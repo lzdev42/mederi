@@ -1,0 +1,1 @@
+-dontwarn xyz.emuci.codehigh.**

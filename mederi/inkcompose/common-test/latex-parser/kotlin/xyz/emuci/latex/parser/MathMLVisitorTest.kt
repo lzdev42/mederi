@@ -1,0 +1,314 @@
+package xyz.emuci.latex.parser
+
+import xyz.emuci.latex.parser.visitor.MathMLVisitor
+import kotlin.test.Test
+import kotlin.test.assertTrue
+
+class MathMLVisitorTest {
+
+    private val parser = LatexParser()
+
+    @Test
+    fun testMathMLWrapper() {
+        val doc = parser.parse("x")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.startsWith("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""))
+        assertTrue(result.endsWith("</math>"))
+    }
+
+    @Test
+    fun testDisplayMode() {
+        val doc = parser.parse("x")
+        val block = MathMLVisitor.convert(doc, displayMode = true)
+        assertTrue(block.contains("display=\"block\""))
+
+        val inline = MathMLVisitor.convert(doc, displayMode = false)
+        assertTrue(inline.contains("display=\"inline\""))
+    }
+
+    @Test
+    fun testTextNode() {
+        val doc = parser.parse("abc123")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mi>a</mi>"))
+        assertTrue(result.contains("<mi>b</mi>"))
+        assertTrue(result.contains("<mi>c</mi>"))
+        assertTrue(result.contains("<mn>1</mn>"))
+        assertTrue(result.contains("<mn>2</mn>"))
+        assertTrue(result.contains("<mn>3</mn>"))
+    }
+
+    @Test
+    fun testFraction() {
+        val doc = parser.parse("\\frac{1}{2}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mfrac>"))
+        assertTrue(result.contains("</mfrac>"))
+    }
+
+    @Test
+    fun testSuperscript() {
+        val doc = parser.parse("x^2")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<msup>"))
+    }
+
+    @Test
+    fun testSubscript() {
+        val doc = parser.parse("a_i")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<msub>"))
+    }
+
+    @Test
+    fun testSquareRoot() {
+        val doc = parser.parse("\\sqrt{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<msqrt>"))
+    }
+
+    @Test
+    fun testNthRoot() {
+        val doc = parser.parse("\\sqrt[3]{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mroot>"))
+    }
+
+    @Test
+    fun testSymbol() {
+        val doc = parser.parse("\\alpha")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mi>") || result.contains("<mo>"))
+    }
+
+    @Test
+    fun testOperator() {
+        val doc = parser.parse("a + b")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mo>+</mo>"))
+    }
+
+    @Test
+    fun testMatrix() {
+        val doc = parser.parse("\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mtable>"))
+        assertTrue(result.contains("<mtr>"))
+        assertTrue(result.contains("<mtd>"))
+        assertTrue(result.contains("<mo>(</mo>"))
+        assertTrue(result.contains("<mo>)</mo>"))
+    }
+
+    @Test
+    fun testBigOperator() {
+        val doc = parser.parse("\\sum_{i=1}^{n} i")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<munderover>"))
+    }
+
+    @Test
+    fun testDelimited() {
+        val doc = parser.parse("\\left( x \\right)")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("stretchy"))
+    }
+
+    @Test
+    fun testDelimitedWithMid() {
+        val doc = parser.parse("A=\\left\\{x\\mid -5<x^3<5\\right\\}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mo stretchy=\"true\">{</mo>"))
+        assertTrue(result.contains("∣"))
+        assertTrue(result.contains("<mo stretchy=\"true\">}</mo>"))
+    }
+
+    @Test
+    fun testDfracUsesDisplayStyle() {
+        val doc = parser.parse("\\dfrac{1}{2}")
+        val result = MathMLVisitor.convert(doc, displayMode = false)
+        assertTrue(result.contains("<mstyle displaystyle=\"true\"><mfrac>"))
+    }
+
+    @Test
+    fun testTfracUsesTextStyle() {
+        val doc = parser.parse("\\tfrac{1}{2}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mstyle displaystyle=\"false\"><mfrac>"))
+    }
+
+    @Test
+    fun testAccent() {
+        val doc = parser.parse("\\hat{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mover>"))
+    }
+
+    @Test
+    fun testCancel() {
+        val doc = parser.parse("\\cancel{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<menclose"))
+        assertTrue(result.contains("updiagonalstrike"))
+    }
+
+    @Test
+    fun testStyle() {
+        val doc = parser.parse("\\mathbf{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mstyle"))
+        assertTrue(result.contains("bold"))
+    }
+
+    @Test
+    fun testColor() {
+        val doc = parser.parse("\\color{red}{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("mathcolor"))
+        assertTrue(result.contains("red"))
+    }
+
+    @Test
+    fun testCases() {
+        val doc = parser.parse("\\begin{cases} 1 & x > 0 \\\\ 0 & x = 0 \\end{cases}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mo>{</mo>"))
+        assertTrue(result.contains("<mtable>"))
+    }
+
+    @Test
+    fun testBinomial() {
+        val doc = parser.parse("\\binom{n}{k}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mfrac"))
+        assertTrue(result.contains("linethickness=\"0\""))
+    }
+
+    @Test
+    fun testTextMode() {
+        val doc = parser.parse("\\text{hello}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mtext>hello</mtext>"))
+    }
+
+    @Test
+    fun testSpace() {
+        val doc = parser.parse("a \\quad b")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mspace"))
+    }
+
+    @Test
+    fun testBoxed() {
+        val doc = parser.parse("\\boxed{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<menclose"))
+        assertTrue(result.contains("box"))
+    }
+
+    @Test
+    fun testEnclose() {
+        val doc = parser.parse("\\enclose{circle,box}[mathcolor=\"red\"]{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<menclose"))
+        assertTrue(result.contains("notation=\"circle box\""))
+        assertTrue(result.contains("mathcolor=\"red\""))
+    }
+
+    @Test
+    fun testPhantom() {
+        val doc = parser.parse("\\phantom{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mphantom>"))
+    }
+
+    @Test
+    fun testExtensibleArrow() {
+        val doc = parser.parse("\\xrightarrow{f}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("→"))
+    }
+
+    @Test
+    fun testHookArrow() {
+        val doc = parser.parse("\\xhookrightarrow{f}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("↪"))
+    }
+
+    @Test
+    fun testSideSet() {
+        val doc = parser.parse("\\sideset{_a^b}{_c^d}{\\sum}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mmultiscripts>"))
+        assertTrue(result.contains("<mprescripts/>"))
+    }
+
+    @Test
+    fun testTensor() {
+        val doc = parser.parse("\\tensor{T}{^a_b}")
+        val result = MathMLVisitor.convert(doc)
+        // tensor creates msub/msup/msubsup elements
+        assertTrue(result.contains("<msub") || result.contains("<msup") || result.contains("<msubsup"))
+    }
+
+    @Test
+    fun testTabular() {
+        val doc = parser.parse("\\begin{tabular}{cc} a & b \\\\ c & d \\end{tabular}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mtable>"))
+    }
+
+    @Test
+    fun testRef() {
+        val doc = parser.parse("\\ref{eq:1}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mtext>eq:1</mtext>"))
+    }
+
+    @Test
+    fun testEqRef() {
+        val doc = parser.parse("\\eqref{eq:1}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mo>(</mo>"))
+        assertTrue(result.contains("<mtext>eq:1</mtext>"))
+    }
+
+    @Test
+    fun testXmlEscaping() {
+        val doc = parser.parse("a < b")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("&lt;"))
+    }
+
+    @Test
+    fun testEmptyDocument() {
+        val doc = parser.parse("")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.startsWith("<math"))
+        assertTrue(result.endsWith("</math>"))
+    }
+
+    @Test
+    fun testSmash() {
+        val doc = parser.parse("\\smash{x}")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<mpadded"))
+    }
+
+    @Test
+    fun testNegation() {
+        val doc = parser.parse("\\not= b")
+        val result = MathMLVisitor.convert(doc)
+        assertTrue(result.contains("<menclose"))
+    }
+
+    @Test
+    fun testNestedFontSizeUsesAbsoluteDeclarationScale() {
+        val doc = parser.parse("{\\small {\\Huge x} {\\normalsize y}}")
+        val result = MathMLVisitor.convert(doc)
+
+        assertTrue(result.contains("mathsize=\"90%\""), result)
+        assertTrue(result.contains("mathsize=\"276.444%\""), result)
+        assertTrue(result.contains("mathsize=\"111.111%\""), result)
+    }
+}

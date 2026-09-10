@@ -1,0 +1,506 @@
+package xyz.emuci.latex.parser
+
+import xyz.emuci.latex.parser.model.LatexNode
+import xyz.emuci.latex.parser.visitor.MathMLVisitor
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * 特殊效果测试（boxed, phantom, hyperlink, colorbox）
+ */
+class SpecialEffectTest {
+
+    private val parser = LatexParser()
+
+    @Test
+    fun should_parse_boxed_with_simple_content() {
+        val input = "\\boxed{E = mc^2}"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertEquals(1, result.children.size)
+
+        val boxed = result.children[0]
+        assertIs<LatexNode.Boxed>(boxed)
+        assertTrue(boxed.content.isNotEmpty(), "Boxed content should not be empty")
+    }
+
+    @Test
+    fun should_parse_boxed_with_complex_formula() {
+        val input = "\\boxed{\\frac{a}{b} + \\sqrt{x}}"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertEquals(1, result.children.size)
+
+        val boxed = result.children[0]
+        assertIs<LatexNode.Boxed>(boxed)
+        assertTrue(boxed.content.isNotEmpty())
+        
+        // 验证内容包含分数和根号
+        val hasContent = boxed.content.any { 
+            it is LatexNode.Fraction || it is LatexNode.Root 
+        }
+        assertTrue(hasContent || boxed.content.size > 1, "Boxed should contain complex formula")
+    }
+
+    @Test
+    fun should_parse_phantom_with_simple_content() {
+        val input = "\\phantom{x}"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertEquals(1, result.children.size)
+
+        val phantom = result.children[0]
+        assertIs<LatexNode.Phantom>(phantom)
+        assertTrue(phantom.content.isNotEmpty(), "Phantom content should not be empty")
+    }
+
+    @Test
+    fun should_parse_phantom_with_formula() {
+        val input = "x + \\phantom{+ y} = z"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertTrue(result.children.size >= 3, "Should have x, phantom, and z parts")
+
+        // 查找 phantom 节点
+        val hasPhantom = result.children.any { it is LatexNode.Phantom }
+        assertTrue(hasPhantom, "Should contain phantom node")
+    }
+
+    @Test
+    fun should_parse_phantom_for_alignment() {
+        // 常见用法：对齐多行公式
+        val input = "\\begin{align}x &= 1 \\\\ \\phantom{x} &= 2\\end{align}"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        // 验证解析成功（具体结构取决于环境解析实现）
+        assertTrue(result.children.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_nested_boxed() {
+        val input = "\\boxed{\\boxed{x}}"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertEquals(1, result.children.size)
+
+        val outer = result.children[0]
+        assertIs<LatexNode.Boxed>(outer)
+        
+        // 内层也应该是 boxed
+        val hasInnerBoxed = outer.content.any { it is LatexNode.Boxed }
+        assertTrue(hasInnerBoxed, "Should support nested boxed")
+    }
+
+    @Test
+    fun should_parse_boxed_with_color() {
+        val input = "\\boxed{\\color{red}{x + y}}"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertEquals(1, result.children.size)
+
+        val boxed = result.children[0]
+        assertIs<LatexNode.Boxed>(boxed)
+        assertTrue(boxed.content.isNotEmpty())
+        
+        // 验证内容包含颜色节点
+        val hasColor = boxed.content.any { it is LatexNode.Color }
+        assertTrue(hasColor, "Boxed should contain colored content")
+    }
+
+    @Test
+    fun should_parse_combined_boxed_and_phantom() {
+        val input = "\\boxed{a} + \\phantom{b} = c"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertTrue(result.children.size >= 3)
+
+        val hasBoxed = result.children.any { it is LatexNode.Boxed }
+        val hasPhantom = result.children.any { it is LatexNode.Phantom }
+        
+        assertTrue(hasBoxed, "Should contain boxed node")
+        assertTrue(hasPhantom, "Should contain phantom node")
+    }
+
+    @Test
+    fun should_parse_enclose_circle_box() {
+        val doc = parser.parse("\\enclose{circle,box}{x+y}")
+        val enclose = doc.children.first()
+        assertIs<LatexNode.Enclose>(enclose)
+        assertEquals(
+            listOf(LatexNode.Enclose.Notation.CIRCLE, LatexNode.Enclose.Notation.BOX),
+            enclose.notations
+        )
+        assertTrue(enclose.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_enclose_with_attributes() {
+        val doc = parser.parse("\\enclose{roundedbox}[mathcolor=\"red\" mathbackground=\"yellow\"]{x}")
+        val enclose = doc.children.first()
+        assertIs<LatexNode.Enclose>(enclose)
+        assertEquals(listOf(LatexNode.Enclose.Notation.ROUNDEDBOX), enclose.notations)
+        assertEquals("red", enclose.attributes["mathcolor"])
+        assertEquals("yellow", enclose.attributes["mathbackground"])
+    }
+
+    @Test
+    fun should_parse_mathjax_bbox_options() {
+        val doc = parser.parse("\\bbox[5px, border: 1px solid purple]{x+y}")
+        val enclose = doc.children.first()
+        assertIs<LatexNode.Enclose>(enclose)
+        assertEquals(listOf(LatexNode.Enclose.Notation.BOX), enclose.notations)
+        assertEquals("5px", enclose.attributes["padding"])
+        assertEquals("1px solid purple", enclose.attributes["border"])
+        assertEquals("purple", enclose.attributes["mathcolor"])
+    }
+
+    @Test
+    fun should_parse_mathjax_bbox_background() {
+        val doc = parser.parse("\\bbox[#CAF,20px,border:1px]{\\delta S=0}")
+        val enclose = doc.children.first()
+        assertIs<LatexNode.Enclose>(enclose)
+        assertEquals("#CAF", enclose.attributes["mathbackground"])
+        assertEquals("20px", enclose.attributes["padding"])
+        assertEquals("1px solid currentColor", enclose.attributes["border"])
+    }
+
+    @Test
+    fun should_emit_bbox_without_longdiv_mathml() {
+        val mathMl = MathMLVisitor.convert(parser.parse("\\bbox[#CAF,5px]{x}"))
+
+        assertFalse(mathMl.contains("longdiv"))
+        assertTrue(mathMl.contains("<mpadded"))
+        assertTrue(mathMl.contains("background-color: #CAF"))
+        assertTrue(mathMl.contains("""width="+10px""""))
+    }
+
+    @Test
+    fun should_normalize_width_only_bbox_border_for_mathml() {
+        val mathMl = MathMLVisitor.convert(
+            parser.parse("\\bbox[#CAF,20px,border:1px]{\\delta S=0}")
+        )
+
+        assertTrue(mathMl.contains("border: 1px solid currentColor"))
+    }
+
+    @Test
+    fun should_parse_enclose_strike_combinations() {
+        val doc = parser.parse("\\enclose{updiagonalstrike downdiagonalstrike}{x}")
+        val enclose = doc.children.first()
+        assertIs<LatexNode.Enclose>(enclose)
+        assertEquals(
+            listOf(
+                LatexNode.Enclose.Notation.UPDIAGONALSTRIKE,
+                LatexNode.Enclose.Notation.DOWNDIAGONALSTRIKE
+            ),
+            enclose.notations
+        )
+    }
+
+    @Test
+    fun should_parse_boxed_in_equation() {
+        val input = "y = \\boxed{mx + b}"
+        val result = parser.parse(input)
+
+        assertIs<LatexNode.Document>(result)
+        assertTrue(result.children.size >= 2)
+
+        val hasBoxed = result.children.any { it is LatexNode.Boxed }
+        assertTrue(hasBoxed, "Should contain boxed node in equation")
+    }
+
+    // ========== smash 可选参数 ==========
+
+    @Test
+    fun should_parse_smash_default() {
+        val doc = parser.parse("\\smash{x}")
+        val smash = doc.children[0]
+        assertIs<LatexNode.Smash>(smash)
+        assertEquals(LatexNode.Smash.SmashType.BOTH, smash.smashType)
+        assertTrue(smash.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_smash_top() {
+        val doc = parser.parse("\\smash[t]{x}")
+        val smash = doc.children[0]
+        assertIs<LatexNode.Smash>(smash)
+        assertEquals(LatexNode.Smash.SmashType.TOP, smash.smashType)
+    }
+
+    @Test
+    fun should_parse_smash_bottom() {
+        val doc = parser.parse("\\smash[b]{x}")
+        val smash = doc.children[0]
+        assertIs<LatexNode.Smash>(smash)
+        assertEquals(LatexNode.Smash.SmashType.BOTTOM, smash.smashType)
+    }
+
+    @Test
+    fun should_parse_smash_with_complex_content() {
+        val doc = parser.parse("\\smash[t]{\\frac{a}{b}}")
+        val smash = doc.children[0]
+        assertIs<LatexNode.Smash>(smash)
+        assertEquals(LatexNode.Smash.SmashType.TOP, smash.smashType)
+        assertTrue(smash.content.isNotEmpty())
+    }
+
+    // ============ \href / \url 超链接 ============
+
+    @Test
+    fun should_parse_href_with_url_and_text() {
+        val doc = parser.parse("\\href{https://example.com}{点击这里}")
+        val hyperlink = doc.children.first()
+        assertIs<LatexNode.Hyperlink>(hyperlink)
+        assertEquals("https://example.com", hyperlink.url)
+        assertTrue(hyperlink.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_url_without_display_text() {
+        val doc = parser.parse("\\url{https://example.com}")
+        val hyperlink = doc.children.first()
+        assertIs<LatexNode.Hyperlink>(hyperlink)
+        assertEquals("https://example.com", hyperlink.url)
+        assertTrue(hyperlink.content.isEmpty(), "\\url 没有显示内容")
+    }
+
+    @Test
+    fun should_parse_href_with_complex_content() {
+        val doc = parser.parse("\\href{https://example.com}{E = mc^2}")
+        val hyperlink = doc.children.first()
+        assertIs<LatexNode.Hyperlink>(hyperlink)
+        assertEquals("https://example.com", hyperlink.url)
+        assertTrue(hyperlink.content.size > 1)
+    }
+
+    @Test
+    fun should_handle_empty_href_url_gracefully() {
+        val doc = parser.parse("\\href{}{text}")
+        val hyperlink = doc.children.first()
+        assertIs<LatexNode.Hyperlink>(hyperlink)
+        assertEquals("", hyperlink.url)
+    }
+
+    // ============ \colorbox / \fcolorbox 背景色 ============
+
+    @Test
+    fun should_parse_colorbox() {
+        val doc = parser.parse("\\colorbox{yellow}{重要文字}")
+        val colorBox = doc.children.first()
+        assertIs<LatexNode.ColorBox>(colorBox)
+        assertEquals("yellow", colorBox.backgroundColor)
+        assertNull(colorBox.borderColor, "colorbox 没有边框色")
+        assertTrue(colorBox.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_fcolorbox_with_border_and_bg() {
+        val doc = parser.parse("\\fcolorbox{red}{yellow}{重要文字}")
+        val colorBox = doc.children.first()
+        assertIs<LatexNode.ColorBox>(colorBox)
+        assertEquals("yellow", colorBox.backgroundColor)
+        assertEquals("red", colorBox.borderColor)
+        assertTrue(colorBox.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_colorbox_with_hex_color() {
+        val doc = parser.parse("\\colorbox{#FF5733}{内容}")
+        val colorBox = doc.children.first()
+        assertIs<LatexNode.ColorBox>(colorBox)
+        assertEquals("#FF5733", colorBox.backgroundColor)
+    }
+
+    @Test
+    fun should_parse_fcolorbox_with_math_content() {
+        val doc = parser.parse("\\fcolorbox{blue}{yellow}{x^2 + y^2}")
+        val colorBox = doc.children.first()
+        assertIs<LatexNode.ColorBox>(colorBox)
+        assertEquals("blue", colorBox.borderColor)
+        assertEquals("yellow", colorBox.backgroundColor)
+        assertTrue(colorBox.content.size > 1)
+    }
+
+    @Test
+    fun should_handle_empty_colorbox_content_gracefully() {
+        val doc = parser.parse("\\colorbox{red}{}")
+        val colorBox = doc.children.first()
+        assertIs<LatexNode.ColorBox>(colorBox)
+        assertEquals("red", colorBox.backgroundColor)
+    }
+
+    // ============ \fbox 文本模式方框 ============
+
+    @Test
+    fun should_parse_fbox() {
+        val doc = parser.parse("\\fbox{text}")
+        val boxed = doc.children.first()
+        assertIs<LatexNode.Boxed>(boxed)
+        assertEquals(LatexNode.Boxed.BoxStyle.FBOX, boxed.boxStyle)
+        assertTrue(boxed.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_fbox_with_math() {
+        val doc = parser.parse("\\fbox{x^2 + y^2}")
+        val boxed = doc.children.first()
+        assertIs<LatexNode.Boxed>(boxed)
+        assertEquals(LatexNode.Boxed.BoxStyle.FBOX, boxed.boxStyle)
+    }
+
+    @Test
+    fun should_parse_boxed_with_normal_style() {
+        val doc = parser.parse("\\boxed{E = mc^2}")
+        val boxed = doc.children.first()
+        assertIs<LatexNode.Boxed>(boxed)
+        assertEquals(LatexNode.Boxed.BoxStyle.NORMAL, boxed.boxStyle)
+    }
+
+    // ============ \mathclap / \mathllap / \mathrlap 零宽叠加 ============
+
+    @Test
+    fun should_parse_mathclap() {
+        val doc = parser.parse("\\mathclap{text}")
+        val lap = doc.children.first()
+        assertIs<LatexNode.MathLap>(lap)
+        assertEquals(LatexNode.MathLap.LapType.CLAP, lap.lapType)
+        assertTrue(lap.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_mathllap() {
+        val doc = parser.parse("\\mathllap{text}")
+        val lap = doc.children.first()
+        assertIs<LatexNode.MathLap>(lap)
+        assertEquals(LatexNode.MathLap.LapType.LLAP, lap.lapType)
+    }
+
+    @Test
+    fun should_parse_mathrlap() {
+        val doc = parser.parse("\\mathrlap{text}")
+        val lap = doc.children.first()
+        assertIs<LatexNode.MathLap>(lap)
+        assertEquals(LatexNode.MathLap.LapType.RLAP, lap.lapType)
+    }
+
+    @Test
+    fun should_parse_mathclap_with_complex_content() {
+        val doc = parser.parse("\\sum_{\\mathclap{1 \\le i \\le n}} x_i")
+        assertTrue(doc.children.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_mathrlap_with_empty_content() {
+        val doc = parser.parse("\\mathrlap{}")
+        val lap = doc.children.first()
+        assertIs<LatexNode.MathLap>(lap)
+        assertEquals(LatexNode.MathLap.LapType.RLAP, lap.lapType)
+    }
+
+    // ============ \RLE / \LRE / \textarabic / \texthebrew 文本方向 ============
+
+    @Test
+    fun should_parse_RLE_command() {
+        val doc = parser.parse("\\RLE{مرحبا}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.RTL, dir.direction)
+        assertTrue(dir.content.isNotEmpty(), "RLE 应有子内容")
+    }
+
+    @Test
+    fun should_parse_LRE_command() {
+        val doc = parser.parse("\\LRE{Hello}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.LTR, dir.direction)
+        assertTrue(dir.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_textarabic_command() {
+        val doc = parser.parse("\\textarabic{مرحبا بالعالم}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.RTL, dir.direction)
+        assertTrue(dir.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_texthebrew_command() {
+        val doc = parser.parse("\\texthebrew{שלום}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.RTL, dir.direction)
+        assertTrue(dir.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_RTL_environment() {
+        val doc = parser.parse("\\begin{RTL}مرحبا\\end{RTL}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.RTL, dir.direction)
+        assertTrue(dir.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_LTR_environment() {
+        val doc = parser.parse("\\begin{LTR}Hello World\\end{LTR}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.LTR, dir.direction)
+        assertTrue(dir.content.isNotEmpty())
+    }
+
+    @Test
+    fun should_parse_nested_RLE_LRE() {
+        val doc = parser.parse("\\RLE{مرحبا \\LRE{Hello} عالم}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.RTL, dir.direction)
+        // 内部应包含嵌套的 LTR 方向节点
+        val hasNestedLtr = dir.content.any { it is LatexNode.TextDirection }
+        assertTrue(hasNestedLtr, "应支持嵌套 RLE/LRE")
+        val nested = dir.content.filterIsInstance<LatexNode.TextDirection>().first()
+        assertEquals(LatexNode.TextDirection.Direction.LTR, nested.direction)
+    }
+
+    @Test
+    fun should_parse_RLE_with_math() {
+        val doc = parser.parse("\\RLE{x^2 + y^2 = r^2}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.RTL, dir.direction)
+        assertTrue(dir.content.size > 1, "RTL 内可包含数学内容")
+    }
+
+    @Test
+    fun should_handle_empty_RLE() {
+        val doc = parser.parse("\\RLE{}")
+        val dir = doc.children.first()
+        assertIs<LatexNode.TextDirection>(dir)
+        assertEquals(LatexNode.TextDirection.Direction.RTL, dir.direction)
+    }
+
+    @Test
+    fun should_parse_mixed_RTL_and_normal() {
+        val doc = parser.parse("Hello \\RLE{مرحبا} World")
+        assertTrue(doc.children.size >= 3, "应包含文本和 RTL 节点")
+        val hasRtl = doc.children.any { it is LatexNode.TextDirection }
+        assertTrue(hasRtl, "应包含 RTL 方向节点")
+    }
+}

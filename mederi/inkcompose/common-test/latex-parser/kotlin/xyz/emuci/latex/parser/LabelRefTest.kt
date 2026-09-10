@@ -1,0 +1,149 @@
+package xyz.emuci.latex.parser
+
+import xyz.emuci.latex.parser.model.LatexNode
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+
+/**
+ * 标签引用测试 — \label, \ref, \eqref
+ */
+class LabelRefTest {
+
+    private val parser = LatexParser()
+
+    @Test
+    fun testLabel() {
+        val doc = parser.parse("\\label{eq:1}")
+        assertEquals(1, doc.children.size)
+        val label = doc.children[0] as LatexNode.Label
+        assertEquals("eq:1", label.key)
+    }
+
+    @Test
+    fun testRef() {
+        val doc = parser.parse("\\ref{eq:1}")
+        assertEquals(1, doc.children.size)
+        val ref = doc.children[0] as LatexNode.Ref
+        assertEquals("eq:1", ref.key)
+    }
+
+    @Test
+    fun testEqRef() {
+        val doc = parser.parse("\\eqref{eq:1}")
+        assertEquals(1, doc.children.size)
+        val eqRef = doc.children[0] as LatexNode.EqRef
+        assertEquals("eq:1", eqRef.key)
+    }
+
+    @Test
+    fun testLabelInContext() {
+        val doc = parser.parse("E = mc^2 \\label{einstein}")
+        val labelNode = doc.children.filterIsInstance<LatexNode.Label>().firstOrNull()
+        assertNotNull(labelNode, "Label node should exist")
+        assertEquals("einstein", labelNode.key)
+    }
+
+    @Test
+    fun testRefInContext() {
+        val doc = parser.parse("See equation \\ref{eq:1}")
+        val refNode = doc.children.filterIsInstance<LatexNode.Ref>().firstOrNull()
+        assertNotNull(refNode, "Ref node should exist")
+        assertEquals("eq:1", refNode.key)
+    }
+
+    @Test
+    fun testCombinedRefAndLabel() {
+        val doc = parser.parse("\\label{eq:euler} e^{i\\pi} + 1 = 0 \\eqref{eq:euler}")
+        val labels = doc.children.filterIsInstance<LatexNode.Label>()
+        val eqRefs = doc.children.filterIsInstance<LatexNode.EqRef>()
+        assertEquals(1, labels.size, "Should have one label")
+        assertEquals(1, eqRefs.size, "Should have one eqref")
+        assertEquals("eq:euler", labels[0].key)
+        assertEquals("eq:euler", eqRefs[0].key)
+    }
+
+    // ===================================================================
+    // 公式编号支持：envName 字段验证
+    // ===================================================================
+
+    @Test
+    fun should_preserve_envName_in_aligned_node() {
+        val doc = parser.parse("\\begin{align} x &= 1 \\end{align}")
+        val aligned = findNode<LatexNode.Aligned>(doc)
+        assertNotNull(aligned, "Should have Aligned node")
+        assertEquals("align", aligned.envName, "envName should be 'align'")
+    }
+
+    @Test
+    fun should_preserve_star_envName_in_aligned_node() {
+        val doc = parser.parse("\\begin{align*} x &= 1 \\end{align*}")
+        val aligned = findNode<LatexNode.Aligned>(doc)
+        assertNotNull(aligned, "Should have Aligned node")
+        assertEquals("align*", aligned.envName, "envName should be 'align*'")
+    }
+
+    @Test
+    fun should_preserve_envName_in_multline_node() {
+        val doc = parser.parse("\\begin{multline} a + b \\\\ c + d \\end{multline}")
+        val multline = findNode<LatexNode.Multline>(doc)
+        assertNotNull(multline, "Should have Multline node")
+        assertEquals("multline", multline.envName, "envName should be 'multline'")
+    }
+
+    @Test
+    fun should_preserve_star_envName_in_multline_node() {
+        val doc = parser.parse("\\begin{multline*} a + b \\\\ c + d \\end{multline*}")
+        val multline = findNode<LatexNode.Multline>(doc)
+        assertNotNull(multline, "Should have Multline node")
+        assertEquals("multline*", multline.envName, "envName should be 'multline*'")
+    }
+
+    @Test
+    fun should_preserve_envName_in_eqnarray_node() {
+        val doc = parser.parse("\\begin{eqnarray} a &=& b \\end{eqnarray}")
+        val eqnarray = findNode<LatexNode.Eqnarray>(doc)
+        assertNotNull(eqnarray, "Should have Eqnarray node")
+        assertEquals("eqnarray", eqnarray.envName, "envName should be 'eqnarray'")
+    }
+
+    @Test
+    fun should_preserve_star_envName_in_eqnarray_node() {
+        val doc = parser.parse("\\begin{eqnarray*} a &=& b \\end{eqnarray*}")
+        val eqnarray = findNode<LatexNode.Eqnarray>(doc)
+        assertNotNull(eqnarray, "Should have Eqnarray node")
+        assertEquals("eqnarray*", eqnarray.envName, "envName should be 'eqnarray*'")
+    }
+
+    @Test
+    fun should_have_label_inside_equation_environment() {
+        val doc = parser.parse("\\begin{equation} E = mc^2 \\label{eq:einstein} \\end{equation}")
+        val env = findNode<LatexNode.Environment>(doc)
+        assertNotNull(env, "Should have Environment node")
+        assertEquals("equation", env.name)
+        val label = env.content.filterIsInstance<LatexNode.Label>().firstOrNull()
+        assertNotNull(label, "Should have label inside equation environment")
+        assertEquals("eq:einstein", label.key)
+    }
+
+    // ── 辅助方法 ──
+
+    private inline fun <reified T : LatexNode> findNode(doc: LatexNode.Document): T? {
+        return findNodeRecursive(doc.children) { it as? T }
+    }
+
+    private fun <T : LatexNode> findNodeRecursive(
+        nodes: List<LatexNode>,
+        match: (LatexNode) -> T?
+    ): T? {
+        for (node in nodes) {
+            match(node)?.let { return it }
+            val children = node.children()
+            if (children.isNotEmpty()) {
+                val found = findNodeRecursive(children, match)
+                if (found != null) return found
+            }
+        }
+        return null
+    }
+}

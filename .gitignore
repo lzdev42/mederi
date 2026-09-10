@@ -1,0 +1,56 @@
+# Temporary & Reference（临时解压/拉取/实验一律放 temp/，见 AGENTS.md）
+temp/
+.freebuff/
+# 工具 scratch（playwright MCP 截图/日志、反编译 class 产物）
+.playwright-mcp/
+/com/
+
+# dagre JS 参考源码（renderkit diagram-layout 的 Kotlin 移植参照，不参与构建）
+package/
+dagrejs-*.tgz
+
+# Koog Reference Documentation & Generated Site
+doc/koog-api-docs-md/
+doc/site/
+doc/docs/
+doc/mkdocs.yml
+doc/generate_html_site.py
+doc/README.md
+
+# Gradle & Build
+.gradle/
+build/
+**/build/
+!src/**/build/
+
+# Kotlin
+.kotlin/
+
+# IDE & Editor
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Android / Mobile / Native
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+
+# Node
+node_modules/
+
+# Logs
+*.log

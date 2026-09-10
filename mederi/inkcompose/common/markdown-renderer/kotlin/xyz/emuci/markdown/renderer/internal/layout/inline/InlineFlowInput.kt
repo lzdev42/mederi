@@ -1,0 +1,31 @@
+package xyz.emuci.markdown.renderer.internal.layout.inline
+
+import androidx.compose.ui.text.AnnotatedString
+import xyz.emuci.markdown.renderer.inline.InlinePlaceholderId
+
+internal data class InlineFlowInput(
+    val segments: List<InlineFlowSegment>,
+)
+
+internal data class InlinePlaceholderLayoutSpec(
+    val alternateText: String,
+    val widthPx: Float,
+    val heightPx: Float,
+)
+
+internal sealed interface InlineFlowSegment {
+    data class TextRun(
+        val annotated: AnnotatedString,
+        val sourceStart: Int? = null,
+        val sourceEnd: Int? = null,
+    ) : InlineFlowSegment
+
+    data class InlineRun(
+        val id: InlinePlaceholderId,
+        val placeholder: InlinePlaceholderLayoutSpec,
+        val sourceStart: Int? = null,
+        val sourceEnd: Int? = null,
+    ) : InlineFlowSegment
+
+    data object Newline : InlineFlowSegment
+}

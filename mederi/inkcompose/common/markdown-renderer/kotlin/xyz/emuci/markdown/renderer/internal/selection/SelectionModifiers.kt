@@ -1,0 +1,52 @@
+package xyz.emuci.markdown.renderer.internal.selection
+
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.layout.onGloballyPositioned
+import xyz.emuci.markdown.renderer.LocalMarkdownTheme
+import xyz.emuci.markdown.renderer.internal.layout.model.InternalLayoutBlockModel
+
+/**
+ * 把一个可选 inline block 接入自研选区层：
+ * - [onGloballyPositioned] 把当前 block 的 [LayoutCoordinates] 注册到坐标表（支持 window↔local 换算）；
+ * - [DisposableEffect] 在 block 滚出屏 / 离开组合时反注册（支持 LazyColumn 虚拟化）；
+ * - [drawWithContent] 按控制器给出的 block-local 高亮矩形绘制选中背景。
+ */
+internal fun Modifier.selectableBlock(
+    block: InternalLayoutBlockModel,
+    controller: MarkdownSelectionController?,
+): Modifier {
+    if (controller == null) return this
+    return this.composed {
+        val stableId = block.identity.stableId
+        val highlightColor = LocalMarkdownTheme.current.linkColor.copy(alpha = 0.3f)
+        DisposableEffect(block, controller) {
+            controller.registerVisibleBlock(block)
+            onDispose {
+                controller.unregisterVisibleBlock(stableId)
+                controller.registry.unregister(stableId)
+            }
+        }
+        this
+            .onGloballyPositioned { controller.registry.register(stableId, it) }
+            .drawWithContent {
+                drawContent()
+                val highlightBoxes = if (controller.state.range == null) {
+                    emptyList()
+                } else {
+                    controller.highlightBoxesFor(stableId)
+                }
+                for (box in highlightBoxes) {
+                    drawRect(
+                        color = highlightColor,
+                        topLeft = Offset(box.left, box.top),
+                        size = Size(box.width, box.height),
+                    )
+                }
+            }
+    }
+}

@@ -1,0 +1,205 @@
+-- ============================================================
+-- Mederi 数据库（data.db）
+-- ============================================================
+-- 会话运行数据：sessions、message_history、diffs。
+-- 特性：高频写（append-heavy）、体积随使用增长。
+-- 开发期（未发布）schema 可破坏性变更：直接删除本文件重建，配置（config.db）无损。
+
+-- ============================================================
+-- 会话表
+-- ============================================================
+-- Session 不引用 Agent，只记录用户最后一次选择的
+-- agent_mode / work_type / ai_model / reasoning_level。系统提示词由 agentMode + workType 动态决定。
+-- ai_model 存储 AIModel 的 JSON 序列化（modelId + thinkingLevel + 模型元信息）。
+-- project_id 表示该 Session 所属的项目，Agent 的读写权限作用于该项目下的目录。
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id              TEXT NOT NULL,
+    project_id      TEXT NOT NULL,
+    title           TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'IDLE',
+    agent_mode      TEXT NOT NULL DEFAULT 'AUTONOMOUS',
+    work_type       TEXT NOT NULL DEFAULT 'CODE',
+    ai_model        TEXT,
+    reasoning_level TEXT,
+    env             TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
+
+-- 插入会话
+insertSession:
+INSERT INTO sessions (id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- 查询所有会话（按更新时间降序）
+listSessions:
+SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at
+FROM sessions
+ORDER BY updated_at DESC;
+
+-- 按 ID 查询会话
+getSession:
+SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at
+FROM sessions
+WHERE id = ?;
+
+-- 按项目查询会话
+listSessionsByProject:
+SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at
+FROM sessions
+WHERE project_id = ?
+ORDER BY updated_at DESC;
+
+-- 更新会话状态
+updateSessionStatus:
+UPDATE sessions SET status = ?, updated_at = ?
+WHERE id = ?;
+
+-- 更新会话标题
+updateSessionTitle:
+UPDATE sessions SET title = ?, updated_at = ?
+WHERE id = ?;
+
+-- 更新会话 Agent 配置（COALESCE 使 NOT NULL 的列可接受 null 参数）
+updateSessionAgentConfig:
+UPDATE sessions SET agent_mode = COALESCE(?, agent_mode), work_type = COALESCE(?, work_type), ai_model = COALESCE(?, ai_model), reasoning_level = COALESCE(?, reasoning_level), updated_at = ?
+WHERE id = ?;
+
+-- 删除会话
+deleteSession:
+DELETE FROM sessions
+WHERE id = ?;
+
+
+-- ============================================================
+-- 对话历史表
+-- ============================================================
+-- 存储每个 session 的完整对话历史。
+-- 每条消息有序号 seq，支持回退（删除 seq 之后的消息）。
+-- 完整的 Message 对象以 JSON 序列化存储在 payload 列（存储即真相，原始消息直读走 payload）。
+-- 诊断列（model_id/duration_ms/finish_reason/status）写入时从 Message 抽取：
+-- 原始消息查看器可直接按模型筛选、按时长排序，无需逐行解 JSON。
+
+CREATE TABLE IF NOT EXISTS message_history (
+    session_id    TEXT NOT NULL,
+    seq           INTEGER NOT NULL,
+    message_id    TEXT,
+    role          TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    payload       TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    model_id      TEXT,
+    duration_ms   INTEGER,
+    finish_reason TEXT,
+    status        TEXT,
+    PRIMARY KEY (session_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_session ON message_history(session_id, seq);
+
+-- 加载完整历史（按序号升序）
+loadBySession:
+SELECT seq, message_id, role, content, payload, created_at, model_id, duration_ms, finish_reason, status
+FROM message_history
+WHERE session_id = ?
+ORDER BY seq ASC;
+
+-- 当前最大 seq（追加时计算下一序号用）
+maxSeq:
+SELECT MAX(seq) FROM message_history
+WHERE session_id = ?;
+
+-- 追加消息（seq 由调用方在同一事务中计算）
+appendMessage:
+INSERT INTO message_history (session_id, seq, message_id, role, content, payload, created_at, model_id, duration_ms, finish_reason, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- 全量替换前清空
+deleteAllBySession:
+DELETE FROM message_history
+WHERE session_id = ?;
+
+-- 删除 session 的所有消息
+deleteBySession:
+DELETE FROM message_history
+WHERE session_id = ?;
+
+-- 回退到指定消息点（删除 seq 之后的消息）
+rollbackTo:
+DELETE FROM message_history
+WHERE session_id = ? AND seq > ?;
+
+-- 获取摘要列表（不含 payload 列，用于列表预览）
+listSummary:
+SELECT seq, message_id, role, content, created_at
+FROM message_history
+WHERE session_id = ?
+ORDER BY seq ASC;
+
+-- 原始消息直读（调试用）：payload JSON 原样返回，不解析；诊断列一并返回供筛选
+listRaw:
+SELECT seq, message_id, role, payload, created_at, model_id, duration_ms, finish_reason, status
+FROM message_history
+WHERE session_id = ?
+ORDER BY seq ASC;
+
+-- 统计消息数
+countBySession:
+SELECT COUNT(*) FROM message_history
+WHERE session_id = ?;
+
+
+-- ============================================================
+-- Diff 表
+-- ============================================================
+-- 存储每次 turn 产生的文件变更。
+-- changes_json 存储 FileChange 列表的 JSON 序列化。
+-- unified_diff 存储 git 风格的 unified diff 文本。
+
+CREATE TABLE IF NOT EXISTS diffs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT NOT NULL,
+    message_id      TEXT,
+    changes_json    TEXT NOT NULL,
+    unified_diff    TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_diffs_session_id ON diffs(session_id);
+CREATE INDEX IF NOT EXISTS idx_diffs_message_id ON diffs(message_id);
+
+-- 保存一次 diff
+insertDiff:
+INSERT INTO diffs (session_id, message_id, changes_json, unified_diff, created_at)
+VALUES (?, ?, ?, ?, ?);
+
+-- 按 session 查询所有 diff（按创建时间升序）
+listDiffs:
+SELECT session_id, message_id, changes_json, unified_diff, created_at
+FROM diffs
+WHERE session_id = ?
+ORDER BY created_at ASC;
+
+-- 按 message_id 查询 diff
+getDiffByMessage:
+SELECT session_id, message_id, changes_json, unified_diff, created_at
+FROM diffs
+WHERE session_id = ? AND message_id = ?
+LIMIT 1;
+
+-- 查询 session 最近一次 diff
+getLatestDiff:
+SELECT session_id, message_id, changes_json, unified_diff, created_at
+FROM diffs
+WHERE session_id = ?
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- 删除 session 的所有 diff
+deleteDiffsBySession:
+DELETE FROM diffs
+WHERE session_id = ?;

@@ -1,0 +1,557 @@
+package xyz.mederi.tools
+
+import ai.koog.agents.core.tools.SimpleTool
+import ai.koog.agents.core.tools.annotations.LLMDescription
+import ai.koog.serialization.typeToken
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.serialization.KeepGeneratedSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonTransformingSerializer
+import xyz.mederi.domain.model.AgentMode
+import xyz.mederi.domain.model.EventType
+import xyz.mederi.domain.model.MederiEvent
+import xyz.mederi.domain.model.WorkType
+import xyz.mederi.plan.Decision
+import xyz.mederi.plan.Notebook
+import xyz.mederi.plan.Plan
+import xyz.mederi.plan.PlanApprovalRequester
+import xyz.mederi.plan.PlanStatus
+import xyz.mederi.plan.PlanStore
+import xyz.mederi.plan.PlannedChange
+import xyz.mederi.plan.Subtask
+import xyz.mederi.plan.SubtaskStatus
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.util.UUID
+import xyz.mederi.debug.DebugLog
+
+/**
+ * 宽松列表反序列化（List<String> 字段容错，实测两种失败形态）：
+ * - 模型把列表写成单个字符串（`"outScope": "xxx"`）→ 包成单元素数组；
+ * - 模型给"备选项"这类天然列表语义的字段传 JsonArray，而字段声明为 String → 改为 List<String> 后原样收下。
+ * 映射进领域模型处统一 joinToString，领域类型不动。
+ */
+private object LenientStringList :
+    JsonTransformingSerializer<List<String>>(ListSerializer(String.serializer())) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        if (element is JsonArray) element else JsonArray(listOf(element))
+}
+
+/**
+ * 复合对象列表字段形状矫正（List<DecisionArg>/List<PlannedChangeArg> 容错）。
+ *
+ * 实测两种崩溃形态（sess_f01ec14e）：
+ * - 模型把对象列表序列化成 JSON 字符串（`"keyDecisions": "[{...}]"`）→ Expected JsonArray but had JsonLiteral
+ * - 模型把单个对象直接当列表（`"decisions": {...}`）→ Expected JsonArray but had JsonObject
+ *
+ * 做成按字段名单变换的顶层工具函数，供 args 类级别的 JsonTransformingSerializer 调用——
+ * 模型错形出现在哪个字段不可预测，类级变换一次覆盖全部复合列表字段。
+ */
+private fun coerceObjectListField(element: JsonElement, fieldName: String): JsonElement {
+    if (element !is kotlinx.serialization.json.JsonObject) return element
+    val value = element[fieldName] ?: return element
+    val fixed: JsonElement = when (value) {
+        is JsonArray -> value
+        is kotlinx.serialization.json.JsonObject -> JsonArray(listOf(value))
+        is kotlinx.serialization.json.JsonPrimitive -> runCatching {
+            when (val parsed = Json.parseToJsonElement(value.content)) {
+                is JsonArray -> parsed
+                is kotlinx.serialization.json.JsonObject -> JsonArray(listOf(parsed))
+                else -> JsonArray(emptyList())
+            }
+        }.getOrDefault(JsonArray(emptyList()))
+        else -> JsonArray(emptyList())
+    }
+    return kotlinx.serialization.json.JsonObject(element.toMutableMap().apply { put(fieldName, fixed) })
+}
+
+/** 复合列表字段名（SubtaskArg + CreatePlanArgs，形状矫正目标） */
+private val OBJECT_LIST_FIELDS = listOf("decisions", "keyDecisions", "changes")
+
+/** create_plan 参数整体形状矫正：先矫正子任务列表里每个 subtask，再矫正顶层字段 */
+private object LenientCreatePlanArgs :
+    JsonTransformingSerializer<PlanTools.CreatePlanArgs>(PlanTools.CreatePlanArgs.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        var result = element
+        // subtasks[*].decisions / targetFiles 内层矫正
+        val subtasks = result.subelement("subtasks")
+        if (subtasks is JsonArray) {
+            val fixed = JsonArray(subtasks.map { sub ->
+                OBJECT_LIST_FIELDS.fold(sub) { acc, f -> coerceObjectListField(acc, f) }
+            })
+            result = kotlinx.serialization.json.JsonObject(
+                (result as? kotlinx.serialization.json.JsonObject)?.toMutableMap()?.apply { put("subtasks", fixed) }
+                    ?: mutableMapOf("subtasks" to fixed)
+            )
+        }
+        // 顶层 keyDecisions / changes 矫正
+        return OBJECT_LIST_FIELDS.fold(result) { acc, f -> coerceObjectListField(acc, f) }
+    }
+}
+
+/** generate_spec/子任务级参数形状矫正 */
+private object LenientSubtaskArg :
+    JsonTransformingSerializer<PlanTools.SubtaskArg>(PlanTools.SubtaskArg.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        OBJECT_LIST_FIELDS.fold(element) { acc, f -> coerceObjectListField(acc, f) }
+}
+
+private fun JsonElement.subelement(name: String): JsonElement? =
+    (this as? kotlinx.serialization.json.JsonObject)?.get(name)
+
+class PlanTools(
+    private val sessionId: String,
+    private val agentMode: AgentMode,
+    private val workType: WorkType,
+    private val planStore: PlanStore,
+    private val planApprovalRequester: PlanApprovalRequester,
+    private val notebook: Notebook,
+    private val eventBus: MutableSharedFlow<MederiEvent>
+) {
+
+    @Serializable
+    data class DecisionArg(
+        @LLMDescription("The question or uncertainty being decided.")
+        val question: String = "",
+        @LLMDescription("The choice that was made.")
+        val choice: String = "",
+        @LLMDescription("Why this choice was made.")
+        val rationale: String = "",
+        @LLMDescription("Other options that were considered (list them as an array).")
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val alternatives: List<String> = emptyList()
+    )
+
+    @Serializable
+    data class PlannedChangeArg(
+        @LLMDescription("Module or component grouping label, e.g. 'core', 'cli', 'ui'. Required.")
+        val module: String = "",
+        @LLMDescription("Action type: MODIFY, NEW, or DELETE.")
+        val action: String,
+        @LLMDescription("File path to be created or modified.")
+        val filePath: String,
+        @LLMDescription("What will be changed.")
+        val description: String,
+        @LLMDescription("Why this change is needed here, and why this approach.")
+        val rationale: String
+    )
+
+    @KeepGeneratedSerializer
+    @Serializable(with = LenientSubtaskArg::class)
+    data class SubtaskArg(
+        @LLMDescription("Subtask name. Concise action-noun.")
+        val name: String,
+        @LLMDescription(
+            "Brief intent (1-3 sentences): what this subtask achieves and why it exists. " +
+                "Do NOT write the detailed implementation spec here — the detailed spec is generated " +
+                "AFTER plan approval via generate_spec, grounded in the actual codebase."
+        )
+        val planDetail: String = "",
+        @LLMDescription("Exact file paths that will be created or modified (list them as an array). Required in Code mode, not needed in Work mode.")
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val targetFiles: List<String> = emptyList(),
+        @LLMDescription("Design decisions resolved during planning this subtask.")
+        val decisions: List<DecisionArg> = emptyList(),
+        @LLMDescription("Verification method: specific commands + expected results + pass criteria.")
+        val verification: String,
+        @LLMDescription("Indices of subtasks this depends on (0-based).")
+        val dependsOn: List<Int> = emptyList(),
+        @LLMDescription("Whether this can run in parallel with other subtasks.")
+        val parallelizable: Boolean = false
+    )
+
+    @KeepGeneratedSerializer
+    @Serializable(with = LenientCreatePlanArgs::class)
+    data class CreatePlanArgs(
+        @LLMDescription("Plan title.")
+        val title: String,
+        @LLMDescription(
+            "ONE sentence for the approval card: what will change and to what end. " +
+                "Must NOT duplicate the overview — the overview explains background and goals, " +
+                "this is the single-line takeaway."
+        )
+        val summary: String = "",
+        @LLMDescription(
+            "Project context: GREENFIELD (brand-new project built from zero) or BROWNFIELD " +
+                "(iterating an existing codebase). GREENFIELD plans must make the FIRST subtask " +
+                "a project bootstrap: module init + dependency manifest (go.mod / package.json / ...)."
+        )
+        val projectContext: String = "BROWNFIELD",
+        @LLMDescription("Language and toolchain with version, e.g. 'Go 1.22', 'Kotlin 2.1 + Gradle 8.10'.")
+        val languageStack: String = "",
+        @LLMDescription(
+            "Business logic in coherent, human-readable prose: where the requirement enters " +
+                "(UI action, API, command — and which function/call chain receives it), how behavior changes " +
+                "(before vs after), and where the new logic hooks into the existing call chain. " +
+                "Write flowing sentences that survive being read aloud once — no telegraphic fragments. " +
+                "Required in Code mode, not needed in Work mode."
+        )
+        val businessLogic: String = "",
+        @LLMDescription("Goal and background: what to build and why.")
+        val overview: String = "",
+        @LLMDescription("In scope: what this plan will do.")
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val inScope: List<String> = emptyList(),
+        @LLMDescription("Out of scope: what this plan will NOT do.")
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val outScope: List<String> = emptyList(),
+        @LLMDescription("Key decisions: trade-offs, breaking changes, and rationale.")
+        val keyDecisions: List<DecisionArg> = emptyList(),
+        @LLMDescription("Proposed changes per module with [MODIFY]/[NEW]/[DELETE] markers. Required in Code mode.")
+        val changes: List<PlannedChangeArg> = emptyList(),
+        @LLMDescription(
+            "Optional: data sources read or written (tables, files, endpoints, formats) and new or changed " +
+                "parameters with their defaults. Omit entirely if the task touches no data or parameters."
+        )
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val dataAndParams: List<String> = emptyList(),
+        @LLMDescription("Risks and rollback strategy.")
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val risks: List<String> = emptyList(),
+        @LLMDescription("Success criteria: how to know the task is done. Also the verification basis.")
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val successCriteria: List<String> = emptyList(),
+        @LLMDescription("Optional: Mermaid or PlantUML diagram code for architecture visualization.")
+        val architecture: String? = null,
+        @LLMDescription("Subtask list (the skeleton). Each must include name, brief intent, targetFiles (Code mode), and verification. Detailed implementation specs are generated after approval via generate_spec.")
+        val subtasks: List<SubtaskArg>
+    )
+
+    @Serializable
+    data class GenerateSpecArgs(
+        @LLMDescription("Plan ID from the approved plan.")
+        val planId: String,
+        @LLMDescription("Subtask index (0-based) to generate the spec for.")
+        val subtaskIndex: Int,
+        @LLMDescription(
+            "The detailed implementation spec as an ORDERED CHECKLIST: numbered steps (1. 2. 3.), " +
+                "each step concrete and independently verifiable (create X, modify Y, add test Z), " +
+                "in execution order. Include exact function names/signatures grounded in the real code " +
+                "(read the files first), data structures, edge cases, and error handling. " +
+                "The executing subagent works through this checklist top-down, item by item."
+        )
+        val spec: String
+    )
+
+    inner class CreatePlanTool : SimpleTool<CreatePlanArgs>(
+        argsType = typeToken<CreatePlanArgs>(),
+        name = "create_plan",
+        description = "Create the implementation PLAN (the WHAT): business logic, scope, decisions, changes, " +
+            "and subtask skeletons (name + brief intent + targetFiles + verification). This is what the user " +
+            "approves. Do NOT write detailed implementation specs here — after approval, call generate_spec " +
+            "per subtask to produce the executable spec grounded in the actual codebase. " +
+            "In Approval mode, the plan is saved to a file and the user is notified via event. " +
+            "In Autonomous mode, the plan is auto-approved."
+    ) {
+        override suspend fun execute(args: CreatePlanArgs): String {
+            val error = validatePlan(args)
+            if (error != null) return "Error: $error"
+
+            val now = Instant.now().atZone(ZoneOffset.UTC)
+            val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").format(now)
+
+            val plan = Plan(
+                id = "plan_${UUID.randomUUID().toString().take(8)}",
+                title = args.title,
+                summary = args.summary,
+                projectContext = if (args.projectContext.equals("GREENFIELD", ignoreCase = true))
+                    xyz.mederi.plan.ProjectContextType.GREENFIELD
+                else xyz.mederi.plan.ProjectContextType.BROWNFIELD,
+                languageStack = args.languageStack,
+                sessionId = sessionId,
+                businessLogic = args.businessLogic,
+                overview = args.overview,
+                inScope = args.inScope,
+                outScope = args.outScope,
+                keyDecisions = args.keyDecisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
+                changes = args.changes.map { PlannedChange(it.module.ifBlank { "core" }, it.action.uppercase(), it.filePath, it.description, it.rationale) },
+                dataAndParams = args.dataAndParams,
+                risks = args.risks,
+                successCriteria = args.successCriteria,
+                architecture = args.architecture,
+                subtasks = args.subtasks.mapIndexed { i, st ->
+                    Subtask(
+                        index = i,
+                        name = st.name,
+                        planDetail = st.planDetail,
+                        targetFiles = st.targetFiles,
+                        decisions = st.decisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
+                        verification = st.verification,
+                        dependsOn = st.dependsOn,
+                        parallelizable = st.parallelizable
+                    )
+                },
+                status = if (agentMode == AgentMode.AUTONOMOUS) PlanStatus.APPROVED else PlanStatus.PENDING_APPROVAL,
+                createdAt = timestamp,
+                agentMode = agentMode,
+                workType = workType
+            )
+
+            planStore.save(plan)
+            // save 已自愈创建 .mederi；仍拿不到路径说明项目目录异常——明确报错，
+            // 绝不带着空 planPath 发批准事件（UI 会渲染成无内容的空壳卡片）
+            val planPath = planStore.getPlanAbsolutePath(plan.id)
+                ?: return "Error: plan was created but could not be persisted under .mederi/plans/ " +
+                    "of the project directories. Check that the project's main directory is writable, " +
+                    "then retry create_plan."
+
+            val planContent = runCatching { java.io.File(planPath).readText() }.getOrDefault("")
+            DebugLog.data(
+                "PlanTools",
+                "create_plan executed",
+                "planId=${plan.id}, title='${plan.title}', summary='${plan.summary}', contentLen=${planContent.length}"
+            )
+
+            return if (agentMode == AgentMode.APPROVAL) {
+                val result = planApprovalRequester.request(
+                    planId = plan.id,
+                    planPath = planPath,
+                    title = plan.title,
+                    summary = plan.summary,
+                    planContent = planContent,
+                    subtaskCount = plan.subtasks.size
+                )
+                if (result.superseded) {
+                    "Plan superseded by a newer plan request."
+                } else if (result.approved) {
+                    planStore.update(plan.copy(status = PlanStatus.APPROVED))
+                    notebook.append("## ${Instant.now()} — Plan approved: ${plan.title}")
+                    "Plan approved. Plan ID: ${plan.id}. Use spawn_agent to execute subtasks."
+                } else {
+                    // 拒绝后不盲目重提：直接在最终回复里问用户理由，turn 正常结束，
+                    // 用户答复后（下一轮）再修订重提——避免被拒后疯狂 create_plan 循环
+                    "Plan rejected by the user. Do NOT retry create_plan now. In your final " +
+                        "reply, ask the user why it was rejected and what to adjust " +
+                        "(scope, approach, files, granularity), then wait for their answer " +
+                        "before revising and requesting approval again."
+                }
+            } else {
+                notebook.append("## ${Instant.now()} — Plan created (auto-approved): ${plan.title}")
+                "Plan created and auto-approved. Plan ID: ${plan.id}. Use spawn_agent to execute subtasks."
+            }
+        }
+    }
+
+    @Serializable
+    data class ConvergePlanArgs(
+        @LLMDescription("Plan ID to converge.")
+        val planId: String,
+        @LLMDescription("Remediation subtasks to append. Same structure as create_plan subtasks.")
+        val remediationSubtasks: List<SubtaskArg>
+    )
+
+    inner class ConvergePlanTool : SimpleTool<ConvergePlanArgs>(
+        argsType = typeToken<ConvergePlanArgs>(),
+        name = "converge_plan",
+        description = "When verify_subtask reports PARTIAL or FAIL, append remediation subtasks to the plan. " +
+            "Append-only: never rewrites or renumbers existing subtasks."
+    ) {
+        override suspend fun execute(args: ConvergePlanArgs): String {
+            val plan = planStore.load(args.planId)
+                ?: return "Error: Plan not found: ${args.planId}"
+            if (args.remediationSubtasks.isEmpty())
+                return "Error: Must provide at least one remediation subtask."
+
+            val nextIndex = plan.subtasks.size
+            val newSubtasks = args.remediationSubtasks.mapIndexed { i, st ->
+                Subtask(
+                    index = nextIndex + i,
+                    name = st.name,
+                    planDetail = st.planDetail,
+                    targetFiles = st.targetFiles,
+                    decisions = st.decisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
+                    verification = st.verification,
+                    dependsOn = st.dependsOn,
+                    parallelizable = st.parallelizable
+                )
+            }
+
+            val updatedPlan = plan.copy(subtasks = plan.subtasks + newSubtasks)
+            planStore.save(updatedPlan)
+
+            val passed = updatedPlan.subtasks.count { it.status == SubtaskStatus.COMPLETED }
+            val failed = updatedPlan.subtasks.count { it.status == SubtaskStatus.FAILED }
+            val pending = updatedPlan.subtasks.count { it.status == SubtaskStatus.PENDING }
+            eventBus.emit(MederiEvent(
+                type = EventType.PLAN_PROGRESS,
+                sessionId = sessionId,
+                payload = mapOf(
+                    "planId" to args.planId,
+                    "action" to "converged",
+                    "appendedCount" to args.remediationSubtasks.size.toString(),
+                    "totalSubtasks" to updatedPlan.subtasks.size.toString(),
+                    "passed" to passed.toString(),
+                    "failed" to failed.toString(),
+                    "pending" to pending.toString()
+                ),
+                timestamp = Instant.now().toString()
+            ))
+
+            return "Converged: ${args.remediationSubtasks.size} remediation subtasks appended " +
+                "(indices $nextIndex..${nextIndex + newSubtasks.size - 1}). " +
+                "Use spawn_agent to execute."
+        }
+    }
+
+    @Serializable
+    data class WriteLogArgs(
+        @LLMDescription("Log entry content.")
+        val entry: String
+    )
+
+    inner class WriteLogTool : SimpleTool<WriteLogArgs>(
+        argsType = typeToken<WriteLogArgs>(),
+        name = "write_log",
+        description = "Append an entry to the work log (.mederi/notebook.md). Use this to record decisions, findings, and important events."
+    ) {
+        override suspend fun execute(args: WriteLogArgs): String {
+            val timestamp = Instant.now().toString()
+            notebook.append("## $timestamp — Log entry\n${args.entry}")
+            return "Logged."
+        }
+    }
+
+    /**
+     * generate_spec：计划批准后，为单个子任务派生可执行 Spec。
+     *
+     * 分层语义（docs/sandbox-plan.md / AGENTS.md §5.5）：
+     * - Plan（批准前）= WHAT：意图级骨架，用户审的是这个
+     * - Spec（批准后）= HOW：对照真实代码写函数签名/数据结构/边界情况——
+     *   此时计划已定、前序子任务已有产出，spec 天然贴地，不存在"写着写着过期"
+     * - spawn_agent 只能按已存在的 Spec 执行（硬保证），发现 spec 与现实矛盾
+     *   → 重新 generate_spec（upsert 覆盖）→ 重执行
+     */
+    inner class GenerateSpecTool : SimpleTool<GenerateSpecArgs>(
+        argsType = typeToken<GenerateSpecArgs>(),
+        name = "generate_spec",
+        description = "Generate the detailed implementation spec for ONE subtask of an APPROVED plan, " +
+            "grounded in the actual codebase (read the real files first: function names, signatures, " +
+            "data structures must match reality). Call this right before spawning an agent for the " +
+            "subtask — and re-call it to REPLACE the spec whenever verification shows the spec itself " +
+            "contradicts reality. The spec is stored per (planId, subtaskIndex); spawn_agent will " +
+            "execute exactly this spec."
+    ) {
+        override suspend fun execute(args: GenerateSpecArgs): String {
+            val plan = planStore.load(args.planId)
+                ?: return "Error: Plan not found: ${args.planId}"
+            if (plan.status != PlanStatus.APPROVED && plan.status != PlanStatus.IN_PROGRESS)
+                return "Error: Plan ${plan.id} is ${plan.status}. Specs can only be generated for an approved plan."
+            val st = plan.subtasks.getOrNull(args.subtaskIndex)
+                ?: return "Error: Subtask index ${args.subtaskIndex} out of range (0..${plan.subtasks.size - 1})."
+            if (st.status == SubtaskStatus.COMPLETED)
+                return "Error: Subtask ${args.subtaskIndex} is COMPLETED. Use converge_plan to append new work instead."
+            if (args.spec.isBlank())
+                return "Error: spec must not be empty."
+
+            // Spec 只写进 Subtask.spec（spawn_agent 读取的真理源）；brief（planDetail）保留不动，
+            // 用户批准时看到的内容永不失真，spec 可反复覆盖重写。
+            val updated = plan.copy(
+                subtasks = plan.subtasks.mapIndexed { i, s ->
+                    if (i == args.subtaskIndex) s.copy(spec = args.spec) else s
+                }
+            )
+            planStore.update(updated)
+            notebook.append(
+                "## ${Instant.now()} — Spec generated: Subtask ${args.subtaskIndex} (${st.name})\n"
+            )
+            eventBus.emit(xyz.mederi.domain.model.MederiEvent(
+                type = EventType.PLAN_PROGRESS,
+                sessionId = sessionId,
+                payload = mapOf(
+                    "planId" to args.planId,
+                    "action" to "spec-generated",
+                    "subtaskIndex" to args.subtaskIndex.toString()
+                ),
+                timestamp = Instant.now().toString()
+            ))
+            return "Spec saved for Subtask ${args.subtaskIndex} (${st.name}). " +
+                "Spawn an agent with planId=${args.planId}, subtaskIndex=${args.subtaskIndex} to execute it."
+        }
+    }
+
+    /**
+     * 计划校验（聚合报错）：一次列出全部问题，模型一轮补齐所有缺失项。
+     * 逐条报错的台阶实测爬不完（弱模型 6+ 轮都到不了底），聚合后一轮收敛。
+     */
+    private fun validatePlan(args: CreatePlanArgs): String? {
+        val errors = mutableListOf<String>()
+        if (args.subtasks.isEmpty())
+            errors.add("Plan must contain at least one subtask.")
+        if (args.overview.isBlank())
+            errors.add("Overview is required: background and goals (1-2 sentences).")
+        // Summary 与 Overview 复读拦截：卡片摘要是一句话结论，Overview 是背景与目标，语义不同
+        if (args.summary.isNotBlank() && args.summary.trim() == args.overview.trim())
+            errors.add(
+                "Summary must not duplicate the Overview. Summary = ONE sentence for the approval " +
+                    "card (what will change); Overview = background and goals (1-2 paragraphs)."
+            )
+        val isGreenfield = args.projectContext.equals("GREENFIELD", ignoreCase = true)
+        if (workType == WorkType.CODE) {
+            // 二值不变量校验：只检查"有没有"，不限制"写多少"（篇幅交给提示词约束）
+            if (args.businessLogic.isBlank())
+                errors.add(
+                    "Business logic is required in CODE mode: entry point, before/after behavior, " +
+                        "and where the new logic hooks into the call chain."
+                )
+            if (args.inScope.isEmpty())
+                errors.add("In Scope is required: what will this plan do?")
+            if (args.keyDecisions.isEmpty())
+                errors.add(
+                    "Key Decisions is required: surface your assumptions and choices explicitly " +
+                        "(storage location, formats, algorithms, libraries) instead of burying them in prose."
+                )
+            if (args.changes.isEmpty())
+                errors.add(
+                    "Changes is required in CODE mode: list every file with [MODIFY]/[NEW]/[DELETE] markers. " +
+                        "Every [NEW] file must justify why an existing file cannot be modified instead."
+                )
+            if (args.successCriteria.isEmpty())
+                errors.add("Success criteria is required: how do we know the whole task is done?")
+            if (args.languageStack.isBlank())
+                errors.add("Language stack is required in CODE mode, e.g. 'Go 1.22', 'Kotlin 2.1 + Gradle 8.10'.")
+            for (c in args.changes) {
+                if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
+                    errors.add(
+                        "Change ${c.filePath}: action must be MODIFY, NEW, or DELETE (got \"${c.action}\"). " +
+                            "Example: {module: \"core\", action: \"NEW\", filePath: \"main.go\", description: \"...\", rationale: \"...\"}."
+                    )
+                if (c.action.equals("NEW", ignoreCase = true) && c.rationale.isBlank())
+                    errors.add("Change ${c.filePath}: a [NEW] file must justify why an existing file cannot be modified instead.")
+            }
+        }
+        args.subtasks.forEachIndexed { i, st ->
+            if (st.verification.isBlank())
+                errors.add("Subtask $i (${st.name}): verification is required.")
+            if (workType == WorkType.CODE && st.targetFiles.isEmpty())
+                errors.add("Subtask $i (${st.name}): targetFiles required in CODE mode (which files will be changed?).")
+            for (dep in st.dependsOn) {
+                if (dep >= args.subtasks.size || dep < 0)
+                    errors.add("Subtask $i (${st.name}): dependsOn $dep out of range (0..${args.subtasks.size - 1}).")
+            }
+        }
+        if (isGreenfield && workType == WorkType.CODE) {
+            // Greenfield 第一个子任务必须做项目骨架：否则后续子任务产出的代码根本无法编译
+            args.subtasks.firstOrNull()?.let { first ->
+                val bootstrapHint = first.name + " " + first.planDetail
+                val isBootstrap = listOf("bootstrap", "init", "scaffold", "go.mod", "package.json",
+                    "build.gradle", "cargo.toml", "pyproject", "module", "skeleton", "骨架", "初始化", "脚手架")
+                    .any { bootstrapHint.contains(it, ignoreCase = true) }
+                if (!isBootstrap)
+                    errors.add(
+                        "This plan is GREENFIELD: the FIRST subtask must be project bootstrap — " +
+                            "module init + dependency manifest (go.mod / package.json / build.gradle.kts / ...), " +
+                            "so later subtasks can build. Name it accordingly (e.g. 'Project bootstrap: go mod init + deps')."
+                    )
+            }
+        }
+        if (errors.isEmpty()) return null
+        return "Plan validation failed — fix ALL of the following items, then retry create_plan once with the complete arguments:\n" +
+            errors.mapIndexed { i, e -> "${i + 1}. $e" }.joinToString("\n")
+    }
+}

@@ -1,0 +1,534 @@
+package xyz.emuci.markdown.renderer.inline
+
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.BaselineShift
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
+import xyz.emuci.syntax.renderer.InlineCodeDefaults
+import xyz.emuci.syntax.renderer.measureInlineCodeSize
+import xyz.emuci.syntax.theme.CodeTheme
+import xyz.emuci.latex.renderer.measure.LatexMeasurerState
+import xyz.emuci.latex.renderer.model.LatexConfig
+import xyz.emuci.markdown.parser.core.CharacterUtils
+import xyz.emuci.markdown.renderer.DefaultMarkdownImage
+import xyz.emuci.markdown.renderer.LocalImageRenderer
+import xyz.emuci.markdown.renderer.MarkdownImageData
+import xyz.emuci.markdown.renderer.MarkdownTheme
+import xyz.emuci.markdown.renderer.internal.adapter.createDirectiveInlineRenderScope
+import xyz.emuci.markdown.renderer.internal.core.model.DirectiveInlineWidgetModel
+import xyz.emuci.markdown.renderer.internal.core.model.ImageWidgetModel
+import xyz.emuci.markdown.renderer.internal.core.model.InlineAtom
+import xyz.emuci.markdown.renderer.internal.core.model.InlineCodeWidgetModel
+import xyz.emuci.markdown.renderer.internal.core.model.InlineMathWidgetModel
+import xyz.emuci.markdown.renderer.internal.core.model.InlineModel
+import xyz.emuci.markdown.renderer.internal.core.model.RubyTextWidgetModel
+import xyz.emuci.markdown.renderer.internal.core.model.SpanMark
+import xyz.emuci.markdown.renderer.internal.core.model.SpoilerWidgetModel
+import xyz.emuci.markdown.renderer.internal.core.model.TextAtom
+import xyz.emuci.markdown.renderer.internal.core.model.WidgetAtom
+import xyz.emuci.markdown.renderer.internal.layout.inline.InlineFlowInput
+import xyz.emuci.markdown.renderer.internal.layout.inline.InlineFlowSegment
+import xyz.emuci.markdown.runtime.MarkdownDirectiveRegistry
+import kotlin.math.ceil
+import xyz.emuci.syntax.renderer.InlineCode as CodeHighInlineCode
+
+internal fun buildInlineRenderResultFromModel(
+    model: InlineModel,
+    theme: MarkdownTheme,
+    hostTextStyle: TextStyle,
+    directiveRegistry: MarkdownDirectiveRegistry,
+    onLinkClick: ((String) -> Unit)? = null,
+    onFootnoteClick: ((String) -> Unit)? = null,
+    latexMeasurer: LatexMeasurerState,
+    density: Density,
+    textMeasurer: TextMeasurer,
+    codeTheme: CodeTheme? = null,
+): InlineRenderResult {
+    val flowSegments = mutableListOf<InlineFlowSegment>()
+    val context = InlineRenderBuildContext(
+        paintPayloads = linkedMapOf(),
+        flowSegments = flowSegments,
+    )
+    val annotated = buildAnnotatedString {
+        renderInlineModel(
+            model = model,
+            theme = theme,
+            hostTextStyle = hostTextStyle,
+            context = context,
+            directiveRegistry = directiveRegistry,
+            onLinkClick = onLinkClick,
+            onFootnoteClick = onFootnoteClick,
+            latexMeasurer = latexMeasurer,
+            density = density,
+            textMeasurer = textMeasurer,
+            inlineCodeTheme = codeTheme,
+        )
+    }
+    return InlineRenderResult(
+        annotated = annotated,
+        paintPayloads = context.paintPayloads,
+        flowInput = InlineFlowInput(flowSegments),
+        inlineMathBuildRequests = context.inlineMathBuildRequests,
+    )
+}
+
+internal fun AnnotatedString.Builder.renderInlineModel(
+    model: InlineModel,
+    theme: MarkdownTheme,
+    hostTextStyle: TextStyle,
+    context: InlineRenderBuildContext,
+    directiveRegistry: MarkdownDirectiveRegistry,
+    onLinkClick: ((String) -> Unit)?,
+    onFootnoteClick: ((String) -> Unit)?,
+    latexMeasurer: LatexMeasurerState,
+    density: Density,
+    textMeasurer: TextMeasurer,
+    inlineCodeTheme: CodeTheme? = null,
+) {
+    model.atoms.forEachIndexed { index, atom ->
+        when (atom) {
+            is TextAtom -> {
+                val normalized = normalizeTextAtomForCjkInlineMathSpacing(
+                    atoms = model.atoms,
+                    index = index,
+                    atom = atom,
+                )
+                renderTextAtom(
+                    atom = normalized,
+                    theme = theme,
+                    context = context,
+                    onLinkClick = onLinkClick,
+                    onFootnoteClick = onFootnoteClick,
+                    sourceOffset = atom.text.indexOf(normalized.text).coerceAtLeast(0),
+                    sourceLength = atom.text.length,
+                )
+            }
+
+            is WidgetAtom -> renderWidgetAtom(
+                atom = atom,
+                theme = theme,
+                hostTextStyle = hostTextStyle,
+                context = context,
+                directiveRegistry = directiveRegistry,
+                onLinkClick = onLinkClick,
+                onFootnoteClick = onFootnoteClick,
+                latexMeasurer = latexMeasurer,
+                density = density,
+                textMeasurer = textMeasurer,
+                inlineCodeTheme = inlineCodeTheme,
+            )
+        }
+    }
+}
+
+private fun normalizeTextAtomForCjkInlineMathSpacing(
+    atoms: List<InlineAtom>,
+    index: Int,
+    atom: TextAtom,
+): TextAtom {
+    var text = atom.text
+    if (text.isEmpty()) return atom
+
+    val previous = atoms.getOrNull(index - 1)
+    val next = atoms.getOrNull(index + 1)
+
+    if (previous.isInlineMathWidgetAtom() && text.firstOrNull()?.isWhitespace() == true) {
+        val nextVisible = text.firstOrNull { !it.isWhitespace() }
+        if (nextVisible != null && CharacterUtils.isCJKOrFullWidthPunctuation(nextVisible)) {
+            text = text.trimStart()
+        }
+    }
+
+    if (next.isInlineMathWidgetAtom() && text.lastOrNull()?.isWhitespace() == true) {
+        val previousVisible = text.lastOrNull { !it.isWhitespace() }
+        if (previousVisible != null && CharacterUtils.isCJKOrFullWidthPunctuation(previousVisible)) {
+            text = text.trimEnd()
+        }
+    }
+
+    return if (text == atom.text) atom else atom.copy(text = text)
+}
+
+private fun InlineAtom?.isInlineMathWidgetAtom(): Boolean {
+    return (this as? WidgetAtom)?.widget is InlineMathWidgetModel
+}
+
+private fun AnnotatedString.Builder.renderTextAtom(
+    atom: TextAtom,
+    theme: MarkdownTheme,
+    context: InlineRenderBuildContext,
+    onLinkClick: ((String) -> Unit)?,
+    onFootnoteClick: ((String) -> Unit)?,
+    sourceOffset: Int,
+    sourceLength: Int,
+) {
+    val clickMark =
+        atom.marks.lastOrNull { it.kind == "link" || it.kind == "footnote" || it.kind == "citation" }
+    val abbreviation = atom.marks.lastOrNull { it.kind == "abbreviation" }?.payload?.get("fullText")
+    val spanStyle = atom.marks.fold(SpanStyle()) { acc, mark ->
+        acc.merge(spanStyleForMark(mark, theme))
+    }
+
+    val segment = buildAnnotatedString {
+        val appendText: AnnotatedString.Builder.() -> Unit = {
+            if (!abbreviation.isNullOrEmpty()) {
+                pushStringAnnotation(tag = "abbreviation", annotation = abbreviation)
+            }
+            if (spanStyle != SpanStyle()) {
+                withStyle(spanStyle) { append(atom.text) }
+            } else {
+                append(atom.text)
+            }
+            if (!abbreviation.isNullOrEmpty()) {
+                pop()
+            }
+        }
+
+        when (clickMark?.kind) {
+            "link" -> {
+                val target = clickMark.payload["target"].orEmpty()
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = clickMark.payload["tag"] ?: "link",
+                        styles = TextLinkStyles(
+                            style = SpanStyle(
+                                color = theme.linkColor,
+                                textDecoration = TextDecoration.Underline,
+                            )
+                        ),
+                        linkInteractionListener = { onLinkClick?.invoke(target) },
+                    )
+                ) { appendText() }
+            }
+
+            "footnote" -> {
+                val label = clickMark.payload["label"].orEmpty()
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = "footnote",
+                        styles = TextLinkStyles(
+                            style = SpanStyle(
+                                color = theme.linkColor,
+                                fontSize = theme.footnoteStyle.fontSize,
+                                baselineShift = BaselineShift.Superscript,
+                            )
+                        ),
+                        linkInteractionListener = { onFootnoteClick?.invoke(label) },
+                    )
+                ) { appendText() }
+            }
+
+            "citation" -> {
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = "citation",
+                        styles = TextLinkStyles(
+                            style = SpanStyle(
+                                color = theme.linkColor,
+                                fontSize = theme.footnoteStyle.fontSize,
+                                baselineShift = BaselineShift.Superscript,
+                            )
+                        ),
+                        linkInteractionListener = { },
+                    )
+                ) { appendText() }
+            }
+
+            else -> appendText()
+        }
+    }
+    context.emitTextAtom(
+        builder = this,
+        segment = segment,
+        sourceOffset = sourceOffset,
+        sourceLength = sourceLength,
+    )
+}
+
+private fun spanStyleForMark(mark: SpanMark, theme: MarkdownTheme): SpanStyle = when (mark.kind) {
+    "emphasis" -> SpanStyle(fontStyle = FontStyle.Italic)
+    "strong" -> SpanStyle(fontWeight = FontWeight.Bold)
+    "strikethrough" -> theme.strikethroughStyle
+    "highlight" -> SpanStyle(background = theme.highlightColor)
+    "superscript" -> theme.superscriptStyle.merge(SpanStyle(baselineShift = BaselineShift.Superscript))
+    "subscript" -> theme.subscriptStyle.merge(SpanStyle(baselineShift = BaselineShift.Subscript))
+    "inserted" -> theme.insertedTextStyle
+    "styled" -> {
+        val style = mark.payload["style"]?.let(::parseCssStyleToSpanStyle)
+        val classes = mark.payload["class"]?.split(" ")?.filter { it.isNotBlank() }.orEmpty()
+        style ?: inferStyleFromClasses(classes, theme) ?: SpanStyle()
+    }
+
+    "abbreviation" -> theme.abbreviationStyle
+    "kbd" -> theme.kbdStyle
+    "inline_html" -> SpanStyle(
+        color = Color.Gray,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 14.sp,
+    )
+
+    else -> SpanStyle()
+}
+
+private fun AnnotatedString.Builder.renderWidgetAtom(
+    atom: WidgetAtom,
+    theme: MarkdownTheme,
+    hostTextStyle: TextStyle,
+    context: InlineRenderBuildContext,
+    directiveRegistry: MarkdownDirectiveRegistry,
+    onLinkClick: ((String) -> Unit)?,
+    onFootnoteClick: ((String) -> Unit)?,
+    latexMeasurer: LatexMeasurerState,
+    density: Density,
+    textMeasurer: TextMeasurer,
+    inlineCodeTheme: CodeTheme? = null,
+) {
+    when (val widget = atom.widget) {
+        is InlineCodeWidgetModel -> renderInlineCodeWidget(
+            widget,
+            theme,
+            context,
+            density,
+            textMeasurer,
+            inlineCodeTheme
+        )
+
+        is ImageWidgetModel -> renderImageWidget(widget, context)
+        is InlineMathWidgetModel -> renderInlineMathWidget(
+            widget,
+            theme,
+            hostTextStyle,
+            context,
+            latexMeasurer,
+            density
+        )
+
+        is SpoilerWidgetModel -> renderSpoilerWidget(
+            widget = widget,
+            theme = theme,
+            hostTextStyle = hostTextStyle,
+            context = context,
+            directiveRegistry = directiveRegistry,
+            onLinkClick = onLinkClick,
+            onFootnoteClick = onFootnoteClick,
+            latexMeasurer = latexMeasurer,
+            density = density,
+            textMeasurer = textMeasurer,
+            inlineCodeTheme = inlineCodeTheme,
+        )
+
+        is DirectiveInlineWidgetModel -> renderDirectiveInlineWidget(
+            widget,
+            theme,
+            context,
+            directiveRegistry,
+            density
+        )
+
+        is RubyTextWidgetModel -> renderRubyTextWidget(widget, theme, context, density)
+    }
+}
+
+private fun AnnotatedString.Builder.renderInlineCodeWidget(
+    widget: InlineCodeWidgetModel,
+    theme: MarkdownTheme,
+    context: InlineRenderBuildContext,
+    density: Density?,
+    textMeasurer: TextMeasurer?,
+    inlineCodeTheme: CodeTheme?,
+) {
+    if (density != null && textMeasurer != null && inlineCodeTheme != null) {
+        val inlineCodeStyle = InlineCodeDefaults.style(inlineCodeTheme)
+        val size = measureInlineCodeSize(
+            text = widget.code,
+            style = inlineCodeStyle,
+            density = density,
+            textMeasurer = textMeasurer,
+        )
+        context.emitInlineCodeWidget(
+            builder = this,
+            widget = widget,
+            widthPx = ceil(size.width),
+            heightPx = size.height,
+        ) {
+            CodeHighInlineCode(text = widget.code, style = inlineCodeStyle)
+        }
+    } else {
+        context.emitStyledTextAtom(this, widget.code, theme.inlineCodeStyle)
+    }
+}
+
+private fun AnnotatedString.Builder.renderImageWidget(
+    widget: ImageWidgetModel,
+    context: InlineRenderBuildContext,
+) {
+    context.emitImageWidget(
+        builder = this,
+        widget = widget,
+        widthPx = widget.width?.toFloat() ?: 200f,
+        heightPx = widget.height?.toFloat() ?: 150f,
+    ) {
+        val imageData = MarkdownImageData(
+            url = widget.url,
+            altText = widget.altText,
+            title = widget.title,
+            width = widget.width,
+            height = widget.height,
+            attributes = widget.attributes,
+        )
+        val customRenderer = LocalImageRenderer.current
+        if (customRenderer != null) {
+            customRenderer(imageData, Modifier)
+        } else {
+            DefaultMarkdownImage(data = imageData)
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.renderInlineMathWidget(
+    widget: InlineMathWidgetModel,
+    theme: MarkdownTheme,
+    hostTextStyle: TextStyle,
+    context: InlineRenderBuildContext,
+    latexMeasurer: LatexMeasurerState,
+    density: Density,
+) {
+    context.recordInlineMathBuildRequest()
+    val trimmedLatex = widget.latex.trim()
+    val latexConfig = LatexConfig(
+        fontSize = theme.mathFontSize.sp,
+        theme = theme.latexTheme,
+    )
+    val inlineContent = latexMeasurer.inlineContent(trimmedLatex, latexConfig)
+    if (inlineContent == null) {
+        context.emitStyledTextAtom(
+            builder = this,
+            text = widget.latex,
+            style = hostTextStyle.toSpanStyle(),
+        )
+        return
+    }
+    context.emitInlineMathWidget(
+        builder = this,
+        widget = widget,
+        inlineContent = inlineContent,
+        density = density,
+    )
+}
+
+private fun AnnotatedString.Builder.renderSpoilerWidget(
+    widget: SpoilerWidgetModel,
+    theme: MarkdownTheme,
+    hostTextStyle: TextStyle,
+    context: InlineRenderBuildContext,
+    directiveRegistry: MarkdownDirectiveRegistry,
+    onLinkClick: ((String) -> Unit)?,
+    onFootnoteClick: ((String) -> Unit)?,
+    latexMeasurer: LatexMeasurerState,
+    density: Density,
+    textMeasurer: TextMeasurer,
+    inlineCodeTheme: CodeTheme?,
+) {
+    val fontSize = theme.bodyStyle.fontSize.value
+    val avgCharWidth = widget.alternateText.sumOf { ch -> if (ch.code > 0x7F) 12 else 7 }
+        .toFloat() / 10f * (fontSize / 16f)
+    context.emitSpoilerWidget(
+        builder = this,
+        widget = widget,
+        widthPx = density.scaledSpValueToPx(avgCharWidth + 8f),
+        heightPx = density.scaledSpValueToPx(fontSize * 1.5f),
+    ) {
+        SpoilerContent(
+            model = widget.content,
+            theme = theme,
+            hostTextStyle = hostTextStyle,
+            directiveRegistry = directiveRegistry,
+            onLinkClick = onLinkClick,
+            onFootnoteClick = onFootnoteClick,
+            latexMeasurer = latexMeasurer,
+            density = density,
+            textMeasurer = textMeasurer,
+            inlineCodeTheme = inlineCodeTheme,
+        )
+    }
+}
+
+private fun AnnotatedString.Builder.renderDirectiveInlineWidget(
+    widget: DirectiveInlineWidgetModel,
+    theme: MarkdownTheme,
+    context: InlineRenderBuildContext,
+    directiveRegistry: MarkdownDirectiveRegistry,
+    density: Density?,
+) {
+    val renderer = directiveRegistry.findInlineDirectiveRenderer(widget.tagName)
+    if (renderer != null) {
+        val fontSize = theme.bodyStyle.fontSize.value
+        val estimatedWidth = widget.alternateText.sumOf { ch -> if (ch.code > 0x7F) 12 else 7 }
+            .toFloat() / 10f * (fontSize / 16f)
+        context.emitDirectiveInlineWidget(
+            builder = this,
+            widget = widget,
+            widthPx = density.scaledSpValueToPx(estimatedWidth + 8f),
+            heightPx = density.scaledSpValueToPx(fontSize * 1.5f),
+        ) {
+            renderer(
+                createDirectiveInlineRenderScope(
+                    tagName = widget.tagName,
+                    args = widget.args,
+                    alternateText = widget.alternateText,
+                )
+            )
+        }
+    } else {
+        context.emitStyledTextAtom(
+            builder = this,
+            text = widget.alternateText,
+            style = SpanStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = theme.bodyStyle.fontSize * 0.875f,
+                color = theme.linkColor,
+            ),
+        )
+    }
+}
+
+private fun AnnotatedString.Builder.renderRubyTextWidget(
+    widget: RubyTextWidgetModel,
+    theme: MarkdownTheme,
+    context: InlineRenderBuildContext,
+    density: Density?,
+) {
+    val fontSize = theme.bodyStyle.fontSize.value
+    val baseWidth =
+        widget.base.sumOf { ch -> if (ch.code > 0x7F) 12 else 7 }.toFloat() / 10f * (fontSize / 16f)
+    context.emitRubyTextWidget(
+        builder = this,
+        widget = widget,
+        widthPx = density.scaledSpValueToPx(baseWidth + 2f),
+        heightPx = density.scaledSpValueToPx(fontSize * 2.0f),
+    ) {
+        RubyTextContent(
+            base = widget.base,
+            annotation = widget.annotation,
+            theme = theme,
+        )
+    }
+}
+
+private fun Density?.scaledSpValueToPx(value: Float): Float {
+    return this?.run { value.sp.toPx() } ?: value
+}

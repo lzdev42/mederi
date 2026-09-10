@@ -1,0 +1,194 @@
+package xyz.emuci.latex.parser
+
+import xyz.emuci.latex.parser.model.LatexNode
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+
+class MathOpTest {
+
+    private val parser = LatexParser()
+
+    @Test
+    fun should_parse_basic_mathop() {
+        val result = parser.parse("\\mathop{T}")
+        val children = result.children
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("T", node.operator)
+        assertNull(node.subscript)
+        assertNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_mathop_with_subscript() {
+        val result = parser.parse("\\mathop{max}_{x}")
+        val children = result.children
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("max", node.operator)
+        assertNotNull(node.subscript)
+        assertNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_mathop_with_both_scripts() {
+        val result = parser.parse("\\mathop{op}_{i=0}^{n}")
+        val children = result.children
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("op", node.operator)
+        assertNotNull(node.subscript)
+        assertNotNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_mathop_with_limits() {
+        val result = parser.parse("\\mathop{op}\\limits_{a}^{b}")
+        val children = result.children
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("op", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.LIMITS, node.limitsMode)
+        assertNotNull(node.subscript)
+        assertNotNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_mathop_text_with_limits() {
+        val result = parser.parse("\\mathop{\\text{limsup}}\\limits_{n\\to\\infty}")
+        val node = result.children.single()
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("limsup", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.LIMITS, node.limitsMode)
+        assertNotNull(node.subscript)
+    }
+
+    @Test
+    fun should_parse_mathop_with_nolimits() {
+        val result = parser.parse("\\mathop{op}\\nolimits_{a}")
+        val children = result.children
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals(LatexNode.BigOperator.LimitsMode.NOLIMITS, node.limitsMode)
+    }
+
+    @Test
+    fun should_parse_mathop_in_expression() {
+        val result = parser.parse("\\mathop{Res}_{z=0} f(z)")
+        val children = result.children
+        // First: BigOperator, then text content
+        assertIs<LatexNode.BigOperator>(children[0])
+        assertEquals("Res", (children[0] as LatexNode.BigOperator).operator)
+    }
+
+    @Test
+    fun should_parse_mathop_without_scripts() {
+        val result = parser.parse("\\mathop{custom} x")
+        val children = result.children
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("custom", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.AUTO, node.limitsMode)
+    }
+
+    @Test
+    fun should_preserve_space_after_big_operator_without_scripts() {
+        val result = parser.parse("\\sum x")
+        val children = result.children
+
+        assertEquals(3, children.size)
+        assertIs<LatexNode.BigOperator>(children[0])
+        assertIs<LatexNode.Space>(children[1])
+        assertIs<LatexNode.Text>(children[2])
+        assertEquals("x", (children[2] as LatexNode.Text).content)
+    }
+
+    @Test
+    fun should_parse_mathop_wrapping_existing_big_operator() {
+        val result = parser.parse("\\mathop \\prod \\limits_{i = 1}^n")
+        val children = result.children
+        assertEquals(1, children.size)
+
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("prod", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.LIMITS, node.limitsMode)
+        assertNotNull(node.subscript)
+        assertNotNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_big_operator_with_newline_before_limits() {
+        val result = parser.parse("\\prod\n\\limits_{i = 1}^n")
+        val children = result.children
+
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("prod", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.LIMITS, node.limitsMode)
+        assertNotNull(node.subscript)
+        assertNotNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_mathop_braced_existing_big_operator_with_limits() {
+        val result = parser.parse("\\mathop{\\prod}\\limits_{i = 1}^n")
+        val children = result.children
+
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("prod", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.LIMITS, node.limitsMode)
+        assertNotNull(node.subscript)
+        assertNotNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_mathop_symbol_using_unicode_operator() {
+        val result = parser.parse("\\mathop \\times")
+        val children = result.children
+
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("×", node.operator)
+    }
+
+    @Test
+    fun should_parse_mathop_nolimits_with_existing_big_operator() {
+        val result = parser.parse("\\mathop \\prod \\nolimits_{i = 1}^n")
+        val children = result.children
+
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("prod", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.NOLIMITS, node.limitsMode)
+        assertNotNull(node.subscript)
+        assertNotNull(node.superscript)
+    }
+
+    @Test
+    fun should_parse_mathop_braced_big_operator_with_spaces() {
+        val result = parser.parse("\\mathop{ \\prod }\\limits_{i = 1}^n")
+        val children = result.children
+
+        assertEquals(1, children.size)
+        val node = children[0]
+        assertIs<LatexNode.BigOperator>(node)
+        assertEquals("prod", node.operator)
+        assertEquals(LatexNode.BigOperator.LimitsMode.LIMITS, node.limitsMode)
+        assertNotNull(node.subscript)
+        assertNotNull(node.superscript)
+    }
+}

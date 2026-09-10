@@ -1,0 +1,181 @@
+-- ============================================================
+-- Mederi 配置库（config.db）
+-- ============================================================
+-- 软件的全部"设置"数据：供应商、API 密钥、项目、MCP server。
+-- 特性：极小、低频写、事务一致——一个文件 = 全部配置，可单独备份迁移。
+-- 开发期 data.db 可随便删，config.db 删除 = 重置全部配置（须经用户批准）。
+--
+-- 各聚合根统一存取模式：payload 列存领域对象完整 JSON（真理源），
+-- 常用查询字段提升为独立列；schema 变更直接删库重建（未发布，无迁移）。
+
+-- ============================================================
+-- 供应商表
+-- ============================================================
+-- Provider 聚合根（含内嵌 models 列表）整行 JSON 存储。
+-- apiKeys 为 @Transient 不写入 payload，由 api_keys 表独立管理。
+
+CREATE TABLE IF NOT EXISTS providers (
+    id      TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    type    TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (id)
+);
+
+-- 查询所有供应商（按名称排序，顺序确定）
+listProviders:
+SELECT id, name, type, payload
+FROM providers
+ORDER BY name ASC;
+
+-- 按 ID 查询供应商
+getProvider:
+SELECT id, name, type, payload
+FROM providers
+WHERE id = ?;
+
+-- 保存供应商（upsert，整条覆盖）
+upsertProvider:
+INSERT OR REPLACE INTO providers (id, name, type, payload)
+VALUES (?, ?, ?, ?);
+
+-- 删除供应商
+deleteProvider:
+DELETE FROM providers
+WHERE id = ?;
+
+-- 供应商数量
+countProviders:
+SELECT COUNT(*) FROM providers;
+
+-- ============================================================
+-- API 密钥表
+-- ============================================================
+-- 存储供应商的 API 密钥明文。返回给调用方时脱敏处理。
+-- 与 providers 同库：provider 行 + key 行同库事务，消灭跨存储不一致。
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id          TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    key_value   TEXT NOT NULL,
+    is_default  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_apikey_provider ON api_keys(provider_id);
+
+-- 按供应商查询所有密钥（默认 key 在前，再按创建时间升序，保证返回顺序确定）
+listByProvider:
+SELECT id, provider_id, name, key_value, is_default, created_at
+FROM api_keys
+WHERE provider_id = ?
+ORDER BY is_default DESC, created_at ASC;
+
+-- 插入密钥
+insertKey:
+INSERT INTO api_keys (id, provider_id, name, key_value, is_default, created_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- 删除密钥
+deleteKey:
+DELETE FROM api_keys
+WHERE id = ?;
+
+-- 删除供应商的所有密钥
+deleteByProvider:
+DELETE FROM api_keys
+WHERE provider_id = ?;
+
+-- 设置默认密钥（先取消旧默认，再设置新默认）
+clearDefault:
+UPDATE api_keys SET is_default = 0
+WHERE provider_id = ?;
+
+setDefault:
+UPDATE api_keys SET is_default = 1
+WHERE id = ? AND provider_id = ?;
+
+-- 获取默认密钥
+getDefaultKey:
+SELECT id, provider_id, name, key_value, is_default, created_at
+FROM api_keys
+WHERE provider_id = ? AND is_default = 1
+LIMIT 1;
+
+-- 按 ID 查询单个密钥
+getKeyById:
+SELECT id, provider_id, name, key_value, is_default, created_at
+FROM api_keys
+WHERE id = ?;
+
+-- ============================================================
+-- 项目表
+-- ============================================================
+-- Project 聚合根整行 JSON 存储。
+
+CREATE TABLE IF NOT EXISTS projects (
+    id         TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (id)
+);
+
+-- 查询所有项目（按创建时间升序，顺序稳定）
+listProjects:
+SELECT id, name, payload
+FROM projects
+ORDER BY created_at ASC, name ASC;
+
+-- 按 ID 查询项目
+getProject:
+SELECT id, name, payload
+FROM projects
+WHERE id = ?;
+
+-- 保存项目（upsert，整条覆盖）
+upsertProject:
+INSERT OR REPLACE INTO projects (id, name, payload, created_at)
+VALUES (?, ?, ?, ?);
+
+-- 删除项目
+deleteProject:
+DELETE FROM projects
+WHERE id = ?;
+
+-- ============================================================
+-- MCP server 配置表
+-- ============================================================
+-- McpServerConfig 整行 JSON 存储（raw 是任意 JsonElement，天然整行存）。
+-- name 为主键（保存语义：以 name 为键 upsert）。
+
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    name    TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (name)
+);
+
+-- 查询所有 MCP server 配置
+listMcpServers:
+SELECT name, enabled, payload
+FROM mcp_servers
+ORDER BY name ASC;
+
+-- 按名称查询单个配置
+getMcpServer:
+SELECT name, enabled, payload
+FROM mcp_servers
+WHERE name = ?;
+
+-- 保存（新增或整体替换，以 name 为键）
+upsertMcpServer:
+INSERT OR REPLACE INTO mcp_servers (name, enabled, payload)
+VALUES (?, ?, ?);
+
+-- 删除配置
+deleteMcpServer:
+DELETE FROM mcp_servers
+WHERE name = ?;

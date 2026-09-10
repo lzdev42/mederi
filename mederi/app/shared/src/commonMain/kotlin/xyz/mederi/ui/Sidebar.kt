@@ -1,0 +1,688 @@
+package xyz.mederi.ui
+
+import androidx.compose.foundation.BorderStroke
+import xyz.mederi.AppInfo
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import compose.icons.FeatherIcons
+import compose.icons.feathericons.*
+import xyz.mederi.core.contract.models.Conversation
+import xyz.mederi.core.contract.models.ConversationStatus
+import xyz.mederi.core.contract.models.Project
+import xyz.mederi.core.ui.SidebarViewModel
+import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.theme.AppThemeMode
+import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.theme.MederiColors
+
+import xyz.mederi.core.contract.models.WorkType
+import xyz.mederi.ui.components.SegmentItem
+import xyz.mederi.ui.components.SegmentedControl
+
+/**
+ * 侧边栏。状态与动作统一经 [SidebarViewModel]（内部转发 AppState 全局真理源），
+ * 仅布局导航类副作用（收起抽屉/打开设置）以回调形式上抛。
+ */
+@Composable
+fun Sidebar(
+    modifier: Modifier = Modifier,
+    viewModel: SidebarViewModel,
+    isCompact: Boolean = false,
+    isDrawer: Boolean = false,
+    onRequestClose: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+) {
+    val appState = LocalAppState.current
+    val colors = LocalMederiColors.current
+    val projects by viewModel.filteredProjects.collectAsState()
+    val selectedProjectId by appState.selectedProjectId.collectAsState()
+    val selectedConversationId by appState.selectedConversationId.collectAsState()
+    val selectedWorkType by viewModel.selectedWorkType.collectAsState()
+    val theme by appState.theme.collectAsState()
+
+    // 抽屉模式下，改变会话/项目选择的操作同时收起抽屉（桌面常驻侧栏不收起）
+    val navigate: () -> Unit = { if (isDrawer) onRequestClose() }
+
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .then(if (isCompact) Modifier.fillMaxWidth() else Modifier.width(260.dp))
+            .background(colors.surfaceSidebar)
+            .padding(12.dp)
+    ) {
+        // Top Toolbar (40dp 高度对齐全屏顶栏线条)
+        if (isCompact) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.size(24.dp).clip(RoundedCornerShape(6.dp)).background(colors.accentPrimary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(FeatherIcons.Cpu, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
+                    }
+                    Text("Mederi", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+                SidebarIconButton(imageVector = FeatherIcons.X, colors = colors, onClick = onRequestClose)
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SidebarIconButton(imageVector = FeatherIcons.Sidebar, colors = colors, onClick = onRequestClose)
+                SidebarIconButton(imageVector = FeatherIcons.Search, colors = colors)
+            }
+        }
+
+        // Work / Code 工作模式选择器
+        SegmentedControl(
+            items = listOf(
+                SegmentItem(WorkType.WORK, "Work", FeatherIcons.Briefcase),
+                SegmentItem(WorkType.CODE, "Code", FeatherIcons.Code)
+            ),
+            selectedKey = selectedWorkType,
+            onSelect = { viewModel.selectWorkType(it) },
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            height = 32.dp,
+            equalWeight = true
+        )
+
+        // 顶层三大固定菜单 (新建任务、插件市场、自动化 - 对齐图 2)
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            SidebarMenuItem(
+                icon = FeatherIcons.MessageSquare,
+                title = "新建任务",
+                isSelected = false,
+                colors = colors,
+                onClick = {
+                    viewModel.newSession()
+                    navigate()
+                }
+            )
+            SidebarMenuItem(
+                icon = FeatherIcons.Grid,
+                title = "插件市场",
+                isSelected = false,
+                colors = colors
+            )
+            SidebarMenuItem(
+                icon = FeatherIcons.Clock,
+                title = "自动化",
+                isSelected = false,
+                colors = colors
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 项目分组 Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "项目",
+                color = colors.textSecondary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // 项目层级树与会话列表（已由 SidebarViewModel.filteredProjects 按 workType 过滤）
+        val scrollState = rememberScrollState()
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            projects.forEach { project ->
+                ProjectTreeRow(
+                    project = project,
+                    viewModel = viewModel,
+                    colors = colors,
+                    navigate = navigate
+                )
+            }
+        }
+
+        HorizontalDivider(
+            color = colors.divider,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+
+        // Sidebar Footer (两行布局：设置 + 主题切换，全称版本号)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 2.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onOpenSettings() }
+                            .padding(vertical = 4.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Settings,
+                            contentDescription = "设置",
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "设置",
+                            color = colors.textSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                // Theme Switch Button（主题写操作唯一通道：AppState）
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(colors.surfaceCard)
+                        .clickable {
+                            appState.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK)
+                        }
+                        .padding(5.dp)
+                ) {
+                    Icon(
+                        imageVector = if (colors.isDark) FeatherIcons.Moon else FeatherIcons.Sun,
+                        contentDescription = "切换主题",
+                        tint = colors.accentPrimary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // 第二行：版本号
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = AppInfo.VERSION,
+                    color = colors.textMuted,
+                    fontSize = 10.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarMenuItem(
+    icon: ImageVector,
+    title: String,
+    isSelected: Boolean,
+    colors: MederiColors,
+    onClick: () -> Unit = {}
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (isSelected) colors.surfaceCard else Color.Transparent)
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (isSelected) colors.accentPrimary else colors.iconMuted,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = title,
+            color = if (isSelected) colors.textPrimary else colors.textSecondary,
+            fontSize = 13.sp,
+            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+private fun SidebarIconButton(
+    imageVector: ImageVector,
+    colors: MederiColors,
+    onClick: () -> Unit = {}
+) {
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = null,
+            tint = colors.textSecondary,
+            modifier = Modifier.size(15.dp)
+        )
+    }
+}
+
+@Composable
+private fun ProjectTreeRow(
+    project: Project,
+    viewModel: SidebarViewModel,
+    colors: MederiColors,
+    navigate: () -> Unit
+) {
+    val appState = LocalAppState.current
+    val selectedProjectId by appState.selectedProjectId.collectAsState()
+    val isExpanded = project.id in viewModel.uiState.expandedProjectIds
+    var isMenuExpanded by remember { mutableStateOf(false) }
+    var isRenameOpen by remember { mutableStateOf(false) }
+    var isDeleteOpen by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 项目主行
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (isExpanded) colors.surfaceCard.copy(alpha = 0.5f) else Color.Transparent)
+                .clickable { viewModel.toggleProjectExpanded(project.id) }
+                .padding(horizontal = 6.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (isExpanded) FeatherIcons.FolderMinus else FeatherIcons.Folder,
+                    contentDescription = null,
+                    tint = if (isExpanded) colors.accentPrimary else colors.textSecondary,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .padding(end = 6.dp)
+                )
+                Text(
+                    text = project.name,
+                    color = if (isExpanded) colors.textPrimary else colors.textSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = if (isExpanded) FontWeight.Medium else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // 右侧操作图标组 (+ 和 三竖点)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // + 按钮：新建当前项目对话
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
+                            viewModel.createConversation(project.id)
+                            navigate()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = FeatherIcons.Plus,
+                        contentDescription = "新建当前项目对话",
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
+
+                // 三竖点 按钮：项目管理菜单
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { isMenuExpanded = true },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = FeatherIcons.MoreVertical,
+                        contentDescription = "项目菜单",
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(13.dp)
+                    )
+
+                    DropdownMenu(
+                        expanded = isMenuExpanded,
+                        onDismissRequest = { isMenuExpanded = false },
+                        containerColor = colors.surfaceSidebar,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("新建对话", fontSize = 12.sp, color = colors.textPrimary) },
+                            leadingIcon = { Icon(FeatherIcons.Plus, null, tint = colors.accentPrimary, modifier = Modifier.size(14.dp)) },
+                            onClick = {
+                                isMenuExpanded = false
+                                viewModel.createConversation(project.id)
+                                navigate()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("重命名项目", fontSize = 12.sp, color = colors.textPrimary) },
+                            leadingIcon = { Icon(FeatherIcons.Edit2, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)) },
+                            onClick = {
+                                isMenuExpanded = false
+                                isRenameOpen = true
+                            }
+                        )
+                        HorizontalDivider(color = colors.divider)
+                        DropdownMenuItem(
+                            text = { Text("删除项目", fontSize = 12.sp, color = colors.accentDanger) },
+                            leadingIcon = { Icon(FeatherIcons.Trash2, null, tint = colors.accentDanger, modifier = Modifier.size(14.dp)) },
+                            onClick = {
+                                isMenuExpanded = false
+                                isDeleteOpen = true
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // 会话子列表
+        if (isExpanded && project.conversations.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                project.conversations.forEach { conversation ->
+                    ConversationTreeRow(
+                        conversation = conversation,
+                        viewModel = viewModel,
+                        colors = colors,
+                        navigate = navigate
+                    )
+                }
+            }
+        }
+    }
+
+    // 重命名项目弹窗
+    if (isRenameOpen) {
+        var newName by remember { mutableStateOf(project.name) }
+        Dialog(onDismissRequest = { isRenameOpen = false }) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surfaceSidebar,
+                border = BorderStroke(1.dp, colors.surfaceCardBorder),
+                modifier = Modifier.width(320.dp).padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("重命名项目", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { isRenameOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            if (newName.isNotBlank()) {
+                                viewModel.renameProject(project.id, newName.trim())
+                            }
+                            isRenameOpen = false
+                        }) { Text("确认重命名") }
+                    }
+                }
+            }
+        }
+    }
+
+    // 删除确认弹窗
+    if (isDeleteOpen) {
+        Dialog(onDismissRequest = { isDeleteOpen = false }) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surfaceSidebar,
+                border = BorderStroke(1.dp, colors.surfaceCardBorder),
+                modifier = Modifier.width(320.dp).padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("确认删除项目？", color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("删除后将移除项目 ${project.name} 及关联会话记录。", color = colors.textSecondary, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { isDeleteOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger),
+                            onClick = {
+                                viewModel.deleteProject(project.id)
+                                isDeleteOpen = false
+                            }
+                        ) { Text("确认删除", color = colors.onAccentPrimary) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConversationTreeRow(
+    conversation: Conversation,
+    viewModel: SidebarViewModel,
+    colors: MederiColors,
+    navigate: () -> Unit
+) {
+    val appState = LocalAppState.current
+    val selectedConversationId by appState.selectedConversationId.collectAsState()
+    val isSelected = conversation.id == selectedConversationId
+    var isMenuExpanded by remember { mutableStateOf(false) }
+    var isRenameOpen by remember { mutableStateOf(false) }
+    var isDeleteOpen by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent)
+            .border(
+                width = 1.dp,
+                color = if (isSelected) colors.accentPrimary.copy(alpha = 0.3f) else Color.Transparent,
+                shape = RoundedCornerShape(6.dp)
+            )
+            .clickable {
+                viewModel.selectConversation(conversation.id)
+                navigate()
+            }
+            .padding(start = 8.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = conversation.title,
+            color = if (isSelected) colors.textPrimary else colors.textSecondary,
+            fontSize = 11.5.sp,
+            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            if (conversation.status == ConversationStatus.Working) {
+                CircularProgressIndicator(
+                    color = colors.accentPrimary,
+                    strokeWidth = 1.5.dp,
+                    modifier = Modifier.size(10.dp)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { isMenuExpanded = true },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.MoreVertical,
+                    contentDescription = "会话菜单",
+                    tint = if (isSelected) colors.textSecondary else colors.textMuted,
+                    modifier = Modifier.size(12.dp)
+                )
+
+                DropdownMenu(
+                    expanded = isMenuExpanded,
+                    onDismissRequest = { isMenuExpanded = false },
+                    containerColor = colors.surfaceSidebar,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("重命名会话", fontSize = 12.sp, color = colors.textPrimary) },
+                        leadingIcon = { Icon(FeatherIcons.Edit2, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)) },
+                        onClick = {
+                            isMenuExpanded = false
+                            isRenameOpen = true
+                        }
+                    )
+                    HorizontalDivider(color = colors.divider)
+                    DropdownMenuItem(
+                        text = { Text("删除会话", fontSize = 12.sp, color = colors.accentDanger) },
+                        leadingIcon = { Icon(FeatherIcons.Trash2, null, tint = colors.accentDanger, modifier = Modifier.size(14.dp)) },
+                        onClick = {
+                            isMenuExpanded = false
+                            isDeleteOpen = true
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    // 重命名会话弹窗
+    if (isRenameOpen) {
+        var newTitle by remember { mutableStateOf(conversation.title) }
+        Dialog(onDismissRequest = { isRenameOpen = false }) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surfaceSidebar,
+                border = BorderStroke(1.dp, colors.surfaceCardBorder),
+                modifier = Modifier.width(320.dp).padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("重命名会话", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = newTitle,
+                        onValueChange = { newTitle = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { isRenameOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            if (newTitle.isNotBlank()) {
+                                viewModel.renameConversation(conversation.id, newTitle.trim())
+                            }
+                            isRenameOpen = false
+                        }) { Text("确认重命名") }
+                    }
+                }
+            }
+        }
+    }
+
+    // 删除会话确认弹窗
+    if (isDeleteOpen) {
+        Dialog(onDismissRequest = { isDeleteOpen = false }) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surfaceSidebar,
+                border = BorderStroke(1.dp, colors.surfaceCardBorder),
+                modifier = Modifier.width(320.dp).padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("确认删除会话？", color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("删除后将清除会话【${conversation.title}】的全部记录，操作无法恢复。", color = colors.textSecondary, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { isDeleteOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger),
+                            onClick = {
+                                viewModel.deleteConversation(conversation.id)
+                                isDeleteOpen = false
+                            }
+                        ) { Text("确认删除", color = colors.onAccentPrimary) }
+                    }
+                }
+            }
+        }
+    }
+}

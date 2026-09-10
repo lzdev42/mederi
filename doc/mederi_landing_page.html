@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mederi — 一个你自己部署的 AI Agent (开源 Harness)</title>
+  <!-- Tailwind CSS -->
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+    :root {
+      --bg-base: #08090d;
+      --bg-surface: #0e1117;
+      --border-hairline: rgba(255, 255, 255, 0.08);
+      --border-hairline-hover: rgba(255, 255, 255, 0.16);
+      --accent-indigo: #6366f1;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-base);
+      color: #e2e8f0;
+      overflow-x: hidden;
+    }
+
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Subtle Technical Dot Grid */
+    .dot-grid {
+      background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+
+    /* Ambient Center Glow */
+    .ambient-glow {
+      background: radial-gradient(ellipse 70% 45% at 50% 0%, rgba(99, 102, 241, 0.09), transparent 75%);
+    }
+
+    /* Hairline Border Surface */
+    .hairline-card {
+      background: rgba(14, 17, 23, 0.65);
+      border: 1px solid var(--border-hairline);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .hairline-card:hover {
+      border-color: var(--border-hairline-hover);
+    }
+
+    /* Minimal Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</head>
+<body class="selection:bg-indigo-500/30 selection:text-indigo-200">
+
+  <!-- Background Grids & Ambient Glow -->
+  <div class="fixed inset-0 dot-grid pointer-events-none z-0"></div>
+  <div class="fixed inset-0 ambient-glow pointer-events-none z-0"></div>
+
+  <!-- Top Navigation Bar -->
+  <header class="sticky top-0 z-50 border-b border-white/[0.06] bg-[#08090d]/85 backdrop-blur-md">
+    <div class="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+      <!-- Brand Identity -->
+      <div class="flex items-center gap-3">
+        <a href="#" class="flex items-center gap-2.5 group">
+          <div class="w-7 h-7 rounded-md bg-white/[0.05] border border-white/10 flex items-center justify-center text-indigo-400 font-mono font-semibold text-xs group-hover:border-indigo-500/40 group-hover:text-indigo-300 transition-colors">
+            M
+          </div>
+          <span class="font-semibold text-sm tracking-tight text-white group-hover:text-slate-200 transition-colors">Mederi</span>
+        </a>
+        <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-white/[0.04] text-slate-400 border border-white/[0.06]">
+          AI Agent Harness · v0.1-alpha
+        </span>
+      </div>
+
+      <!-- Navigation Links -->
+      <nav class="hidden md:flex items-center gap-8 text-xs text-slate-400 font-medium">
+        <a href="#capabilities" class="hover:text-white transition-colors">核心能力</a>
+        <a href="#showcase" class="hover:text-white transition-colors">运行演示</a>
+        <a href="#harness" class="hover:text-white transition-colors">Harness 架构</a>
+        <a href="#specs" class="hover:text-white transition-colors">技术规格</a>
+      </nav>
+
+      <!-- Action Items: Open Source / GitHub -->
+      <div class="flex items-center gap-3">
+        <a href="https://github.com/lzdev42/mederi" target="_blank" rel="noreferrer" 
+           class="text-xs font-mono px-3 py-1.5 rounded border border-white/10 text-slate-300 hover:text-white hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.05] transition-all flex items-center gap-2">
+          <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          <span>GitHub</span>
+          <span class="text-[10px] text-slate-500 font-mono pl-1 border-l border-white/10">Apache-2.0</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Wrapper -->
+  <main class="relative z-10">
+
+    <!-- Hero Section -->
+    <section class="pt-20 pb-16 px-6 max-w-5xl mx-auto text-center">
+      <!-- Status Badge -->
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-white/[0.08] bg-white/[0.02] text-xs font-mono text-slate-400 mb-8">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>Open Source AI Agent Execution Harness · Desktop & Server</span>
+      </div>
+
+      <!-- Main Headline (大白话，人人看懂) -->
+      <h1 class="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-white mb-6 leading-[1.15]">
+        一个你自己部署的 AI Agent<br>
+        <span class="text-indigo-400 font-semibold">写代码 · 自动化网页 · 处理日常任务</span>
+      </h1>
+
+      <!-- Honest Technical Subhead (交代本质优势) -->
+      <p class="text-base sm:text-lg text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed font-normal">
+        开源。自带 Key。数据不出本地。<br class="hidden sm:inline">
+        既能作为桌面端单机运行，也能作为服务端部署供外部系统调用。内置操作系统级沙盒与计划驱动治理机制。
+      </p>
+
+      <!-- Quick Command Runner (Developer Focus) -->
+      <div class="max-w-lg mx-auto mb-16">
+        <div class="hairline-card rounded-lg p-2.5 text-left font-mono text-xs shadow-lg">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-white/[0.06] text-[11px] text-slate-500">
+            <div class="flex items-center gap-2">
+              <span id="quickTab1" onclick="switchQuickCmd(1)" class="cursor-pointer text-indigo-400 font-medium hover:text-indigo-300 transition-colors">Desktop 单机运行</span>
+              <span class="text-slate-700">/</span>
+              <span id="quickTab2" onclick="switchQuickCmd(2)" class="cursor-pointer text-slate-500 hover:text-slate-300 transition-colors">Server 服务端部署</span>
+              <span class="text-slate-700">/</span>
+              <span id="quickTab3" onclick="switchQuickCmd(3)" class="cursor-pointer text-slate-500 hover:text-slate-300 transition-colors">Clone 源码</span>
+            </div>
+            <span class="text-[10px] text-slate-600">macOS · Linux</span>
+          </div>
+          <div class="flex items-center justify-between px-1 py-1">
+            <div class="flex items-center gap-2 text-slate-200 overflow-x-auto whitespace-nowrap py-0.5">
+              <span class="text-indigo-400 select-none">$</span>
+              <span id="cmdText">./gradlew :app:desktopApp:run</span>
+            </div>
+            <button onclick="copyCurrentCmd()" class="ml-3 text-slate-400 hover:text-white p-1 rounded hover:bg-white/5 transition-all flex items-center gap-1 shrink-0" title="复制指令">
+              <span id="copyNotice" class="text-[10px] text-emerald-400 hidden">已复制</span>
+              <svg id="copyIcon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Three Practical Capabilities (非技术人员一眼看懂能干嘛) -->
+    <section id="capabilities" class="px-6 max-w-5xl mx-auto mb-24">
+      <div class="text-center max-w-xl mx-auto mb-12">
+        <span class="text-[11px] font-mono tracking-wider uppercase text-indigo-400 block mb-2">Core Capabilities</span>
+        <h2 class="text-2xl sm:text-3xl font-bold tracking-tight text-white mb-3">它能替你完成什么工作？</h2>
+        <p class="text-sm text-slate-400">脱离纯聊天的限制，赋予 AI 真实调用工具、操控系统与落地的能力。</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <!-- Cap 1 -->
+        <div class="hairline-card rounded-xl p-6 flex flex-col justify-between">
+          <div class="space-y-3">
+            <div class="w-9 h-9 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+            </div>
+            <h3 class="text-base font-semibold text-white">自主编程与重构</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              自主分析项目代码库，制定多步骤修改计划。直接读写文件、通过内置终端执行编译与单元测试，根据报错日志自我纠错。
+            </p>
+          </div>
+          <div class="pt-4 mt-4 border-t border-white/[0.06] font-mono text-[11px] text-slate-500 flex items-center gap-2">
+            <span>• 真实文件读写</span>
+            <span>• 内置 PTY 测试执行</span>
+          </div>
+        </div>
+
+        <!-- Cap 2 -->
+        <div class="hairline-card rounded-xl p-6 flex flex-col justify-between">
+          <div class="space-y-3">
+            <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
+            </div>
+            <h3 class="text-base font-semibold text-white">自动化网页与浏览器操作</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              通过 Playwright 驱动真实无头或有头浏览器。能替你自动登录系统、填写表单、查询网页数据并对复杂页面进行结构化信息提取。
+            </p>
+          </div>
+          <div class="pt-4 mt-4 border-t border-white/[0.06] font-mono text-[11px] text-slate-500 flex items-center gap-2">
+            <span>• Playwright MCP</span>
+            <span>• 网页自动化抓取</span>
+          </div>
+        </div>
+
+        <!-- Cap 3 -->
+        <div class="hairline-card rounded-xl p-6 flex flex-col justify-between">
+          <div class="space-y-3">
+            <div class="w-9 h-9 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+            </div>
+            <h3 class="text-base font-semibold text-white">日常工作与复杂工作流</h3>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              面对含糊多步骤的日常任务，先理清方案生成清晰的步骤清单（Plan），经你确认后再有序执行，避免传统 AI 乱跑乱改。
+            </p>
+          </div>
+          <div class="pt-4 mt-4 border-t border-white/[0.06] font-mono text-[11px] text-slate-500 flex items-center gap-2">
+            <span>• 计划驱动状态机</span>
+            <span>• 本地状态随时恢复</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Showcase Section (界面视窗，保留纯代码交互) -->
+    <section id="showcase" class="px-6 max-w-5xl mx-auto mb-28">
+      <!-- Section Header -->
+      <div class="flex flex-col sm:flex-row sm:items-end justify-between mb-4 gap-3">
+        <div>
+          <span class="text-[11px] font-mono tracking-wider uppercase text-indigo-400 block mb-1">Execution Showcase</span>
+          <h2 class="text-xl sm:text-2xl font-semibold text-white tracking-tight">直观运行演示</h2>
+        </div>
+
+        <!-- View Switcher Tabs -->
+        <div class="flex items-center gap-1 p-1 rounded-lg bg-white/[0.03] border border-white/[0.06] font-mono text-xs">
+          <button onclick="switchShowcaseTab('plan')" id="tabBtn-plan" class="px-3 py-1 rounded bg-white/10 text-white font-medium transition-all">
+            01 编程与计划
+          </button>
+          <button onclick="switchShowcaseTab('web')" id="tabBtn-web" class="px-3 py-1 rounded text-slate-400 hover:text-white transition-all">
+            02 网页自动化
+          </button>
+          <button onclick="switchShowcaseTab('sandbox')" id="tabBtn-sandbox" class="px-3 py-1 rounded text-slate-400 hover:text-white transition-all">
+            03 系统沙盒
+          </button>
+          <button onclick="switchShowcaseTab('terminal')" id="tabBtn-terminal" class="px-3 py-1 rounded text-slate-400 hover:text-white transition-all">
+            04 原生终端
+          </button>
+        </div>
+      </div>
+
+      <!-- The Window Frame -->
+      <div class="hairline-card rounded-xl overflow-hidden shadow-2xl">
+        <!-- Window Titlebar -->
+        <div class="h-10 px-4 border-b border-white/[0.06] bg-[#0c0e14] flex items-center justify-between select-none">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-[#ff5f56]/90 border border-[#e0443e]"></span>
+            <span class="w-3 h-3 rounded-full bg-[#ffbd2e]/90 border border-[#dea123]"></span>
+            <span class="w-3 h-3 rounded-full bg-[#27c93f]/90 border border-[#1aab29]"></span>
+            <span class="ml-3 font-mono text-xs text-slate-400 hidden sm:inline">mederi-workspace — /Projects/mederi [main]</span>
+          </div>
+
+          <div class="flex items-center gap-2 font-mono text-[11px]">
+            <span id="mockupStatusTag" class="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
+              Plan-Driven State: Active
+            </span>
+          </div>
+        </div>
+
+        <!-- Window Body Layout -->
+        <div class="grid grid-cols-12 min-h-[440px] bg-[#090b10]">
+
+          <!-- Left Sidebar: Projects & Sessions -->
+          <div class="col-span-3 border-r border-white/[0.06] p-3 hidden md:flex flex-col justify-between bg-[#0b0d13]">
+            <div class="space-y-4">
+              <!-- Workspace Title -->
+              <div>
+                <div class="text-[10px] font-mono tracking-wider uppercase text-slate-500 mb-2">Projects</div>
+                <div class="space-y-1 text-xs font-mono">
+                  <div class="p-1.5 rounded bg-white/[0.05] text-slate-200 border border-white/[0.06] flex items-center justify-between">
+                    <span class="truncate">📁 mederi-core</span>
+                    <span class="text-[10px] text-indigo-400">active</span>
+                  </div>
+                  <div class="p-1.5 rounded text-slate-500 hover:text-slate-400 hover:bg-white/[0.02] transition-colors flex items-center justify-between">
+                    <span class="truncate">📁 automation-scripts</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Sessions List -->
+              <div>
+                <div class="text-[10px] font-mono tracking-wider uppercase text-slate-500 mb-2">Active Tasks</div>
+                <div class="space-y-1 text-xs">
+                  <div class="p-2 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-200 font-medium">
+                    <div class="text-[11px] truncate">端到端自动化与编译测试</div>
+                    <div class="text-[10px] font-mono text-indigo-400/80 mt-0.5">8 turns · in progress</div>
+                  </div>
+                  <div class="p-2 rounded text-slate-400 hover:bg-white/[0.02] transition-colors">
+                    <div class="text-[11px] truncate text-slate-300">自动化抓取官网更新</div>
+                    <div class="text-[10px] font-mono text-slate-500 mt-0.5">Playwright · finished</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bottom Mode Pill -->
+            <div class="p-2 rounded border border-white/[0.06] bg-white/[0.02] text-[11px] font-mono text-slate-400">
+              <span class="text-slate-500">HARNESS:</span> Embedded Server<br>
+              <span class="text-slate-500">SANDBOX:</span> Seatbelt Enforced
+            </div>
+          </div>
+
+          <!-- Main Interactive Viewport (Tab Content) -->
+          <div class="col-span-12 md:col-span-9 p-4 flex flex-col justify-between">
+
+            <!-- TAB 1: Plan-Driven Coding -->
+            <div id="view-plan" class="space-y-4">
+              <!-- User Request -->
+              <div class="flex items-start gap-3">
+                <div class="w-6 h-6 rounded bg-slate-800 border border-white/10 flex items-center justify-center text-[10px] font-mono font-bold text-slate-300 shrink-0">
+                  U
+                </div>
+                <div class="text-xs text-slate-200 bg-white/[0.03] border border-white/[0.06] p-3 rounded-lg flex-1">
+                  帮我给项目增加一个 Server 端守护进程，支持 Headless 模式运行，并提供标准的 API 与 SSE 事件流。
+                </div>
+              </div>
+
+              <!-- Agent Response: Plan Contract -->
+              <div class="flex items-start gap-3">
+                <div class="w-6 h-6 rounded bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-[10px] font-mono font-bold text-indigo-300 shrink-0">
+                  M
+                </div>
+                <div class="space-y-3 flex-1 text-xs">
+                  <div class="text-slate-400">
+                    已分析工程架构，生成执行计划（Plan），写操作已在计划确认前自动锁定：
+                  </div>
+
+                  <!-- Structured Plan Box -->
+                  <div class="hairline-card rounded-lg p-3.5 border-indigo-500/30 bg-[#0e111a]">
+                    <div class="flex items-center justify-between pb-2 mb-2.5 border-b border-white/[0.06]">
+                      <span class="font-mono font-semibold text-indigo-300 text-xs flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+                        PLAN: DECOUPLED_SERVER_MODULE
+                      </span>
+                      <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        APPROVED
+                      </span>
+                    </div>
+
+                    <div class="space-y-2 font-mono text-[11px]">
+                      <div class="flex items-center gap-2 text-slate-300">
+                        <span class="text-emerald-400">✓</span>
+                        <span class="line-through text-slate-500">Step 1: 在 mederi/server 引入 Ktor Netty 与 remoteModule</span>
+                      </div>
+                      <div class="flex items-center gap-2 text-slate-300">
+                        <span class="text-emerald-400">✓</span>
+                        <span class="line-through text-slate-500">Step 2: 编写 Application.kt 端口鉴权与 Core 实例初始化</span>
+                      </div>
+                      <div class="flex items-center gap-2 text-indigo-300 font-medium">
+                        <span class="text-indigo-400 animate-pulse">▶</span>
+                        <span>Step 3: 运行自动化回归测试并验证 SSE 事件链路</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="p-2.5 rounded bg-black/40 border border-white/[0.06] font-mono text-[11px] text-slate-400 flex items-center justify-between">
+                    <span class="flex items-center gap-2">
+                      <span class="text-emerald-400">✓</span>
+                      <span>tool: update_plan(step="3", status="IN_PROGRESS")</span>
+                    </span>
+                    <span class="text-[10px] text-slate-600">8ms</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 2: Web Automation (Playwright) -->
+            <div id="view-web" class="space-y-4 hidden">
+              <!-- User Request -->
+              <div class="flex items-start gap-3">
+                <div class="w-6 h-6 rounded bg-slate-800 border border-white/10 flex items-center justify-center text-[10px] font-mono font-bold text-slate-300 shrink-0">
+                  U
+                </div>
+                <div class="text-xs text-slate-200 bg-white/[0.03] border border-white/[0.06] p-3 rounded-lg flex-1">
+                  自动打开后台控制台，登录后抓取本周的接口调用数据，导出成报表。
+                </div>
+              </div>
+
+              <!-- Agent Action -->
+              <div class="flex items-start gap-3">
+                <div class="w-6 h-6 rounded bg-emerald-600/30 border border-emerald-500/40 flex items-center justify-center text-[10px] font-mono font-bold text-emerald-300 shrink-0">
+                  M
+                </div>
+                <div class="space-y-2.5 flex-1 font-mono text-xs">
+                  <div class="p-2.5 rounded bg-[#06080c] border border-white/[0.06] space-y-1.5 text-[11px]">
+                    <div class="text-slate-400 flex items-center gap-2">
+                      <span class="text-emerald-400">▶</span>
+                      <span>call: browser_navigate(url="https://dashboard.internal/analytics")</span>
+                    </div>
+                    <div class="text-slate-500 pl-4">↳ Status 200 OK (Render completed in 312ms)</div>
+                    <div class="text-slate-400 flex items-center gap-2">
+                      <span class="text-emerald-400">▶</span>
+                      <span>call: browser_click(selector="#export-csv-btn")</span>
+                    </div>
+                    <div class="text-slate-500 pl-4">↳ Download triggered: analytics_weekly.csv</div>
+                  </div>
+                  <div class="text-slate-300 text-xs font-sans">
+                    已完成网页自动化操作，报表数据已保存至本地工作目录：<span class="font-mono text-indigo-300">./data/analytics_weekly.csv</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 3: Sandbox View -->
+            <div id="view-sandbox" class="space-y-4 hidden">
+              <div class="hairline-card rounded-lg p-3 bg-black/30">
+                <div class="flex items-center justify-between text-[11px] font-mono pb-2 border-b border-white/[0.06]">
+                  <span class="text-slate-300">KERNEL ENFORCEMENT ENGINE</span>
+                  <span class="text-emerald-400">macOS Seatbelt · ACTIVE</span>
+                </div>
+                <div class="font-mono text-xs text-slate-400 pt-2 space-y-1.5">
+                  <div>Workspace Target: <span class="text-indigo-300">/Users/liuzhe/Projects/mederi</span></div>
+                  <div>Sandbox Policy: <span class="text-slate-200">deny default, allow file-write* (subpath workspace)</span></div>
+                </div>
+              </div>
+
+              <!-- Intercept Log Simulation -->
+              <div class="rounded-lg border border-white/[0.08] bg-[#07090e] p-3 font-mono text-xs space-y-2">
+                <div class="text-[10px] text-slate-500 uppercase tracking-wider">Intercept Timeline</div>
+                <div class="p-2 rounded bg-white/[0.02] border border-white/[0.04] text-[11px] text-slate-300">
+                  <span class="text-emerald-400">ALLOWED [WRITE]</span>
+                  <span class="text-slate-400 ml-2">/Projects/mederi/server/src/Application.kt</span>
+                </div>
+                <div class="p-2 rounded bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-300">
+                  <span class="text-rose-400 font-bold">BLOCKED [WRITE]</span>
+                  <span class="text-rose-200 ml-2">~/.ssh/id_rsa</span>
+                  <div class="text-[10px] text-rose-400/80 mt-1 pl-4">↳ Kernel Hook (Seatbelt): EACCES Operation not permitted</div>
+                </div>
+                <div class="p-2 rounded bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-300">
+                  <span class="text-rose-400 font-bold">BLOCKED [WRITE]</span>
+                  <span class="text-rose-200 ml-2">/etc/hosts</span>
+                  <div class="text-[10px] text-rose-400/80 mt-1 pl-4">↳ Kernel Hook (Seatbelt): Target outside workspace boundary</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 4: Terminal View -->
+            <div id="view-terminal" class="space-y-4 hidden">
+              <div class="rounded-lg border border-white/[0.08] bg-[#06080c] p-3 font-mono text-xs">
+                <div class="flex items-center justify-between pb-2 mb-2 border-b border-white/[0.06] text-[11px] text-slate-500">
+                  <span>Pty4J Interactive PTY — zsh (pid 48921)</span>
+                  <span class="text-emerald-400">RUNNING</span>
+                </div>
+                <div class="space-y-1.5 text-slate-300 leading-relaxed text-[11px]">
+                  <div><span class="text-indigo-400">➜</span> <span class="text-slate-400">mederi</span> <span class="text-emerald-400">git:(main)</span> ./gradlew :core:test --tests "TurnExecutorTest"</div>
+                  <div class="text-slate-500">> Task :core:compileKotlinJvm UP-TO-DATE</div>
+                  <div class="text-slate-500">> Task :core:jvmTest</div>
+                  <div class="text-slate-300">TurnExecutorTest > testPlanEnforcementPasses() <span class="text-emerald-400">PASSED</span></div>
+                  <div class="text-slate-300">TurnExecutorTest > testSandboxInterceptsEscape() <span class="text-emerald-400">PASSED</span></div>
+                  <div class="pt-2 text-emerald-400 font-semibold">BUILD SUCCESSFUL in 1.42s</div>
+                  <div class="flex items-center gap-1 text-slate-400 pt-1">
+                    <span class="text-indigo-400">➜</span> <span class="text-slate-400">mederi</span> <span class="text-emerald-400">git:(main)</span> <span class="inline-block w-2 h-3.5 bg-indigo-400 animate-pulse ml-1"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Fake Command Input Footer -->
+            <div class="mt-4 pt-3 border-t border-white/[0.06] flex items-center gap-2">
+              <div class="flex-1 bg-white/[0.03] rounded px-3 py-2 text-xs font-mono text-slate-400 flex items-center justify-between border border-white/[0.06]">
+                <span class="text-slate-500">输入任务指令或唤起工具调度...</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-slate-400">⌘K</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Harness Architecture Section (给懂技术与招聘方看的硬核层) -->
+    <section id="harness" class="px-6 max-w-5xl mx-auto mb-28 border-t border-white/[0.06] pt-20">
+      <div class="max-w-xl mx-auto text-center mb-14">
+        <span class="text-[11px] font-mono tracking-wider uppercase text-indigo-400 block mb-2">Architecture & Harness</span>
+        <h2 class="text-2xl sm:text-3xl font-bold tracking-tight text-white mb-3">真正的 Agent Harness 架构</h2>
+        <p class="text-sm text-slate-400">Core 与 UI 彻底解耦，兼顾单机极速体验与服务端集群调用。</p>
+      </div>
+
+      <!-- Two Deployment Modes -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-10 font-mono text-xs">
+        <div class="hairline-card rounded-xl p-5 border-indigo-500/20 bg-indigo-950/10 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-indigo-300 font-semibold text-sm">Mode 01: Desktop 单机运行</span>
+            <span class="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300">本地内嵌</span>
+          </div>
+          <p class="text-slate-400 text-xs font-sans leading-relaxed">
+            Harness Core 直接内嵌在 Compose 桌面客户端进程中，单机零配置秒级启动。适合个人日常辅助编程、网页自动化与文件处理。
+          </p>
+          <div class="pt-2 text-slate-500 text-[11px] border-t border-white/[0.06]">
+            ./gradlew :app:desktopApp:run
+          </div>
+        </div>
+
+        <div class="hairline-card rounded-xl p-5 border-emerald-500/20 bg-emerald-950/10 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-emerald-300 font-semibold text-sm">Mode 02: Headless 服务端部署</span>
+            <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">守护进程</span>
+          </div>
+          <p class="text-slate-400 text-xs font-sans leading-relaxed">
+            以独立 Server 进程常驻在服务器或本地后台，暴露标准 REST & SSE 协议，自托管 Web UI，外部脚本与 CI/CD 流程可直接调度。
+          </p>
+          <div class="pt-2 text-slate-500 text-[11px] border-t border-white/[0.06]">
+            ./gradlew :server:run (Port: 8081)
+          </div>
+        </div>
+      </div>
+
+      <!-- Layer Breakdown -->
+      <div class="space-y-3 font-mono text-xs">
+        <div class="hairline-card rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-semibold text-[11px]">PRESENTATION</span>
+            <span class="text-slate-200 font-medium">Compose Multiplatform (Desktop) & wasmJs (Web)</span>
+          </div>
+          <span class="text-slate-500 text-[11px]">Skiko Native Canvas · No CEF Overhead</span>
+        </div>
+
+        <div class="flex justify-center text-slate-600 font-mono text-xs select-none">
+          ↓ Remote Contract / In-Process Bridge (Ktor SSE & StateFlow)
+        </div>
+
+        <div class="hairline-card rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-semibold text-[11px]">HARNESS CORE</span>
+            <span class="text-slate-200 font-medium">Mederi Core (PlanStore, SessionStore, ProviderStore)</span>
+          </div>
+          <span class="text-slate-500 text-[11px]">Triage FSM · SQLite · JetBrains Koog Engine</span>
+        </div>
+
+        <div class="flex justify-center text-slate-600 font-mono text-xs select-none">
+          ↓ Execution Dispatcher & Kernel Hooks
+        </div>
+
+        <div class="hairline-card rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold text-[11px]">ISOLATION & TOOLS</span>
+            <span class="text-slate-200 font-medium">macOS Seatbelt / Linux bwrap + Pty4J Terminal + Playwright</span>
+          </div>
+          <span class="text-slate-500 text-[11px]">Kernel Write-Barrier · Real PTY · Web Automation</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Technical Specs Matrix -->
+    <section id="specs" class="px-6 max-w-5xl mx-auto mb-28 border-t border-white/[0.06] pt-20">
+      <div class="max-w-xl mx-auto text-center mb-12">
+        <span class="text-[11px] font-mono tracking-wider uppercase text-indigo-400 block mb-2">Technical Matrix</span>
+        <h2 class="text-2xl font-bold tracking-tight text-white mb-2">开源技术规格表</h2>
+        <p class="text-xs text-slate-400">代码完全开源、可审计、零遥测。</p>
+      </div>
+
+      <div class="hairline-card rounded-xl overflow-hidden text-xs font-mono">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="border-b border-white/[0.06] bg-white/[0.02] text-slate-400 text-[11px]">
+              <th class="p-3.5 pl-5 font-medium">维度 (Dimension)</th>
+              <th class="p-3.5 font-medium">技术方案 / 实现细节</th>
+              <th class="p-3.5 pr-5 text-right font-medium">状态 (Status)</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-white/[0.04] text-slate-300">
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">核心定位</td>
+              <td class="p-3.5">AI Agent Execution Harness (单机/服务端双模解耦)</td>
+              <td class="p-3.5 pr-5 text-right text-emerald-400">Active</td>
+            </tr>
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">语言与运行时</td>
+              <td class="p-3.5">Kotlin 2.1+ · JVM 21+ · Kotlin Multiplatform</td>
+              <td class="p-3.5 pr-5 text-right text-emerald-400">Stable</td>
+            </tr>
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">UI 交互层</td>
+              <td class="p-3.5">Compose Multiplatform 1.7.x · Skiko Native Canvas · wasmJs</td>
+              <td class="p-3.5 pr-5 text-right text-emerald-400">Stable</td>
+            </tr>
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">Agent 执行底座</td>
+              <td class="p-3.5">JetBrains Koog 框架 · 结构化 Tool Calling · MCP 扩展协议</td>
+              <td class="p-3.5 pr-5 text-right text-indigo-400">Active</td>
+            </tr>
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">执行沙盒隔离</td>
+              <td class="p-3.5">macOS Seatbelt (sandbox-exec) · Linux bubblewrap (bwrap)</td>
+              <td class="p-3.5 pr-5 text-right text-emerald-400">Enforcing</td>
+            </tr>
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">网页与终端驱动</td>
+              <td class="p-3.5">Playwright MCP 浏览器自动化 · Pty4J 原生 JNI 伪终端管道</td>
+              <td class="p-3.5 pr-5 text-right text-emerald-400">Merged</td>
+            </tr>
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">本地存储策略</td>
+              <td class="p-3.5">SQLite 本地持久化 (Project, Conversation, PlanStore) · 零遥测</td>
+              <td class="p-3.5 pr-5 text-right text-emerald-400">Zero Cloud</td>
+            </tr>
+            <tr>
+              <td class="p-3.5 pl-5 text-slate-400 font-semibold">开源协议</td>
+              <td class="p-3.5">Apache License 2.0</td>
+              <td class="p-3.5 pr-5 text-right text-slate-400">Open Source</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Open Source Repository Card -->
+    <section class="px-6 max-w-5xl mx-auto mb-20">
+      <div class="hairline-card rounded-2xl p-8 sm:p-10 text-center relative overflow-hidden bg-gradient-to-b from-[#0e111a] to-[#08090d]">
+        <div class="max-w-xl mx-auto space-y-6">
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-indigo-500/20 bg-indigo-500/10 text-indigo-300 font-mono text-xs">
+            <span>Project in Final Testing Stage</span>
+          </div>
+
+          <h3 class="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+            探索代码与架构设计
+          </h3>
+
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Mederi 完全开源。欢迎克隆源码在本地编译体验，或在 GitHub 讨论架构演进。
+          </p>
+
+          <div class="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2 font-mono text-xs">
+            <a href="https://github.com/lzdev42/mederi" target="_blank" rel="noreferrer"
+               class="px-5 py-2.5 rounded-lg bg-white text-zinc-900 font-semibold hover:bg-slate-200 transition-colors flex items-center gap-2 w-full sm:w-auto justify-center">
+              <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+              <span>GitHub Repository</span>
+            </a>
+            <a href="https://github.com/lzdev42/mederi/issues" target="_blank" rel="noreferrer"
+               class="px-5 py-2.5 rounded-lg border border-white/10 text-slate-300 hover:text-white hover:bg-white/[0.04] transition-colors w-full sm:w-auto text-center">
+              查看 Issue 与讨论
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Minimalist Footer -->
+  <footer class="border-t border-white/[0.06] py-10 px-6 max-w-6xl mx-auto text-xs font-mono text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-4 z-10 relative">
+    <div class="flex items-center gap-2">
+      <span class="text-slate-300 font-semibold">Mederi</span>
+      <span>·</span>
+      <span>An Open Source AI Agent Execution Harness</span>
+    </div>
+    <div class="flex items-center gap-6 text-[11px]">
+      <a href="#capabilities" class="hover:text-slate-300 transition-colors">Capabilities</a>
+      <a href="#showcase" class="hover:text-slate-300 transition-colors">Showcase</a>
+      <a href="#harness" class="hover:text-slate-300 transition-colors">Harness</a>
+      <a href="https://github.com/lzdev42/mederi" target="_blank" rel="noreferrer" class="hover:text-slate-300 transition-colors">GitHub</a>
+    </div>
+  </footer>
+
+  <!-- Interactive Client-side Script -->
+  <script>
+    // Quick Command Switcher
+    const commands = {
+      1: './gradlew :app:desktopApp:run',
+      2: './gradlew :server:run',
+      3: 'git clone https://github.com/lzdev42/mederi.git'
+    };
+
+    let currentCmdIndex = 1;
+
+    function switchQuickCmd(index) {
+      currentCmdIndex = index;
+      document.getElementById('cmdText').textContent = commands[index];
+      
+      for (let i = 1; i <= 3; i++) {
+        const tab = document.getElementById('quickTab' + i);
+        if (i === index) {
+          tab.className = 'cursor-pointer text-indigo-400 font-medium transition-colors';
+        } else {
+          tab.className = 'cursor-pointer text-slate-500 hover:text-slate-300 transition-colors';
+        }
+      }
+    }
+
+    // Copy Command to Clipboard
+    function copyCurrentCmd() {
+      const text = commands[currentCmdIndex];
+      navigator.clipboard.writeText(text).then(() => {
+        const notice = document.getElementById('copyNotice');
+        const icon = document.getElementById('copyIcon');
+        notice.classList.remove('hidden');
+        icon.classList.add('hidden');
+        setTimeout(() => {
+          notice.classList.add('hidden');
+          icon.classList.remove('hidden');
+        }, 1800);
+      });
+    }
+
+    // Showcase View Switcher
+    const tabs = ['plan', 'web', 'sandbox', 'terminal'];
+    const statusTags = {
+      plan: '<span class="w-1.5 h-1.5 rounded-full bg-indigo-400"></span> Plan-Driven State: Active',
+      web: '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Playwright Automation: Active',
+      sandbox: '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> OS Seatbelt Sandbox: Enforcing',
+      terminal: '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Pty4J JNI Pipe: Connected'
+    };
+
+    function switchShowcaseTab(tabId) {
+      tabs.forEach(t => {
+        const view = document.getElementById('view-' + t);
+        const btn = document.getElementById('tabBtn-' + t);
+        if (t === tabId) {
+          view.classList.remove('hidden');
+          btn.className = 'px-3 py-1 rounded bg-white/10 text-white font-medium transition-all';
+        } else {
+          view.classList.add('hidden');
+          btn.className = 'px-3 py-1 rounded text-slate-400 hover:text-white transition-all';
+        }
+      });
+      document.getElementById('mockupStatusTag').innerHTML = statusTags[tabId];
+    }
+  </script>
+
+</body>
+</html>
