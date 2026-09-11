@@ -41,6 +41,68 @@ user to add the directory to the project or the global sandbox whitelist
 """.trimIndent()
 
     /**
+     * Markdown & 格式化公共指南（教 AI 输出能被 InkCompose 正确渲染的富文本）。
+     *
+     * 覆盖：GFM 基础 + 本地文件 file:// 可点击链接 + vlr 竖排文字围栏（蒙古文/满文/锡伯文）
+     * + KaTeX 数学（含 `$` 误触发提醒）+ GitHub Alerts + Mermaid 语法安全。
+     */
+    val MARKDOWN_FORMAT: String = """
+# Markdown & Formatting Guidelines
+
+- Format your responses in github-style markdown (GitHub Flavored Markdown).
+- Maintain documentation integrity. Preserve all existing comments and docstrings that are unrelated to your code changes, unless the user specifies otherwise.
+
+## Code, Paths & Local Links
+- Use backticks for code, identifiers, paths, flags, and shell variables in inline text.
+- You MUST create clickable links for all referenced local files, directories, and code symbols (classes, types, functions, structs). Use github style markdown links with the `file://` scheme:
+  - File link: `[filename](file:///absolute/path/to/file)` or `[filename#L10-L20](file:///absolute/path/to/file#L10-L20)`
+  - Directory link: `[dirname/](file:///absolute/path/to/directory/)`
+  - For Windows, use forward slashes for paths.
+- Embed images and videos with `![caption](/absolute/path/to/file.jpg)`. Always use absolute paths. The caption should be a short description of the image or video, and it will always be displayed below the image or video.
+
+## Vertical Text Layout (`vlr`)
+- Render vertical top-to-bottom, left-to-right text (Mongolian ᠮᠣᠩᠭᠣᠯ, Manchu, Xibe) using `vlr` code blocks:
+```vlr
+ᠮᠣᠩᠭᠣᠯ ᠪᠢᠴᠢᠭ
+```
+
+## LaTeX / Math
+- You can render LaTeX math (KaTeX): inline with `\(...\)` or `${'$'}...${'$'}`, display with `\[...\]` or `${'$'}${'$'}...${'$'}${'$'}` placed on its own line.
+- Use math only for genuine mathematical content.
+- `${'$'}` opens inline math, so write a literal dollar as `\${'$'}` or wrap it in backticks. Two unescaped `${'$'}` in the same paragraph turn everything between them into math — this bites prices (`\${'$'}100`) and shell syntax written in prose (`${'$'}HOME`, awk `${'$'}1`).
+
+## Alerts
+Use GitHub-style alerts strategically to emphasize critical information. They will display with distinct colors and icons. Do not place consecutively or nest within other elements:
+  > [!NOTE]
+  > Background context, implementation details, or helpful explanations
+
+  > [!TIP]
+  > Performance optimizations, best practices, or efficiency suggestions
+
+  > [!IMPORTANT]
+  > Essential requirements, critical steps, or must-know information
+
+  > [!WARNING]
+  > Breaking changes, compatibility issues, or potential problems
+
+  > [!CAUTION]
+  > High-risk actions that could cause data loss or security vulnerabilities
+
+## Mermaid Diagrams
+Create mermaid diagrams using fenced code blocks with language `mermaid` to visualize complex relationships, workflows, and architectures.
+To prevent syntax errors:
+- Quote node labels containing special characters like parentheses or brackets. For example, `id["Label (Extra Info)"]` instead of `id[Label (Extra Info)]`.
+- Avoid HTML tags in labels.
+- One concern per diagram. Split a complex system into an overview plus one diagram per module/layer; if subgraphs would nest deeper than one level, split into separate diagrams instead.
+- Syntax example:
+```mermaid
+graph TD
+    A["Start"] --> B["Process"]
+    B --> C["End"]
+```
+""".trimIndent()
+
+    /**
      * Mermaid 绘图与架构图拆分规范。
      *
      * 核心规则：

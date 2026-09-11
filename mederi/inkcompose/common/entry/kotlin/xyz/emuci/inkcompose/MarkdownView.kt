@@ -157,9 +157,14 @@ fun MarkdownView(
 
         RenderType.VLR -> {
             {
+                val colorScheme = MaterialTheme.colorScheme
+                val effectiveTheme = markdownTheme ?: remember(colorScheme) {
+                    MarkdownTheme.material3(colorScheme)
+                }
                 VTextView(
                     text = content,
                     modifier = modifier,
+                    style = effectiveTheme.verticalTextStyle,
                 )
             }
         }

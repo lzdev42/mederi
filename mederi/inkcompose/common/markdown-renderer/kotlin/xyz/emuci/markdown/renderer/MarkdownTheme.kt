@@ -130,6 +130,11 @@ data class MarkdownTheme(
     val spoilerColor: Color = Color(0xFF3A3A3A),
     /** Diagram 块渲染主题 */
     val diagramTheme: DiagramTheme = DiagramTheme.Default,
+    /** 竖排文字块文字样式 */
+    val verticalTextStyle: TextStyle = TextStyle(
+        fontSize = 13.sp,
+        lineHeight = 21.5.sp,
+    ),
 ) {
     companion object {
         /**
@@ -168,6 +173,11 @@ data class MarkdownTheme(
             codeBlockTitleBackground = Color(0xFF21262D),
             spoilerColor = Color(0xFF3D444D),
             diagramTheme = DiagramTheme.Dark,
+            verticalTextStyle = TextStyle(
+                fontSize = 13.sp,
+                lineHeight = 21.5.sp,
+                color = Color(0xFFE6EDF3),
+            ),
         )
 
         /**
@@ -232,6 +242,7 @@ data class MarkdownTheme(
                 codeBlockTitleStyle = baseTheme.codeBlockTitleStyle.copy(color = subduedContentColor),
                 spoilerColor = subduedContentColor,
                 diagramTheme = DiagramTheme.material3(colorScheme, base = baseDiagramTheme),
+                verticalTextStyle = baseTheme.verticalTextStyle.copy(color = contentColor),
             )
         }
 

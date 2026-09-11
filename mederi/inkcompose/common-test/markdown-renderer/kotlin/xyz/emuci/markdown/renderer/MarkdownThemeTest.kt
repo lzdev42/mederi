@@ -35,6 +35,7 @@ class MarkdownThemeTest {
         assertEquals(colorScheme.surface.toArgb(), theme.diagramTheme.colors.canvas.toArgb())
         assertEquals(colorScheme.primary.toArgb(), theme.diagramTheme.colors.accent.toArgb())
         assertEquals(LatexTheme.material3(colorScheme), theme.latexTheme)
+        assertEquals(colorScheme.onSurface, theme.verticalTextStyle.color)
     }
 
     @Test
@@ -50,5 +51,12 @@ class MarkdownThemeTest {
         assertEquals(DiagramTheme.Dark.typography, theme.diagramTheme.typography)
         assertEquals(colorScheme.surface.toArgb(), theme.diagramTheme.colors.canvas.toArgb())
         assertEquals(LatexTheme.material3(colorScheme), theme.latexTheme)
+        assertEquals(colorScheme.onSurface, theme.verticalTextStyle.color)
+    }
+
+    @Test
+    fun darkThemeSetsVerticalTextColor() {
+        val darkTheme = MarkdownTheme.dark()
+        assertEquals(Color(0xFFE6EDF3), darkTheme.verticalTextStyle.color)
     }
 }

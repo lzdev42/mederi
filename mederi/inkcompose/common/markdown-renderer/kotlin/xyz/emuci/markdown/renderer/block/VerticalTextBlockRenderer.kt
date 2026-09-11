@@ -9,6 +9,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.unit.dp
 import xyz.emuci.markdown.parser.ast.VerticalTextBlock
 import xyz.emuci.markdown.renderer.LocalMarkdownTheme
@@ -47,6 +49,18 @@ internal fun RenderVerticalTextBlockWidgetModel(
     modifier: Modifier = Modifier,
 ) {
     val theme = LocalMarkdownTheme.current
+    val effectiveColor = if (theme.verticalTextStyle.color.isSpecified) {
+        theme.verticalTextStyle.color
+    } else if (theme.bodyStyle.color.isSpecified) {
+        theme.bodyStyle.color
+    } else {
+        Color.Unspecified
+    }
+    val verticalStyle = if (effectiveColor.isSpecified) {
+        theme.verticalTextStyle.copy(color = effectiveColor)
+    } else {
+        theme.verticalTextStyle
+    }
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -58,6 +72,7 @@ internal fun RenderVerticalTextBlockWidgetModel(
         VTextView(
             text = model.text.trimEnd('\n'),
             modifier = Modifier.fillMaxWidth(),
+            style = verticalStyle,
         )
     }
 }

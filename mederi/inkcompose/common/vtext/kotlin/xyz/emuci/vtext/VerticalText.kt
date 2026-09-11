@@ -1,16 +1,19 @@
 package xyz.emuci.vtext
 
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
@@ -24,6 +27,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.unit.sp
 
 /**
  * 每列（竖排中的一"行"）的布局指标。
@@ -105,9 +109,20 @@ internal fun VerticalText(
     val columnSpacingPx = with(density) { config.columnSpacing.toPx() }
     val textMeasurer = rememberTextMeasurer()
 
-    val baseStyle = if (config.baselineShift != 0f)
+    val contentColor = LocalContentColor.current
+    val effectiveColor = if (style.color.isSpecified) {
+        style.color
+    } else if (contentColor.isSpecified) {
+        contentColor
+    } else {
+        Color.Unspecified
+    }
+
+    val baseStyle = (if (config.baselineShift != 0f)
         style.copy(baselineShift = BaselineShift(config.baselineShift))
-    else style
+    else style).let {
+        if (effectiveColor.isSpecified) it.copy(color = effectiveColor) else it
+    }
 
     val measuredStyle = baseStyle.withNormalizedLineHeight()
 
@@ -203,7 +218,7 @@ internal fun VerticalText(
                                 right = result.size.width.toFloat(), bottom = clipBottom,
                                 clipOp = ClipOp.Intersect,
                             ) {
-                                drawColumnText(text, result, lineStart, lineEnd)
+                                drawColumnText(text, result, lineStart, lineEnd, color = effectiveColor)
                             }
                         }
                     }
@@ -221,6 +236,7 @@ private fun DrawScope.drawColumnText(
     result: TextLayoutResult,
     lineStart: Int,
     lineEnd: Int,
+    color: Color = Color.Unspecified,
 ) {
     // 先扫描本列是否含直立字符，没有则整列一次性绘制
     var hasUpright = false
@@ -231,7 +247,7 @@ private fun DrawScope.drawColumnText(
     }
 
     if (!hasUpright) {
-        drawText(result)
+        drawText(result, color = color)
         return
     }
 
@@ -247,7 +263,7 @@ private fun DrawScope.drawColumnText(
             if (rect.width > 0 && rect.height > 0) {
                 rotate(degrees = -90f, pivot = rect.center) {
                     clipRect(rect.left, rect.top, rect.right, rect.bottom) {
-                        drawText(result)
+                        drawText(result, color = color)
                     }
                 }
             }
@@ -275,7 +291,7 @@ private fun DrawScope.drawColumnText(
             }
 
             if (hasRect) {
-                clipRect(minLeft, minTop, maxRight, maxBottom) { drawText(result) }
+                clipRect(minLeft, minTop, maxRight, maxBottom) { drawText(result, color = color) }
             }
         }
     }
@@ -336,6 +352,9 @@ internal fun codePointAt(text: String, index: Int): Int {
     }
 }
 
-private fun TextStyle.withNormalizedLineHeight(): TextStyle =
-    if (lineHeight.isSpecified) this
-    else copy(lineHeight = fontSize * 1.6f)
+private fun TextStyle.withNormalizedLineHeight(): TextStyle {
+    val effectiveFontSize = if (fontSize.isSpecified) fontSize else 14.sp
+    val effectiveLineHeight = if (lineHeight.isSpecified) lineHeight else effectiveFontSize * 1.6f
+    return if (fontSize.isSpecified && lineHeight.isSpecified) this
+    else copy(fontSize = effectiveFontSize, lineHeight = effectiveLineHeight)
+}

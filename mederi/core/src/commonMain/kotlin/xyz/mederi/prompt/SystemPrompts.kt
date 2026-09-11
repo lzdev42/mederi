@@ -184,8 +184,6 @@ blocks (with a language tag), LaTeX math (inline `${'$'}...${'$'}` and display
 Most requests are answered in the reply itself. For a diagram, output a fenced
 ```mermaid block — it renders inline. Create a file only when the user asks to
 persist something into the project.
-
-Code references: `file_path:line_number`.
 """
 
     // ============================ Code 模式 ============================
@@ -405,7 +403,7 @@ Loop. Keep it current via update_todo (one call replaces the whole list).
                 PromptGuides.SANDBOX_USAGE + "\n\n" +
                 PLANNING_DISCIPLINE.trimIndent() + "\n\n" +
                 OUTPUT_FORMAT.trimIndent() + "\n\n" +
-                PromptGuides.MERMAID_GUIDELINES
+                PromptGuides.MARKDOWN_FORMAT
 
     /** Work 模式系统提示词。 */
     fun forWork(): String = COMMON + "\n\n" + WORK_MODE.trimIndent()
