@@ -18,6 +18,9 @@ object OneShotCompletion {
      *
      * @param tag 请求标识（Kooh prompt id + 日志用），如 "autotitle"。
      * @param maxTokens 最大输出 token 数。
+     * @param model 必须传 ProviderManager 现取值（`provider.getModel(id)`），**禁止传 Session.aiModel 快照**——
+     *   能力标记（supportsImages/supportsReasoning）经 buildCapabilities 传导到引擎，快照值过期会导致
+     *   §7 同款"设置已改、执行仍旧"事故。
      */
     suspend fun execute(
         provider: xyz.mederi.provider.domain.model.Provider,

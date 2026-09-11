@@ -124,13 +124,14 @@ data class LatexFontFamilies(
         if (size2 != other.size2) return false
         if (size3 != other.size3) return false
         if (size4 != other.size4) return false
-        if (!mainBytes.contentEquals(other.mainBytes)) return false
-        if (!mathBytes.contentEquals(other.mathBytes)) return false
-        if (!amsBytes.contentEquals(other.amsBytes)) return false
-        if (!size1Bytes.contentEquals(other.size1Bytes)) return false
-        if (!size2Bytes.contentEquals(other.size2Bytes)) return false
-        if (!size3Bytes.contentEquals(other.size3Bytes)) return false
-        if (!size4Bytes.contentEquals(other.size4Bytes)) return false
+        // 快速引用与长度对比：字体为资源静态字节，避免 250KB 全量遍历
+        if (mainBytes !== other.mainBytes && (mainBytes?.size != other.mainBytes?.size)) return false
+        if (mathBytes !== other.mathBytes && (mathBytes?.size != other.mathBytes?.size)) return false
+        if (amsBytes !== other.amsBytes && (amsBytes?.size != other.amsBytes?.size)) return false
+        if (size1Bytes !== other.size1Bytes && (size1Bytes?.size != other.size1Bytes?.size)) return false
+        if (size2Bytes !== other.size2Bytes && (size2Bytes?.size != other.size2Bytes?.size)) return false
+        if (size3Bytes !== other.size3Bytes && (size3Bytes?.size != other.size3Bytes?.size)) return false
+        if (size4Bytes !== other.size4Bytes && (size4Bytes?.size != other.size4Bytes?.size)) return false
 
         return true
     }
@@ -148,13 +149,14 @@ data class LatexFontFamilies(
         result = 31 * result + size2.hashCode()
         result = 31 * result + size3.hashCode()
         result = 31 * result + size4.hashCode()
-        result = 31 * result + (mainBytes?.contentHashCode() ?: 0)
-        result = 31 * result + (mathBytes?.contentHashCode() ?: 0)
-        result = 31 * result + (amsBytes?.contentHashCode() ?: 0)
-        result = 31 * result + (size1Bytes?.contentHashCode() ?: 0)
-        result = 31 * result + (size2Bytes?.contentHashCode() ?: 0)
-        result = 31 * result + (size3Bytes?.contentHashCode() ?: 0)
-        result = 31 * result + (size4Bytes?.contentHashCode() ?: 0)
+        // O(1) 轻量哈希：使用字节大小代替 contentHashCode()，避免 250,000 次循环计算
+        result = 31 * result + (mainBytes?.size ?: 0)
+        result = 31 * result + (mathBytes?.size ?: 0)
+        result = 31 * result + (amsBytes?.size ?: 0)
+        result = 31 * result + (size1Bytes?.size ?: 0)
+        result = 31 * result + (size2Bytes?.size ?: 0)
+        result = 31 * result + (size3Bytes?.size ?: 0)
+        result = 31 * result + (size4Bytes?.size ?: 0)
         return result
     }
 }

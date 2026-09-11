@@ -72,6 +72,24 @@ fun formatReasoningLevelLabel(level: String): String = when (level.uppercase()) 
     else -> level
 }
 
+/** 模型能力小标签（Thinking / Image），桌面下拉与移动端抽屉共用。 */
+@Composable
+private fun ModelCapabilityTag(text: String, tint: Color) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(tint.copy(alpha = 0.15f))
+            .padding(horizontal = 4.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text = text,
+            color = tint,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
 @Composable
 fun ChatInputCard(
     viewModel: WorkspaceViewModel,
@@ -86,6 +104,8 @@ fun ChatInputCard(
     var isMobileSheetOpen by remember { mutableStateOf(false) }
 
     val selectedModel by appState.selectedModel.collectAsState()
+    // 图片能力唯一推导（VM 派生流）：按钮显隐/警告/门禁全同源，UI 禁止手写 supportsImages 判断
+    val modelSupportsImages by viewModel.modelSupportsImages.collectAsState()
     val selectedProjectId by appState.selectedProjectId.collectAsState()
     val projects by appState.projects.collectAsState()
 
@@ -129,10 +149,11 @@ fun ChatInputCard(
     }
 
     // 剪贴板图片统一入口（附件按钮与 Ctrl/Cmd+V 拦截共用）：读取→附加→日志
+    // 门禁在 WorkspaceViewModel.tryAttachImage（模型不支持图片时拒绝入列并给可见反馈）
     val attachClipboardImageIfPresent: (String) -> Boolean = { logEvent ->
         val img = PlatformClipboard.getImage()
         if (img != null) {
-            viewModel.addImage(
+            viewModel.tryAttachImage(
                 name = "image_${xyz.mederi.currentTimeMillis()}.png",
                 mimeType = img.mimeType,
                 bytes = img.bytes,
@@ -373,6 +394,17 @@ fun ChatInputCard(
                         color = colors.divider.copy(alpha = 0.4f),
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
+
+                    // 图片门禁内联提示：挂了图片但当前模型不支持（如切换模型后），发送会被拦截
+                    if (pendingImages.isNotEmpty() && !modelSupportsImages) {
+                        Text(
+                            text = "当前模型不支持图片输入，发送前请移除图片或切换模型",
+                            color = colors.accentWarning,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                    }
                 }
 
                 if (isOverBudget) {
@@ -488,7 +520,10 @@ fun ChatInputCard(
                                     openRequest = projectMenuOpenRequest
                                 )
                                 IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 40)
-                                IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 40)
+                                // 图片门禁：仅支持图片输入的模型显示附件按钮（粘贴路径由 tryAttachImage 拦截）
+                                if (modelSupportsImages) {
+                                    IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 40)
+                                }
                             }
 
                             Spacer(modifier = Modifier.width(8.dp))
@@ -531,7 +566,10 @@ fun ChatInputCard(
                                     openRequest = projectMenuOpenRequest
                                 )
                                 IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
-                                IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
+                                // 图片门禁：仅支持图片输入的模型显示附件按钮（粘贴路径由 tryAttachImage 拦截）
+                                if (modelSupportsImages) {
+                                    IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
+                                }
                                 AgentModeSelector(viewModel = viewModel)
                             }
 
@@ -614,7 +652,15 @@ private fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) {
                     DropdownMenuItem(
                         text = {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(model.name, fontSize = if (compact) 12.5.sp else 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, color = colors.textPrimary)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(model.name, fontSize = if (compact) 12.5.sp else 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, color = colors.textPrimary)
+                                    if (model.supportsThinking) ModelCapabilityTag("Thinking", colors.thoughtAccent)
+                                    if (model.supportsImages) ModelCapabilityTag("Image", colors.accentSecondary)
+                                }
                                 if (contextSizeStr != null) {
                                     Text(contextSizeStr, fontSize = if (compact) 10.5.sp else 11.sp, color = colors.textSecondary)
                                 }
@@ -1174,6 +1220,9 @@ private fun MobileModelBottomSheet(
                                                         fontWeight = FontWeight.Medium
                                                     )
                                                 }
+                                            }
+                                            if (model.supportsImages) {
+                                                ModelCapabilityTag("Image", colors.accentSecondary)
                                             }
                                         }
 

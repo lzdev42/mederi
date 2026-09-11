@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import xyz.mederi.Mederi
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.CreateSessionRequest
@@ -116,8 +115,8 @@ class MederiAiCore(
             mederi.modelCatalog.start()
             // 后台刷新内置 Google 供应商的模型列表（不阻塞启动）
             autoRefreshBuiltinGoogleModels()
-            // 存量模型元数据一次性回填（迁移，非定时刷新）
-            backfillModelMetadata()
+            // 存量模型元数据回填已移除（2026-09 机制翻转）：系统永不自动纠正存量数据，
+            // 目录元数据只在用户点「自动设置」时应用（autoSetupProviderModels）
             // 会话自动命名：挂 core 事件流，首条消息发出后生成标题。
             // 挂在 initialize 而非各宿主 main——desktop / server（headless 遥控端）
             // 共用同一桥实现，谁初始化谁生效，宿主无需各自接线。
@@ -126,80 +125,11 @@ class MederiAiCore(
     }
 
     /**
-     * 存量模型元数据一次性回填。
-     *
-     * 元数据目录功能上线之前同步过模型的供应商，其模型字段（contextWindow/价格/图片等）
-     * 全是空——同步触发点只覆盖"之后"的添加/手动刷新，老数据永远等不到补全。
-     * 这里在目录首次加载成功后补一次：**只填空字段，已有值一律不动**（迁移语义，不是刷新）。
-     * 目录拉取失败（离线）静默跳过，下次启动再试；没有定时重试。
-     */
-    private fun backfillModelMetadata() {
-        scope.launch {
-            // 等目录首次加载（start() 的立即刷新），最多 30s；离线则放弃，下次启动再补
-            val loaded = withTimeoutOrNull(30_000) {
-                mederi.modelCatalog.version.first { it > 0 }
-            } ?: return@launch
-            try {
-                var touchedModels = 0
-                for (provider in mederi.providers.list()) {
-                    if (provider.models.isEmpty()) continue
-                    for (model in provider.models) {
-                        val meta = mederi.modelCatalog.getFor(
-                            provider.modelsDevKey,
-                            provider.baseUrl,
-                            model.providerModelId
-                        ) ?: continue
-
-                        // 逐字段填空：null 表示"本地已有/目录没有，不动"
-                        val contextWindow = model.contextWindow ?: meta.contextWindow
-                        val maxTokens = model.maxTokens ?: meta.maxOutputTokens
-                        val inputPrice = model.inputPricePerMillion ?: meta.inputPricePerMillion
-                        val outputPrice = model.outputPricePerMillion ?: meta.outputPricePerMillion
-                        val supportsImages = if (!model.supportsImages) meta.supportsImages else null
-                        val supportsReasoning = if (!model.supportsReasoning) meta.supportsReasoning else null
-                        val reasoningLevels = meta.reasoningLevels.takeIf { it.isNotEmpty() && model.reasoningLevels.isEmpty() }
-
-                        val hasFill = contextWindow != model.contextWindow ||
-                            maxTokens != model.maxTokens ||
-                            inputPrice != model.inputPricePerMillion ||
-                            outputPrice != model.outputPricePerMillion ||
-                            supportsImages != null ||
-                            supportsReasoning != null ||
-                            reasoningLevels != null
-                        if (!hasFill) continue
-
-                        mederi.providerManager.updateModel(
-                            providerId = provider.id,
-                            modelId = model.id,
-                            name = null,
-                            supportsReasoning = supportsReasoning,
-                            reasoningLevel = null,
-                            contextWindow = contextWindow,
-                            maxTokens = maxTokens,
-                            supportsImages = supportsImages,
-                            reasoningLevels = reasoningLevels,
-                            isEnabled = null,
-                            inputPricePerMillion = inputPrice,
-                            outputPricePerMillion = outputPrice
-                        )
-                        touchedModels++
-                    }
-                }
-                if (touchedModels > 0) {
-                    DebugLog.event("AiCore", "存量模型元数据回填: $touchedModels 个模型已补全")
-                    refreshProvidersAndAgents()
-                }
-            } catch (e: Exception) {
-                DebugLog.error("AiCore", "存量模型元数据回填失败: ${e.message}", e)
-            }
-        }
-    }
-
-    /**
      * 后台刷新内置 Google 供应商的模型列表。
      *
      * Google 不内置模型（原生 models.list 可拉取），添加后每次启动自动同步远端
-     * （displayName / 上下文窗口 / 是否支持 thinking），失败静默记录，不打扰启动流程。
+     * （只新增模型进列表，不碰已有模型元数据——机制翻转见 autoSetupProviderModels），
+     * 失败静默记录，不打扰启动流程。
      */
     private fun autoRefreshBuiltinGoogleModels() {
         scope.launch {
@@ -359,6 +289,22 @@ class MederiAiCore(
     }
 
     override suspend fun deleteProject(projectId: String): Result<Unit> = runCatching {
+        // 删除项目 = 遍历其下所有会话统一走 [deleteConversation]（删除会话的唯一封装入口）：
+        // 内部完成 abortAndJoin 运行中 turn → 删 session/history/diff 表 → 删磁盘 png → 清本地缓存。
+        // 循环后只剩项目记录本身和各目录残留的 .mederi/mermaid 目录需要收尾。
+        mederi.sessions.list().filter { it.projectId == projectId }.forEach { session ->
+            deleteConversation(session.id).getOrThrow()
+        }
+        runCatching {
+            val project = mederi.projects.get(projectId)
+            project?.directories?.forEach { dirPath ->
+                val mermaidDir = File(dirPath, ".mederi/mermaid")
+                if (mermaidDir.exists()) {
+                    mermaidDir.deleteRecursively()
+                    DebugLog.event("AiCore", "Cleaned up mermaid cache for deleted project: $dirPath")
+                }
+            }
+        }
         mederi.projects.delete(projectId)
         refreshProjects()
     }
@@ -399,6 +345,29 @@ class MederiAiCore(
     }
 
     override suspend fun deleteConversation(conversationId: String): Result<Unit> = runCatching {
+        // 1. 删除磁盘上的 Mermaid 缓存图片
+        runCatching {
+            val session = mederi.sessions.get(conversationId)
+            if (session != null) {
+                val project = mederi.projects.get(session.projectId)
+                project?.directories?.forEach { dirPath ->
+                    val mermaidDir = File(dirPath, ".mederi/mermaid")
+                    if (mermaidDir.exists() && mermaidDir.isDirectory) {
+                        val sanitized = conversationId.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32)
+                        val prefix = "${sanitized}_"
+                        mermaidDir.listFiles()?.forEach { file ->
+                            if (file.name.startsWith(prefix) && file.name.endsWith(".png")) {
+                                file.delete()
+                                DebugLog.event("AiCore", "Deleted session mermaid cache: ${file.name}")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 2. 清理 Inkcompose 客户端缓存
+        xyz.emuci.inkcompose.MermaidCacheConfig.clearSessionCache(conversationId)
+
         mederi.sessions.delete(conversationId)
         refreshProjects()
     }
@@ -543,6 +512,12 @@ class MederiAiCore(
         // 落库后必须刷新 UI StateFlow，否则设置页模型列表停留在旧数据
         refreshProvidersAndAgents()
         ids
+    }
+
+    override suspend fun autoSetupProviderModels(providerId: String): Result<Int> = runCatching {
+        val updated = mederi.providers.autoSetupModels(providerId)
+        refreshProvidersAndAgents()
+        updated
     }
 
     override suspend fun createCustomProvider(input: CreateCustomProviderInput): Result<ProviderConfig> = runCatching {

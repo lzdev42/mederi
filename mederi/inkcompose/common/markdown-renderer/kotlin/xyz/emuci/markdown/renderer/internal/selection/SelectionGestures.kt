@@ -2,6 +2,7 @@ package xyz.emuci.markdown.renderer.internal.selection
 
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.focusable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -11,7 +12,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -33,8 +43,32 @@ internal fun Modifier.markdownSelectionGestures(
     controller: MarkdownSelectionController,
 ): Modifier = this.composed {
     val dispatcher = remember { NestedScrollDispatcher() }
+    val focusRequester = remember { FocusRequester() }
 
     this
+        .focusRequester(focusRequester)
+        .focusable()
+        .onKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown) {
+                val isCopyKey = event.key == Key.C || event.key == Key.Insert
+                val isModifierPressed = event.isMetaPressed || event.isCtrlPressed
+                val isCopyShortcut = (isModifierPressed && isCopyKey) || event.key == Key.Copy
+
+                if (isCopyShortcut) {
+                    println("[MarkdownSelection] KeyDown Copy shortcut: isMeta=${event.isMetaPressed}, isCtrl=${event.isCtrlPressed}, key=${event.key}, hasSelection=${controller.hasSelection}, textLength=${controller.selectedText.length}")
+                    if (controller.hasSelection) {
+                        controller.copySelection()
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
         .nestedScroll(
             connection = object : NestedScrollConnection {},
             dispatcher = dispatcher,
@@ -45,6 +79,7 @@ internal fun Modifier.markdownSelectionGestures(
 
             detectDragGestures(
                 onDragStart = { offset ->
+                    focusRequester.requestFocus()
                     pendingStart = offset
                     selectionActive = false
                 },
@@ -92,8 +127,14 @@ internal fun Modifier.markdownSelectionGestures(
         }
         .pointerInput(controller) {
             detectTapGestures(
-                onTap = { controller.clearSelectionFromTap() },
-                onDoubleTap = { offset -> controller.selectWordAtRootLocal(offset) },
+                onTap = {
+                    focusRequester.requestFocus()
+                    controller.clearSelectionFromTap()
+                },
+                onDoubleTap = { offset ->
+                    focusRequester.requestFocus()
+                    controller.selectWordAtRootLocal(offset)
+                },
             )
         }
         .pointerInput(controller) {
@@ -104,6 +145,7 @@ internal fun Modifier.markdownSelectionGestures(
                         val change = event.changes.firstOrNull() ?: continue
                         if (change.type == PointerType.Mouse && event.isSecondaryClick()) {
                             change.consume()
+                            focusRequester.requestFocus()
                             controller.showContextMenuAt(change.position)
                         }
                     }

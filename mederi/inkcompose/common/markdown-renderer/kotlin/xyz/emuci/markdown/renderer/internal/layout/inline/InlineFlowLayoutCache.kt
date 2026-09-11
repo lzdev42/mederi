@@ -17,7 +17,6 @@ internal class InlineFlowLayoutCache(
         maxLines: Int,
         style: TextStyle,
         density: Density,
-        textMeasurer: TextMeasurer,
         compute: () -> InlineFlowLayout,
     ): InlineFlowLayout {
         val key = InlineFlowLayoutCacheKey(
@@ -28,7 +27,6 @@ internal class InlineFlowLayoutCache(
             styleHash = style.hashCode(),
             densityBits = density.density.toBits(),
             fontScaleBits = density.fontScale.toBits(),
-            textMeasurerHash = textMeasurer.hashCode(),
         )
         return entries.getOrPut(key, compute)
     }
@@ -45,7 +43,6 @@ internal class InlineFlowLayoutCache(
         val styleHash: Int,
         val densityBits: Int,
         val fontScaleBits: Int,
-        val textMeasurerHash: Int,
     )
 
     private companion object {

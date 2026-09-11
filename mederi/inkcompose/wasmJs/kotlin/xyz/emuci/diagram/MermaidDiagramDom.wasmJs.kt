@@ -135,7 +135,7 @@ internal object MermaidDiagramDom {
             attempt(0);
           }
 
-          window.mederiDiagram = {
+          window.inkcomposeDiagram = {
             render: function(id, code, widthCss, themeKey, configJson) {
               renderStates[id] = { state: 0, width: 0, height: 0, base64: '', error: '' };
               console.log('[MermaidDiagramJS] render called: id=' + id + ', widthCss=' + widthCss);
@@ -277,16 +277,16 @@ private fun bridgeRender(
     widthCss: Int,
     themeKey: Int,
     configJson: String,
-): Unit = js("window.mederiDiagram.render(id, code, widthCss, themeKey, configJson)")
+): Unit = js("window.inkcomposeDiagram.render(id, code, widthCss, themeKey, configJson)")
 
-private fun bridgeGetState(id: Int): Int = js("window.mederiDiagram.getState(id)")
+private fun bridgeGetState(id: Int): Int = js("window.inkcomposeDiagram.getState(id)")
 
-private fun bridgeGetWidth(id: Int): Int = js("window.mederiDiagram.getWidth(id)")
+private fun bridgeGetWidth(id: Int): Int = js("window.inkcomposeDiagram.getWidth(id)")
 
-private fun bridgeGetHeight(id: Int): Int = js("window.mederiDiagram.getHeight(id)")
+private fun bridgeGetHeight(id: Int): Int = js("window.inkcomposeDiagram.getHeight(id)")
 
-private fun bridgeGetBase64(id: Int): String = js("window.mederiDiagram.getBase64(id)")
+private fun bridgeGetBase64(id: Int): String = js("window.inkcomposeDiagram.getBase64(id)")
 
-private fun bridgeGetError(id: Int): String = js("window.mederiDiagram.getError(id)")
+private fun bridgeGetError(id: Int): String = js("window.inkcomposeDiagram.getError(id)")
 
-private fun bridgeClear(id: Int): Unit = js("window.mederiDiagram.clear(id)")
+private fun bridgeClear(id: Int): Unit = js("window.inkcomposeDiagram.clear(id)")

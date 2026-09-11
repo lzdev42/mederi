@@ -359,6 +359,9 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     post("/v1/providers/{id}/models/refresh") {
         call.respondResult(aiCore.refreshProviderModels(call.parameters["id"]!!))
     }
+    post("/v1/providers/{id}/models/auto-setup") {
+        call.respondResult(aiCore.autoSetupProviderModels(call.parameters["id"]!!))
+    }
     patch("/v1/providers/{id}/models/{modelId}") {
         val input = call.receive<UpdateModelInput>()
         call.respondResult(

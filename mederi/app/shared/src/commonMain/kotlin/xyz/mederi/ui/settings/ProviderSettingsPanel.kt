@@ -34,6 +34,7 @@ import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.launch
+import xyz.mederi.core.contract.models.ModelOrigin
 import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.core.ui.appstate.LocalAppState
@@ -850,6 +851,18 @@ private fun ProviderDetailWorkspace(
                         }
                     }
 
+                    // 「自动设置」：显式应用目录元数据（系统唯一自动写入通道，用户覆盖优先）
+                    Box(
+                        modifier = Modifier
+                            .clip(ProviderTokens.RadiusControl)
+                            .background(colors.surfaceCard)
+                            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
+                            .clickable { viewModel.autoSetupModels(provider.id) }
+                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                    ) {
+                        Text("自动设置", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                    }
+
                     Spacer(modifier = Modifier.width(ProviderTokens.SpacingXSmall))
 
                     // 添加模型按钮
@@ -893,7 +906,7 @@ private fun ProviderDetailWorkspace(
                             CapabilityFilter.ALL -> "全部 (${provider.models.size})"
                             CapabilityFilter.ENABLED_ONLY -> "已启用 (${provider.enabledModelCount})"
                             CapabilityFilter.REASONING -> "Reasoning"
-                            CapabilityFilter.VISION -> "Vision"
+                            CapabilityFilter.IMAGE -> "Image"
                             CapabilityFilter.FREE -> "免费"
                         }
                         Box(
@@ -968,7 +981,7 @@ private fun ProviderDetailWorkspace(
                             CapabilityFilter.ALL -> "全部 (${provider.models.size})"
                             CapabilityFilter.ENABLED_ONLY -> "已启用 (${provider.enabledModelCount})"
                             CapabilityFilter.REASONING -> "Reasoning"
-                            CapabilityFilter.VISION -> "Vision"
+                            CapabilityFilter.IMAGE -> "Image"
                             CapabilityFilter.FREE -> "免费"
                         }
                         Box(
@@ -1044,6 +1057,18 @@ private fun ProviderDetailWorkspace(
                                 )
                             }
                         }
+                    }
+
+                    // 「自动设置」：显式应用目录元数据（系统唯一自动写入通道，用户覆盖优先）
+                    Box(
+                        modifier = Modifier
+                            .clip(ProviderTokens.RadiusControl)
+                            .background(colors.surfaceCard)
+                            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
+                            .clickable { viewModel.autoSetupModels(provider.id) }
+                            .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
+                    ) {
+                        Text("自动设置", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     }
 
                     Box(
@@ -1158,12 +1183,12 @@ private fun ProviderDetailWorkspace(
         AddManualModelDialog(
             colors = colors,
             onDismiss = { showAddManualModelDialog = false },
-            onAdd = { id, name, vision, thinking, contextWindow, maxTokens, reasoningLevels ->
+            onAdd = { id, name, images, thinking, contextWindow, maxTokens, reasoningLevels ->
                 viewModel.addManualModel(
                     providerId = provider.id,
                     modelId = id,
                     name = name,
-                    supportsImages = vision,
+                    supportsImages = images,
                     supportsThinking = thinking,
                     contextWindow = contextWindow,
                     maxTokens = maxTokens,
@@ -1173,17 +1198,22 @@ private fun ProviderDetailWorkspace(
             }
         )
     }
-    editingModel?.let { model ->
+    editingModel?.let { captured ->
+        // 解析最新状态：对话框打开期间用户覆盖/同步可能已更新模型，避免展示陈旧值
+        val model = provider.models.find { it.id == captured.id } ?: captured
         EditModelDialog(
             model = model,
             colors = colors,
             onDismiss = { editingModel = null },
-            onSave = { newName, newVision, newThinking, newCw, newMt, newLevels ->
+            onImageOverride = { supported ->
+                viewModel.setImageOverride(provider.id, model.id, supported)
+            },
+            onSave = { newName, newImages, newThinking, newCw, newMt, newLevels ->
                 viewModel.updateModelConfig(
                     providerId = provider.id,
                     modelId = model.id,
                     name = newName,
-                    supportsImages = newVision,
+                    supportsImages = newImages,
                     supportsThinking = newThinking,
                     contextWindow = newCw,
                     maxTokens = newMt,
@@ -1266,7 +1296,7 @@ private fun ModelItemRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)) {
-                if (model.supportsImages) UnifiedCapabilityTag("Vision", FeatherIcons.Image, colors, textAlpha)
+                if (model.supportsImages) UnifiedCapabilityTag("Image", FeatherIcons.Image, colors, textAlpha)
                 if (model.supportsThinking) {
                     val label = if (model.reasoningLevels.isNotEmpty()) "Thinking (${model.reasoningLevels.joinToString(",")})" else "Thinking"
                     UnifiedCapabilityTag(label, FeatherIcons.Cpu, colors, textAlpha)
@@ -1417,11 +1447,11 @@ private fun ReasoningLevelsEditor(
 private fun AddManualModelDialog(
     colors: MederiColors,
     onDismiss: () -> Unit,
-    onAdd: (id: String, name: String, vision: Boolean, thinking: Boolean, cw: Int?, mt: Int?, levels: List<String>) -> Unit
+    onAdd: (id: String, name: String, images: Boolean, thinking: Boolean, cw: Int?, mt: Int?, levels: List<String>) -> Unit
 ) {
     var modelId by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
-    var supportsVision by remember { mutableStateOf(false) }
+    var supportsImages by remember { mutableStateOf(false) }
     var supportsThinking by remember { mutableStateOf(false) }
     var contextWindowText by remember { mutableStateOf("") }
     var maxTokensText by remember { mutableStateOf("") }
@@ -1451,8 +1481,8 @@ private fun AddManualModelDialog(
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("支持图片输入 (Vision)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
-                    Switch(checked = supportsVision, onCheckedChange = { supportsVision = it }, colors = switchColors(colors))
+                    Text("支持图片输入 (Image)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                    Switch(checked = supportsImages, onCheckedChange = { supportsImages = it }, colors = switchColors(colors))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("支持思考推理 (Thinking)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
@@ -1474,7 +1504,7 @@ private fun AddManualModelDialog(
                         val cw = contextWindowText.toIntOrNull()
                         val mt = maxTokensText.toIntOrNull()
                         onAdd(
-                            modelId.trim(), name.trim(), supportsVision, supportsThinking, cw, mt,
+                            modelId.trim(), name.trim(), supportsImages, supportsThinking, cw, mt,
                             if (supportsThinking) selectedLevels.sortedBy { ReasoningLevels.SELECTABLE.indexOf(it) } else emptyList()
                         )
                     }
@@ -1489,10 +1519,24 @@ private fun EditModelDialog(
     model: ModelItemUiState,
     colors: MederiColors,
     onDismiss: () -> Unit,
-    onSave: (name: String, vision: Boolean, thinking: Boolean, cw: Int?, mt: Int?, levels: List<String>) -> Unit
+    onImageOverride: (Boolean) -> Unit,
+    onSave: (name: String, images: Boolean, thinking: Boolean, cw: Int?, mt: Int?, levels: List<String>) -> Unit
 ) {
+    // 元数据所有权：FETCHED = 端点/目录权威（ModelMerge 唯一写入）→ 元数据只读；
+    // 唯一例外是图片能力开关（用户覆盖层，用户显式设置压过目录且同步永不洗掉）。
+    // MANUAL = 用户权威 → 可编辑表单
+    if (model.origin == ModelOrigin.FETCHED) {
+        ModelMetadataViewDialog(
+            model = model,
+            colors = colors,
+            onImageOverride = onImageOverride,
+            onDismiss = onDismiss
+        )
+        return
+    }
+
     var name by remember { mutableStateOf(model.name) }
-    var supportsVision by remember { mutableStateOf(model.supportsImages) }
+    var supportsImages by remember { mutableStateOf(model.supportsImages) }
     var supportsThinking by remember { mutableStateOf(model.supportsThinking) }
     var contextWindowText by remember { mutableStateOf(model.contextWindow?.toString() ?: "") }
     var maxTokensText by remember { mutableStateOf(model.maxTokens?.toString() ?: "") }
@@ -1526,8 +1570,8 @@ private fun EditModelDialog(
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("支持图片输入 (Vision)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
-                    Switch(checked = supportsVision, onCheckedChange = { supportsVision = it }, colors = switchColors(colors))
+                    Text("支持图片输入 (Image)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                    Switch(checked = supportsImages, onCheckedChange = { supportsImages = it }, colors = switchColors(colors))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("支持思考推理 (Thinking)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
@@ -1549,13 +1593,97 @@ private fun EditModelDialog(
                         val cw = contextWindowText.toIntOrNull()
                         val mt = maxTokensText.toIntOrNull()
                         onSave(
-                            name.trim(), supportsVision, supportsThinking, cw, mt,
+                            name.trim(), supportsImages, supportsThinking, cw, mt,
                             if (supportsThinking) selectedLevels.sortedBy { ReasoningLevels.SELECTABLE.indexOf(it) } else emptyList()
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * FETCHED 模型元数据只读视图。
+ *
+ * 元数据权威 = 端点/模型目录（ModelMerge 唯一写入），只展示不编辑；
+ * 唯一例外：图片能力开关走**用户覆盖层**（supportsImagesOverride，用户显式设置压过目录且同步永不洗掉）——
+ * 目录对长尾/私有模型经常缺数据或标错（如 agnes-image-* 在 models.dev 无收录/标成纯文本），
+ * 用户对自己供应商的能力有最终发言权。
+ */
+@Composable
+private fun ModelMetadataViewDialog(
+    model: ModelItemUiState,
+    colors: MederiColors,
+    onImageOverride: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = ProviderTokens.RadiusCard,
+            color = colors.surfaceCard,
+            border = BorderStroke(1.dp, colors.divider),
+            modifier = Modifier.width(440.dp).padding(ProviderTokens.SpacingLarge)
+        ) {
+            Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
+                Text("模型信息: ${model.providerModelId}", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+                HorizontalDivider(color = colors.divider)
+
+                ModelInfoRow("显示名称", model.name, colors)
+                ModelInfoRow("上下文窗口", model.contextWindow?.let { "${it / 1000}K tokens" } ?: "未知", colors)
+                ModelInfoRow("最大输出", model.maxTokens?.let { "${it / 1000}K tokens" } ?: "未设置", colors)
+
+                // 图片能力：用户覆盖开关（唯一可编辑项）
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
+                        Text("图片输入 (Image)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                        if (model.supportsImagesOverride != null) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(colors.accentWarning.copy(alpha = 0.15f))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                            ) {
+                                Text("已覆盖目录", color = colors.accentWarning, fontSize = 9.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                    Switch(
+                        checked = model.supportsImages,
+                        onCheckedChange = { onImageOverride(it) },
+                        colors = switchColors(colors)
+                    )
+                }
+                ModelInfoRow(
+                    "思考推理 (Thinking)",
+                    if (model.supportsThinking) model.reasoningLevels.filter { it != "NONE" }.joinToString(" / ").ifEmpty { "支持" } else "不支持",
+                    colors
+                )
+
+                Text(
+                    "元数据来自模型目录（models.dev / 端点），自动同步维护；图片开关是你的用户覆盖，不会被同步覆盖。" +
+                        "如需自定义其他字段请删除后手动添加同名模型。",
+                    color = colors.textMuted,
+                    fontSize = ProviderTokens.FontLabel
+                )
+
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onDismiss) { Text("关闭", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelInfoRow(label: String, value: String, colors: MederiColors) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+        Text(value, color = colors.textPrimary, fontSize = ProviderTokens.FontLabel)
     }
 }
 

@@ -19,9 +19,9 @@ internal fun computeInlineFlowLayout(
     maxWidthPx: Float,
     maxLines: Int,
 ): InlineFlowLayout {
-    if (maxLines <= 0 || maxWidthPx <= 0f) {
+    if (maxLines <= 0 || maxWidthPx.isNaN() || maxWidthPx <= 0f) {
         return InlineFlowLayout(
-            widthPx = maxWidthPx.coerceAtLeast(0f),
+            widthPx = if (maxWidthPx.isNaN()) 0f else maxWidthPx.coerceAtLeast(0f),
             heightPx = 0f,
             lines = emptyList(),
         )

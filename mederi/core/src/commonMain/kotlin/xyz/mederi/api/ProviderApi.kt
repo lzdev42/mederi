@@ -25,7 +25,20 @@ interface ProviderApi {
     suspend fun addModel(providerId: String, request: CreateModelRequest): AIModel
     suspend fun updateModel(providerId: String, modelId: String, request: UpdateModelRequest): AIModel
     suspend fun deleteModel(providerId: String, modelId: String)
+
+    /**
+     * 刷新模型列表：从供应商 /models 端点同步列表——**只新增远端新模型，不碰已有模型的元数据**
+     * （机制翻转：系统永不自动纠正存量数据，元数据应用只经 [autoSetupModels] 显式触发）。
+     */
     suspend fun refreshModels(providerId: String): List<String>
+
+    /**
+     * 「自动设置」：用户显式触发，把 models.dev 目录元数据应用到该供应商全部 FETCHED 模型。
+     * 目录数据进入存量模型的**唯一**通道；用户覆盖（supportsImagesOverride）优先于目录。
+     *
+     * @return 实际更新（字段发生变化）的模型数。
+     */
+    suspend fun autoSetupModels(providerId: String): Int
 }
 
 /**

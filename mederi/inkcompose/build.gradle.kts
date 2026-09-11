@@ -19,7 +19,7 @@ val inkModules = listOf(
 )
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(25)
 
     iosArm64()
     iosSimulatorArm64()

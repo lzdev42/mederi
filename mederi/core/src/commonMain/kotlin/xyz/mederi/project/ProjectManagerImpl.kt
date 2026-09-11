@@ -19,7 +19,8 @@ import java.util.UUID
 class ProjectManagerImpl(
     private val projectStore: ProjectStore,
     private val sessionStore: SessionStore,
-    private val historyStore: HistoryStore
+    private val historyStore: HistoryStore,
+    private val diffStore: xyz.mederi.store.DiffStore? = null
 ) : ProjectManager {
 
     override suspend fun list(): List<Project> = projectStore.list()
@@ -50,10 +51,11 @@ class ProjectManagerImpl(
     }
 
     override suspend fun delete(id: String) {
-        // 级联删除项目下的所有 Session 及历史
+        // 级联删除项目下的所有 Session 及历史与 Diff
         sessionStore.list().filter { it.projectId == id }.forEach { session ->
             sessionStore.delete(session.id)
             historyStore.delete(session.id)
+            diffStore?.delete(session.id)
         }
         projectStore.delete(id)
     }

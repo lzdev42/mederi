@@ -146,8 +146,13 @@ object MederiModelMapper {
             provider = providerId,
             supportsThinking = model.supportsReasoning,
             supportsImages = model.supportsImages,
+            supportsImagesOverride = model.supportsImagesOverride,
             reasoningLevels = reasoningLevels,
             providerModelId = model.providerModelId,
+            origin = when (model.origin) {
+                xyz.mederi.domain.model.ModelOrigin.FETCHED -> xyz.mederi.core.contract.models.ModelOrigin.FETCHED
+                xyz.mederi.domain.model.ModelOrigin.MANUAL -> xyz.mederi.core.contract.models.ModelOrigin.MANUAL
+            },
             contextWindow = model.contextWindow,
             maxTokens = model.maxTokens,
             inputPricePerMillion = model.inputPricePerMillion,

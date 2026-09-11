@@ -113,4 +113,31 @@ class MermaidDiskCacheTest {
         val keyWithoutMsg = MermaidDiskCache.computeKey(code, 42, null)
         assertFalse(keyWithoutMsg.contains("msg-12345"))
     }
+
+    @Test
+    fun testClearSessionCache() {
+        val dummyPng = byteArrayOf(1, 2, 3)
+        val s1Key1 = MermaidDiskCache.computeKey("graph 1", 1, "session-alpha")
+        val s1Key2 = MermaidDiskCache.computeKey("graph 2", 1, "session-alpha")
+        val s2Key = MermaidDiskCache.computeKey("graph 3", 1, "session-beta")
+        val noSessionKey = MermaidDiskCache.computeKey("graph 4", 1, null)
+
+        MermaidDiskCache.savePng(s1Key1, dummyPng)
+        MermaidDiskCache.savePng(s1Key2, dummyPng)
+        MermaidDiskCache.savePng(s2Key, dummyPng)
+        MermaidDiskCache.savePng(noSessionKey, dummyPng)
+
+        assertTrue(MermaidDiskCache.getCacheFile(s1Key1).exists())
+        assertTrue(MermaidDiskCache.getCacheFile(s1Key2).exists())
+        assertTrue(MermaidDiskCache.getCacheFile(s2Key).exists())
+        assertTrue(MermaidDiskCache.getCacheFile(noSessionKey).exists())
+
+        // 清理 session-alpha
+        MermaidCacheConfig.clearSessionCache("session-alpha")
+
+        assertFalse(MermaidDiskCache.getCacheFile(s1Key1).exists(), "session-alpha files should be deleted")
+        assertFalse(MermaidDiskCache.getCacheFile(s1Key2).exists(), "session-alpha files should be deleted")
+        assertTrue(MermaidDiskCache.getCacheFile(s2Key).exists(), "session-beta files must remain")
+        assertTrue(MermaidDiskCache.getCacheFile(noSessionKey).exists(), "non-session files must remain")
+    }
 }

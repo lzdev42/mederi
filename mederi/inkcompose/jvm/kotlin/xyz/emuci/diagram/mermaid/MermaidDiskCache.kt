@@ -10,7 +10,7 @@ import java.security.MessageDigest
  * JVM 桌面端 Mermaid 磁盘持久化缓存管理（具备全自愈能力）。
  *
  * 特性：
- * 1. 动态根路径：由 ViewModel 从 core 读出注入，默认自动展开 "~/.mederi"；
+ * 1. 动态根路径：由宿主应用注入，未指定时使用系统临时目录中的 inkcompose 子目录；
  * 2. 目录自愈：任何读写均探测 `${baseDir}/mermaid/`，若被外部误删自动 mkdirs() 重建；
  * 3. 坏文件自愈：读取时校验长度与 Skia 解码合法性，若遇 0 字节或损坏图片自动 delete 坏文件并重新触发生成；
  * 4. 原子安全写入：先写临时文件 .tmp 再原子 renameTo，避免写入中途崩溃产生坏文件。
@@ -18,8 +18,10 @@ import java.security.MessageDigest
 internal object MermaidDiskCache {
 
     private val defaultBaseDir: File by lazy {
-        val userHome = System.getProperty("user.home") ?: "."
-        File(userHome, ".mederi")
+        val tmp = System.getProperty("java.io.tmpdir") ?: "."
+        val dir = File(tmp, "inkcompose")
+        println("[MermaidDiskCache] defaultBaseDir initialized to: ${dir.absolutePath}")
+        dir
     }
 
     @Volatile
@@ -118,6 +120,23 @@ internal object MermaidDiskCache {
                 getMermaidDir().mkdirs()
                 File(getMermaidDir(), "$key.png").writeBytes(bytes)
             } catch (ignored: Throwable) {}
+        }
+    }
+
+    /**
+     * 清理指定会话关联的所有缓存 PNG 图片。
+     */
+    fun clearSession(sessionKey: String) {
+        if (sessionKey.isBlank()) return
+        val sanitized = sessionKey.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32)
+        val prefix = "${sanitized}_"
+        val dir = getMermaidDir()
+        if (dir.exists() && dir.isDirectory) {
+            val files = dir.listFiles { _, name -> name.startsWith(prefix) && name.endsWith(".png") }
+            files?.forEach { file ->
+                val deleted = file.delete()
+                println("[MermaidDiskCache] Deleted session diagram cache: ${file.name}, success=$deleted")
+            }
         }
     }
 }

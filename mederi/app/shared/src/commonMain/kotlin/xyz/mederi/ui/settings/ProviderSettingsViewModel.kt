@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.models.ApiKeyOption
 import xyz.mederi.core.contract.models.ModelOption
+import xyz.mederi.core.contract.models.ModelOrigin
 import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.core.contract.models.ProviderConfig
 import xyz.mederi.core.contract.models.ProviderType
@@ -55,7 +56,8 @@ sealed class ModelsSyncStatus {
  * @param name 显示名称（用户可自定义或默认与 ID 相同）
  * @param isEnabled 是否启用（勾选在主聊天输入框的模型列表中显示）
  * @param supportsThinking 是否支持思考/Reasoning
- * @param supportsImages 是否支持图片/Vision 多模态
+ * @param supportsImages 是否支持图片（Image）多模态
+ * @param origin 元数据所有权：FETCHED = 目录/端点权威（元数据只读）；MANUAL = 用户权威（可编辑）
  * @param isFree 是否为免费模型（core 未建模，恒为 false）
  * @param contextWindow 上下文窗口大小（tokens），null 表示未知
  * @param maxTokens 最大输出大小（tokens），null 表示未设置
@@ -69,6 +71,9 @@ data class ModelItemUiState(
     val isEnabled: Boolean = true,
     val supportsThinking: Boolean = false,
     val supportsImages: Boolean = false,
+    /** 图片能力用户覆盖：null = 未覆盖（随目录同步）；非 null = 用户显式设置（同步永不覆盖）。 */
+    val supportsImagesOverride: Boolean? = null,
+    val origin: ModelOrigin = ModelOrigin.FETCHED,
     val isFree: Boolean = false,
     val contextWindow: Int? = null,
     val maxTokens: Int? = null,
@@ -124,7 +129,7 @@ enum class CapabilityFilter(val label: String) {
     ALL("全部"),
     ENABLED_ONLY("仅启用"),
     REASONING("🧠 Reasoning"),
-    VISION("🖼️ Vision"),
+    IMAGE("🖼️ Image"),
     FREE("🆓 免费")
 }
 
@@ -171,7 +176,7 @@ data class ProviderSettingsUiState(
                     CapabilityFilter.ALL -> true
                     CapabilityFilter.ENABLED_ONLY -> model.isEnabled
                     CapabilityFilter.REASONING -> model.supportsThinking
-                    CapabilityFilter.VISION -> model.supportsImages
+                    CapabilityFilter.IMAGE -> model.supportsImages
                     CapabilityFilter.FREE -> model.isFree
                 }
 
@@ -298,6 +303,8 @@ class ProviderSettingsViewModel(
             isEnabled = model.isEnabled,
             supportsThinking = model.supportsThinking,
             supportsImages = model.supportsImages,
+            supportsImagesOverride = model.supportsImagesOverride,
+            origin = model.origin,
             isFree = false,
             contextWindow = model.contextWindow,
             maxTokens = model.maxTokens,
@@ -678,6 +685,13 @@ class ProviderSettingsViewModel(
         maxTokens: Int?,
         reasoningLevels: List<String>
     ) {
+        // FETCHED 模型元数据是端点/目录权威（ModelMerge 唯一写入），UI 不提供编辑；
+        // 这里兜底拦一次，防止调用方绕过对话框状态直接发起
+        val target = uiState.providers.find { it.id == providerId }?.models?.find { it.id == modelId }
+        if (target?.origin == ModelOrigin.FETCHED) {
+            uiState = uiState.copy(errorMessage = "该模型元数据来自模型目录，不可编辑（如需自定义请删除后手动添加）")
+            return
+        }
         viewModelScope.launch {
             val result = appState.aiCore.updateProviderModel(
                 providerId = providerId,
@@ -695,6 +709,45 @@ class ProviderSettingsViewModel(
                 },
                 onFailure = { e ->
                     uiState = uiState.copy(errorMessage = "更新失败: ${e.message}")
+                }
+            )
+        }
+    }
+
+    /**
+     * 图片能力用户覆盖（FETCHED 模型的图片开关唯一入口）：
+     * 用户显式设置写入 supportsImagesOverride（用户权威），目录/刷新/回填永不洗掉。
+     */
+    fun setImageOverride(providerId: String, modelId: String, supported: Boolean) {
+        viewModelScope.launch {
+            val result = appState.aiCore.updateProviderModel(
+                providerId = providerId,
+                modelId = modelId,
+                supportsImages = supported
+            )
+            result.fold(
+                onSuccess = {
+                    uiState = uiState.copy(successMessage = if (supported) "已设置支持图片（用户覆盖，不会被目录同步覆盖）" else "已设置不支持图片（用户覆盖）")
+                },
+                onFailure = { e ->
+                    uiState = uiState.copy(errorMessage = "设置失败: ${e.message}")
+                }
+            )
+        }
+    }
+
+    /**
+     * 「自动设置」：显式应用 models.dev 目录元数据到该供应商全部 FETCHED 模型
+     * （系统永不自动纠正存量数据，这是目录数据进入存量模型的唯一通道；用户覆盖优先）。
+     */
+    fun autoSetupModels(providerId: String) {
+        viewModelScope.launch {
+            appState.aiCore.autoSetupProviderModels(providerId).fold(
+                onSuccess = { n ->
+                    uiState = uiState.copy(successMessage = "自动设置完成：更新 $n 个模型（用户覆盖不受影响）")
+                },
+                onFailure = { e ->
+                    uiState = uiState.copy(errorMessage = "自动设置失败: ${e.message}")
                 }
             )
         }

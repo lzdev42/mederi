@@ -80,19 +80,19 @@ internal fun rememberStreamingDocument(
     }
 
     LaunchedEffect(markdown, isStreaming, parser, runtimePipeline) {
-        val newState = updateStreamingDocumentState(
-            markdown = markdown,
-            isStreaming = isStreaming,
-            state = state,
-            beginStream = parser::beginStream,
-            append = parser::append,
-            endStream = parser::endStream,
-            parse = { value ->
-                withContext(Dispatchers.Default) {
+        val newState = withContext(Dispatchers.Default) {
+            updateStreamingDocumentState(
+                markdown = markdown,
+                isStreaming = isStreaming,
+                state = state,
+                beginStream = parser::beginStream,
+                append = parser::append,
+                endStream = parser::endStream,
+                parse = { value ->
                     parser.parse(runtimePipeline.transform(value).markdown)
                 }
-            }
-        )
+            )
+        }
         if (!isStreaming && newState.document != null) {
             parsedDocumentCache[markdown] = newState.document
         }
@@ -116,14 +116,14 @@ internal fun rememberRenderDocument(
             return@LaunchedEffect
         }
 
-        while (true) {
-            withFrameNanos { }
-            delay(16L)
-            val upstream = latestDocument
-            if (upstream !== throttledDocument) {
-                throttledDocument = upstream
+        // 响应式数据驱动节流：无新内容时挂起休眠（0 CPU），有新内容时最多以 ~60fps 频率发射
+        androidx.compose.runtime.snapshotFlow { latestDocument }
+            .collect { upstream ->
+                if (upstream !== throttledDocument) {
+                    throttledDocument = upstream
+                    delay(16L)
+                }
             }
-        }
     }
 
     // 仅在流式期间使用节流后的 document；流结束后直接消费最终 document，

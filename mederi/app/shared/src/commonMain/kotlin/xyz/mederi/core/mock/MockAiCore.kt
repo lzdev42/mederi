@@ -199,6 +199,7 @@ class MockAiCore(
             supportsImages = supportsImages,
             reasoningLevels = if (supportsThinking) reasoningLevels else emptyList(),
             providerModelId = providerModelId,
+            origin = ModelOrigin.MANUAL,
             isEnabled = isEnabled
         )
         _providers.value = _providers.value.map { p ->
@@ -257,6 +258,8 @@ class MockAiCore(
         _availableModels.value.filter { it.provider == providerId }.map { it.providerModelId }
     }
 
+    override suspend fun autoSetupProviderModels(providerId: String): Result<Int> = runCatching { 0 }
+
     override suspend fun createCustomProvider(input: CreateCustomProviderInput): Result<ProviderConfig> = runCatching {
         val config = ProviderConfig(
             id = "custom_${idGenerator.next()}",
@@ -272,7 +275,8 @@ class MockAiCore(
                     supportsThinking = cm.supportsThinking,
                     supportsImages = cm.supportsImages,
                     reasoningLevels = cm.reasoningLevels,
-                    providerModelId = cm.id
+                    providerModelId = cm.id,
+                    origin = ModelOrigin.MANUAL
                 )
             },
             customModels = input.customModels,

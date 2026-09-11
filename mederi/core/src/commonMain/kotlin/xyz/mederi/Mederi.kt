@@ -211,7 +211,7 @@ class Mederi private constructor(
 
             // === Manager 层装配 ===
             val providerManager = ProviderManagerImpl(providerStore, apiKeyStore)
-            val projectManager = ProjectManagerImpl(projectStore, sessionStore, historyStore)
+            val projectManager = ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)
             val sessionManager = SessionManagerImpl(
                 sessionStore = sessionStore,
                 historyStore = historyStore,

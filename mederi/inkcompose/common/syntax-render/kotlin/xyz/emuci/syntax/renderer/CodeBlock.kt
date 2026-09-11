@@ -72,7 +72,7 @@ fun CodeBlock(
     val highlighter = remember(language) { IncrementalHighlighter() }
 
     var isExpanded by remember { mutableStateOf(false) }
-    val lines = code.split("\n")
+    val lines = remember(code) { code.split("\n") }
     val totalLines = lines.size
     val isCollapsible = maxVisibleLines != null && totalLines > maxVisibleLines
     val visibleLineCount = when {
@@ -80,8 +80,8 @@ fun CodeBlock(
         else -> maxVisibleLines // isCollapsible 为 true 时 maxVisibleLines 一定非空
     }
 
-    val visibleLines = lines.take(visibleLineCount)
-    val visibleCode = visibleLines.joinToString("\n")
+    val visibleLines = remember(lines, visibleLineCount) { lines.take(visibleLineCount) }
+    val visibleCode = remember(visibleLines) { visibleLines.joinToString("\n") }
     val visibleAst = remember(visibleCode, language) { highlighter.update(visibleCode, language) }
     val lineHighlights = remember(visibleAst, theme, language, highlightedLines, visibleLineCount) {
         buildLineRenders(
@@ -158,15 +158,17 @@ fun CodeBlock(
             Column(
                 modifier = Modifier.padding(vertical = 8.dp)
             ) {
-                val renderedLines = if (fallbackToPlainLines) {
-                    visibleLines.map { line ->
-                        CodeLineRender(
-                            kind = CodeLineKind.NORMAL,
-                            text = AnnotatedString(line),
-                        )
+                val renderedLines = remember(fallbackToPlainLines, visibleLines, lineHighlights) {
+                    if (fallbackToPlainLines) {
+                        visibleLines.map { line ->
+                            CodeLineRender(
+                                kind = CodeLineKind.NORMAL,
+                                text = AnnotatedString(line),
+                            )
+                        }
+                    } else {
+                        lineHighlights
                     }
-                } else {
-                    lineHighlights
                 }
                 renderedLines.forEachIndexed { index, lineRender ->
                     key(index) {

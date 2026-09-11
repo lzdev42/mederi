@@ -1,6 +1,8 @@
 package xyz.mederi.provider
 
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.ModelOrigin
+import xyz.mederi.metadata.ModelMetadata
 import xyz.mederi.provider.domain.model.Provider
 import xyz.mederi.provider.domain.model.ProviderApiKey
 import xyz.mederi.provider.domain.model.ProviderType
@@ -172,6 +174,7 @@ class ProviderManagerImpl(
             maxTokens = maxTokens,
             supportsImages = supportsImages,
             reasoningLevels = reasoningLevels,
+            origin = ModelOrigin.MANUAL,
             isEnabled = isEnabled,
             inputPricePerMillion = inputPricePerMillion,
             outputPricePerMillion = outputPricePerMillion
@@ -180,7 +183,39 @@ class ProviderManagerImpl(
         return model
     }
 
-    override suspend fun updateModel(
+    override suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean): AIModel {
+        val provider = providerStore.get(providerId)
+            ?: throw NoSuchElementException("Provider not found: $providerId")
+        val model = merged.copy(
+            id = "mdl_${UUID.randomUUID().toString().take(8)}",
+            origin = ModelOrigin.FETCHED,
+            isEnabled = isEnabled
+        )
+        saveProviderInternal(provider.copy(models = provider.models + model))
+        return model
+    }
+
+    override suspend fun applyRemoteMetadata(
+        providerId: String,
+        modelId: String,
+        endpoint: RemoteModelInfo?,
+        catalog: ModelMetadata?
+    ): AIModel {
+        val provider = providerStore.get(providerId)
+            ?: throw NoSuchElementException("Provider not found: $providerId")
+        val existing = provider.getModel(modelId)
+            ?: throw NoSuchElementException("Model not found: $modelId")
+        check(existing.origin == ModelOrigin.FETCHED) {
+            "MANUAL 模型是用户权威，禁止远端元数据合并: ${existing.providerModelId}"
+        }
+        val merged = ModelMerge.mergeFetched(existing, endpoint, catalog)
+        // 无变化不落库（回填路径每模型都会调，省一次写放大）
+        if (merged == existing) return existing
+        saveProviderInternal(provider.copy(models = provider.models.map { if (it.id == modelId) merged else it }))
+        return merged
+    }
+
+    override suspend fun updateUserModel(
         providerId: String,
         modelId: String,
         name: String?,
@@ -190,14 +225,19 @@ class ProviderManagerImpl(
         maxTokens: Int?,
         supportsImages: Boolean?,
         reasoningLevels: List<ReasoningLevel>?,
-        isEnabled: Boolean?,
-        inputPricePerMillion: Double?,
-        outputPricePerMillion: Double?
+        isEnabled: Boolean?
     ): AIModel {
         val provider = providerStore.get(providerId)
             ?: throw NoSuchElementException("Provider not found: $providerId")
         val existing = provider.getModel(modelId)
             ?: throw NoSuchElementException("Model not found: $modelId")
+        if (existing.origin == ModelOrigin.FETCHED) {
+            val metadataTouched = name != null || supportsReasoning != null || reasoningLevel != null ||
+                contextWindow != null || maxTokens != null || reasoningLevels != null
+            check(!metadataTouched) {
+                "FETCHED 模型元数据是端点/目录权威，只能改 isEnabled / 图片覆盖: ${existing.providerModelId}"
+            }
+        }
         val updated = existing.copy(
             name = name ?: existing.name,
             supportsReasoning = supportsReasoning ?: existing.supportsReasoning,
@@ -205,14 +245,16 @@ class ProviderManagerImpl(
             contextWindow = contextWindow ?: existing.contextWindow,
             maxTokens = maxTokens ?: existing.maxTokens,
             supportsImages = supportsImages ?: existing.supportsImages,
+            // 用户覆盖（用户权威）：FETCHED 模型经 UI 显式设置的图片能力，同步永不洗掉
+            //（目录对长尾/私有模型经常缺数据或标错，用户显式设置必须压过目录）
+            supportsImagesOverride = when {
+                existing.origin == ModelOrigin.FETCHED && supportsImages != null -> supportsImages
+                else -> existing.supportsImagesOverride
+            },
             reasoningLevels = reasoningLevels ?: existing.reasoningLevels,
-            isEnabled = isEnabled ?: existing.isEnabled,
-            inputPricePerMillion = inputPricePerMillion ?: existing.inputPricePerMillion,
-            outputPricePerMillion = outputPricePerMillion ?: existing.outputPricePerMillion
+            isEnabled = isEnabled ?: existing.isEnabled
         )
-        saveProviderInternal(
-            provider.copy(models = provider.models.map { if (it.id == modelId) updated else it })
-        )
+        saveProviderInternal(provider.copy(models = provider.models.map { if (it.id == modelId) updated else it }))
         return updated
     }
 

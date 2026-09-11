@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import xyz.emuci.syntax.renderer.CodeBlock
@@ -72,8 +73,10 @@ fun MarkdownView(
     enableSelection: Boolean = true,
     selectionMenuActions: List<SelectionMenuAction> = emptyList(),
     enableScrollOverride: Boolean? = null,
+    sessionKey: String? = null,
 ) {
     val effectiveType = if (type == RenderType.AUTO) RenderType.MARKDOWN else type
+    val effectiveSessionKey = sessionKey ?: LocalSessionKey.current
 
     val contentComposable: @Composable () -> Unit = when (effectiveType) {
         RenderType.TEXT -> {
@@ -146,7 +149,7 @@ fun MarkdownView(
                     source = content,
                     theme = diagramTheme,
                     languageHint = "mermaid",
-                    sessionKey = null,
+                    sessionKey = effectiveSessionKey,
                     modifier = modifier,
                 )
             }
@@ -176,5 +179,7 @@ fun MarkdownView(
         RenderType.AUTO -> error("unreachable: AUTO should be normalized to MARKDOWN above")
     }
 
-    contentComposable()
+    CompositionLocalProvider(LocalSessionKey provides effectiveSessionKey) {
+        contentComposable()
+    }
 }

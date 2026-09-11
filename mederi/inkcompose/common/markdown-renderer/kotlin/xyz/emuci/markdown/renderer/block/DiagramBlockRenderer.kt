@@ -21,6 +21,7 @@ import xyz.emuci.markdown.renderer.LocalDiagramHostRegistry
 import xyz.emuci.markdown.renderer.LocalIsStreaming
 import xyz.emuci.markdown.parser.ast.DiagramBlock
 import xyz.emuci.markdown.renderer.LocalMarkdownTheme
+import xyz.emuci.inkcompose.LocalSessionKey
 import xyz.emuci.markdown.renderer.internal.core.identity.renderIdentityFromText
 import xyz.emuci.markdown.renderer.internal.core.identity.renderIdentityFromValues
 import xyz.emuci.markdown.renderer.internal.core.model.DiagramBlockWidgetModel
@@ -80,6 +81,12 @@ internal fun RenderDiagramBlockWidgetModel(
         }
     }
     val hostKey = model.hostKey
+    val currentSessionId = LocalSessionKey.current
+    val effectiveSessionKey = if (!currentSessionId.isNullOrBlank()) {
+        currentSessionId
+    } else {
+        hostKey
+    }
     val route = hostRegistry.route(
         hostKey = hostKey,
         detectedDiagram = detection.shouldRouteToDiagram,
@@ -100,7 +107,7 @@ internal fun RenderDiagramBlockWidgetModel(
                     source = code,
                     theme = theme.diagramTheme,
                     languageHint = diagramType,
-                    sessionKey = hostKey,
+                    sessionKey = effectiveSessionKey,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onSizeChanged { size ->

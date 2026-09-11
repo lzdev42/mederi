@@ -80,7 +80,6 @@ internal class InlineLayoutRuntime {
             maxLines = maxLines,
             style = style,
             density = density,
-            textMeasurer = textMeasurer,
         ) {
             metrics.flowLayoutComputations++
             computeInlineFlowLayout(

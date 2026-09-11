@@ -109,6 +109,8 @@ class SessionManagerImpl(
     }
 
     override suspend fun delete(id: String) {
+        DebugLog.event("SessionMgr", "delete: sessionId=$id")
+        turnExecutor.abortAndJoin(id)
         sessionStore.delete(id)
         historyStore.delete(id)
         diffStore?.delete(id)

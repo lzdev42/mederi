@@ -26,6 +26,7 @@ import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.FileAttachment
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.ui.appstate.AppState
+import xyz.mederi.isDesktopPlatform
 import xyz.emuci.inkcompose.MermaidCacheConfig
 import xyz.mederi.ui.components.TurnStatus
 import xyz.mederi.ui.components.deriveTurnStatus
@@ -164,11 +165,41 @@ class WorkspaceViewModel(
     val appStateRef: AppState get() = appState
 
     init {
-        // 从 core 动态读取配置存储路径并注入 Mermaid 磁盘缓存系统
-        appState.aiCore.configDir?.let { dir ->
-            MermaidCacheConfig.setBaseDirectory(dir)
+        // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到项目主目录下的 .mederi。
+        // android/ios 是遥控端：project.directories 是 server 机器的路径，设备上不存在/无写权限，
+        // 注入只会让磁盘缓存静默失效——遥控端固定用本地应用缓存目录（Android 宿主启动时注入 cacheDir，
+        // iOS 用 NSCaches 默认值），不走项目重定向。wasmJs 无磁盘，setBaseDirectory 本身是 no-op。
+        if (isDesktopPlatform) {
+            viewModelScope.launch {
+                combine(appState.projects, appState.selectedProjectId) { projects, selectedId ->
+                    val project = projects.find { it.id == selectedId }
+                    val primaryDir = project?.directories?.firstOrNull()
+                    if (!primaryDir.isNullOrBlank()) {
+                        "$primaryDir/.mederi"
+                    } else {
+                        appState.aiCore.configDir
+                    }
+                }.collect { targetDir ->
+                    if (!targetDir.isNullOrBlank()) {
+                        MermaidCacheConfig.setBaseDirectory(targetDir)
+                    }
+                }
+            }
         }
     }
+
+    // ==========================================
+    // 图片能力（唯一推导，UI 显隐/警告与发送门禁同源）
+    // ==========================================
+
+    /**
+     * 当前选中模型是否支持图片输入（唯一推导，禁止 UI 各处手写 `selectedModel?.supportsImages` 判断）：
+     * 附件按钮显隐、附件区警告、tryAttachImage 拦截、guardImageSupport 发送守卫全部同源于此。
+     * 无选中模型 = false（不提供图片功能）。
+     */
+    val modelSupportsImages: StateFlow<Boolean> = appState.selectedModel
+        .map { it?.supportsImages == true }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // ==========================================
     // Agent 选择（AgentMode × WorkType 切换）
@@ -462,7 +493,24 @@ class WorkspaceViewModel(
         pendingPastedTexts.addAll(reindexed)
     }
 
-    fun addImage(name: String, mimeType: String, bytes: ByteArray, width: Int = 0, height: Int = 0) {
+    /**
+     * 附加剪贴板图片的唯一 UI 入口（附件按钮与 Ctrl/Cmd+V 粘贴共用）。
+     * 内置图片门禁：当前模型不支持图片输入时拒绝入列并给出可见反馈。
+     *
+     * @return true = 已附加；false = 被门禁拦截（error 已写入展示位）。
+     */
+    fun tryAttachImage(name: String, mimeType: String, bytes: ByteArray, width: Int = 0, height: Int = 0): Boolean {
+        val model = appState.selectedModel.value
+        if (model != null && !model.supportsImages) {
+            DebugLog.event("UI", "attach blocked: model does not support image input (${model.providerModelId})")
+            error = "当前模型「${model.name}」不支持图片输入，请移除图片或切换到支持图片的模型"
+            return false
+        }
+        addImage(name, mimeType, bytes, width, height)
+        return true
+    }
+
+    private fun addImage(name: String, mimeType: String, bytes: ByteArray, width: Int = 0, height: Int = 0) {
         val base64 = bytes.toByteString().base64()
         val dataUrl = "data:$mimeType;base64,$base64"
         val item = ImageAttachment(
@@ -1013,6 +1061,19 @@ class WorkspaceViewModel(
         appState.selectConversation(id)
     }
 
+    /**
+     * 图片附件门禁（唯一守卫，send 与 rollbackMessage 共用）：
+     * 当前模型不支持图片输入时拒绝发送，不让请求到达供应商后报 400。
+     *
+     * @return true = 放行；false = 已拦截并写入 [error]。
+     */
+    private fun guardImageSupport(model: ModelOption): Boolean {
+        if (model.supportsImages) return true
+        DebugLog.event("UI", "send blocked: model does not support image input (${model.providerModelId})")
+        error = "当前模型「${model.name}」不支持图片输入，请移除图片或切换到支持图片的模型"
+        return false
+    }
+
     fun send(text: String) {
         val trimmed = text.trim()
         val hasPasted = pendingPastedTexts.isNotEmpty()
@@ -1046,6 +1107,7 @@ class WorkspaceViewModel(
             error = "请先在输入框选择模型"
             return
         }
+        if (hasImages && !guardImageSupport(model)) return
         error = null
 
         // 组装最终提示词：用户主指令在前，粘贴大文本在后；Core 的 TurnExecutor 会追加 metaNote 保证 metaNote 恒在最底部
@@ -1223,6 +1285,33 @@ class WorkspaceViewModel(
         val textToSend = targetMsg?.blocks?.filterIsInstance<ChatBlock.Text>()
             ?.joinToString("") { it.text }?.ifBlank { messageText } ?: messageText
 
+        // 0. 附件提取 + 目标配置解析 + 图片门禁——**先验后切**：
+        // 门禁拦截时本地必须零变更（快照还没切除），否则会留下"消息已切、重发未发"的不一致状态
+        val imageBlocks = targetMsg?.blocks?.filterIsInstance<ChatBlock.File>()
+            ?.filter { it.mimeType?.startsWith("image/") == true || it.url.startsWith("data:image/") }
+            ?: emptyList()
+        val attachments = imageBlocks.mapNotNull { fileBlock ->
+            val bytes = if (fileBlock.url.startsWith("data:")) {
+                val base64Data = fileBlock.url.substringAfter("base64,")
+                base64Data.decodeBase64()?.toByteArray()
+            } else null
+            if (bytes != null) {
+                FileAttachment(
+                    name = fileBlock.name,
+                    mimeType = fileBlock.mimeType ?: "image/png",
+                    bytes = bytes
+                )
+            } else null
+        }
+        val model = appState.selectedModel.value
+            ?: appState.availableModels.value.find { it.id == currentSnap?.conversation?.modelId }
+            ?: appState.availableModels.value.firstOrNull()
+        val agent = appState.availableAgents.value.find { it.id == appState.selectedAgentId.value }
+            ?: appState.availableAgents.value.find { it.id == currentSnap?.conversation?.agent }
+            ?: BuiltinAgents.ALL.firstOrNull()
+        // 图片门禁（与 send 同一守卫）：切了不支持图片的模型后重试历史消息也要拦
+        if (model != null && attachments.isNotEmpty() && !guardImageSupport(model)) return
+
         DebugLog.info(
             "UI",
             "rollbackMessage (重试): convId=$conversationId, msgId=$messageId, textLen=${textToSend.length}, isWorking=$isWorking"
@@ -1244,35 +1333,10 @@ class WorkspaceViewModel(
             }
         }
 
-        // 3. 提取附件（如果有图片块）
-        val imageBlocks = targetMsg?.blocks?.filterIsInstance<ChatBlock.File>()
-            ?.filter { it.mimeType?.startsWith("image/") == true || it.url.startsWith("data:image/") }
-            ?: emptyList()
-        val attachments = imageBlocks.mapNotNull { fileBlock ->
-            val bytes = if (fileBlock.url.startsWith("data:")) {
-                val base64Data = fileBlock.url.substringAfter("base64,")
-                base64Data.decodeBase64()?.toByteArray()
-            } else null
-            if (bytes != null) {
-                FileAttachment(
-                    name = fileBlock.name,
-                    mimeType = fileBlock.mimeType ?: "image/png",
-                    bytes = bytes
-                )
-            } else null
-        }
-
-        // 4. 解析目标配置
-        val model = appState.selectedModel.value
-            ?: appState.availableModels.value.find { it.id == currentSnap?.conversation?.modelId }
-            ?: appState.availableModels.value.firstOrNull()
-        val agent = appState.availableAgents.value.find { it.id == appState.selectedAgentId.value }
-            ?: appState.availableAgents.value.find { it.id == currentSnap?.conversation?.agent }
-            ?: BuiltinAgents.ALL.firstOrNull()
         // 唯一真理源：与 send() 同源，发 effectiveThinkingLevel（推理选择器显示值）
         val effectiveLevel = computeEffectiveThinkingLevel()
 
-        // 5. 组装并设置重发的乐观用户消息
+        // 3. 组装并设置重发的乐观用户消息
         val now = xyz.mederi.currentTimeMillis()
         val optBlocks = mutableListOf<ChatBlock>()
         imageBlocks.forEach { optBlocks.add(it) }
@@ -1295,7 +1359,7 @@ class WorkspaceViewModel(
         pendingUserMessages[conversationId] = optMsg
         DebugLog.info("UI", "rollbackMessage: created optimistic message id=${optMsg.id}")
 
-        // 6. 调用 core 回滚并在成功后重发
+        // 4. 调用 core 回滚并在成功后重发
         viewModelScope.launch {
             DebugLog.info("UI", "rollbackMessage: calling aiCore.rollbackToMessage(convId=$conversationId, msgId=$messageId)")
             val rollbackResult = appState.aiCore.rollbackToMessage(conversationId, messageId)

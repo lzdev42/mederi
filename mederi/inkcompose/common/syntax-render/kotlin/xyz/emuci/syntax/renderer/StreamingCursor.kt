@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 
 /**
@@ -42,10 +43,12 @@ internal fun StreamingCursor(
         label = "cursorAlpha"
     )
 
+    // 推迟到绘制阶段：避免每次动画刷新都触发 Composable 重组
     Box(
         modifier = modifier
             .width(2.dp)
             .height(16.dp)
-            .background(color.copy(alpha = alpha))
+            .graphicsLayer { this.alpha = alpha }
+            .background(color)
     )
 }

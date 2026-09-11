@@ -38,6 +38,8 @@ import xyz.mederi.core.ui.appstate.LocalAppState
 import compose.icons.feathericons.Sidebar
 import xyz.mederi.theme.LocalMederiColors
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.CompositionLocalProvider
+import xyz.emuci.inkcompose.LocalSessionKey
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.currentTimeMillis
 import xyz.mederi.ui.ChatLayout
@@ -498,9 +500,10 @@ private fun MessageList(
         }
     }
 
-    LazyColumn(
-        state = lazyListState,
-        modifier = modifier,
+    CompositionLocalProvider(LocalSessionKey provides viewModel.conversationId) {
+        LazyColumn(
+            state = lazyListState,
+            modifier = modifier,
         contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 12.dp) else PaddingValues(horizontal = 24.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(ChatLayout.itemSpacing),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -669,6 +672,7 @@ private fun MessageList(
                                         if (item.text.isNotBlank()) {
                                             MarkdownView(
                                                 content = item.text,
+                                                sessionKey = item.conversationId,
                                                 modifier = Modifier.fillMaxWidth(),
                                                 isStreaming = item.isStreaming,
                                                 selectionMenuActions = selectionMenuActions,
@@ -757,6 +761,7 @@ private fun MessageList(
             }
         }
     }
+}
 }
 
 /**

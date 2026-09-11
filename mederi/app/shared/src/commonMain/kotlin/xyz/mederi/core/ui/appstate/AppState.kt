@@ -315,6 +315,14 @@ class AppState(
      *   - 清理 workspace.lastProjectId / workspace.lastConversationId(若它们指向被删)
      */
     fun handleProjectDeleted(projectId: String) {
+        val deletedProjectConversations = projects.value
+            .find { it.id == projectId }
+            ?.conversations
+            ?.map { it.id }
+            .orEmpty()
+        if (_selectedConversationId.value in deletedProjectConversations || _selectedProjectId.value == projectId) {
+            selectConversation(null)
+        }
         if (_selectedProjectId.value == projectId) {
             val next = projects.value.firstOrNull { it.id != projectId }?.id
             selectProject(next)

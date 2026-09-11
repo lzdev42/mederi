@@ -231,6 +231,11 @@ class ServerAiCore(
     }
 
     override suspend fun deleteProject(projectId: String): Result<Unit> = runCatching {
+        // 与 MederiAiCore 对齐：遍历会话统一走 [deleteConversation]（删除会话的唯一封装入口，
+        // 清遥控端本地 Mermaid 缓存 + 经 REST 删服务端会话），最后删项目记录
+        projects.value.find { it.id == projectId }?.conversations?.forEach { conv ->
+            deleteConversation(conv.id).getOrThrow()
+        }
         httpCall("/v1/projects/$projectId", HttpMethod.Delete)
         refreshProjects()
     }
@@ -259,6 +264,7 @@ class ServerAiCore(
     }
 
     override suspend fun deleteConversation(conversationId: String): Result<Unit> = runCatching {
+        xyz.emuci.inkcompose.MermaidCacheConfig.clearSessionCache(conversationId)
         httpCall("/v1/sessions/$conversationId", HttpMethod.Delete)
         refreshProjects()
     }
@@ -375,6 +381,12 @@ class ServerAiCore(
         val ids = httpSend<List<String>>("/v1/providers/$providerId/models/refresh")
         refreshProvidersAndModels()
         ids
+    }
+
+    override suspend fun autoSetupProviderModels(providerId: String): Result<Int> = runCatching {
+        val updated = httpSend<Int>("/v1/providers/$providerId/models/auto-setup")
+        refreshProvidersAndModels()
+        updated
     }
 
     override suspend fun createCustomProvider(input: CreateCustomProviderInput): Result<ProviderConfig> = runCatching {

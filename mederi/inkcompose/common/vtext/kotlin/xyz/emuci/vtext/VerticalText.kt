@@ -79,6 +79,11 @@ internal fun TextLayoutResult.computeColumnMetrics(
     }
 }
 
+private class VerticalLayoutHolder {
+    var layoutResult: TextLayoutResult? = null
+    var cachedMetrics: List<ColumnMetrics> = emptyList()
+}
+
 /**
  * 竖排文字渲染核心。
  *
@@ -135,8 +140,7 @@ internal fun VerticalText(
         }
     }
 
-    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-    var cachedMetrics by remember { mutableStateOf<List<ColumnMetrics>>(emptyList()) }
+    val holder = remember { VerticalLayoutHolder() }
 
     Spacer(
         modifier = modifier
@@ -152,8 +156,8 @@ internal fun VerticalText(
                 onTextLayout(result)
 
                 val metrics = result.computeColumnMetrics(config, density)
-                layoutResult = result
-                cachedMetrics = metrics
+                holder.layoutResult = result
+                holder.cachedMetrics = metrics
 
                 // 组件尺寸：有界则填满父约束，无界则按内容尺寸
                 val w = if (constraints.hasBoundedWidth) constraints.maxWidth else {
@@ -167,8 +171,8 @@ internal fun VerticalText(
                 layout(w, h) { measurable.measure(Constraints.fixed(w, h)).place(0, 0) }
             }
             .drawBehind {
-                val result = layoutResult ?: return@drawBehind
-                val metrics = cachedMetrics
+                val result = holder.layoutResult ?: return@drawBehind
+                val metrics = holder.cachedMetrics
                 val viewportWidth = size.width
 
                 var currentX = 0f
@@ -182,7 +186,7 @@ internal fun VerticalText(
                     // X 方向视口裁剪：列完全不可见则跳过
                     val screenLeft = centerX - halfW
                     val screenRight = centerX + halfW
-                    if (screenRight < 0 || screenLeft > viewportWidth) {
+                    if (screenRight < 0f || screenLeft > viewportWidth) {
                         currentX += col.width
                         continue
                     }

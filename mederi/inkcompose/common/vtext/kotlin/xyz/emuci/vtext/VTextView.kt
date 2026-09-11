@@ -10,6 +10,17 @@ import org.jetbrains.compose.resources.Font
 import xyz.emuci.inkcompose.resources.Res
 import xyz.emuci.inkcompose.resources.NotoSansMongolian_Regular
 
+private var defaultMongolianFontFamily: FontFamily? = null
+
+@Composable
+internal fun rememberBundledMongolianFontFamily(): FontFamily {
+    val cached = defaultMongolianFontFamily
+    if (cached != null) return cached
+    val family = FontFamily(Font(Res.font.NotoSansMongolian_Regular))
+    defaultMongolianFontFamily = family
+    return family
+}
+
 /**
  * 竖排文字渲染组件（只读）。
  *
@@ -37,9 +48,8 @@ fun VTextView(
     style: TextStyle = LocalTextStyle.current,
     config: VTextConfig = VTextConfig(),
 ) {
-    // 加载随库打包的 Noto Sans Mongolian 字体
-    val bundledFontFamily = FontFamily(Font(Res.font.NotoSansMongolian_Regular))
-    val effectiveFont = config.verticalFontFamily ?: bundledFontFamily
+    // 缓存随库打包的 Noto Sans Mongolian 字体，避免每次重组重新构建 FontFamily
+    val effectiveFont = config.verticalFontFamily ?: rememberBundledMongolianFontFamily()
 
     val internalConfig = remember(effectiveFont, config) {
         VTextInternalConfig(

@@ -10,7 +10,9 @@ import xyz.mederi.api.exception.MederiValidationException
 import xyz.mederi.api.exception.mederiCall
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.ModelOrigin
 import xyz.mederi.metadata.ModelCatalog
+import xyz.mederi.provider.ModelMerge
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.Provider
 import xyz.mederi.provider.domain.model.ProviderApiKey
@@ -142,7 +144,7 @@ class ProviderApiImpl(
         modelId: String,
         request: UpdateModelRequest
     ): AIModel = mederiCall {
-        providerManager.updateModel(
+        providerManager.updateUserModel(
             providerId = providerId,
             modelId = modelId,
             name = request.name,
@@ -168,84 +170,52 @@ class ProviderApiImpl(
         remote.map { it.providerModelId }
     }
 
+    override suspend fun autoSetupModels(providerId: String): Int = mederiCall {
+        val provider = providerManager.require(providerId)
+        var updated = 0
+        for (model in provider.models) {
+            // MANUAL 模型是用户权威，自动设置不触碰
+            if (model.origin != ModelOrigin.FETCHED) continue
+            val meta = modelCatalog.getFor(provider.modelsDevKey, provider.baseUrl, model.providerModelId) ?: continue
+            val after = providerManager.applyRemoteMetadata(providerId, model.id, endpoint = null, catalog = meta)
+            if (after != model) updated++
+        }
+        updated
+    }
+
     /**
-     * 远端模型合并进存储（create(fetchModels) 与 refreshModels 共用）。
+     * 远端模型列表同步进存储（create(fetchModels) 与 refreshModels 共用）。
      *
-     * 合并前用 models.dev 元数据目录补充缺口：端点给的值优先（如 Hetzner 的
-     * max_model_len），目录只填端点没提供的字段（价格/图片/推理档位等）。
-     * 目录匹配不上就保持端点原样，不兜底。
-     *
-     * - 新增模型：带元数据（displayName / contextWindow / maxTokens / supportsReasoning /
-     *   价格 / 图片 / 推理档位），默认可见规则 = 补足启用至 [DEFAULT_VISIBLE_MODEL_LIMIT] 个
-     * - 已存在模型：刷新远端元数据；supportsReasoning 为 null（远端未提供）保留本地值；
-     *   reasoningLevel / isEnabled 是用户设置，不动
+     * **只同步列表，不碰已有模型的元数据**（2026-09 机制翻转：系统永不自动纠正存量数据——
+     * 启动回填已移除、刷新只新增模型；目录元数据进入存量模型的唯一通道 = [autoSetupModels] 显式触发）：
+     * - 远端新模型：[ModelMerge.createFetched] 构建后落库（origin=FETCHED，带端点+目录元数据），
+     *   默认可见规则 = 补足启用至 [DEFAULT_VISIBLE_MODEL_LIMIT] 个
+     * - 已存在模型：一律跳过（存量元数据只属于用户，或经显式「自动设置」更新）
      */
     private suspend fun mergeRemoteModels(providerId: String, remote: List<RemoteModelInfo>) {
         val provider = providerManager.require(providerId)
         val existingByProviderId = provider.models.associateBy { it.providerModelId }
         var enabledCount = provider.models.count { it.isEnabled }
         var added = 0
-        var updated = 0
+        var skippedExisting = 0
         for (info in remote) {
-            val enriched = enrichFromCatalog(provider, info)
-            val existing = existingByProviderId[info.providerModelId]
-            if (existing == null) {
-                val enabled = enabledCount < DEFAULT_VISIBLE_MODEL_LIMIT
-                if (enabled) enabledCount++
-                added++
-                providerManager.addModel(
-                    providerId = providerId,
-                    providerModelId = enriched.providerModelId,
-                    name = enriched.name,
-                    supportsReasoning = enriched.supportsReasoning ?: false,
-                    reasoningLevel = xyz.mederi.provider.domain.model.ReasoningLevel.NONE,
-                    contextWindow = enriched.contextWindow,
-                    maxTokens = enriched.maxTokens,
-                    supportsImages = enriched.supportsImages ?: false,
-                    reasoningLevels = enriched.reasoningLevels,
-                    isEnabled = enabled,
-                    inputPricePerMillion = enriched.inputPricePerMillion,
-                    outputPricePerMillion = enriched.outputPricePerMillion
-                )
-            } else {
-                updated++
-                providerManager.updateModel(
-                    providerId = providerId,
-                    modelId = existing.id,
-                    name = enriched.name,
-                    supportsReasoning = enriched.supportsReasoning,
-                    reasoningLevel = null,
-                    contextWindow = enriched.contextWindow,
-                    maxTokens = enriched.maxTokens,
-                    supportsImages = enriched.supportsImages,
-                    reasoningLevels = enriched.reasoningLevels.takeIf { it.isNotEmpty() },
-                    isEnabled = null,
-                    inputPricePerMillion = enriched.inputPricePerMillion,
-                    outputPricePerMillion = enriched.outputPricePerMillion
-                )
+            if (existingByProviderId.containsKey(info.providerModelId)) {
+                skippedExisting++
+                continue
             }
+            val meta = modelCatalog.getFor(provider.modelsDevKey, provider.baseUrl, info.providerModelId)
+            val enabled = enabledCount < DEFAULT_VISIBLE_MODEL_LIMIT
+            if (enabled) enabledCount++
+            added++
+            providerManager.addFetchedModel(
+                providerId = providerId,
+                merged = ModelMerge.createFetched(info.providerModelId, info, meta),
+                isEnabled = enabled
+            )
         }
-        DebugLog.event("ProviderApi", "mergeRemoteModels: $added added / $updated updated (provider=$providerId)")
-    }
-
-    /**
-     * 用 models.dev 目录补充端点未提供的模型元数据。
-     *
-     * 匹配优先级：Provider.modelsDevKey（显式指定，覆盖同一家多端点场景）
-     * → baseUrl 对应目录 api 字段（自定义供应商零注册自动命中）。
-     * 端点已给的值不动，目录只填空。
-     */
-    private fun enrichFromCatalog(provider: Provider, info: RemoteModelInfo): RemoteModelInfo {
-        val meta = modelCatalog.getFor(provider.modelsDevKey, provider.baseUrl, info.providerModelId)
-            ?: return info
-        return info.copy(
-            contextWindow = info.contextWindow ?: meta.contextWindow,
-            maxTokens = info.maxTokens ?: meta.maxOutputTokens,
-            supportsReasoning = info.supportsReasoning ?: meta.supportsReasoning,
-            inputPricePerMillion = info.inputPricePerMillion ?: meta.inputPricePerMillion,
-            outputPricePerMillion = info.outputPricePerMillion ?: meta.outputPricePerMillion,
-            supportsImages = meta.supportsImages, // 端点不提供图片信息，目录是唯一来源
-            reasoningLevels = meta.reasoningLevels // 目录档位为权威；空列表由调用方按"无值保留"处理
+        DebugLog.event(
+            "ProviderApi",
+            "mergeRemoteModels: $added added / $skippedExisting skipped(existing) (provider=$providerId)"
         )
     }
 }

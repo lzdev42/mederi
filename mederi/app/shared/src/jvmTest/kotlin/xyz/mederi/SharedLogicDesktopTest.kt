@@ -154,6 +154,12 @@ class SharedLogicDesktopTest {
             val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
             appState.selectConversation(conv.id)
             appState.selectModel(appState.availableModels.value.first())
+            // 等待 WorkspaceViewModel init 的 selectedConversationId.collect → attach 异步完成：
+            // send 读的是 viewModel 内部 conversationId（而非 appState），未 attach 且未选项目时
+            // 会被"请先选择项目"分支静默拦截（本测试未 selectProject），产生与调度时序相关的 flaky
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
+            }
 
             // 2. 发送两条消息
             viewModel.send("First message")
@@ -280,6 +286,62 @@ class SharedLogicDesktopTest {
             assertEquals("", secondItem.text)
             assertEquals(listOf("https://example.com/pure.png"), secondItem.images)
             assertEquals(false, secondItem.isUser)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testImageGating() = kotlinx.coroutines.runBlocking {
+        // 图片能力门禁唯一推导链：modelSupportsImages 派生流 / tryAttachImage 拦截 / 发送守卫
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            appState.selectConversation(conv.id)
+            // 种子模型均 supportsImages=false（claude-sonnet-4 是首个可选）
+            appState.selectModel(appState.availableModels.value.first())
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
+            }
+
+            // 1. 派生流初始 = false；tryAttachImage 拦截 + error 可见 + 不入列
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.modelSupportsImages.value) kotlinx.coroutines.delay(20)
+            }
+            assertEquals(false, viewModel.modelSupportsImages.value)
+            val blocked = viewModel.tryAttachImage("a.png", "image/png", byteArrayOf(1, 2, 3))
+            assertEquals(false, blocked, "不支持图片的模型必须拦截附加")
+            assertTrue(viewModel.error?.contains("不支持图片") == true, "拦截必须给出可见反馈")
+            assertEquals(0, viewModel.pendingImages.size, "被拦图片不得入列")
+
+            // 2. 纯文本发送不受门禁影响
+            viewModel.send("text only")
+            val snap1 = mockAiCore.awaitSettledSnapshot(conv.id)
+            assertEquals(2, snap1.messages.size, "纯文本发送不应被图片门禁拦截")
+
+            // 3. 模型支持图片后：派生流翻转 + 附加成功入列
+            mockAiCore.updateProviderModel(
+                providerId = "anthropic",
+                modelId = "claude-sonnet-4",
+                supportsImages = true
+            ).getOrThrow()
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (!viewModel.modelSupportsImages.value) kotlinx.coroutines.delay(20)
+            }
+            val ok = viewModel.tryAttachImage("b.png", "image/png", byteArrayOf(4, 5, 6))
+            assertEquals(true, ok, "支持图片的模型必须放行附加")
+            assertEquals(1, viewModel.pendingImages.size)
         } finally {
             testScope.cancel()
         }

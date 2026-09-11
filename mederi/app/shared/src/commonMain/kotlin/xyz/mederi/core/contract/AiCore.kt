@@ -22,11 +22,16 @@ interface AiCore {
 
     suspend fun createProject(input: CreateProjectInput): Result<Project>
     suspend fun renameProject(projectId: String, name: String): Result<Unit>
+    /** 删除项目。内部遍历其下所有会话统一走 [deleteConversation]（唯一封装入口），最后删项目记录。 */
     suspend fun deleteProject(projectId: String): Result<Unit>
     suspend fun addProjectDirectory(projectId: String, directory: String): Result<Unit>
     suspend fun removeProjectDirectory(projectId: String, directory: String): Result<Unit>
 
     suspend fun createConversation(projectId: String, agent: AgentOption? = null): Result<Conversation>
+    /**
+     * 删除会话的**唯一**封装入口（硬性约定，UI 层与 deleteProject 级联都只准走这里）：
+     * abortAndJoin 运行中 turn → 删 session/history/diff 表 → 删 .mederi 下 Mermaid png → 清本地缓存。
+     */
     suspend fun deleteConversation(conversationId: String): Result<Unit>
     suspend fun renameConversation(conversationId: String, title: String): Result<Unit>
     fun observeConversation(conversationId: String): Flow<ConversationSnapshot>
@@ -41,6 +46,14 @@ interface AiCore {
     suspend fun deleteProviderModel(providerId: String, modelId: String): Result<Unit>
     suspend fun setModelEnabled(providerId: String, modelId: String, enabled: Boolean): Result<Unit>
     suspend fun refreshProviderModels(providerId: String): Result<List<String>>
+
+    /**
+     * 「自动设置」：显式把 models.dev 目录元数据应用到该供应商全部 FETCHED 模型
+     * （目录数据进入存量模型的唯一通道——系统不做任何自动纠正；用户覆盖 supportsImagesOverride 优先）。
+     *
+     * @return 实际更新（字段发生变化）的模型数。
+     */
+    suspend fun autoSetupProviderModels(providerId: String): Result<Int>
     suspend fun createCustomProvider(input: CreateCustomProviderInput): Result<ProviderConfig>
 
     suspend fun addProviderApiKey(providerId: String, name: String, key: String, isDefault: Boolean = false): Result<ApiKeyOption>

@@ -59,7 +59,10 @@ object KoogModelBuilder {
      *    - OPENAI_RESPONSES: 添加 OpenAIEndpoint.Responses
      *    - GOOGLE: 不添加 OpenAIEndpoint（Google 使用自己的 API 协议）
      * 2. Thinking 能力：如果 [AIModel.supportsReasoning] 为 true，添加 [LLMCapability.Thinking]
-     * 3. 默认能力：添加 [LLMCapability.Temperature] 和 [LLMCapability.Tools]
+     * 3. 图片能力：如果 [AIModel.supportsImages] 为 true，添加 [LLMCapability.Vision.Image]——
+     *    缺了它 Koog 会在发送时直接拒绝图片消息（"does not support images"），
+     *    UI/存储怎么设都没用（历史事故：设置链路全通、唯独引擎能力缺失，用户永远报不支持图片）
+     * 4. 默认能力：添加 [LLMCapability.Temperature] 和 [LLMCapability.Tools]
      *    （大多数现代模型都支持温度调节和工具调用）
      *
      * @param model Mederi AI 模型定义。
@@ -87,6 +90,11 @@ object KoogModelBuilder {
         // Thinking 能力
         if (model.supportsReasoning) {
             capabilities.add(LLMCapability.Thinking)
+        }
+
+        // 图片能力（supportsImages 含用户覆盖语义——消费端读到的生效值）
+        if (model.supportsImages) {
+            capabilities.add(LLMCapability.Vision.Image)
         }
 
         // 默认能力（大多数现代模型都支持）

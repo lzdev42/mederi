@@ -1,6 +1,8 @@
 package xyz.mederi.provider
 
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.ModelOrigin
+import xyz.mederi.metadata.ModelMetadata
 import xyz.mederi.provider.domain.model.Provider
 import xyz.mederi.provider.domain.model.ProviderApiKey
 import xyz.mederi.provider.domain.model.ProviderType
@@ -58,6 +60,10 @@ interface ProviderManager {
     // === Model ===
 
     suspend fun listModels(providerId: String): List<AIModel>
+
+    /**
+     * 添加用户手动模型（[ModelOrigin.MANUAL]，用户权威，同步永不触碰）。
+     */
     suspend fun addModel(
         providerId: String,
         providerModelId: String,
@@ -72,20 +78,55 @@ interface ProviderManager {
         inputPricePerMillion: Double? = null,
         outputPricePerMillion: Double? = null
     ): AIModel
-    suspend fun updateModel(
+
+    /**
+     * 添加远端拉取的新模型（[ModelOrigin.FETCHED]）。
+     * 元数据必须先经 [ModelMerge] 合并产生——本方法是落库通道，不解释字段。
+     */
+    suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean): AIModel
+
+    /**
+     * FETCHED 模型元数据的唯一写入路径（用户意图 API 之外的全部模型写入都走这里）。
+     *
+     * - endpoint != null = refresh：端点 + 目录全量权威重同步
+     * - endpoint == null = 启动回填：只补空、绝不覆盖
+     *
+     * 合并规则唯一实现见 [ModelMerge]；本方法只做模型存在性/来源校验 + 无变化跳过落库。
+     *
+     * @throws NoSuchElementException 模型不存在。
+     * @throws IllegalStateException 目标是 MANUAL 模型（用户权威，同步不许触碰）。
+     */
+    suspend fun applyRemoteMetadata(
         providerId: String,
         modelId: String,
-        name: String?,
-        supportsReasoning: Boolean?,
-        reasoningLevel: ReasoningLevel?,
+        endpoint: RemoteModelInfo?,
+        catalog: ModelMetadata?
+    ): AIModel
+
+    /**
+     * 用户编辑模型（设置页对话框唯一通道）。
+     *
+     * MANUAL 模型：用户权威，全部字段可改。
+     * FETCHED 模型：元数据是端点/目录权威，**只允许改 isEnabled 和图片能力**——
+     * 图片能力走用户覆盖（[AIModel.supportsImagesOverride]，用户权威，后续同步永不覆盖），
+     * 因为目录对长尾/私有模型经常缺数据或标错；其余元数据字段传入即抛错。
+     *
+     * @throws NoSuchElementException 模型不存在。
+     * @throws IllegalStateException FETCHED 模型携带了 isEnabled/supportsImages 之外的修改。
+     */
+    suspend fun updateUserModel(
+        providerId: String,
+        modelId: String,
+        name: String? = null,
+        supportsReasoning: Boolean? = null,
+        reasoningLevel: ReasoningLevel? = null,
         contextWindow: Int? = null,
         maxTokens: Int? = null,
         supportsImages: Boolean? = null,
         reasoningLevels: List<ReasoningLevel>? = null,
-        isEnabled: Boolean? = null,
-        inputPricePerMillion: Double? = null,
-        outputPricePerMillion: Double? = null
+        isEnabled: Boolean? = null
     ): AIModel
+
     suspend fun deleteModel(providerId: String, modelId: String)
 
     // === 跨供应商 Model 查询 ===
