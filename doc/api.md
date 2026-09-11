@@ -273,6 +273,13 @@ mederi.sessions.events(session.id)
 
 `MESSAGE_COMPLETED` 的 `messageId` 是最终 assistant 消息在历史中的 ID。
 
+`MESSAGE_COMPLETED` 可选携带 `payload["warning"]`：**流式断流诊断摘要**，仅当 AI 回复流提前中断/异常时非空。格式 `流式中断：<原因>（已接收 N 帧 / N 字符）`：
+- `<原因>` = `HTTP <状态码>: <错误体>` —— API Server 返回非 2xx（如 `HTTP 502: upstream timeout`）
+- `<原因>` = `网络错误(<类型>): <消息>` —— 网络层断连（SocketTimeout / 连接被重置 / TLS 失败 / DNS 解析失败）
+- `<原因>` = `服务器关闭连接但未发送结束标记` —— HTTP 2xx 但服务器静默断开、未见 `[DONE]`
+
+据此可判定断流责任方：**HTTP 错误 / 提前关闭 = Server 侧**，**网络错误 = 网络层**，用户中止（`MESSAGE_ERROR` `error=用户中止了对话`）= 客户端。
+
 ### 6.5 审批（Approval）
 
 当 Agent 使用写文件、执行命令等工具时，如果配置了审批，工具执行会挂起等待用户确认：

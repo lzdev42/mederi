@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.debug.DebugLog
+import xyz.mederi.debug.SseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
 import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
@@ -207,9 +208,8 @@ class TurnExecutor(
                 // 指针行：给模型 todo 式的焦点（"正在做哪个/下一个做哪个"），与轻量 todo 的单 in_progress 同机制
                 val activeSubtask = p.currentSubtask ?: p.nextPending
                 activeSubtask?.let { appendLine("Current: Subtask ${it.index + 1} [${it.status}]: ${it.name}") }
-                if (failed > 0 && p.needsConvergence) {
-                    appendLine("WARNING: Has failed subtasks needing convergence — call converge_plan to append remediation subtasks, then spawn_agent to retry.")
-                }
+                // 失败子任务的处置指令不在此挂（Plan Loop 静态规则已覆盖）；这里只挂状态事实，
+                // 由模型对照 [FAILED] + Verification Result 自行走 converge_plan / re-generate_spec 分支
                 // spec 只挂活跃子任务：历史 spec 留在磁盘（spawn_agent 自取、generate_spec 可重写），
                 // 主代理的编排/验证/收敛决策只需要骨架（brief/verification/验证结果），避免 token 无界增长
                 p.subtasks.forEach { st ->
@@ -759,10 +759,16 @@ class TurnExecutor(
                         // = 上游没给收尾标记（SSE 连接断开时 lines() flow 正常结束、emitEnd
                         // 无 finishReason）→ turn 会"成功"收尾但回复被静默截断——置警告传给 UI
                         if (frame.finishReason == null) {
-                            streamWarning.compareAndSet(null, "流式连接提前中断，回复可能不完整")
+                            streamWarning.compareAndSet(
+                                null,
+                                "流式连接提前中断：服务器关闭连接但未发送结束标记" +
+                                    "（已接收 ${traceSession.deltaCount} 帧 / ${traceSession.charCount} 字符）"
+                            )
                             StreamTrace.record(
                                 "Stream.Summary",
-                                mapOf("event" to "end-no-finish-reason", "id" to sessionId)
+                                mapOf("event" to "end-no-finish-reason", "id" to sessionId,
+                                    "deltas" to traceSession.deltaCount.toString(),
+                                    "chars" to traceSession.charCount.toString())
                             )
                         }
                         DebugLog.event("Frame", "End frame: finishReason=${frame.finishReason}")
@@ -776,12 +782,33 @@ class TurnExecutor(
             throw e
         } catch (e: Throwable) {
             exitNote = "error: ${e::class.simpleName}: ${e.message}"
-            // 流消费异常（连接错误/解析失败等）：置警告，turn 收尾时随 MESSAGE_COMPLETED 传 UI
-            streamWarning.compareAndSet(
-                null,
-                "流式传输异常（${e::class.simpleName}），回复可能不完整：${e.message.orEmpty().take(120)}"
+            // 从异常链中提取 HTTP 状态码、错误体、网络异常类型等诊断数据，
+            // 不再只报"流式传输异常"——要能回答"谁的责任断的"
+            val diag = SseDiagnostics.extract(e)
+            val warning = buildString {
+                append("流式中断：")
+                append(diag.summary())
+                append("（已接收 ${traceSession.deltaCount} 帧 / ${traceSession.charCount} 字符）")
+            }
+            streamWarning.compareAndSet(null, warning)
+            DebugLog.error(
+                "Frame",
+                "stream consumer error: ${diag.summary()}, " +
+                    "party=${diag.responsibleParty}, " +
+                    "deltas=${traceSession.deltaCount}, chars=${traceSession.charCount}, " +
+                    "causeChain=${diag.causeChain.joinToString(" | ")}",
+                e
             )
-            DebugLog.error("Frame", "stream consumer error: ${e::class.simpleName}: ${e.message}", e)
+            StreamTrace.record("Stream.Summary", mapOf(
+                "event" to "consumer-exception",
+                "mode" to diag.failureMode.name,
+                "httpStatus" to (diag.httpStatusCode?.toString() ?: "-"),
+                "errorBody" to (diag.errorBody?.take(200) ?: "-"),
+                "exceptionType" to (diag.exceptionType ?: "-"),
+                "party" to diag.responsibleParty,
+                "deltas" to traceSession.deltaCount.toString(),
+                "chars" to traceSession.charCount.toString()
+            ))
         } finally {
             StreamTrace.closeSession(traceSession, note = exitNote)
             timing.close()
@@ -905,10 +932,10 @@ class TurnExecutor(
         val agentConfig = AIAgentConfig.builder()
             .model(koogModel)
             .prompt(koogPrompt)
-            .maxAgentIterations(50)
+            .maxAgentIterations(3000)
             .serializer(mederiToolSerializer)
             .build()
-        DebugLog.data("TurnExec", "agentConfig.maxAgentIterations", 50)
+        DebugLog.data("TurnExec", "agentConfig.maxAgentIterations", 3000)
         DebugLog.data("TurnExec", "agentConfig.serializer", mederiToolSerializer::class.simpleName)
 
         // 构建压缩配置（仅当模型有 contextWindow 时启用）

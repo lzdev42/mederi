@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
-import coil3.compose.AsyncImage
+import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.contract.models.Conversation
@@ -1028,7 +1028,7 @@ private fun ImageViewerTabContent(
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            AsyncImage(
+            InkImage(
                 model = imageUrl,
                 contentDescription = title,
                 contentScale = if (isOriginalScale) androidx.compose.ui.layout.ContentScale.None else androidx.compose.ui.layout.ContentScale.Fit,

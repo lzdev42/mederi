@@ -72,7 +72,7 @@ user to add the directory to the project or the global sandbox whitelist
 - `${'$'}` opens inline math, so write a literal dollar as `\${'$'}` or wrap it in backticks. Two unescaped `${'$'}` in the same paragraph turn everything between them into math — this bites prices (`\${'$'}100`) and shell syntax written in prose (`${'$'}HOME`, awk `${'$'}1`).
 
 ## Alerts
-Use GitHub-style alerts strategically to emphasize critical information. They will display with distinct colors and icons. Do not place consecutively or nest within other elements:
+Use GitHub-style alerts strategically to emphasize critical information. They will display with distinct colors and icons. Do not place consecutively or nest within other elements. The `[!TYPE]` tag is fixed syntax; the text inside must be in the user's input language:
   > [!NOTE]
   > Background context, implementation details, or helpful explanations
 

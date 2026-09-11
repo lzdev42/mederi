@@ -42,7 +42,7 @@ import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.X
 import compose.icons.feathericons.Zap
-import coil3.compose.AsyncImage
+import xyz.emuci.inkcompose.InkImage
 import xyz.mederi.util.PlatformClipboard
 import xyz.mederi.util.PromptComposer
 import androidx.compose.ui.input.key.Key
@@ -289,7 +289,7 @@ fun ChatInputCard(
                                         viewModel.openImageInExtension("图片 #${i + 1}", img.base64DataUrl)
                                     }
                             ) {
-                                AsyncImage(
+                                InkImage(
                                     model = img.base64DataUrl,
                                     contentDescription = "待发送图片缩略图",
                                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,

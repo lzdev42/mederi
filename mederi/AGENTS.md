@@ -1,5 +1,19 @@
 # Mederi AGENTS.md
 
+## 0. 架构速查文档（AI 必读入口）
+
+`docs/architecture/` 是由全量代码结构化提取的架构文档（类图/结构图/流程图/时序图 + 穷尽式字段/签名清单）：
+
+- **排查问题先查这里，不要直接通读源码**：模块总览与平台注入矩阵 → `00-overview.md`；core 模块（DI/模型字段/Manager/Store/Koog 引擎/工具/Plan/Provider/MCP/事件/存储表）→ `01-core.md`；AiCore 契约与三实现、RemoteServer 路由表、AppState/VM/UI → `02-app-shared.md`；inkcompose 渲染管线 → `03-inkcompose.md`；运行时流程与时序（发消息全链路/Turn/事件聚合/Plan Loop/压缩/审批/子代理/回滚/自动改名/遥控启动）→ `04-flows.md`。
+- **排查工作流（禁止一上来通读/全量搜索源码）**：先按问题域查对应篇章 → 用文档里的类图/流程图/签名清单定位相关类与 `文件路径` → **只打开这几个文件读相关段落**。文档能回答的问题（结构、字段、谁调谁、事件流向、端点、表结构）直接引用文档答案，不再翻源码确认；只有文档未覆盖或疑似与代码不一致的实现细节，才去读文档标注的那几个源码文件。
+- 每个类都标注了 `文件路径`；只有文档未覆盖的实现细节才去读对应源码。
+- **维护义务（硬性）：每次改动代码，按需同步更新 `docs/architecture/`**，保持文档与代码一致——过时文档比没有文档更误导。改动完成前自检：这次改动是否触碰下列任一项？是 → 更新对应文档：
+  - 新增/删除/重命名 **模块、类、接口、方法签名、DTO 字段、枚举值、工具、端点、事件、数据库表/列** → 更新对应篇章（core→`01-core.md`，契约/UI/VM/server→`02-app-shared.md`，inkcompose→`03-inkcompose.md`，总览/平台注入矩阵→`00-overview.md`）；
+  - **运行时行为/调用链/流程变化**（新增交互流程、改 sendMessage/turn/压缩/审批/子代理/回滚等链路、新增人机交互挂起点）→ 更新 `04-flows.md` 的流程图/时序图/状态机；
+  - 改 `.sq` schema → 同步 `01-core.md` 存储节；改 RemoteServer/ServerAiCore 路由 → 同步 `02-app-shared.md` 路由表（契约四处同步本来就要做，文档顺带）；
+  - 纯实现细节修复（内部算法微调、不改对外结构的 bug fix）→ 可不更新；拿不准就更新对应段落，宁多勿漏。
+- 本文档描述"结构"，AGENTS.md 描述"规则"——规则类变更（不变量、真理源、硬性约束）写进 AGENTS.md，不写进该目录。
+
 ## 1. 定位
 
 Mederi 是 Koog 的易用化、插件化包装库：让开发者快速构建 AI Agent 应用。
@@ -236,6 +250,30 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 1. **沙盒（代码强制）**：文件工具只能写项目目录 + `.mederi/` + 全局白名单；命令走 OS 级写沙箱
 2. **分诊判断（提示词强制）**：先调研再动手、小改直接改、复杂走 Plan Loop
 3. plan 从"写文件通行证"降级为"复杂工作的审批流程"——用户批准点保留（APPROVAL 模式），不再锁所有写
+
+### 审计备忘（2026-09，暂不修，记录以免重复分析）
+
+下列几项经审计确认为"真实代码特性但符合当前哲学/暂不修"，遇到真问题再说：
+
+1. **小改路径无 spec 落盘**：triage "小改直改"路径不建 plan、无 `Subtask.spec`，spec 只在聊天里。
+   按哲学（AI 判断 = AI 责任）可接受。kvstore 事件**未确认**是否为其实例（不知 AI 当时判小改还是判复杂跳过）。
+   要修须先定：是否强制所有写都走 plan——目前否。
+2. **spec 自动更新只到提示词级**：`verify_subtask` 的 spec-冲突分流（CONTRADICTS→re-generate_spec）是
+   提示词引导，无代码强制 re-generate。符合"信任 AI"哲学。要升级为代码强制再动。
+3. **spec 每轮挂载范围**：主代理每轮只挂**活跃子任务**的 spec（非全部），executor 在 spawn 时拿一次。
+   已满足"todo 开始时加载一次"。删 per-turn spec 挂载是可选优化，暂不做。
+4. **triage 声明 gate（update_todo 当小改许可证）**：曾提议让"判了复杂"可观测以强制写 plan。
+   kvstore 未证实该失败模式（真根因是 ask_user 缺支，已修，见下）。先搁置。
+5. **动态上下文只挂状态、不挂指令**（已落地）：`TurnExecutor` 的 `# Active Plan` 段已砍掉
+   "WARNING: ... call converge_plan" 这行每轮说教——它重复静态 Plan Loop 规则且是 gap-D 实例。
+   **不要再往动态注入里加指令/警告行**；指令归静态系统提示词，动态段只挂状态事实（status/result/evidence）。
+6. **已修的真缺陷（2026-09）**：① `VerifyTools` 按 gapType 分流（CONTRADICTS→re-generate_spec，
+   其余→converge_plan），不再对所有 FAIL 笼统说 converge；② spec 内部自相矛盾（不可满足，非"跟代码对不上"）
+   时禁止自行修改，强制 `ask_user`——加进 Core Principles 第 7 条 + Plan Loop 第 6 步第 4 分支 +
+   executor SPEC_FEEDBACK 区分 `vs-reality` / `unsatisfiable`。
+7. **Markdown 警示块语言**（已修）：`PromptGuides` Alerts 段教模型用 GitHub 警示块，但原规则没说内容用什么
+   语言，模型在中文回复里抄了英文 `[!WARNING]`，红框看起来像系统报错。已补：警示块正文必须用用户输入语言
+   （Core Principles 第 6 条）。UI 红色撞车问题后续单独处理。
 
 ## 5.7 存储架构（2026-09 双库定稿）
 

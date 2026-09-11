@@ -2,19 +2,19 @@ package xyz.emuci.markdown.renderer
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
-import coil3.compose.AsyncImagePainter
+import xyz.emuci.inkcompose.InkImage
 
 /**
  * 图片渲染所需的数据模型。
@@ -85,8 +85,8 @@ internal val LocalImageRenderer = compositionLocalOf<MarkdownImageRenderer?> { n
 /**
  * 默认的图片渲染组件。
  *
- * 使用 Coil3 的 [AsyncImage] 从网络或本地加载图片。
- * 加载过程中显示 loading 指示器，加载失败时显示替代文本。
+ * 委托 [InkImage]（InkCompose 统一图片组件）：网络 / data: base64 / 本地文件 / SVG
+ * 一体支持，加载失败显示可见占位（替代文本），不静默空白。
  *
  * 外部使用者也可通过 [Markdown] 的 `imageContent` 参数传入自定义图片加载实现来覆盖此行为。
  */
@@ -95,48 +95,45 @@ internal fun DefaultMarkdownImage(
     data: MarkdownImageData,
     modifier: Modifier = Modifier,
 ) {
+    val alignment = when (data.align?.lowercase()) {
+        "left" -> Alignment.CenterStart
+        "right" -> Alignment.CenterEnd
+        else -> Alignment.Center
+    }
+    val density = androidx.compose.ui.platform.LocalDensity.current
     Box(
         modifier = modifier
-            .applyImageSize(data.width, data.height)
+            .fillMaxWidth()
             .padding(vertical = 4.dp),
-        contentAlignment = Alignment.Center,
+        contentAlignment = alignment,
     ) {
-        AsyncImage(
+        InkImage(
             model = data.url,
             contentDescription = data.altText.ifEmpty { data.title },
             modifier = Modifier
-                .applyImageSize(data.width, data.height),
-            contentScale = if (data.width != null || data.height != null) {
-                ContentScale.Fit
-            } else {
-                ContentScale.FillWidth
-            },
-            onState = { /* 可用于调试日志 */ },
-            transform = { state ->
-                when (state) {
-                    is AsyncImagePainter.State.Loading -> state
-                    is AsyncImagePainter.State.Error -> state
-                    is AsyncImagePainter.State.Success -> state
-                    is AsyncImagePainter.State.Empty -> state
-                }
-            },
+                .applyImageSize(data.width, data.height)
+                .onGloballyPositioned { coordinates ->
+                    val widthDp = with(density) { coordinates.size.width.toDp() }
+                    val heightDp = with(density) { coordinates.size.height.toDp() }
+                    println("[DefaultMarkdownImage] Rendered size: ${coordinates.size.width}x${coordinates.size.height} px (${widthDp}x${heightDp}), specified: ${data.width}x${data.height}")
+                },
+            contentScale = ContentScale.Fit,
         )
     }
 }
 
 /**
  * 根据图片数据的宽高约束应用 Modifier。
+ * - 未设定尺寸时保持自身尺寸（不强制 fillMaxWidth），真实尺寸显示；
+ *   超出容器时由父级最大宽度约束自动等比缩放适配。
+ * - 设定尺寸时应用指定的尺寸约束。
  */
 internal fun Modifier.applyImageSize(width: Int?, height: Int?): Modifier {
-    var mod = this
-    if (width != null && height != null) {
-        mod = mod.size(width.dp, height.dp)
-    } else if (width != null) {
-        mod = mod.widthIn(max = width.dp)
-    } else if (height != null) {
-        mod = mod.heightIn(max = height.dp)
-    } else {
-        mod = mod.fillMaxWidth()
+    return when {
+        width != null && height != null -> this.size(width.dp, height.dp)
+        width != null -> this.width(width.dp)
+        height != null -> this.height(height.dp)
+        else -> this
     }
-    return mod
 }
+

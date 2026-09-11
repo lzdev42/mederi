@@ -7,6 +7,7 @@ Mederi 的富文本渲染核心：Markdown + LaTeX + 代码高亮 + 图表（Mer
 ```kotlin
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.emuci.inkcompose.RenderType
+import xyz.emuci.inkcompose.InkImage
 
 // 通用模式：任何字符串走 Markdown 解析，代码块/公式/图表自动分发到子渲染器
 MarkdownView("## 标题\n\n\`\`\`mermaid\ngraph TD; A-->B;\n\`\`\`\n\n$E=mc^2$")

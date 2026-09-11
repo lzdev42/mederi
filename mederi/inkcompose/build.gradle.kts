@@ -11,6 +11,7 @@ plugins {
 // 按旧模块划分的领域目录（common/ 与 common-test/ 下的子目录即边界）
 val inkModules = listOf(
     "entry",
+    "image",
     "latex-parser", "latex-renderer",
     "syntax-parser", "syntax-render",
     "diagram",
@@ -76,16 +77,28 @@ kotlin {
             kotlin.srcDir("android/kotlin")
             dependencies {
                 implementation(libs.androidx.graphics.path)
+                // Ktor 客户端引擎：默认图片渲染（coil-network-ktor3）在 Android 上无默认引擎，
+                // 缺了 URL 图片静默失败（"Failed to find HTTP client engine implementation"）。
+                // 库自带引擎保证宿主接入即用；宿主想换引擎可通过自定义 ImageLoader/imageContent 覆盖
+                implementation(libs.ktor.clientCio)
+                // Android 端 SVG 解码（ServiceLoader 自动注册进 Coil）
+                implementation(libs.coil.svg)
             }
         }
         iosMain {
             kotlin.srcDir("ios/kotlin")
+            dependencies {
+                // iOS 上 Ktor 需要 Darwin 引擎（NSURLSession），无默认引擎
+                implementation(libs.ktor.clientDarwin)
+            }
         }
         jvmMain {
             kotlin.srcDir("jvm/kotlin")
             resources.srcDir("jvm/resources")
             dependencies {
                 implementation(compose.desktop.currentOs)
+                // JVM 上 Ktor 需要 CIO 等引擎，无默认引擎
+                implementation(libs.ktor.clientCio)
             }
         }
         jvmTest {

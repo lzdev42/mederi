@@ -58,7 +58,7 @@ import xyz.mederi.ui.components.UserPastedTextCard
 import xyz.mederi.ui.components.UserMessageFooter
 import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
-import coil3.compose.AsyncImage
+import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.markdown.renderer.SelectionMenuAction
 
 import compose.icons.feathericons.Menu
@@ -609,7 +609,7 @@ private fun MessageList(
                                     ) {
                                         if (item.images.isNotEmpty()) {
                                             item.images.forEachIndexed { imgIdx, imgUrl ->
-                                                AsyncImage(
+                                                InkImage(
                                                     model = imgUrl,
                                                     contentDescription = "图片附件",
                                                     modifier = Modifier
@@ -837,7 +837,7 @@ private fun AssistantImagesView(
                         viewModel.openImageInExtension("生成的图片 #${imgIdx + 1}", imgUrl)
                     }
             ) {
-                AsyncImage(
+                InkImage(
                     model = imgUrl,
                     contentDescription = "AI生成的图片 #${imgIdx + 1}",
                     contentScale = androidx.compose.ui.layout.ContentScale.Fit,

@@ -52,6 +52,10 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.compose.uiTooling)
+            // Ktor 客户端引擎：coil-network-ktor3（inkcompose 图片加载）与 ServerAiCore 的
+            // 网络请求都需要引擎，Android 上 Ktor 无默认引擎，缺了会报
+            // "Failed to find HTTP client engine implementation"（URL 图片静默不渲染）
+            implementation(libs.ktor.clientCio)
         }
         commonMain.dependencies {
             api(project(":inkcompose"))
@@ -72,6 +76,10 @@ kotlin {
             implementation(libs.coil.compose)
             // FilePreferencesStore：commonMain 统一文件偏好存储（okio = KMP 文件系统抽象）
             implementation(libs.okio)
+        }
+        iosMain.dependencies {
+            // iOS 上 Ktor 客户端需要 Darwin 引擎（NSURLSession），无默认引擎
+            implementation(libs.ktor.clientDarwin)
         }
         jvmMain.dependencies {
             // core 是 JVM 侧模块，仅 desktop/server 直连；wasm/ios 走 ServerAiCore(REST)

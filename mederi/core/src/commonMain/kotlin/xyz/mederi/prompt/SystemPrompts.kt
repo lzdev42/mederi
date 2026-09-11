@@ -48,6 +48,14 @@ Respond in the user's language. If they write Chinese, respond in Chinese.
 3. Follow existing conventions. Read neighboring files before writing.
 4. Don't make changes beyond what was asked. No unsolicited refactoring.
 5. Security: never expose secrets, keys, or credentials.
+6. Reply in the user's input language. Match the language of the user's message
+   throughout — including any Markdown alert blocks. Never switch languages
+   mid-reply.
+7. When a requirement or spec is internally unsatisfiable — no implementation
+   can satisfy all parts simultaneously (e.g. two assertions that cannot both
+   hold, and it's NOT a misread of the code) — do NOT silently pick a side or
+   "correct" it. Surface the contradiction via ask_user and ask which intent
+   wins. Picking a side yourself hides the problem from the user.
 """
 
     private const val TOOL_GUIDELINES = """
@@ -155,6 +163,10 @@ When you decide work is complex, run these steps in order. Do not skip steps:
    - Execution wrong -> converge_plan (append remediation) -> re-run.
    - Spec wrong (contradicts reality) -> re-call generate_spec to replace it
      -> re-run.
+   - Spec internally unsatisfiable (no implementation can satisfy it — e.g. two
+     assertions that cannot both hold; NOT a misread of code) -> ask_user: state
+     the contradiction and ask which intent wins. Do NOT silently pick a side or
+     "fix" the spec yourself.
    Repeat until all subtasks PASS, then report completion.
 7. Record key decisions to .mederi/notebook.md via write_log.
 
@@ -337,9 +349,14 @@ only mode-specific point is step 3 — who approves.
   what commands can write. If a legitimate write is blocked, report it to the
   parent agent in your final answer — never retry blindly.
 
-You have NO planning/spec/spawn/verify tools. Follow the spec checklist you
-were given, top-down, and report the outcome in your final answer
-(including a SPEC_FEEDBACK line when the spec contradicts reality).
+You have NO planning/spec/spawn/verify/ask_user tools. Follow the spec checklist
+you were given, top-down, and report the outcome in your final answer. When
+reporting, distinguish two SPEC_FEEDBACK kinds:
+- "SPEC_FEEDBACK(vs-reality): <what the spec got wrong about the code>" — the
+  parent can fix this by re-generating the spec.
+- "SPEC_FEEDBACK(unsatisfiable): <the contradiction; no implementation can
+  satisfy both X and Y>" — the parent must ask the user. Do NOT silently pick a
+  side or "correct" the spec; report it and stop.
 """.trimIndent()
 
     /** RESEARCHER 实际拥有的工具清单（read_file / list_directory 之外一律没有）。 */

@@ -34,7 +34,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import ai.koog.agents.core.tools.ToolDescriptor
 import xyz.mederi.debug.DebugLog
+import xyz.mederi.debug.SseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
+import xyz.mederi.debug.StreamTrace
 
 class MederiOpenAILLMClient(
     apiKey: String,
@@ -171,6 +173,9 @@ class MederiOpenAILLMClient(
 
         return flow {
             val timing = StreamTimingLog("SSE-Timing", "chat lines")
+            var sawDone = false
+            var bytesReceived = 0L
+            var linesReceived = 0
             try {
                 emitAll(
                     httpClient.lines(
@@ -183,19 +188,38 @@ class MederiOpenAILLMClient(
                             "Content-Type" to "application/json"
                         )
                     )
-                        .onEach { timing.sample(it.length) }
+                        .onEach {
+                            timing.sample(it.length)
+                            bytesReceived += it.length
+                            linesReceived++
+                        }
                         // SSE 注释行（`: ping` / `: OPENROUTER PROCESSING` 等 keep-alive）与
                         // event:/id:/retry: 行不是 JSON——不过滤直接解码会抛异常炸断整条流。
                         // 长推理的静默期正是端点发注释行的窗口，症状 = 推理中途断流。
                         // 与 Responses 路径（executeStreamingResponsesAPI）对齐。
                         .filter { it.startsWith("data:") }
                         .map { line -> line.removePrefix("data:").trim() }
+                        .onEach { if (it == "[DONE]") sawDone = true }
                         .takeWhile { data -> data != "[DONE]" }
                         .onCompletion { error ->
+                            // 区分三种结束模式：正常([DONE]) / 提前断连(无[DONE]无异常) / 异常断连
+                            val mode = when {
+                                error != null -> "exception"
+                                sawDone -> "done"
+                                else -> "premature-close"
+                            }
                             DebugLog.event(
                                 "SSE",
-                                "chat lines flow closed: cause=${error?.message ?: "normal (reached [DONE] or connection end)"}"
+                                "chat lines flow closed: mode=$mode, lines=$linesReceived, bytes=$bytesReceived, " +
+                                    "sawDone=$sawDone, cause=${error?.message?.take(120) ?: "none"}"
                             )
+                            StreamTrace.record("Stream.Summary", mapOf(
+                                "event" to "flow-completion",
+                                "mode" to mode,
+                                "lines" to linesReceived.toString(),
+                                "bytes" to bytesReceived.toString(),
+                                "cause" to (error?.message?.take(120) ?: "none")
+                            ))
                         }
                         .map { data -> sanitizeJson.decodeFromString<SanitizedStreamResponse>(data) }
                         .let { processStreamingFlow(it) }
@@ -204,7 +228,25 @@ class MederiOpenAILLMClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                DebugLog.error("SSE", "streaming failed: ${e.message}", e)
+                val diag = SseDiagnostics.extract(e)
+                DebugLog.error(
+                    "SSE",
+                    "streaming failed: ${diag.summary()}, " +
+                        "lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
+                        "party=${diag.responsibleParty}",
+                    e
+                )
+                StreamTrace.record("Stream.Summary", mapOf(
+                    "event" to "stream-exception",
+                    "mode" to diag.failureMode.name,
+                    "httpStatus" to (diag.httpStatusCode?.toString() ?: "-"),
+                    "errorBody" to (diag.errorBody?.take(200) ?: "-"),
+                    "exceptionType" to (diag.exceptionType ?: "-"),
+                    "lines" to linesReceived.toString(),
+                    "bytes" to bytesReceived.toString(),
+                    "sawDone" to sawDone.toString(),
+                    "party" to diag.responsibleParty
+                ))
                 throw LLMClientException(clientName, e.message, e)
             } finally {
                 timing.close()
@@ -392,6 +434,9 @@ class MederiOpenAILLMClient(
 
         return flow {
             val timing = StreamTimingLog("SSE-Timing", "responses events")
+            var sawDone = false
+            var bytesReceived = 0L
+            var linesReceived = 0
             try {
                 emitAll(
                     httpClient.lines(
@@ -404,16 +449,34 @@ class MederiOpenAILLMClient(
                             "Content-Type" to "application/json"
                         )
                     )
-                        .onEach { timing.sample(it.length) }
+                        .onEach {
+                            timing.sample(it.length)
+                            bytesReceived += it.length
+                            linesReceived++
+                        }
                         // SSE 行有两类：`event: xxx`（事件名，JSON 里也有 type，忽略）和 `data: {...}`
                         .filter { it.startsWith("data:") }
                         .map { line -> line.removePrefix("data:").trim() }
+                        .onEach { if (it == "[DONE]" || it.isEmpty()) sawDone = true }
                         .takeWhile { data -> data.isNotEmpty() && data != "[DONE]" }
                         .onCompletion { error ->
+                            val mode = when {
+                                error != null -> "exception"
+                                sawDone -> "done"
+                                else -> "premature-close"
+                            }
                             DebugLog.event(
                                 "SSE",
-                                "responses lines flow closed: cause=${error?.message ?: "normal (reached [DONE] or connection end)"}"
+                                "responses lines flow closed: mode=$mode, lines=$linesReceived, bytes=$bytesReceived, " +
+                                    "sawDone=$sawDone, cause=${error?.message?.take(120) ?: "none"}"
                             )
+                            StreamTrace.record("Stream.Summary", mapOf(
+                                "event" to "flow-completion",
+                                "mode" to mode,
+                                "lines" to linesReceived.toString(),
+                                "bytes" to bytesReceived.toString(),
+                                "cause" to (error?.message?.take(120) ?: "none")
+                            ))
                         }
                         .map { data -> sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(data) }
                         .let { processResponsesStreamingFlow(it) }
@@ -422,7 +485,25 @@ class MederiOpenAILLMClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                DebugLog.error("SSE", "Responses streaming failed: ${e.message}", e)
+                val diag = SseDiagnostics.extract(e)
+                DebugLog.error(
+                    "SSE",
+                    "Responses streaming failed: ${diag.summary()}, " +
+                        "lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
+                        "party=${diag.responsibleParty}",
+                    e
+                )
+                StreamTrace.record("Stream.Summary", mapOf(
+                    "event" to "stream-exception",
+                    "mode" to diag.failureMode.name,
+                    "httpStatus" to (diag.httpStatusCode?.toString() ?: "-"),
+                    "errorBody" to (diag.errorBody?.take(200) ?: "-"),
+                    "exceptionType" to (diag.exceptionType ?: "-"),
+                    "lines" to linesReceived.toString(),
+                    "bytes" to bytesReceived.toString(),
+                    "sawDone" to sawDone.toString(),
+                    "party" to diag.responsibleParty
+                ))
                 throw LLMClientException(clientName, e.message, e)
             } finally {
                 timing.close()

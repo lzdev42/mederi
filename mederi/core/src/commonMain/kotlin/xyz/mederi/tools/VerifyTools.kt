@@ -164,10 +164,19 @@ class VerifyTools(
             } else if (verifyStatus == VerifyStatus.PASS) {
                 "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: PASS. ($passed passed, $failed failed, $pending pending)$verifyNote"
             } else {
+                // 缺口 D：按 gapType 分流，不再对所有 FAIL 都说 converge_plan。
+                // CONTRADICTS = spec 跟现实矛盾（AI 能修：re-generate_spec 覆盖）；
+                // 其余 = 执行错（converge_plan 追加补救）。
+                val guidance = if (gapType == GapType.CONTRADICTS) {
+                    "The spec contradicts reality — re-call generate_spec(planId=${args.planId}, " +
+                        "subtaskIndex=${args.subtaskIndex}) to replace the spec, then spawn_agent to re-execute. " +
+                        "Do NOT use converge_plan for a spec error."
+                } else {
+                    "Call converge_plan to append remediation subtasks."
+                }
                 "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: ${args.status}" +
-                (args.gapType?.let { " ($it)" } ?: "") +
-                ". ($passed passed, $failed failed, $pending pending) " +
-                "Call converge_plan to append remediation subtasks.$verifyNote"
+                    (args.gapType?.let { " ($it)" } ?: "") +
+                    ". ($passed passed, $failed failed, $pending pending) $guidance$verifyNote"
             }
         }
     }
