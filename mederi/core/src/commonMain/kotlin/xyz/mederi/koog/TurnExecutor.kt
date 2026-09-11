@@ -204,14 +204,26 @@ class TurnExecutor(
                 val failed = p.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.FAILED }
                 val pending = p.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.PENDING }
                 appendLine("Progress: $passed passed, $failed failed, $pending pending")
+                // 指针行：给模型 todo 式的焦点（"正在做哪个/下一个做哪个"），与轻量 todo 的单 in_progress 同机制
+                val activeSubtask = p.currentSubtask ?: p.nextPending
+                activeSubtask?.let { appendLine("Current: Subtask ${it.index + 1} [${it.status}]: ${it.name}") }
                 if (failed > 0 && p.needsConvergence) {
                     appendLine("WARNING: Has failed subtasks needing convergence — call converge_plan to append remediation subtasks, then spawn_agent to retry.")
                 }
+                // spec 只挂活跃子任务：历史 spec 留在磁盘（spawn_agent 自取、generate_spec 可重写），
+                // 主代理的编排/验证/收敛决策只需要骨架（brief/verification/验证结果），避免 token 无界增长
                 p.subtasks.forEach { st ->
                     appendLine("- [${st.status}] Subtask ${st.index + 1}: ${st.name}")
                     if (st.targetFiles.isNotEmpty()) appendLine("  Files: ${st.targetFiles.joinToString()}")
                     if (st.planDetail.isNotBlank()) appendLine("  Brief: ${st.planDetail}")
-                    if (!st.spec.isNullOrBlank()) appendLine("  Spec: ${st.spec}") else appendLine("  Spec: (not generated yet — call generate_spec before spawning)")
+                    when {
+                        st.index == activeSubtask?.index && !st.spec.isNullOrBlank() ->
+                            appendLine("  Spec: ${st.spec}")
+                        st.spec.isNullOrBlank() ->
+                            appendLine("  Spec: (not generated yet — call generate_spec before spawning)")
+                        else ->
+                            appendLine("  Spec: (stored on disk; mounted only for the active subtask)")
+                    }
                     st.decisions.forEach { d -> appendLine("  Decision: ${d.question} -> ${d.choice} (${d.rationale})") }
                     appendLine("  Verification: ${st.verification}")
                     st.verificationResult?.let { r ->
@@ -221,10 +233,18 @@ class TurnExecutor(
                 }
             }
         }
+        // 无活跃计划且模型维护过 todo 时挂载轻量进度段（有 Plan 时 Plan 即 tracker，不挂第二份）。
+        // session 实例在 turn 开始时读取，本段按 turn 边界刷新；turn 内模型调 update_todo 后
+        // 状态就在对话历史里，无需重建 prompt
+        val activeTodoContent = if (activePlan == null && session.todos.isNotEmpty()) buildString {
+            session.todos.forEach { appendLine("- [${it.status.name}] ${it.content}") }
+            val done = session.todos.count { it.status == xyz.mederi.domain.model.TodoStatus.COMPLETED }
+            appendLine("Progress: $done/${session.todos.size} completed.")
+        }.trimEnd() else null
         // 子代理用专用执行者/研究者提示词（无 plan/spawn/verify 工具，主代理工作流指令对它全是误导）；
         // 主代理用完整提示词（含工作流与活跃计划段）
         val systemPrompt = if (subagentRole != null) SystemPrompts.forSubagent(subagentRole, workType)
-        else SystemPrompts.build(agentMode, workType, activePlanContent)
+        else SystemPrompts.build(agentMode, workType, activePlanContent, activeTodoContent)
         DebugLog.data("TurnExec", "agentMode", agentMode)
         DebugLog.data("TurnExec", "workType", workType)
         DebugLog.data("TurnExec", "activePlan", activePlan?.id ?: "none")
@@ -586,7 +606,8 @@ class TurnExecutor(
                 planApprovalRequester = planApprovalRequester,
                 planStore = planStore,
                 notebook = notebook,
-                commandSandbox = commandSandbox
+                commandSandbox = commandSandbox,
+                sessionStore = sessionStore
             )
 
             val agent = buildTurnAgent(

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     ai_model        TEXT,
     reasoning_level TEXT,
     env             TEXT NOT NULL DEFAULT '{}',
+    todos           TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     PRIMARY KEY (id)
@@ -32,27 +33,32 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 
 -- 插入会话
 insertSession:
-INSERT INTO sessions (id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO sessions (id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- 查询所有会话（按更新时间降序）
 listSessions:
-SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at
 FROM sessions
 ORDER BY updated_at DESC;
 
 -- 按 ID 查询会话
 getSession:
-SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at
 FROM sessions
 WHERE id = ?;
 
 -- 按项目查询会话
 listSessionsByProject:
-SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at
 FROM sessions
 WHERE project_id = ?
 ORDER BY updated_at DESC;
+
+-- 更新会话 todo 列表（整体替换；唯一真理源 = sessions.todos 列）
+updateSessionTodos:
+UPDATE sessions SET todos = ?, updated_at = ?
+WHERE id = ?;
 
 -- 更新会话状态
 updateSessionStatus:

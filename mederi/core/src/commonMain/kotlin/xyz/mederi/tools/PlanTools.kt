@@ -16,6 +16,7 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.WorkType
+import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.Decision
 import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.Plan
@@ -25,6 +26,7 @@ import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.PlannedChange
 import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.SubtaskStatus
+import xyz.mederi.plan.toTodoProjection
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -322,6 +324,7 @@ class PlanTools(
                 } else if (result.approved) {
                     planStore.update(plan.copy(status = PlanStatus.APPROVED))
                     notebook.append("## ${Instant.now()} — Plan approved: ${plan.title}")
+                    emitPlanTodos(plan.copy(status = PlanStatus.APPROVED), "approved")
                     "Plan approved. Plan ID: ${plan.id}. Use spawn_agent to execute subtasks."
                 } else {
                     // 拒绝后不盲目重提：直接在最终回复里问用户理由，turn 正常结束，
@@ -333,8 +336,26 @@ class PlanTools(
                 }
             } else {
                 notebook.append("## ${Instant.now()} — Plan created (auto-approved): ${plan.title}")
+                emitPlanTodos(plan, "created")
                 "Plan created and auto-approved. Plan ID: ${plan.id}. Use spawn_agent to execute subtasks."
             }
+        }
+
+        /**
+         * Plan 子任务投影事件：todo 面板的 Plan 侧唯一来源。
+         * 投影函数共享（plan.toTodoProjection），四类发射点（create/spawn/verify/converge）只调不发各自手拼。
+         */
+        private suspend fun emitPlanTodos(plan: Plan, action: String) {
+            eventBus.emit(MederiEvent(
+                type = EventType.PLAN_PROGRESS,
+                sessionId = sessionId,
+                payload = mapOf(
+                    "planId" to plan.id,
+                    "action" to action,
+                    "todos" to plan.toTodoProjection().encodeTodos()
+                ),
+                timestamp = Instant.now().toString()
+            ))
         }
     }
 
@@ -388,7 +409,8 @@ class PlanTools(
                     "totalSubtasks" to updatedPlan.subtasks.size.toString(),
                     "passed" to passed.toString(),
                     "failed" to failed.toString(),
-                    "pending" to pending.toString()
+                    "pending" to pending.toString(),
+                    "todos" to updatedPlan.toTodoProjection().encodeTodos()
                 ),
                 timestamp = Instant.now().toString()
             ))

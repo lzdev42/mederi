@@ -130,6 +130,25 @@ object MederiModelMapper {
             timestamp = event.timestamp
         )
 
+    /**
+     * core Todo → 契约 Todo（hydration 投影的唯一映射点；事件路径走 reducer 的 wire 解码）。
+     * id 是渲染 key：在投影边界按序合成（"t$index"），不持久化不交换。
+     */
+    fun toTodos(todos: List<xyz.mederi.domain.model.TodoItem>): List<xyz.mederi.core.contract.models.TodoItem> =
+        todos.mapIndexed { i, t ->
+            xyz.mederi.core.contract.models.TodoItem(
+                id = "t$i",
+                content = t.content,
+                status = when (t.status) {
+                    xyz.mederi.domain.model.TodoStatus.PENDING -> xyz.mederi.core.contract.models.TodoStatus.Pending
+                    xyz.mederi.domain.model.TodoStatus.IN_PROGRESS -> xyz.mederi.core.contract.models.TodoStatus.InProgress
+                    xyz.mederi.domain.model.TodoStatus.COMPLETED -> xyz.mederi.core.contract.models.TodoStatus.Completed
+                    xyz.mederi.domain.model.TodoStatus.CANCELLED -> xyz.mederi.core.contract.models.TodoStatus.Cancelled
+                    xyz.mederi.domain.model.TodoStatus.FAILED -> xyz.mederi.core.contract.models.TodoStatus.Failed
+                }
+            )
+        }
+
     fun toModelOption(
         model: AIModel,
         providerId: String,

@@ -81,7 +81,10 @@ Respond in the user's language. If they write Chinese, respond in Chinese.
    remediation subtasks (append-only, never rewrite).
  - ask_user: Ask clarification/decision questions. Max 3, prioritized: scope > security > UX > technical.
    If a reasonable default exists, use it and document as a Decision. Don't ask what you can read yourself.
- - update_plan: Track multi-step progress. At most one step in_progress.
+ - update_todo: Track multi-step progress for work WITHOUT a plan (multi-step small fixes,
+   ad-hoc tasks). One call REPLACES the whole list; at most one item in_progress; an empty
+   list clears it. Do NOT call it when an Active Plan exists — the plan's subtask statuses
+   are the tracker. Skip it for single-step replies.
   - write_log: Record decisions and findings to .mederi/notebook.md.
     """
 
@@ -384,6 +387,13 @@ When modifying existing documents (write_file, edit_file on non-.mederi files):
 {plan}
 """
 
+    private const val TODO_SECTION_TEMPLATE = """
+# Current Todo
+{todo}
+This list is your lightweight tracker for work that does NOT go through the Plan
+Loop. Keep it current via update_todo (one call replaces the whole list).
+"""
+
     // ============================ 拼接 ============================
 
     private val COMMON: String
@@ -425,23 +435,34 @@ When modifying existing documents (write_file, edit_file on non-.mederi files):
     }
 
     /**
-     * 根据 agentMode、workType 和活跃计划构建完整系统提示词。
+     * 根据 agentMode、workType、活跃计划和当前 todo 构建完整系统提示词。
      *
-     * 拼接顺序：配置声明 + COMMON + workType 段 + agentMode 段 + 活跃计划段（如有）。
+     * 拼接顺序：配置声明 + COMMON + workType 段 + agentMode 段 + 活跃计划段（如有）+ 当前 todo 段（仅无计划时）。
+     * 互斥规则：有活跃计划时 todo 面板/挂载都走 Plan 子任务投影，不挂模型自管理的 todo——
+     * 防止同一进度出现两份真理源。
      */
-    fun build(agentMode: AgentMode, workType: WorkType, activePlan: String? = null): String {
+    fun build(
+        agentMode: AgentMode,
+        workType: WorkType,
+        activePlan: String? = null,
+        activeTodo: String? = null
+    ): String {
         val workSection = when (workType) {
             WorkType.WORK -> WORK_MODE.trimIndent()
             WorkType.CODE -> CODE_MODE.trimIndent()
         }
         val modeSection = workflowSection(agentMode)
         val planSection = activePlan?.let { PLAN_SECTION_TEMPLATE.replace("{plan}", it) }
+        val todoSection = if (activePlan == null && !activeTodo.isNullOrBlank()) {
+            TODO_SECTION_TEMPLATE.replace("{todo}", activeTodo)
+        } else null
         return buildString {
             append(configSection(agentMode, workType)).append("\n\n")
             append(COMMON).append("\n\n")
             append(workSection).append("\n\n")
             append(modeSection)
             if (planSection != null) append("\n\n").append(planSection.trimIndent())
+            if (todoSection != null) append("\n\n").append(todoSection.trimIndent())
         }
     }
 }

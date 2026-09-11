@@ -883,10 +883,23 @@ private fun TodoListCard(
             }
         }
 
-        // Tasks list
+        // Tasks list（四态：Pending 灰 / InProgress 高亮 / Completed 绿勾划线 / Failed 红）
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             todoList.forEach { task ->
                 val isDone = task.status == TodoStatus.Completed
+                val isRunning = task.status == TodoStatus.InProgress
+                val isFailed = task.status == TodoStatus.Failed
+                val boxColor = when {
+                    isDone -> colors.accentPrimary
+                    isRunning -> colors.accentPrimary
+                    isFailed -> colors.accentDanger
+                    else -> colors.buttonSecondary
+                }
+                val textColor = when {
+                    isDone -> colors.textMuted
+                    isFailed -> colors.accentDanger
+                    else -> colors.textPrimary
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -900,10 +913,12 @@ private fun TodoListCard(
                         modifier = Modifier
                             .size(14.dp)
                             .clip(RoundedCornerShape(3.dp))
-                            .background(if (isDone) colors.accentPrimary else colors.buttonSecondary)
+                            .background(
+                                if (isRunning) boxColor.copy(alpha = 0.25f) else boxColor
+                            )
                             .border(
                                 1.dp,
-                                if (isDone) colors.accentPrimary else colors.divider,
+                                boxColor,
                                 RoundedCornerShape(3.dp)
                             ),
                         contentAlignment = Alignment.Center
@@ -915,13 +930,22 @@ private fun TodoListCard(
                                 tint = colors.onAccentPrimary,
                                 modifier = Modifier.size(10.dp)
                             )
+                        } else if (isRunning) {
+                            // 进行中：实心圆点（不引图标，点即"正在做"的视觉焦点）
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(colors.accentPrimary)
+                            )
                         }
                     }
 
                     Text(
                         text = task.content,
-                        color = if (isDone) colors.textMuted else colors.textPrimary,
+                        color = textColor,
                         fontSize = 11.sp,
+                        fontWeight = if (isRunning) FontWeight.SemiBold else FontWeight.Normal,
                         textDecoration = if (isDone) TextDecoration.LineThrough else TextDecoration.None,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis

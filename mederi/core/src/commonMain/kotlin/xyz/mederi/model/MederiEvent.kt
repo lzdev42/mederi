@@ -18,6 +18,13 @@ enum class EventType {
     PLAN_PROGRESS,
 
     /**
+     * 会话 todo 列表更新（update_todo 工具 / Plan 子任务投影共用）。
+     * payload: todos = List<TodoItem> 的 JSON（key 统一为 "todos"），可选 explanation。
+     * 真理源在持久化层（sessions.todos 列 / PlanStore），本事件只是投影通知。
+     */
+    TODO_UPDATED,
+
+    /**
      * 环境态状态事件（不改变 session 状态机、不落库）：限流重试、供应商抖动等
      * "正在发生但不是业务结果"的事实。payload 约定：
      * scope=provider, code=RETRYING, message, attempt, maxAttempts。

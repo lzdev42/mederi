@@ -4,6 +4,7 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
+import xyz.mederi.domain.model.TodoItem
 import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
@@ -44,6 +45,12 @@ interface SessionStore {
         aiModel: AIModel? = null,
         reasoningLevel: ReasoningLevel? = null
     )
+
+    /**
+     * 更新会话的 todo 列表（整体替换；无 Plan 任务的轻量进度跟踪）。
+     * 真理源 = sessions.todos 列；事件/快照/提示词段都是它的投影。
+     */
+    suspend fun updateTodos(id: String, todos: List<TodoItem>)
 
     /**
      * 删除会话。

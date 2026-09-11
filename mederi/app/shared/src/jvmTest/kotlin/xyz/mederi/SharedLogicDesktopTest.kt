@@ -196,6 +196,93 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testSnapshotReducerTodoUpdatedReplacesStatelessly() {
+        val initialSnap = testSnapshot("conv_todo")
+        val event = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.TODO_UPDATED,
+            sessionId = "conv_todo",
+            payload = mapOf(
+                "todos" to """[{"content":"step one","status":"completed"},{"content":"step two","status":"in_progress"}]"""
+            )
+        )
+        val updated = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, event)
+        assertEquals(2, updated.todos.size, "TODO_UPDATED 必须整体替换快照 todos（无状态投影，不合并）")
+        assertEquals(xyz.mederi.core.contract.models.TodoStatus.Completed, updated.todos[0].status)
+        assertEquals("t0", updated.todos[0].id, "id 是渲染 key，投影边界按序合成")
+        assertEquals(xyz.mederi.core.contract.models.TodoStatus.InProgress, updated.todos[1].status)
+    }
+
+    @Test
+    fun testSnapshotReducerPlanProgressProjectsSubtasks() {
+        val initialSnap = testSnapshot("conv_plan")
+        val event = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.PLAN_PROGRESS,
+            sessionId = "conv_plan",
+            payload = mapOf(
+                "planId" to "plan_x",
+                "action" to "subtask-started",
+                "todos" to """[{"content":"Subtask 1: bootstrap","status":"completed"},{"content":"Subtask 2: implement","status":"in_progress"},{"content":"Subtask 3: cleanup","status":"pending"}]"""
+            )
+        )
+        val updated = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, event)
+        assertEquals(3, updated.todos.size, "PLAN_PROGRESS 的 todos 投影必须进入快照")
+        assertEquals("Subtask 2: implement", updated.todos[1].content)
+    }
+
+    @Test
+    fun testSnapshotReducerEmptyTodosClears() {
+        val withTodos = testSnapshot("conv_clear").copy(
+            todos = listOf(
+                xyz.mederi.core.contract.models.TodoItem("t0", "old", xyz.mederi.core.contract.models.TodoStatus.Pending)
+            )
+        )
+        val event = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.TODO_UPDATED,
+            sessionId = "conv_clear",
+            payload = mapOf("todos" to "[]")
+        )
+        val updated = xyz.mederi.core.contract.SnapshotReducer.apply(withTodos, event)
+        assertEquals(0, updated.todos.size, "空列表是合法值 = 清空 todo")
+    }
+
+    @Test
+    fun testSnapshotReducerMalformedTodoPayloadKeepsSnapshot() {
+        val withTodos = testSnapshot("conv_bad").copy(
+            todos = listOf(
+                xyz.mederi.core.contract.models.TodoItem("t0", "keep", xyz.mederi.core.contract.models.TodoStatus.Pending)
+            )
+        )
+        val event = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.TODO_UPDATED,
+            sessionId = "conv_bad",
+            payload = mapOf("todos" to "not-json-at-all")
+        )
+        val updated = xyz.mederi.core.contract.SnapshotReducer.apply(withTodos, event)
+        assertEquals(
+            listOf(xyz.mederi.core.contract.models.TodoItem("t0", "keep", xyz.mederi.core.contract.models.TodoStatus.Pending)),
+            updated.todos,
+            "畸形 payload 安全降级：丢弃该事件、保留先前快照，绝不字符串手术挽救"
+        )
+    }
+
+    private fun testSnapshot(convId: String): xyz.mederi.core.contract.dto.ConversationSnapshot {
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = convId,
+            projectId = "proj_1",
+            title = "Test",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Idle,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        return xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+    }
+
+    @Test
     fun testSnapshotReducerImageDelta() {
         val conv = xyz.mederi.core.contract.models.Conversation(
             id = "conv_img",

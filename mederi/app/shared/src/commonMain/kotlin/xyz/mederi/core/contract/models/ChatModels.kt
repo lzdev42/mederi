@@ -156,6 +156,12 @@ enum class CoreEventType {
     PLAN_PROGRESS,
 
     /**
+     * 会话 todo 列表更新（update_todo 工具 / Plan 子任务投影共用）。
+     * payload: todos = List<TodoItem> 的 JSON（key 统一为 "todos"）。快照 todos 无状态整体替换。
+     */
+    TODO_UPDATED,
+
+    /**
      * 环境态状态事件（不改变会话状态机、不落库）：供应商限流重试等"正在发生但不是
      * 业务结果"的事实。payload: scope/code/message/attempt/maxAttempts。
      * UI 据此在状态栏显示"重试中"；会话 status 仍为 Working，不进 Error。

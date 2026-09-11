@@ -160,6 +160,9 @@ inkcompose/
 - **Manager = 唯一真理源**；**ApiImpl = DTO 转换 + 异常转换**；**Store = 纯持久化**
 - 统一异常体系：对外 API 只抛 `MederiException` 子类；core 层不得静默 no-op 伪装成功（调用方会基于错误的"成功"继续走，造成更深的错误）
 - 命名具体化：避免 `context` 这类过度抽象的命名
+- 结构化数据（事件 payload、持久化列、跨端 DTO）一律 `@Serializable` DTO + kotlinx.serialization 编解码；
+  **禁止手拼/手解 JSON**（joinToString / 字符串模板 / buildString 拼 JSON、正则或字符串手术解析全禁止）；
+  解码失败安全降级，不用字符串手术挽救
 
 ## 5.5 执行沙盒与审批模式（2026-09 定稿，详见 `docs/sandbox-plan.md`）
 
@@ -223,7 +226,8 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 
 ### 上下文挂载（防失忆）
 
-- **主代理**：每轮 turn 从 PlanStore 现读活跃计划，把每个子任务的 status/targetFiles/brief（planDetail）+ spec/verification/验证结果拼进系统提示词的 `# Active Plan` 段——plan 与 spec 始终挂载，永不失忆
+- **主代理**：每轮 turn 从 PlanStore 现读活跃计划，把每个子任务的 status/targetFiles/brief（planDetail）+ verification/验证结果拼进系统提示词的 `# Active Plan` 段——**spec 只挂活跃子任务**（IN_PROGRESS 优先，否则 nextPending），历史 spec 留在磁盘（spawn_agent 自取）；挂 `Current: Subtask N` 指针行给模型 todo 式焦点
+- **轻量 todo（update_todo，2026-09）**：无 Plan 任务的进度跟踪，真理源 = sessions.todos 列，每轮挂 `# Current Todo` 段（turn 边界刷新）；**有活跃 Plan（执行期）时代码级硬门禁禁用**（AgentTools 校验）——todo 面板显示 Plan 子任务投影（`PLAN_PROGRESS` payload `todos`，投影函数 `Plan.toTodoProjection()` 唯一），防止两份进度真理源
 - **Executor**：spec（Subtask.spec）注入其唯一一条用户消息（brief 拼进 briefing 作意图上下文），系统提示词要求自顶向下执行——一次性任务无需持续挂载
 - **Researcher**：只挂 task + briefing，无计划上下文
 
@@ -355,4 +359,5 @@ server 路由（`RemoteServer.remoteModule`），任何变动四处同步、缺�
 - 分诊流程（Triage Flow）：已落地（§5.6）；执行沙盒已落地（§5.5 + `docs/sandbox-plan.md`）
 - 存储架构：双库已落地（§5.7）——config.db / data.db + 设备本地 preferences；原始消息 API（listRaw）已就绪
 - 会话自动命名：`SessionTitleService` 挂 `MederiAiCore.initialize()`（§1.5），所有宿主生效
+- Todo 系统：`update_todo`（无 Plan 任务，sessions.todos 持久化 + `# Current Todo` 回注入 + UI TodoListCard）+ Plan 子任务投影（create/spawn/verify/converge 发 `PLAN_PROGRESS` 带 todos）已落地（详见 `docs/todo-system-plan.md`）
 - inkcompose：单 KMP 模块已接入 `app:shared`（jvmTest 2600+ tests 全绿，四平台编译通过）

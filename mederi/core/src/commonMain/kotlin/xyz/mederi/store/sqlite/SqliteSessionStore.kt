@@ -12,7 +12,10 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
+import xyz.mederi.domain.model.TodoItem
 import xyz.mederi.domain.model.WorkType
+import xyz.mederi.domain.model.decodeTodos
+import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.store.SessionStore
 import java.time.Instant
@@ -45,6 +48,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
                 env = parseEnv(row.env),
+                todos = parseTodos(row.todos),
                 createdAt = row.created_at,
                 updatedAt = row.updated_at
             )
@@ -63,6 +67,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
                 env = parseEnv(row.env),
+                todos = parseTodos(row.todos),
                 createdAt = row.created_at,
                 updatedAt = row.updated_at
             )
@@ -80,6 +85,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             ai_model = session.aiModel?.let { serializeAIModel(it) },
             reasoning_level = session.reasoningLevel?.name,
             env = serializeEnv(session.env),
+            todos = session.todos.encodeTodos(),
             created_at = session.createdAt,
             updated_at = session.updatedAt
         )
@@ -114,6 +120,10 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         )
     }
 
+    override suspend fun updateTodos(id: String, todos: List<TodoItem>): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionTodos(todos.encodeTodos(), Instant.now().toString(), id)
+    }
+
     override suspend fun delete(id: String): Unit = withContext(Dispatchers.IO) {
         queries.deleteSession(id)
     }
@@ -125,6 +135,9 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         if (jsonStr.isBlank()) return emptyMap()
         return runCatching { json.decodeFromString(envSerializer, jsonStr) }.getOrDefault(emptyMap())
     }
+
+    private fun parseTodos(jsonStr: String): List<TodoItem> =
+        decodeTodos(jsonStr).orEmpty()
 
     private fun serializeAIModel(aiModel: AIModel): String =
         json.encodeToString(AIModel.serializer(), aiModel)

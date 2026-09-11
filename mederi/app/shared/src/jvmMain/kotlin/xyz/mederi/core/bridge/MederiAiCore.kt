@@ -22,6 +22,7 @@ import xyz.mederi.api.RenameSessionRequest
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.core.autotitle.SessionTitleService
 import xyz.mederi.core.contract.AiCore
+import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
@@ -381,8 +382,24 @@ class MederiAiCore(
         return MederiEventAggregator.observe(
             conversationId = conversationId,
             sessions = mederi.sessions,
-            modelToProvider = { modelToProvider[it] }
+            modelToProvider = { modelToProvider[it] },
+            planTodos = { id -> initialTodos(id) }
         )
+    }
+
+    /**
+     * 初始快照的 todo hydration（与事件流/提示词挂载同源同一投影函数，不产生第二份逻辑）：
+     * 有活跃 Plan → Plan 子任务投影（todo 面板显示"该做哪个/正在做哪个/做完哪个"）；
+     * 无 Plan → sessions.todos 列的模型 todo。优先级与提示词挂载规则同构（Plan 优先）。
+     */
+    private suspend fun initialTodos(conversationId: String): List<xyz.mederi.core.contract.models.TodoItem> {
+        val session = mederi.sessions.get(conversationId)
+        val planTodos = runCatching {
+            val project = mederi.projects.get(session.projectId)
+            xyz.mederi.plan.PlanStore(project.directories).loadBySession(conversationId)
+                ?.let { MederiModelMapper.toTodos(it.toTodoProjection()) }
+        }.getOrNull().orEmpty()
+        return planTodos.ifEmpty { MederiModelMapper.toTodos(session.todos) }
     }
 
     /**
@@ -397,7 +414,8 @@ class MederiAiCore(
             messages = messages.map { MederiModelMapper.toChatMessage(it) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
             contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages),
-            cost = MederiModelMapper.toCostSummary()
+            cost = MederiModelMapper.toCostSummary(),
+            todos = initialTodos(conversationId)
         )
     }
 

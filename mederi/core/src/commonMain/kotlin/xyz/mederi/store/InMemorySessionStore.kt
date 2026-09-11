@@ -4,6 +4,7 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
+import xyz.mederi.domain.model.TodoItem
 import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
@@ -48,6 +49,15 @@ class InMemorySessionStore : SessionStore {
                 workType = workType ?: s.workType,
                 aiModel = aiModel ?: s.aiModel,
                 reasoningLevel = reasoningLevel ?: s.reasoningLevel,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        } ?: return
+    }
+
+    override suspend fun updateTodos(id: String, todos: List<TodoItem>) {
+        sessions[id] = sessions[id]?.let { s ->
+            s.copy(
+                todos = todos,
                 updatedAt = java.time.Instant.now().toString()
             )
         } ?: return

@@ -7,11 +7,13 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
+import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.GapType
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.SubtaskStatus
 import xyz.mederi.plan.VerifyStatus
 import xyz.mederi.plan.VerificationResult
+import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.tools.ShellTools.CommandResult
 import java.time.Instant
 
@@ -147,7 +149,8 @@ class VerifyTools(
                     "pending" to pending.toString(),
                     "lastSubtaskIndex" to args.subtaskIndex.toString(),
                     "lastSubtaskStatus" to args.status,
-                    "lastSubtaskGapType" to (args.gapType ?: "")
+                    "lastSubtaskGapType" to (args.gapType ?: ""),
+                    "todos" to finalizedPlan.toTodoProjection().encodeTodos()
                 ),
                 timestamp = Instant.now().toString()
             ))

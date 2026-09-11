@@ -3,12 +3,18 @@ package xyz.mederi.tools.subagent
 import ai.koog.agents.core.tools.SimpleTool
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.EventType
+import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.domain.model.WorkType
+import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.PlanStore
+import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import java.time.Instant
 
 /**
  * spawn_agent 工具参数。
@@ -47,6 +53,7 @@ data class SpawnAgentArgs(
  * @param projectId 当前项目 ID，子 Agent 必须关联到已存在的 Project。
  * @param parentSessionId 父 Session ID，用于追踪。
  * @param planStore 计划存储，门禁查询活跃计划与读取 spec 用。
+ * @param eventBus 事件总线（派工后发 PLAN_PROGRESS 携带子任务投影，驱动 UI todo 面板）。
  */
 class SpawnAgentTool(
     private val subagentRunner: SubagentRunner,
@@ -55,7 +62,8 @@ class SpawnAgentTool(
     private val reasoningLevel: ReasoningLevel,
     private val projectId: String,
     private val parentSessionId: String,
-    private val planStore: PlanStore? = null
+    private val planStore: PlanStore? = null,
+    private val eventBus: MutableSharedFlow<MederiEvent>? = null
 ) : SimpleTool<SpawnAgentArgs>(
     argsType = typeToken<SpawnAgentArgs>(),
     name = "spawn_agent",
@@ -96,6 +104,19 @@ class SpawnAgentTool(
             }
         )
         planStore?.update(updatedPlan)
+
+        // 派工后发子任务投影：UI todo 面板据此显示"正在做哪个"（真理源仍是 PlanStore）
+        eventBus?.emit(MederiEvent(
+            type = EventType.PLAN_PROGRESS,
+            sessionId = parentSessionId,
+            payload = mapOf(
+                "planId" to args.planId,
+                "action" to "subtask-started",
+                "subtaskIndex" to args.subtaskIndex.toString(),
+                "todos" to updatedPlan.toTodoProjection().encodeTodos()
+            ),
+            timestamp = Instant.now().toString()
+        ))
 
         return try {
             val result = subagentRunner.run(

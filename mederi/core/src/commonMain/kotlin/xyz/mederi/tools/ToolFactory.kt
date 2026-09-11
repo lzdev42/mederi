@@ -11,6 +11,7 @@ import xyz.mederi.plan.PlanApprovalRequester
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.store.HistoryStore
+import xyz.mederi.store.SessionStore
 import xyz.mederi.tools.diff.TurnDiffTracker
 import xyz.mederi.tools.subagent.SpawnAgentTool
 import xyz.mederi.tools.subagent.SpawnResearcherTool
@@ -22,7 +23,7 @@ object ToolFactory {
     val FS_TOOL_NAMES = listOf("read_file", "write_file", "edit_file", "list_directory", "execute_command", "apply_patch")
     // get_context_remaining / new_context 未开放给 AI（AgentTools 实现保留），恢复时取消注释
     val AGENT_TOOL_NAMES = listOf(
-        "update_plan",
+        "update_todo",
         // "get_context_remaining",
         // "new_context",
         "ask_user"
@@ -52,11 +53,12 @@ object ToolFactory {
         planApprovalRequester: PlanApprovalRequester? = null,
         planStore: PlanStore? = null,
         notebook: Notebook? = null,
-        commandSandbox: xyz.mederi.tools.sandbox.CommandSandbox? = null
+        commandSandbox: xyz.mederi.tools.sandbox.CommandSandbox? = null,
+        sessionStore: SessionStore? = null
     ): ToolRegistry {
         val fsTools = FileSystemTools(directories, diffTracker)
         val shellTools = ShellTools(directories, commandSandbox)
-        val agentTools = AgentTools(sessionId, historyStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester)
+        val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester, planStore)
 
         // 主代理：全量工具（Triage Flow——是否建计划由 AI 判断，无代码门禁）。子代理按角色裁剪：
         // - EXECUTOR：执行计划内子任务——全量写/执行工具，但无 plan/spawn/verify/ask_user。
@@ -68,6 +70,8 @@ object ToolFactory {
         val canPlan = !isSubagent && planStore != null && planApprovalRequester != null && notebook != null
         val canSpawn = !isSubagent && subagentRunner != null && aiModel != null && reasoningLevel != null && projectId != null
         val canAskUser = !isSubagent && questionRequester != null
+        // todo 工具仅主代理：子代理的进度单是 spec 清单，不养第二份进度
+        val canTodo = !isSubagent && sessionStore != null
 
         // 文件系统工具
         val fsToolMap = mutableMapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
@@ -85,12 +89,16 @@ object ToolFactory {
             fsToolMap["apply_patch"] = { fsTools.ApplyPatchTool() }
         }
 
-        val agentToolMap = mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-            "update_plan" to { agentTools.UpdatePlanTool() },
+        val agentToolMap = if (canTodo) {
+            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                "update_todo" to { agentTools.UpdateTodoTool() }
+            )
+        } else {
             // 未开放给 AI：AgentTools 实现保留，恢复时取消注释
             // "get_context_remaining" to { agentTools.GetContextRemainingTool() },
             // "new_context" to { agentTools.NewContextWindowTool() },
-        )
+            emptyMap()
+        }
 
         val askUserToolMap = if (canAskUser) {
             mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
@@ -129,7 +137,8 @@ object ToolFactory {
                         reasoningLevel = reasoningLevel!!,
                         projectId = projectId!!,
                         parentSessionId = sessionId,
-                        planStore = planStore
+                        planStore = planStore,
+                        eventBus = eventBus
                     )
                 },
                 "spawn_researcher" to {

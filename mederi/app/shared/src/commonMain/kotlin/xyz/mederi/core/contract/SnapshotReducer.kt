@@ -2,6 +2,7 @@ package xyz.mederi.core.contract
 
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.MessagesPage
@@ -13,6 +14,8 @@ import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.core.contract.models.PlanApprovalRequest
+import xyz.mederi.core.contract.models.TodoItem
+import xyz.mederi.core.contract.models.TodoWireItem
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.currentTimeMillis
 
@@ -164,7 +167,15 @@ object SnapshotReducer {
             )
         }
 
-        CoreEventType.PLAN_PROGRESS -> snapshot
+        CoreEventType.TODO_UPDATED -> {
+            val todos = event.payload["todos"]?.let(::decodeTodoProjection)
+            if (todos != null) snapshot.copy(todos = todos) else snapshot
+        }
+
+        CoreEventType.PLAN_PROGRESS -> {
+            val todos = event.payload["todos"]?.let(::decodeTodoProjection)
+            if (todos != null) snapshot.copy(todos = todos) else snapshot
+        }
 
         CoreEventType.PLAN_APPROVAL_RESOLVED -> {
             val planId = event.payload["planId"]
@@ -178,6 +189,24 @@ object SnapshotReducer {
             )
         }
     }
+
+    // ------------------------------------------------------------------
+    // 私有：Todo 投影解码（TODO_UPDATED / PLAN_PROGRESS 共用，无状态整体替换）
+    // ------------------------------------------------------------------
+
+    private val todoWireJson = Json { ignoreUnknownKeys = true }
+    private val todoWireSerializer = ListSerializer(TodoWireItem.serializer())
+
+    /**
+     * 事件 payload → 契约 Todo 列表（与 core 侧唯一编码点 encodeTodos 的 JSON 形状对齐）。
+     * id 是渲染 key：在投影边界按序合成（"t$index"），不持久化不交换。
+     * 解码失败返回 null（调用方丢弃该事件、保留先前快照）——禁止字符串手术挽救畸形数据。
+     * 空列表是合法值（= 清空 todo）。
+     */
+    private fun decodeTodoProjection(raw: String): List<TodoItem>? = runCatching {
+        todoWireJson.decodeFromString(todoWireSerializer, raw)
+            .mapIndexed { i, w -> TodoItem(id = "t$i", content = w.content, status = w.status) }
+    }.getOrNull()
 
     // ------------------------------------------------------------------
     // 私有：消息/block 状态机（与原 jvm MederiEventAggregator 逐行等价）

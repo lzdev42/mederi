@@ -7,6 +7,7 @@ import xyz.mederi.core.contract.SnapshotReducer
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.models.CoreEventType
+import xyz.mederi.core.contract.models.TodoItem
 import xyz.mederi.debug.DebugLog
 
 /**
@@ -21,10 +22,15 @@ import xyz.mederi.debug.DebugLog
  */
 object MederiEventAggregator {
 
+    /**
+     * @param planTodos 会话重开时的 Plan 子任务投影 hydration（MederiAiCore 提供，
+     * 内部走 PlanStore 同一投影函数）；优先级：Plan 投影 > session.todos（与提示词挂载规则同构）。
+     */
     fun observe(
         conversationId: String,
         sessions: SessionApi,
-        modelToProvider: (String) -> String?
+        modelToProvider: (String) -> String?,
+        planTodos: suspend (String) -> List<TodoItem> = { emptyList() }
     ): Flow<ConversationSnapshot> = flow {
         DebugLog.section("Aggregator", "MederiEventAggregator.observe start")
         DebugLog.data("Aggregator", "conversationId", conversationId)
@@ -38,7 +44,8 @@ object MederiEventAggregator {
             messages = messages.map { MederiModelMapper.toChatMessage(it) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
             contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages),
-            cost = MederiModelMapper.toCostSummary()
+            cost = MederiModelMapper.toCostSummary(),
+            todos = planTodos(conversationId).ifEmpty { MederiModelMapper.toTodos(session.todos) }
         )
         DebugLog.event("Aggregator", "initial snapshot built: status=${snapshot.conversation.status}, messages=${snapshot.messages.size}")
         emit(snapshot)
