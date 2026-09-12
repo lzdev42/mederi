@@ -127,6 +127,10 @@ data class Message(
     val cachedTokens: Int? = null,
     val providerId: String? = null,
     val modelId: String? = null,
+    /** 模型显示名（AIModel.name，原始消息诊断字段）——footer 展示用 */
+    val modelName: String? = null,
+    /** 实际使用的推理档位（effectiveReasoningLevel，原始消息诊断字段）——footer 展示用 */
+    val reasoningLevel: String? = null,
     val agentMode: String? = null,
     val workType: String? = null,
     val projectId: String? = null,

@@ -100,7 +100,7 @@ object KoogMessageMapper {
             role = MessageRole.ASSISTANT,
             parts = parts,
             status = MessageStatus.COMPLETED,
-            createdAt = formatTimestamp(metaInfo.timestamp.toJava()),
+            createdAt = sanitizeTimestamp(metaInfo.timestamp.toJava()),
             finishReason = koogMessage.finishReason,
             totalTokens = metaInfo.totalTokensCount,
             inputTokens = metaInfo.inputTokensCount,
@@ -223,6 +223,16 @@ object KoogMessageMapper {
 
     private fun parseTimestamp(iso: String): Instant = Instant.parse(iso)
     private fun formatTimestamp(instant: Instant): String = DateTimeFormatter.ISO_INSTANT.format(instant)
+
+    /**
+     * Koog 无 metaInfo 时回退到 `ResponseMetaInfo/RequestMetaInfo.Empty`（timestamp = Instant.DISTANT_PAST，
+     * 即 -100001 年）——若直接落库 createdAt 会变成哨兵日期，消息在 UI 按时间排序时沉底错乱。
+     * 检测到遥远远于当前时间的纪元值（早于公元 1 年）一律用当前时间兜底。
+     */
+    private fun sanitizeTimestamp(instant: Instant): String {
+        val usable = if (instant.isAfter(Instant.parse("0001-01-01T00:00:00Z"))) instant else Instant.now()
+        return formatTimestamp(usable)
+    }
 
     private fun Instant.toKoog(): KoogInstant = KoogInstant.parse(this.toString())
     private fun KoogInstant.toJava(): Instant = Instant.parse(this.toString())

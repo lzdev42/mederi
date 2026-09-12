@@ -23,6 +23,24 @@ data class ConversationSnapshot(
      * 与 [errorMessage] 语义不同——errorMessage 是终态错误，statusHint 是过程状态。
      */
     val statusHint: String? = null,
+    /**
+     * 错误 ID（ErrorCollector 生成）。JVM 端 UI 可经 `ErrorCollector.get(errorId)`
+     * 取回完整 [ErrorRecord]（含堆栈、分类、严重级别、cause 链等富字段）。
+     * null 表示无错误或错误来自旧路径。
+     */
+    val errorId: String? = null,
+    /**
+     * 完整诊断报告（人类可读，纯文本）——点击错误简报时展示的详情。
+     * 跨进程（server → wasmJs）场景下这是详细信息的唯一载体；
+     * JVM 端可直接展示本字段，或用 [errorId] 从 ErrorCollector 取富对象。
+     */
+    val errorDiagnostic: String? = null,
+    /**
+     * 当前错误是否为"流式连接提前中断"（断流，failureMode=PREMATURE_CLOSE）。
+     * UI 据此在 ErrorBoard 显示"继续"按钮（重发 Continue 让模型续写半截回复）。
+     * turn 正常推进（MESSAGE_DELTA/新的完成事件无错误）时复位为 false。
+     */
+    val errorIsStreamInterrupted: Boolean = false,
 )
 
 /**

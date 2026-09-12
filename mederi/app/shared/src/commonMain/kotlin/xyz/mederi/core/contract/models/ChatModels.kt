@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 enum class ConversationStatus {
     Idle,
     Working,
+    WaitingUser,
     Error
 }
 
@@ -49,6 +50,14 @@ data class ChatMessage(
     val agent: String?,
     val isStreaming: Boolean = false,
     val error: String? = null,
+    /** 模型显示名（AIModel.name）——assistant 消息 footer 展示 */
+    val modelName: String? = null,
+    /** Agent 模式（APPROVAL/AUTONOMOUS）——assistant 消息 footer 展示 */
+    val agentMode: String? = null,
+    /** 实际使用的推理档位（reasoningLevel 名称）——assistant 消息 footer 展示 */
+    val thinkingLevel: String? = null,
+    /** LLM 请求耗时毫秒（assistant 消息）——footer 展示 */
+    val durationMs: Long? = null,
 )
 
 /**

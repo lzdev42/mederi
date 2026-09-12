@@ -31,7 +31,8 @@ object ToolFactory {
     val PLAN_TOOL_NAMES = listOf("create_plan", "generate_spec", "write_log", "converge_plan")
     val SUBAGENT_TOOL_NAMES = listOf("spawn_agent", "spawn_researcher")
     val VERIFY_TOOL_NAMES = listOf("verify_subtask")
-    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES
+    val PROCESS_TOOL_NAMES = listOf("list_processes", "stop_process")
+    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + PROCESS_TOOL_NAMES
 
     fun build(
         toolNames: List<String>,
@@ -88,6 +89,16 @@ object ToolFactory {
             fsToolMap["execute_command"] = { shellTools.ExecuteCommandTool() }
             fsToolMap["apply_patch"] = { fsTools.ApplyPatchTool() }
         }
+
+        // 进程管理：只对能执行命令的角色开放（主代理 + EXECUTOR）。
+        // 宿主侧按 ProcessRegistry 回收 mederi 自己启动的进程组（沙箱内无法互杀，见 sandbox-plan.md）
+        val processTools = ProcessTools()
+        val processToolMap = if (canExecute) {
+            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                "list_processes" to { processTools.ListProcessesTool() },
+                "stop_process" to { processTools.StopProcessTool() }
+            )
+        } else emptyMap()
 
         val agentToolMap = if (canTodo) {
             mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
@@ -154,7 +165,7 @@ object ToolFactory {
             )
         } else emptyMap()
 
-        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap
+        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + processToolMap
         val requested = if (toolNames.isEmpty()) allAvailableMaps.keys.toList() else toolNames
 
         return ToolRegistry {

@@ -24,6 +24,7 @@
 | read_file / list_directory | 全盘可读 | 纯 Kotlin（resolveForRead 无包含校验） | 全平台 |
 | write_file / edit_file / apply_patch | 只能写白名单路径 | 纯 Kotlin（resolveForWrite containment 校验，WindowsPath 大小写不敏感天然兼容） | 全平台 |
 | execute_command | OS 级沙箱：写=白名单，读=全盘，网络/进程放行 | macOS Seatbelt / Linux bwrap / Windows NONE | 按平台降级 |
+| 进程回收 | 只允许回收 mederi 自己 spawn 的进程组（ProcessRegistry 注册表）；沙箱内命令无法写入注册表，查不到 pid 即拒绝 | ProcessRegistry（宿主侧）+ list_processes / stop_process | 全平台 |
 | 是否写文件/建计划 | Triage Flow 分诊判断（提示词强制，见 `AGENTS.md §5.6`），沙盒是唯一代码级安全网 | SystemPrompts | 全平台 |
 
 ## 2. 架构
@@ -34,6 +35,8 @@
 SessionManagerImpl → TurnExecutor（每 turn 读取）
             → ToolFactory → ShellTools(CommandSandbox 实例)
 CommandSandbox.wrap(command, allowedDirs, extraPaths) → ProcessBuilder argv
+ShellTools.runCommand → 启动即注册 → ProcessRegistry（全局单例，进程组）
+            → list_processes / stop_process（宿主侧 kill -- -pgid 整组回收，沙箱外）
 ```
 
 - CommandSandbox 每 turn 新建实例 → bwrap 探测每 turn 重跑（~10ms；用户装完无需重启）
@@ -51,6 +54,7 @@ Time: UTC ... / Local ... (tz, dow)
 OS: macOS 15.5 (arm64) / Windows 11 (amd64) / Ubuntu 24.04 (x86_64)
 Shell: bash 5.2 (sandboxed writes: <project dirs> + tmp + build caches)
 Sandbox: Seatbelt (macOS) / bubblewrap (Linux) / none (Windows)
+Process control: list_processes / stop_process manage mederi-spawned processes only
 Project dirs: /path/a (primary), /path/b
 Extra writable paths: ... (全局白名单，如有)
 Mederi workdir: <primary>/.mederi
@@ -87,6 +91,30 @@ Java: 21.0.5  (进程运行时，构建相关任务有用)
 沙箱内 `env -u JAVA_HOME ./gradlew :core:compileKotlinJvm` 全绿。
 macOS 沙箱内 gradle 首跑如遇遗漏路径（daemon socket、Xcode licenses 等）→ 实测后追加 profile 放行项，**追加项记录到本节**。
 
+**信号完全不可配（2026-09 实测，macOS 26.6.2）**：`(allow process-signal)` 一律报
+`unbound variable`——本版本 Seatbelt 没有 process-signal 操作（连父→子、同 profile 进程间
+互发信号都被 deny default 拦死，实测 `kill` 全部 "Operation not permitted"）。**profile 层面无法
+放开信号**，因此跨命令回收只能走宿主侧进程管理（见 §4.5）。该限制是本次新增进程管理机制的直接动因。
+
+## 4.5 进程管理与宿主侧回收（2026-09 落地，修 macOS 互杀不可能）
+
+**问题**：macOS 沙箱内命令之间无法发信号 → execute_command 起的 dev server / 后台任务，
+后续命令 `kill` 必然失败，只能靠会话 teardown 回收。
+
+**机制**：每条命令套**进程组长包装**，使整条命令树共享一个 PGID（= 直接子进程 pid）：
+- macOS：`perl -e 'setpgrp(0,0) or die $!; exec @ARGV' -- <sandbox-exec ...>`（/usr/bin/perl 系统自带）
+- Linux：`setsid`（util-linux 默认带；缺失降级无进程组）
+- Windows：无进程组，退化单 pid + `taskkill /T`
+
+**回收**（宿主侧，沙箱外执行）：
+- `ShellTools.runCommand` 启动即写入 `ProcessRegistry`（进程组注册表，全局单例）
+- **超时**：整组 SIGKILL（修掉原实现只 destroyForcibly 杀直接子进程、孙进程变孤儿的洞）
+- `list_processes` / `stop_process`（新工具，主代理 + Executor 可用，Researcher 无）：按注册表
+  定向回收，`pid` 来自 list 输出
+
+**安全边界（硬）**：注册只发生在 runCommand 启动点；注册表查不到 pid 一律拒绝——
+AI 无法用 stop_process 杀任何非 mederi 启动的进程。沙箱内命令永远没有写注册表的通道。
+
 ## 5. bwrap argv 模板（Linux）
 
 ```
@@ -106,6 +134,11 @@ bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp
   （Codex 社区已知坑）。烟测失败降级为无沙箱 + 精确区分两种原因（未安装 vs AppArmor 限制+解法）。
   **待真机验证**：Ubuntu 24.04（AppArmor 默认开）跑通/降级路径；Fedora（无限制）全功能；
   gradle 编译任务在 bwrap 内的 /dev、/proc、$TMPDIR 覆盖是否完整。
+- **macOS 沙箱内信号不可用是平台限制，非 bug**：profile 无 process-signal 放行项（实测
+  unbound variable）。进程回收已由宿主侧注册表补齐（§4.5）。实测影响：JVM `Process.destroy()`/
+  `destroyForcibly()` 在沙箱内**静默失效**（不报错、子进程杀不掉）——Gradle 正常跑测试靠
+  socket 协议收工不受影响，但**中断/超时强杀回退会漏 worker JVM**（恰好能被 stop_process 整组回收）；
+  测试内自行 spawn 子进程再 destroy 的场景同样会漏。编译/测试主链路已验证可用。
 - Seatbelt deprecated：Chrome/Anthropic/OpenAI 全在用，短期内不会消失；如被移除则降级警告
 - Windows execute_command 裸跑：文件工具仍是硬边界；git/diff 是回滚网
 - 全局白名单存 PreferencesStore（明文路径，无敏感数据）

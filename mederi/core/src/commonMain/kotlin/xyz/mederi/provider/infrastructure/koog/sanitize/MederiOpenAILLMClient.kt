@@ -34,7 +34,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import ai.koog.agents.core.tools.ToolDescriptor
 import xyz.mederi.debug.DebugLog
-import xyz.mederi.debug.SseDiagnostics
+import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
 
@@ -54,6 +54,14 @@ class MederiOpenAILLMClient(
     private val responsesAPIPath: String = chatCompletionsPath.replace("chat/completions", "responses")
 
     override val clientName: String = "MederiOpenAILLMClient"
+
+    /**
+     * 最近一次流式请求的关闭诊断——`onCompletion` 写入，[xyz.mederi.koog.TurnExecutor] 断流时读取。
+     * 包含流结束模式（premature-close = 服务端关连接 / exception = 客户端网络异常）、
+     * 最后 N 条原始 SSE 行、非 data: 错误信号行、时间统计。
+     */
+    @Volatile
+    var lastStreamDiagnostics: StreamCloseDiagnostics? = null
 
     override fun llmProvider(): LLMProvider = LLMProvider.OpenAI
 
@@ -176,6 +184,9 @@ class MederiOpenAILLMClient(
             var sawDone = false
             var bytesReceived = 0L
             var linesReceived = 0
+            // 原始 SSE 行 ring buffer（data: 过滤前）+ 非 data: 错误信号行——供断流诊断
+            val lastRawLines = ArrayDeque<String>()
+            val errorSseLines = mutableListOf<String>()
             try {
                 emitAll(
                     httpClient.lines(
@@ -192,6 +203,16 @@ class MederiOpenAILLMClient(
                             timing.sample(it.length)
                             bytesReceived += it.length
                             linesReceived++
+                            // 截获最后 5 条原始行（含注释/event 行，data: 过滤前）
+                            lastRawLines.addLast(it)
+                            while (lastRawLines.size > 5) lastRawLines.removeFirst()
+                            // 非 data: 行中疑似错误信号（event: 前缀 / 含 "error" 关键词）
+                            if (!it.startsWith("data:") && it.isNotBlank()) {
+                                val lower = it.lowercase()
+                                if (lower.contains("error") || it.startsWith("event:")) {
+                                    if (errorSseLines.size < 10) errorSseLines.add(it)
+                                }
+                            }
                         }
                         // SSE 注释行（`: ping` / `: OPENROUTER PROCESSING` 等 keep-alive）与
                         // event:/id:/retry: 行不是 JSON——不过滤直接解码会抛异常炸断整条流。
@@ -220,6 +241,20 @@ class MederiOpenAILLMClient(
                                 "bytes" to bytesReceived.toString(),
                                 "cause" to (error?.message?.take(120) ?: "none")
                             ))
+                            // 结构化诊断——TurnExecutor 断流警告时读取
+                            val ts = timing.snapshot()
+                            lastStreamDiagnostics = StreamCloseDiagnostics(
+                                mode = mode,
+                                linesReceived = linesReceived,
+                                bytesReceived = bytesReceived,
+                                durationMs = ts.durationMs,
+                                maxGapMs = ts.maxGapMs,
+                                ttfbMs = ts.ttfbMs,
+                                lastRawLines = lastRawLines.toList(),
+                                errorSseLines = errorSseLines.toList(),
+                                errorType = error?.let { it::class.simpleName },
+                                errorMessage = error?.message?.lineSequence()?.firstOrNull()?.take(120)
+                            )
                         }
                         .map { data -> sanitizeJson.decodeFromString<SanitizedStreamResponse>(data) }
                         .let { processStreamingFlow(it) }
@@ -228,25 +263,14 @@ class MederiOpenAILLMClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                val diag = SseDiagnostics.extract(e)
+                // 原始异常随 LLMClientException 的 cause 链上抛，外层 ErrorCollector 统一收集完整诊断。
+                // 此处只留一行轻量日志：限流重试期间失败的是尝试，最终错误才进 ErrorCollector 历史
                 DebugLog.error(
                     "SSE",
-                    "streaming failed: ${diag.summary()}, " +
-                        "lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
-                        "party=${diag.responsibleParty}",
+                    "chat streaming failed: lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
+                        "cause=${e.message?.take(120)}",
                     e
                 )
-                StreamTrace.record("Stream.Summary", mapOf(
-                    "event" to "stream-exception",
-                    "mode" to diag.failureMode.name,
-                    "httpStatus" to (diag.httpStatusCode?.toString() ?: "-"),
-                    "errorBody" to (diag.errorBody?.take(200) ?: "-"),
-                    "exceptionType" to (diag.exceptionType ?: "-"),
-                    "lines" to linesReceived.toString(),
-                    "bytes" to bytesReceived.toString(),
-                    "sawDone" to sawDone.toString(),
-                    "party" to diag.responsibleParty
-                ))
                 throw LLMClientException(clientName, e.message, e)
             } finally {
                 timing.close()
@@ -437,6 +461,9 @@ class MederiOpenAILLMClient(
             var sawDone = false
             var bytesReceived = 0L
             var linesReceived = 0
+            // 原始 SSE 行 ring buffer + 非 data: 错误信号行——供断流诊断
+            val lastRawLines = ArrayDeque<String>()
+            val errorSseLines = mutableListOf<String>()
             try {
                 emitAll(
                     httpClient.lines(
@@ -453,6 +480,16 @@ class MederiOpenAILLMClient(
                             timing.sample(it.length)
                             bytesReceived += it.length
                             linesReceived++
+                            // 截获最后 5 条原始行（含 event 行，data: 过滤前）
+                            lastRawLines.addLast(it)
+                            while (lastRawLines.size > 5) lastRawLines.removeFirst()
+                            // 非 data: 行中疑似错误信号
+                            if (!it.startsWith("data:") && it.isNotBlank()) {
+                                val lower = it.lowercase()
+                                if (lower.contains("error") || it.startsWith("event:")) {
+                                    if (errorSseLines.size < 10) errorSseLines.add(it)
+                                }
+                            }
                         }
                         // SSE 行有两类：`event: xxx`（事件名，JSON 里也有 type，忽略）和 `data: {...}`
                         .filter { it.startsWith("data:") }
@@ -477,6 +514,20 @@ class MederiOpenAILLMClient(
                                 "bytes" to bytesReceived.toString(),
                                 "cause" to (error?.message?.take(120) ?: "none")
                             ))
+                            // 结构化诊断——TurnExecutor 断流警告时读取
+                            val ts = timing.snapshot()
+                            lastStreamDiagnostics = StreamCloseDiagnostics(
+                                mode = mode,
+                                linesReceived = linesReceived,
+                                bytesReceived = bytesReceived,
+                                durationMs = ts.durationMs,
+                                maxGapMs = ts.maxGapMs,
+                                ttfbMs = ts.ttfbMs,
+                                lastRawLines = lastRawLines.toList(),
+                                errorSseLines = errorSseLines.toList(),
+                                errorType = error?.let { it::class.simpleName },
+                                errorMessage = error?.message?.lineSequence()?.firstOrNull()?.take(120)
+                            )
                         }
                         .map { data -> sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(data) }
                         .let { processResponsesStreamingFlow(it) }
@@ -485,25 +536,13 @@ class MederiOpenAILLMClient(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                val diag = SseDiagnostics.extract(e)
+                // 原始异常随 cause 链上抛，外层 ErrorCollector 统一收集；此处只留轻量日志记录失败尝试
                 DebugLog.error(
                     "SSE",
-                    "Responses streaming failed: ${diag.summary()}, " +
-                        "lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
-                        "party=${diag.responsibleParty}",
+                    "responses streaming failed: lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
+                        "cause=${e.message?.take(120)}",
                     e
                 )
-                StreamTrace.record("Stream.Summary", mapOf(
-                    "event" to "stream-exception",
-                    "mode" to diag.failureMode.name,
-                    "httpStatus" to (diag.httpStatusCode?.toString() ?: "-"),
-                    "errorBody" to (diag.errorBody?.take(200) ?: "-"),
-                    "exceptionType" to (diag.exceptionType ?: "-"),
-                    "lines" to linesReceived.toString(),
-                    "bytes" to bytesReceived.toString(),
-                    "sawDone" to sawDone.toString(),
-                    "party" to diag.responsibleParty
-                ))
                 throw LLMClientException(clientName, e.message, e)
             } finally {
                 timing.close()

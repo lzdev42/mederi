@@ -143,10 +143,14 @@ private fun nodeLLMSendToolResultsPersistable(
             // 流式与 nodeCallLLM 对齐：requestLLM() 是非流式——工具轮之后的
             // LLM 响应（含 turn 的最终文本回复）从不产生 MESSAGE_DELTA，
             // UI 只能在 MESSAGE_COMPLETED 后靠快照刷新看到整段文字（端到端实测）。
+            // 显式计时：Koog metaInfo.timestamp 是流结束时刻，推算 durationMs≈0，
+            // 故围绕 requestLLMStreaming 前后测量真实流耗时（含推理+正文）。
+            val startNs = System.nanoTime()
             val response = requestLLMStreaming().toList().toAssistantMessageSafe()
+            val durationMs = (System.nanoTime() - startNs) / 1_000_000
             // requestLLMStreaming() 不自动追加响应到 prompt（与 requestLLM() 不同），手动补
             appendPrompt { message(response) }
-            persister?.persistAssistant(response)
+            persister?.persistAssistant(response, durationMs)
             response
         }
     }
@@ -158,13 +162,16 @@ fun mederiSingleRunStrategy(
         val nodeCallLLM by node<String, Message.Assistant>("call_llm_streaming") { message ->
             llm.writeSession {
                 if (message != MEDERI_INPUT_PERSISTED) appendPrompt { user(message) }
+                // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
+                val startNs = System.nanoTime()
                 val response = requestLLMStreaming().toList().toAssistantMessageSafe()
+                val durationMs = (System.nanoTime() - startNs) / 1_000_000
                 // requestLLMStreaming() 不会自动把响应追加到 prompt（与 requestLLM() 不同），
                 // 必须手动追加，否则 ChatMemory.store 时 assistant 消息会丢失。
                 appendPrompt { message(response) }
                 // 增量持久化：LLM 响应到达即落库。turn 中途崩溃时本轮对话不丢
                 // （ChatMemory 的 strategy 级 store 只在 turn 正常结束时执行）
-                persister?.persistAssistant(response)
+                persister?.persistAssistant(response, durationMs)
                 response
             }
         }
@@ -200,10 +207,13 @@ fun mederiSingleRunStrategyWithCompression(
         val nodeCallLLM by node<String, Message.Assistant>("call_llm_streaming") { message ->
             llm.writeSession {
                 if (message != MEDERI_INPUT_PERSISTED) appendPrompt { user(message) }
+                // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
+                val startNs = System.nanoTime()
                 val response = requestLLMStreaming().toList().toAssistantMessageSafe()
+                val durationMs = (System.nanoTime() - startNs) / 1_000_000
                 appendPrompt { message(response) }
                 // 增量持久化（同 mederiSingleRunStrategy）
-                persister?.persistAssistant(response)
+                persister?.persistAssistant(response, durationMs)
                 response
             }
         }
@@ -219,10 +229,13 @@ fun mederiSingleRunStrategyWithCompression(
         // 压缩后发送工具结果给 LLM（流式对齐 nodeSendToolResult，见其注释）
         val nodeSendCompressedHistory by node<ReceivedToolResults, Message.Assistant>("send_compressed") {
             llm.writeSession {
+                // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
+                val startNs = System.nanoTime()
                 val response = requestLLMStreaming().toList().toAssistantMessageSafe()
+                val durationMs = (System.nanoTime() - startNs) / 1_000_000
                 appendPrompt { message(response) }
                 // 增量持久化（与 nodeCallLLM / nodeSendToolResult 一致）
-                persister?.persistAssistant(response)
+                persister?.persistAssistant(response, durationMs)
                 response
             }
         }

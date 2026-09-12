@@ -86,26 +86,35 @@ object SnapshotReducer {
             errorMessage = null
         )
 
-        CoreEventType.MESSAGE_DELTA -> snapshot.withDelta(event.payload).copy(statusHint = null)
+        CoreEventType.MESSAGE_DELTA -> snapshot.withDelta(event.payload).copy(statusHint = null, errorIsStreamInterrupted = false)
 
         CoreEventType.MESSAGE_COMPLETED -> {
             val now = currentTimeMillis()
-            // 流式传输异常随完成事件带来的警告（如"流式连接提前中断"）：
-            // 内容照常落库展示，但状态栏保留提示（statusHint），用户知道回复可能不完整
-            val warning = event.payload["warning"]
-            snapshot.copy(
+            // 流式传输异常（如"流式连接提前中断"）随完成事件以 ErrorRecord payload 到达
+            // （error/errorId/fullDiagnostic）：内容照常落库展示，错误统一进 ErrorBoard
+            // （输入框上方），statusHint 只保留给运转过程提示（限流重试），不再承载警告。
+            // failureMode=PREMATURE_CLOSE 标记断流 → UI 显示"继续"按钮（重发 Continue 续写）。
+            val streamInterrupted = event.payload["failureMode"] == "PREMATURE_CLOSE"
+            val completed = snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.Idle),
                 messages = snapshot.messages.map { msg ->
                     if (msg.isStreaming) msg.copy(isStreaming = false, completedAt = now) else msg
                 },
-                errorMessage = null,
-                statusHint = warning
+                errorMessage = event.payload["error"] ?: snapshot.errorMessage,
+                errorId = event.payload["errorId"] ?: snapshot.errorId,
+                errorDiagnostic = event.payload["fullDiagnostic"] ?: snapshot.errorDiagnostic,
+                errorIsStreamInterrupted = streamInterrupted,
+                statusHint = null
             )
+            completed
         }
 
         CoreEventType.MESSAGE_ERROR -> snapshot.copy(
             conversation = snapshot.conversation.copy(status = ConversationStatus.Error),
             errorMessage = event.payload["error"],
+            errorId = event.payload["errorId"],
+            errorDiagnostic = event.payload["fullDiagnostic"],
+            errorIsStreamInterrupted = event.payload["failureMode"] == "PREMATURE_CLOSE",
             statusHint = null
         )
 
@@ -139,6 +148,7 @@ object SnapshotReducer {
                 Json.decodeFromString<List<QuestionRequest.Question>>(event.payload["questions"] ?: "[]")
             }.getOrDefault(emptyList())
             snapshot.copy(
+                conversation = snapshot.conversation.copy(status = ConversationStatus.WaitingUser),
                 pendingQuestion = QuestionRequest(
                     id = event.payload["questionId"] ?: "",
                     conversationId = snapshot.conversation.id,
@@ -147,7 +157,10 @@ object SnapshotReducer {
             )
         }
 
-        CoreEventType.QUESTION_RESOLVED -> snapshot.copy(pendingQuestion = null)
+        CoreEventType.QUESTION_RESOLVED -> snapshot.copy(
+            conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
+            pendingQuestion = null
+        )
 
         CoreEventType.PLAN_APPROVAL_REQUESTED -> {
             val req = PlanApprovalRequest(
@@ -162,6 +175,7 @@ object SnapshotReducer {
             )
             val updatedList = (snapshot.planApprovals.filter { it.id != req.id } + req)
             snapshot.copy(
+                conversation = snapshot.conversation.copy(status = ConversationStatus.WaitingUser),
                 pendingPlanApproval = req,
                 planApprovals = updatedList
             )
@@ -184,6 +198,7 @@ object SnapshotReducer {
                 if (it.id == planId) it.copy(status = if (approved) "APPROVED" else "REJECTED") else it
             }
             snapshot.copy(
+                conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
                 pendingPlanApproval = null,
                 planApprovals = updatedList
             )

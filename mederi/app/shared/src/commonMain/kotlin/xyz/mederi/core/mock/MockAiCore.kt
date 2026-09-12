@@ -370,11 +370,29 @@ class MockAiCore(
     }
 
     override suspend fun resolveQuestion(conversationId: String, questionId: String, answers: List<List<String>>): Result<Unit> = runCatching {
-        // Mock: no-op
+        val sf = conversations[conversationId] ?: return@runCatching
+        sf.value = sf.value.copy(
+            conversation = sf.value.conversation.copy(status = ConversationStatus.Working),
+            pendingQuestion = null
+        )
+        _projects.value = _projects.value.map { p ->
+            p.copy(conversations = p.conversations.map { c ->
+                if (c.id == conversationId) c.copy(status = ConversationStatus.Working) else c
+            })
+        }
     }
 
     override suspend fun resolvePlanApproval(conversationId: String, planId: String, approved: Boolean): Result<Unit> = runCatching {
-        // Mock: no-op
+        val sf = conversations[conversationId] ?: return@runCatching
+        sf.value = sf.value.copy(
+            conversation = sf.value.conversation.copy(status = ConversationStatus.Working),
+            pendingPlanApproval = null
+        )
+        _projects.value = _projects.value.map { p ->
+            p.copy(conversations = p.conversations.map { c ->
+                if (c.id == conversationId) c.copy(status = ConversationStatus.Working) else c
+            })
+        }
     }
 
     override suspend fun compressHistory(conversationId: String): Result<Unit> = runCatching {

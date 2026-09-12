@@ -38,6 +38,20 @@ platform:
 If a legitimate write is blocked, the target is outside the project — ask the
 user to add the directory to the project or the global sandbox whitelist
 (Settings). Never retry the same blocked command expecting a different result.
+
+## Long-running processes & process control
+
+Start long-running processes with execute_command, backgrounded, and redirect
+their output to a file under the project so a later command can read it:
+
+    python3 -m http.server 8000 > server.log 2>&1 &
+
+Track them with list_processes (shows mederi-spawned pids) and stop them with
+stop_process(pid). macOS note: Seatbelt does not allow ANY cross-process signal —
+a sandboxed command cannot `kill` even a process it started itself, so `kill`,
+`pkill`, `kill -9` inside execute_command fail with "Operation not permitted"
+on macOS. stop_process runs outside the sandbox and only affects processes that
+mederi itself started, so it is the only reliable way to stop your servers.
 """.trimIndent()
 
     /**

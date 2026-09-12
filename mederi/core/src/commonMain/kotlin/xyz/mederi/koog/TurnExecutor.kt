@@ -24,11 +24,14 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.debug.DebugLog
-import xyz.mederi.debug.SseDiagnostics
+import xyz.mederi.debug.ErrorCollector
+import xyz.mederi.debug.ErrorContext
+import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
 import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 import xyz.mederi.provider.infrastructure.koog.retry.RetryableLLMClient
+import xyz.mederi.provider.infrastructure.koog.sanitize.MederiOpenAILLMClient
 import xyz.mederi.tools.contextUsedTokens
 import xyz.mederi.tools.estimateTokens
 import xyz.mederi.domain.model.AIModel
@@ -161,7 +164,11 @@ class TurnExecutor(
             runCatching {
                 sessionStore.update(sessionId, SessionStatus.ERROR)
             }
-            emit(sessionId, EventType.MESSAGE_ERROR, payload = mapOf("error" to e.message.orEmpty()))
+            val record = ErrorCollector.collect(e, ErrorContext(
+                phase = "send_message",
+                sessionId = sessionId
+            ))
+            emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             throw e
         }
     }
@@ -389,7 +396,12 @@ class TurnExecutor(
         scope.launch {
             runCatching {
                 sessionStore.update(sessionId, SessionStatus.IDLE)
-                emit(sessionId, EventType.MESSAGE_ERROR, payload = mapOf("error" to "用户中止了对话"))
+                // 用户中止 = 取消事件，走 ErrorCollector 统一记录（分类 CANCELLED / 严重级 WARNING）
+                val record = ErrorCollector.collect(
+                    kotlinx.coroutines.CancellationException("用户中止了对话"),
+                    ErrorContext(phase = "abort", sessionId = sessionId)
+                )
+                emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             }.onFailure {
                 DebugLog.error("TurnExec", "Failed to update session status after abort: ${it.message}", it)
             }
@@ -460,7 +472,11 @@ class TurnExecutor(
         try {
             compressOnce(session, provider, model, effectiveReasoningLevel, SystemPrompts.build(session.agentMode, session.workType))
         } catch (e: Throwable) {
-            emit(sessionId, EventType.MESSAGE_ERROR, payload = mapOf("error" to e.message.orEmpty()))
+            val record = ErrorCollector.collect(e, ErrorContext(
+                phase = "compression",
+                sessionId = sessionId
+            ))
+            emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             throw e
         } finally {
             sessionStore.update(sessionId, SessionStatus.IDLE)
@@ -546,8 +562,10 @@ class TurnExecutor(
         val newContextWindowFlag = AtomicBoolean(false)
         val frameChannel = Channel<StreamFrame>(Channel.UNLIMITED)
         // 流式传输异常（静默断流/消费异常）：流消费者写入，turn 收尾时随 MESSAGE_COMPLETED
-        // 的 warning payload 传给 UI 状态栏。内容不回滚（半截文本已生成/落库），只提示不完整
+        // 的 payload 传给 UI。内容不回滚（半截文本已生成/落库），只提示不完整。
+        // streamWarning = 人类提示文本；streamWarningRecord = 结构化警告记录（ErrorCollector，走统一错误出口）
         val streamWarning = AtomicReference<String?>(null)
+        val streamWarningRecord = AtomicReference<xyz.mederi.debug.ErrorRecord?>(null)
 
         val session = sessionStore.get(sessionId)
             ?: throw IllegalStateException("Session not found: $sessionId")
@@ -557,11 +575,31 @@ class TurnExecutor(
 
         val diffTracker = TurnDiffTracker(sessionId, directories)
 
-        val streamConsumer = launchStreamConsumer(sessionId, frameChannel, streamWarning)
+        // clientRef 在 buildTurnAgent 创建 client 后写入，streamConsumer 读 End 帧时取诊断
+        val clientRef = AtomicReference<ai.koog.prompt.executor.clients.LLMClient?>(null)
+        val diagnosticsProvider: () -> StreamCloseDiagnostics? = {
+            val c = clientRef.get()
+            when (c) {
+                is RetryableLLMClient -> (c.delegate() as? MederiOpenAILLMClient)?.lastStreamDiagnostics
+                is MederiOpenAILLMClient -> c.lastStreamDiagnostics
+                else -> null
+            }
+        }
+
+        val streamConsumer = launchStreamConsumer(
+            sessionId, frameChannel, streamWarning, streamWarningRecord,
+            providerId = provider.id,
+            providerName = provider.name,
+            modelId = model.id,
+            modelName = model.name,
+            diagnosticsProvider = diagnosticsProvider
+        )
 
         val diagnostics = MessageDiagnostics(
             providerId = provider.id,
             modelId = model.id,
+            modelName = model.name,
+            reasoningLevel = reasoningLevel.name,
             agentMode = agentMode.name,
             workType = workType.name,
             projectId = session.projectId
@@ -621,7 +659,9 @@ class TurnExecutor(
                 historyProvider = historyProvider,
                 toolTimings = toolTimings,
                 frameChannel = frameChannel,
-                streamWarning = streamWarning
+                streamWarning = streamWarning,
+                clientRef = clientRef,
+                diagnostics = diagnostics
             )
 
             DebugLog.event("TurnExec", "agent.run() starting...")
@@ -644,19 +684,26 @@ class TurnExecutor(
             // 先通知 UI 完成，再做后续清理（diff 追踪等）
             // 这样按钮立即从"停止"变回"发送"，不需要等 diff/history I/O
             sessionStore.update(sessionId, SessionStatus.IDLE)
-            DebugLog.event("TurnExec", "runTurn success, session status = IDLE (streamWarning=${streamWarning.get() != null})")
-            // 流式期间有传输异常（静默断流/消费错误）→ warning 随完成事件带给 UI 状态栏；
-            // 内容不回滚（半截文本已落库，用户能看到已生成部分），只提示不完整
+            DebugLog.event("TurnExec", "runTurn success, session status = IDLE (streamWarning=${streamWarning.get() != null}, record=${streamWarningRecord.get()?.id})")
+            // 流式期间有传输异常（静默断流/消费错误）→ 随完成事件带给 UI：
+            // 内容不回滚（半截文本已落库，用户能看到已生成部分），只提示不完整。
+            // 有结构化警告记录时合并其 payload（error/errorId/fullDiagnostic）→ ErrorBoard 展示 + 可展开详细报告；
+            // 只留文本时退化为 warning key（兼容旧消费方）。
             val warning = streamWarning.get()
-            if (warning != null) {
-                emit(
-                    sessionId,
-                    EventType.MESSAGE_COMPLETED,
-                    payload = mapOf("warning" to warning as String)
-                )
-            } else {
-                emit(sessionId, EventType.MESSAGE_COMPLETED, null)
+            val warningRecord = streamWarningRecord.get()
+            val payload = when {
+                warningRecord != null -> {
+                    val record = warningRecord as xyz.mederi.debug.ErrorRecord
+                    record.toPayload() + mapOf("warning" to (warning ?: ""))
+                }
+                warning != null -> mapOf("warning" to warning as String)
+                else -> null
             }
+            emit(
+                sessionId,
+                EventType.MESSAGE_COMPLETED,
+                payload = payload ?: emptyMap()
+            )
 
             // 后续清理：diff 追踪 + 保存（不影响 UI 响应）
             diffTracker.captureSnapshot()
@@ -674,21 +721,26 @@ class TurnExecutor(
             // 滞后到达的 ERROR 事件会污染回滚后新建 turn 的 UI 状态（错误横幅误亮）
             throw e
         } catch (e: Throwable) {
-            DebugLog.error("TurnExec", "runTurn error: ${e::class.simpleName}: ${e.message}", e)
+            DebugLog.event("TurnExec", "runTurn error: ${e::class.simpleName}: ${e.message}")
             frameChannel.close(e)
             streamConsumer.join()
-            // durable-first：用户消息已在 turn 启动前落库，失败不丢输入，
-            // 只需把错误状态与错误事件交给 UI（回查落库数据可看到用户消息）
+            val errorContext = ErrorContext(
+                phase = "turn_execution",
+                sessionId = sessionId,
+                providerId = provider.id,
+                providerName = provider.name,
+                modelId = model.id,
+                modelName = model.name
+            )
+            val record = ErrorCollector.collect(e, errorContext)
             if (RetryableLLMClient.isTransientError(e)) {
                 // 限流/网关过载 = 环境态：重试已耗尽但供应商是暂时不可用，session 保持 IDLE
                 // （可恢复状态，用户稍后重发即可），不把会话标成 ERROR
                 sessionStore.update(sessionId, SessionStatus.IDLE)
-                emit(sessionId, EventType.MESSAGE_ERROR, payload = mapOf(
-                    "error" to "供应商限流/暂时不可用（已自动重试 ${LlmRetryConfig.maxRetries} 次）：${e.message.orEmpty().take(200)}"
-                ))
+                emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             } else {
                 sessionStore.update(sessionId, SessionStatus.ERROR)
-                emit(sessionId, EventType.MESSAGE_ERROR, payload = mapOf("error" to e.message.orEmpty()))
+                emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             }
         } finally {
             activeJobs.remove(sessionId)
@@ -708,7 +760,13 @@ class TurnExecutor(
     private fun launchStreamConsumer(
         sessionId: String,
         frameChannel: Channel<StreamFrame>,
-        streamWarning: AtomicReference<String?>
+        streamWarning: AtomicReference<String?>,
+        streamWarningRecord: AtomicReference<xyz.mederi.debug.ErrorRecord?>,
+        providerId: String,
+        providerName: String,
+        modelId: String,
+        modelName: String,
+        diagnosticsProvider: () -> StreamCloseDiagnostics? = { null }
     ) = scope.launch {
         val timing = StreamTimingLog("SSE-Timing", "delta frames")
         val traceSession = StreamTrace.beginSession(sessionId)
@@ -757,12 +815,27 @@ class TurnExecutor(
                     is StreamFrame.End -> {
                         // End 也是轮次边界（tool loop 每轮一个 End）。finishReason=null 的 End
                         // = 上游没给收尾标记（SSE 连接断开时 lines() flow 正常结束、emitEnd
-                        // 无 finishReason）→ turn 会"成功"收尾但回复被静默截断——置警告传给 UI
+                        // 无 finishReason）→ turn 会"成功"收尾但回复被静默截断。
+                        // 生成 WARNING 级 ErrorRecord 走统一错误出口（ErrorBoard），并留人类提示文本。
                         if (frame.finishReason == null) {
-                            streamWarning.compareAndSet(
+                            val diag = diagnosticsProvider()
+                            val summary = "流式连接提前中断：服务器关闭连接但未发送结束标记" +
+                                "（已接收 ${traceSession.deltaCount} 帧 / ${traceSession.charCount} 字符）"
+                            streamWarning.compareAndSet(null, summary)
+                            streamWarningRecord.compareAndSet(
                                 null,
-                                "流式连接提前中断：服务器关闭连接但未发送结束标记" +
-                                    "（已接收 ${traceSession.deltaCount} 帧 / ${traceSession.charCount} 字符）"
+                                ErrorCollector.collectWarning(
+                                    message = summary,
+                                    detail = diag?.summary(),
+                                    context = ErrorContext(
+                                        phase = "streaming",
+                                        sessionId = sessionId,
+                                        providerId = providerId,
+                                        providerName = providerName,
+                                        modelId = modelId,
+                                        modelName = modelName
+                                    )
+                                )
                             )
                             StreamTrace.record(
                                 "Stream.Summary",
@@ -782,33 +855,17 @@ class TurnExecutor(
             throw e
         } catch (e: Throwable) {
             exitNote = "error: ${e::class.simpleName}: ${e.message}"
-            // 从异常链中提取 HTTP 状态码、错误体、网络异常类型等诊断数据，
-            // 不再只报"流式传输异常"——要能回答"谁的责任断的"
-            val diag = SseDiagnostics.extract(e)
-            val warning = buildString {
-                append("流式中断：")
-                append(diag.summary())
-                append("（已接收 ${traceSession.deltaCount} 帧 / ${traceSession.charCount} 字符）")
-            }
-            streamWarning.compareAndSet(null, warning)
-            DebugLog.error(
-                "Frame",
-                "stream consumer error: ${diag.summary()}, " +
-                    "party=${diag.responsibleParty}, " +
-                    "deltas=${traceSession.deltaCount}, chars=${traceSession.charCount}, " +
-                    "causeChain=${diag.causeChain.joinToString(" | ")}",
-                e
-            )
-            StreamTrace.record("Stream.Summary", mapOf(
-                "event" to "consumer-exception",
-                "mode" to diag.failureMode.name,
-                "httpStatus" to (diag.httpStatusCode?.toString() ?: "-"),
-                "errorBody" to (diag.errorBody?.take(200) ?: "-"),
-                "exceptionType" to (diag.exceptionType ?: "-"),
-                "party" to diag.responsibleParty,
-                "deltas" to traceSession.deltaCount.toString(),
-                "chars" to traceSession.charCount.toString()
+            val record = ErrorCollector.collect(e, ErrorContext(
+                phase = "streaming",
+                sessionId = sessionId,
+                providerId = providerId,
+                providerName = providerName,
+                modelId = modelId,
+                modelName = modelName
             ))
+            val warning = "流式中断：${record.formatShortMessage()}" +
+                "（已接收 ${traceSession.deltaCount} 帧 / ${traceSession.charCount} 字符）"
+            streamWarning.compareAndSet(null, warning)
         } finally {
             StreamTrace.closeSession(traceSession, note = exitNote)
             timing.close()
@@ -885,12 +942,17 @@ class TurnExecutor(
         historyProvider: TrackingHistoryProvider,
         toolTimings: TurnToolTimings,
         frameChannel: Channel<StreamFrame>,
-        streamWarning: AtomicReference<String?>
+        streamWarning: AtomicReference<String?>,
+        clientRef: AtomicReference<ai.koog.prompt.executor.clients.LLMClient?> = AtomicReference(null),
+        diagnostics: MessageDiagnostics = MessageDiagnostics()
     ): AIAgent<String, String> {
         val client = retryWrapped(KoogClientFactory.create(provider, apiKey), sessionId)
+        clientRef.set(client)
         DebugLog.data("TurnExec", "client", client::class.simpleName)
         // 增量持久化器：LLM 响应/tool results 到达即落库，turn 中途崩溃不丢历史
-        val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore)
+        // 带 diagnostics：增量落库即打模型/模式/推理档/耗时元数据——否则 reconcile 时
+        // assistant 消息被"已存在"识别、诊断字段永不补上，UI footer 只剩完成时间
+        val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics)
 
         val executor: PromptExecutor = PromptExecutorBuilder()
             .addClient(client)
@@ -981,12 +1043,11 @@ class TurnExecutor(
                     frameChannel.trySend(eventContext.streamFrame)
                 }
                 config.onLLMStreamingFailed { eventContext ->
-                    DebugLog.error("EventHandler", "onLLMStreamingFailed: ${eventContext.error.message}", eventContext.error)
-                    // 显式失败路径：agent 会抛错走 runTurn 的 catch（MESSAGE_ERROR），此处只留痕
-                    StreamTrace.record(
-                        "Stream.Summary",
-                        mapOf("event" to "stream-failed", "id" to sessionId, "note" to (eventContext.error.message ?: "").take(120))
-                    )
+                    // ErrorCollector 内部完成日志 + 历史记录；agent 会抛错走 runTurn 的 catch（MESSAGE_ERROR）
+                    ErrorCollector.collect(eventContext.error, ErrorContext(
+                        phase = "streaming_failed",
+                        sessionId = sessionId
+                    ))
                     frameChannel.close(eventContext.error)
                 }
                 config.onToolCallStarting { eventContext ->
@@ -1014,7 +1075,14 @@ class TurnExecutor(
                 }
                 config.onToolCallFailed { eventContext ->
                     toolTimings.onFailed(eventContext.toolCallId, eventContext.message)
-                    DebugLog.error("EventHandler", "onToolCallFailed: tool=${eventContext.toolName}, error=${eventContext.message}")
+                    ErrorCollector.collect(
+                        RuntimeException(eventContext.message),
+                        ErrorContext(
+                            phase = "tool_call",
+                            sessionId = sessionId,
+                            toolName = eventContext.toolName
+                        )
+                    )
                     scope.launch {
                         emit(sessionId, EventType.TOOL_RESULT, payload = mapOf(
                             "tool" to eventContext.toolName,

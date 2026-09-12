@@ -19,17 +19,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Shield
-import compose.icons.feathericons.Square
 import compose.icons.feathericons.Zap
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.ui.ChatListItem
@@ -37,25 +34,22 @@ import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
 import compose.icons.feathericons.Sidebar
 import xyz.mederi.theme.LocalMederiColors
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.CompositionLocalProvider
 import xyz.emuci.inkcompose.LocalSessionKey
 import xyz.emuci.inkcompose.MarkdownView
-import xyz.mederi.currentTimeMillis
-import xyz.mederi.ui.ChatLayout
 import xyz.mederi.ui.components.RightExtensionPanel
 import xyz.mederi.ui.components.RightDock
-import xyz.mederi.ui.components.StatusBar
-import xyz.mederi.ui.components.ReasoningBlock
+import xyz.mederi.ui.components.SystemInfoBar
 import xyz.mederi.ui.components.ThoughtAndActionsBlock
-import xyz.mederi.ui.components.ToolPill
 import xyz.mederi.ui.components.QuestionCard
 import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
-import xyz.mederi.ui.components.TurnStatusBar
+import xyz.mederi.ui.components.StatusBar
 import xyz.mederi.ui.components.TurnStatus
+import xyz.mederi.ui.components.ErrorDetailDialog
 import xyz.mederi.ui.components.UserPastedTextCard
 import xyz.mederi.ui.components.UserMessageFooter
+import xyz.mederi.ui.components.AssistantMessageFooter
 import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
 import xyz.emuci.inkcompose.InkImage
@@ -390,12 +384,19 @@ fun Workspace(
 
         val processStats by appState.processStats.collectAsState()
 
-        // 底部吸底系统状态栏 (资源监控)
-        StatusBar(
-            stats = processStats,
-            error = viewModel.error,
-            onRetry = {}
+        // 底部吸底系统信息栏（纯 CPU/内存资源监控；错误统一走 ErrorBoard）
+        SystemInfoBar(
+            stats = processStats
         )
+
+        // 详细错误报告弹窗
+        if (viewModel.isErrorDetailOpen) {
+            ErrorDetailDialog(
+                errorSummary = viewModel.error.orEmpty(),
+                errorDiagnostic = viewModel.errorDiagnostic.orEmpty(),
+                onDismiss = viewModel::dismissErrorDetail
+            )
+        }
     }
 }
 
@@ -448,7 +449,7 @@ private fun MessageList(
     }
 
     // 跟随滚动（stick-to-bottom / tail -f 式）：贴底期间内容增长（流式文字增高、
-    // 新消息 / TurnStatusBar / 动态卡片出现）自动吸附到内容真正的底部。
+    // 新消息 / StatusBar / 动态卡片出现）自动吸附到内容真正的底部。
     // 观察 layoutInfo（每次布局都发射，避免 canForward 等派生值不变时 dedup 吞掉事件），
     // 条件全部在 collect 内现读。防打架：
     // 1) isScrollInProgress：用户拖拽/惯性中不拽回（程序滚动中间帧同样跳过，防自触发）
@@ -686,7 +687,15 @@ private fun MessageList(
                                                 colors = colors,
                                                 modifier = Modifier.fillMaxWidth()
                                             )
-                                        }                                    }
+                                        }
+                                        // 轮次底部 footer：模型名 · 审批/自主 · 推理档 · 时长 · 完成时间
+                                        item.assistantFooter?.let { footer ->
+                                            AssistantMessageFooter(
+                                                footer = footer,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    }
                                 }
 
                                 if (item.isTurnStart) {
@@ -726,10 +735,11 @@ private fun MessageList(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.Start
                     ) {
-                        // detail 优先真实错误（errorMessage），无错误但有流式警告（statusHint）也展示
-                        TurnStatusBar(
+                        // 轮次过程状态栏：只显示运转状态（思考中、生成中、调用工具等）
+                        // 计时锚定发送请求时刻（turnStartedAt），每秒重算，切会话回来不重置
+                        StatusBar(
                             status = turnStatus,
-                            detail = viewModel.error ?: viewModel.statusHint,
+                            startedAtMillis = viewModel.turnStartedAt,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }

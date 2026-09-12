@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,6 +34,7 @@ import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.models.ApiKeyOption
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
+import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CostSummary
 import xyz.mederi.core.contract.models.FileDiff
@@ -122,6 +124,46 @@ class MederiAiCore(
             // 挂在 initialize 而非各宿主 main——desktop / server（headless 遥控端）
             // 共用同一桥实现，谁初始化谁生效，宿主无需各自接线。
             autotitleService.start()
+            startSessionStatusSync()
+        }
+    }
+
+    /**
+     * 监听 core 事件流，实时将会话状态同步至 _projects StateFlow（驱动侧边栏指示灯）。
+     */
+    private fun startSessionStatusSync() {
+        scope.launch {
+            mederi.sessions.events().collect { event ->
+                val newStatus = when (event.type) {
+                    xyz.mederi.domain.model.EventType.SESSION_UPDATED -> ConversationStatus.Working
+                    xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED -> ConversationStatus.Idle
+                    xyz.mederi.domain.model.EventType.MESSAGE_ERROR -> ConversationStatus.Error
+                    xyz.mederi.domain.model.EventType.QUESTION_REQUESTED -> ConversationStatus.WaitingUser
+                    xyz.mederi.domain.model.EventType.QUESTION_RESOLVED -> ConversationStatus.Working
+                    xyz.mederi.domain.model.EventType.PLAN_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
+                    xyz.mederi.domain.model.EventType.PLAN_APPROVAL_RESOLVED -> ConversationStatus.Working
+                    else -> null
+                }
+                if (newStatus != null) {
+                    updateConversationStatus(event.sessionId, newStatus)
+                }
+            }
+        }
+    }
+
+    private fun updateConversationStatus(sessionId: String, status: ConversationStatus) {
+        _projects.update { currentProjects ->
+            currentProjects.map { project ->
+                if (project.conversations.any { it.id == sessionId }) {
+                    project.copy(
+                        conversations = project.conversations.map { conv ->
+                            if (conv.id == sessionId) conv.copy(status = status) else conv
+                        }
+                    )
+                } else {
+                    project
+                }
+            }
         }
     }
 

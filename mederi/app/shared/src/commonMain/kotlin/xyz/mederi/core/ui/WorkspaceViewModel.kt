@@ -8,7 +8,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -20,7 +19,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import okio.ByteString.Companion.decodeBase64
 import okio.ByteString.Companion.toByteString
-import xyz.mederi.core.bridge.BuiltinAgents
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.FileAttachment
@@ -73,6 +71,8 @@ sealed interface ChatListItem {
         override val isTurnStart: Boolean = false,
         val messageId: String = "",
         val createdAt: Long = 0L,
+        /** assistant 消息的 footer 元数据——只挂在该轮次最后一个文本块上，其余为 null */
+        val assistantFooter: AssistantFooterInfo? = null,
     ) : ChatListItem
 
     /** 压缩标记消息（SUMMARY）：既是历史的一部分，也是 AI 视图的分界点 */
@@ -89,6 +89,22 @@ sealed interface ChatListItem {
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
 }
+
+/**
+ * assistant 消息底部 footer 的元数据（预计算，View 零逻辑）。
+ * 数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs），
+ * 经契约 ChatMessage 透传到 UI。
+ */
+data class AssistantFooterInfo(
+    val modelName: String? = null,
+    /** APPROVAL / AUTONOMOUS */
+    val agentMode: String? = null,
+    /** 推理档位名称（如 HIGH） */
+    val thinkingLevel: String? = null,
+    val durationMs: Long? = null,
+    /** 回复结束时刻（epoch millis）≈ createdAt + durationMs */
+    val completedAtMs: Long? = null,
+)
 
 /**
  * 右侧独立功能活动栏枚举。
@@ -416,6 +432,39 @@ class WorkspaceViewModel(
     var error by mutableStateOf<String?>(null); private set
 
     /**
+     * 当前会话错误的完整诊断报告（纯文本，来自 [ConversationSnapshot.errorDiagnostic]）。
+     * UI 点击错误简报时可展示此完整详情；null 表示无错误或旧路径。
+     */
+    var errorDiagnostic by mutableStateOf<String?>(null); private set
+
+    /**
+     * 当前会话错误的 ID（来自 [ConversationSnapshot.errorId]）。
+     * JVM 端 UI 可经 `ErrorCollector.get(errorId)` 取回完整结构化的 [ErrorRecord]。
+     */
+    var errorId by mutableStateOf<String?>(null); private set
+
+    /**
+     * 当前错误是否为断流（流式连接提前中断）。为 true 时 ErrorBoard 显示"继续"按钮，
+     * 点击经 [continueAfterInterruption] 重发 Continue 续写半截回复。
+     */
+    var isStreamInterrupted by mutableStateOf(false); private set
+
+    /**
+     * 是否正在展示详细错误报告弹窗。
+     */
+    var isErrorDetailOpen by mutableStateOf(false); private set
+
+    fun showErrorDetail() {
+        if (!errorDiagnostic.isNullOrBlank() || !error.isNullOrBlank()) {
+            isErrorDetailOpen = true
+        }
+    }
+
+    fun dismissErrorDetail() {
+        isErrorDetailOpen = false
+    }
+
+    /**
      * 乐观用户消息（按会话归档）。
      *
      * core 在 turn 结束时才把用户消息落库（ChatMemory store / 失败兜底），turn 进行中
@@ -424,6 +473,15 @@ class WorkspaceViewModel(
      * key = conversationId（新会话创建成功后从 pending_xxx re-key 到真实 id）。
      */
     private val pendingUserMessages = mutableStateMapOf<String, ChatMessage>()
+
+    /**
+     * StatusBar 计时锚点：每次发送（send）记录"请求发出时刻"（epoch ms），按会话归档。
+     * 计时 = now - turnStartAt（每秒重算），切换会话回来不重置。
+     * 与 footer 的 durationMs 语义不同——durationMs 是"API 有回应开始算到回复结束"（core 侧），
+     * 本字段是"从用户发出请求开始算"，二者不是同一数据源。
+     * turn 结束（快照 status 离开 Working）时清除。
+     */
+    private val turnStartByConv = mutableMapOf<String, Long>()
 
     /** 当前会话的乐观消息（兼容旧引用/测试） */
     val optimisticUserMessage: ChatMessage? get() = conversationId?.let { pendingUserMessages[it] }
@@ -552,6 +610,14 @@ class WorkspaceViewModel(
     val contextUsedTokens: Long get() = snapshot?.contextUsedTokens ?: 0L
 
     /**
+     * 当前会话的"发送请求时刻"（epoch ms）——StatusBar 计时锚点。
+     * 来自 [turnStartByConv]（send 时记录，turn 结束清除），切换会话回来不重置。
+     * null = 当前会话没有进行中的发送（StatusBar 不显示计时）。
+     */
+    val turnStartedAt: Long?
+        get() = conversationId?.let { turnStartByConv[it] }
+
+    /**
      * 上下文窗口（token）：唯一真理源 = AppState.selectedModel 的派生 StateFlow。
      * UI 用 collectAsState 订阅（读 `.value` 不建立订阅，模型切换后指标卡会停留旧值）。
      */
@@ -620,7 +686,7 @@ class WorkspaceViewModel(
         HeaderTitle(projectName, convName ?: "新对话")
     }.stateIn(viewModelScope, SharingStarted.Eagerly, HeaderTitle(null, "新对话"))
 
-    /** 环境态/警告提示（statusHint，如限流重试、流式连接中断），TurnStatusBar detail 展示用 */
+    /** 环境态/过程提示（statusHint，如限流重试中），StatusBar 过程状态展示用。错误/警告不在此——走 ErrorBoard */
     val statusHint: String? get() = snapshot?.statusHint
 
     /** 当前对话轮次的实时状态（授权等待由卡片本身承载，状态条不重复提示） */
@@ -802,6 +868,9 @@ class WorkspaceViewModel(
                 val textBlocks = msg.blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() }
                 if (textBlocks.isNotEmpty()) {
                     textBlocks.forEachIndexed { blockIndex, block ->
+                        // footer 只挂在该轮次最后一条 assistant 消息的最后一个文本块上，避免重复
+                        val isLastTextOfTurn = !isUser && msg == turnMessages.last() &&
+                            blockIndex == textBlocks.lastIndex
                         result.add(
                             ChatListItem.TextMessage(
                                 key = "${msg.id}_${block.id}",
@@ -815,6 +884,7 @@ class WorkspaceViewModel(
                                 isTurnStart = if (isUser) true else !turnHasFirstItem,
                                 messageId = msg.id,
                                 createdAt = msg.createdAt,
+                                assistantFooter = if (isLastTextOfTurn) msg.toAssistantFooter() else null,
                             )
                         )
                         turnHasFirstItem = true
@@ -874,6 +944,18 @@ class WorkspaceViewModel(
         }
 
         return result
+    }
+
+    /** assistant 消息 → footer 元数据（诊断字段来自 core Message） */
+    private fun ChatMessage.toAssistantFooter(): AssistantFooterInfo {
+        val modelId = model
+        return AssistantFooterInfo(
+            modelName = modelName ?: modelId,
+            agentMode = agentMode,
+            thinkingLevel = thinkingLevel,
+            durationMs = durationMs,
+            completedAtMs = completedAt?.takeIf { it > 0 } ?: (createdAt + (durationMs ?: 0)),
+        )
     }
 
     /** 从工具参数中探测"核心目标"单行摘要（文件路径 / 命令等），供 ToolCallUi.target 使用。 */
@@ -949,12 +1031,20 @@ class WorkspaceViewModel(
             snapshot = null
             isAttached = false
             pendingOptReconciled.clear()
+            error = null
+            errorDiagnostic = null
+            errorId = null
+            isErrorDetailOpen = false
             return
         }
         conversationId = id
         snapshot = null
         isAttached = false
         pendingOptReconciled.clear()
+        error = null
+        errorDiagnostic = null
+        errorId = null
+        isErrorDetailOpen = false
         observeJob = viewModelScope.launch {
             // 先校验会话可达（不存在/已删 → 失败）。启动时 lastConversationId 可能指向
             // 已被删除的会话（如删库重建），此时按"没有了就是没有"处理：清空选择态并
@@ -1001,6 +1091,13 @@ class WorkspaceViewModel(
                 snapshot = snap
                 isAttached = true
                 error = snap.errorMessage
+                errorDiagnostic = snap.errorDiagnostic
+                errorId = snap.errorId
+                isStreamInterrupted = snap.errorIsStreamInterrupted
+                // turn 结束（离开 Working）清除 StatusBar 计时锚点
+                if (snap.conversation.status != ConversationStatus.Working) {
+                    turnStartByConv.remove(id)
+                }
                 if (!selectionHydrated) {
                     selectionHydrated = true
                     hydrateSelectionFromConversation(snap.conversation)
@@ -1109,6 +1206,9 @@ class WorkspaceViewModel(
         }
         if (hasImages && !guardImageSupport(model)) return
         error = null
+        errorDiagnostic = null
+        errorId = null
+        isErrorDetailOpen = false
 
         // 组装最终提示词：用户主指令在前，粘贴大文本在后；Core 的 TurnExecutor 会追加 metaNote 保证 metaNote 恒在最底部
         val finalPrompt = PromptComposer.compose(trimmed, pendingPastedTexts)
@@ -1201,6 +1301,9 @@ class WorkspaceViewModel(
                 appState.aiCore.resolvePlanApproval(targetConvId, pendingPlan.id, false)
             }
 
+            // StatusBar 计时锚点：从"发送请求时刻"起算（切会话回来不重置）
+            turnStartByConv[targetConvId] = xyz.mederi.currentTimeMillis()
+
             val r = appState.aiCore.sendMessage(targetConvId, input)
             DebugLog.event("UI", "sendMessage result: isSuccess=${r.isSuccess}")
             if (r.isFailure) {
@@ -1216,6 +1319,16 @@ class WorkspaceViewModel(
     fun abort() {
         val id = conversationId ?: return
         viewModelScope.launch { appState.aiCore.abort(id) }
+    }
+
+    /**
+     * 断流"继续"：重发英文 Continue 走正常发消息流程（新 turn），
+     * 历史里的半截 assistant 回复让模型自然续写。
+     */
+    fun continueAfterInterruption() {
+        val id = conversationId ?: return
+        DebugLog.event("UI", "continue after stream interruption, conversation=$id")
+        send("Continue")
     }
 
     fun replyQuestion(requestId: String, answers: List<List<String>>) {
@@ -1264,6 +1377,10 @@ class WorkspaceViewModel(
 
     fun clearError() {
         error = null
+        errorDiagnostic = null
+        errorId = null
+        isStreamInterrupted = false
+        isErrorDetailOpen = false
     }
 
     /**
@@ -1277,53 +1394,26 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 重试用户消息：先删除这条消息及之后的所有记录，然后使用该消息的完整内容重新发送。
+     * 回退用户消息：删除这条消息及之后的所有记录，然后把消息内容完整粘贴回输入框
+     * （主指令回输入框、大段文本附件与图片附件恢复到附件队列达标注原貌）——
+     * 用户可切换模型/模式/Agent、修改内容后自行发送，而非原封不动自动重试。
      */
     fun rollbackMessage(conversationId: String, messageId: String, messageText: String) {
         val currentSnap = snapshot
         val targetMsg = currentSnap?.messages?.find { it.id == messageId }
-        val textToSend = targetMsg?.blocks?.filterIsInstance<ChatBlock.Text>()
-            ?.joinToString("") { it.text }?.ifBlank { messageText } ?: messageText
+        // 先验后切：附着物反解在此完成，回滚失败时输入框与附件队列保持原状
+        val restored = restoreInputFromMessage(targetMsg, messageText)
 
-        // 0. 附件提取 + 目标配置解析 + 图片门禁——**先验后切**：
-        // 门禁拦截时本地必须零变更（快照还没切除），否则会留下"消息已切、重发未发"的不一致状态
-        val imageBlocks = targetMsg?.blocks?.filterIsInstance<ChatBlock.File>()
-            ?.filter { it.mimeType?.startsWith("image/") == true || it.url.startsWith("data:image/") }
-            ?: emptyList()
-        val attachments = imageBlocks.mapNotNull { fileBlock ->
-            val bytes = if (fileBlock.url.startsWith("data:")) {
-                val base64Data = fileBlock.url.substringAfter("base64,")
-                base64Data.decodeBase64()?.toByteArray()
-            } else null
-            if (bytes != null) {
-                FileAttachment(
-                    name = fileBlock.name,
-                    mimeType = fileBlock.mimeType ?: "image/png",
-                    bytes = bytes
-                )
-            } else null
-        }
-        val model = appState.selectedModel.value
-            ?: appState.availableModels.value.find { it.id == currentSnap?.conversation?.modelId }
-            ?: appState.availableModels.value.firstOrNull()
-        val agent = appState.availableAgents.value.find { it.id == appState.selectedAgentId.value }
-            ?: appState.availableAgents.value.find { it.id == currentSnap?.conversation?.agent }
-            ?: BuiltinAgents.ALL.firstOrNull()
-        // 图片门禁（与 send 同一守卫）：切了不支持图片的模型后重试历史消息也要拦
-        if (model != null && attachments.isNotEmpty() && !guardImageSupport(model)) return
-
+        DebugLog.section("UI", "WorkspaceViewModel.rollbackMessage (退回)")
         DebugLog.info(
             "UI",
-            "rollbackMessage (重试): convId=$conversationId, msgId=$messageId, textLen=${textToSend.length}, isWorking=$isWorking"
+            "rollbackMessage: convId=$conversationId, msgId=$messageId, instructionLen=${restored.instruction.length}, pasted=${restored.pastedTexts.size}, images=${restored.images.size}"
         )
         // 不在这里提前 abort()：服务端 rollbackToMessage 内部会 abortAndJoin（等旧 turn
         // 死透再截断）。fire-and-forget 的前置 abort 与回滚请求并发到达服务端时，
         // 滞后的 abort 可能命中刚重发的新 turn 并把它杀掉。
 
-        // 1. 清理乐观更新消息
-        pendingUserMessages.remove(conversationId)
-
-        // 2. 本地快照立即切除该消息及后续所有记录（UI 零等待/防闪烁）
+        // 本地快照立即切除该消息及后续所有记录（UI 零等待/防闪烁）
         if (currentSnap != null) {
             val targetIdx = currentSnap.messages.indexOfFirst { it.id == messageId }
             if (targetIdx >= 0) {
@@ -1333,61 +1423,30 @@ class WorkspaceViewModel(
             }
         }
 
-        // 唯一真理源：与 send() 同源，发 effectiveThinkingLevel（推理选择器显示值）
-        val effectiveLevel = computeEffectiveThinkingLevel()
-
-        // 3. 组装并设置重发的乐观用户消息
-        val now = xyz.mederi.currentTimeMillis()
-        val optBlocks = mutableListOf<ChatBlock>()
-        imageBlocks.forEach { optBlocks.add(it) }
-        if (textToSend.isNotEmpty()) {
-            optBlocks.add(ChatBlock.Text(id = "optimistic_text_$now", text = textToSend))
-        }
-        val optMsg = ChatMessage(
-            id = "optimistic_$now",
-            conversationId = conversationId,
-            role = ChatRole.User,
-            blocks = optBlocks,
-            createdAt = now,
-            completedAt = now,
-            parentMessageId = null,
-            model = null,
-            agent = null,
-            isStreaming = false,
-            error = null
-        )
-        pendingUserMessages[conversationId] = optMsg
-        DebugLog.info("UI", "rollbackMessage: created optimistic message id=${optMsg.id}")
-
-        // 4. 调用 core 回滚并在成功后重发
+        // 服务端回滚；成功后才把内容粘贴回输入区（失败 → 错误走 ErrorBoard，输入区保持原状）
         viewModelScope.launch {
             DebugLog.info("UI", "rollbackMessage: calling aiCore.rollbackToMessage(convId=$conversationId, msgId=$messageId)")
             val rollbackResult = appState.aiCore.rollbackToMessage(conversationId, messageId)
             if (rollbackResult.isFailure) {
                 val ex = rollbackResult.exceptionOrNull()
                 DebugLog.error("UI", "rollbackMessage rollbackToMessage failed: ${ex?.message}", ex)
-                error = "重试失败: ${ex?.message ?: "无法回滚消息"}"
-                pendingUserMessages.remove(conversationId)
+                error = "回退失败: ${ex?.message ?: "无法回滚消息"}"
                 return@launch
             }
-            DebugLog.info("UI", "rollbackMessage: rollbackToMessage success, proceeding to sendMessage")
 
-            val input = ChatPromptInput(
-                text = textToSend,
-                model = model,
-                agent = agent,
-                thinkingLevel = effectiveLevel,
-                attachments = attachments
-            )
-            val sendResult = appState.aiCore.sendMessage(conversationId, input)
-            if (sendResult.isFailure) {
-                val ex = sendResult.exceptionOrNull()
-                DebugLog.error("UI", "rollbackMessage resend failed: ${ex?.message}", ex)
-                error = ex?.message ?: "重发失败，服务器无响应或用量受限"
-                pendingUserMessages.remove(conversationId)
-            } else {
-                DebugLog.info("UI", "rollbackMessage: resend success")
+            if (restored.isEmpty) {
+                DebugLog.info("UI", "rollbackMessage: nothing to restore, leaving input untouched")
+                return@launch
             }
+            // 回退成功 → 用回退内容重建输入区（替换现有草稿/附件，语义 = "重新编辑这条消息"）
+            clearPendingAttachments()
+            inputDraft = TextFieldValue(restored.instruction, TextRange(restored.instruction.length))
+            if (restored.images.isNotEmpty()) pendingImages.addAll(restored.images)
+            if (restored.pastedTexts.isNotEmpty()) pendingPastedTexts.addAll(restored.pastedTexts)
+            DebugLog.info(
+                "UI",
+                "rollbackMessage: restored input (instruction + ${restored.pastedTexts.size} pasted + ${restored.images.size} images)"
+            )
         }
     }
 
@@ -1395,4 +1454,54 @@ class WorkspaceViewModel(
         observeJob?.cancel()
         super.onCleared()
     }
+}
+
+/** 回退消息后放回输入框的内容：主指令 + 大段文本附件 + 图片附件（原样恢复，非脱壳简化） */
+data class RestoredInput(
+    val instruction: String,
+    val pastedTexts: List<PastedTextAttachment>,
+    val images: List<ImageAttachment>,
+) {
+    val isEmpty: Boolean get() = instruction.isBlank() && pastedTexts.isEmpty() && images.isEmpty()
+}
+
+/**
+ * 从一条已发送的用户消息反解出可放回输入框的内容（纯函数，单测直接覆盖）：
+ * - 主指令 = `PromptComposer.parse` 剥离大段文本 XML 标签后的主指令部分
+ * - `pastedTexts` = parse 拆出的大段文本附件，index 重新编号、id 改为当前时间戳前缀
+ * - `images` = 消息中 `data:` URL 的 `ChatBlock.File` → base64 解码还原 `ImageAttachment`
+ *   （回退是"恢复已发内容"，不做模型图片能力门禁；真发送时 send() 的 guardImageSupport 会拦）
+ */
+fun restoreInputFromMessage(targetMsg: ChatMessage?, fallbackText: String): RestoredInput {
+    val fullText = targetMsg?.blocks
+        ?.filterIsInstance<ChatBlock.Text>()
+        ?.joinToString("") { it.text }
+        ?.ifBlank { fallbackText } ?: fallbackText
+    val parsed = PromptComposer.parse(fullText)
+    val images = targetMsg?.blocks
+        ?.filterIsInstance<ChatBlock.File>()
+        ?.filter { it.url.startsWith("data:") && it.url.contains("base64,") }
+        ?.mapIndexedNotNull { i, block ->
+            val bytes = block.url.substringAfter("base64,", "").decodeBase64()?.toByteArray()
+            if (bytes != null) {
+                ImageAttachment(
+                    id = "img_${targetMsg.id}_$i",
+                    name = block.name.ifBlank { "image_${i + 1}" },
+                    mimeType = block.mimeType ?: "image/png",
+                    bytes = bytes,
+                    base64DataUrl = block.url,
+                )
+            } else null
+        } ?: emptyList()
+    val pastedTexts = parsed.pastedTexts.mapIndexed { i, item ->
+        item.copy(
+            id = "pasted_${targetMsg?.id ?: "rollback"}_${i + 1}",
+            index = i + 1
+        )
+    }
+    return RestoredInput(
+        instruction = parsed.instruction,
+        pastedTexts = pastedTexts,
+        images = images
+    )
 }

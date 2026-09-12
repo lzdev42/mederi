@@ -81,7 +81,7 @@ interface AiCore {
 - `enum ConversationStatus { Idle, Working, Error }`
 - `Conversation(id, projectId?, title, status, createdAt: Long, updatedAt: Long, parentConversationId?=null, modelId?=null, modelProvider?=null, thinkingLevel: String?=null(仅回显 core 诊断值,非 UI 真理源), agent?=null, directory?=null, workType=CODE)`
 - `enum ChatRole { User, Assistant, System, Summary }`
-- `ChatMessage(id, conversationId, role, blocks: List<ChatBlock>, createdAt, completedAt?, parentMessageId?, model?, agent?, isStreaming=false, error?=null)`
+- `ChatMessage(id, conversationId, role, blocks: List<ChatBlock>, createdAt, completedAt?, parentMessageId?, model?, agent?, isStreaming=false, error?=null, modelName?(assistant footer 模型显示名), agentMode?(APPROVAL/AUTONOMOUS), thinkingLevel?(实际推理档位), durationMs?(LLM 耗时))` —— footer 诊断字段由 `MederiModelMapper.toChatMessage` 从 core Message 诊断字段填充（completedAt ≈ createdAt + durationMs 下界估计）
 - `sealed class ChatBlock(id)`（type 判别多态序列化）：`Text(id, text)` / `Reasoning(id, text)` / `ToolCall(id, name, state: ToolCallState)` / `File(id, name, url, mimeType?)` / `Diff(id, filePath, before, after)` / `Unknown(id, type)`
 - `sealed class ToolCallState`：`Pending` / `Running(input: Map<String,String>)` / `Completed(input, output)` / `Failed(input, error)`
 - `ToolCallUi(id, name, state, target?=null, isFailed=false)` —— VM 预计算展平展示模型
@@ -105,7 +105,7 @@ interface AiCore {
 ### 2.3 dto/
 
 - `ChatPromptInput(text, model: ModelOption?, agent: AgentOption?, thinkingLevel: String?, attachments: List<FileAttachment>)`；`FileAttachment(name, mimeType, bytes)`
-- `ConversationSnapshot(conversation, messages, tokenUsage, contextUsedTokens: Long=0(最近一条 Assistant inputTokens,与自动压缩同源), cost, pendingQuestion?, pendingPlanApproval?, planApprovals=[], todos=[], childConversations=[], errorMessage?, statusHint?(限流重试提示 / 断流诊断摘要,仅内存态))`
+- `ConversationSnapshot(conversation, messages, tokenUsage, contextUsedTokens: Long=0(最近一条 Assistant inputTokens,与自动压缩同源), cost, pendingQuestion?, pendingPlanApproval?, planApprovals=[], todos=[], childConversations=[], errorMessage?(错误/警告简报,ErrorBoard 输入框顶部一行展示), errorId?(ErrorCollector 生成的错误 ID,JVM 端可 ErrorCollector.get(id) 取完整 ErrorRecord), errorDiagnostic?(完整分层诊断报告纯文本,点"详细报告"展开;server→wasmJs 的详情唯一载体), statusHint?(仅限流重试过程提示,内存态——不再承载断流警告,警告走 errorMessage/ErrorBoard), errorIsStreamInterrupted=false(failureMode==PREMATURE_CLOSE 时置 true,MESSAGE_DELTA 复位;UI 据此在 ErrorBoard 显示"继续"按钮))`
 - `MessagesPage(messages, tokenUsage, contextUsedTokens)` —— MESSAGE_COMPLETED/ERROR 后对齐落库数据用
 - `RawMessageDto(seq, messageId?, role, payload(原始 JSON), createdAt)`
 - `CreateProjectInput(name, directory)`；`ReasoningConfigInput(levels: Map<String,String?>)`；`ProviderUpdateInput(name?, apiKey?, baseUrl?, enabled?, customModels?, reasoningParameter?)`；`CreateCustomProviderInput(name, baseUrl, apiKey?, customModels, type=DEFAULT, responseSanitization=false, reasoningParameter?)`
@@ -120,8 +120,8 @@ interface AiCore {
 | SESSION_CREATED | 原样返回 |
 | SESSION_UPDATED | status=Working、清 errorMessage（新 turn 开始旧错误过时） |
 | MESSAGE_DELTA | 在当前 streaming Assistant 占位消息上追加块（text/reasoning 合并到最后同类型块、tool_call 增量、image 新建 File 块），status=Working、清 statusHint |
-| MESSAGE_COMPLETED | status=Idle、isStreaming=false、errorMessage=null、statusHint=payload["warning"]（断流诊断摘要，格式见 core 事件表；正常收尾为 null） |
-| MESSAGE_ERROR | status=Error、errorMessage=payload["error"]、清 statusHint |
+| MESSAGE_COMPLETED | status=Idle、isStreaming=false、清 statusHint；断流警告以 **ErrorRecord payload**（error/errorId/fullDiagnostic, errorSeverity=WARNING, failureMode=PREMATURE_CLOSE）写入 errorMessage/errorId/errorDiagnostic，**failureMode==PREMATURE_CLOSE → errorIsStreamInterrupted=true** → **ErrorBoard 展示 + 可展开详细报告 + "继续"按钮**（`WorkspaceViewModel.continueAfterInterruption()` 重发 `"Continue"` 走正常 send 流程续写），会话保持 Idle（turn 真实完成）。正常收尾无这些 key → 三者保持原值；MESSAGE_DELTA 复位 errorIsStreamInterrupted |
+| MESSAGE_ERROR | status=Error、errorMessage=payload["error"]（简报）、errorId=payload["errorId"]、errorDiagnostic=payload["fullDiagnostic"]、清 statusHint |
 | STATUS | 仅 scope=provider 且 code=RETRYING 时写 statusHint="供应商限流，重试中 (attempt/max)"，不碰状态机 |
 | TOOL_CALLED | 完整 args 更新 ToolCall block(input)，状态 Running |
 | TOOL_RESULT | 按 toolCallId 精确匹配（回退：最后 Running/Pending 同名），状态 Completed/Failed 并保留 input |
@@ -288,7 +288,7 @@ classDiagram
     AppState --> TerminalViewModel : terminalManager
 ```
 
-- **WorkspaceViewModel 要点**：`attach(id)` = getSnapshot 校验可达 + observeConversation 订阅 + 乐观消息对账；`send(text)` = 校验就绪/模型/图片门禁 guardImageSupport（send 与 rollbackMessage 共用唯一实现）→ PromptComposer.compose → 乐观更新 → 无会话自动 createConversation → 有待审批先 resolvePlanApproval(false) → sendMessage（thinkingLevel 只发 computeEffectiveThinkingLevel()）；`rollbackMessage` = 先验后切（附件提取+门禁 → 本地切片 → 乐观消息 → rollbackToMessage → 重发）；`chatItems` 预计算 toolSummary/target/headerSummary/isReasoningActive。
+- **WorkspaceViewModel 要点**：`attach(id)` = getSnapshot 校验可达 + observeConversation 订阅 + 乐观消息对账；`send(text)` = 校验就绪/模型/图片门禁 guardImageSupport（send 与 rollbackMessage 共用唯一实现）→ PromptComposer.compose → 乐观更新 → 无会话自动 createConversation → 有待审批先 resolvePlanApproval(false) → sendMessage（thinkingLevel 只发 computeEffectiveThinkingLevel()）；`rollbackMessage` = 先验后切（restoreInputFromMessage 反解主指令/大段文本/图片 → 本地切片 → rollbackToMessage）→ **成功后才把内容粘贴回输入框重建待发态**（inputDraft + pendingPastedTexts + pendingImages，用户切模型/模式/改内容后自行发送），失败走 ErrorBoard；`restoreInputFromMessage(targetMsg?, fallbackText)` 为纯函数（PromptComposer.parse 拆主指令与大段文本、data: File block base64 还原图片）；`chatItems` 预计算 toolSummary/target/headerSummary/isReasoningActive。
 - **TerminalViewModel key 约定**：`"project:<id>"`、`"project:<id>#<n>"`、`"tmp:<n>"`。
 
 ## 8. UI 组合结构（commonMain）
@@ -301,9 +301,9 @@ flowchart TD
     SB["Sidebar<br/>项目/会话树 + WORK/CODE 分段<br/>+ 主题切换 + 设置入口"]
     WS["Workspace<br/>中央聊天区"]
     HDR["Workspace Header（标题/模型）"]
-    LIST["LazyColumn 消息列表<br/>ChatCards: ThoughtAndActionsBlock/ReasoningBlock/ToolPill<br/>QuestionCard/PlanApprovalCard/SummaryCard/UserPastedTextCard"]
-    INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft"]
-    TSB["TurnStatusBar<br/>deriveTurnStatus(snapshot) 纯函数"]
+    LIST["LazyColumn 消息列表<br/>ChatCards: ThoughtAndActionsBlock/ReasoningBlock/ToolPill<br/>QuestionCard/PlanApprovalCard/SummaryCard/UserPastedTextCard<br/>AssistantMessageFooter（assistant 回复底部: 模型名·审批/自主·推理档·时长·完成时间）"]
+    INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft<br/>顶部 ErrorBoard（错误/警告唯一出口）"]
+    SBAR["StatusBar（原 TurnStatusBar）<br/>deriveTurnStatus(snapshot) 纯函数<br/>只显示 AI 运转状态（思考/生成/工具/重试），永不显示错误"]
     DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/SUB_AGENTS/ARTIFACTS/TERMINAL"]
     REP["RightExtensionPanel(360dp)<br/>按 activePanel 分发面板内容<br/>含 RawMessagesCard/图片与大文本阅读器"]
     SD["SettingsDialog<br/>6 Tab: PROVIDERS/GENERAL/SANDBOX/AGENTS/REMOTE/SYSTEM<br/>ProviderSettingsPanel+ProviderSettingsViewModel<br/>(Master-Detail/移动端下钻自适应)"]
@@ -313,12 +313,14 @@ flowchart TD
     WS --> HDR
     WS --> LIST
     WS --> INPUT
-    WS --> TSB
+    WS --> SBAR
     WS --> DOCK --> REP
     MS --> SD
 ```
 
 - `ChatLayout.kt` 不是 Composable，是**布局常量对象**（contentMaxWidth=1000dp、userBubbleMaxWidth=680dp、sidebarWidth=260dp、rightPanelWidth=360dp、headerHeight=40dp、turnSpacing=14dp 等）。
+- 三个职责分离的条栏：**StatusBar**（消息区，AI 运转状态，`deriveTurnStatus(snapshot)`，永不显示错误；计时锚定"发送请求时刻"`WorkspaceViewModel.turnStartedAt`（send 时记录、turn 结束清除），每秒 `now - turnStartedAt` 重算——切会话回来不重置；**与 footer durationMs 语义不同：StatusBar=从发请求起算，footer=API 有回应起算到回复结束**）、**ErrorBoard**（ChatInputCard 顶部，错误/警告唯一出口：单行简报 + "详细报告"展开 + 关闭；断流时（快照 errorIsStreamInterrupted）额外显示"继续"按钮 → `continueAfterInterruption()` 重发 Continue 续写半截回复，数据源=快照 errorMessage）、**SystemInfoBar**（最底部，纯 CPU/RSS/JVM 资源监控，不接错误）。
+- **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
 - 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`SegmentedControl`（WorkType/AgentMode 复用）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）。
 - 渲染 AI 回复使用 `:inkcompose` 的 `MarkdownView`（见 03-inkcompose.md）。
 

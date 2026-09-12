@@ -83,10 +83,10 @@ flowchart TD
     RUN --> OK{"正常结束?"}
     OK -- "是" --> DONE["IDLE + MESSAGE_COMPLETED(warning?)<br/>diffTracker.captureSnapshot → diffStore.save"]
     OK -- "异常 e" --> T{"RetryableLLMClient.isTransientError(e)?"}
-    T -- "是" --> IDLE["IDLE + MESSAGE_COMPLETED(限流提示)<br/>(RetryableLLMClient 已在流内重试过 STATUS/RETRYING)"]
-    T -- "否" --> ERR["ERROR + MESSAGE_ERROR"]
+    T -- "是" --> IDLE["IDLE + MESSAGE_ERROR(分类 RATE_LIMIT)<br/>(RetryableLLMClient 已在流内重试过 STATUS/RETRYING)"]
+    T -- "否" --> ERR["ERROR + MESSAGE_ERROR<br/>(ErrorCollector rich payload: 简报/errorId/完整诊断)"]
     DONE & IDLE & ERR --> STOP
-    ABORT["abort(id): cancel job + cancelAll requester<br/>IDLE + MESSAGE_ERROR('用户中止了对话')"] --> STOP["结束"]
+    ABORT["abort(id): cancel job + cancelAll requester<br/>IDLE + MESSAGE_ERROR(ErrorCollector CANCELLED/WARNING)"] --> STOP["结束"]
 ```
 
 **事件流消费侧**：`eventBus` → 三路消费：① `MederiAiCore.events()`（进程内）/ `GET /v1/events`（SSE 遥控端）→ 客户端 `SnapshotReducer` 聚合快照；② `launchStreamConsumer` 把 StreamFrame 转 MESSAGE_DELTA；③ UI 层特性（SessionTitleService 等）订阅。
@@ -107,7 +107,7 @@ flowchart TD
     SW -- "MESSAGE_DELTA" --> D["在 streaming Assistant 占位消息上<br/>合并 Text/Reasoning 块 / 增量 ToolCall / 新建 File 块"]
     SW -- "MESSAGE_COMPLETED" --> C1["先发完成状态快照"]
     C1 --> C2["refreshPage() 回查 listMessagesPage<br/>(token统计/contextUsedTokens 对齐落库) → 发第二个快照"]
-    SW -- "MESSAGE_ERROR" --> ER["回查后发最终快照(status=Error)"]
+    SW -- "MESSAGE_ERROR" --> ER["写 errorMessage/errorId/errorDiagnostic,<br/>回查后发最终快照(status=Error)"]
     SW -- "TOOL_CALLED/RESULT" --> TO["按 toolCallId 精确匹配更新 ToolCall block"]
     SW -- "QUESTION_*/PLAN_APPROVAL_*" --> PE["写/清 pendingQuestion / pendingPlanApproval"]
     SW -- "TODO_UPDATED/PLAN_PROGRESS" --> TD["解码 payload.todos 整体替换(失败丢弃事件)"]
@@ -254,15 +254,14 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    U["用户点击某消息回滚并重发"] --> VM["WorkspaceViewModel.rollbackMessage(convId, messageId, messageText)"]
-    VM --> V1["先验后切: 提取该消息附件(图片/粘贴文本)+图片门禁"]
-    V1 --> V2["本地切片: messages 截到目标消息之前"]
-    V2 --> V3["乐观消息更新 UI"]
-    V3 --> AC["AiCore.rollbackToMessage(convId, messageId)"]
+    U["用户点击用户消息上的「退回并重新编辑」"] --> VM["WorkspaceViewModel.rollbackMessage(convId, messageId, messageText)"]
+    VM --> V1["先验后切: restoreInputFromMessage 反解该消息内容<br/>(主指令 PromptComposer.parse + 大段文本附件 + data: 图片 base64 还原)"]
+    V1 --> V2["本地切片: messages 截到目标消息之前(UI 零等待)"]
+    V2 --> AC["AiCore.rollbackToMessage(convId, messageId)"]
     AC --> SM["SessionManager.rollbackToMessage"]
     SM --> TE["TurnExecutor.abortAndJoin(sessionId)<br/>等旧 turn 完全死透(防收尾落库复活已删消息)"]
     TE --> HS["historyStore.replace(id, msgs.take(targetIndex))<br/>(目标不存在显式抛错)"]
-    HS --> RE["用户编辑后的消息作为新输入重发(复用 sendMessage 链路)<br/>thinkingLevel 只发 effectiveThinkingLevel"]
+    HS --> RE["回退成功 → 内容粘贴回输入框重建待发态:<br/>inputDraft=主指令 + pendingPastedTexts=大段文本 + pendingImages=图片<br/>用户切换模型/模式/Agent、修改后自行发送<br/>(失败 → error 走 ErrorBoard，输入区保持原状)"]
 ```
 
 ## 9. 会话自动改名（SessionTitleService）
@@ -368,7 +367,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    P1["用户粘贴/选择图片<br/>ClipboardHelper.getImage / tryAttachImage"] --> G1{"guardImageSupport<br/>(send 与 rollbackMessage 共用唯一实现)"}
+    P1["用户粘贴/选择图片<br/>ClipboardHelper.getImage / tryAttachImage"] --> G1{"guardImageSupport<br/>(唯一发送守卫 send 使用；rollbackMessage 恢复附件不经门禁，<br/>切到不支持图片的模型后真发送时由 send 拦截)"}
     G1 -- "模型不支持(supportsImages=false)" --> X["拦截并提示(附件按钮显隐+粘贴拦截双门禁)"]
     G1 -- "支持" --> A1["ImageAttachment(base64DataUrl) 入 pendingImages"]
     A1 --> SEND["send(text)"]

@@ -115,26 +115,67 @@ class CommandSandbox(
         )
     }
 
+    /** 组装好的命令：argv + 可选警告前缀 + 是否已是独立进程组（直接子进程 pid==pgid）。 */
+    data class WrappedCommand(
+        val argv: List<String>,
+        val warning: String?,
+        /**
+         * 直接子进程是否为进程组长（pid == pgid）。为 true 时宿主可按 pgid 整组回收
+         * （stop_process / runCommand 超时清理）。macOS 经 perl setpgrp、Linux 经 setsid。
+         */
+        val processGroupLeader: Boolean
+    )
+
     /**
      * 组装执行 argv：沙箱可用时包一层 OS 沙箱，否则裸命令（可能带警告）。
      *
-     * @return (argv, 警告前缀)；警告为 null 表示无
+     * 同时给每条命令套进程组长包装（posix）：macOS 用系统自带 perl 的 `setpgrp(0,0)` 后
+     * `exec sandbox-exec`，Linux 用 setsid——让整条命令树共享一个新 PGID（= 直接子进程 pid）。
+     * 原因：macOS Seatbelt 无 process-signal 操作（实测 unbound variable），沙箱内互杀不可能；
+     * 必须由宿主在沙箱外按进程组回收（见 ProcessRegistry）。
+     *
+     * @return 组装结果（argv + 警告前缀 + 是否独立进程组）
      */
-    fun wrap(command: String): Pair<List<String>, String?> {
+    fun wrap(command: String): WrappedCommand {
         val status = status()
-        val baseArgv = if (isWindows) {
-            if (shell == "bash.exe") listOf("bash.exe", "-c", command)
-            else listOf("cmd", "/c", command)
-        } else {
-            listOf(shell, "-c", command)
+        val baseArgv = when {
+            isWindows -> if (shell == "bash.exe") listOf("bash.exe", "-c", command)
+                         else listOf("cmd", "/c", command)
+            isMac -> listOf("sandbox-exec", "-f", seatbeltProfileFile().absolutePath, shell, "-c", command)
+            bwrapFunctional -> bwrapArgv(listOf(shell, "-c", command))
+            else -> listOf(shell, "-c", command)
         }
+        val warning = if (status.available) null else "[sandbox] ${status.detail}\n"
 
-        return when {
-            isWindows -> baseArgv to "[sandbox] ${status.detail}\n"
-            isMac -> Pair(listOf("sandbox-exec", "-f", seatbeltProfileFile().absolutePath, shell, "-c", command), null)
-            bwrapFunctional -> Pair(bwrapArgv(baseArgv), null)
-            else -> baseArgv to "[sandbox] ${status.detail}\n"
+        val leaderPrefix = posixGroupLeaderPrefix()
+        return if (leaderPrefix != null) {
+            WrappedCommand(leaderPrefix + baseArgv, warning, processGroupLeader = true)
+        } else {
+            WrappedCommand(baseArgv, warning, processGroupLeader = false)
         }
+    }
+
+    /**
+     * posix 平台让直接子进程成为独立进程组组长（pid==pgid）的前缀 argv；不可用返回 null。
+     * - macOS：/usr/bin/perl 系统自带必在，`setpgrp(0,0)` 后 exec 原命令（同 pid 保持组长身份）
+     * - Linux：setsid（util-linux 默认带）；缺失则降级为无进程组
+     */
+    private fun posixGroupLeaderPrefix(): List<String>? = when {
+        isWindows -> null
+        isMac -> listOf(
+            "/usr/bin/perl",
+            "-e",
+            """setpgrp(0,0) or die ${'$'}!; exec @ARGV""",
+            "--"
+        )
+        setsidAvailable -> listOf("setsid")
+        else -> null
+    }
+
+    /** Linux setsid 探测（lazy 一次） */
+    private val setsidAvailable: Boolean by lazy {
+        runCatching { ProcessBuilder("setsid", "--version").start().waitFor() == 0 }
+            .getOrDefault(false)
     }
 
     // ==================== macOS Seatbelt ====================
@@ -226,6 +267,7 @@ class CommandSandbox(
                 appendLine("Shell: ${status.shell}${if (status.available) " (writes sandboxed)" else " (unsandboxed)"}")
                 appendLine("Sandbox: ${if (status.available) status.backend else "none"} — ${status.detail}")
             }
+            appendLine("Process control: list_processes / stop_process manage mederi-spawned processes only")
             appendLine("Java: ${System.getProperty("java.version")}")
         }
     }

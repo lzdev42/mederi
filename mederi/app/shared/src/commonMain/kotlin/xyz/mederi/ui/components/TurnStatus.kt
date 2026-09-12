@@ -17,29 +17,21 @@ enum class TurnStatus(val label: String) {
     Generating("生成回复中"),
     WaitingAnswer("等待回答"),
     Retrying("重试中"),
-    Error("出错了"),
     Aborted("已中断"),
-    /** 流式传输异常警告（连接中断/消费错误）：回复已收尾但可能不完整 */
-    Warning("回复可能不完整"),
 }
 
 fun deriveTurnStatus(snapshot: ConversationSnapshot?): TurnStatus {
     val snap = snapshot ?: return TurnStatus.Idle
     return when (snap.conversation.status) {
-        ConversationStatus.Error -> TurnStatus.Error
-        ConversationStatus.Idle -> {
-            // 流式传输警告（连接中断等，随 MESSAGE_COMPLETED 的 warning payload 到达）：
-            // Idle 态保留在状态栏提示"回复可能不完整"
-            if (snap.statusHint != null) TurnStatus.Warning
-            // Idle 但最后一条消息有 error 标记 -> Aborted
-            else if (snap.messages.lastOrNull()?.error != null) TurnStatus.Aborted
-            else TurnStatus.Idle
-        }
+        // 轮次已结束：错误/警告一律由 ErrorBoard（输入框上方）展示，StatusBar 只显示运转过程状态。
+        // 故 Error 状态也回落 Idle（错误信息在 ErrorBoard 呈现），StatusBar 永不显示错误。
+        ConversationStatus.Error -> TurnStatus.Idle
+        ConversationStatus.Idle -> TurnStatus.Idle
+        ConversationStatus.WaitingUser -> TurnStatus.WaitingAnswer
         ConversationStatus.Working -> {
             when {
                 // 环境态过程提示（供应商限流重试中）优先于内容派生——此时模型没在产出
                 snap.statusHint != null -> TurnStatus.Retrying
-                snap.errorMessage != null -> TurnStatus.Retrying
                 snap.pendingQuestion != null -> TurnStatus.WaitingAnswer
                 else -> {
                     // 只看正在流式的 assistant 消息（aggregator 占位消息跨整个 turn 累积所有轮次的块）。

@@ -213,13 +213,19 @@ object MederiModelMapper {
             blocks = blocks,
             createdAt = parseIsoToMillis(message.createdAt),
             completedAt = if (message.status == xyz.mederi.domain.model.MessageStatus.COMPLETED) {
-                parseIsoToMillis(message.createdAt)
+                // 结束时刻 ≈ 响应创建时刻 + LLM 请求耗时（下界估计）
+                val base = parseIsoToMillis(message.createdAt)
+                (message.durationMs?.let { base + it } ?: base)
             } else null,
             parentMessageId = null,
-            model = null,
-            agent = null,
+            model = message.modelName,
+            agent = message.agentMode,
             isStreaming = message.status == xyz.mederi.domain.model.MessageStatus.PROCESSING,
-            error = null
+            error = null,
+            modelName = message.modelName,
+            agentMode = message.agentMode,
+            thinkingLevel = message.reasoningLevel,
+            durationMs = message.durationMs
         )
     }
 

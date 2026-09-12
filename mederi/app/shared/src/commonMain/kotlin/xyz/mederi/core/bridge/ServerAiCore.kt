@@ -18,12 +18,17 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.seconds
 import xyz.mederi.currentTimeMillis
@@ -43,7 +48,9 @@ import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ApiKeyOption
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
+import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
+import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.FileDiff
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.ProcessStats
@@ -67,6 +74,7 @@ class ServerAiCore(
     private val passwordProvider: suspend () -> String? = { null },
 ) : AiCore {
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
     private val client = HttpClient {
         install(ContentNegotiation) { json(json) }
@@ -213,6 +221,46 @@ class ServerAiCore(
         _providers.value = httpGet("/v1/providers")
         _projects.value = httpGet("/v1/projects")
         _isReady.value = true
+        startSessionStatusSync()
+    }
+
+    /**
+     * 监听远端 SSE 事件流，实时更新 _projects StateFlow 中对应会话的状态。
+     */
+    private fun startSessionStatusSync() {
+        scope.launch {
+            events().collect { event ->
+                val newStatus = when (event.type) {
+                    CoreEventType.SESSION_UPDATED -> ConversationStatus.Working
+                    CoreEventType.MESSAGE_COMPLETED -> ConversationStatus.Idle
+                    CoreEventType.MESSAGE_ERROR -> ConversationStatus.Error
+                    CoreEventType.QUESTION_REQUESTED -> ConversationStatus.WaitingUser
+                    CoreEventType.QUESTION_RESOLVED -> ConversationStatus.Working
+                    CoreEventType.PLAN_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
+                    CoreEventType.PLAN_APPROVAL_RESOLVED -> ConversationStatus.Working
+                    else -> null
+                }
+                if (newStatus != null) {
+                    updateConversationStatus(event.sessionId, newStatus)
+                }
+            }
+        }
+    }
+
+    private fun updateConversationStatus(sessionId: String, status: ConversationStatus) {
+        _projects.update { currentProjects ->
+            currentProjects.map { project ->
+                if (project.conversations.any { it.id == sessionId }) {
+                    project.copy(
+                        conversations = project.conversations.map { conv ->
+                            if (conv.id == sessionId) conv.copy(status = status) else conv
+                        }
+                    )
+                } else {
+                    project
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------

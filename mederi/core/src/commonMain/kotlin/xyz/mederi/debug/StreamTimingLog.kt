@@ -79,4 +79,16 @@ class StreamTimingLog(
     private fun elapsedMs(now: Long): Long = if (firstNs == 0L) 0 else (now - firstNs) / 1_000_000
 
     private fun Float.formatted(): String = "%.0f".format(this)
+
+    /**
+     * 快照当前统计值——供 [StreamCloseDiagnostics] 在 `onCompletion` 中读取。
+     * `durationMs` = 首帧到末帧；`maxGapMs` = 帧间最大间隔；`ttfbMs` = 首字节时间。
+     */
+    fun snapshot(): Snapshot = Snapshot(
+        durationMs = if (firstNs == 0L) 0L else (lastNs - firstNs) / 1_000_000,
+        maxGapMs = maxGapMs.toLong(),
+        ttfbMs = ttfbMs()
+    )
+
+    data class Snapshot(val durationMs: Long, val maxGapMs: Long, val ttfbMs: Long)
 }

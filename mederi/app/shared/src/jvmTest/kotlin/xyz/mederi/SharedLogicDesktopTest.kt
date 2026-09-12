@@ -3,9 +3,11 @@ package xyz.mederi
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import okio.ByteString.Companion.toByteString
 import xyz.mederi.core.bridge.BuiltinProviders
 import xyz.mederi.provider.domain.model.ProviderType
 
@@ -136,7 +138,7 @@ class SharedLogicDesktopTest {
     }
 
     @Test
-    fun testRollbackAndResendMessage() = kotlinx.coroutines.runBlocking {
+    fun testRollbackMessageSlicesAndRestoresText() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {
             val mockAiCore = xyz.mederi.core.mock.MockAiCore()
@@ -172,27 +174,68 @@ class SharedLogicDesktopTest {
             assertEquals(4, snap2.messages.size, "应有两条用户消息和两条AI回复")
             val secondUserMsgId = snap2.messages[2].id
 
-            // 3. 对第二条用户消息执行重试 (rollbackMessage)
+            // 3. 对第二条用户消息执行退回 (rollbackMessage)：截断本条及后续记录，内容粘贴回输入框，不再自动重发
             viewModel.rollbackMessage(conv.id, secondUserMsgId, "Second message")
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.inputDraft.text != "Second message") kotlinx.coroutines.delay(50)
+            }
             val snapAfterSecondRollback = mockAiCore.awaitSettledSnapshot(conv.id)
-            assertEquals(4, snapAfterSecondRollback.messages.size, "第二条消息重试后总数应依然是4")
-            assertEquals(
-                "Second message",
-                (snapAfterSecondRollback.messages[2].blocks[0] as xyz.mederi.core.contract.models.ChatBlock.Text).text
-            )
+            assertEquals(2, snapAfterSecondRollback.messages.size, "退回第二条消息后应只剩第一条用户消息及其回复")
 
-            // 4. 对第一条用户消息执行重试 (rollbackMessage)
-            // 应该删除第一条消息及其之后的所有记录（原4条全部撤回），并重新发送第一条消息
+            // 4. 对第一条用户消息执行退回：应删除第一条消息及其后所有记录，会话清空、内容回输入框
             viewModel.rollbackMessage(conv.id, firstUserMsgId, "First message")
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.inputDraft.text != "First message") kotlinx.coroutines.delay(50)
+            }
             val snapAfterFirstRollback = mockAiCore.awaitSettledSnapshot(conv.id)
-            assertEquals(2, snapAfterFirstRollback.messages.size, "重试第一条消息应删除后续所有记录并重新发送")
-            assertEquals(
-                "First message",
-                (snapAfterFirstRollback.messages[0].blocks[0] as xyz.mederi.core.contract.models.ChatBlock.Text).text
-            )
+            assertEquals(0, snapAfterFirstRollback.messages.size, "退回第一条消息应清空会话（不自动重发）")
         } finally {
             testScope.cancel()
         }
+    }
+
+    @Test
+    fun testRestoreInputFromMessageDecomposesPastedTextAndImage() {
+        // 主指令 + 大段文本附件（PromptComposer 编码格式）+ 图片附件（data: File block）反解
+        val pastedBody = "line1\nline2\nline3"
+        val composed = xyz.mederi.util.PromptComposer.compose(
+            "请修改这段配置",
+            listOf(xyz.mederi.core.contract.models.PastedTextAttachment("p1", 1, pastedBody, 3, pastedBody.length))
+        )
+        val imgBytes = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+        val dataUrl = "data:image/png;base64," + imgBytes.toByteString().base64()
+        val msg = xyz.mederi.core.contract.models.ChatMessage(
+            id = "user_1",
+            conversationId = "conv_1",
+            role = xyz.mederi.core.contract.models.ChatRole.User,
+            blocks = listOf(
+                xyz.mederi.core.contract.models.ChatBlock.File(id = "f1", name = "截图.png", url = dataUrl, mimeType = "image/png"),
+                xyz.mederi.core.contract.models.ChatBlock.Text(id = "t1", text = composed)
+            ),
+            createdAt = 1000L,
+            completedAt = 1000L,
+            parentMessageId = null,
+            model = null,
+            agent = null,
+            isStreaming = false,
+            error = null
+        )
+        val restored = xyz.mederi.core.ui.restoreInputFromMessage(msg, "fallback")
+        assertEquals("请修改这段配置", restored.instruction, "主指令应剥离大段文本标签积分还原")
+        assertEquals(1, restored.pastedTexts.size)
+        assertEquals(pastedBody, restored.pastedTexts[0].text)
+        assertEquals(1, restored.pastedTexts[0].index, "附件 index 应重新从 1 编号")
+        assertEquals(1, restored.images.size)
+        assertEquals("截图.png", restored.images[0].name)
+        assertEquals("image/png", restored.images[0].mimeType)
+        assertTrue(restored.images[0].bytes.contentEquals(imgBytes), "图片 bytes 应从 data: URL base64 解码还原")
+        assertEquals(dataUrl, restored.images[0].base64DataUrl)
+
+        // 真实纯文本消息：主指令即全文、无附件
+        val plain = xyz.mederi.core.ui.restoreInputFromMessage(null, "just text")
+        assertEquals("just text", plain.instruction)
+        assertTrue(plain.pastedTexts.isEmpty())
+        assertTrue(plain.images.isEmpty())
     }
 
     @Test
@@ -432,5 +475,244 @@ class SharedLogicDesktopTest {
         } finally {
             testScope.cancel()
         }
+    }
+
+    @Test
+    fun testSnapshotReducerQuestionRequestedSetsWaitingUserAndResolvedRestoresWorking() {
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_q",
+            projectId = "proj_1",
+            title = "Test Question",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val initialSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+
+        // 1. QUESTION_REQUESTED -> status 变为 WaitingUser，TurnStatus 派生为 WaitingAnswer
+        val questionEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_REQUESTED,
+            sessionId = "conv_q",
+            payload = mapOf(
+                "questionId" to "q_1",
+                "questions" to """[{"question":"确认执行操作吗？","header":"确认"}]"""
+            )
+        )
+        val waitingSnap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, questionEvent)
+        assertEquals(xyz.mederi.core.contract.models.ConversationStatus.WaitingUser, waitingSnap.conversation.status)
+        assertNotNull(waitingSnap.pendingQuestion)
+        assertEquals(xyz.mederi.ui.components.TurnStatus.WaitingAnswer, xyz.mederi.ui.components.deriveTurnStatus(waitingSnap))
+
+        // 2. QUESTION_RESOLVED -> status 恢复为 Working
+        val resolveEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_RESOLVED,
+            sessionId = "conv_q",
+            payload = mapOf("questionId" to "q_1")
+        )
+        val resumedSnap = xyz.mederi.core.contract.SnapshotReducer.apply(waitingSnap, resolveEvent)
+        assertEquals(xyz.mederi.core.contract.models.ConversationStatus.Working, resumedSnap.conversation.status)
+        assertEquals(null, resumedSnap.pendingQuestion)
+    }
+
+    @Test
+    fun testSnapshotReducerPlanApprovalRequestedSetsWaitingUserAndResolvedRestoresWorking() {
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_plan",
+            projectId = "proj_1",
+            title = "Test Plan",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val initialSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+
+        // 1. PLAN_APPROVAL_REQUESTED -> status 变为 WaitingUser
+        val planEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.PLAN_APPROVAL_REQUESTED,
+            sessionId = "conv_plan",
+            payload = mapOf(
+                "planId" to "plan_1",
+                "title" to "架构重构计划",
+                "summary" to "优化侧边栏指示灯"
+            )
+        )
+        val waitingSnap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, planEvent)
+        assertEquals(xyz.mederi.core.contract.models.ConversationStatus.WaitingUser, waitingSnap.conversation.status)
+        assertNotNull(waitingSnap.pendingPlanApproval)
+        assertEquals(xyz.mederi.ui.components.TurnStatus.WaitingAnswer, xyz.mederi.ui.components.deriveTurnStatus(waitingSnap))
+
+        // 2. PLAN_APPROVAL_RESOLVED -> status 恢复为 Working
+        val resolvePlanEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.PLAN_APPROVAL_RESOLVED,
+            sessionId = "conv_plan",
+            payload = mapOf(
+                "planId" to "plan_1",
+                "approved" to "true"
+            )
+        )
+        val resumedSnap = xyz.mederi.core.contract.SnapshotReducer.apply(waitingSnap, resolvePlanEvent)
+        assertEquals(xyz.mederi.core.contract.models.ConversationStatus.Working, resumedSnap.conversation.status)
+        assertEquals(null, resumedSnap.pendingPlanApproval)
+    }
+
+    @Test
+    fun testSnapshotReducerMessageErrorRichPayload() {
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_err",
+            projectId = "proj_1",
+            title = "Test Error",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val initialSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+
+        val errorPayload = mapOf(
+            "error" to "[API] KoogHttpClientException: Model not found (HTTP 404)",
+            "errorId" to "err_12345",
+            "fullDiagnostic" to "[FATAL] API: KoogHttpClientException\nHTTP Status: 404\nSuggestion: 请检查模型参数",
+            "errorCategory" to "API"
+        )
+        val errorEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_ERROR,
+            sessionId = "conv_err",
+            payload = errorPayload
+        )
+
+        val errorSnap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, errorEvent)
+        assertEquals(xyz.mederi.core.contract.models.ConversationStatus.Error, errorSnap.conversation.status)
+        assertEquals("[API] KoogHttpClientException: Model not found (HTTP 404)", errorSnap.errorMessage)
+        assertEquals("err_12345", errorSnap.errorId)
+        assertEquals("[FATAL] API: KoogHttpClientException\nHTTP Status: 404\nSuggestion: 请检查模型参数", errorSnap.errorDiagnostic)
+        // 报错后轮次结束，StatusBar 只显示运转状态（错误走 ErrorBoard），故此处 deriveTurnStatus 保持 Idle
+        assertEquals(xyz.mederi.ui.components.TurnStatus.Idle, xyz.mederi.ui.components.deriveTurnStatus(errorSnap))
+    }
+
+    @Test
+    fun testSnapshotReducerMessageCompletedCarriesStreamWarning() {
+        // 断流警告以 ErrorRecord payload 随 MESSAGE_COMPLETED 到达：会话保持 Idle（turn 真实完成），
+        // 但 errorMessage/errorId/errorDiagnostic 写入快照 → ErrorBoard（输入框上方）展示 + 可展开详细报告。
+        // statusHint 不再承载警告（原死区：Idle 时永不渲染）→ 断言清空。
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_warn",
+            projectId = "proj_1",
+            title = "Test Stream Warning",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val initialSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+        val streamWarning = "流式连接提前中断：服务器关闭连接但未发送结束标记（已接收 3 帧 / 12 字符）"
+        val warnEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_COMPLETED,
+            sessionId = "conv_warn",
+            payload = mapOf(
+                "warning" to streamWarning,
+                "error" to "[NETWORK] StreamInterrupted: $streamWarning",
+                "errorId" to "err_warn01",
+                "fullDiagnostic" to "WARNING（无异常，静默失败）：$streamWarning",
+                "errorCategory" to "NETWORK",
+                "errorSeverity" to "WARNING"
+            )
+        )
+        val warnSnap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, warnEvent)
+        assertEquals(xyz.mederi.core.contract.models.ConversationStatus.Idle, warnSnap.conversation.status)
+        assertEquals("err_warn01", warnSnap.errorId)
+        assertEquals("[NETWORK] StreamInterrupted: $streamWarning", warnSnap.errorMessage)
+        assertTrue(warnSnap.errorDiagnostic.orEmpty().contains("WARNING（无异常，静默失败）"))
+        assertNull(warnSnap.statusHint, "stream warning must not land in statusHint (the old invisible dead-end)")
+        // StatusBar 只显示运转状态：Idle 状态下即使有 errorMessage 也保持 Idle（错误由 ErrorBoard 呈现）
+        assertEquals(xyz.mederi.ui.components.TurnStatus.Idle, xyz.mederi.ui.components.deriveTurnStatus(warnSnap))
+    }
+
+    @Test
+    fun testAssistantFooterFieldsMapping() {
+        val coreMsg = xyz.mederi.domain.model.Message(
+            id = "msg_assist_1",
+            sessionId = "conv_1",
+            role = xyz.mederi.domain.model.MessageRole.ASSISTANT,
+            parts = listOf(xyz.mederi.domain.model.MessagePart.Text("回复内容")),
+            status = xyz.mederi.domain.model.MessageStatus.COMPLETED,
+            createdAt = "2026-09-08T12:00:00Z",
+            providerId = "prov_1",
+            modelId = "mdl_1",
+            modelName = "Claude Sonnet",
+            reasoningLevel = "HIGH",
+            agentMode = "APPROVAL",
+            workType = "CODE",
+            projectId = "proj_1",
+            durationMs = 1500
+        )
+        val chatMsg = xyz.mederi.core.bridge.MederiModelMapper.toChatMessage(coreMsg)
+        assertEquals("Claude Sonnet", chatMsg.modelName, "footer 应带模型显示名")
+        assertEquals("APPROVAL", chatMsg.agentMode, "footer 应带 Agent 模式")
+        assertEquals("HIGH", chatMsg.thinkingLevel, "footer 应带推理档位")
+        assertEquals(1500L, chatMsg.durationMs, "footer 应带耗时")
+        // completedAt ≈ createdAt + durationMs（下界估计）
+        val createdAtMs = chatMsg.createdAt
+        assertEquals(createdAtMs + 1500L, chatMsg.completedAt)
+    }
+
+    @Test
+    fun testStreamInterruptedFlagFromFailureMode() {
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_warn2",
+            projectId = "proj_1",
+            title = "warn2",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val initialSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+        val streamWarning = "流式连接提前中断：服务器关闭连接但未发送结束标记（已接收 3 帧 / 12 字符）"
+        val warnEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_COMPLETED,
+            sessionId = "conv_warn2",
+            payload = mapOf(
+                "warning" to streamWarning,
+                "error" to "[NETWORK] StreamInterrupted: $streamWarning",
+                "errorId" to "err_warn02",
+                "fullDiagnostic" to "WARNING（无异常，静默失败）：$streamWarning",
+                "errorCategory" to "NETWORK",
+                "errorSeverity" to "WARNING",
+                "failureMode" to "PREMATURE_CLOSE"
+            )
+        )
+        val snap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, warnEvent)
+        assertTrue(snap.errorIsStreamInterrupted, "failureMode=PREMATURE_CLOSE 应标记断流（ErrorBoard 显示继续按钮）")
+
+        // MESSAGE_DELTA 推进应复位断流标记
+        val deltaEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_DELTA,
+            sessionId = "conv_warn2",
+            payload = mapOf("messageId" to "m1", "blockId" to "b1", "type" to "text", "text" to "hi")
+        )
+        val afterDelta = xyz.mederi.core.contract.SnapshotReducer.apply(snap, deltaEvent)
+        assertTrue(!afterDelta.errorIsStreamInterrupted, "MESSAGE_DELTA 后应复位断流标记")
     }
 }

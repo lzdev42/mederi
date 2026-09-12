@@ -11,8 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -32,12 +30,10 @@ import compose.icons.feathericons.*
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.PlanApprovalRequest
-import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.QuestionRequest
+import xyz.mederi.core.ui.AssistantFooterInfo
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.core.contract.models.ToolCallUi
-import xyz.mederi.util.formatBytes
-import xyz.mederi.util.formatCpuUsage
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 
@@ -739,135 +735,6 @@ fun PlanApprovalCard(
 }
 
 /**
- * 5. 吸底系统状态栏 (StatusBar) - 资源消耗监控
- */
-@Composable
-fun StatusBar(
-    stats: ProcessStats? = null,
-    error: String? = null,
-    onRetry: () -> Unit = {},
-    modifier: Modifier = Modifier
-) {
-    val colors = LocalMederiColors.current
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(32.dp)
-            .background(colors.surfaceSidebar)
-            .border(width = 1.dp, color = colors.divider)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        // 左侧：进程资源消耗（CPU、RSS物理内存、JVM堆内存）
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // CPU 指标
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "CPU",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Normal
-                )
-                val cpuText = formatCpuUsage(stats?.cpuUsage)
-                val coresText = if (stats != null && stats.cpuCores > 0) " (${stats.cpuCores}核)" else ""
-                Text(
-                    text = "$cpuText$coresText",
-                    color = colors.textPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            Text(
-                text = "•",
-                color = colors.divider,
-                fontSize = 12.sp
-            )
-
-            // RSS 真实常驻内存指标
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "内存(RSS)",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Normal
-                )
-                Text(
-                    text = formatBytes(stats?.rssBytes),
-                    color = colors.textPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            Text(
-                text = "•",
-                color = colors.divider,
-                fontSize = 12.sp
-            )
-
-            // JVM 堆内存指标
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "JVM堆",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Normal
-                )
-                val heapText = if (stats?.heapMaxBytes != null) {
-                    "${formatBytes(stats.heapUsedBytes)} / ${formatBytes(stats.heapMaxBytes)}"
-                } else {
-                    formatBytes(stats?.heapUsedBytes)
-                }
-                Text(
-                    text = heapText,
-                    color = colors.textPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-
-        // 右侧：错误提示与重试
-        if (error != null) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Error: $error",
-                    color = colors.accentDanger,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "[重试]",
-                    color = colors.accentPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.clickable { onRetry() }
-                )
-            }
-        }
-    }
-}
-
-/**
  * 用户消息中的大段文本折叠卡片 (UserPastedTextCard)
  */
 @Composable
@@ -1036,7 +903,7 @@ fun UserMessageFooter(
             )
         }
 
-        // 2. 重试按钮
+        // 2. 退回并重新编辑按钮（回退一步 = 撤回本条及后续记录，内容粘贴回输入框，可切换模型/模式后再发）
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(3.dp))
@@ -1045,8 +912,8 @@ fun UserMessageFooter(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = FeatherIcons.RotateCcw,
-                contentDescription = "重试",
+                imageVector = FeatherIcons.CornerUpLeft,
+                contentDescription = "退回并重新编辑",
                 tint = colors.textMuted,
                 modifier = Modifier.size(12.dp)
             )
@@ -1072,3 +939,68 @@ fun UserMessageFooter(
         }
     }
 }
+
+/**
+ * assistant 消息底部 footer：模型名 · 审批/自主 · 推理档 · 消耗时长 · 回复结束时间。
+ *
+ * 全部元数据缺失（历史消息无诊断字段）时不渲染。
+ */
+@Composable
+fun AssistantMessageFooter(
+    footer: AssistantFooterInfo,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
+    val segments = mutableListOf<String>()
+
+    footer.modelName?.takeIf { it.isNotBlank() }?.let { segments.add(it) }
+    footer.agentMode?.let {
+        segments.add(
+            when (it) {
+                "AUTONOMOUS" -> "自主"
+                "APPROVAL" -> "审批"
+                else -> it
+            }
+        )
+    }
+    footer.thinkingLevel?.takeIf { it.isNotBlank() && it != "NONE" }?.let { segments.add("推理 $it") }
+    footer.durationMs?.let { ms ->
+        if (ms > 0) segments.add(formatSeconds(ms))
+    }
+    footer.completedAtMs?.let { ms ->
+        if (ms > 0) segments.add("完成 ${xyz.mederi.formatMessageTime(ms)}")
+    }
+
+    if (segments.isEmpty()) return
+
+    Row(
+        modifier = modifier.padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = FeatherIcons.Info,
+            contentDescription = null,
+            tint = colors.textMuted.copy(alpha = 0.6f),
+            modifier = Modifier.size(11.dp)
+        )
+        Text(
+            text = segments.joinToString(" · "),
+            color = colors.textMuted.copy(alpha = 0.8f),
+            fontSize = 10.5.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+private fun formatSeconds(ms: Long): String =
+    if (ms >= 10_000) {
+        // KMP 兼容的一位小数秒（wasmJs 无 String.format）
+        val secs = ms / 1000
+        val tenths = (ms % 1000) / 100
+        "${secs}.${tenths}s"
+    } else {
+        "${ms}ms"
+    }

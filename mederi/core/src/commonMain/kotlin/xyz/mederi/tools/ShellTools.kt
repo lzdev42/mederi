@@ -6,6 +6,7 @@ import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
 import java.io.File
 import xyz.mederi.tools.sandbox.CommandSandbox
+import xyz.mederi.tools.sandbox.ProcessRegistry
 
 /**
  * Shell 命令执行工具集。
@@ -37,14 +38,23 @@ class ShellTools(
     suspend fun runCommand(command: String, timeoutSeconds: Int = 120): CommandResult {
         if (command.isBlank()) return CommandResult("Error: command is empty", -1)
 
-            val (sandboxArgv, warning) = sandbox?.wrap(command)
-                ?: (listOf(sandbox?.shell ?: "sh", "-c", command) to null)
+            val wrapped = sandbox?.wrap(command)
+                ?: CommandSandbox.WrappedCommand(listOf(sandbox?.shell ?: "sh", "-c", command), null, false)
             val workDir = File(allowedDirectories.first())
-            val builder = ProcessBuilder(sandboxArgv)
+            val builder = ProcessBuilder(wrapped.argv)
             builder.directory(workDir)
             builder.redirectErrorStream(true)
 
             val process = builder.start()
+
+            // 启动即登记：posix 下直接子进程是进程组长（pid==pgid），
+            // 宿主侧据此整组回收（stop_process / 超时清理），安全边界见 ProcessRegistry。
+            ProcessRegistry.register(
+                pid = process.pid(),
+                pgid = if (wrapped.processGroupLeader) process.pid() else null,
+                command = command,
+                workDir = workDir.absolutePath
+            )
 
             val outputFuture = java.util.concurrent.FutureTask {
                 process.inputStream.bufferedReader().use { it.readText() }
@@ -54,6 +64,10 @@ class ShellTools(
             val completed = process.waitFor(timeoutSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
 
             if (!completed) {
+                // 超时整组回收：仅 destroyForcibly 只杀直接子进程，后台孙进程会变孤儿继续跑
+                if (wrapped.processGroupLeader) {
+                    ProcessRegistry.killGroup(process.pid(), process.pid(), force = true)
+                }
                 process.destroyForcibly()
                 outputFuture.get(1, java.util.concurrent.TimeUnit.SECONDS)
                 val partialOutput = outputFuture.get()
@@ -62,7 +76,7 @@ class ShellTools(
 
             val output = outputFuture.get(1, java.util.concurrent.TimeUnit.SECONDS)
             val exitCode = process.exitValue()
-            val prefixed = if (warning != null) warning + output else output
+            val prefixed = if (wrapped.warning != null) wrapped.warning + output else output
             return CommandResult(prefixed, exitCode)
     }
 

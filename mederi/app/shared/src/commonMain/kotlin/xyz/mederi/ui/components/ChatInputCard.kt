@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -226,36 +225,16 @@ fun ChatInputCard(
             }
         }
 
-        // 错误提示条：平时不占空间，有错误时显示红色文字
-        if (errorMessage != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(colors.accentDanger.copy(alpha = 0.15f))
-                    .border(1.dp, colors.accentDanger.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                SelectionContainer(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = errorMessage,
-                        color = colors.accentDanger,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                    )
-                }
-                Icon(
-                    imageVector = FeatherIcons.X,
-                    contentDescription = "关闭",
-                    tint = colors.accentDanger,
-                    modifier = Modifier
-                        .size(16.dp)
-                        .clickable { viewModel.clearError() }
-                )
-            }
-        }
+        // 错误显示板（ErrorBoard）：错误/警告唯一出口，平时不占空间，点击展开详细报告
+        // 断流（isStreamInterrupted）时显示"继续"按钮——重发 Continue 续写半截回复
+        ErrorBoard(
+            errorMessage = errorMessage,
+            onShowDetail = viewModel::showErrorDetail,
+            onDismiss = viewModel::clearError,
+            showContinue = viewModel.isStreamInterrupted,
+            onContinue = viewModel::continueAfterInterruption,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         // 输入卡片
         Card(

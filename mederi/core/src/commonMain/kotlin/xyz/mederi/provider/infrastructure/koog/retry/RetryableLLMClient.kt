@@ -55,6 +55,9 @@ class RetryableLLMClient(
     private val random: Random = Random.Default
 ) : LLMClient() {
 
+    /** 暴露内部 delegate——TurnExecutor 读取 [MederiOpenAILLMClient.lastStreamDiagnostics] 用 */
+    fun delegate(): LLMClient = delegate
+
     override val clientName: String = "Retryable(${delegate.clientName})"
 
     override fun llmProvider() = delegate.llmProvider()

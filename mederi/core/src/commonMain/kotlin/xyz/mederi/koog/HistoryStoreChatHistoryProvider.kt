@@ -21,6 +21,8 @@ import java.util.UUID
 data class MessageDiagnostics(
     val providerId: String? = null,
     val modelId: String? = null,
+    val modelName: String? = null,
+    val reasoningLevel: String? = null,
     val agentMode: String? = null,
     val workType: String? = null,
     val projectId: String? = null
@@ -57,10 +59,12 @@ class TurnToolTimings {
 data class ToolTiming(val status: String, val durationMs: Long, val error: String?)
 
 /** 给落库消息打诊断元数据（只补空不覆盖——诊断字段是增强信息）。 */
-private fun xyz.mederi.domain.model.Message.withDiagnostics(d: MessageDiagnostics): xyz.mederi.domain.model.Message =
+internal fun xyz.mederi.domain.model.Message.withDiagnostics(d: MessageDiagnostics): xyz.mederi.domain.model.Message =
     copy(
         providerId = providerId ?: d.providerId,
         modelId = modelId ?: d.modelId,
+        modelName = modelName ?: d.modelName,
+        reasoningLevel = reasoningLevel ?: d.reasoningLevel,
         agentMode = agentMode ?: d.agentMode,
         workType = workType ?: d.workType,
         projectId = projectId ?: d.projectId
@@ -70,7 +74,7 @@ private fun xyz.mederi.domain.model.Message.withDiagnostics(d: MessageDiagnostic
  * Assistant 消息近似耗时：Koogy ResponseMetaInfo 的 timestamp 是响应创建时刻，
  * 与落库时刻之差包含流式传输全程——作为 LLM 请求耗时的下界估计够诊断用。
  */
-private fun xyz.mederi.domain.model.Message.withAssistantDuration(
+internal fun xyz.mederi.domain.model.Message.withAssistantDuration(
     koog: KoogMessage,
     storedAt: Instant
 ): xyz.mederi.domain.model.Message =
