@@ -273,21 +273,26 @@ sequenceDiagram
     participant TE as TurnExecutor(durable-first 落库)
     participant EB as eventBus
     participant ST as SessionTitleService(jvmMain, 挂 MederiAiCore.initialize)
-    participant OC as OpenCode Zen 免费模型链
-    participant AC as AiCore.renameConversation
+    participant MC as ModelCatalog(models.dev 价格目录)
+    participant OC as OneShotCompletion(复用用户供应商 Koog 链路, 不发推理参数)
+    participant SM as SessionManager.rename
 
     TE->>EB: SESSION_UPDATED(用户消息已落库)
     EB-->>ST: 事件
     ST->>ST: 首次处理该会话?<br/>标题=="New Session" 且恰好一条 user 消息?
     alt 条件满足
-        ST->>OC: POST 首条消息(截400字) → mimo-v2.5-free<br/>失败降级 ling-3.0-flash-fin-free → nemotron-3.5-lightning-free<br/>(免Key, reasoning_effort=none, X-Session-ID 随机, 20s超时)
+        ST->>ST: 选模型(当前供应商优先→其他已连接; 全量模型不过滤 isEnabled)<br/>① 免费(input==0&&output==0)<br/>② 小模型(flash/lite, 排除 mini)
+        Note over ST: 有候选 → 逐个请求, 报错换下一个
+        ST->>MC: getFor(providerKey, baseUrl, modelId) 查免费/价格
+        ST->>OC: execute(provider, model, key): 候选之一
         OC-->>ST: ≤40 字标题
-        alt 全链失败
-            ST->>AC: renameConversation(session_yyyy-MM-dd_HH-mm-ss)
-        else 成功
-            ST->>AC: renameConversation(生成的标题)
+        alt 全部候选失败
+            ST->>OC: execute(用户发信息用的模型): 兜底
+            alt 兜底也失败
+                ST->>ST: session_yyyy-MM-ddTHH:mm:ss
+            end
         end
-        AC->>AC: 刷新 projects StateFlow → 侧边栏即时变名
+        ST->>SM: rename(id, title)
     end
     Note over ST: 全程静默不重试; 每会话只处理一次
 ```

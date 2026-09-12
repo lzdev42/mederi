@@ -484,6 +484,7 @@ classDiagram
         <<object>>
         +execute(provider, model, apiKey, tag, prompt, maxTokens) String?
         % 轻量一次性补全（会话自动命名等）
+        % 不注入任何推理参数(reasoningParameter=null, 服务器默认) — 推理型模型关思考普遍报错
     }
     class UrlNormalizer {
         <<object>> +normalize(url): NormalizedUrl(base, versionPath)

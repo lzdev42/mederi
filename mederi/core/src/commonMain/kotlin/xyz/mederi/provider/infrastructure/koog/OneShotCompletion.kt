@@ -6,8 +6,12 @@ import ai.koog.prompt.message.MessagePart
 /**
  * 一次性补全（one-shot completion）。
  *
- * 轻量场景专用（会话自动命名等）：单条 user 消息、非流式、无工具、关推理、小 maxTokens。
+ * 轻量场景专用（会话自动命名等）：单条 user 消息、非流式、无工具、小 maxTokens。
  * 复用 [KoogClientFactory] / [KoogModelBuilder] / [KoogParamsBuilder]，与对话 turn 同一条请求链路。
+ *
+ * **不注入任何推理参数**（reasoningParameter = null，服务器默认是什么就是什么）：
+ * 推理型模型很多对"显式关闭推理"报错，选模型/关思考把失败风险推到调用方不可控的配置上；
+ * 不发参数让服务器端默认行为决定，是各类模型最稳的请求形态。
  *
  * 这是个无状态函数对象，线程安全。调用方负责异常处理（本层不吞错）。
  */
@@ -32,12 +36,10 @@ object OneShotCompletion {
     ): String? {
         val client = KoogClientFactory.create(provider, apiKey)
         try {
-            // 关推理（NONE 档）：推理型模型默认输出全在 reasoning_content，content 为空；
-            // 空文本由调用方按失败处理
             val params = KoogParamsBuilder.build(
                 type = provider.type,
                 reasoningLevel = xyz.mederi.provider.domain.model.ReasoningLevel.NONE,
-                reasoningParameter = provider.reasoningParameter,
+                reasoningParameter = null,
                 maxTokens = maxTokens
             )
             val koogPrompt = prompt(tag, params = params) {

@@ -340,8 +340,14 @@ flowchart TD
 
 ### 9.2 SessionTitleService（`…/jvm/core/autotitle/SessionTitleService.kt`）
 
-- 触发：订阅 `aiCore.events()`，收到 `SESSION_UPDATED` 且该会话**首次**进入处理（内存 processedSessions）时判定；条件 = 标题仍为 "New Session" 且**恰好一条** user 消息（core durable-first 保证回查可见）。
-- 改名：首条用户消息（截 400 字）POST 到 OpenCode Zen 免费模型链（`mimo-v2.5-free` → `ling-3.0-flash-fin-free` → `nemotron-3.5-lightning-free`，免 Key、reasoning_effort=none、强制 `X-Session-ID` 随机 UUID 头、20s 超时）生成 ≤40 字标题 → `aiCore.renameConversation()`（内部刷新 projects StateFlow，侧边栏即时变名）；全链失败降级 `session_yyyy-MM-dd_HH-mm-ss`；全程静默不重试。
+- 挂载：`MederiAiCore.initialize()` 内 `autotitleService.start()`（lazy 构造，注入 `Mederi`，构造时传 `{ refreshProjects() }`，改名成功后回调刷新侧边栏），订阅 `mederi.sessionManager.events()`。
+- 触发：收到 `SESSION_UPDATED` 且该会话**首次**进入处理（内存 processedSessions）时判定；条件 = 标题仍为 "New Session" 且**恰好一条** user 消息（core durable-first 保证回查可见）。
+- 选模型（所有层：**当前供应商优先 → 其他已连接供应商**；扫描范围 = 供应商**全部**模型，**不过滤 isEnabled**）：
+  1. 免费模型：`mederi.modelCatalog.getFor(providerKey, baseUrl, modelId)` 价格 input==0 && output==0
+  2. 小模型：名字含 `flash` / `lite`（大小写不敏感），排除含 `mini` 的
+- 请求：走 `OneShotCompletion.execute(provider, model, key, "autotitle", ...)`（**不注入任何推理参数**，服务器默认）→ `mederi.sessionManager.rename(id, title)`；候选逐个试，请求报错推下一个。
+- 兜底：候选耗尽 → 直接用用户发信息用的模型（`session.aiModel` 快照 id → provider 现值）再请求一次；仍失败 → `session_yyyy-MM-ddTHH:mm:ss`（本地时间）。
+- 旧的 OpenCode Zen 免费模型链 / X-Session-ID / 自建 HttpClient / timestamp 命名已整体删除。
 
 ### 9.3 desktopApp（`app/desktopApp/src/main/kotlin/xyz/mederi/`）
 

@@ -4,72 +4,57 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
-import io.ktor.http.isSuccess
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.json.Json
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
-import xyz.mederi.core.contract.AiCore
-import xyz.mederi.core.contract.models.ChatBlock
-import xyz.mederi.core.contract.models.ChatRole
-import xyz.mederi.core.contract.models.CoreEventType
+import xyz.mederi.Mederi
 import xyz.mederi.debug.DebugLog
+import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.EventType
+import xyz.mederi.domain.model.MessageRole
+import xyz.mederi.domain.model.MessagePart
+import xyz.mederi.domain.model.Session
+import xyz.mederi.domain.model.UI_HIDDEN_MARKER
+import xyz.mederi.provider.domain.model.Provider
+import xyz.mederi.provider.infrastructure.koog.OneShotCompletion
 
 /**
- * 会话自动命名服务（UI 层特性，不触碰 core）。
+ * 会话自动命名服务（挂 [MederiAiCore.initialize]，全部宿主生效）。
  *
  * 每个会话第一条消息**发出时**（收到 SESSION_UPDATED——core 在用户消息落库后才广播该事件，
- * durable-first 保证此时回查快照必能看到本条用户消息），后台把用户第一条消息发给
- * OpenCode Zen 免费模型——无 Key 直连、关推理——用返回的标题 rename 会话，用户全程无感知。
+ * durable-first 保证此时回查历史必能看到本条用户消息），后台选一个模型生成标题并改名，
+ * 用户全程无感知。
  *
- * - 免费端点强制要求 `X-Session-ID` 请求头（2026-09 起，缺失返回 400 MissingSessionID：
- *   "OpenCode's free tier can only be used in OpenCode"），每次请求带随机 UUID 即可通过。
- * - 仅第一次：内存已处理集合 + "仍是默认标题且恰好一条 user 消息"双重判定；
- *   生成过或用户手动改名过（标题非默认）都不会再触发。
- * - 降级：免费模型链依次尝试，全部失败（免费额度用尽 / 限流 / 网络不通 / 模型下架）
- *   时把会话命名为 session_yyyy-MM-dd_HH-mm-ss（本地时间）。一律静默，不重试不报错。
- * - 改名走 [AiCore.renameConversation]，其内部刷新 projects StateFlow，侧边栏即时变名。
+ * 选模型策略（所有层都是：当前供应商优先，当前没有 → 其他已连接供应商）：
+ * 1. 免费模型：models.dev 目录价格 input==0 && output==0
+ * 2. 小模型：名字含 flash 或 lite（大小写不敏感），排除含 mini 的（有旗舰模型叫 mini）
+ * 扫描范围是该供应商的**全部**模型（不过滤 isEnabled——是"这个供应商有"，不是"用户选择显示的"）。
  *
- * 免费模型轮换频繁，此链 2026-09 实测可用（需带 session 头），需按 https://opencode.ai/zen/v1/models 定期核对。
+ * 请求：走 [OneShotCompletion] 复用该供应商的 baseUrl + API Key 与主对话同一条 Koog 链路；
+ * **不注入任何推理参数**（服务器默认，推理型模型关思考普遍会报错）。
+ * 请求报错 → 换下一个候选；候选耗尽 → 兜底直接用用户发信息用的模型再请求一次；
+ * 仍失败 → 最终兜底 session_yyyy-MM-ddTHH:mm:ss（本地时间）。
+ *
+ * 触发条件：仍为默认标题且恰好一条 user 消息；生成过或用户手动改名过不再触发。
  */
 class SessionTitleService(
-    private val aiCore: AiCore,
+    private val mederi: Mederi,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /** 改名成功后回调（桥层用它刷新 projects StateFlow，侧边栏即时变名）。 */
+    private val onRenamed: suspend () -> Unit = {},
 ) {
 
     private val processedSessions: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     private val started = AtomicBoolean(false)
 
-    private val client = HttpClient(CIO) {
-        install(HttpTimeout) {
-            requestTimeoutMillis = REQUEST_TIMEOUT_MS
-        }
-    }
-
-    private val json = Json { ignoreUnknownKeys = true }
-
     /** 挂载事件流，开始监听第一条消息发出（幂等，重复调用 no-op）。 */
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch {
-            aiCore.events().collect { event ->
-                if (event.type == CoreEventType.SESSION_UPDATED) {
+            mederi.sessionManager.events().collect { event ->
+                if (event.type == EventType.SESSION_UPDATED) {
                     renameIfNeeded(event.sessionId)
                 }
             }
@@ -81,119 +66,129 @@ class SessionTitleService(
             // 已处理集合保证每个会话整个生命周期只判定一次
             if (!processedSessions.add(sessionId)) return@launch
             try {
-                val snapshot = aiCore.getSnapshot(sessionId).getOrNull() ?: return@launch
-                val conversation = snapshot.conversation
-                if (conversation.title != DEFAULT_TITLE) return@launch
+                val session = mederi.sessionManager.get(sessionId) ?: return@launch
+                if (session.title != DEFAULT_TITLE) return@launch
 
-                val messages = snapshot.messages
-                val userMessages = messages.filter { it.role == ChatRole.User }
+                val messages = mederi.sessionManager.listMessages(sessionId)
+                val userMessages = messages.filter { it.role == MessageRole.USER }
                 // 发送时触发：恰好一条 user 消息（assistant 可能还没回复，不设数量条件）
                 if (userMessages.size != 1) return@launch
 
                 val firstUserText = userMessages
-                    .flatMap { it.blocks }
-                    .filterIsInstance<ChatBlock.Text>()
+                    .flatMap { it.parts }
+                    .filterIsInstance<MessagePart.Text>()
                     .joinToString("\n") { it.text }
+                    .substringBefore(UI_HIDDEN_MARKER)
                     .trim()
                 if (firstUserText.isEmpty()) return@launch
 
-                val generated = generateTitle(firstUserText)
-                val title = generated ?: fallbackTitle()
-                DebugLog.event(TAG, "会话自动命名: $sessionId -> $title${if (generated == null) " (降级)" else ""}")
-                aiCore.renameConversation(sessionId, title)
+                val title = generateTitle(session, firstUserText)
+                DebugLog.event(TAG, "会话自动命名: $sessionId -> $title")
+                mederi.sessionManager.rename(sessionId, title)
+                runCatching { onRenamed() }
+                    .onFailure { DebugLog.error(TAG, "改名后刷新 UI 失败: ${it.message}", it) }
             } catch (e: Exception) {
                 DebugLog.error(TAG, "会话 $sessionId 自动命名异常: ${e.message}", e)
             }
         }
     }
 
-    /** 依次尝试免费模型链；全部失败返回 null，由调用方走时间戳兜底。 */
-    private suspend fun generateTitle(userText: String): String? {
+    /** 按优先级选模型请求标题；全部候选 + 兜底都失败返回时间戳兜底名。 */
+    private suspend fun generateTitle(session: Session, userText: String): String {
         val prompt = "$PROMPT_PREFIX${userText.take(MAX_INPUT_CHARS)}"
-        for (model in FREE_MODELS) {
-            val title = runCatching { requestTitle(model, prompt) }
-                .onFailure { DebugLog.event(TAG, "标题模型 $model 失败: ${it.message}") }
-                .getOrNull()
+        // 只从已连接（有默认 Key）供应商里选——请求需要能发出去
+        val providers = mederi.providerManager.list().filter { it.defaultApiKey != null }
+
+        // 当前供应商 = 会话最后一次用的模型所属供应商（TurnExecutor 每轮回写 session.aiModel）
+        val currentProviderId = session.aiModel?.let { model ->
+            providers.firstOrNull { p -> p.models.any { it.id == model.id } }?.id
+        }
+
+        for ((provider, model) in buildCandidates(providers, currentProviderId)) {
+            val title = requestTitle(provider, model, prompt)
             if (!title.isNullOrBlank()) return title
         }
-        return null
-    }
 
-    @OptIn(ExperimentalUuidApi::class)
-    private suspend fun requestTitle(model: String, prompt: String): String? {
-        val response = withTimeout(REQUEST_TIMEOUT_MS) {
-            client.post("$ZEN_BASE_URL/chat/completions") {
-                // 免费档强制要求 session 身份头，缺失直接 400 MissingSessionID；随机 UUID 即可通过
-                header("X-Session-ID", Uuid.random().toString())
-                contentType(ContentType.Application.Json)
-                setBody(
-                    ChatCompletionRequest(
-                        model = model,
-                        messages = listOf(Message(role = "user", content = prompt))
-                    )
-                )
+        // 兜底：直接用用户发信息用的模型（session.aiModel 的快照 id）再请求一次
+        session.aiModel?.let { snapshot ->
+            val provider = providers.firstOrNull { p -> p.models.any { it.id == snapshot.id } }
+            val live = provider?.getModel(snapshot.id)
+            if (provider != null && live != null) {
+                val title = requestTitle(provider, live, prompt)
+                if (!title.isNullOrBlank()) return title
             }
         }
-        if (!response.status.isSuccess()) return null
-        val body = json.decodeFromString<ChatCompletionResponse>(response.bodyAsText())
-        return body.choices.firstOrNull()?.message?.content
-            ?.trim()
+
+        return "session_" + LocalDateTime.now().format(FALLBACK_FORMAT)
+    }
+
+    /**
+     * 候选顺序：免费（当前 → 其他）→ 小模型（当前 → 其他）。
+     * 同一个模型可重复进列表（兜底模型可能同时也是免费/小模型），请求失败自然推进到下一个。
+     */
+    private fun buildCandidates(
+        providers: List<Provider>,
+        currentProviderId: String?
+    ): List<Pair<Provider, AIModel>> {
+        val current = providers.firstOrNull { it.id == currentProviderId }
+        val others = providers.filter { it.id != currentProviderId }
+
+        val result = mutableListOf<Pair<Provider, AIModel>>()
+        current?.let { cp -> result += cp.models.filter { isFree(cp, it) }.map { cp to it } }
+        others.forEach { op -> result += op.models.filter { isFree(op, it) }.map { op to it } }
+        current?.let { cp -> result += cp.models.filter { isSmall(it) }.map { cp to it } }
+        others.forEach { op -> result += op.models.filter { isSmall(it) }.map { op to it } }
+        return result
+    }
+
+    /** models.dev 目录价格：输入和输出都为 0 = 免费。目录查不到 = 不算免费。 */
+    private fun isFree(provider: Provider, model: AIModel): Boolean {
+        val meta = mederi.modelCatalog.getFor(provider.modelsDevKey, provider.baseUrl, model.providerModelId)
+            ?: return false
+        return meta.inputPricePerMillion == 0.0 && meta.outputPricePerMillion == 0.0
+    }
+
+    /** 小模型：名字含 flash 或 lite，且不含 mini（有旗舰模型叫 mini）。 */
+    private fun isSmall(model: AIModel): Boolean {
+        val name = model.name.lowercase()
+        return (name.contains("flash") || name.contains("lite")) && !name.contains("mini")
+    }
+
+    /** 用该供应商的 baseUrl + Key 请求标题；任何异常/空返回都视为该候选失败。 */
+    private suspend fun requestTitle(provider: Provider, model: AIModel, prompt: String): String? {
+        val apiKey = mederi.providerManager.getDefaultKeyValue(provider.id) ?: return null
+        val raw = runCatching {
+            OneShotCompletion.execute(
+                provider = provider,
+                model = model,
+                apiKey = apiKey,
+                tag = "autotitle",
+                prompt = prompt,
+                maxTokens = MAX_TITLE_TOKENS
+            )
+        }.onFailure { DebugLog.event(TAG, "标题请求失败 ${provider.name}/${model.name}: ${it.message}") }
+            .getOrNull()
+        return raw?.trim()
             ?.trim('"', '\'', '`')
             ?.replace(Regex("\\s+"), " ")
             ?.take(MAX_TITLE_CHARS)
             ?.takeIf { it.isNotBlank() }
     }
 
-    /** 免费额度用尽 / 模型全挂时的兜底名。 */
-    private fun fallbackTitle(): String =
-        "session_" + LocalDateTime.now().format(FALLBACK_FORMAT)
-
     private companion object {
         const val TAG = "AutoTitle"
-        const val ZEN_BASE_URL = "https://opencode.ai/zen/v1"
-
-        /** 依次降级的免费模型（均为免 Key 直连；顺序按隐私风险与可用性权衡）。 */
-        val FREE_MODELS = listOf(
-            "mimo-v2.5-free",
-            "ling-3.0-flash-fin-free",
-            "nemotron-3.5-lightning-free",
-        )
 
         /** 与 core SessionManagerImpl.create 的默认标题保持一致。 */
         const val DEFAULT_TITLE = "New Session"
 
-        /** 显式关推理：免费推理模型默认输出全在 reasoning_content，content 为空。 */
-        const val REASONING_EFFORT_NONE = "none"
-
-        const val REQUEST_TIMEOUT_MS = 20_000L
         const val MAX_INPUT_CHARS = 400
         const val MAX_TITLE_CHARS = 40
+        const val MAX_TITLE_TOKENS = 512
 
-        val FALLBACK_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
+        /** 全链路失败兜底名：session_yyyy-MM-ddTHH:mm:ss */
+        val FALLBACK_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
 
         const val PROMPT_PREFIX =
             "根据以下用户消息生成一个不超过20字的会话标题。只输出标题本身，不要引号、句号或任何解释。\n用户消息："
     }
-
-    @Serializable
-    private data class ChatCompletionRequest(
-        val model: String,
-        val messages: List<Message>,
-        @SerialName("reasoning_effort") val reasoningEffort: String = REASONING_EFFORT_NONE,
-        // 推理模型在 reasoning_effort 未被端点尊重时会把 token 花在 reasoning 上，
-        // 64 会先耗尽（finish_reason=length，content=null）——给足余量保证有正文输出
-        @SerialName("max_tokens") val maxTokens: Int = 512,
-    )
-
-    @Serializable
-    private data class Message(val role: String, val content: String)
-
-    @Serializable
-    private data class ChatCompletionResponse(val choices: List<Choice> = emptyList())
-
-    @Serializable
-    private data class Choice(val message: ResponseMessage? = null)
-
-    @Serializable
-    private data class ResponseMessage(val content: String? = null)
 }

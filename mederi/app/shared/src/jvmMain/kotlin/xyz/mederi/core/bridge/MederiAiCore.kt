@@ -64,8 +64,8 @@ class MederiAiCore(
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val stateMutex = Mutex()
 
-    /** 会话自动命名服务（首条消息发出后生成标题），随 initialize 挂载事件流 */
-    private val autotitleService = SessionTitleService(this)
+    /** 会话自动命名服务（首条消息发出后生成标题），随 initialize 挂载事件流；依赖 mederi（lateinit），lazy 推迟到 start() 时构造 */
+    private val autotitleService by lazy { SessionTitleService(mederi) { refreshProjects() } }
 
     private lateinit var mederi: Mederi
 
