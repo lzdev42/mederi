@@ -30,6 +30,8 @@ import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Zap
+import compose.icons.feathericons.Activity
+import compose.icons.feathericons.X
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.ui.ChatListItem
 import xyz.mederi.core.ui.WorkspaceViewModel

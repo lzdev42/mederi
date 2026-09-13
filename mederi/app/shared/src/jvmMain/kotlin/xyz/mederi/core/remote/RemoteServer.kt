@@ -50,6 +50,10 @@ import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.CreateConversationInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.CreateProjectInput
+import xyz.mederi.core.contract.dto.InstallMcpServerInput
+import xyz.mederi.core.contract.dto.McpServerJsonResponse
+import xyz.mederi.core.contract.dto.SetMcpServerEnabledInput
+import xyz.mederi.core.contract.dto.UpdateMcpServerInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.ReadyInfo
 import xyz.mederi.core.contract.dto.RenameConversationInput
@@ -384,6 +388,35 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     post("/v1/providers/{id}/keys/{keyId}/set-default") {
         call.respondResult(aiCore.setDefaultProviderApiKey(call.parameters["id"]!!, call.parameters["keyId"]!!))
+    }
+
+    // ------------------------------------------------------------------
+    // MCP Server 管理
+    // ------------------------------------------------------------------
+
+    get("/v1/mcp/servers") {
+        call.respondResult(aiCore.listMcpServers())
+    }
+    post("/v1/mcp/servers") {
+        val input = call.receive<InstallMcpServerInput>()
+        call.respondResult(aiCore.installMcpServer(input.json))
+    }
+    patch("/v1/mcp/servers/{name}") {
+        val input = call.receive<UpdateMcpServerInput>()
+        call.respondResult(aiCore.updateMcpServer(call.parameters["name"]!!, input.json))
+    }
+    post("/v1/mcp/servers/{name}/enabled") {
+        val input = call.receive<SetMcpServerEnabledInput>()
+        call.respondResult(aiCore.setMcpServerEnabled(call.parameters["name"]!!, input.enabled))
+    }
+    delete("/v1/mcp/servers/{name}") {
+        call.respondResult(aiCore.deleteMcpServer(call.parameters["name"]!!))
+    }
+    post("/v1/mcp/servers/{name}/verify") {
+        call.respondResult(aiCore.verifyMcpServer(call.parameters["name"]!!))
+    }
+    get("/v1/mcp/servers/{name}/json") {
+        call.respondResult(aiCore.getMcpServerJson(call.parameters["name"]!!).map { McpServerJsonResponse(it) })
     }
 }
 

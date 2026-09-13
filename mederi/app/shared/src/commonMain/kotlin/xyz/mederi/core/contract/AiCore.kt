@@ -81,4 +81,15 @@ interface AiCore {
     fun events(): Flow<CoreEvent>
 
     suspend fun getFileDiffs(conversationId: String, messageId: String? = null): Result<List<FileDiff>>
+
+    // ==========================================
+    // MCP Server 管理契约
+    // ==========================================
+    suspend fun listMcpServers(): Result<List<McpServerItem>> = Result.success(emptyList())
+    suspend fun setMcpServerEnabled(name: String, enabled: Boolean): Result<Unit> = Result.success(Unit)
+    suspend fun installMcpServer(json: String): Result<Unit> = Result.success(Unit)
+    suspend fun updateMcpServer(name: String, json: String): Result<Unit> = Result.success(Unit)
+    suspend fun deleteMcpServer(name: String): Result<Unit> = Result.success(Unit)
+    suspend fun verifyMcpServer(name: String): Result<Unit> = Result.success(Unit)
+    suspend fun getMcpServerJson(name: String): Result<String> = Result.success("{}")
 }

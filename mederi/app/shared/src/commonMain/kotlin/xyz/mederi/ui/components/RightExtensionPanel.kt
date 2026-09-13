@@ -686,6 +686,12 @@ private fun OverviewTabContent(
             }
         }
 
+        // MCP 服务管理卡片
+        McpManagementCard(
+            viewModel = viewModel,
+            colors = colors
+        )
+
         // 原始消息列表（概览下方展示）
         RawMessagesCard(
             viewModel = viewModel,

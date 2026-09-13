@@ -218,6 +218,14 @@ class WorkspaceViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            appState.isReady.collect { ready ->
+                DebugLog.info("MCP", "WorkspaceViewModel: appState.isReady changed to $ready")
+                if (ready) {
+                    refreshMcpServers()
+                }
+            }
+        }
     }
 
     // ==========================================
@@ -378,6 +386,79 @@ class WorkspaceViewModel(
 
     fun closeDockPanel() {
         activeDockPanel = null
+    }
+
+    /** 已安装 MCP Server 列表（概览面板消费） */
+    var mcpServers by mutableStateOf<List<xyz.mederi.core.contract.models.McpServerItem>>(emptyList()); private set
+    var isMcpRefreshing by mutableStateOf(false); private set
+
+    /** 刷新 MCP Server 列表 */
+    fun refreshMcpServers() {
+        viewModelScope.launch {
+            isMcpRefreshing = true
+            try {
+                DebugLog.info("MCP", "refreshMcpServers started. appState.isReady=${appState.isReady.value}")
+                val res = appState.aiCore.listMcpServers()
+                if (res.isSuccess) {
+                    val list = res.getOrDefault(emptyList())
+                    DebugLog.info("MCP", "refreshMcpServers success. Found ${list.size} servers: ${list.map { it.name }}")
+                    mcpServers = list
+                } else {
+                    val err = res.exceptionOrNull()
+                    DebugLog.error("MCP", "refreshMcpServers failed: ${err?.message}", err)
+                }
+            } finally {
+                isMcpRefreshing = false
+            }
+        }
+    }
+
+    /** 启停 MCP Server */
+    fun toggleMcpServer(name: String, enabled: Boolean) {
+        viewModelScope.launch {
+            mcpServers = mcpServers.map { if (it.name == name) it.copy(enabled = enabled) else it }
+            appState.aiCore.setMcpServerEnabled(name, enabled)
+            refreshMcpServers()
+        }
+    }
+
+    /** 安装/新增 MCP Server */
+    suspend fun installMcpServer(json: String): Result<Unit> {
+        val res = appState.aiCore.installMcpServer(json)
+        if (res.isSuccess) {
+            refreshMcpServers()
+        }
+        return res
+    }
+
+    /** 更新/编辑 MCP Server */
+    suspend fun updateMcpServer(name: String, json: String): Result<Unit> {
+        val res = appState.aiCore.updateMcpServer(name, json)
+        if (res.isSuccess) {
+            refreshMcpServers()
+        }
+        return res
+    }
+
+    /** 删除 MCP Server */
+    fun deleteMcpServer(name: String) {
+        viewModelScope.launch {
+            appState.aiCore.deleteMcpServer(name)
+            refreshMcpServers()
+        }
+    }
+
+    /** 验证/测试 MCP Server */
+    fun verifyMcpServer(name: String) {
+        viewModelScope.launch {
+            appState.aiCore.verifyMcpServer(name)
+            refreshMcpServers()
+        }
+    }
+
+    /** 读取单个 MCP Server 的原始 JSON */
+    suspend fun getMcpServerJson(name: String): Result<String> {
+        return appState.aiCore.getMcpServerJson(name)
     }
 
     /** 当前展示的实施计划内容。写操作只经 openPlanInExtension（单向数据流） */

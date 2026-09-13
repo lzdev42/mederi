@@ -43,6 +43,10 @@ import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.CreateConversationInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.CreateProjectInput
+import xyz.mederi.core.contract.dto.McpServerJsonResponse
+import xyz.mederi.core.contract.dto.InstallMcpServerInput
+import xyz.mederi.core.contract.dto.UpdateMcpServerInput
+import xyz.mederi.core.contract.dto.SetMcpServerEnabledInput
 import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.RawMessageDto
@@ -55,6 +59,7 @@ import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.FileDiff
+import xyz.mederi.core.contract.models.McpServerItem
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.Project
@@ -525,5 +530,41 @@ class ServerAiCore(
     override suspend fun getFileDiffs(conversationId: String, messageId: String?): Result<List<FileDiff>> = runCatching {
         val query = messageId?.let { "?messageId=${it.encodeURLParameter()}" } ?: ""
         httpGet("/v1/sessions/$conversationId/diffs$query")
+    }
+
+    // ------------------------------------------------------------------
+    // MCP Server 管理（遥控 REST 桥）
+    // ------------------------------------------------------------------
+
+    override suspend fun listMcpServers(): Result<List<McpServerItem>> = runCatching {
+        httpGet("/v1/mcp/servers")
+    }
+
+    override suspend fun setMcpServerEnabled(name: String, enabled: Boolean): Result<Unit> = runCatching {
+        httpCall("/v1/mcp/servers/${name.encodeURLParameter()}/enabled", requestBody = SetMcpServerEnabledInput(enabled))
+    }
+
+    override suspend fun installMcpServer(json: String): Result<Unit> = runCatching {
+        httpCall("/v1/mcp/servers", requestBody = InstallMcpServerInput(json))
+    }
+
+    override suspend fun updateMcpServer(name: String, json: String): Result<Unit> = runCatching {
+        httpCall(
+            "/v1/mcp/servers/${name.encodeURLParameter()}",
+            method = HttpMethod.Patch,
+            requestBody = UpdateMcpServerInput(json)
+        )
+    }
+
+    override suspend fun deleteMcpServer(name: String): Result<Unit> = runCatching {
+        httpCall("/v1/mcp/servers/${name.encodeURLParameter()}", method = HttpMethod.Delete)
+    }
+
+    override suspend fun verifyMcpServer(name: String): Result<Unit> = runCatching {
+        httpCall("/v1/mcp/servers/${name.encodeURLParameter()}/verify")
+    }
+
+    override suspend fun getMcpServerJson(name: String): Result<String> = runCatching {
+        httpGet<McpServerJsonResponse>("/v1/mcp/servers/${name.encodeURLParameter()}/json").json
     }
 }

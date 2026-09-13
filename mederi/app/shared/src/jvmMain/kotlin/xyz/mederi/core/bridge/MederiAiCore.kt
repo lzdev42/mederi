@@ -38,6 +38,8 @@ import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CostSummary
+import xyz.mederi.core.contract.models.McpServerItem
+import xyz.mederi.core.contract.models.McpServerStatus
 import xyz.mederi.core.contract.models.FileDiff
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.Project
@@ -793,5 +795,59 @@ class MederiAiCore(
 
     private suspend fun findCoreModel(modelId: String): xyz.mederi.domain.model.AIModel? {
         return mederi.models.get(modelId)
+    }
+
+    override suspend fun listMcpServers(): Result<List<McpServerItem>> = runCatching {
+        if (!::mederi.isInitialized) {
+            xyz.mederi.core.ui.DebugLog.info("MCP", "listMcpServers: mederi not initialized yet, waiting for isReady...")
+            _isReady.first { it }
+        }
+        val rawList = mederi.mcpServers.list()
+        xyz.mederi.core.ui.DebugLog.info("MCP", "listMcpServers: fetched ${rawList.size} servers from mederi.mcpServers")
+        rawList.map {
+            McpServerItem(
+                name = it.name,
+                enabled = it.enabled,
+                kind = it.kind,
+                summary = it.summary,
+                status = when (it.status) {
+                    xyz.mederi.mcp.servers.domain.McpServerStatus.OK -> McpServerStatus.OK
+                    xyz.mederi.mcp.servers.domain.McpServerStatus.FAILED -> McpServerStatus.FAILED
+                    else -> McpServerStatus.UNCHECKED
+                },
+                toolCount = it.toolCount,
+                lastError = it.lastError
+            )
+        }
+    }
+
+    override suspend fun setMcpServerEnabled(name: String, enabled: Boolean): Result<Unit> = runCatching {
+        mederi.mcpServers.setEnabled(name, enabled)
+    }
+
+    override suspend fun installMcpServer(json: String): Result<Unit> = runCatching {
+        val res = mederi.mcpServers.install(json)
+        if (!res.success) {
+            error(res.errors.joinToString("; ").ifEmpty { "安装 MCP 服务失败" })
+        }
+    }
+
+    override suspend fun updateMcpServer(name: String, json: String): Result<Unit> = runCatching {
+        val res = mederi.mcpServers.update(name, json)
+        if (!res.success) {
+            error(res.errors.joinToString("; ").ifEmpty { "更新 MCP 服务失败" })
+        }
+    }
+
+    override suspend fun deleteMcpServer(name: String): Result<Unit> = runCatching {
+        mederi.mcpServers.delete(name)
+    }
+
+    override suspend fun verifyMcpServer(name: String): Result<Unit> = runCatching {
+        mederi.mcpServers.verify(name)
+    }
+
+    override suspend fun getMcpServerJson(name: String): Result<String> = runCatching {
+        mederi.mcpServers.getJson(name)
     }
 }
