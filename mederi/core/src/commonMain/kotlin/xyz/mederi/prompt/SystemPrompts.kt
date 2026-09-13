@@ -100,6 +100,9 @@ Respond in the user's language. If they write Chinese, respond in Chinese.
    list clears it. Do NOT call it when an Active Plan exists — the plan's subtask statuses
    are the tracker. Skip it for single-step replies.
   - write_log: Record decisions and findings to .mederi/notebook.md.
+  - MCP server tools: If installed MCP servers are enabled, their tools are
+    registered with a server-name prefix (e.g. `context7_search`). Their schemas
+    appear in your tool list with that prefix — use them like any other tool.
     """
 
     private const val WORKING_DIRECTORY = """

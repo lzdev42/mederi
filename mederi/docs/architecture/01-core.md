@@ -16,7 +16,7 @@
    - config.db 侧：`apiKeyStore` / `providerStore` / `projectStore` / `mcpServerStore`
    - data.db 侧：`historyStore` / `sessionStore` / `diffStore`
 5. `ModelCatalog()`（内存索引，需外部调 `start()`）。
-6. Manager 装配：`ProviderManagerImpl(providerStore, apiKeyStore)`；`ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)`；`SessionManagerImpl(sessionStore, historyStore, projectManager, providerManager, diffStore)`；`McpServerManagerImpl(mcpServerStore)`；`McpMarketManagerImpl(OfficialRegistrySource())`。
+6. Manager 装配：`ProviderManagerImpl(providerStore, apiKeyStore)`；`ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)`；`SessionManagerImpl(sessionStore, historyStore, projectManager, providerManager, diffStore, mcpConnector)`；`McpServerManagerImpl(mcpServerStore, mcpConnector)`；`McpMarketManagerImpl(OfficialRegistrySource())`；`McpConnector(mcpServerStore)`（引擎，manager 与 TurnExecutor 共享）。
 7. API 装配：`ProviderApiImpl(providerManager, modelCatalog)`、`ModelApiImpl(providerManager)`、`ProjectApiImpl(projectManager)`、`SessionApiImpl(sessionManager)`、`McpServerApiImpl(mcpServerManager)`、`McpMarketApiImpl(mcpMarketManager)`。
 
 `Mederi` 公开成员：`historyStore: HistoryStore?`、`providers: ProviderApi`、`projects: ProjectApi`、`providerManager`、`projectManager`、`sessionManager`、`sessions: SessionApi`、`models: ModelApi`、`mcpMarket: McpMarketApi`、`mcpServers: McpServerApi`、`modelCatalog: ModelCatalog`。
@@ -192,7 +192,7 @@ Impl 规则：写前 `validateReasoningParameter`（`{` 开头必须是合法 JS
 | `ProjectApi` | list / create / get / delete / rename / addDirectory / removeDirectory | |
 | `ProviderApi` | list / create / get / update / delete / addKey / listKeys / deleteKey / setDefaultKey / listModels / addModel / updateModel / deleteModel / **refreshModels** / **autoSetupModels** | refresh 只新增远端新模型（DEFAULT_VISIBLE_MODEL_LIMIT=10 补足启用）不碰存量元数据；autoSetupModels=目录元数据进存量 FETCHED 模型唯一通道；type 字符串解析失败抛 Validation |
 | `ModelApi` | list / get（跨供应商聚合） | |
-| `McpServerApi` | install(mcpServersJson) / list / getJson / update / setEnabled / delete / verify / verifyConfig | 无 DTO 转换 |
+| `McpServerApi` | install(mcpServersJson) / list / getJson / update / setEnabled / delete / **discover(name)** / verify / **verifyAll** / verifyConfig | 无 DTO 转换；list 返回带缓存 status 的 McpServerInfo |
 | `McpMarketApi` | search(query,cursor,pageSize) / detail(id) / installOptions(detail) / installConfig(detail,...) / installConfig(id,...) | |
 
 SessionApi 同文件 DTO：`AgentConfig(agentMode, workType=CODE, aiModel=null, reasoningLevel=null)`、`CreateSessionRequest(agentConfig, projectId, title="", env)`、`RenameSessionRequest(title)`、`SendMessageRequest(agentConfig, parts: List<MessagePart>)`、`RawMessageRecord(seq, messageId?, role, payload, createdAt, modelId?, durationMs?, finishReason?, status?)`、`MessageSummary(seq, messageId?, role, content, createdAt)`（HistoryStore.kt 内）。
@@ -538,7 +538,10 @@ classDiagram
     subgraph servers["mcp/servers/ 配置管理"]
         class McpServerManager {
             +install(mcpServersJson) +list() +getJson(name) +update(name, json)
-            +setEnabled(name, enabled) +delete(name) +verify(name) +verifyConfig(json)
+            +setEnabled(name, enabled) +delete(name)
+            +discover(name) McpDiscoveryResult +verify(name) +verifyAll() +verifyConfig(json)
+            % statusCache: name→(status, toolCount, lastError, lastCheckedAt)
+            % install/update/enable 后自动 verify 写缓存
         }
         class McpServerConfig {
             +name +enabled +raw: JsonElement
@@ -549,17 +552,32 @@ classDiagram
             Stdio(command, args, env)
             Remote(url, headers, transportType?)
         }
-        class McpVerifier {
-            +verify(connection) McpVerifyResult
-            % MCP initialize 握手(2025-06-18)
-            % remote POST 优先, 非2xx 回退 GET SSE
-            % stdio 拉进程写 stdin 等 stdout, finally destroyForcibly
-        }
         class McpServersParser {
             <<object>> +parse(json): Result
             % 接受 {"mcpServers":{...}} 标准形态与裸条目兼容
         }
         class McpServersStore
+    end
+    subgraph engine["mcp/engine/ 内核引擎（Koog agents-mcp）"]
+        class McpConnector {
+            +discover(config) McpDiscoveryResult
+            +verify(connection) McpVerifyResult
+            +openSession() McpSession
+            % transport 映射: stdio→jvmMain起进程+defaultStdioTransport
+            % remote sse→SseClientTransport / 默认→mcpStreamableHttpTransport
+            % 工具名加 server 前缀(serverName_toolName)防撞名
+        }
+        class McpSession {
+            +tools: List~ToolBase~
+            +close()
+        }
+        class PrefixedMcpToolDescriptorParser
+        class MederiMcpTool {
+            % 定制 McpTool：LLM 侧带前缀名，server 调用回落原始名(ToolId)
+        }
+        class McpStdioTransport {
+            <<expect/actual>>
+        }
     end
     subgraph market["mcp/market/ 市场"]
         class McpMarketManager {
@@ -580,15 +598,25 @@ classDiagram
         class McpMarketSource
     end
     McpServerManagerImpl --> McpServersStore
-    McpServerManagerImpl --> McpVerifier
+    McpServerManagerImpl --> McpConnector
     McpServerManagerImpl --> McpServersParser
     McpServerConfig --> McpConnection
+    McpConnector --> McpServersStore
+    McpConnector --> McpSession
+    McpConnector --> PrefixedMcpToolDescriptorParser
+    McpConnector --> McpStdioTransport
     McpMarketManagerImpl --> McpMarketSource
     McpMarketManagerImpl --> McpClientConfigBuilder
     McpMarketManagerImpl --> OfficialRegistrySource
 ```
 
-**关系**：市场产出标准 mcpServers JSON → `McpServerApi.install` 消费入库 McpServersStore；两者零耦合。domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/McpPackage/McpRemote/McpTransport/McpKeyValue/McpArgument/McpInputSpec/McpInstallOption(kind: LOCAL/REMOTE, id="package-N"/"remote-N")/McpInputField`；servers：`McpInstallResult(installed, errors)`、`McpServerInfo(name, enabled, kind, summary)`、`McpVerifyResult(ok, latencyMs, serverInfo?, error?)`。
+**关系**：市场产出标准 mcpServers JSON → `McpServerApi.install` 消费入库 McpServersStore；两者零耦合。`McpConnector`（引擎）读 McpServersStore 的已启用配置 → 经 Koog `agents-mcp` + MCP Kotlin SDK 连 server、listTools、把工具转成 Koog `Tool`（`PrefixedMcpToolDescriptorParser` 加 `serverName_` 前缀防撞名；Koog 原版 `McpTool` 用 `descriptor.name` 调 server，前缀后 server 找不到工具——故用 `MederiMcpTool` 定制，server 调用回落 metadata[ToolId] 的原始名）。可用性 = 真连接（initialize + listTools 计数），替代了早期手写握手 `McpVerifier`（已删）。
+
+**状态缓存**（`McpServerManagerImpl.statusCache`，内存，非配置）：install/update/setEnabled(true)/verify/verifyAll 时更新；`list()` 合并进 `McpServerInfo`。core 重启归零为 UNCHECKED。
+
+domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/McpPackage/McpRemote/McpTransport/McpKeyValue/McpArgument/McpInputSpec/McpInstallOption(kind: LOCAL/REMOTE, id="package-N"/"remote-N")/McpInputField`；servers：`McpInstallResult(installed, errors)`、`McpServerInfo(name, enabled, kind, summary, status=UNCHECKED, toolCount?, lastError?, lastCheckedAt?)`、`McpVerifyResult(ok, latencyMs, serverInfo?, toolCount?, error?)`、`McpToolInfo(name, description?)`、`McpDiscoveryResult(ok, tools, error?)`、`McpServerStatus(UNCHECKED/OK/FAILED)`。
+
+**接线**：`McpConnector` 由 `Mederi.create` 装配 → `McpServerManagerImpl`（verify/discover）+ `SessionManagerImpl → TurnExecutor`（主代理每 turn `openSession()` 合并 MCP tools 进 `ToolFactory.build(mcpTools=...)`，turn 结束 `McpSession.close()`；子代理不接入，只读隔离）。依赖：`ai.koog:agents-mcp:1.2.0-beta` + `ktor-client-core/cio` + `ktor-sse`（core 新增）。
 
 ## 11. 事件系统（`…/model/MederiEvent.kt`）
 

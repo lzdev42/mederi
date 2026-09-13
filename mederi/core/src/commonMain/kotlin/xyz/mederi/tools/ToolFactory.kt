@@ -1,5 +1,6 @@
 package xyz.mederi.tools
 
+import ai.koog.agents.core.tools.ToolBase
 import ai.koog.agents.core.tools.ToolRegistry
 import kotlinx.coroutines.flow.MutableSharedFlow
 import xyz.mederi.domain.model.AIModel
@@ -55,7 +56,8 @@ object ToolFactory {
         planStore: PlanStore? = null,
         notebook: Notebook? = null,
         commandSandbox: xyz.mederi.tools.sandbox.CommandSandbox? = null,
-        sessionStore: SessionStore? = null
+        sessionStore: SessionStore? = null,
+        mcpTools: List<ToolBase<*, *>> = emptyList()
     ): ToolRegistry {
         val fsTools = FileSystemTools(directories, diffTracker)
         val shellTools = ShellTools(directories, commandSandbox)
@@ -168,10 +170,18 @@ object ToolFactory {
         val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + processToolMap
         val requested = if (toolNames.isEmpty()) allAvailableMaps.keys.toList() else toolNames
 
-        return ToolRegistry {
+        val built = ToolRegistry {
             requested.forEach { name ->
                 allAvailableMaps[name]?.let { tool(it()) }
             }
+        }
+
+        // MCP server 工具（已带 server 名前缀）：旁路合并，不参与 toolNames 裁剪。
+        // 无 MCP 工具时直接返回内置 registry，避免多包一层。
+        return if (mcpTools.isEmpty()) {
+            built
+        } else {
+            built + ToolRegistry { mcpTools.forEach { tool(it) } }
         }
     }
 }

@@ -1,5 +1,6 @@
 package xyz.mederi.api
 
+import xyz.mederi.mcp.servers.domain.McpDiscoveryResult
 import xyz.mederi.mcp.servers.domain.McpInstallResult
 import xyz.mederi.mcp.servers.domain.McpServerInfo
 import xyz.mederi.mcp.servers.domain.McpVerifyResult
@@ -33,8 +34,17 @@ interface McpServerApi {
     /** 删除。 */
     suspend fun delete(name: String)
 
-    /** 验证已安装 server 是否可用（initialize 握手）。 */
+    /**
+     * 发现：连接该 server 并返回它提供的全部工具（工具名带 server 名前缀，即注册给 LLM 的名字）。
+     * 连接失败返回 [McpDiscoveryResult.ok]=false 且 error 给出原因。
+     */
+    suspend fun discover(name: String): McpDiscoveryResult
+
+    /** 验证已安装 server 是否可用（真连接 initialize + 工具列表）。结果写入状态缓存。 */
     suspend fun verify(name: String): McpVerifyResult
+
+    /** 验证全部已启用 server（并行），返回 name → 结果，并写入状态缓存。 */
+    suspend fun verifyAll(): Map<String, McpVerifyResult>
 
     /** 安装前验证：验证尚未安装的 mcpServers JSON 是否可连接。 */
     suspend fun verifyConfig(mcpServersJson: String): McpVerifyResult

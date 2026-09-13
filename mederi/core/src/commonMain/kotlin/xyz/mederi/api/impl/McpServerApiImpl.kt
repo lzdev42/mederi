@@ -3,6 +3,7 @@ package xyz.mederi.api.impl
 import xyz.mederi.api.McpServerApi
 import xyz.mederi.api.exception.mederiCall
 import xyz.mederi.mcp.servers.McpServerManager
+import xyz.mederi.mcp.servers.domain.McpDiscoveryResult
 import xyz.mederi.mcp.servers.domain.McpInstallResult
 import xyz.mederi.mcp.servers.domain.McpServerInfo
 import xyz.mederi.mcp.servers.domain.McpVerifyResult
@@ -32,7 +33,15 @@ class McpServerApiImpl(private val manager: McpServerManager) : McpServerApi {
         mederiCall { manager.delete(name) }
     }
 
+    override suspend fun discover(name: String): McpDiscoveryResult = mederiCall {
+        manager.discover(name)
+    }
+
     override suspend fun verify(name: String): McpVerifyResult = mederiCall { manager.verify(name) }
+
+    override suspend fun verifyAll(): Map<String, McpVerifyResult> = mederiCall {
+        manager.verifyAll()
+    }
 
     override suspend fun verifyConfig(mcpServersJson: String): McpVerifyResult = mederiCall {
         manager.verifyConfig(mcpServersJson)

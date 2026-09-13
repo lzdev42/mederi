@@ -17,6 +17,7 @@ import xyz.mederi.config.MederiConfig
 import xyz.mederi.config.MederiPaths
 import xyz.mederi.mcp.market.McpMarketManagerImpl
 import xyz.mederi.mcp.market.infrastructure.OfficialRegistrySource
+import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.mcp.servers.McpServerManagerImpl
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.project.ProjectManagerImpl
@@ -213,6 +214,7 @@ class Mederi private constructor(
             val modelCatalog = xyz.mederi.metadata.ModelCatalog()
 
             // === Manager 层装配 ===
+            val mcpConnector = McpConnector(mcpServerStore)
             val providerManager = ProviderManagerImpl(providerStore, apiKeyStore)
             val projectManager = ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)
             val sessionManager = SessionManagerImpl(
@@ -220,9 +222,10 @@ class Mederi private constructor(
                 historyStore = historyStore,
                 projectManager = projectManager,
                 providerManager = providerManager,
-                diffStore = diffStore
+                diffStore = diffStore,
+                mcpConnector = mcpConnector
             )
-            val mcpServerManager = McpServerManagerImpl(mcpServerStore)
+            val mcpServerManager = McpServerManagerImpl(mcpServerStore, mcpConnector)
             val mcpMarketManager = McpMarketManagerImpl(OfficialRegistrySource())
 
             // === API 层装配 ===

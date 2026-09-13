@@ -14,6 +14,7 @@ import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.infrastructure.koog.TurnExecutor
+import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.store.DiffStore
 import xyz.mederi.store.HistoryStore
@@ -45,7 +46,8 @@ class SessionManagerImpl(
         replay = 0,
         extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
+    ),
+    private val mcpConnector: McpConnector? = null
 ) : SessionManager {
 
     private val turnExecutor = TurnExecutor(
@@ -54,7 +56,8 @@ class SessionManagerImpl(
         eventBus = eventBus,
         providerManager = providerManager,
         projectManager = projectManager,
-        diffStore = diffStore
+        diffStore = diffStore,
+        mcpConnector = mcpConnector
     )
 
     override suspend fun list(): List<Session> = sessionStore.list()

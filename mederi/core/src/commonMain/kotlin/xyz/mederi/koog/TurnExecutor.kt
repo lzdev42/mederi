@@ -29,6 +29,8 @@ import xyz.mederi.debug.ErrorContext
 import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
+import xyz.mederi.mcp.engine.McpConnector
+import xyz.mederi.mcp.engine.McpSession
 import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 import xyz.mederi.provider.infrastructure.koog.retry.RetryableLLMClient
 import xyz.mederi.provider.infrastructure.koog.sanitize.MederiOpenAILLMClient
@@ -106,7 +108,8 @@ class TurnExecutor(
     private val eventBus: MutableSharedFlow<MederiEvent>,
     private val providerManager: ProviderManager,
     private val projectManager: ProjectManager,
-    private val diffStore: DiffStore? = null
+    private val diffStore: DiffStore? = null,
+    private val mcpConnector: McpConnector? = null
 ) {
 
     private val subagentRunner = SubagentRunnerImpl(
@@ -616,6 +619,17 @@ class TurnExecutor(
             HistoryStoreChatHistoryProvider(historyStore, diagnostics, toolTimings)
         )
 
+        // MCP：主代理连接已启用的 MCP server，把工具合并进 agent；子代理暂不接入（只读隔离）。
+        // 失败只记日志不拖垮 turn；turn 结束统一 close。声明在 try 外，finally 里才能访问。
+        val mcpSession: McpSession? = if (subagentRole == null) {
+            try {
+                mcpConnector?.openSession()
+            } catch (e: Exception) {
+                DebugLog.error("TurnExec", "openSession MCP 失败: ${e.message}", e)
+                null
+            }
+        } else null
+
         try {
             val apiKey = providerManager.getDefaultKeyValue(provider.id)
                 ?: throw IllegalStateException("No API key available for provider: ${provider.id}")
@@ -652,7 +666,8 @@ class TurnExecutor(
                 planStore = planStore,
                 notebook = notebook,
                 commandSandbox = commandSandbox,
-                sessionStore = sessionStore
+                sessionStore = sessionStore,
+                mcpTools = mcpSession?.tools ?: emptyList()
             )
 
             val agent = buildTurnAgent(
@@ -753,6 +768,13 @@ class TurnExecutor(
             activeJobs.remove(sessionId)
             questionRequesters.remove(sessionId)?.cancelAll()
             planApprovalRequesters.remove(sessionId)?.cancelAll()
+            if (mcpSession != null) {
+                try {
+                    mcpSession.close()
+                } catch (e: Exception) {
+                    DebugLog.error("TurnExec", "关闭 MCP 连接失败: ${e.message}", e)
+                }
+            }
         }
     }
 

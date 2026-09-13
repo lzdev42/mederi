@@ -16,11 +16,15 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(libs.koog.agents)
+            implementation(libs.koog.mcp)
             implementation(libs.koog.google.client)
             implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.kotlinx.serializationJson)
             implementation(libs.sqldelight.sqlite.driver)
             implementation(libs.sqldelight.coroutines)
+            implementation(libs.ktor.clientCore)
+            implementation(libs.ktor.clientCio)
+            implementation(libs.ktor.sse)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

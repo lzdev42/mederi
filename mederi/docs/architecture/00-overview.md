@@ -14,7 +14,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │       ├── koog/ + infrastructure/koog/ ← Koog 执行引擎适配（TurnExecutor 等）
 │       ├── tools/                       ← 工具系统（FS/Shell/Plan/Verify/Subagent/Sandbox/Diff/Patch）
 │       ├── plan/                        ← 计划系统（Plan/PlanStore/Notebook/审批）
-│       ├── mcp/{servers,market}/        ← MCP 配置管理 + MCP 市场
+│       ├── mcp/{servers,engine,market}/ ← MCP 配置管理 + 内核引擎（McpConnector）+ MCP 市场
 │       ├── provider/                    ← Provider 领域模型 + Koog client 适配
 │       ├── metadata/                    ← models.dev 模型目录（ModelCatalog）
 │       ├── prompt/                      ← 系统提示词（骨架 SystemPrompts + 素材 PromptGuides）

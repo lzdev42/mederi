@@ -15,12 +15,14 @@ data class McpVerifyResult(
     val latencyMs: Long,
     /** 成功时对端 initialize 响应中的 serverInfo（name + version），可能为 null。 */
     val serverInfo: String? = null,
+    /** 成功时发现（listTools）的工具数。 */
+    val toolCount: Int? = null,
     /** 失败原因（人类可读）。 */
     val error: String? = null
 ) {
     companion object {
-        fun success(latencyMs: Long, serverInfo: String?): McpVerifyResult =
-            McpVerifyResult(ok = true, latencyMs = latencyMs, serverInfo = serverInfo)
+        fun success(latencyMs: Long, serverInfo: String? = null, toolCount: Int? = null): McpVerifyResult =
+            McpVerifyResult(ok = true, latencyMs = latencyMs, serverInfo = serverInfo, toolCount = toolCount)
 
         fun failure(latencyMs: Long, error: String): McpVerifyResult =
             McpVerifyResult(ok = false, latencyMs = latencyMs, error = error)
