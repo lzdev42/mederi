@@ -6,6 +6,6 @@ import kotlinx.serialization.Serializable
 data class Project(
     val id: String,
     val name: String,
-    val directories: List<String>,
+    val directory: String,
     val conversations: List<Conversation>,
 )

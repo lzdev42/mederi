@@ -17,12 +17,10 @@ interface AiCore {
     val builtinPresets: List<String>              // 内置供应商预设名（BuiltinProviders.allEntries）
     val configDir: String? get() = null           // 宿主配置/缓存基路径；纯 Web 返回 null
 
-    // Project
+    // Project（单目录模型：一个项目恰好一个 directory）
     suspend fun createProject(input: CreateProjectInput): Result<Project>
     suspend fun renameProject(projectId: String, name: String): Result<Unit>
     suspend fun deleteProject(projectId: String): Result<Unit>       // 遍历会话统一走 deleteConversation
-    suspend fun addProjectDirectory(projectId: String, directory: String): Result<Unit>
-    suspend fun removeProjectDirectory(projectId: String, directory: String): Result<Unit>
 
     // Conversation
     suspend fun createConversation(projectId: String, agent: AgentOption? = null): Result<Conversation>
@@ -84,7 +82,7 @@ interface AiCore {
 - `ChatMessage(id, conversationId, role, blocks: List<ChatBlock>, createdAt, completedAt?, parentMessageId?, model?, agent?, isStreaming=false, error?=null, modelName?(assistant footer 模型显示名), agentMode?(APPROVAL/AUTONOMOUS), thinkingLevel?(实际推理档位), durationMs?(LLM 耗时))` —— footer 诊断字段由 `MederiModelMapper.toChatMessage` 从 core Message 诊断字段填充（completedAt ≈ createdAt + durationMs 下界估计）
 - `sealed class ChatBlock(id)`（type 判别多态序列化）：`Text(id, text)` / `Reasoning(id, text)` / `ToolCall(id, name, state: ToolCallState)` / `File(id, name, url, mimeType?)` / `Diff(id, filePath, before, after)` / `Unknown(id, type)`
 - `sealed class ToolCallState`：`Pending` / `Running(input: Map<String,String>)` / `Completed(input, output)` / `Failed(input, error)`
-- `ToolCallUi(id, name, state, target?=null, isFailed=false)` —— VM 预计算展平展示模型
+- `ToolCallUi(id, name, state, target?=null, isFailed=false)` —— VM 预计算展平展示模型；target = 命令原文 / 文件路径（会话目录内→相对路径，目录外→绝对路径）/ apply_patch 提取的文件清单；工具行展开区显示执行结果（Completed.output / Failed.error）
 - `enum CoreEventType`（与 core EventType 14 个一一对应）
 - `CoreEvent(type, sessionId, messageId?=null, payload: Map<String,String>, timestamp="")`
 - `PastedTextAttachment(id, index, text, lineCount, charCount)`；`ImageAttachment(id, name, mimeType, bytes, base64DataUrl, width=0, height=0)`
@@ -94,7 +92,7 @@ interface AiCore {
 - **ConfigModels.kt**：`ModelOrigin{FETCHED, MANUAL}`；`ModelOption(id, name, provider, supportsThinking, supportsImages=false, supportsImagesOverride: Boolean?=null(用户覆盖,同步永不覆盖), reasoningLevels=[], providerModelId=id, origin=FETCHED, contextWindow?, maxTokens?, inputPricePerMillion?, outputPricePerMillion?, isEnabled=true)`；`AgentMode{APPROVAL, AUTONOMOUS}`；`WorkType{WORK, CODE}`；`AgentOption(id, name, description?, mode, workType=CODE, model: ModelOption?=null, reasoningLevel?, systemPrompt?, tools=[])`
 - **ProviderModels.kt**：`ProtocolType{OPENAI_CHAT("OpenAI 兼容"), OPENAI_RESPONSES, GOOGLE}`（displayName+placeholderUrl；`CREATABLE=[OPENAI_CHAT, OPENAI_RESPONSES]`）；`ReasoningLevels.SELECTABLE=["LOW","MEDIUM","HIGH","MAX"]`；`ProviderType{Builtin, Custom}`；`CustomModelEntry(id, name, supportsThinking=false, supportsImages=false, contextWindow?, maxTokens?, reasoningLevels=[], isEnabled=true)`；`ApiKeyOption(id, name, maskedValue, isDefault)`；`ProviderConfig(id, name, type, baseUrl?, isConnected, models: List<ModelOption>, customModels=[], supportsApiKey, supportsBaseUrl, protocolType=DEFAULT, apiKeys=[], reasoningLevels: Map<String,String?>=空(级别名→请求体JSON片段/null), responseSanitization=false)`
 - **ReasoningMenu.kt（纯函数唯一真理源）**：`derive(providerLevels, modelLevels): List<String>`（推导聊天菜单档位，NONE 恒第一；显示条件=模型勾选了级别或供应商任一档有值）；`resolve(modelMemoryLevel, modelLevels): String?`（**唯一推导链：模型记忆 > 默认档(MEDIUM 优先否则首档)**；菜单空=不支持返回 null）
-- **ProjectModels.kt**：`Project(id, name, directories: List<String>, conversations: List<Conversation>)`
+- **ProjectModels.kt**：`Project(id, name, directory: String, conversations: List<Conversation>)`
 - **FilesystemModels.kt**：`FileChangeStatus{Added, Modified, Deleted}`；`FileChange(filePath, status)`；`FileDiff(filePath, before, after, additions, deletions)`
 - **PermissionModels.kt**：`QuestionRequest(id, conversationId, questions: List<Question>)`；`Question(id, prompt, options, allowCustom, multiSelect=false)`；`PlanApprovalRequest(id, conversationId, planPath, title, summary="", subtaskCount=0, planContent?=null, status="PENDING")`（审批卡片只展示标题+子任务数，详细内容经 planPath 读取）
 - **TodoModels.kt**：`TodoStatus`（wire 小写 pending/in_progress/completed/cancelled/failed）；`TodoItem(id, content, status, priority?=null)`；`internal TodoWireItem(content, status)`（事件 payload wire DTO，与 core encodeTodos 严格对齐，id/priority 不上 wire）
@@ -109,7 +107,7 @@ interface AiCore {
 - `MessagesPage(messages, tokenUsage, contextUsedTokens)` —— MESSAGE_COMPLETED/ERROR 后对齐落库数据用
 - `RawMessageDto(seq, messageId?, role, payload(原始 JSON), createdAt)`
 - `CreateProjectInput(name, directory)`；`ReasoningConfigInput(levels: Map<String,String?>)`；`ProviderUpdateInput(name?, apiKey?, baseUrl?, enabled?, customModels?, reasoningParameter?)`；`CreateCustomProviderInput(name, baseUrl, apiKey?, customModels, type=DEFAULT, responseSanitization=false, reasoningParameter?)`
-- wire 请求 DTO：`CreateConversationInput(projectId, agent)`、`RenameConversationInput(title)`、`RenameProjectInput(name)`、`AddDirectoryInput(directory)`、`BuiltinProviderInput(name, apiKey)`、`AddModelInput/UpdateModelInput/SetModelEnabledInput`、`AddApiKeyInput(name, key, isDefault=false)`、`ResolveQuestionInput(answers)`、`ResolvePlanApprovalInput(approved)`、`ApiError(error)`、`ReadyInfo(ready, configDir)`、`PlanContent(content?)`
+- wire 请求 DTO：`CreateConversationInput(projectId, agent)`、`RenameConversationInput(title)`、`RenameProjectInput(name)`、`BuiltinProviderInput(name, apiKey)`、`AddModelInput/UpdateModelInput/SetModelEnabledInput`、`AddApiKeyInput(name, key, isDefault=false)`、`ResolveQuestionInput(answers)`、`ResolvePlanApprovalInput(approved)`、`ApiError(error)`、`ReadyInfo(ready, configDir)`、`PlanContent(content?)`
 
 ## 3. SnapshotReducer（`…/contract/SnapshotReducer.kt`）
 
@@ -125,6 +123,8 @@ interface AiCore {
 | STATUS | 仅 scope=provider 且 code=RETRYING 时写 statusHint="供应商限流，重试中 (attempt/max)"，不碰状态机 |
 | TOOL_CALLED | 完整 args 更新 ToolCall block(input)，状态 Running |
 | TOOL_RESULT | 按 toolCallId 精确匹配（回退：最后 Running/Pending 同名），状态 Completed/Failed 并保留 input |
+
+工具参数解析走 `ToolArgParser.parse`（commonMain，`SnapshotReducer` 与 `MederiModelMapper` 共用）：以 `JsonObject` 宽容解析为 `Map<String,String>`，数字/布尔转字面量、嵌套结构保留 JSON 文本——避免 `read_file.max_lines` / `execute_command.timeout_seconds` 等非字符串参数让整条 args 解析失败导致路径/命令丢失。
 | QUESTION_REQUESTED / RESOLVED | 写/清 pendingQuestion |
 | PLAN_APPROVAL_REQUESTED / RESOLVED | 写/清 pendingPlanApproval + planApprovals 去重列表 |
 | TODO_UPDATED / PLAN_PROGRESS | 解码 payload["todos"] 整体替换快照 todos；解码失败丢弃事件保留先前快照 |
@@ -197,7 +197,7 @@ flowchart TB
 | GET `/info`、GET `/v1/ready` | ReadyInfo |
 | GET `/v1/presets` / `/v1/agents` / `/v1/models` / `/v1/providers` / `/v1/projects` | 直接 respondData StateFlow 值 |
 | GET `/v1/system/stats` | getProcessStats |
-| POST `/v1/projects`；PATCH/DELETE `/v1/projects/{id}`；POST/DELETE `/v1/projects/{id}/directories` | Project 组 |
+| POST `/v1/projects`；PATCH/DELETE `/v1/projects/{id}` | Project 组（单目录，无目录增删端点） |
 | POST `/v1/sessions`；DELETE/PATCH `/v1/sessions/{id}` | Conversation 组 |
 | GET `/v1/sessions/{id}/snapshot` \| `messages` \| `messages/raw` \| `messages/{messageId}` \| `diffs[?messageId=]` | 查询组 |
 | POST `/v1/sessions/{id}/messages` \| `abort` \| `rollback` \| `questions/{questionId}` \| `plans/{planId}/approve` \| `compress` | 动作组 |

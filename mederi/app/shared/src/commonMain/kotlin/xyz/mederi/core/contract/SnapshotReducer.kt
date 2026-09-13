@@ -433,14 +433,9 @@ object SnapshotReducer {
 
     /**
      * 解析审批事件的工具参数 JSON。
-     * 工具参数是扁平的键值对对象（如 {"path":"...","content":"..."}），直接反序列化为 Map。
-     * 非对象结构或解析失败时返回空 map，不崩溃（审批卡片入参区显示为空即可）。
+     * 工具参数是扁平的键值对对象（如 {"path":"...","content":"..."}）。
+     * 走 [ToolArgParser] 宽容解析（容忍数字/布尔等非字符串值，避免整条参数丢失）；
+     * 非对象结构或解析失败返回空 map，不崩溃（审批卡片入参区显示为空即可）。
      */
-    private fun parseToolArgs(args: String): Map<String, String> {
-        return try {
-            Json.decodeFromString<Map<String, String>>(args)
-        } catch (_: Exception) {
-            emptyMap()
-        }
-    }
+    private fun parseToolArgs(args: String): Map<String, String> = ToolArgParser.parse(args)
 }

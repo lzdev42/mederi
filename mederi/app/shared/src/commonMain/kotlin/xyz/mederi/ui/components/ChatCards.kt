@@ -246,7 +246,7 @@ fun ThoughtAndActionsBlock(
 }
 
 /**
- * 紧凑型子操作行：单行纯文本 + 极弱化状态，高信息密度。
+ * 紧凑型子操作行：单行命令/路径 + 可展开的执行结果（输出/错误）。
  * 目标参数与失败标记由 ViewModel 预计算（ToolCallUi）。
  */
 @Composable
@@ -257,74 +257,121 @@ private fun ToolCallItemRow(
 ) {
     val isFailed = toolCall.isFailed
     val isRunning = isStreaming && toolCall.state is ToolCallState.Running
+    // 执行结果：成功 = 输出，失败 = 错误详情（core 事件/落库都带，之前 UI 只显示成败没展示）
+    val result = when (val s = toolCall.state) {
+        is ToolCallState.Completed -> s.output
+        is ToolCallState.Failed -> s.error
+        else -> null
+    }?.takeIf { it.isNotBlank() }
+    var resultExpanded by remember { mutableStateOf(false) }
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 22.dp)
             .padding(horizontal = 4.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        // 极简状态图标：成功弱化为淡灰勾号，运行中微型转圈，失败红叹号
-        when {
-            isRunning -> {
-                CircularProgressIndicator(
-                    color = colors.accentPrimary,
-                    strokeWidth = 1.2.dp,
-                    modifier = Modifier.size(9.dp)
-                )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 22.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // 极简状态图标：成功弱化为淡灰勾号，运行中微型转圈，失败红叹号
+            when {
+                isRunning -> {
+                    CircularProgressIndicator(
+                        color = colors.accentPrimary,
+                        strokeWidth = 1.2.dp,
+                        modifier = Modifier.size(9.dp)
+                    )
+                }
+                isFailed -> {
+                    Icon(
+                        imageVector = FeatherIcons.AlertCircle,
+                        contentDescription = null,
+                        tint = colors.accentDanger,
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+                else -> {
+                    Icon(
+                        imageVector = FeatherIcons.Check,
+                        contentDescription = null,
+                        tint = colors.textMuted.copy(alpha = 0.7f),
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
             }
-            isFailed -> {
-                Icon(
-                    imageVector = FeatherIcons.AlertCircle,
-                    contentDescription = null,
-                    tint = colors.accentDanger,
-                    modifier = Modifier.size(11.dp)
-                )
-            }
-            else -> {
-                Icon(
-                    imageVector = FeatherIcons.Check,
-                    contentDescription = null,
-                    tint = colors.textMuted.copy(alpha = 0.7f),
-                    modifier = Modifier.size(11.dp)
-                )
-            }
-        }
 
-        // 工具名（等宽弱化）
-        Text(
-            text = toolCall.name,
-            color = colors.textMuted,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace
-        )
-
-        // 核心目标参数（ViewModel 预计算）
-        if (!toolCall.target.isNullOrBlank()) {
+            // 工具名（等宽弱化）
             Text(
-                text = toolCall.target,
-                color = colors.textSecondary,
+                text = toolCall.name,
+                color = colors.textMuted,
                 fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                fontFamily = FontFamily.Monospace
             )
-        } else {
-            Spacer(modifier = Modifier.weight(1f))
+
+            // 核心目标参数（命令原文 / 路径等，ViewModel 预计算）
+            if (!toolCall.target.isNullOrBlank()) {
+                Text(
+                    text = toolCall.target,
+                    color = colors.textSecondary,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            // 仅在失败时在尾部显示错误提示
+            if (isFailed) {
+                Text(
+                    text = "Failed",
+                    color = colors.accentDanger,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
 
-        // 仅在失败时在尾部显示错误提示
-        if (isFailed) {
-            Text(
-                text = "Failed",
-                color = colors.accentDanger,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium
-            )
+        // 执行结果区：折叠时预览前几行，点击展开/收起完整输出
+        if (result != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(colors.surfaceCode)
+                    .border(1.dp, colors.divider, RoundedCornerShape(4.dp))
+                    .clickable { resultExpanded = !resultExpanded }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = result,
+                    color = if (isFailed) colors.accentDanger else colors.textSecondary,
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 14.sp,
+                    maxLines = if (resultExpanded) Int.MAX_VALUE else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (resultExpanded) {
+                    Text(
+                        text = "收起",
+                        color = colors.textMuted.copy(alpha = 0.7f),
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.align(Alignment.End)
+                    )
+                }
+            }
         }
     }
 }

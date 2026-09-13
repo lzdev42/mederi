@@ -37,11 +37,12 @@ object MederiEventAggregator {
 
         val session = sessions.get(conversationId)
         val messages = sessions.listMessages(conversationId)
+        val toolResults = MederiModelMapper.buildToolResultsById(messages)
         DebugLog.data("Aggregator", "initial messages", messages.size)
 
         var snapshot = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let(modelToProvider)),
-            messages = messages.map { MederiModelMapper.toChatMessage(it) },
+            messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
             contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages),
             cost = MederiModelMapper.toCostSummary(),
@@ -54,8 +55,9 @@ object MederiEventAggregator {
         suspend fun refreshPage(): MessagesPage? {
             val refreshed = runCatching { sessions.listMessages(conversationId) }.getOrNull() ?: return null
             DebugLog.data("Aggregator", "refreshed messages", refreshed.size)
+            val refreshedToolResults = MederiModelMapper.buildToolResultsById(refreshed)
             return MessagesPage(
-                messages = refreshed.map { MederiModelMapper.toChatMessage(it) },
+                messages = refreshed.map { MederiModelMapper.toChatMessage(it, refreshedToolResults) },
                 tokenUsage = MederiModelMapper.toTokenUsage(refreshed),
                 contextUsedTokens = MederiModelMapper.toContextUsedTokens(refreshed)
             )

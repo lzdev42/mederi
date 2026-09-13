@@ -115,7 +115,7 @@ class TerminalViewModel(
         val key = project?.let { "project:${it.id}" } ?: "tmp:1"
         _tabKeys.add(key)
         activeKey = key
-        launchSession(key, project?.directories?.firstOrNull(), project?.name ?: "本地终端")
+        launchSession(key, project?.directory?.takeIf { it.isNotBlank() }, project?.name ?: "本地终端")
     }
 
     private var bootstrapped = false
@@ -178,9 +178,9 @@ internal fun terminalProjectOf(key: String, projects: List<Project>): Project? {
     return projects.find { it.id == id }
 }
 
-/** tab key → 会话工作目录（项目主目录优先） */
+/** tab key → 会话工作目录（项目目录优先） */
 internal fun terminalCwdOf(key: String, projects: List<Project>): String? =
-    terminalProjectOf(key, projects)?.directories?.firstOrNull()
+    terminalProjectOf(key, projects)?.directory?.takeIf { it.isNotBlank() }
 
 /** tab 显示名：会话自定义标题优先；同项目多 shell 加序号区分 */
 internal fun terminalTabTitle(key: String, sessionTitle: String?, projects: List<Project>): String {

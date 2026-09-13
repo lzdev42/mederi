@@ -2,7 +2,7 @@ package xyz.mederi.core.bridge
 
 import java.time.Instant
 import java.time.format.DateTimeFormatter
-import kotlinx.serialization.json.Json
+import xyz.mederi.core.contract.ToolArgParser
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.ChatMessage
@@ -42,8 +42,6 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
  */
 object MederiModelMapper {
 
-    private val json = Json { ignoreUnknownKeys = true }
-
     // ------------------------------------------------------------------
     // Project
     // ------------------------------------------------------------------
@@ -52,7 +50,7 @@ object MederiModelMapper {
         UiProject(
             id = coreProject.id,
             name = coreProject.name,
-            directories = coreProject.directories,
+            directory = coreProject.directory,
             conversations = conversations
         )
 
@@ -196,14 +194,27 @@ object MederiModelMapper {
     // Message / ChatBlock
     // ------------------------------------------------------------------
 
-    fun toChatMessage(message: CoreMessage): ChatMessage {
-        val toolResultsById = message.parts
+    fun toChatMessage(message: CoreMessage): ChatMessage =
+        toChatMessage(message, null)
+
+    /**
+     * 映射单条消息为 ChatMessage。
+     *
+     * @param toolResultsById 跨消息聚合的工具结果表（ToolCall 在 assistant 消息、ToolResult 在紧随的
+     *   user 消息——两条消息，必须跨消息按 id 匹配才能回填 input/output，否则工具调用在重开/刷新后会
+     *   退化为 Pending、命令/结果全部丢失）。为 null 时退化为只查本条消息自己的 parts。
+     */
+    fun toChatMessage(
+        message: CoreMessage,
+        toolResultsById: Map<String, CoreMessagePart.ToolResult>?,
+    ): ChatMessage {
+        val results = toolResultsById ?: message.parts
             .filterIsInstance<CoreMessagePart.ToolResult>()
             .filterNot { it.id.isNullOrBlank() }
             .associateBy { it.id!! }
 
         val blocks = message.parts.mapIndexedNotNull { index, part ->
-            toChatBlock(part, index, message, toolResultsById)
+            toChatBlock(part, index, message, results)
         }
 
         return ChatMessage(
@@ -228,6 +239,17 @@ object MederiModelMapper {
             durationMs = message.durationMs
         )
     }
+
+    /**
+     * 跨消息聚合全部 ToolResult（整个会话的消息列表）：
+     * ToolCall 在 assistant 消息、ToolResult 在紧随其后的 user 消息，必须合并才能还原工具状态。
+     */
+    fun buildToolResultsById(messages: List<CoreMessage>): Map<String, CoreMessagePart.ToolResult> =
+        messages.asSequence()
+            .flatMap { it.parts.asSequence() }
+            .filterIsInstance<CoreMessagePart.ToolResult>()
+            .filterNot { it.id.isNullOrBlank() }
+            .associateBy { it.id!! }
 
     private fun toChatRole(role: CoreMessageRole): ChatRole = when (role) {
         CoreMessageRole.SYSTEM -> ChatRole.System
@@ -285,14 +307,10 @@ object MederiModelMapper {
 
     /**
      * 解析工具调用参数 JSON。
-     * 工具参数是扁平的键值对对象（如 {"command":"ls"}），直接反序列化为 Map。
-     * 非对象结构（数组、标量）或解析失败时返回空 map，不崩溃。
+     * 工具参数是扁平的键值对对象（如 {"command":"ls"}）。走 [ToolArgParser] 宽容解析
+     * （容忍 max_lines / timeout_seconds 等数字参数，避免整条参数丢失）。
      */
-    private fun parseArgsJson(args: String): Map<String, String> = try {
-        json.decodeFromString<Map<String, String>>(args)
-    } catch (_: Exception) {
-        emptyMap()
-    }
+    private fun parseArgsJson(args: String): Map<String, String> = ToolArgParser.parse(args)
 
     // ------------------------------------------------------------------
     // Token / Cost

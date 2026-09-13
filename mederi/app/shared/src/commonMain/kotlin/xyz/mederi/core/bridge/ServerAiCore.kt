@@ -288,16 +288,6 @@ class ServerAiCore(
         refreshProjects()
     }
 
-    override suspend fun addProjectDirectory(projectId: String, directory: String): Result<Unit> = runCatching {
-        httpCall("/v1/projects/$projectId/directories", requestBody = xyz.mederi.core.contract.dto.AddDirectoryInput(directory))
-        refreshProjects()
-    }
-
-    override suspend fun removeProjectDirectory(projectId: String, directory: String): Result<Unit> = runCatching {
-        httpCall("/v1/projects/$projectId/directories?directory=${directory.encodeURLParameter()}", HttpMethod.Delete)
-        refreshProjects()
-    }
-
     // ------------------------------------------------------------------
     // Conversation / Session
     // ------------------------------------------------------------------

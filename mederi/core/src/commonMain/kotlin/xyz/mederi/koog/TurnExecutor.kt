@@ -198,8 +198,9 @@ class TurnExecutor(
         val workType = request.agentConfig.workType
         val project = projectManager.get(session.projectId)
             ?: throw IllegalStateException("Project not found: ${session.projectId}")
-        val planStore = xyz.mederi.plan.PlanStore(project.directories)
-        val notebook = xyz.mederi.plan.Notebook(project.directories)
+        val projectDirs = listOf(project.directory)
+        val planStore = xyz.mederi.plan.PlanStore(projectDirs)
+        val notebook = xyz.mederi.plan.Notebook(projectDirs)
         val activePlan = planStore.loadBySession(sessionId)
         val activePlanContent = activePlan?.let { p ->
             buildString {
@@ -299,8 +300,8 @@ class TurnExecutor(
         // ChatMemory load 时已落库的消息自然进入 prompt；回写 reconcile 按内容指纹对齐，
         // 不会重复追加。append 同步执行且先于 SESSION_UPDATED 事件，
         // 发送时机的监听者（如自动改名）回查快照必然能看到本条消息。
-        val commandSandbox = xyz.mederi.tools.sandbox.CommandSandbox(project.directories)
-        val userMessage = buildUserMessage(sessionId, request.parts, project.directories, commandSandbox)
+        val commandSandbox = xyz.mederi.tools.sandbox.CommandSandbox(projectDirs)
+        val userMessage = buildUserMessage(sessionId, request.parts, projectDirs, commandSandbox)
         historyStore.append(sessionId, userMessage)
 
         sessionStore.update(sessionId, SessionStatus.RUNNING)
@@ -321,7 +322,7 @@ class TurnExecutor(
                 reasoningLevel = effectiveReasoningLevel,
                 agentMode = agentMode,
                 workType = workType,
-                directories = project.directories,
+                directories = projectDirs,
                 planStore = planStore,
                 notebook = notebook,
                 planApprovalRequester = planApprovalRequester,
@@ -358,8 +359,7 @@ class TurnExecutor(
             "UTC: $utc ($utcDow)\n" +
             "Local: $local (${tz.id}, $localDow)\n" +
             xyz.mederi.tools.sandbox.CommandSandbox.environmentNote(commandSandbox) +
-            "Project dirs: " + directories.mapIndexed { i, d -> if (i == 0) "$d (primary)" else d }
-                .joinToString(", ") + "\n" +
+            "Project dir: " + directories.first() + "\n" +
             (xyz.mederi.tools.sandbox.SandboxConfig.extraWritablePaths.takeIf { it.isNotEmpty() }
                 ?.let { "Extra writable paths: ${it.joinToString(", ")}\n" } ?: "") +
             "Mederi workdir: ${java.io.File(directories.first(), ".mederi").absolutePath}"
@@ -571,7 +571,7 @@ class TurnExecutor(
             ?: throw IllegalStateException("Session not found: $sessionId")
         val project = projectManager.get(session.projectId)
             ?: throw IllegalStateException("Project not found: ${session.projectId}")
-        val directories = project.directories
+        val directories = listOf(project.directory)
 
         val diffTracker = TurnDiffTracker(sessionId, directories)
 

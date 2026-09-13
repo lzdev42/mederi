@@ -82,7 +82,7 @@ class MockAiCore(
     }
 
     override suspend fun createProject(input: CreateProjectInput): Result<Project> = runCatching {
-        val project = Project(id = "proj_${idGenerator.next()}", name = input.name, directories = listOf(input.directory), conversations = emptyList())
+        val project = Project(id = "proj_${idGenerator.next()}", name = input.name, directory = input.directory, conversations = emptyList())
         _projects.value = _projects.value + project
         project
     }
@@ -94,16 +94,6 @@ class MockAiCore(
 
     override suspend fun deleteProject(projectId: String): Result<Unit> = runCatching {
         _projects.value = _projects.value.filterNot { it.id == projectId }
-    }
-
-    override suspend fun addProjectDirectory(projectId: String, directory: String): Result<Unit> = runCatching {
-        val projects = _projects.value.map { if (it.id == projectId) it.copy(directories = it.directories + directory) else it }
-        _projects.value = projects
-    }
-
-    override suspend fun removeProjectDirectory(projectId: String, directory: String): Result<Unit> = runCatching {
-        val projects = _projects.value.map { if (it.id == projectId) it.copy(directories = it.directories - directory) else it }
-        _projects.value = projects
     }
 
     override suspend fun createConversation(projectId: String, agent: AgentOption?): Result<Conversation> = runCatching {

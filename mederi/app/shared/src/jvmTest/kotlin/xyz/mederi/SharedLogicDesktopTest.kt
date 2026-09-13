@@ -7,11 +7,62 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.Json
 import okio.ByteString.Companion.toByteString
 import xyz.mederi.core.bridge.BuiltinProviders
+import xyz.mederi.core.bridge.MederiModelMapper
+import xyz.mederi.core.contract.ToolArgParser
+import xyz.mederi.core.contract.models.ChatBlock
+import xyz.mederi.core.contract.models.ToolCallState
+import xyz.mederi.domain.model.Message as CoreMessage
+import xyz.mederi.domain.model.MessagePart as CoreMessagePart
+import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.provider.domain.model.ProviderType
 
 class SharedLogicDesktopTest {
+
+    /** 工具参数宽容解析：数字/布尔等非字符串值不能导致整条参数丢失（read_file.max_lines / execute_command.timeout_seconds 等） */
+    @Test
+    fun toolArgParserToleratesNonStringValues() {
+        assertEquals(mapOf("pid" to "2627"), ToolArgParser.parse("""{"pid":2627}"""))
+        val cmd = ToolArgParser.parse("""{"command":"curl -s https://api.open-meteo.com | head -c 2000","timeout_seconds":30}""")
+        assertEquals("curl -s https://api.open-meteo.com | head -c 2000", cmd["command"])
+        assertEquals("30", cmd["timeout_seconds"])
+        assertEquals(mapOf("path" to "weather", "max_lines" to "200"), ToolArgParser.parse("""{"path":"weather","max_lines":200}"""))
+        // 非对象结构 / 畸形输入 → 空 map，不崩
+        assertTrue(ToolArgParser.parse("""[1,2,3]""").isEmpty())
+        assertTrue(ToolArgParser.parse("not-json").isEmpty())
+    }
+
+    /** 落库重放路径：ToolCall 在 assistant 消息、ToolResult 在紧随的 user 消息，必须跨消息聚合还原子工具状态 */
+    @Test
+    fun toolCallBlockReconstructedFromStoredParts() {
+        val json = Json { ignoreUnknownKeys = true }
+        val assistantPayload =
+            """{"id":"m1","sessionId":"s","role":"ASSISTANT","parts":""" +
+                """[{"type":"xyz.mederi.domain.model.MessagePart.Reasoning","content":["stop it"],"summary":null,"encrypted":null,"id":null},""" +
+                """{"type":"xyz.mederi.domain.model.MessagePart.ToolCall","id":"call_x","tool":"stop_process","args":"{\"pid\":2627}"}],"status":"COMPLETED","createdAt":"2026-09-12T00:00:00Z"}"""
+        val userPayload =
+            """{"id":"m2","sessionId":"s","role":"USER","parts":""" +
+                """[{"type":"xyz.mederi.domain.model.MessagePart.ToolResult","id":"call_x","tool":"stop_process","output":"Stopped pid 2627.\n(kill -TERM -- -2627 rc=0)","isError":false,"status":null,"durationMs":null,"error":null}],"status":"COMPLETED","createdAt":"2026-09-12T00:00:01Z"}"""
+
+        val assistant = json.decodeFromString<CoreMessage>(assistantPayload)
+        val user = json.decodeFromString<CoreMessage>(userPayload)
+        val allMessages = listOf(assistant, user)
+
+        // 修复路径：跨消息聚合 ToolResult（历史缺陷 = 只查本条消息 → 重开后工具退化为 Pending、命令/结果全丢）
+        val toolResults = MederiModelMapper.buildToolResultsById(allMessages)
+        val chatMessage = MederiModelMapper.toChatMessage(assistant, toolResults)
+
+        val toolBlock = chatMessage.blocks.filterIsInstance<ChatBlock.ToolCall>().single()
+        assertTrue(toolBlock.state is ToolCallState.Completed, "预期 Completed，实际 ${toolBlock.state::class.simpleName}")
+
+        val state = toolBlock.state as ToolCallState.Completed
+        // input 必须解析出 pid（数字参数宽容解析）→ UI target 数据依赖
+        assertEquals("2627", state.input["pid"])
+        // output 必须带上工具结果 → UI 结果区数据依赖
+        assertTrue(state.output.startsWith("Stopped pid 2627"))
+    }
 
     /** 等待快照静止（连续两次间隔读取相同 = 异步回合动作全部完成），再交由断言校验内容 */
     private suspend fun xyz.mederi.core.mock.MockAiCore.awaitSettledSnapshot(

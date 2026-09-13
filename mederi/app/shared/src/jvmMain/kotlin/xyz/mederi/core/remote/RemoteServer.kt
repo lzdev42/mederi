@@ -43,7 +43,6 @@ import xyz.mederi.api.exception.MederiStateException
 import xyz.mederi.api.exception.MederiValidationException
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.core.contract.dto.AddApiKeyInput
-import xyz.mederi.core.contract.dto.AddDirectoryInput
 import xyz.mederi.core.contract.dto.AddModelInput
 import xyz.mederi.core.contract.dto.ApiError
 import xyz.mederi.core.contract.dto.BuiltinProviderInput
@@ -239,15 +238,6 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     delete("/v1/projects/{id}") {
         call.respondResult(aiCore.deleteProject(call.parameters["id"]!!))
-    }
-    post("/v1/projects/{id}/directories") {
-        val input = call.receive<AddDirectoryInput>()
-        call.respondResult(aiCore.addProjectDirectory(call.parameters["id"]!!, input.directory))
-    }
-    delete("/v1/projects/{id}/directories") {
-        val directory = call.parameters["directory"]
-            ?: return@delete call.respondError(MederiValidationException("directory query parameter required"))
-        call.respondResult(aiCore.removeProjectDirectory(call.parameters["id"]!!, directory))
     }
 
     // ------------------------------------------------------------------

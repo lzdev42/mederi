@@ -58,10 +58,6 @@ data class RenameConversationInput(val title: String)
 @Serializable
 data class RenameProjectInput(val name: String)
 
-/** addProjectDirectory / removeProjectDirectory */
-@Serializable
-data class AddDirectoryInput(val directory: String)
-
 /** addBuiltinProvider：POST /v1/providers/builtin */
 @Serializable
 data class BuiltinProviderInput(val name: String, val apiKey: String)

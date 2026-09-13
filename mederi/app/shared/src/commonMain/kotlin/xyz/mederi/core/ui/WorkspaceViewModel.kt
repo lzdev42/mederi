@@ -181,17 +181,17 @@ class WorkspaceViewModel(
     val appStateRef: AppState get() = appState
 
     init {
-        // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到项目主目录下的 .mederi。
-        // android/ios 是遥控端：project.directories 是 server 机器的路径，设备上不存在/无写权限，
+        // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到项目目录下的 .mederi。
+        // android/ios 是遥控端：project.directory 是 server 机器的路径，设备上不存在/无写权限，
         // 注入只会让磁盘缓存静默失效——遥控端固定用本地应用缓存目录（Android 宿主启动时注入 cacheDir，
         // iOS 用 NSCaches 默认值），不走项目重定向。wasmJs 无磁盘，setBaseDirectory 本身是 no-op。
         if (isDesktopPlatform) {
             viewModelScope.launch {
                 combine(appState.projects, appState.selectedProjectId) { projects, selectedId ->
                     val project = projects.find { it.id == selectedId }
-                    val primaryDir = project?.directories?.firstOrNull()
-                    if (!primaryDir.isNullOrBlank()) {
-                        "$primaryDir/.mederi"
+                    val projectDir = project?.directory?.takeIf { it.isNotBlank() }
+                    if (projectDir != null) {
+                        "$projectDir/.mederi"
                     } else {
                         appState.aiCore.configDir
                     }
@@ -966,15 +966,72 @@ class WorkspaceViewModel(
             is ToolCallState.Failed -> s.input
             ToolCallState.Pending -> emptyMap()
         }
-        val target = input["path"] ?: input["file"] ?: input["targetFile"]
-            ?: input["command"] ?: input["cmd"] ?: input.values.firstOrNull()
         return ToolCallUi(
             id = toolCall.id,
             name = toolCall.name,
             state = toolCall.state,
-            target = target,
+            target = probeToolTarget(toolCall.name, input),
             isFailed = toolCall.state is ToolCallState.Failed,
         )
+    }
+
+    /**
+     * 按工具名探测目标摘要：
+     * - 文件工具（read/write/edit/list）→ 路径（会话目录内显示相对路径，目录外保留绝对路径）；
+     * - 命令工具（execute_command/bash）→ 命令原文；
+     * - apply_patch → 补丁内涉及的文件清单（Add/Update/Delete/Move 去重取前 3）；
+     * - 其余 → 回退到 path/file/command 等常见键，最后兜底第一个参数值。
+     */
+    private fun probeToolTarget(name: String, input: Map<String, String>): String? {
+        val baseDir = snapshot?.conversation?.directory?.takeIf { it.isNotBlank() }
+        val fileKeys = listOf("path", "file", "targetFile", "filePath", "file_path")
+        val firstFileValue = fileKeys.firstNotNullOfOrNull { input[it]?.takeIf { v -> v.isNotBlank() } }
+        return when {
+            name == "apply_patch" ->
+                input["patch"]?.let { extractPatchFiles(it) }?.takeIf { it.isNotBlank() }
+            name == "execute_command" || name == "bash" ->
+                input["command"]?.takeIf { it.isNotBlank() } ?: input["cmd"]?.takeIf { it.isNotBlank() }
+            firstFileValue != null ->
+                toDisplayPath(firstFileValue, baseDir)
+            else ->
+                input["command"]?.takeIf { it.isNotBlank() }
+                    ?: input["cmd"]?.takeIf { it.isNotBlank() }
+                    ?: input["patch"]?.let { extractPatchFiles(it) }?.takeIf { it.isNotBlank() }
+                    ?: input.values.firstOrNull { it.isNotBlank() }
+        }
+    }
+
+    /**
+     * 路径显示规则：会话所属目录内 → 相对路径；目录外 → 保留绝对路径（用户能看出 AI 动了哪个位置）。
+     */
+    private fun toDisplayPath(raw: String, baseDir: String?): String {
+        val path = raw.trim()
+        if (path.isBlank()) return path
+        val base = baseDir?.trim()?.trimEnd('/')
+        if (base != null && isAbsolutePath(path)) {
+            if (path.startsWith("$base/")) return path.removePrefix("$base/")
+            if (path == base) return path
+        }
+        return path
+    }
+
+    private fun isAbsolutePath(path: String): Boolean =
+        path.startsWith("/") || Regex("^[A-Za-z]:[/\\\\]").containsMatchIn(path)
+
+    /** 从 apply_patch 补丁文本中提取涉及的文件路径（Add/Update/Delete/Move，去重后取前 3）。 */
+    private fun extractPatchFiles(patch: String): String? {
+        if (patch.isBlank()) return null
+        val baseDir = snapshot?.conversation?.directory?.takeIf { it.isNotBlank() }
+        val paths = patch.lineSequence()
+            .mapNotNull { line ->
+                Regex("^\\*\\*\\* (?:Add File|Update File|Delete File|Move to): (.+)$")
+                    .find(line.trim())?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+            }
+            .distinct()
+            .toList()
+        if (paths.isEmpty()) return null
+        return paths.take(3).joinToString(", ") { toDisplayPath(it, baseDir) } +
+            if (paths.size > 3) ", …" else ""
     }
 
     private fun buildToolSummary(toolCalls: List<ToolCallUi>): String {

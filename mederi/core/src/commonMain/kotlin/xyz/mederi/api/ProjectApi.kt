@@ -16,10 +16,6 @@ interface ProjectApi {
     suspend fun delete(id: String)
 
     suspend fun rename(id: String, request: RenameProjectRequest): Project
-
-    suspend fun addDirectory(id: String, request: AddProjectDirectoryRequest): Project
-
-    suspend fun removeDirectory(id: String, request: RemoveProjectDirectoryRequest): Project
 }
 
 /**
@@ -27,7 +23,7 @@ interface ProjectApi {
  */
 data class CreateProjectRequest(
     val name: String,
-    val directories: List<String>
+    val directory: String
 )
 
 /**
@@ -35,18 +31,4 @@ data class CreateProjectRequest(
  */
 data class RenameProjectRequest(
     val name: String
-)
-
-/**
- * 添加项目目录请求。
- */
-data class AddProjectDirectoryRequest(
-    val path: String
-)
-
-/**
- * 移除项目目录请求。
- */
-data class RemoveProjectDirectoryRequest(
-    val path: String
 )

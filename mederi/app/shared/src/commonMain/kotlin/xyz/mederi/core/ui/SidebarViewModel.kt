@@ -79,14 +79,6 @@ class SidebarViewModel(
         }
     }
 
-    fun addProjectDirectory(projectId: String, dir: String) = launch {
-        appState.aiCore.addProjectDirectory(projectId, dir)
-    }
-
-    fun removeProjectDirectory(projectId: String, dir: String) = launch {
-        appState.aiCore.removeProjectDirectory(projectId, dir)
-    }
-
     fun createConversation(projectId: String) {
         viewModelScope.launch {
             uiState = uiState.copy(isBusy = true)

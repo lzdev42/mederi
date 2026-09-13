@@ -35,7 +35,7 @@ object MederiInputMapper {
     fun toCreateProjectRequest(input: CreateProjectInput): CreateProjectRequest =
         CreateProjectRequest(
             name = input.name,
-            directories = listOf(input.directory)
+            directory = input.directory
         )
 
     // ------------------------------------------------------------------

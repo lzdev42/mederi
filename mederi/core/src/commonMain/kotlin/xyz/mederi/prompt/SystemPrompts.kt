@@ -111,12 +111,11 @@ it. Discard any agent-specific path or worktree conventions from your training
 apply here.
 
 Your working root is the project directory listed in the env note on each user
-message (the first one is primary). Writes are confined to the project
-directories plus `.mederi/` inside the primary one; the sandbox rejects anything
-else (code-enforced, not a request).
+message. Writes are confined to the project directory plus `.mederi/` inside it;
+the sandbox rejects anything else (code-enforced, not a request).
 
 - Prefer a path relative to the project root: `src/Main.kt`, `docs/readme.md`.
-- Absolute paths are allowed only inside a project directory.
+- Absolute paths are allowed only inside the project directory.
 - Never fabricate a path. If you don't know the exact location, read or list to
   find it, or use a relative path.
 """

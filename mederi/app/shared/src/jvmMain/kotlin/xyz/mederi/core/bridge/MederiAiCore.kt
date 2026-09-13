@@ -334,13 +334,13 @@ class MederiAiCore(
     override suspend fun deleteProject(projectId: String): Result<Unit> = runCatching {
         // 删除项目 = 遍历其下所有会话统一走 [deleteConversation]（删除会话的唯一封装入口）：
         // 内部完成 abortAndJoin 运行中 turn → 删 session/history/diff 表 → 删磁盘 png → 清本地缓存。
-        // 循环后只剩项目记录本身和各目录残留的 .mederi/mermaid 目录需要收尾。
+        // 循环后只剩项目记录本身和项目目录残留的 .mederi/mermaid 目录需要收尾。
         mederi.sessions.list().filter { it.projectId == projectId }.forEach { session ->
             deleteConversation(session.id).getOrThrow()
         }
         runCatching {
             val project = mederi.projects.get(projectId)
-            project?.directories?.forEach { dirPath ->
+            project?.directory?.let { dirPath ->
                 val mermaidDir = File(dirPath, ".mederi/mermaid")
                 if (mermaidDir.exists()) {
                     mermaidDir.deleteRecursively()
@@ -349,16 +349,6 @@ class MederiAiCore(
             }
         }
         mederi.projects.delete(projectId)
-        refreshProjects()
-    }
-
-    override suspend fun addProjectDirectory(projectId: String, directory: String): Result<Unit> = runCatching {
-        mederi.projects.addDirectory(projectId, xyz.mederi.api.AddProjectDirectoryRequest(directory))
-        refreshProjects()
-    }
-
-    override suspend fun removeProjectDirectory(projectId: String, directory: String): Result<Unit> = runCatching {
-        mederi.projects.removeDirectory(projectId, xyz.mederi.api.RemoveProjectDirectoryRequest(directory))
         refreshProjects()
     }
 
@@ -393,7 +383,7 @@ class MederiAiCore(
             val session = mederi.sessions.get(conversationId)
             if (session != null) {
                 val project = mederi.projects.get(session.projectId)
-                project?.directories?.forEach { dirPath ->
+                project?.directory?.let { dirPath ->
                     val mermaidDir = File(dirPath, ".mederi/mermaid")
                     if (mermaidDir.exists() && mermaidDir.isDirectory) {
                         val sanitized = conversationId.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32)
@@ -438,7 +428,7 @@ class MederiAiCore(
         val session = mederi.sessions.get(conversationId)
         val planTodos = runCatching {
             val project = mederi.projects.get(session.projectId)
-            xyz.mederi.plan.PlanStore(project.directories).loadBySession(conversationId)
+            xyz.mederi.plan.PlanStore(listOf(project.directory)).loadBySession(conversationId)
                 ?.let { MederiModelMapper.toTodos(it.toTodoProjection()) }
         }.getOrNull().orEmpty()
         return planTodos.ifEmpty { MederiModelMapper.toTodos(session.todos) }
@@ -451,9 +441,10 @@ class MederiAiCore(
     override suspend fun getSnapshot(conversationId: String): Result<ConversationSnapshot> = runCatching {
         val session = mederi.sessions.get(conversationId)
         val messages = mederi.sessions.listMessages(conversationId)
+        val toolResults = MederiModelMapper.buildToolResultsById(messages)
         ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }),
-            messages = messages.map { MederiModelMapper.toChatMessage(it) },
+            messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
             contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages),
             cost = MederiModelMapper.toCostSummary(),
@@ -669,13 +660,16 @@ class MederiAiCore(
     }
 
     override suspend fun listMessages(conversationId: String): Result<List<ChatMessage>> = runCatching {
-        mederi.sessions.listMessages(conversationId).map { MederiModelMapper.toChatMessage(it) }
+        val messages = mederi.sessions.listMessages(conversationId)
+        val toolResults = MederiModelMapper.buildToolResultsById(messages)
+        messages.map { MederiModelMapper.toChatMessage(it, toolResults) }
     }
 
     override suspend fun listMessagesPage(conversationId: String): Result<MessagesPage> = runCatching {
         val messages = mederi.sessions.listMessages(conversationId)
+        val toolResults = MederiModelMapper.buildToolResultsById(messages)
         MessagesPage(
-            messages = messages.map { MederiModelMapper.toChatMessage(it) },
+            messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
             contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages)
         )
@@ -685,6 +679,7 @@ class MederiAiCore(
         conversationId: String,
         messageId: String
     ): Result<ChatMessage> = runCatching {
+        // 单条消息无法拿到与 ToolCall 跨消息配对的 ToolResult（在同会话紧随的 user 消息），保持单条映射
         val msg = mederi.sessions.getMessage(conversationId, messageId)
         MederiModelMapper.toChatMessage(msg)
     }

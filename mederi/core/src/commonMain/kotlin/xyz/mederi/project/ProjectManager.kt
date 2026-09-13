@@ -7,9 +7,9 @@ import xyz.mederi.domain.model.Project
  *
  * 项目（Project）的唯一真理源。所有项目的读写、目录管理都必须通过 ProjectManager。
  *
- * 核心不变式：
- * - 每个项目必须至少有一个目录。
- * - 新建项目时必须给定至少一个绝对路径。
+ * 核心不变式（单目录模型）：
+ * - 每个项目恰好绑定一个目录。
+ * - 新建项目时必须给定一个绝对路径。
  */
 interface ProjectManager {
 
@@ -32,11 +32,11 @@ interface ProjectManager {
      * 创建项目。
      *
      * @param name 项目名称。
-     * @param directories 绝对路径目录列表，至少一个。
+     * @param directory 项目绑定的绝对路径目录（唯一）。
      * @return 创建后的项目。
-     * @throws IllegalArgumentException 如果 directories 为空。
+     * @throws IllegalArgumentException 如果 directory 为空。
      */
-    suspend fun create(name: String, directories: List<String>): Project
+    suspend fun create(name: String, directory: String): Project
 
     /**
      * 删除项目。
@@ -51,16 +51,4 @@ interface ProjectManager {
      * 重命名项目。
      */
     suspend fun rename(id: String, name: String): Project
-
-    /**
-     * 为项目添加一个目录。
-     */
-    suspend fun addDirectory(id: String, path: String): Project
-
-    /**
-     * 移除项目中的一个目录。
-     *
-     * 如果移除后项目将没有目录，则拒绝操作（每个项目至少保留一个目录）。
-     */
-    suspend fun removeDirectory(id: String, path: String): Project
 }

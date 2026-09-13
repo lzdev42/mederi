@@ -11,7 +11,7 @@ object MockSeedData {
         Project(
             id = "proj_1",
             name = "mederi-dev",
-            directories = listOf("/Users/mock/projects/mederi-dev"),
+            directory = "/Users/mock/projects/mederi-dev",
             conversations = listOf(
                 Conversation(id = "conv_101", projectId = "proj_1", title = "重构对话引擎", status = ConversationStatus.Idle, createdAt = currentTimeMillis() - 100000, updatedAt = currentTimeMillis() - 50000),
                 Conversation(id = "conv_102", projectId = "proj_1", title = "新增 diff 功能", status = ConversationStatus.Idle, createdAt = currentTimeMillis() - 80000, updatedAt = currentTimeMillis() - 60000),
@@ -20,7 +20,7 @@ object MockSeedData {
         Project(
             id = "proj_2",
             name = "side-project",
-            directories = listOf("/Users/mock/projects/side-project"),
+            directory = "/Users/mock/projects/side-project",
             conversations = listOf(
                 Conversation(id = "conv_103", projectId = "proj_2", title = "整理 notes", status = ConversationStatus.Idle, createdAt = currentTimeMillis() - 70000, updatedAt = currentTimeMillis() - 70000),
             )
@@ -28,7 +28,7 @@ object MockSeedData {
         Project(
             id = "proj_3",
             name = "notes",
-            directories = listOf("/Users/mock/projects/notes"),
+            directory = "/Users/mock/projects/notes",
             conversations = emptyList()
         ),
     )

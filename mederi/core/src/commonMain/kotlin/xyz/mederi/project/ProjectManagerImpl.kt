@@ -30,22 +30,22 @@ class ProjectManagerImpl(
     override suspend fun require(id: String): Project =
         get(id) ?: throw NoSuchElementException("Project not found: $id")
 
-    override suspend fun create(name: String, directories: List<String>): Project {
-        require(directories.isNotEmpty()) {
-            "Project must have at least one directory"
+    override suspend fun create(name: String, directory: String): Project {
+        require(directory.isNotBlank()) {
+            "Project must have a directory"
         }
         val now = Instant.now().toString()
         val project = Project(
             id = "proj_${UUID.randomUUID().toString().take(8)}",
             name = name,
-            directories = directories,
+            directory = directory,
             createdAt = now,
             updatedAt = now
         )
         projectStore.save(project)
 
-        // 在主目录下创建 .mederi/ 工作目录（与写路径自愈共用一套逻辑）
-        xyz.mederi.plan.ensureMederiDir(directories)
+        // 在项目目录下创建 .mederi/ 工作目录（与写路径自愈共用一套逻辑）
+        xyz.mederi.plan.ensureMederiDir(listOf(directory))
 
         return project
     }
@@ -63,35 +63,6 @@ class ProjectManagerImpl(
     override suspend fun rename(id: String, name: String): Project {
         val existing = require(id)
         val updated = existing.copy(name = name, updatedAt = Instant.now().toString())
-        projectStore.save(updated)
-        return updated
-    }
-
-    override suspend fun addDirectory(id: String, path: String): Project {
-        val existing = require(id)
-        require(path !in existing.directories) {
-            "Directory already exists in project: $path"
-        }
-        val updated = existing.copy(
-            directories = existing.directories + path,
-            updatedAt = Instant.now().toString()
-        )
-        projectStore.save(updated)
-        return updated
-    }
-
-    override suspend fun removeDirectory(id: String, path: String): Project {
-        val existing = require(id)
-        require(path in existing.directories) {
-            "Directory not found in project: $path"
-        }
-        require(existing.directories.size > 1) {
-            "Project must have at least one directory"
-        }
-        val updated = existing.copy(
-            directories = existing.directories - path,
-            updatedAt = Instant.now().toString()
-        )
         projectStore.save(updated)
         return updated
     }

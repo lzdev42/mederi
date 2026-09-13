@@ -33,7 +33,7 @@
 
 ```mermaid
 classDiagram
-    class Project { +id +name +directories~List~ +createdAt +updatedAt }
+    class Project { +id +name +directory +createdAt +updatedAt }
     class Session {
         +id +projectId +title +status: SessionStatus
         +agentMode: AgentMode +workType: WorkType
@@ -152,14 +152,13 @@ Impl 内部创建 `TurnExecutor(sessionStore, historyStore, eventBus, providerMa
 ```kotlin
 suspend fun list(): List<Project>
 suspend fun get(id: String): Project?;  suspend fun require(id: String): Project
-suspend fun create(name: String, directories: List<String>): Project   // ensureMederiDir 建 .mederi/{plans,plans-done,notebook.md}
+suspend fun create(name: String, directory: String): Project   // ensureMederiDir 建 .mederi/{plans,plans-done,notebook.md}
 suspend fun delete(id: String)          // 级联删 Session+History+Diff
 suspend fun rename(id, name): Project
-suspend fun addDirectory(id, path): Project
-suspend fun removeDirectory(id, path): Project   // 移除后无目录则拒绝
 ```
 
-**项目目录模型**：`directories.first()` = 主目录（承载 `.mederi/`、shell cwd、相对路径解析首选），其余目录平等读写。
+**项目目录模型（单目录）**：项目恰好绑定一个目录 `directory`（绝对路径，非空），承载 `.mederi/`、shell cwd、相对路径解析。引擎内部工具/沙箱仍以 `List<String>`（containment 白名单）接收，调用侧统一 `listOf(project.directory)`。
+**旧数据迁移**：`SqliteProjectStore` 读取旧版 `directories: List<String>` payload 时取第一个目录迁移为单目录（内存态生效，下次保存回写新形状）。
 
 ### 3.3 ProviderManager（`…/provider/`）
 
@@ -318,7 +317,7 @@ classDiagram
 ### 6.2 TurnExecutor 关键语义（`…/koog/TurnExecutor.kt`）
 
 - **sendMessage 流程**：`sendMessage` → 失败置 ERROR + 经 `ErrorCollector.collect` 收集（分类/堆栈/cause 链/诊断报告入内存历史 + DebugLog）→ 发 MESSAGE_ERROR（rich payload）再上抛 → `sendMessageInternal`：
-  1. RUNNING 校验 → 读 project → `PlanStore(project.directories)` / `Notebook(project.directories)` → `planStore.loadBySession(sessionId)` 组装 activePlanContent（`Current: Subtask N` 指针 + Progress；**spec 只挂活跃子任务**：IN_PROGRESS 优先否则 nextPending）
+  1. RUNNING 校验 → 读 project → `PlanStore(listOf(project.directory))` / `Notebook(listOf(project.directory))` → `planStore.loadBySession(sessionId)` 组装 activePlanContent（`Current: Subtask N` 指针 + Progress；**spec 只挂活跃子任务**：IN_PROGRESS 优先否则 nextPending）
   2. activeTodoContent（仅无活跃 Plan 时，互斥防两份进度真理源）
   3. `SystemPrompts.build(...)` 或 `SystemPrompts.forSubagent(...)`
   4. 解析 effectiveModel/effectiveReasoningLevel → 回写 `sessionStore.updateAgentConfig`

@@ -38,7 +38,7 @@ class SessionAndProjectCascadeDeleteTest {
             diffStore = diffStore,
         )
 
-        val project = projectManager.create("TestProj", listOf("/tmp/test-proj"))
+        val project = projectManager.create("TestProj", "/tmp/test-proj")
         val session = sessionManager.create(
             agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE),
             projectId = project.id,
@@ -75,7 +75,7 @@ class SessionAndProjectCascadeDeleteTest {
             diffStore = diffStore,
         )
 
-        val project = projectManager.create("TestProj", listOf("/tmp/test-proj"))
+        val project = projectManager.create("TestProj", "/tmp/test-proj")
         val s1 = sessionManager.create(
             agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE),
             projectId = project.id,

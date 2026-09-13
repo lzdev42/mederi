@@ -24,8 +24,6 @@ interface AiCore {
     suspend fun renameProject(projectId: String, name: String): Result<Unit>
     /** 删除项目。内部遍历其下所有会话统一走 [deleteConversation]（唯一封装入口），最后删项目记录。 */
     suspend fun deleteProject(projectId: String): Result<Unit>
-    suspend fun addProjectDirectory(projectId: String, directory: String): Result<Unit>
-    suspend fun removeProjectDirectory(projectId: String, directory: String): Result<Unit>
 
     suspend fun createConversation(projectId: String, agent: AgentOption? = null): Result<Conversation>
     /**
