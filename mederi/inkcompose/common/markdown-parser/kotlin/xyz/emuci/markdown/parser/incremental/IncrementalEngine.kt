@@ -572,7 +572,7 @@ class IncrementalEngine(
                 }
                 block
             }
-            is ListBlock, is ListItem, is CustomContainer -> {
+            is ListBlock, is ListItem, is CustomContainer, is Admonition -> {
                 val children = block.children.toList()
                 if (children.isNotEmpty()) {
                     val lastChild = children.last()

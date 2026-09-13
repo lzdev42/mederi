@@ -131,6 +131,7 @@ class BlockParser(
         for (i in 1 until openBlocks.size) {
             val ob = openBlocks[i]
             if (continueBlock(ob, cursor)) {
+                ob.lastLineIndex = maxOf(ob.lastLineIndex, lineIdx)
                 matchedDepth = i + 1
             } else {
                 // 检查块是否被关闭围栏/定界符关闭
@@ -1059,8 +1060,14 @@ class BlockParser(
             }
             is BlockQuote -> {
                 // 检查是否为警告块
-                checkAdmonition(node)
-                node.lineRange = LineRange(ob.contentStartLine, ob.lastLineIndex + 1)
+                val admonition = checkAdmonition(node, ob)
+                val targetNode = admonition ?: node
+                val childEnd = targetNode.children.maxOfOrNull { it.lineRange.endLine } ?: (ob.lastLineIndex + 1)
+                val endLine = maxOf(ob.lastLineIndex + 1, childEnd)
+                targetNode.lineRange = LineRange(ob.contentStartLine, endLine)
+                if (targetNode !== node) {
+                    node.lineRange = targetNode.lineRange
+                }
             }
             is ListBlock -> {
                 // compute endLine from children for accurate lineRange
@@ -1109,13 +1116,13 @@ class BlockParser(
         }
     }
 
-    private fun checkAdmonition(blockQuote: BlockQuote) {
+    private fun checkAdmonition(blockQuote: BlockQuote, ob: OpenBlock): Admonition? {
         val firstChild = blockQuote.children.firstOrNull()
-        if (firstChild !is Paragraph) return
+        if (firstChild !is Paragraph) return null
 
         // 从源文本重建段落首行内容
         val lr = firstChild.lineRange
-        if (lr.lineCount <= 0) return
+        if (lr.lineCount <= 0) return null
         val firstLine = source.lineContent(lr.startLine).trimStart()
         // 去除 > 前缀
         val content = firstLine.let {
@@ -1128,23 +1135,56 @@ class BlockParser(
         }
 
         // 匹配 [!TYPE] 或 [!TYPE] 后跟标题文本
-        val match = ADMONITION_REGEX.find(content) ?: return
+        val match = ADMONITION_REGEX.find(content) ?: return null
         val type = match.groupValues[1]
         val title = match.groupValues[2].trim()
 
+        val childEnd = blockQuote.children.maxOfOrNull { it.lineRange.endLine } ?: (ob.lastLineIndex + 1)
+        val endLine = maxOf(ob.lastLineIndex + 1, childEnd)
+        val fullRange = LineRange(ob.contentStartLine, endLine)
+
         // 创建 Admonition 节点，替换 BlockQuote
         val admonition = Admonition(type = type, title = title)
-        admonition.lineRange = blockQuote.lineRange
+        admonition.lineRange = fullRange
         admonition.sourceRange = blockQuote.sourceRange
+        if (fullRange.lineCount > 0) {
+            admonition.contentHash = source.contentHash(fullRange)
+        }
 
         // 检查首段是否仅含 [!TYPE] 行
-        val remainingContent = if (lr.lineCount > 1) {
+        if (lr.lineCount > 1) {
             // 首段有多行，将第一行之后的内容保留为新段落
             val newPara = Paragraph()
-            newPara.lineRange = LineRange(lr.startLine + 1, lr.endLine)
+            val newParaRange = LineRange(lr.startLine + 1, lr.endLine)
+            newPara.lineRange = newParaRange
+            newPara.sourceRange = SourceRange(
+                SourcePosition(newParaRange.startLine, 0, 0),
+                SourcePosition(newParaRange.endLine, 0, 0)
+            )
+            // 优先继承原段落已剔除 > 前缀的 rawContent（去除首行 [!TYPE] 后的剩余内容）
+            val raw = firstChild.rawContent
+            if (raw != null) {
+                val lines = raw.lines()
+                if (lines.size > 1) {
+                    newPara.rawContent = lines.drop(1).joinToString("\n")
+                }
+            } else {
+                newPara.rawContent = buildString {
+                    for (i in newParaRange.startLine until newParaRange.endLine) {
+                        if (i > newParaRange.startLine) append('\n')
+                        var l = source.lineContent(i).trimStart()
+                        if (l.startsWith('>')) {
+                            l = l.drop(1)
+                            if (l.startsWith(' ')) l = l.drop(1)
+                        }
+                        append(l.trimStart())
+                    }
+                }
+            }
+            if (newParaRange.lineCount > 0) {
+                newPara.contentHash = source.contentHash(newParaRange)
+            }
             admonition.appendChild(newPara)
-        } else {
-            // 首段只有 [!TYPE] 一行，移除它
         }
 
         // 将 blockQuote 的其余子节点（跳过首段）移到 admonition
@@ -1154,8 +1194,9 @@ class BlockParser(
         }
 
         // 在父节点中用 Admonition 替换 BlockQuote
-        val parent = blockQuote.parent as? ContainerNode ?: return
+        val parent = blockQuote.parent as? ContainerNode ?: return null
         parent.replaceChild(blockQuote, admonition)
+        return admonition
     }
 
     private fun isListTight(list: ListBlock): Boolean {
@@ -1403,7 +1444,12 @@ class BlockParser(
                 buildString {
                     for (i in lr.startLine until lr.endLine) {
                         if (i > lr.startLine) append('\n')
-                        append(source.lineContent(i).trimStart())
+                        var line = source.lineContent(i).trimStart()
+                        if (line.startsWith('>')) {
+                            line = line.drop(1)
+                            if (line.startsWith(' ')) line = line.drop(1)
+                        }
+                        append(line.trimStart())
                     }
                 }
             }

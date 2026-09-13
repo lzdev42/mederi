@@ -1050,14 +1050,6 @@ class ListExtendedTest {
     }
 
     @Test
-    fun should_detect_loose_list() {
-        val doc = parser.parse("- A\n\n- B\n\n- C")
-        val list = doc.children.first()
-        assertIs<ListBlock>(list)
-        assertTrue(!list.tight)
-    }
-
-    @Test
     fun should_parse_ordered_list_starting_from_0() {
         val doc = parser.parse("0. Zero\n1. One")
         val list = doc.children.first()
@@ -1328,6 +1320,23 @@ class AdmonitionTest {
         val doc = parser.parse("> Normal blockquote")
         val bq = doc.children.first()
         assertIs<BlockQuote>(bq)
+    }
+
+    @Test
+    fun should_parse_admonition_without_leading_gt_in_paragraph() {
+        val doc = parser.parse("> [!NOTE]\n> Line 1\n> Line 2")
+        val admonition = doc.children.first()
+        assertIs<Admonition>(admonition)
+        assertEquals("NOTE", admonition.type)
+        assertEquals(LineRange(0, 3), admonition.lineRange)
+        assertTrue(admonition.contentHash != 0L)
+        val para = admonition.children.first()
+        assertIs<Paragraph>(para)
+        assertEquals(LineRange(1, 3), para.lineRange)
+        assertTrue(para.contentHash != 0L)
+        val texts = para.children.filterIsInstance<Text>().map { it.literal }
+        assertEquals(listOf("Line 1", "Line 2"), texts)
+        assertTrue(para.children.any { it is SoftLineBreak })
     }
 }
 

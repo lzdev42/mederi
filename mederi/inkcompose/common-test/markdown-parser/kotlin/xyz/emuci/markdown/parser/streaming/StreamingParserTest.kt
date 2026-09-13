@@ -897,4 +897,25 @@ class InlineAutoCloserTest {
         assertTrue(suffix.contains("`"), "Expected ` in suffix")
         assertTrue(suffix.contains("**"), "Expected ** in suffix")
     }
+
+    // ────── Admonition 流式解析测试 ──────
+
+    @Test
+    fun should_auto_close_inline_formatting_inside_streaming_admonition() {
+        val parser = MarkdownParser()
+        parser.beginStream()
+        parser.append("> [!WARNING]\n")
+        parser.append("> This is **unclosed bold")
+
+        val doc = parser.document
+        val adm = doc.children.firstOrNull { it is Admonition }
+        assertIs<Admonition>(adm)
+        val para = adm.children.firstOrNull { it is Paragraph }
+        assertIs<Paragraph>(para)
+        // 验证未闭合的 bold 被自动闭合，生成 StrongEmphasis
+        val hasStrong = para.children.any { it is StrongEmphasis }
+        assertTrue(hasStrong, "Unclosed bold in admonition should be auto-closed into StrongEmphasis")
+
+        parser.endStream()
+    }
 }

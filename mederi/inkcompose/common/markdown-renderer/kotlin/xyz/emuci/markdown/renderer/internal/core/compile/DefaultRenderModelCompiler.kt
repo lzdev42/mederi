@@ -458,6 +458,17 @@ private fun inlineRevision(node: Node): Long {
     for (child in children) {
         acc = renderIdentityMix(acc, blockStableId(child))
         acc = renderIdentityMix(acc, child.contentHash)
+        when (child) {
+            is LeafNode -> if (child.literal.isNotEmpty()) {
+                acc = renderIdentityMix(acc, renderIdentityFromText(child.literal))
+            }
+            is ContainerNode -> {
+                val text = extractPlainText(child)
+                if (text.isNotEmpty()) {
+                    acc = renderIdentityMix(acc, renderIdentityFromText(text))
+                }
+            }
+        }
     }
     return acc
 }
