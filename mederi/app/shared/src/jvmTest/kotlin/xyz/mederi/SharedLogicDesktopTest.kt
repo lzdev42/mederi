@@ -456,7 +456,8 @@ class SharedLogicDesktopTest {
 
             val items = viewModel.computeChatItems(listOf(assistantMsgWithImage, pureImageAssistantMsg))
             println("DEBUG_TEST: items count = ${items.size}")
-            assertEquals(2, items.size, "应生成两条 TextMessage 列表项")
+            // 两条 assistant 消息构成同一轮次：正文(带图) + 纯图 + 轮次底部 Footer
+            assertEquals(3, items.size, "应生成两条 TextMessage 列表项 + 一条沉底 Footer")
 
             val firstItem = items[0] as xyz.mederi.core.ui.ChatListItem.TextMessage
             assertEquals("这是为您生成的图片：", firstItem.text)
@@ -467,6 +468,8 @@ class SharedLogicDesktopTest {
             assertEquals("", secondItem.text)
             assertEquals(listOf("https://example.com/pure.png"), secondItem.images)
             assertEquals(false, secondItem.isUser)
+
+            assertTrue(items[2] is xyz.mederi.core.ui.ChatListItem.Footer, "轮次结束应挂沉底 Footer")
         } finally {
             testScope.cancel()
         }
@@ -1047,6 +1050,7 @@ class SharedLogicDesktopTest {
 
             val footerItem = items[4] as xyz.mederi.core.ui.ChatListItem.Footer
             assertNotNull(footerItem.footer)
+            Unit
         } finally {
             testScope.cancel()
         }

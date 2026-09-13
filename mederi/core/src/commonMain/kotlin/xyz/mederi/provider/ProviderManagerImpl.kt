@@ -10,6 +10,7 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.provider.domain.model.ReasoningParameter
 import xyz.mederi.provider.domain.model.RemoteModelInfo
 import xyz.mederi.debug.DebugLog
+import xyz.mederi.http.MederiHttpClientFactory
 import xyz.mederi.store.ApiKeyStore
 import xyz.mederi.store.ProviderStore
 import kotlinx.serialization.Serializable
@@ -283,10 +284,9 @@ class ProviderManagerImpl(
         val normalized = xyz.mederi.provider.infrastructure.UrlNormalizer.normalize(provider.baseUrl)
         val modelsPath = "${normalized.pathPrefix}models"
 
-        val httpClientFactory = ai.koog.http.client.HttpClientFactoryResolver.resolve()
         return when (provider.type) {
             ProviderType.GOOGLE -> {
-                val httpClient = httpClientFactory.create(
+                val httpClient = MederiHttpClientFactory.create(
                     clientName = "mederi-models-fetch-google",
                     baseUrl = normalized.base,
                     headers = mapOf("x-goog-api-key" to apiKey)
@@ -298,7 +298,7 @@ class ProviderManagerImpl(
                 }
             }
             else -> {
-                val httpClient = httpClientFactory.create(
+                val httpClient = MederiHttpClientFactory.create(
                     clientName = "mederi-models-fetch",
                     baseUrl = normalized.base,
                     headers = mapOf(

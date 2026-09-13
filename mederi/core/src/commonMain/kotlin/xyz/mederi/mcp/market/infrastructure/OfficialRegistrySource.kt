@@ -1,7 +1,6 @@
 package xyz.mederi.mcp.market.infrastructure
 
-import ai.koog.http.client.HttpClientFactoryResolver
-import ai.koog.http.client.KoogHttpClient
+import xyz.mederi.http.MederiHttpClientFactory
 import xyz.mederi.mcp.market.domain.McpSearchResult
 import xyz.mederi.mcp.market.domain.McpServerDetail
 import java.net.URLEncoder
@@ -50,8 +49,8 @@ class OfficialRegistrySource(
         }
 
     /** 每请求创建即用即毁客户端（与 ModelCatalog / fetchRemoteModels 同款模式），统一生命周期。 */
-    private suspend fun <T> withClient(name: String, block: suspend (KoogHttpClient) -> T): T {
-        val client = HttpClientFactoryResolver.resolve().create(
+    private suspend fun <T> withClient(name: String, block: suspend (ai.koog.http.client.KoogHttpClient) -> T): T {
+        val client = MederiHttpClientFactory.create(
             clientName = name,
             baseUrl = baseUrl,
             headers = mapOf("Accept" to "application/json")

@@ -160,7 +160,7 @@ flowchart TB
 `class MederiAiCore(configDir: String, dispatcher = Dispatchers.Default) : AiCore, SandboxHooks`。
 
 **initialize() 流程（顺序）**：
-1. `mederi = Mederi.local(configDir)`
+1. `mederi = Mederi.create { configDir; userAgent = AppInfo.userAgent }`（出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带 Mederi 身份头）
 2. `cleanupLegacyBuiltinProviders()` —— 删"无 API Key 且名字命中内置预设"的历史垃圾 Provider
 3. `cleanupStaleRunningSessions()` —— abort 上次崩溃残留的 RUNNING session
 4. `syncBuiltinProviders()` —— 内置供应商 baseUrl/reasoningParameter/responseSanitization/modelsDevKey 与代码预设校验、不一致则更新
@@ -178,10 +178,18 @@ flowchart TB
 ### 4.2 ServerAiCore（`…/commonMain/core/bridge/ServerAiCore.kt`）
 
 `class ServerAiCore(baseUrl, passwordProvider: suspend () -> String? = {null}) : AiCore`。
+- Ktor client 配置：`defaultRequest` 统一带 `User-Agent: AppInfo.userAgent`（身份头唯一真理源 = `AppInfo.userAgent`，见 §4.3）。
 - 鉴权：passwordProvider 非空时所有 REST + SSE 带 `Authorization: Bearer <password>`。
 - initialize：校验 baseUrl → 轮询 `GET /v1/ready`（20s 上限、250ms 间隔）→ 拉 presets/agents/models/providers/projects → isReady。
 - SSE：官方 SSE 插件，incoming data 段反序列化为 CoreEvent（失败丢弃），心跳注释帧不投递；两个流：`/v1/events`（全局）与 `/v1/sessions/{id}/events`（会话）。
 - 错误：非 2xx 抛异常（优先 ApiError.error 文本），方法边界包 Result 失败。
+
+### 4.3 AppInfo（`…/commonMain/AppInfo.kt`，应用身份唯一真理源）
+
+- `VERSION`：应用版本常量，**源码不写版本字面量**。唯一出处 = Gradle 工程根 `version.json`（CI 基于 git tag 写入）；构建脚本（app/shared 的 `generateVersionSource` 任务）读取后生成 `AppVersion.kt`（`MEDERI_APP_VERSION`）注入这里。
+- `userAgent`（lazy）：`Mederi/<version> (<os> <os-version>; <arch>)` —— 组合 `VERSION` + `platformInfo()`，所有出站 HTTP 请求（Koog 链路经 `MederiConfig.userAgent` → `MederiHttpClientFactory`；Ktor 客户端经 `defaultRequest`）只从这里取值。
+- `platformInfo(): PlatformInfo(osName, osVersion, arch)`：`expect` 声明，jvm/android/ios/wasmJs 各一个 `actual`（见 00-overview 平台注入矩阵）；`normalizeOsName`/`normalizeArch` 为标准 UA 粒度映射（Windows NT / Mac OS X / Linux / Android / iOS；aarch64→arm64、amd64→x86_64）。
+- 硬性规则：禁止在调用处自行获取版本号 / os / arch 再拼 UA。
 
 ## 5. RemoteServer 路由表（`…/jvm/core/remote/RemoteServer.kt`）
 

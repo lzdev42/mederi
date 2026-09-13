@@ -99,6 +99,14 @@ class MederiConfig {
      */
     var mcpServerStore: McpServersStore? = null
 
+    /**
+     * 出站 HTTP 请求的 User-Agent 身份头值。
+     *
+     * 装配层（app/shared 的 MederiAiCore / server）从 `AppInfo.userAgent` 注入；
+     * 注入后统一经 [xyz.mederi.http.MederiHttpClientFactory] 应用到所有 Koog 链路请求。
+     */
+    var userAgent: String = "Mederi/dev"
+
     // 预留扩展点，例如：
     // var eventStore: EventStore? = null
     // var clock: Clock = Clock.System

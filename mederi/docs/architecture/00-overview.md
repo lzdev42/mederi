@@ -116,6 +116,7 @@ flowchart TB
 | RemoteControlHooks | `DesktopRemoteControlHooks`（RemoteServer + cloudflared 隧道） | 本身即 server | — | — | — |
 | Mermaid 缓存目录 | `~/.mederi/mermaid/` | — | `cacheDir`（MainActivity 注入） | NSCachesDirectory | no-op（同文档 DOM 渲染） |
 | RemoteGate 密码门 | 无 | 无 | 无 | 无 | **有**（包在 MederiApp 外层） |
+| `AppInfo.platformInfo()`（UA 平台信息） | `System.getProperty(os.name/version/arch)` | 同 desktop | `Build.VERSION.RELEASE` + `SUPPORTED_ABIS` | `UIDevice.systemVersion` + `kotlin.native.Platform.cpuArchitecture` | 解析 `navigator.userAgent` |
 | UI 布局 | Row: Sidebar + Workspace（宽 ≥768dp）；窄屏抽屉 | — | 同 shared 逻辑 | 同 shared 逻辑 | 同 shared 逻辑 |
 
 ## 4. 分层架构与依赖方向（core）

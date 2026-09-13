@@ -5,8 +5,8 @@ import ai.koog.prompt.executor.clients.google.GoogleClientSettings
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.http.client.HttpClientFactoryResolver
 import xyz.mederi.debug.DebugLog
+import xyz.mederi.http.MederiHttpClientFactory
 import xyz.mederi.provider.domain.model.Provider
 import xyz.mederi.provider.domain.model.ProviderType
 import xyz.mederi.provider.infrastructure.UrlNormalizer
@@ -89,14 +89,18 @@ object KoogClientFactory {
 
         if (!needsCustomClient) {
             DebugLog.event("ClientFactory", "created OpenAILLMClient (standard)")
-            return OpenAILLMClient(apiKey = apiKey, settings = settings)
+            return OpenAILLMClient(
+                apiKey = apiKey,
+                settings = settings,
+                httpClientFactory = MederiHttpClientFactory
+            )
         }
 
         DebugLog.event("ClientFactory", "created MederiOpenAILLMClient (reasoning=${provider.reasoningParameter != null}, sanitization=${provider.responseSanitization})")
         return MederiOpenAILLMClient(
             apiKey = apiKey,
             settings = settings,
-            httpClientFactory = HttpClientFactoryResolver.resolve(),
+            httpClientFactory = MederiHttpClientFactory,
             chatCompletionsPath = "${prefix}chat/completions",
         )
     }
@@ -124,6 +128,10 @@ object KoogClientFactory {
             baseUrl = normalized.base,
             defaultPath = "${normalized.versionPath}/models"
         )
-        return GoogleLLMClient(apiKey = apiKey, settings = settings)
+        return GoogleLLMClient(
+            apiKey = apiKey,
+            settings = settings,
+            httpClientFactory = MederiHttpClientFactory
+        )
     }
 }

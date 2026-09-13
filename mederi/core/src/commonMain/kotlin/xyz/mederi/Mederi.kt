@@ -153,6 +153,9 @@ class Mederi private constructor(
         fun create(block: MederiConfig.() -> Unit): Mederi {
             val config = MederiConfig().apply(block)
 
+            // 出站 HTTP User-Agent：装配层注入的版本 + 平台身份统一下发到 HTTP 工厂
+            xyz.mederi.http.MederiHttpClientFactory.userAgent = config.userAgent
+
             val configDir = config.configDir?.let { expandUserHome(it) }
 
             val paths = configDir?.let { dirPath ->

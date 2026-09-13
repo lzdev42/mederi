@@ -1,6 +1,6 @@
 package xyz.mederi.metadata
 
-import ai.koog.http.client.HttpClientFactoryResolver
+import xyz.mederi.http.MederiHttpClientFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -112,11 +112,9 @@ class ModelCatalog(
     }
 
     private suspend fun fetch(): CatalogIndex {
-        val httpClientFactory = HttpClientFactoryResolver.resolve()
-        val httpClient = httpClientFactory.create(
+        val httpClient = MederiHttpClientFactory.create(
             clientName = "mederi-model-catalog",
             baseUrl = CATALOG_BASE_URL,
-            headers = emptyMap()
         )
         try {
             val raw = httpClient.get<String>(path = CATALOG_PATH, responseType = String::class)

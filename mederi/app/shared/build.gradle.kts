@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.AbstractKotlinCompileTool
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -109,6 +110,44 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }
+    }
+}
+
+// 生成的 AppVersion.kt 挂到 commonMain（四个平台 + 对应 test 都可见）
+kotlin.sourceSets.commonMain {
+    kotlin.srcDir(layout.buildDirectory.dir("generated/version/commonMain"))
+}
+
+// ── 版本号单一真理源注入 ──────────────────────────────────────────────
+// `version.json`（Gradle 工程根，CI 基于 git tag 写入）是版本号唯一出处，源码不写版本字面量。
+// 每次编译前读它 → 生成 build/generated/version/commonMain/xyz/mederi/AppVersion.kt
+// → `AppInfo.VERSION` / User-Agent 都引用该生成常量。
+val generateVersionSource = tasks.register("generateVersionSource") {
+    val versionJson = rootProject.file("version.json")
+    val outputDir = layout.buildDirectory.dir("generated/version/commonMain")
+    inputs.file(versionJson)
+    outputs.dir(outputDir)
+    doLast {
+        val parsed = groovy.json.JsonSlurper().parse(versionJson) as Map<*, *>
+        val version = parsed["version"] as? String
+            ?: error("version.json 必须包含非空 version 字段：$versionJson")
+        val source = """
+            |package xyz.mederi
+            |
+            |/** 由 version.json 生成的版本常量（CI 基于 git tag 写入），勿手改。 */
+            |const val MEDERI_APP_VERSION: String = "$version"
+        """.trimMargin() + "\n"
+        val target = outputDir.get().asFile.resolve("xyz/mederi/AppVersion.kt")
+        target.parentFile.mkdirs()
+        target.writeText(source)
+    }
+}
+
+// 所有 Kotlin 源编译任务（jvm / android / ios / wasmJs / 各 test，基类统一为 AbstractKotlinCompileTool）
+// 先跑版本生成，避免 Gradle 因"使用了未声明依赖的输出"校验报错
+tasks.configureEach {
+    if (this is AbstractKotlinCompileTool<*>) {
+        dependsOn(generateVersionSource)
     }
 }
 

@@ -3,6 +3,7 @@ package xyz.mederi.core.bridge
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.sse.SSE
 import io.ktor.client.plugins.sse.sse
 import io.ktor.client.request.HttpRequestBuilder
@@ -11,6 +12,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -31,6 +33,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.seconds
+import xyz.mederi.AppInfo
 import xyz.mederi.currentTimeMillis
 import xyz.mederi.core.contract.AiCore
 import xyz.mederi.core.contract.SnapshotReducer
@@ -77,6 +80,10 @@ class ServerAiCore(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
     private val client = HttpClient {
+        // 身份头：所有遥控 REST/SSE 请求统一携带 Mederi User-Agent（唯一真理源 = AppInfo.userAgent）
+        defaultRequest {
+            header(HttpHeaders.UserAgent, AppInfo.userAgent)
+        }
         install(ContentNegotiation) { json(json) }
         install(SSE) {
             // 断线自动重连（最多 4 次，间隔 2s），重连期内快照由回查兜底

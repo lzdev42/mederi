@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import xyz.mederi.AppInfo
 import xyz.mederi.Mederi
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.CreateSessionRequest
@@ -108,7 +109,11 @@ class MederiAiCore(
 
     override suspend fun initialize(): Result<Unit> = runCatching {
         withContext(dispatcher) {
-            mederi = Mederi.local(configDir)
+            mederi = Mederi.create {
+                configDir = this@MederiAiCore.configDir
+                // 出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带上 Mederi 身份头
+                userAgent = AppInfo.userAgent
+            }
             cleanupLegacyBuiltinProviders()
             cleanupStaleRunningSessions()
             syncBuiltinProviders()

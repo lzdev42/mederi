@@ -1,5 +1,7 @@
 package xyz.mederi.core.remote
 
+import xyz.mederi.AppInfo
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,8 +31,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import kotlinx.browser.localStorage
 import kotlinx.browser.window
@@ -60,7 +64,7 @@ fun RemoteGate(content: @Composable () -> Unit) {
     var phase by remember { mutableStateOf(GatePhase.Checking) }
     var password by remember { mutableStateOf(readStoredPassword() ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
-    val client = remember { HttpClient() }
+    val client = remember { HttpClient { defaultRequest { header(HttpHeaders.UserAgent, AppInfo.userAgent) } } }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
