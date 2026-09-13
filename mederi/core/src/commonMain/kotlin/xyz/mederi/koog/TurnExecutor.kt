@@ -185,13 +185,20 @@ class TurnExecutor(
         DebugLog.data("TurnExec", "session.aiModel", "${session.aiModel?.id} (${session.aiModel?.name}), providerModelId=${session.aiModel?.providerModelId}")
         DebugLog.data("TurnExec", "session.reasoningLevel", session.reasoningLevel)
 
-        if (session.status == SessionStatus.RUNNING) {
-            throw IllegalStateException(
-                "Session $sessionId is already running a turn. Wait for it to complete or abort it first."
-            )
-        }
-        if (activeJobs[sessionId]?.isActive == true) {
-            throw IllegalStateException("Session $sessionId has an active turn in progress.")
+        val hasPendingQuestion = questionRequesters[sessionId]?.hasPending() == true
+        val hasPendingPlanApproval = planApprovalRequesters[sessionId]?.hasPending() == true
+        if (hasPendingQuestion || hasPendingPlanApproval) {
+            DebugLog.info("TurnExec", "User sent message while question/plan approval pending for session $sessionId; aborting previous turn cleanly")
+            abortAndJoin(sessionId)
+        } else {
+            if (session.status == SessionStatus.RUNNING) {
+                throw IllegalStateException(
+                    "Session $sessionId is already running a turn. Wait for it to complete or abort it first."
+                )
+            }
+            if (activeJobs[sessionId]?.isActive == true) {
+                throw IllegalStateException("Session $sessionId has an active turn in progress.")
+            }
         }
 
         val agentMode = request.agentConfig.agentMode

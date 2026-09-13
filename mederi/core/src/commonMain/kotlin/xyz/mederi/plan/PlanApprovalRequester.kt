@@ -77,6 +77,8 @@ class PlanApprovalRequester(
         return true
     }
 
+    fun hasPending(): Boolean = pendingDeferred?.isActive == true
+
     fun cancelAll() {
         cancelCurrent("cancelled")
     }

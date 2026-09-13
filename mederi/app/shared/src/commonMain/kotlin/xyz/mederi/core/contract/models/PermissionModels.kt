@@ -4,16 +4,16 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class QuestionRequest(
-    val id: String,
-    val conversationId: String,
-    val questions: List<Question>,
+    val id: String = "",
+    val conversationId: String = "",
+    val questions: List<Question> = emptyList(),
 ) {
     @Serializable
     data class Question(
-        val id: String,
-        val prompt: String,
-        val options: List<String>,
-        val allowCustom: Boolean,
+        val id: String = "",
+        val prompt: String = "",
+        val options: List<String> = emptyList(),
+        val allowCustom: Boolean = false,
         val multiSelect: Boolean = false,
     )
 }

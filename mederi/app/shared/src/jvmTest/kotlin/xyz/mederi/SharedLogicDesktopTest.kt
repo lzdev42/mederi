@@ -571,6 +571,120 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testQuestionRequestedDecodingAndStateHandling() {
+        val jsonPayload = """[
+            {"id":"q1","prompt":"选择端口","options":["8080","3000"]},
+            {"id":"q2","prompt":"请输入你的名字","options":[]},
+            {"id":"q3","prompt":"选择功能","options":["A","B"],"multiSelect":true,"allowCustom":true}
+        ]"""
+
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_q",
+            projectId = "proj_1",
+            title = "Test Question",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val initialSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+        val event = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_REQUESTED,
+            sessionId = "conv_q",
+            payload = mapOf(
+                "questionId" to "q_1",
+                "questions" to jsonPayload
+            )
+        )
+        val snap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, event)
+        val pq = snap.pendingQuestion
+        assertNotNull(pq, "pendingQuestion 不应为空")
+        assertEquals("q_1", pq.id)
+        assertEquals(3, pq.questions.size)
+
+        // 第一题：默认 allowCustom = false, multiSelect = false
+        assertEquals("q1", pq.questions[0].id)
+        assertEquals("选择端口", pq.questions[0].prompt)
+        assertEquals(listOf("8080", "3000"), pq.questions[0].options)
+        assertEquals(false, pq.questions[0].allowCustom)
+        assertEquals(false, pq.questions[0].multiSelect)
+
+        // 第二题：自由输入（options 为空）
+        assertEquals("q2", pq.questions[1].id)
+        assertEquals(emptyList(), pq.questions[1].options)
+
+        // 第三题：多选且允许自定义
+        assertEquals("q3", pq.questions[2].id)
+        assertEquals(true, pq.questions[2].multiSelect)
+        assertEquals(true, pq.questions[2].allowCustom)
+
+        // SESSION_UPDATED 应自动清理 pendingQuestion
+        val sessionUpdatedEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.SESSION_UPDATED,
+            sessionId = "conv_q"
+        )
+        val cleanedSnap = xyz.mederi.core.contract.SnapshotReducer.apply(snap, sessionUpdatedEvent)
+        assertNull(cleanedSnap.pendingQuestion, "SESSION_UPDATED 必须清空 pendingQuestion")
+        assertNull(cleanedSnap.pendingPlanApproval, "SESSION_UPDATED 必须清空 pendingPlanApproval")
+    }
+
+    @Test
+    fun testWorkspaceViewModelQuestionInteraction() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            appState.selectConversation(conv.id)
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
+            }
+
+            // 模拟 pendingQuestion 注入
+            val jsonPayload = """[{"id":"q1","prompt":"端口","options":["8080","3000"]},{"id":"q2","prompt":"特性","options":["A","B"],"multiSelect":true}]"""
+            val reqEvent = xyz.mederi.core.contract.models.CoreEvent(
+                type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_REQUESTED,
+                sessionId = conv.id,
+                payload = mapOf("questionId" to "q_batch", "questions" to jsonPayload)
+            )
+            val currentSnap = mockAiCore.awaitSettledSnapshot(conv.id)
+            mockAiCore.injectSnapshot(conv.id, xyz.mederi.core.contract.SnapshotReducer.apply(currentSnap, reqEvent))
+
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.pendingQuestion == null) kotlinx.coroutines.delay(50)
+            }
+
+            // 测试回答单选与多选
+            viewModel.answerQuestion(0, "8080")
+            viewModel.answerQuestion(1, listOf("A", "B"))
+            assertEquals(listOf("8080"), viewModel.questionAnswers[0])
+            assertEquals(listOf("A", "B"), viewModel.questionAnswers[1])
+
+            // 测试提交
+            viewModel.submitQuestion()
+            val resolvedSnap = mockAiCore.awaitSettledSnapshot(conv.id)
+            assertNull(resolvedSnap.pendingQuestion)
+            assertEquals(emptyMap(), viewModel.questionAnswers)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+
+    @Test
     fun testSnapshotReducerPlanApprovalRequestedSetsWaitingUserAndResolvedRestoresWorking() {
         val conv = xyz.mederi.core.contract.models.Conversation(
             id = "conv_plan",

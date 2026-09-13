@@ -82,8 +82,10 @@ object SnapshotReducer {
         CoreEventType.SESSION_UPDATED -> snapshot.copy(
             conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
             // 新 turn 开始 = 上一轮的错误已过时（如"用户中止了对话"来自被回滚杀掉的旧 turn），
-            // 不清除会让错误横幅挂在重发的新 turn 上
-            errorMessage = null
+            // 不清除会让错误横幅挂在重发的新 turn 上；同时清空上一轮未决的提问与审批
+            errorMessage = null,
+            pendingQuestion = null,
+            pendingPlanApproval = null
         )
 
         CoreEventType.MESSAGE_DELTA -> snapshot.withDelta(event.payload).copy(statusHint = null, errorIsStreamInterrupted = false)
@@ -144,9 +146,13 @@ object SnapshotReducer {
         )
 
         CoreEventType.QUESTION_REQUESTED -> {
+            val rawQuestions = event.payload["questions"] ?: "[]"
             val questions = runCatching {
-                Json.decodeFromString<List<QuestionRequest.Question>>(event.payload["questions"] ?: "[]")
-            }.getOrDefault(emptyList())
+                questionWireJson.decodeFromString(questionListSerializer, rawQuestions)
+            }.getOrElse { ex ->
+                xyz.mederi.core.ui.DebugLog.error("SnapshotReducer", "Failed to decode questions: ${ex.message}", ex)
+                emptyList()
+            }
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.WaitingUser),
                 pendingQuestion = QuestionRequest(
@@ -211,6 +217,13 @@ object SnapshotReducer {
 
     private val todoWireJson = Json { ignoreUnknownKeys = true }
     private val todoWireSerializer = ListSerializer(TodoWireItem.serializer())
+
+    private val questionWireJson = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        coerceInputValues = true
+    }
+    private val questionListSerializer = ListSerializer(QuestionRequest.Question.serializer())
 
     /**
      * 事件 payload → 契约 Todo 列表（与 core 侧唯一编码点 encodeTodos 的 JSON 形状对齐）。

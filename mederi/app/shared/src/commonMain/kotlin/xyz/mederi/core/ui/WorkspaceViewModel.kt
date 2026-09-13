@@ -749,8 +749,8 @@ class WorkspaceViewModel(
     // 问询（ask_user）交互状态机
     // ==========================================
 
-    /** 每题收集的答案（题 index -> 用户选择的选项文本） */
-    var questionAnswers by mutableStateOf<Map<Int, String>>(emptyMap())
+    /** 每题收集的答案（题 index -> 用户选择的选项文本列表） */
+    var questionAnswers by mutableStateOf<Map<Int, List<String>>>(emptyMap())
         private set
 
     /** 当前展示的题页 index */
@@ -758,7 +758,11 @@ class WorkspaceViewModel(
         private set
 
     fun answerQuestion(index: Int, answer: String) {
-        questionAnswers = questionAnswers + (index to answer)
+        questionAnswers = questionAnswers + (index to listOf(answer))
+    }
+
+    fun answerQuestion(index: Int, answers: List<String>) {
+        questionAnswers = questionAnswers + (index to answers)
     }
 
     fun nextQuestionPage() {
@@ -770,12 +774,12 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 提交全部答案。组装 core 契约：answers[i] = 第 i 题用户选择的选项文本（顺序对应 questions）。
+     * 提交全部答案。组装 core 契约：answers[i] = 第 i 题用户选择的选项文本列表（顺序对应 questions）。
      */
     fun submitQuestion() {
         val question = pendingQuestion ?: return
         val answers = question.questions.mapIndexed { idx, _ ->
-            questionAnswers[idx]?.let { listOf(it) } ?: emptyList()
+            questionAnswers[idx] ?: emptyList()
         }
         resetQuestionState()
         replyQuestion(question.id, answers)
@@ -991,6 +995,8 @@ class WorkspaceViewModel(
                 input["patch"]?.let { extractPatchFiles(it) }?.takeIf { it.isNotBlank() }
             name == "execute_command" || name == "bash" ->
                 input["command"]?.takeIf { it.isNotBlank() } ?: input["cmd"]?.takeIf { it.isNotBlank() }
+            name == "ask_user" ->
+                extractAskUserSummary(input)
             firstFileValue != null ->
                 toDisplayPath(firstFileValue, baseDir)
             else ->
@@ -999,6 +1005,13 @@ class WorkspaceViewModel(
                     ?: input["patch"]?.let { extractPatchFiles(it) }?.takeIf { it.isNotBlank() }
                     ?: input.values.firstOrNull { it.isNotBlank() }
         }
+    }
+
+    private fun extractAskUserSummary(input: Map<String, String>): String? {
+        input["prompt"]?.takeIf { it.isNotBlank() }?.let { return it }
+        val rawQuestions = input["questions"] ?: return null
+        val match = Regex("\"prompt\"\\s*:\\s*\"([^\"]+)\"").find(rawQuestions)
+        return match?.groupValues?.get(1) ?: rawQuestions.take(50)
     }
 
     /**
@@ -1229,6 +1242,9 @@ class WorkspaceViewModel(
     }
 
     fun send(text: String) {
+        if (pendingQuestion != null) {
+            resetQuestionState()
+        }
         val trimmed = text.trim()
         val hasPasted = pendingPastedTexts.isNotEmpty()
         val hasImages = pendingImages.isNotEmpty()

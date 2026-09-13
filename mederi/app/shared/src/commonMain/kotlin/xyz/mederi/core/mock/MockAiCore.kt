@@ -448,4 +448,8 @@ class MockAiCore(
             before = "// old code", after = "// new code", additions = 10, deletions = 3
         ))
     }
+
+    fun injectSnapshot(conversationId: String, snapshot: ConversationSnapshot) {
+        conversations[conversationId]?.value = snapshot
+    }
 }

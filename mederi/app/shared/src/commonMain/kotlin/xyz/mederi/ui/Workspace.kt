@@ -758,9 +758,9 @@ private fun MessageList(
                     QuestionCard(
                         question = question,
                         currentIndex = viewModel.questionPage,
-                        // 唯一真理源：viewModel.questionAnswers（卡片无状态，点击经 onAnswer 单向写回）
-                        selectedAnswer = viewModel.questionAnswers[viewModel.questionPage] ?: "",
-                        onAnswer = { _, ans -> viewModel.answerQuestion(viewModel.questionPage, ans) },
+                        // 唯一真理源：viewModel.questionAnswers（卡片无状态，交互经 onAnswer 单向写回）
+                        selectedAnswers = viewModel.questionAnswers[viewModel.questionPage] ?: emptyList(),
+                        onAnswer = { ans -> viewModel.answerQuestion(viewModel.questionPage, ans) },
                         onNextPage = viewModel::nextQuestionPage,
                         onPrevPage = viewModel::prevQuestionPage,
                         onSubmit = viewModel::submitQuestion,

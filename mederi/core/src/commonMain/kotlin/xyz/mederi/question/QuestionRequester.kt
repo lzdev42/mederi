@@ -51,7 +51,10 @@ open class QuestionRequester(
     private val eventBus: MutableSharedFlow<MederiEvent>
 ) {
     private val pending = ConcurrentHashMap<String, CompletableDeferred<QuestionResult>>()
-    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    private val json = kotlinx.serialization.json.Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
 
     open suspend fun request(questions: List<Question>): QuestionResult {
         val questionId = "q_${UUID.randomUUID().toString().take(8)}"
@@ -95,6 +98,8 @@ open class QuestionRequester(
         deferred.complete(QuestionResult(answers = emptyList(), rejected = true))
         return true
     }
+
+    fun hasPending(): Boolean = pending.isNotEmpty()
 
     fun cancelAll() {
         pending.values.forEach {
