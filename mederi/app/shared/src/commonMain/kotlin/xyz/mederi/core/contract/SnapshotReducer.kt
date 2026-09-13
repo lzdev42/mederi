@@ -61,6 +61,16 @@ object SnapshotReducer {
             )
         }
 
+        CoreEventType.SESSION_UPDATED -> {
+            val updated = apply(snapshot, event)
+            // 新 turn 开始（包含 durable-first 用户消息刚落库）：
+            // 立即回查对齐落库消息，使快照立刻包含刚发送的用户消息
+            val page = runCatching { refreshPage() }.getOrNull()
+            listOf(page?.let { p ->
+                updated.copy(messages = p.messages, tokenUsage = p.tokenUsage, contextUsedTokens = p.contextUsedTokens)
+            } ?: updated)
+        }
+
         CoreEventType.MESSAGE_ERROR -> {
             val errored = apply(snapshot, event)
             // 回查落库数据对齐（失败保持错误快照），只发最终一个
@@ -82,7 +92,11 @@ object SnapshotReducer {
         CoreEventType.SESSION_UPDATED -> snapshot.copy(
             conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
             // 新 turn 开始 = 上一轮的错误已过时（如"用户中止了对话"来自被回滚杀掉的旧 turn），
-            // 不清除会让错误横幅挂在重发的新 turn 上；同时清空上一轮未决的提问与审批
+            // 不清除会让错误横幅挂在重发的新 turn 上；同时清空上一轮未决的提问与审批，
+            // 并且强制复位上一轮遗留的 isStreaming 状态
+            messages = snapshot.messages.map { msg ->
+                if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+            },
             errorMessage = null,
             pendingQuestion = null,
             pendingPlanApproval = null
@@ -113,6 +127,9 @@ object SnapshotReducer {
 
         CoreEventType.MESSAGE_ERROR -> snapshot.copy(
             conversation = snapshot.conversation.copy(status = ConversationStatus.Error),
+            messages = snapshot.messages.map { msg ->
+                if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+            },
             errorMessage = event.payload["error"],
             errorId = event.payload["errorId"],
             errorDiagnostic = event.payload["fullDiagnostic"],
@@ -155,6 +172,10 @@ object SnapshotReducer {
             }
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.WaitingUser),
+                // 交互挂起 = 当前 step 生成完毕，暂停等待用户，不再属于流式中
+                messages = snapshot.messages.map { msg ->
+                    if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+                },
                 pendingQuestion = QuestionRequest(
                     id = event.payload["questionId"] ?: "",
                     conversationId = snapshot.conversation.id,
@@ -182,6 +203,10 @@ object SnapshotReducer {
             val updatedList = (snapshot.planApprovals.filter { it.id != req.id } + req)
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.WaitingUser),
+                // 审批挂起 = 当前计划生成完毕，暂停等待用户审批，不再属于流式中
+                messages = snapshot.messages.map { msg ->
+                    if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+                },
                 pendingPlanApproval = req,
                 planApprovals = updatedList
             )

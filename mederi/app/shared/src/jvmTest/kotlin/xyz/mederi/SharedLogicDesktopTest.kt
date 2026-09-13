@@ -633,6 +633,98 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testOptimisticMessageOrderingBugVerification() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            appState.selectConversation(conv.id)
+            appState.selectModel(appState.availableModels.value.first())
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
+            }
+
+            // 构造上文：用户提问 (t=1000) -> AI 生成中调 ask_user (t=2000, isStreaming=true)
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_user_1",
+                conversationId = conv.id,
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text("u1", "问我多个问题测试")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false,
+                error = null
+            )
+            val assistantStreamingMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_1",
+                conversationId = conv.id,
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "Thinking... ask_user")),
+                createdAt = 2000L,
+                completedAt = null,
+                parentMessageId = "msg_user_1",
+                model = null,
+                agent = null,
+                isStreaming = true,
+                error = null
+            )
+
+            val currentSnap = mockAiCore.awaitSettledSnapshot(conv.id)
+            val snapWithStreaming = currentSnap.copy(
+                messages = listOf(userMsg, assistantStreamingMsg)
+            )
+            mockAiCore.injectSnapshot(conv.id, snapWithStreaming)
+
+            // 发出 QUESTION_REQUESTED 事件
+            val reqEvent = xyz.mederi.core.contract.models.CoreEvent(
+                type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_REQUESTED,
+                sessionId = conv.id,
+                payload = mapOf(
+                    "questionId" to "q_test",
+                    "questions" to """[{"id":"q1","prompt":"选择构建工具","options":["Gradle","Maven"]}]"""
+                )
+            )
+            val snapAfterQuestion = xyz.mederi.core.contract.SnapshotReducer.apply(snapWithStreaming, reqEvent)
+            assertEquals(false, snapAfterQuestion.messages.last().isStreaming, "QUESTION_REQUESTED 必须将前序 Assistant 消息的 isStreaming 设为 false")
+            mockAiCore.injectSnapshot(conv.id, snapAfterQuestion)
+
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.pendingQuestion == null) kotlinx.coroutines.delay(50)
+            }
+
+            // 用户发送 "呵呵"
+            viewModel.send("呵呵")
+
+            val currentMessagesInVm = viewModel.messages
+            assertEquals(3, currentMessagesInVm.size, "应包含历史提问、AI问询、以及刚发送的呵呵")
+            assertEquals(xyz.mederi.core.contract.models.ChatRole.User, currentMessagesInVm[0].role)
+            assertEquals("问我多个问题测试", (currentMessagesInVm[0].blocks[0] as xyz.mederi.core.contract.models.ChatBlock.Text).text)
+
+            // 第 2 条必须是 AI 的 ask_user 消息，绝对不能被"呵呵"插到前面
+            assertEquals(xyz.mederi.core.contract.models.ChatRole.Assistant, currentMessagesInVm[1].role)
+
+            // 第 3 条必须是新发送的用户消息"呵呵"
+            assertEquals(xyz.mederi.core.contract.models.ChatRole.User, currentMessagesInVm[2].role)
+            assertEquals("呵呵", (currentMessagesInVm[2].blocks[0] as xyz.mederi.core.contract.models.ChatBlock.Text).text)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
     fun testWorkspaceViewModelQuestionInteraction() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {
@@ -879,5 +971,279 @@ class SharedLogicDesktopTest {
         )
         val afterDelta = xyz.mederi.core.contract.SnapshotReducer.apply(snap, deltaEvent)
         assertTrue(!afterDelta.errorIsStreamInterrupted, "MESSAGE_DELTA 后应复位断流标记")
+    }
+
+    @Test
+    fun testComputeChatItemsSeparatesReasoningAndToolCalls() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_user_1",
+                conversationId = "conv_sep",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text(id = "u1", text = "你好")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            val assistantMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_1",
+                conversationId = "conv_sep",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning(id = "r1", text = "正在分析用户的意图..."),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "t1",
+                        name = "search_code",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Completed(
+                            input = mapOf("query" to "test"),
+                            output = "found 1 match"
+                        )
+                    ),
+                    xyz.mederi.core.contract.models.ChatBlock.Text(id = "txt1", text = "这是最终的清晰回答。")
+                ),
+                createdAt = 2000L,
+                completedAt = 3500L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            val items = viewModel.computeChatItems(listOf(userMsg, assistantMsg))
+            println("DEBUG_TEST: items classes = ${items.map { it::class.simpleName }}")
+
+            // 预期分为：1条用户文本、1条思考项、1条助手正文、1条沉底工具调用项、1条沉底 Footer
+            assertEquals(5, items.size, "应生成5个独立的列表项：用户消息、思考项、助手正文、沉底工具调用项、Footer")
+
+            val userItem = items[0] as xyz.mederi.core.ui.ChatListItem.TextMessage
+            assertEquals("你好", userItem.text)
+            assertEquals(true, userItem.isUser)
+
+            val reasoningItem = items[1] as xyz.mederi.core.ui.ChatListItem.Reasoning
+            assertEquals("正在分析用户的意图...", reasoningItem.text)
+            assertEquals(1500L, reasoningItem.durationMs)
+            assertEquals(true, reasoningItem.isTurnStart)
+
+            val textItem = items[2] as xyz.mederi.core.ui.ChatListItem.TextMessage
+            assertEquals("这是最终的清晰回答。", textItem.text)
+            assertEquals(false, textItem.isUser)
+
+            val toolCallsItem = items[3] as xyz.mederi.core.ui.ChatListItem.ToolCalls
+            assertEquals(1, toolCallsItem.toolCalls.size)
+            assertEquals("search_code", toolCallsItem.toolCalls.first().name)
+            assertEquals(false, toolCallsItem.isTurnStart)
+
+            val footerItem = items[4] as xyz.mederi.core.ui.ChatListItem.Footer
+            assertNotNull(footerItem.footer)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testMultiStepAssistantTurnLogging() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "u1",
+                conversationId = "c1",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text("t_u1", "请修复并验证")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null
+            )
+            val asst1 = xyz.mederi.core.contract.models.ChatMessage(
+                id = "a1",
+                conversationId = "c1",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "先阅读代码..."),
+                    xyz.mederi.core.contract.models.ChatBlock.Text("t1", "先读现有代码："),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("call_1", "read_file", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("path" to "file.kt"), "content"))
+                ),
+                createdAt = 2000L,
+                completedAt = 3000L,
+                parentMessageId = null,
+                model = "test-model",
+                agent = "AUTONOMOUS",
+                durationMs = 1000L
+            )
+            // 数据库中持久化的中间工具结果消息（role=USER, blocks为空，因为ToolResult被ToolCall吸收）
+            val toolResultUser1 = xyz.mederi.core.contract.models.ChatMessage(
+                id = "tr1",
+                conversationId = "c1",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = emptyList(),
+                createdAt = 3100L,
+                completedAt = 3100L,
+                parentMessageId = null,
+                model = null,
+                agent = null
+            )
+            val asst2 = xyz.mederi.core.contract.models.ChatMessage(
+                id = "a2",
+                conversationId = "c1",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning("r2", "派发子代理执行..."),
+                    xyz.mederi.core.contract.models.ChatBlock.Text("t2", "派子代理执行任务："),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("call_2", "spawn_agent", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("task" to "子任务0"), "done report"))
+                ),
+                createdAt = 4000L,
+                completedAt = 5000L,
+                parentMessageId = null,
+                model = "test-model",
+                agent = "AUTONOMOUS",
+                durationMs = 1000L
+            )
+
+            val rawMessages = listOf(userMsg, asst1, toolResultUser1, asst2)
+            val currentItems = viewModel.computeChatItems(rawMessages)
+            println("Computed chat items count: ${currentItems.size}")
+            currentItems.forEachIndexed { idx, item ->
+                println("  item[$idx]: class=${item::class.simpleName}, key=${item.key}, isTurnStart=${item.isTurnStart}")
+            }
+
+            // 预期分为：1用户文本 + 1思考 + 1文本 + 1思考 + 1文本 + 1普通工具调用 + 1子代理调用 + 1Footer = 8项
+            assertEquals(8, currentItems.size, "多步轮次应汇聚为单轮，时序交错，底部汇总普通工具与子代理")
+
+            assertTrue(currentItems[0] is xyz.mederi.core.ui.ChatListItem.TextMessage)
+            assertEquals("请修复并验证", (currentItems[0] as xyz.mederi.core.ui.ChatListItem.TextMessage).text)
+
+            assertTrue(currentItems[1] is xyz.mederi.core.ui.ChatListItem.Reasoning)
+            assertEquals("先阅读代码...", (currentItems[1] as xyz.mederi.core.ui.ChatListItem.Reasoning).text)
+
+            assertTrue(currentItems[2] is xyz.mederi.core.ui.ChatListItem.TextMessage)
+            assertEquals("先读现有代码：", (currentItems[2] as xyz.mederi.core.ui.ChatListItem.TextMessage).text)
+
+            assertTrue(currentItems[3] is xyz.mederi.core.ui.ChatListItem.Reasoning)
+            assertEquals("派发子代理执行...", (currentItems[3] as xyz.mederi.core.ui.ChatListItem.Reasoning).text)
+
+            assertTrue(currentItems[4] is xyz.mederi.core.ui.ChatListItem.TextMessage)
+            assertEquals("派子代理执行任务：", (currentItems[4] as xyz.mederi.core.ui.ChatListItem.TextMessage).text)
+
+            // 沉底汇总：普通工具（过滤掉 spawn_agent）
+            assertTrue(currentItems[5] is xyz.mederi.core.ui.ChatListItem.ToolCalls)
+            val toolCalls = (currentItems[5] as xyz.mederi.core.ui.ChatListItem.ToolCalls).toolCalls
+            assertEquals(1, toolCalls.size)
+            assertEquals("read_file", toolCalls.first().name)
+
+            // 沉底汇总：子代理（包含 spawn_agent，提取 task）
+            assertTrue(currentItems[6] is xyz.mederi.core.ui.ChatListItem.SubagentCalls)
+            val subagents = (currentItems[6] as xyz.mederi.core.ui.ChatListItem.SubagentCalls).subagents
+            assertEquals(1, subagents.size)
+            assertEquals("spawn_agent", subagents.first().name)
+            assertEquals("子任务0", subagents.first().target)
+
+            // 沉底 Footer
+            assertTrue(currentItems[7] is xyz.mederi.core.ui.ChatListItem.Footer)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testToolCallTargetExtractionAndDisplay() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            // 测试 1: list_directory 参数为空时
+            val assistantMsgEmptyInput = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_dir",
+                conversationId = "conv_dir",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "t_dir",
+                        name = "list_directory",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Completed(
+                            input = emptyMap(),
+                            output = "[FILE] .DS_Store\n[DIR] src"
+                        )
+                    )
+                ),
+                createdAt = 2000L,
+                completedAt = 3000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            val items = viewModel.computeChatItems(listOf(assistantMsgEmptyInput))
+            val toolCallsItem = items.filterIsInstance<xyz.mederi.core.ui.ChatListItem.ToolCalls>().first()
+            val toolCallUi = toolCallsItem.toolCalls.first()
+            println("=== DEBUG LOG FOR RULE 6 ===")
+            println("toolCall.name: ${toolCallUi.name}")
+            println("toolCall.target: ${toolCallUi.target}")
+            println("toolCall.state output line count: ${(toolCallUi.state as? xyz.mederi.core.contract.models.ToolCallState.Completed)?.output?.lines()?.size}")
+            println("============================")
+
+            assertEquals("directory", toolCallUi.target, "list_directory 缺省参数应指向 'directory'")
+
+            // 测试 2: 带有 DirectoryPath 参数时
+            val assistantMsgWithPath = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_dir2",
+                conversationId = "conv_dir",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "t_dir2",
+                        name = "list_directory",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Completed(
+                            input = mapOf("DirectoryPath" to "app/shared"),
+                            output = "[FILE] build.gradle.kts"
+                        )
+                    )
+                ),
+                createdAt = 3100L,
+                completedAt = 4000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+            val items2 = viewModel.computeChatItems(listOf(assistantMsgWithPath))
+            val toolCallUi2 = items2.filterIsInstance<xyz.mederi.core.ui.ChatListItem.ToolCalls>().first().toolCalls.first()
+            assertEquals("app/shared", toolCallUi2.target, "带有 DirectoryPath 参数时应正确提取目标路径")
+        } finally {
+            testScope.cancel()
+        }
     }
 }

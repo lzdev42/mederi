@@ -19,10 +19,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.emuci.markdown.renderer.MarkdownTheme
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Plus
@@ -40,7 +42,9 @@ import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.ui.components.RightExtensionPanel
 import xyz.mederi.ui.components.RightDock
 import xyz.mederi.ui.components.SystemInfoBar
-import xyz.mederi.ui.components.ThoughtAndActionsBlock
+import xyz.mederi.ui.components.ReasoningBlock
+import xyz.mederi.ui.components.ToolCallsBlock
+import xyz.mederi.ui.components.SubagentCallsBlock
 import xyz.mederi.ui.components.QuestionCard
 import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
@@ -410,6 +414,24 @@ private fun MessageList(
     val colors = LocalMederiColors.current
     val lazyListState = rememberLazyListState()
 
+    val colorScheme = MaterialTheme.colorScheme
+    val appMarkdownTheme = remember(colorScheme) {
+        val base = MarkdownTheme.material3(colorScheme)
+        base.copy(
+            bodyStyle = base.bodyStyle.copy(fontSize = 14.5.sp, lineHeight = 23.sp),
+            headingStyles = listOf(
+                base.headingStyles.getOrElse(0) { TextStyle() }.copy(fontSize = 19.sp, lineHeight = 26.sp),
+                base.headingStyles.getOrElse(1) { TextStyle() }.copy(fontSize = 17.sp, lineHeight = 24.sp),
+                base.headingStyles.getOrElse(2) { TextStyle() }.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
+                base.headingStyles.getOrElse(3) { TextStyle() }.copy(fontSize = 14.5.sp, lineHeight = 21.sp),
+                base.headingStyles.getOrElse(4) { TextStyle() }.copy(fontSize = 14.sp, lineHeight = 20.sp),
+                base.headingStyles.getOrElse(5) { TextStyle() }.copy(fontSize = 13.5.sp, lineHeight = 19.sp),
+            ),
+            codeBlockStyle = base.codeBlockStyle.copy(fontSize = 13.sp, lineHeight = 19.sp),
+            inlineCodeStyle = base.inlineCodeStyle.copy(fontSize = 13.sp)
+        )
+    }
+
     var stickToBottom by remember(viewModel.conversationId) { mutableStateOf(true) }
 
     // 首次自动滚底完成前禁用位置跟踪。否则列表初始布局在顶部，
@@ -574,19 +596,58 @@ private fun MessageList(
                         }
                     }
 
-                    is ChatListItem.ThoughtAndActions -> {
-                        ThoughtAndActionsBlock(
-                            reasoningParts = item.reasoningParts,
-                            toolCalls = item.toolCalls,
+                    is ChatListItem.Reasoning -> {
+                        ReasoningBlock(
+                            text = item.text,
                             isStreaming = item.isStreaming,
-                            toolSummary = item.toolSummary,
-                            hasFailedTool = item.hasFailedTool,
-                            isRunning = item.isRunning,
-                            headerSummary = item.headerSummary,
+                            durationMs = item.durationMs,
                             isReasoningActive = item.isReasoningActive,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
+                                    bottom = ChatLayout.thoughtBottomSpacing
+                                )
+                        )
+                    }
+
+                    is ChatListItem.ToolCalls -> {
+                        ToolCallsBlock(
+                            toolCalls = item.toolCalls,
+                            isStreaming = item.isStreaming,
+                            isRunning = item.isRunning,
+                            hasFailedTool = item.hasFailedTool,
+                            toolSummary = item.toolSummary,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
+                                    bottom = ChatLayout.thoughtBottomSpacing
+                                )
+                        )
+                    }
+
+                    is ChatListItem.SubagentCalls -> {
+                        SubagentCallsBlock(
+                            subagents = item.subagents,
+                            isStreaming = item.isStreaming,
+                            isRunning = item.isRunning,
+                            hasFailed = item.hasFailed,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
+                                    bottom = ChatLayout.thoughtBottomSpacing
+                                )
+                        )
+                    }
+
+                    is ChatListItem.Footer -> {
+                        AssistantMessageFooter(
+                            footer = item.footer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp, bottom = 4.dp)
                         )
                     }
 
@@ -627,8 +688,8 @@ private fun MessageList(
                                             Text(
                                                 text = parsed.instruction,
                                                 color = colors.textPrimary,
-                                                fontSize = 13.5.sp,
-                                                lineHeight = 22.sp
+                                                fontSize = 14.5.sp,
+                                                lineHeight = 23.sp
                                             )
                                         }
                                         if (parsed.pastedTexts.isNotEmpty()) {
@@ -678,6 +739,7 @@ private fun MessageList(
                                                 isStreaming = item.isStreaming,
                                                 selectionMenuActions = selectionMenuActions,
                                                 enableScrollOverride = false,
+                                                markdownTheme = appMarkdownTheme,
                                             )
                                         }
                                         if (item.images.isNotEmpty()) {

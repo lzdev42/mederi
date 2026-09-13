@@ -40,23 +40,32 @@ sealed interface ChatListItem {
     /** 是否为对话轮次的第一个 item（UI 据此加大与上一轮次的间距） */
     val isTurnStart: Boolean
 
-    data class ThoughtAndActions(
+    data class Reasoning(
         override val key: String,
-        val reasoningParts: List<ChatBlock.Reasoning>,
+        val text: String,
+        val isStreaming: Boolean,
+        override val isTurnStart: Boolean = false,
+        val durationMs: Long = 0L,
+        val isReasoningActive: Boolean = false,
+    ) : ChatListItem
+
+    data class ToolCalls(
+        override val key: String,
         val toolCalls: List<ToolCallUi>,
         val isStreaming: Boolean,
         override val isTurnStart: Boolean = false,
-        /** 预计算：工具调用聚合计数（如 "read_file ×3, search_web"） */
         val toolSummary: String = "",
         val hasFailedTool: Boolean = false,
         val isRunning: Boolean = false,
-        /** 预计算：面板顶栏汇总文案 */
-        val headerSummary: String = "",
-        /**
-         * 预计算：推理正在进行中（轮次流式 && 有推理内容 && 正文还没开始）。
-         * UI 据此自动展开 thinking 折叠条；推理结束（正文出现/轮次推进）自动折叠。
-         */
-        val isReasoningActive: Boolean = false,
+    ) : ChatListItem
+
+    data class SubagentCalls(
+        override val key: String,
+        val subagents: List<ToolCallUi>,
+        val isStreaming: Boolean,
+        override val isTurnStart: Boolean = false,
+        val isRunning: Boolean = false,
+        val hasFailed: Boolean = false,
     ) : ChatListItem
 
     data class TextMessage(
@@ -73,6 +82,13 @@ sealed interface ChatListItem {
         val createdAt: Long = 0L,
         /** assistant 消息的 footer 元数据——只挂在该轮次最后一个文本块上，其余为 null */
         val assistantFooter: AssistantFooterInfo? = null,
+    ) : ChatListItem
+
+    /** assistant 轮次底部的诊断与状态栏（沉底挂载） */
+    data class Footer(
+        override val key: String,
+        val footer: AssistantFooterInfo,
+        override val isTurnStart: Boolean = false,
     ) : ChatListItem
 
     /** 压缩标记消息（SUMMARY）：既是历史的一部分，也是 AI 视图的分界点 */
@@ -596,7 +612,9 @@ class WorkspaceViewModel(
     val messages: List<ChatMessage> get() {
         val base = snapshot?.messages ?: emptyList()
         val opt = conversationId?.let { pendingUserMessages[it] } ?: return base
-        val streamingIndex = base.indexOfFirst { it.isStreaming }
+        // 因果时序防护：只有在 base 中存在"时间戳在 opt 之后且正在流式中"的回复（即确由 opt 触发的流式响应），
+        // 才能把 opt 插在它前面；早于 opt 的历史消息（无论是否残留流式标记）绝对不可被 opt 抢占前面。
+        val streamingIndex = base.indexOfFirst { it.isStreaming && it.createdAt >= opt.createdAt }
         return if (streamingIndex >= 0) {
             base.toMutableList().apply { add(streamingIndex, opt) }
         } else {
@@ -790,6 +808,8 @@ class WorkspaceViewModel(
         questionPage = 0
     }
 
+val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
+
     internal fun computeChatItems(msgs: List<ChatMessage>): List<ChatListItem> {
         val result = mutableListOf<ChatListItem>()
 
@@ -805,13 +825,17 @@ class WorkspaceViewModel(
                 turns.add(null to listOf(msg))
                 continue
             }
-            if (msg.role == ChatRole.User) {
+            // 真实用户消息（含有用户文本或文件）：纯中间工具结果消息（blocks 为空）绝不切断 Assistant 轮次
+            val isRealUser = msg.role == ChatRole.User && msg.blocks.any {
+                it is ChatBlock.Text || it is ChatBlock.File
+            }
+            if (isRealUser) {
                 if (currentAssistant.isNotEmpty()) {
                     turns.add(ChatRole.Assistant to currentAssistant.toList())
                     currentAssistant = mutableListOf()
                 }
                 turns.add(ChatRole.User to listOf(msg))
-            } else {
+            } else if (msg.role == ChatRole.Assistant) {
                 currentAssistant.add(msg)
             }
         }
@@ -833,78 +857,135 @@ class WorkspaceViewModel(
                 )
                 continue
             }
-            val isUser = role == ChatRole.User
-            val isStreaming = turnMessages.any { it.isStreaming }
-            val isActiveAssistant = !isUser && (isStreaming || (isWorking && turnMessages == lastAssistantTurn))
 
-            val reasoningParts = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.Reasoning>() }.filter { it.text.isNotEmpty() }
-            val toolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
-                .map { toToolCallUi(it) }
-            // 推理进行中 = 轮次在流式 && 有推理内容 && 正文（非空文本）还没出现。
-            // 正文一旦出现即认为推理结束——这是"流式时自动展开、结束后自动折叠"的判据。
-            val hasVisibleText = turnMessages.any { msg -> msg.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() } }
-            val isReasoningActive = isStreaming && reasoningParts.isNotEmpty() && !hasVisibleText
-            // 轮次第一个 item 标记 turn start（与上一轮拉开间距）
-            var turnHasFirstItem = false
-            if (reasoningParts.isNotEmpty() || toolCalls.isNotEmpty() || (isActiveAssistant && turnMessages.all { it.blocks.filterIsInstance<ChatBlock.Text>().all { t -> t.text.isEmpty() } })) {
-                turnHasFirstItem = true
-                result.add(
-                    ChatListItem.ThoughtAndActions(
-                        key = "${turnMessages.first().id}_thoughts",
-                        reasoningParts = reasoningParts,
-                        toolCalls = toolCalls,
-                        isStreaming = isStreaming,
-                        isTurnStart = true,
-                        toolSummary = buildToolSummary(toolCalls),
-                        hasFailedTool = toolCalls.any { it.isFailed },
-                        isRunning = isStreaming && toolCalls.any { it.state is ToolCallState.Running },
-                        headerSummary = buildHeaderSummary(reasoningParts, toolCalls),
-                        isReasoningActive = isReasoningActive,
-                    )
-                )
+            val isUser = role == ChatRole.User
+            if (isUser) {
+                for (msg in turnMessages) {
+                    val messageImages = msg.blocks.filterIsInstance<ChatBlock.File>()
+                        .filter { isImageBlock(it) }
+                        .map { it.url }
+                    val textBlocks = msg.blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() }
+                    if (textBlocks.isNotEmpty()) {
+                        textBlocks.forEachIndexed { blockIndex, block ->
+                            result.add(
+                                ChatListItem.TextMessage(
+                                    key = "${msg.id}_${block.id}",
+                                    isUser = true,
+                                    isStreaming = false,
+                                    isActiveAssistant = false,
+                                    text = block.text,
+                                    partId = block.id,
+                                    conversationId = msg.conversationId,
+                                    images = if (blockIndex == 0) messageImages else emptyList(),
+                                    isTurnStart = true,
+                                    messageId = msg.id,
+                                    createdAt = msg.createdAt,
+                                )
+                            )
+                        }
+                    } else if (messageImages.isNotEmpty()) {
+                        result.add(
+                            ChatListItem.TextMessage(
+                                key = "${msg.id}_img",
+                                isUser = true,
+                                isStreaming = false,
+                                isActiveAssistant = false,
+                                text = "",
+                                partId = "img",
+                                conversationId = msg.conversationId,
+                                images = messageImages,
+                                isTurnStart = true,
+                                messageId = msg.id,
+                                createdAt = msg.createdAt,
+                            )
+                        )
+                    }
+                }
+                continue
             }
 
+            // Assistant 轮次
+            val isStreaming = turnMessages.any { it.isStreaming }
+            val isActiveAssistant = isStreaming || (isWorking && turnMessages == lastAssistantTurn)
+
+            val allToolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
+                .map { toToolCallUi(it) }
+            val regularToolCalls = allToolCalls.filter { it.name !in SUBAGENT_TOOL_NAMES }
+            val subagentCalls = allToolCalls.filter { it.name in SUBAGENT_TOOL_NAMES }
+
+            var turnHasFirstItem = false
+
+            // 按真实时序遍历本轮的消息与块，交替输出 Reasoning 和 Text
             for (msg in turnMessages) {
                 val messageImages = msg.blocks.filterIsInstance<ChatBlock.File>()
                     .filter { isImageBlock(it) }
                     .map { it.url }
+                var imagesHandled = false
 
-                val textBlocks = msg.blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() }
-                if (textBlocks.isNotEmpty()) {
-                    textBlocks.forEachIndexed { blockIndex, block ->
-                        // footer 只挂在该轮次最后一条 assistant 消息的最后一个文本块上，避免重复
-                        val isLastTextOfTurn = !isUser && msg == turnMessages.last() &&
-                            blockIndex == textBlocks.lastIndex
-                        result.add(
-                            ChatListItem.TextMessage(
-                                key = "${msg.id}_${block.id}",
-                                isUser = isUser,
-                                isStreaming = isStreaming,
-                                isActiveAssistant = isActiveAssistant,
-                                text = block.text,
-                                partId = block.id,
-                                conversationId = msg.conversationId,
-                                images = if (blockIndex == 0) messageImages else emptyList(),
-                                isTurnStart = if (isUser) true else !turnHasFirstItem,
-                                messageId = msg.id,
-                                createdAt = msg.createdAt,
-                                assistantFooter = if (isLastTextOfTurn) msg.toAssistantFooter() else null,
-                            )
-                        )
-                        turnHasFirstItem = true
+                for ((blockIndex, block) in msg.blocks.withIndex()) {
+                    when (block) {
+                        is ChatBlock.Reasoning -> {
+                            if (block.text.isNotBlank()) {
+                                val durationMs = if (msg.completedAt != null && msg.completedAt > msg.createdAt) {
+                                    msg.completedAt - msg.createdAt
+                                } else (msg.durationMs ?: 0L)
+                                val hasSubsequentText = msg.blocks.drop(blockIndex + 1).any { it is ChatBlock.Text && it.text.isNotBlank() }
+                                    || turnMessages.dropWhile { it != msg }.drop(1).any { m -> m.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() } }
+                                val isReasoningActive = isStreaming && !hasSubsequentText
+
+                                result.add(
+                                    ChatListItem.Reasoning(
+                                        key = "${msg.id}_${block.id}",
+                                        text = block.text,
+                                        isStreaming = isStreaming,
+                                        isTurnStart = !turnHasFirstItem,
+                                        durationMs = durationMs,
+                                        isReasoningActive = isReasoningActive,
+                                    )
+                                )
+                                turnHasFirstItem = true
+                            }
+                        }
+
+                        is ChatBlock.Text -> {
+                            if (block.text.isNotBlank()) {
+                                result.add(
+                                    ChatListItem.TextMessage(
+                                        key = "${msg.id}_${block.id}",
+                                        isUser = false,
+                                        isStreaming = isStreaming,
+                                        isActiveAssistant = isActiveAssistant,
+                                        text = block.text,
+                                        partId = block.id,
+                                        conversationId = msg.conversationId,
+                                        images = if (!imagesHandled) messageImages else emptyList(),
+                                        isTurnStart = !turnHasFirstItem,
+                                        messageId = msg.id,
+                                        createdAt = msg.createdAt,
+                                        assistantFooter = null
+                                    )
+                                )
+                                imagesHandled = true
+                                turnHasFirstItem = true
+                            }
+                        }
+
+                        else -> {}
                     }
-                } else if (messageImages.isNotEmpty()) {
+                }
+
+                if (!imagesHandled && messageImages.isNotEmpty()) {
                     result.add(
                         ChatListItem.TextMessage(
                             key = "${msg.id}_img",
-                            isUser = isUser,
+                            isUser = false,
                             isStreaming = isStreaming,
                             isActiveAssistant = isActiveAssistant,
                             text = "",
                             partId = "img",
                             conversationId = msg.conversationId,
                             images = messageImages,
-                            isTurnStart = if (isUser) true else !turnHasFirstItem,
+                            isTurnStart = !turnHasFirstItem,
                             messageId = msg.id,
                             createdAt = msg.createdAt,
                         )
@@ -913,26 +994,85 @@ class WorkspaceViewModel(
                 }
             }
 
-            if (!isUser) {
-                val createPlanCall = toolCalls.find { it.name == "create_plan" }
-                val planIdFromTool = when (val s = createPlanCall?.state) {
-                    is ToolCallState.Completed -> s.input["planId"]
-                    is ToolCallState.Running -> s.input["planId"]
-                    else -> null
-                }
-                val matchedPlan = snapshot?.planApprovals?.find { planIdFromTool != null && it.id == planIdFromTool }
-                    ?: if (turnMessages == lastAssistantTurn) snapshot?.pendingPlanApproval else null
-
-                if (matchedPlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }) {
-                    result.add(
-                        ChatListItem.PlanApproval(
-                            key = "plan_${matchedPlan.id}",
-                            request = matchedPlan,
-                            isTurnStart = !turnHasFirstItem
-                        )
+            // 活跃 assistant 刚开始流式时，若尚无内容输出，放一个占位思考微条
+            if (isActiveAssistant && !turnHasFirstItem) {
+                val firstMsg = turnMessages.firstOrNull()
+                result.add(
+                    ChatListItem.Reasoning(
+                        key = "${firstMsg?.id ?: "active"}_reasoning",
+                        text = "",
+                        isStreaming = true,
+                        isTurnStart = true,
+                        durationMs = 0L,
+                        isReasoningActive = true,
                     )
-                    turnHasFirstItem = true
-                }
+                )
+                turnHasFirstItem = true
+            }
+
+            // 沉底汇总区（红框位置）：
+            // 1. 普通工具调用汇总微条
+            if (regularToolCalls.isNotEmpty()) {
+                result.add(
+                    ChatListItem.ToolCalls(
+                        key = "${turnMessages.first().id}_toolcalls",
+                        toolCalls = regularToolCalls,
+                        isStreaming = isStreaming,
+                        isTurnStart = !turnHasFirstItem,
+                        toolSummary = buildToolSummary(regularToolCalls),
+                        hasFailedTool = regularToolCalls.any { it.isFailed },
+                        isRunning = isStreaming && regularToolCalls.any { it.state is ToolCallState.Running },
+                    )
+                )
+                turnHasFirstItem = true
+            }
+
+            // 2. 子 Agent 独立汇总微条
+            if (subagentCalls.isNotEmpty()) {
+                result.add(
+                    ChatListItem.SubagentCalls(
+                        key = "${turnMessages.first().id}_subagents",
+                        subagents = subagentCalls,
+                        isStreaming = isStreaming,
+                        isTurnStart = !turnHasFirstItem,
+                        isRunning = isStreaming && subagentCalls.any { it.state is ToolCallState.Running },
+                        hasFailed = subagentCalls.any { it.isFailed },
+                    )
+                )
+                turnHasFirstItem = true
+            }
+
+            // 3. 计划审批卡片
+            val createPlanCall = allToolCalls.find { it.name == "create_plan" }
+            val planIdFromTool = when (val s = createPlanCall?.state) {
+                is ToolCallState.Completed -> s.input["planId"]
+                is ToolCallState.Running -> s.input["planId"]
+                else -> null
+            }
+            val matchedPlan = snapshot?.planApprovals?.find { planIdFromTool != null && it.id == planIdFromTool }
+                ?: if (turnMessages == lastAssistantTurn) snapshot?.pendingPlanApproval else null
+
+            if (matchedPlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }) {
+                result.add(
+                    ChatListItem.PlanApproval(
+                        key = "plan_${matchedPlan.id}",
+                        request = matchedPlan,
+                        isTurnStart = !turnHasFirstItem
+                    )
+                )
+                turnHasFirstItem = true
+            }
+
+            // 4. 轮次底部的诊断与状态栏（非流式结束状态输出）
+            val lastMsg = turnMessages.lastOrNull { it.role == ChatRole.Assistant }
+            if (lastMsg != null && !isStreaming) {
+                result.add(
+                    ChatListItem.Footer(
+                        key = "${turnMessages.first().id}_footer",
+                        footer = lastMsg.toAssistantFooter(),
+                        isTurnStart = false,
+                    )
+                )
             }
         }
 
@@ -988,17 +1128,34 @@ class WorkspaceViewModel(
      */
     private fun probeToolTarget(name: String, input: Map<String, String>): String? {
         val baseDir = snapshot?.conversation?.directory?.takeIf { it.isNotBlank() }
-        val fileKeys = listOf("path", "file", "targetFile", "filePath", "file_path")
-        val firstFileValue = fileKeys.firstNotNullOfOrNull { input[it]?.takeIf { v -> v.isNotBlank() } }
+        val fileOrDirKeys = listOf(
+            "path", "file", "targetFile", "filePath", "file_path",
+            "dir", "directory", "dir_path", "directory_path", "DirectoryPath", "SearchDirectory"
+        )
+        val firstFileValue = fileOrDirKeys.firstNotNullOfOrNull { input[it]?.takeIf { v -> v.isNotBlank() } }
+        val isDirTool = name.contains("list") || name.contains("dir") || name.contains("tree")
+        val isSearchTool = name.contains("search") || name.contains("grep") || name.contains("find")
+        val searchQuery = if (isSearchTool) {
+            input["query"] ?: input["pattern"] ?: input["regex"] ?: input["Query"] ?: input["Pattern"]
+        } else null
+
         return when {
+            name in SUBAGENT_TOOL_NAMES ->
+                input["task"]?.lines()?.firstOrNull { it.isNotBlank() } ?: input["briefing"]?.lines()?.firstOrNull { it.isNotBlank() }
             name == "apply_patch" ->
                 input["patch"]?.let { extractPatchFiles(it) }?.takeIf { it.isNotBlank() }
             name == "execute_command" || name == "bash" ->
                 input["command"]?.takeIf { it.isNotBlank() } ?: input["cmd"]?.takeIf { it.isNotBlank() }
             name == "ask_user" ->
                 extractAskUserSummary(input)
-            firstFileValue != null ->
-                toDisplayPath(firstFileValue, baseDir)
+            searchQuery != null ->
+                searchQuery
+            firstFileValue != null -> {
+                val display = toDisplayPath(firstFileValue, baseDir)
+                if (display == "." || display.isBlank()) "directory" else display
+            }
+            isDirTool ->
+                "directory"
             else ->
                 input["command"]?.takeIf { it.isNotBlank() }
                     ?: input["cmd"]?.takeIf { it.isNotBlank() }
@@ -1054,17 +1211,6 @@ class WorkspaceViewModel(
         }
     }
 
-    private fun buildHeaderSummary(reasoningParts: List<ChatBlock.Reasoning>, toolCalls: List<ToolCallUi>): String {
-        val toolSummary = buildToolSummary(toolCalls)
-        return when {
-            reasoningParts.isNotEmpty() && toolCalls.isNotEmpty() -> {
-                if (toolSummary.isNotBlank()) "Thought Process • $toolSummary" else "Thought Process"
-            }
-            toolCalls.isNotEmpty() -> toolSummary
-            reasoningParts.isNotEmpty() -> "Thought Process"
-            else -> "Process"
-        }
-    }
 
     internal fun isImageBlock(block: ChatBlock.File): Boolean {
         val mime = block.mimeType?.lowercase()

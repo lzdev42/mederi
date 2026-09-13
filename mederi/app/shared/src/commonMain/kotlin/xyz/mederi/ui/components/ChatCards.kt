@@ -1,8 +1,7 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -13,13 +12,21 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -79,121 +86,232 @@ fun SeverityBadge(
 }
 
 /**
- * 一体化思考过程与工具调用聚合卡片 (ThoughtAndActionsBlock)
- * 视觉规范：过程安静、单容器内展开、去冗余计数徽标、极简单行子列表。
+ * 极简大脑矢量图标（用于思维链/深度思考展示）
+ */
+val BrainIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "Brain",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        val nodes = PathParser().parsePathString(
+            "M12 18V5 " +
+            "M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4 " +
+            "M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5 " +
+            "M17.997 5.125a4 4 0 0 1 2.526 5.77 " +
+            "M18 18a4 4 0 0 0 2-7.464 " +
+            "M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517 " +
+            "M6 18a4 4 0 0 1-2-7.464 " +
+            "M6.003 5.125a4 4 0 0 0-2.526 5.77"
+        ).toNodes()
+        addPath(
+            pathData = nodes,
+            stroke = SolidColor(Color(0xFF000000)),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        )
+    }.build()
+}
+
+/**
+ * 单独思维链/思考过程折叠面板 (ReasoningBlock)
+ * 严格还原极简设计：大脑图标胶囊 + 展开后轻量导轨线
  */
 @Composable
-fun ThoughtAndActionsBlock(
-    reasoningParts: List<ChatBlock.Reasoning>,
-    toolCalls: List<ToolCallUi>,
-    isStreaming: Boolean = false,
+fun ReasoningBlock(
+    text: String,
     durationMs: Long = 0,
-    modifier: Modifier = Modifier,
-    // 预计算派生数据（由 WorkspaceViewModel.recomputeChatItems 提供）
-    toolSummary: String = "",
-    hasFailedTool: Boolean = false,
-    isRunning: Boolean = false,
-    headerSummary: String = "",
+    isStreaming: Boolean = false,
     isReasoningActive: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
-    if (reasoningParts.isEmpty() && toolCalls.isEmpty()) return
+    if (text.isBlank() && !isReasoningActive) return
 
     val colors = LocalMederiColors.current
     var isExpanded by remember { mutableStateOf(false) }
-    // 推理进行中自动展开，推理结束（正文出现/轮次推进）自动折叠。
-    // 手动开合不被覆盖：仅在 isReasoningActive 翻转时重置（流式中手动折叠会保持折叠直到推理结束）。
-    LaunchedEffect(isReasoningActive) {
-        isExpanded = isReasoningActive
-    }
+
+    val infiniteTransition = rememberInfiniteTransition()
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        )
+    )
+
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
         animationSpec = tween(150)
     )
 
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(colors.thoughtBackground)
-            .border(
-                1.dp,
-                if (hasFailedTool) colors.accentDanger.copy(alpha = 0.35f)
-                else colors.thoughtBorder,
-                RoundedCornerShape(6.dp)
-            )
-            .padding(horizontal = 10.dp, vertical = 7.dp),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // 顶栏汇总条 (Quiet Bar)
+        // 单行微条：整行可点击展开/收起（去卡片化：无背景无边框）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { isExpanded = !isExpanded },
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { isExpanded = !isExpanded }
+                .padding(vertical = 2.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
-            ) {
-                // 折叠展开图标（平滑旋转动画）
-                Icon(
-                    imageVector = FeatherIcons.ChevronRight,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier
-                        .size(14.dp)
-                        .graphicsLayer { rotationZ = arrowRotation }
-                )
+            Icon(
+                imageVector = BrainIcon,
+                contentDescription = null,
+                tint = if (isReasoningActive) colors.accentPrimary.copy(alpha = pulseAlpha) else (if (colors.isDark) Color(0xFF94A3B8) else colors.textMuted),
+                modifier = Modifier.size(13.dp)
+            )
 
-                // 左侧极简状态指示
-                if (isRunning) {
-                    CircularProgressIndicator(
-                        color = colors.thoughtAccent,
-                        strokeWidth = 1.5.dp,
-                        modifier = Modifier.size(11.dp)
-                    )
-                } else {
-                    Icon(
-                        imageVector = if (toolCalls.isNotEmpty() && reasoningParts.isEmpty()) FeatherIcons.Terminal else FeatherIcons.Cpu,
-                        contentDescription = null,
-                        tint = if (hasFailedTool) colors.accentDanger else colors.thoughtAccent,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
+            val durationText = if (durationMs > 0) {
+                val sec = durationMs / 1000
+                val dec = (durationMs % 1000) / 100
+                " (${sec}.${dec}s)"
+            } else ""
 
-                // 汇总说明文字（无字符数冗余）
-                Text(
-                    text = headerSummary,
-                    color = if (hasFailedTool) colors.accentDanger else colors.thoughtText,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Normal,
-                    fontFamily = if (toolCalls.isNotEmpty() && reasoningParts.isEmpty()) FontFamily.Monospace else FontFamily.Default,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                if (durationMs > 0) {
-                    Text(
-                        text = "(${durationMs.toFloat() / 1000f}s)",
-                        color = colors.textMuted,
-                        fontSize = 11.sp
-                    )
-                }
+            val label = when {
+                isReasoningActive -> "思考中..."
+                durationMs > 0 -> "深度思考$durationText"
+                else -> "思考过程"
             }
 
-            if (hasFailedTool) {
-                Text(
-                    text = "Failed",
-                    color = colors.accentDanger,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold
+            Text(
+                text = label,
+                color = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+
+            // 箭头紧跟文字，两格间距（spacedBy 已提供 6dp，此处再加 2dp 间距通过宽 Spacer 模拟"两个空格"）
+            Spacer(modifier = Modifier.width(2.dp))
+
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
+                modifier = Modifier
+                    .size(11.dp)
+                    .graphicsLayer { rotationZ = arrowRotation }
+            )
+        }
+
+        // 展开后的思考旁白内容（左侧细垂直导轨线）
+        AnimatedVisibility(
+            visible = isExpanded && text.isNotBlank(),
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min)
+                    .padding(vertical = 3.dp, horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .fillMaxHeight()
+                        .background(if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD))
+                )
+                MarkdownView(
+                    content = text,
+                    modifier = Modifier.fillMaxWidth(),
+                    enableScrollOverride = false
                 )
             }
         }
+    }
+}
 
-        // 展开内容区 (在同一个容器内部无缝展示，去多层嵌套)
+/**
+ * 结构化工具调用追踪微栏 (ToolCallsBlock)
+ * 统一折叠条：不管1条还是N条都统一显示"工具调用 (N 项)"折叠条，展开后显示清单，去卡片化无框无背景。
+ */
+@Composable
+fun ToolCallsBlock(
+    toolCalls: List<ToolCallUi>,
+    isStreaming: Boolean = false,
+    isRunning: Boolean = false,
+    hasFailedTool: Boolean = false,
+    toolSummary: String = "",
+    modifier: Modifier = Modifier,
+) {
+    if (toolCalls.isEmpty()) return
+
+    val colors = LocalMederiColors.current
+    var isExpanded by remember { mutableStateOf(false) }
+
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(150)
+    )
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // 统一折叠微条（去卡片化：无背景无边框），整行可点击
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { isExpanded = !isExpanded }
+                .padding(vertical = 2.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (isRunning) {
+                CircularProgressIndicator(
+                    color = Color(0xFFF59E0B),
+                    strokeWidth = 1.4.dp,
+                    modifier = Modifier.size(12.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = FeatherIcons.Zap,
+                    contentDescription = null,
+                    tint = if (hasFailedTool) colors.accentDanger else Color(0xFFF59E0B),
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+
+            val titleText = when {
+                isRunning -> {
+                    val active = toolCalls.lastOrNull { it.state is ToolCallState.Running }?.name
+                    if (active != null) "工具调用 · 正在执行 $active..." else "工具调用 · 正在执行..."
+                }
+                hasFailedTool -> "工具调用 (${toolCalls.size} 项，存在失败)"
+                else -> "工具调用 (${toolCalls.size} 项)"
+            }
+
+            Text(
+                text = titleText,
+                color = if (hasFailedTool) colors.accentDanger else (if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+
+            // 箭头紧跟文字，两格间距
+            Spacer(modifier = Modifier.width(2.dp))
+
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
+                modifier = Modifier
+                    .size(11.dp)
+                    .graphicsLayer { rotationZ = arrowRotation }
+            )
+        }
+
+        // 展开后的具体工具调用清单
         AnimatedVisibility(
             visible = isExpanded,
             enter = fadeIn() + expandVertically(),
@@ -202,44 +320,16 @@ fun ThoughtAndActionsBlock(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(start = 10.dp, top = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
-                // 1. 思考过程：左侧细导轨线 (Quote Rail) + 自然语言 Markdown（次要文字颜色）
-                if (reasoningParts.isNotEmpty()) {
-                    val combinedReasoningText = reasoningParts.joinToString("\n\n") { it.text }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(2.dp)
-                                .fillMaxHeight()
-                                .background(colors.thoughtAccent.copy(alpha = 0.45f))
-                        )
-                        MarkdownView(
-                            content = combinedReasoningText,
-                            modifier = Modifier.fillMaxWidth(),
-                            enableScrollOverride = false
-                        )
-                    }
-                }
-
-                // 2. 工具调用列表：紧凑无外框列表
-                if (toolCalls.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = if (reasoningParts.isNotEmpty()) 4.dp else 0.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        toolCalls.forEach { toolCall ->
-                            ToolCallItemRow(toolCall = toolCall, colors = colors, isStreaming = isStreaming)
-                        }
-                    }
+                toolCalls.forEach { toolCall ->
+                    ToolCallItemRow(
+                        toolCall = toolCall,
+                        colors = colors,
+                        isStreaming = isStreaming,
+                        showLeadingIcon = false
+                    )
                 }
             }
         }
@@ -247,18 +337,141 @@ fun ThoughtAndActionsBlock(
 }
 
 /**
- * 紧凑型子操作行：单行命令/路径 + 可展开的执行结果（输出/错误）。
- * 目标参数与失败标记由 ViewModel 预计算（ToolCallUi）。
+ * 结构化子 Agent 调用追踪微栏 (SubagentCallsBlock)
+ * 独立折叠条：与普通工具调用解耦，显示派发的子 Agent 状态与任务，展开可查看执行详情。
+ */
+@Composable
+fun SubagentCallsBlock(
+    subagents: List<ToolCallUi>,
+    isStreaming: Boolean = false,
+    isRunning: Boolean = false,
+    hasFailed: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    if (subagents.isEmpty()) return
+
+    val colors = LocalMederiColors.current
+    var isExpanded by remember { mutableStateOf(false) }
+
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(150)
+    )
+
+    val subagentAccentColor = if (colors.isDark) Color(0xFFA78BFA) else Color(0xFF7C3AED)
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // 统一折叠微条（去卡片化：无背景无边框），整行可点击
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { isExpanded = !isExpanded }
+                .padding(vertical = 2.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (isRunning) {
+                CircularProgressIndicator(
+                    color = subagentAccentColor,
+                    strokeWidth = 1.4.dp,
+                    modifier = Modifier.size(12.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = FeatherIcons.Users,
+                    contentDescription = null,
+                    tint = if (hasFailed) colors.accentDanger else subagentAccentColor,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+
+            val titleText = when {
+                isRunning -> {
+                    val active = subagents.lastOrNull { it.state is ToolCallState.Running }
+                    val taskName = active?.target?.take(30)
+                    if (taskName != null) "子 Agent · 正在执行: $taskName..." else "子 Agent · 正在执行..."
+                }
+                hasFailed -> "子 Agent (${subagents.size} 项，存在失败)"
+                else -> "子 Agent (${subagents.size} 项)"
+            }
+
+            Text(
+                text = titleText,
+                color = if (hasFailed) colors.accentDanger else (if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+
+            // 箭头紧跟文字，两格间距
+            Spacer(modifier = Modifier.width(2.dp))
+
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
+                modifier = Modifier
+                    .size(11.dp)
+                    .graphicsLayer { rotationZ = arrowRotation }
+            )
+        }
+
+        // 展开后的具体子 Agent 任务清单
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, top = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                subagents.forEach { subagent ->
+                    ToolCallItemRow(
+                        toolCall = subagent,
+                        colors = colors,
+                        isStreaming = isStreaming,
+                        showLeadingIcon = false
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 将工具名称解析为简洁动词
+ */
+private fun resolveActionVerb(toolName: String): String = when {
+    toolName == "spawn_agent" -> "agent"
+    toolName == "spawn_researcher" -> "research"
+    toolName.contains("edit") || toolName.contains("patch") || toolName.contains("replace") -> "edit"
+    toolName.contains("write") || toolName.contains("create") -> "create"
+    toolName.contains("read") || toolName.contains("view") -> "read"
+    toolName.contains("run") || toolName.contains("bash") || toolName.contains("exec") || toolName.contains("terminal") -> "run"
+    toolName.contains("list") || toolName.contains("dir") || toolName.contains("tree") -> "list"
+    toolName.contains("search") || toolName.contains("grep") || toolName.contains("find") -> "search"
+    toolName.contains("ask") -> "ask"
+    else -> toolName
+}
+
+/**
+ * 紧凑型子操作行：[✓] 动词 目标参数 + 可展开的紧凑结果微框
  */
 @Composable
 private fun ToolCallItemRow(
     toolCall: ToolCallUi,
     colors: MederiColors,
-    isStreaming: Boolean = false
+    isStreaming: Boolean = false,
+    showLeadingIcon: Boolean = false
 ) {
     val isFailed = toolCall.isFailed
     val isRunning = isStreaming && toolCall.state is ToolCallState.Running
-    // 执行结果：成功 = 输出，失败 = 错误详情（core 事件/落库都带，之前 UI 只显示成败没展示）
     val result = when (val s = toolCall.state) {
         is ToolCallState.Completed -> s.output
         is ToolCallState.Failed -> s.error
@@ -266,211 +479,132 @@ private fun ToolCallItemRow(
     }?.takeIf { it.isNotBlank() }
     var resultExpanded by remember { mutableStateOf(false) }
 
+    val verb = resolveActionVerb(toolCall.name)
+    val rawTarget = toolCall.target?.trim()
+    val targetText = when {
+        !rawTarget.isNullOrBlank() && rawTarget != "." && rawTarget != toolCall.name -> rawTarget
+        verb == "list" -> "directory"
+        else -> toolCall.name.removePrefix(verb).removePrefix("_").ifBlank { "action" }
+    }
+
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 22.dp),
+                .clip(RoundedCornerShape(4.dp))
+                .clickable(enabled = result != null) { resultExpanded = !resultExpanded }
+                .padding(vertical = 3.dp, horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // 极简状态图标：成功弱化为淡灰勾号，运行中微型转圈，失败红叹号
-            when {
-                isRunning -> {
+            if (showLeadingIcon) {
+                if (isRunning) {
                     CircularProgressIndicator(
-                        color = colors.accentPrimary,
-                        strokeWidth = 1.2.dp,
-                        modifier = Modifier.size(9.dp)
+                        color = Color(0xFFF59E0B),
+                        strokeWidth = 1.4.dp,
+                        modifier = Modifier.size(12.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = FeatherIcons.Zap,
+                        contentDescription = null,
+                        tint = if (isFailed) colors.accentDanger else Color(0xFFF59E0B),
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
+            }
+
+            // [✓] 或 [✕] 状态微标签
+            when {
+                isRunning && !showLeadingIcon -> {
+                    CircularProgressIndicator(
+                        color = Color(0xFFF59E0B),
+                        strokeWidth = 1.4.dp,
+                        modifier = Modifier.size(11.dp)
                     )
                 }
                 isFailed -> {
-                    Icon(
-                        imageVector = FeatherIcons.AlertCircle,
-                        contentDescription = null,
-                        tint = colors.accentDanger,
-                        modifier = Modifier.size(11.dp)
+                    Text(
+                        text = "[✕]",
+                        color = colors.accentDanger,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
                     )
                 }
                 else -> {
-                    Icon(
-                        imageVector = FeatherIcons.Check,
-                        contentDescription = null,
-                        tint = colors.textMuted.copy(alpha = 0.7f),
-                        modifier = Modifier.size(11.dp)
+                    Text(
+                        text = "[✓]",
+                        color = if (colors.isDark) Color(0xFF10B981) else colors.accentSuccess,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
 
-            // 工具名（等宽弱化）
+            // 动词（如 edit, run, list, ask, read）
             Text(
-                text = toolCall.name,
-                color = colors.textMuted,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace
+                text = verb,
+                color = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium
             )
 
-            // 核心目标参数（命令原文 / 路径等，ViewModel 预计算）
-            if (!toolCall.target.isNullOrBlank()) {
-                Text(
-                    text = toolCall.target,
-                    color = colors.textSecondary,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+            // 目标参数（如 SnapshotReducer.kt, ./gradlew test, directory）
+            Text(
+                text = targetText,
+                color = if (colors.isDark) Color(0xFFCBD5E1) else colors.textPrimary,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            // 若有执行结果，箭头紧跟文字（2dp 间距），动画旋转
+            if (result != null) {
+                Spacer(modifier = Modifier.width(2.dp))
+                val resultArrowRotation by animateFloatAsState(
+                    targetValue = if (resultExpanded) 90f else 0f,
+                    animationSpec = tween(150)
                 )
-            } else {
-                Spacer(modifier = Modifier.weight(1f))
-            }
-
-            // 仅在失败时在尾部显示错误提示
-            if (isFailed) {
-                Text(
-                    text = "Failed",
-                    color = colors.accentDanger,
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-
-        // 执行结果区：折叠时预览前几行，点击展开/收起完整输出
-        if (result != null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(colors.surfaceCode)
-                    .border(1.dp, colors.divider, RoundedCornerShape(4.dp))
-                    .clickable { resultExpanded = !resultExpanded }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = result,
-                    color = if (isFailed) colors.accentDanger else colors.textSecondary,
-                    fontSize = 10.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 14.sp,
-                    maxLines = if (resultExpanded) Int.MAX_VALUE else 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (resultExpanded) {
-                    Text(
-                        text = "收起",
-                        color = colors.textMuted.copy(alpha = 0.7f),
-                        fontSize = 9.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.align(Alignment.End)
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 单独思维链/思考过程折叠面板 (ReasoningBlock)
- */
-@Composable
-fun ReasoningBlock(
-    text: String,
-    durationMs: Long = 0,
-    isExpandedDefault: Boolean = false,
-    expanded: Boolean? = null,
-    onToggle: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
-) {
-    val colors = LocalMederiColors.current
-    var internalExpanded by remember { mutableStateOf(isExpandedDefault) }
-    val isExpanded = expanded ?: internalExpanded
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (isExpanded) 90f else 0f,
-        animationSpec = tween(150)
-    )
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(colors.thoughtBackground)
-            .border(1.dp, colors.thoughtBorder, RoundedCornerShape(6.dp))
-            .padding(horizontal = 10.dp, vertical = 7.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    if (onToggle != null) onToggle()
-                    else internalExpanded = !internalExpanded
-                },
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
                 Icon(
                     imageVector = FeatherIcons.ChevronRight,
                     contentDescription = null,
-                    tint = colors.textMuted,
+                    tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
                     modifier = Modifier
-                        .size(14.dp)
-                        .graphicsLayer { rotationZ = arrowRotation }
+                        .size(10.dp)
+                        .graphicsLayer { rotationZ = resultArrowRotation }
                 )
-                Icon(
-                    imageVector = FeatherIcons.Cpu,
-                    contentDescription = null,
-                    tint = colors.thoughtAccent,
-                    modifier = Modifier.size(14.dp)
-                )
-                Text(
-                    text = "Thought Process",
-                    color = colors.thoughtText,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Normal
-                )
-                if (durationMs > 0) {
-                    Text(
-                        text = "(${durationMs.toFloat() / 1000f}s)",
-                        color = colors.textMuted,
-                        fontSize = 11.sp
-                    )
-                }
             }
         }
 
-        AnimatedVisibility(
-            visible = isExpanded,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Row(
+        // 执行输出微框（严格限高 130dp，轻量暗色背景）
+        if (result != null && resultExpanded) {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (colors.isDark) Color(0xFF161822) else Color(0xFFF1F3F5))
+                    .border(1.dp, if (colors.isDark) Color(0xFF262936) else Color(0xFFE2E8F0), RoundedCornerShape(4.dp))
+                .clickable { resultExpanded = false }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                Box(
+                Text(
+                    text = result,
+                    color = if (isFailed) colors.accentDanger else (if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary),
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 14.sp,
                     modifier = Modifier
-                        .width(2.dp)
-                        .fillMaxHeight()
-                        .background(colors.thoughtAccent.copy(alpha = 0.45f))
-                )
-                MarkdownView(
-                    content = text,
-                    modifier = Modifier.fillMaxWidth(),
-                    enableScrollOverride = false
+                        .fillMaxWidth()
+                        .heightIn(max = 130.dp)
+                        .verticalScroll(rememberScrollState())
                 )
             }
         }

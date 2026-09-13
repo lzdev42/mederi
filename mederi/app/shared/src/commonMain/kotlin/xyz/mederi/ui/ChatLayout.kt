@@ -35,7 +35,7 @@ object ChatLayout {
     val itemSpacing: Dp = 4.dp
 
     /** 思考过程折叠条与下方消息正文之间的间距 */
-    val thoughtBottomSpacing: Dp = 8.dp
+    val thoughtBottomSpacing: Dp = 4.dp
 
     /** 对话轮次之间的间距（用户消息为轮次起点，额外加此间距） */
     val turnSpacing: Dp = 14.dp
