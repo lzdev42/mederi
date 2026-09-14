@@ -15,7 +15,7 @@
 | app/shared 与 server：AiCore 契约签名、契约模型字段、三实现（MederiAiCore/ServerAiCore/MockAiCore）、RemoteServer 路由表、AppState/ViewModel、UI 组合树、平台入口、preferences | [02-app-shared.md](./02-app-shared.md) |
 | inkcompose：公共 API、Markdown 解析/渲染管线、LaTeX、语法高亮、Mermaid 图表、竖排文字、平台 actual 矩阵 | [03-inkcompose.md](./03-inkcompose.md) |
 | 核心流程图 + 时序图：发消息全链路、Turn 执行、事件→快照聚合、Plan Loop、上下文压缩、ask_user、审批、子代理、回滚、自动改名、遥控启动、密码门 | [04-flows.md](./04-flows.md) |
-| 业务规则（分诊/沙盒/推理档位/模型元数据所有权/契约同步） | 仓库根 `mederi/AGENTS.md` |
+| 业务规则（分诊/并行工具调度/沙盒/推理档位/模型元数据所有权/契约同步） | 仓库根 `mederi/AGENTS.md` |
 | 专项设计文档 | `docs/sandbox-plan.md`、`docs/todo-system-plan.md`、`docs/e2e-test.md`、`docs/workflow.md`、`docs/backlog.md` |
 
 ## 30 秒心智模型

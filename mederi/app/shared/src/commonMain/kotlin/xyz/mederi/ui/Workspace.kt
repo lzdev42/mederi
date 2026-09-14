@@ -786,9 +786,9 @@ private fun MessageList(
             }
         }
 
-        // 2. 对话轮次状态栏（授权等待由卡片本身承载，turnStatus 已去重）
+        // 2. 对话轮次状态栏：仅在等待响应或重试时展示，收到推理/消息输出时自动隐藏
         val turnStatus = viewModel.turnStatus
-        if (turnStatus != TurnStatus.Idle) {
+        if (turnStatus.shouldDisplayInStatusBar) {
             item {
                 Box(
                     modifier = Modifier
@@ -804,6 +804,7 @@ private fun MessageList(
                         StatusBar(
                             status = turnStatus,
                             startedAtMillis = viewModel.turnStartedAt,
+                            statusHint = viewModel.statusHint,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }

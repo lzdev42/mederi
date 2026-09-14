@@ -3,6 +3,7 @@ package xyz.mederi.prompt
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.domain.model.WorkType
+import xyz.mederi.skills.domain.SkillInfo
 
 /**
  * 系统提示词常量。
@@ -103,6 +104,9 @@ Respond in the user's language. If they write Chinese, respond in Chinese.
   - MCP server tools: If installed MCP servers are enabled, their tools are
     registered with a server-name prefix (e.g. `context7_search`). Their schemas
     appear in your tool list with that prefix — use them like any other tool.
+  - Tool calls sent together in one message run in parallel, with no limit on
+    concurrency. When batching: never write to the same file concurrently, never
+    run duplicate commands; otherwise use parallelism freely for independent work.
     """
 
     private const val WORKING_DIRECTORY = """
@@ -186,8 +190,10 @@ completion with unfinished subtasks is a process violation.
 
 Tool-error rule for the Plan Loop: if any plan tool returns an Error, stop and
 fix that call before any dependent call. Use ONLY the planId returned by
-create_plan — never an invented one. One plan-tool call per message step; never
-fire generate_spec/spawn_agent together with create_plan.
+create_plan — never an invented one. Call create_plan alone, never batched with
+anything. Tools in one message run in parallel with no ordering guarantee, so
+never mix generate_spec and spawn_agent in the same message — generate the
+specs first, then spawn independent subtasks together in one message.
 
 This ordering is the only hard requirement in this prompt: complex work goes
 through create_plan -> generate_spec -> spawn_agent -> verify. Everything else
@@ -359,6 +365,9 @@ only mode-specific point is step 3 — who approves.
   processes backgrounded and redirected to a file; stop them with stop_process.
 - list_processes: List mederi-spawned processes still running, with their pids.
 - stop_process: Stop a mederi-spawned process by pid (from list_processes).
+- MCP server tools: If installed MCP servers are enabled, their tools are
+  registered with a server-name prefix (e.g. `context7_search`). Their schemas
+  appear in your tool list with that prefix — use them like any other tool.
 
 You have NO planning/spec/spawn/verify/ask_user tools. Follow the spec checklist
 you were given, top-down, and report the outcome in your final answer. When
@@ -370,17 +379,20 @@ reporting, distinguish two SPEC_FEEDBACK kinds:
   side or "correct" the spec; report it and stop.
 """.trimIndent()
 
-    /** RESEARCHER 实际拥有的工具清单（read_file / list_directory 之外一律没有）。 */
+    /** RESEARCHER 实际拥有的工具清单（read_file / list_directory + MCP 工具之外一律没有）。 */
     private val RESEARCHER_TOOL_GUIDELINES = """
 # Tool Guidelines
 
 - read_file: Read files. Use max_lines=0 for full file.
 - list_directory: Explore structure. Empty path = project root.
+- MCP server tools: If installed MCP servers are enabled, their tools are
+  registered with a server-name prefix (e.g. `context7_search`). Use them for
+  research — but stay read-only: investigate, do not modify anything.
 
-You have ONLY these two read-only tools. There is no write tool, no edit tool,
-no shell execution, no planning, no spawning. If the research question needs
-anything beyond reading, note that limitation in your answer instead of trying
-to work around it.
+You have ONLY read_file / list_directory / MCP tools. There is no write tool, no
+edit tool, no shell execution, no planning, no spawning. If the research
+question needs anything beyond that, note the limitation in your answer instead
+of trying to work around it.
 """.trimIndent()
 
     /** 调研纪律：只读探索 → 交叉验证 → 结构化结论。 */
@@ -432,6 +444,30 @@ Loop. Keep it current via update_todo (one call replaces the whole list).
                 PLANNING_DISCIPLINE.trimIndent() + "\n\n" +
                 OUTPUT_FORMAT.trimIndent() + "\n\n" +
                 PromptGuides.MARKDOWN_FORMAT
+
+    /**
+     * 在基础系统提示词末尾追加已安装 skills 清单段。
+     *
+     * 调用方只在 `AgentCapabilities.of(role).inheritSkills == true` 时调用
+     * （主代理 + EXECUTOR，RESEARCHER 不注入）。无 skill 时不追加任何内容。
+     * 提示词只给 name/description/location——模型按需用文件工具读对应 SKILL.md 装载工作流。
+     */
+    fun withSkills(basePrompt: String, skills: List<SkillInfo>): String {
+        if (skills.isEmpty()) return basePrompt
+        val section = buildString {
+            appendLine()
+            appendLine("# Available Skills")
+            appendLine()
+            appendLine("The following skills are installed locally. When the task matches a skill's")
+            appendLine("description, read its SKILL.md (location below) to load the workflow, then follow")
+            appendLine("it exactly — its instructions override the generic tool guidelines above:")
+            appendLine()
+            skills.forEach { skill ->
+                append("- **${skill.name}**: ${skill.description} (SKILL.md at `${skill.location}`)")
+            }
+        }
+        return basePrompt + "\n" + section.trimIndent()
+    }
 
     /** Work 模式系统提示词。 */
     fun forWork(): String = COMMON + "\n\n" + WORK_MODE.trimIndent()

@@ -9,15 +9,51 @@ import xyz.mederi.core.contract.models.*
 enum class TurnStatus(val label: String) {
     Idle("空闲"),
     /** 消息已提交，turn 尚未开始（等待 core 受理/新会话创建完成） */
-    Sending("发送中"),
+    Sending("正在发送"),
     /** 请求已发出，等待模型返回首个 token（网络在途） */
-    Preparing("请求模型中"),
-    Thinking("思考中"),
+    Preparing("已送达，等待回应"),
+    Thinking("AI 思考中"),
     CallingTool("调用工具中"),
-    Generating("生成回复中"),
+    Generating("正在生成回复"),
     WaitingAnswer("等待回答"),
-    Retrying("重试中"),
-    Aborted("已中断"),
+    Retrying("正在自动重试"),
+    Aborted("已中断");
+
+    /**
+     * 该状态是否需要在状态栏（StatusBar）中展示。
+     * - 等待响应阶段（Sending, Preparing）：展示状态栏以消除用户焦虑；
+     * - 收到推理/正文/工具等内容时（Thinking, Generating, CallingTool...）：卡片内已有对应内容在渲染，状态栏隐藏；
+     * - 仅在异常重试时（Retrying）：状态栏重新出现，展示重试轮次与真实错误信息。
+     */
+    val shouldDisplayInStatusBar: Boolean
+        get() = when (this) {
+            Sending, Preparing, Retrying -> true
+            Thinking, Generating, CallingTool, WaitingAnswer, Aborted, Idle -> false
+        }
+}
+
+/**
+ * 重试状态的结构化信息，由 [parseRetryHint] 从 statusHint 字符串中解析。
+ * [attempt]/[max] 表示当前是第几次/最多几次；[serverMsg] 是供应商返回的真实错误原因。
+ */
+data class RetryHint(
+    val attempt: String,
+    val max: String,
+    val serverMsg: String?,
+)
+
+/**
+ * 将 SnapshotReducer 存入 statusHint 的格式（"attempt/max" 或 "attempt/max|serverMsg"）
+ * 解析成结构体，供 StatusBar 按需渲染。
+ */
+fun parseRetryHint(statusHint: String?): RetryHint? {
+    if (statusHint == null) return null
+    val parts = statusHint.split("|", limit = 2)
+    val progress = parts[0].split("/")
+    val attempt = progress.getOrNull(0) ?: "?"
+    val max = progress.getOrNull(1) ?: "?"
+    val serverMsg = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+    return RetryHint(attempt = attempt, max = max, serverMsg = serverMsg)
 }
 
 fun deriveTurnStatus(snapshot: ConversationSnapshot?): TurnStatus {
@@ -56,3 +92,4 @@ fun deriveTurnStatus(snapshot: ConversationSnapshot?): TurnStatus {
         }
     }
 }
+

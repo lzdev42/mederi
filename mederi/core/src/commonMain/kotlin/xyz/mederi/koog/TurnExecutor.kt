@@ -29,6 +29,7 @@ import xyz.mederi.debug.ErrorContext
 import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
+import xyz.mederi.domain.model.AgentCapabilities
 import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.mcp.engine.McpSession
 import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
@@ -58,6 +59,7 @@ import xyz.mederi.provider.infrastructure.koog.KoogParamsBuilder
 import xyz.mederi.store.DiffStore
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
+import xyz.mederi.skills.SkillManager
 import xyz.mederi.tools.ToolFactory
 import xyz.mederi.tools.diff.TurnDiffTracker
 import xyz.mederi.tools.subagent.SubagentRunnerImpl
@@ -109,12 +111,15 @@ class TurnExecutor(
     private val providerManager: ProviderManager,
     private val projectManager: ProjectManager,
     private val diffStore: DiffStore? = null,
-    private val mcpConnector: McpConnector? = null
+    private val mcpConnector: McpConnector? = null,
+    private val skills: SkillManager? = null
 ) {
 
     private val subagentRunner = SubagentRunnerImpl(
         providerManager = providerManager,
-        projectManager = projectManager
+        projectManager = projectManager,
+        mcpConnector = mcpConnector,
+        skills = skills
     )
 
     private val scope = CoroutineScope(
@@ -260,9 +265,17 @@ class TurnExecutor(
             appendLine("Progress: $done/${session.todos.size} completed.")
         }.trimEnd() else null
         // 子代理用专用执行者/研究者提示词（无 plan/spawn/verify 工具，主代理工作流指令对它全是误导）；
-        // 主代理用完整提示词（含工作流与活跃计划段）
-        val systemPrompt = if (subagentRole != null) SystemPrompts.forSubagent(subagentRole, workType)
+        // 主代理用完整提示词（含工作流与活跃计划段）。
+        // 是否注入已安装 skills：一律读中心化 AgentCapabilities 表（主代理 + EXECUTOR 注入，RESEARCHER 不注入）。
+        val basePrompt = if (subagentRole != null) SystemPrompts.forSubagent(subagentRole, workType)
         else SystemPrompts.build(agentMode, workType, activePlanContent, activeTodoContent)
+        val systemPrompt = if (AgentCapabilities.of(subagentRole).inheritSkills) {
+            val skillList = runCatching { skills?.list() }.getOrElse { e ->
+                DebugLog.error("TurnExec", "加载 skills 列表失败（不阻塞 turn）: ${e.message}", e)
+                null
+            }
+            SystemPrompts.withSkills(basePrompt, skillList.orEmpty())
+        } else basePrompt
         DebugLog.data("TurnExec", "agentMode", agentMode)
         DebugLog.data("TurnExec", "workType", workType)
         DebugLog.data("TurnExec", "activePlan", activePlan?.id ?: "none")
@@ -619,9 +632,10 @@ class TurnExecutor(
             HistoryStoreChatHistoryProvider(historyStore, diagnostics, toolTimings)
         )
 
-        // MCP：主代理连接已启用的 MCP server，把工具合并进 agent；子代理暂不接入（只读隔离）。
-        // 失败只记日志不拖垮 turn；turn 结束统一 close。声明在 try 外，finally 里才能访问。
-        val mcpSession: McpSession? = if (subagentRole == null) {
+        // MCP：连接已启用的 MCP server，把工具合并进 agent。是否开启由中心化
+        // AgentCapabilities 表决定（主代理 + 两种子代理都继承 MCP）。失败只记日志不拖垮
+        // turn；turn 结束统一 close。声明在 try 外，finally 里才能访问。
+        val mcpSession: McpSession? = if (AgentCapabilities.of(subagentRole).inheritMcp) {
             try {
                 mcpConnector?.openSession()
             } catch (e: Exception) {

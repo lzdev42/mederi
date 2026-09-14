@@ -111,7 +111,7 @@ flowchart TD
     SW -- "TOOL_CALLED/RESULT" --> TO["按 toolCallId 精确匹配更新 ToolCall block"]
     SW -- "QUESTION_*/PLAN_APPROVAL_*" --> PE["写/清 pendingQuestion / pendingPlanApproval"]
     SW -- "TODO_UPDATED/PLAN_PROGRESS" --> TD["解码 payload.todos 整体替换(失败丢弃事件)"]
-    SW -- "STATUS RETRYING" --> ST["statusHint='供应商限流,重试中(attempt/max)'"]
+    SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max'(+|serverMsg 供应商真实报错)<br/>UI StatusBar 重试态第二行渲染"]
     SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage"]
     D & C2 & ER & TO & PE & TD & ST & SU --> UI["WorkspaceViewModel.snapshot<br/>→ chatItems(derivedStateOf 展平渲染)"]
 ```
@@ -131,7 +131,7 @@ flowchart TD
     WAIT -- "拒绝" --> REJ["告知用户结束/修改"]
     WAIT -- "批准" --> GEN
     AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变"]
-    GEN --> SPAWN["spawn_agent(planId, subtaskIndex)<br/>硬校验 planId/index/spec 存在 → 子任务 IN_PROGRESS<br/>PLAN_PROGRESS('subtask-started'+todos投影)"]
+    GEN --> SPAWN["spawn_agent(planId, subtaskIndex)<br/>硬校验 planId/index/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>PLAN_PROGRESS('subtask-started'+todos投影)<br/>独立子任务可同消息并行 spawn(无上限)"]
     SPAWN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
     SUB --> VER["verify_subtask(planId, subtaskIndex, status, evidence)<br/>自动执行 Subtask.verification 命令(10s)"]
     VER --> CHK{"verify 结果"}
@@ -143,6 +143,8 @@ flowchart TD
     MORE -- "否" --> ARCH["全部 COMPLETED → plan 置 COMPLETED<br/>planStore.archive → .mederi/plans-done/"]
     CONV & REGEN --> SPAWN
 ```
+
+**并行执行（2026-09）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；并行批量时不得并发写同一文件、不得重复执行同一命令。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。
 
 **Plan 审批时序（APPROVAL 模式）**：
 
@@ -234,12 +236,13 @@ sequenceDiagram
     alt 校验失败
         M-->>M: 返回拒绝文本(spec 不存在即拒)
     end
-    M->>PS: subtask 置 IN_PROGRESS
+    M->>PS: updatePlan 原子置 subtask IN_PROGRESS
     M->>EB: PLAN_PROGRESS('subtask-started' + todos 投影)
     M->>SR: run(task, briefing(含 planDetail), plan=st.spec, role=EXECUTOR, ...)
     SR->>SR: 内存建临时 Session(sub_xxxxxxxx, AUTONOMOUS)
     SR->>ITE: sendMessage(inputText=spec清单自顶向下+SPEC_FEEDBACK约定, subagentRole=EXECUTOR)
     Note over ITE: RESEARCHER 则 inputText=只读调研任务<br/>工具裁剪=read_file+list_directory
+    Note over ITE: 继承策略=中心化 AgentCapabilities 表<br/>MCP: 主/执行/研究都继承(每子代理 turn 独立现连现断)<br/>Skills: 主/执行注入提示词, 研究不注入
     loop 子 turn 内
         ITE->>ITE: 正常 TurnExecutor 流程(事件走独立 eventBus)
     end
@@ -247,6 +250,7 @@ sequenceDiagram
     SR->>SR: 取最后一条 ASSISTANT 消息文本
     SR-->>M: 返回报告字符串(异常转 "[subagent error] ...")
     M->>EB: (主代理继续) verify_subtask / converge_plan / 下一个 spawn
+    Note over M: 独立子任务可同消息并行: 多个 SpawnAgentTool 协程各自 SR.run,<br/>无并发上限, 由 AI 调度(信任 AI); 返回后逐个 verify_subtask
     Note over ITE: 子代理一次任务即死; 无会话残留
 ```
 

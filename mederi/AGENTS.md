@@ -196,6 +196,12 @@ inkcompose/
 **计划/Spec 分层（2026-09 定稿）**：create_plan = WHAT（中层技术方案，用户批准的对象）；批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）；spawn_agent(planId, subtaskIndex) 硬绑定执行存储的 spec；
 verify 三分支：PASS / 执行错→converge_plan / **spec 错→重新 generate_spec 覆盖→重执行**。
 
+**并行工具调度（2026-09 定稿）**：Koog 工具执行节点已开 `parallel=true`——同一条消息里的多个工具调用并行执行，**无并发上限，由 AI 调度**（信任 AI 策略）。配套硬性约束：
+- `create_plan` 必须单独发一条消息，不得与任何工具同消息批量；
+- **禁止同消息混发 `generate_spec` 与 `spawn_agent`**（并行无序，spawn 可能读到未写入的 spec）——先为所有独立子任务生成 spec，再同消息一起 spawn；
+- 并行批量时杜绝竞争：不并发写同一文件、不重复执行同一命令。
+- 因并行而生，plan 状态写入必须原子：`spawn_agent` 的 IN_PROGRESS 标记、`generate_spec` 的 spec 写入、`verify_subtask` 的验证结果一律走 `PlanStore.updatePlan`（原子读改写，进程级锁），禁止裸 load→copy→save。
+
 **系统环境注入**：每条用户消息尾部 `<<<NOT_FOR_UI>>>` 隐藏块注入时间、OS/版本/arch、
 shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该让用户重复输入的环境事实。
 
@@ -230,14 +236,22 @@ shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该
 | 角色 | 职责 | 工具 | 生命周期 |
 |---|---|---|---|
 | 主代理 | 唯一决策者：分诊、调研结论、计划、验证、收敛；小改动亲自动手 | 全套（含写） | 长期存活 |
-| Researcher | 眼睛：只读深度调研，输出完整报告，不做决定、不写文件 | read_file + list_directory | 一次任务即死 |
-| Executor | 手：照 spec 清单自顶向下执行，不问用户，SPEC_FEEDBACK 回报 spec 与现实的矛盾 | 全套（无 plan/spawn/verify/ask_user） | 一次任务即死 |
+| Researcher | 眼睛：只读深度调研，输出完整报告，不做决定、不写文件 | read_file + list_directory（+ MCP 工具） | 一次任务即死 |
+| Executor | 手：照 spec 清单自顶向下执行，不问用户，SPEC_FEEDBACK 回报 spec 与现实的矛盾 | 全套（无 plan/spawn/verify/ask_user）+ MCP 工具 + skills 提示词注入 | 一次任务即死 |
+
+> **代理继承策略中心化（硬性）**：主/子代理"是否继承 MCP / 注入 skills"一律读 `AgentCapabilities`（domain/model/AgentCapabilities.kt）这张**唯一表**——`MAIN(true,true)` / `EXECUTOR(true,true)` / `RESEARCHER(true,false)`。TurnExecutor 开 MCP 会话、SystemPrompts 注入 skills 段都只查此表，**禁止**在别处再写 `subagentRole == EXECUTOR` 之类的散装判断。新增子代理角色 = `SubagentRole` 加值 + `AgentCapabilities` 加行 + `of()` 加分支，其余装配自动生效。
 
 ### 拆小可验证（硬性要求）
 
 create_plan 必须把需求拆成**多个小的、可独立验证的子任务**——每个子任务 = 一个 spec + 一个 verification
 （具体命令 + 预期结果 + 通过标准）。绝不把多个改动塞进一个含混的子任务；无法独立验证就继续拆。
 验证标准在 plan 批准时即对用户可见（PlanStore Markdown 每个子任务带 `#### Verification` 段）。
+
+### 并行执行（2026-09）
+
+**相互独立（无 dependsOn、不写同一批文件）的子任务用并行 spawn 执行**：先为这些子任务逐个
+`generate_spec`，然后同一条消息发多个 `spawn_agent` 一起跑，全部返回后再逐个 `verify_subtask`。
+有依赖的子任务保持串行。并行度不设上限，由 AI 自己判断——信任 AI 调度，代码不设闸门（仅沙箱兜底）。
 
 ### 上下文挂载（防失忆）
 

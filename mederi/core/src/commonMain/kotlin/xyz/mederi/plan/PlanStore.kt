@@ -29,6 +29,14 @@ internal fun ensureMederiDir(projectDirectories: List<String>): File? {
 
 class PlanStore(private val projectDirectories: List<String>) {
 
+    private companion object {
+        /**
+         * 跨实例共享的 plan 写锁：同一进程内即使存在多个 PlanStore 实例，
+         * load→copy→save 也不会互相覆盖（parallel 工具调用场景，见 updatePlan）。
+         */
+        private val planWriteLock = Any()
+    }
+
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
     private val plansDir: File? get() = findMederiDir(projectDirectories)?.let { File(it, "plans") }
@@ -109,6 +117,23 @@ class PlanStore(private val projectDirectories: List<String>) {
     }
 
     fun update(plan: Plan) = save(plan)
+
+    /**
+     * 原子读-改-写：加锁执行 [transform]，返回非 null 的 plan 时落盘并返回，返回 null 则放弃写。
+     *
+     * 需要改 plan 的工具（spawn_agent 的 IN_PROGRESS 标记、generate_spec 的 spec 写入、
+     * verify_subtask 的验证结果）必须走这里，不能用 load→copy→save——
+     * 工具现已支持并行调度，裸 RMW 会互相覆盖（A.load → B.load → A.save → B.save 把 A 写丢）。
+     * [transform] 必须是纯内存操作（不得执行命令/IO/挂起），锁才不会被长操作占住。
+     *
+     * @return 写盘后的新 plan；planId 不存在或 transform 返回 null 时为 null。
+     */
+    fun updatePlan(planId: String, transform: (Plan) -> Plan?): Plan? = synchronized(planWriteLock) {
+        val plan = load(planId) ?: return null
+        val updated = transform(plan) ?: return null
+        save(updated)
+        updated
+    }
 
     private fun buildMarkdown(plan: Plan): String {
         val sb = StringBuilder()

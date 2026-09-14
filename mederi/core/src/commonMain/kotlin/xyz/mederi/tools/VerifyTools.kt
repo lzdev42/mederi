@@ -114,22 +114,21 @@ class VerifyTools(
                 VerifyStatus.PARTIAL, VerifyStatus.FAIL -> SubtaskStatus.FAILED
             }
 
-            val updatedSubtask = subtask.copy(
-                status = newStatus,
-                verificationResult = result
-            )
-            val updatedPlan = plan.copy(
-                subtasks = plan.subtasks.mapIndexed { i, st ->
-                    if (i == args.subtaskIndex) updatedSubtask else st
-                }
-            )
-            // 全部子任务 PASS 时收尾：plan status → COMPLETED + 归档（plans → plans-done）。
-            // 之前缺失这一环：isAllCompleted / archive 是孤儿（零调用点），导致计划跑完后
-            // status 永远停在 APPROVED、永远不归档（端到端实测抓到）。
-            val finalizedPlan = if (verifyStatus == VerifyStatus.PASS && updatedPlan.isAllCompleted) {
-                updatedPlan.copy(status = xyz.mederi.plan.PlanStatus.COMPLETED)
-            } else updatedPlan
-            planStore.save(finalizedPlan)
+            // 原子写入验证结果与子任务状态：工具支持并行调度，同消息多次 verify_subtask 时，
+            // 裸 load→copy→save 会让后写的 plan 覆盖先写的结果（验证结果静默丢失）。
+            // 全部子任务 PASS 时顺带收尾：plan status → COMPLETED（随后归档）。
+            val finalizedPlan = planStore.updatePlan(args.planId) { p ->
+                if (p.subtasks.getOrNull(args.subtaskIndex) == null) return@updatePlan null
+                val withResult = p.copy(
+                    subtasks = p.subtasks.map { st ->
+                        if (st.index == args.subtaskIndex) st.copy(status = newStatus, verificationResult = result)
+                        else st
+                    }
+                )
+                if (verifyStatus == VerifyStatus.PASS && withResult.isAllCompleted)
+                    withResult.copy(status = xyz.mederi.plan.PlanStatus.COMPLETED)
+                else withResult
+            } ?: return "Error: Plan not found: ${args.planId}"
             if (finalizedPlan.status == xyz.mederi.plan.PlanStatus.COMPLETED) {
                 runCatching { planStore.archive(args.planId) }
             }

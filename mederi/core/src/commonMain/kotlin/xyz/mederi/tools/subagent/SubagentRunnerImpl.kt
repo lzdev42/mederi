@@ -16,9 +16,11 @@ import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.domain.model.WorkType
 import xyz.mederi.infrastructure.koog.TurnExecutor
+import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import xyz.mederi.skills.SkillManager
 import xyz.mederi.store.InMemoryHistoryStore
 import xyz.mederi.store.InMemorySessionStore
 import java.time.Instant
@@ -29,11 +31,15 @@ import java.util.UUID
  *
  * 在内存中创建临时 Session 和 HistoryStore，使用独立的 [TurnExecutor] 运行单 turn。
  * 子 Agent 继承父 Agent 的 workType，使用 AUTONOMOUS agentMode。
+ * 子 Agent 是否继承 MCP / skills 由中心化 [xyz.mederi.domain.model.AgentCapabilities] 表
+ * 决定（runTurn 内部据此开关），本类只负责把父级注入的 [mcpConnector] / [skills] 传递下去。
  * 所有异常都在内部 catch 并转换为错误信息字符串返回，不会抛到父 Agent。
  */
 class SubagentRunnerImpl(
     private val providerManager: ProviderManager,
-    private val projectManager: ProjectManager
+    private val projectManager: ProjectManager,
+    private val mcpConnector: McpConnector? = null,
+    private val skills: SkillManager? = null
 ) : SubagentRunner {
 
     override suspend fun run(
@@ -76,7 +82,9 @@ class SubagentRunnerImpl(
             eventBus = eventBus,
             providerManager = providerManager,
             projectManager = projectManager,
-            diffStore = null
+            diffStore = null,
+            mcpConnector = mcpConnector,
+            skills = skills
         )
 
         val inputText = when (role) {

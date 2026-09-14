@@ -69,7 +69,8 @@ class SpawnAgentTool(
     name = "spawn_agent",
     description = "Creates a subagent to handle a sub-task. The subagent inherits all configuration from the parent. " +
         "Requires planId + subtaskIndex; the subagent executes the exact spec stored by generate_spec. " +
-        "Call generate_spec(planId, subtaskIndex) first, then spawn with both."
+        "Call generate_spec(planId, subtaskIndex) first, then spawn with both. " +
+        "Multiple spawn calls sent together in one message run in parallel — use that for independent subtasks."
 ) {
 
     override suspend fun execute(args: SpawnAgentArgs): String {
@@ -92,18 +93,21 @@ class SpawnAgentTool(
             return "Error: Subtask ${args.subtaskIndex} has no generated spec. " +
                 "Call generate_spec(planId=${args.planId}, subtaskIndex=${args.subtaskIndex}) first."
 
-        // 标记子任务与计划为 IN_PROGRESS（之前是死状态——从未被设置）。
+        // 原子标记子任务与计划为 IN_PROGRESS（之前是死状态——从未被设置）。
         // verify_subtask 后续会设 COMPLETED/FAILED；如果 turn 崩溃，IN_PROGRESS
         // 准确反映"这个子任务正在执行中"，下一轮模型看到状态后能判断是否需要重试。
-        val updatedPlan = plan.copy(
-            status = if (plan.status == xyz.mederi.plan.PlanStatus.APPROVED)
-                xyz.mederi.plan.PlanStatus.IN_PROGRESS else plan.status,
-            subtasks = plan.subtasks.mapIndexed { i, s ->
-                if (i == args.subtaskIndex) s.copy(status = xyz.mederi.plan.SubtaskStatus.IN_PROGRESS)
-                else s
-            }
-        )
-        planStore?.update(updatedPlan)
+        // 必须用 planStore.updatePlan（原子 RMW）：工具支持并行调度，两个 spawn_agent
+        // 同消息并行时，裸 load→update 会互相覆盖对方的 IN_PROGRESS 标记。
+        val startedPlan = planStore?.updatePlan(args.planId) { p ->
+            p.copy(
+                status = if (p.status == xyz.mederi.plan.PlanStatus.APPROVED)
+                    xyz.mederi.plan.PlanStatus.IN_PROGRESS else p.status,
+                subtasks = p.subtasks.map { s ->
+                    if (s.index == args.subtaskIndex) s.copy(status = xyz.mederi.plan.SubtaskStatus.IN_PROGRESS)
+                    else s
+                }
+            )
+        } ?: return "Error: Plan not found: ${args.planId}"
 
         // 派工后发子任务投影：UI todo 面板据此显示"正在做哪个"（真理源仍是 PlanStore）
         eventBus?.emit(MederiEvent(
@@ -113,7 +117,7 @@ class SpawnAgentTool(
                 "planId" to args.planId,
                 "action" to "subtask-started",
                 "subtaskIndex" to args.subtaskIndex.toString(),
-                "todos" to updatedPlan.toTodoProjection().encodeTodos()
+                "todos" to startedPlan.toTodoProjection().encodeTodos()
             ),
             timestamp = Instant.now().toString()
         ))

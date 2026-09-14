@@ -109,7 +109,7 @@ WORK → 文档/知识工作，Plan 简单（不含 deep spec）
 ### 阶段 3：Spec 派生（HOW）
 
 ```
-10. 对于每个子任务（按 dependsOn 顺序，可并行）：
+10. 对于每个子任务（按 dependsOn 顺序；相互独立无依赖的可以并行做）：
     a. 主代理先读真实代码（前序子任务的产出、diff、当前文件状态）
     b. 调 generate_spec(planId, subtaskIndex, spec)：
 
@@ -123,7 +123,13 @@ WORK → 文档/知识工作，Plan 简单（不含 deep spec）
         - spec 不存在（Subtask.spec 为空）→ 拒绝，引导先 generate_spec
         - 子代理继承主代理配置（模型/推理等级），AUTONOMOUS，EXECUTOR 角色全套工具
         - 硬绑定：子代理执行的 spec = PlanStore 里存储的 Subtask.spec（零漂移）
+        - 并行：同一消息发多个 spawn_agent，相互独立的子任务一起跑（工具并行、无上限）
 ```
+
+**并行执行规则（2026-09）**：工具调用同一消息并行（`nodeExecuteTools(parallel=true)`），
+无并发上限，由 AI 调度。`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**
+（并行无序，spawn 可能读到未写入的 spec）——先为所有独立子任务生成 spec，再一起 spawn。
+并行批量时不得并发写同一文件、不得重复执行同一命令。独立子任务全部 spawn 返回后再逐个 verify。
 
 ### 阶段 4：验证与修正
 

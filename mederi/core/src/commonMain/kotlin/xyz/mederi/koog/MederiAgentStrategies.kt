@@ -175,7 +175,7 @@ fun mederiSingleRunStrategy(
                 response
             }
         }
-        val nodeExecuteTool by nodeExecuteTools()
+        val nodeExecuteTool by nodeExecuteTools(parallel = true)
         val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister)
 
         edge(nodeStart forwardTo nodeCallLLM)
@@ -217,7 +217,7 @@ fun mederiSingleRunStrategyWithCompression(
                 response
             }
         }
-        val nodeExecuteTool by nodeExecuteTools()
+        val nodeExecuteTool by nodeExecuteTools(parallel = true)
         val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister)
 
         // 压缩节点（Koog 原版，阻塞）

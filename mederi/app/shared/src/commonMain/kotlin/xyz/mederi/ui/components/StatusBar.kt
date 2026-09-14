@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
@@ -32,7 +33,8 @@ import xyz.mederi.theme.LocalMederiColors
  *
  * 职能专一：只显示轮次运转过程状态（status），不展示报错信息（报错由专属错误组件承载）。
  * - status == Idle 时不渲染（完全消失）
- * - 发送中/请求模型中/重试中显示已耗时；超过 20s 变警示色提示响应较慢
+ * - Preparing/Sending/Retrying 显示已耗时；Preparing 超过 20s 变警示色并改为"排队较长"文案
+ * - Retrying 显示供应商真实错误信息（serverMsg）+ 轮次计数，信息来自 [statusHint]
  *
  * 计时锚定 [startedAtMillis]（发送请求时刻）：每秒用 `now - startedAtMillis` 重算，
  * 切换会话回来不重置（非"从 0 每秒 +1"的本地累加）。
@@ -41,9 +43,10 @@ import xyz.mederi.theme.LocalMederiColors
 fun StatusBar(
     status: TurnStatus,
     startedAtMillis: Long? = null,
+    statusHint: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    if (status == TurnStatus.Idle) return
+    if (!status.shouldDisplayInStatusBar) return
 
     val colors = LocalMederiColors.current
     val (icon, tint) = statusIconAndColor(status, colors)
@@ -61,95 +64,122 @@ fun StatusBar(
         (now - startedAtMillis).coerceAtLeast(0L)
     } else 0L
 
-    val showElapsed = status == TurnStatus.Sending || status == TurnStatus.Preparing || status == TurnStatus.Retrying
-    val slowResponse = showElapsed && elapsedMs >= 20_000
+    val showElapsed = status == TurnStatus.Sending
+        || status == TurnStatus.Preparing
+        || status == TurnStatus.Retrying
+    val slowResponse = status == TurnStatus.Preparing && elapsedMs >= 20_000
+
+    // Retrying 状态：解析 statusHint 得到真实错误信息和重试轮次
+    val retryHint = if (status == TurnStatus.Retrying) parseRetryHint(statusHint) else null
+
+    // 主标签文案
+    val labelText = when {
+        status == TurnStatus.Preparing && slowResponse -> "排队较长，仍在等待"
+        status == TurnStatus.Retrying -> "正在自动重试 (${retryHint?.attempt ?: "?"}/${retryHint?.max ?: "?"})"
+        else -> status.label
+    }
 
     AnimatedVisibility(
-        visible = status != TurnStatus.Idle,
+        visible = status.shouldDisplayInStatusBar,
         enter = fadeIn() + expandVertically(),
         exit = fadeOut() + shrinkVertically(),
     ) {
-        Row(
+        Column(
             modifier = modifier
                 .clip(RoundedCornerShape(12.dp))
                 .background(colors.surfaceCard.copy(alpha = 0.6f))
                 .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            // 左侧图标 + 动画
-            when (status) {
-                TurnStatus.Preparing, TurnStatus.Sending -> {
-                    // 闪烁圆点
-                    val transition = rememberInfiniteTransition(label = "prep")
-                    val alpha by transition.animateFloat(
-                        initialValue = 0.3f,
-                        targetValue = 1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(600, easing = LinearEasing),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "prepAlpha",
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(tint.copy(alpha = alpha)),
-                    )
+            // 主行：图标 + 状态文案 + 耗时
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // 左侧图标 + 动画
+                when (status) {
+                    TurnStatus.Preparing, TurnStatus.Sending -> {
+                        // 闪烁圆点
+                        val transition = rememberInfiniteTransition(label = "prep")
+                        val alpha by transition.animateFloat(
+                            initialValue = 0.3f,
+                            targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(600, easing = LinearEasing),
+                                repeatMode = RepeatMode.Reverse,
+                            ),
+                            label = "prepAlpha",
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(tint.copy(alpha = alpha)),
+                        )
+                    }
+                    TurnStatus.Retrying, TurnStatus.WaitingAnswer -> {
+                        icon?.let { Icon(it, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp)) }
+                    }
+                    else -> {
+                        CircularProgressIndicator(
+                            color = tint,
+                            strokeWidth = 1.5.dp,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
                 }
-                TurnStatus.Retrying, TurnStatus.WaitingAnswer -> {
-                    icon?.let { Icon(it, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp)) }
-                }
-                else -> {
-                    CircularProgressIndicator(
-                        color = tint,
-                        strokeWidth = 1.5.dp,
-                        modifier = Modifier.size(12.dp),
-                    )
-                }
-            }
 
-            Text(
-                text = status.label,
-                color = if (slowResponse) colors.accentWarning else tint,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-            )
-
-            // 已耗时（响应变慢时警示）
-            if (showElapsed) {
                 Text(
-                    text = buildString {
-                        append("(${elapsedMs / 1000}s)")
-                        if (slowResponse) append(" 响应较慢")
-                    },
-                    color = if (slowResponse) colors.accentWarning else colors.textMuted,
-                    fontSize = 11.sp,
+                    text = labelText,
+                    color = if (slowResponse) colors.accentWarning else tint,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
                 )
+
+                // 已耗时（Preparing/Sending/Retrying 持续显示，计时器不删）
+                if (showElapsed) {
+                    Text(
+                        text = "(${elapsedMs / 1000}s)",
+                        color = if (slowResponse) colors.accentWarning else colors.textMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+
+                // Preparing/Sending 额外显示动态省略号
+                if (status == TurnStatus.Preparing || status == TurnStatus.Sending) {
+                    val transition = rememberInfiniteTransition(label = "dots")
+                    val dotAlphas = (0..2).map { index ->
+                        transition.animateFloat(
+                            initialValue = 0.2f,
+                            targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(600, delayMillis = index * 200, easing = LinearEasing),
+                                repeatMode = RepeatMode.Reverse,
+                            ),
+                            label = "dot$index",
+                        )
+                    }
+                    dotAlphas.forEach { alpha ->
+                        Text(
+                            text = "·",
+                            color = tint.copy(alpha = alpha.value),
+                            fontSize = 16.sp,
+                        )
+                    }
+                }
             }
 
-            // Preparing/Sending 额外显示动态省略号
-            if (status == TurnStatus.Preparing || status == TurnStatus.Sending) {
-                val transition = rememberInfiniteTransition(label = "dots")
-                val dotAlphas = (0..2).map { index ->
-                    transition.animateFloat(
-                        initialValue = 0.2f,
-                        targetValue = 1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(600, delayMillis = index * 200, easing = LinearEasing),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "dot$index",
-                    )
-                }
-                dotAlphas.forEach { alpha ->
-                    Text(
-                        text = "·",
-                        color = tint.copy(alpha = alpha.value),
-                        fontSize = 16.sp,
-                    )
-                }
+            // 重试：第二行显示供应商真实错误信息（serverMsg）
+            val serverMsg = retryHint?.serverMsg
+            if (status == TurnStatus.Retrying && !serverMsg.isNullOrBlank()) {
+                Text(
+                    text = serverMsg,
+                    color = colors.textMuted,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 20.dp),
+                )
             }
         }
     }

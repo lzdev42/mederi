@@ -10,6 +10,13 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedDeque
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * 统一错误收集器：从任何 [Throwable] 中提取真正能解决问题的结构化诊断信息。
@@ -64,6 +71,14 @@ object ErrorCollector {
     private const val MAX_CAUSE_DEPTH = 8
     private const val MAX_ERROR_BODY_LEN = 500
     private const val MAX_STACK_TRACE_LEN = 2000
+    private const val MAX_SERVER_MESSAGE_LEN = 300
+
+    /** 错误体解析：宽容模式（容忍供应商/代理返回的杂 JSON），禁止手拼/手解 JSON。 */
+    private val lenientJson = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        coerceInputValues = true
+    }
 
     /**
      * 从异常中提取结构化错误记录。
@@ -100,6 +115,7 @@ object ErrorCollector {
             stackTrace = stackTrace,
             httpStatusCode = diag.httpStatusCode,
             errorBody = diag.errorBody?.take(MAX_ERROR_BODY_LEN),
+            serverMessage = extractServerMessage(diag.errorBody),
             networkErrorType = diag.networkErrorType,
             failureMode = diag.failureMode,
             phase = context.phase,
@@ -235,6 +251,46 @@ object ErrorCollector {
             FailureMode.NETWORK_ERROR -> "NETWORK"
             FailureMode.CANCELLED -> "CLIENT"
             FailureMode.UNKNOWN -> "UNKNOWN"
+        }
+    }
+
+    /**
+     * 从 HTTP 错误体（errorBody JSON）中提取供应商返回的真实错误信息。
+     *
+     * 各供应商错误 JSON 形状不一：OpenAI/OpenRouter/Google 为 `{"error":{"message":"..."}}`、
+     * Anthropic 为 `{"error":{"type":"...","message":"..."}}`、FastAPI 为 `{"detail":"..."}`。
+     * 解析失败（非 JSON，如代理返回纯文本）时回退到错误体首行非空文本。
+     *
+     * 提取出的真实信息用于 ErrorBoard 简报——429 时用户需要区分"欠费"还是"限流"，
+     * 而不是只看到 `Error from client: xxx (HTTP 429)` 这种干瘪异常名。
+     */
+    fun extractServerMessage(errorBody: String?): String? {
+        if (errorBody.isNullOrBlank()) return null
+        val root = runCatching {
+            lenientJson.parseToJsonElement(errorBody)
+        }.getOrNull()
+        val found = root?.let(::findErrorMessage)
+        if (!found.isNullOrBlank()) return found.trim().take(MAX_SERVER_MESSAGE_LEN)
+        // 非 JSON 错误体：取首行非空文本
+        return errorBody.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(MAX_SERVER_MESSAGE_LEN)
+    }
+
+    /**
+     * [extractServerMessage] 的 [Throwable] 重载：沿 cause 链找
+     * [KoogHttpClientException].errorBody 再解析。供重试提示等轻量场景复用同一套提取逻辑。
+     */
+    fun extractServerMessage(throwable: Throwable?): String? =
+        throwable?.let { extractServerMessage(extractDiagnostics(it).errorBody) }
+
+    private fun findErrorMessage(el: JsonElement?): String? {
+        if (el == null || el is JsonNull) return null
+        return when (el) {
+            is JsonPrimitive -> el.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+            is JsonObject ->
+                el["message"]?.let(::findErrorMessage)
+                    ?: el["error"]?.let(::findErrorMessage)
+                    ?: el["detail"]?.let(::findErrorMessage)
+            is JsonArray -> el.firstNotNullOfOrNull { findErrorMessage(it) }
         }
     }
 
@@ -571,6 +627,7 @@ data class ErrorRecord(
     val stackTrace: String,
     val httpStatusCode: Int? = null,
     val errorBody: String? = null,
+    val serverMessage: String? = null,
     val networkErrorType: String? = null,
     val failureMode: ErrorCollector.FailureMode = ErrorCollector.FailureMode.UNKNOWN,
     val phase: String,
@@ -598,6 +655,7 @@ data class ErrorRecord(
         put("errorPhase", phase)
         httpStatusCode?.let { put("httpStatus", it.toString()) }
         errorBody?.let { put("errorBody", it) }
+        serverMessage?.let { put("serverMessage", it) }
         networkErrorType?.let { put("networkErrorType", it) }
         put("failureMode", failureMode.name)
         providerName?.let { put("providerName", it) }
@@ -610,6 +668,14 @@ data class ErrorRecord(
 
     /** 短消息——给 UI 简报用（一行，有分类前缀 + 上下文） */
     fun formatShortMessage(): String = buildString {
+        // 优先展示供应商错误体里解析出的真实信息（如 429 是欠费还是限流），
+        // 而不是异常类型 + message 首行（对 HTTP 错误往往只是干瘪的 client/status 描述）。
+        val serverMsg = serverMessage?.trim()?.take(200)
+        if (!serverMsg.isNullOrBlank()) {
+            append("[$category] $serverMsg")
+            httpStatusCode?.let { append(" (HTTP $it)") }
+            return@buildString
+        }
         val shortType = exceptionType.substringAfterLast('.')
         append("[$category] $shortType")
         if (exceptionMessage.isNotBlank()) {

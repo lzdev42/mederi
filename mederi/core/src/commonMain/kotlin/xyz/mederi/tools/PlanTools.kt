@@ -473,12 +473,15 @@ class PlanTools(
 
             // Spec 只写进 Subtask.spec（spawn_agent 读取的真理源）；brief（planDetail）保留不动，
             // 用户批准时看到的内容永不失真，spec 可反复覆盖重写。
-            val updated = plan.copy(
-                subtasks = plan.subtasks.mapIndexed { i, s ->
-                    if (i == args.subtaskIndex) s.copy(spec = args.spec) else s
-                }
-            )
-            planStore.update(updated)
+            // 用 updatePlan 原子写入：工具支持并行调度，同消息多次 generate_spec 时
+            // 裸 load→copy→save 会互相覆盖（后写把前写的 spec 恢复成旧值）。
+            val updated = planStore.updatePlan(args.planId) { p ->
+                p.copy(
+                    subtasks = p.subtasks.map { s ->
+                        if (s.index == args.subtaskIndex) s.copy(spec = args.spec) else s
+                    }
+                )
+            } ?: return "Error: Plan not found: ${args.planId}"
             notebook.append(
                 "## ${Instant.now()} — Spec generated: Subtask ${args.subtaskIndex} (${st.name})\n"
             )

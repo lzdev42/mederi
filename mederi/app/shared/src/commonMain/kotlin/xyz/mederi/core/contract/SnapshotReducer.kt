@@ -138,13 +138,19 @@ object SnapshotReducer {
         )
 
         CoreEventType.STATUS -> {
-            // 环境态状态事件：过程状态提示（如"限流重试中 3/10"），不碰会话状态机。
+            // 环境态状态事件：过程状态提示，不碰会话状态机。
             // 其他 scope 的 STATUS 事件忽略（当前只有 provider 一个 scope）
             if (event.payload["scope"] == "provider" && event.payload["code"] == "RETRYING") {
                 val attempt = event.payload["attempt"] ?: "?"
                 val max = event.payload["maxAttempts"] ?: "?"
+                // message 是 Core 传来的真实错误原因（如 "Insufficient Balance"、"Engine overloaded"），
+                // 直接保留到 statusHint，由 UI 层决定怎么渲染，不在这里写死文案。
+                val serverMsg = event.payload["message"]?.takeIf { it.isNotBlank() }
                 snapshot.copy(
-                    statusHint = "供应商限流，重试中 ($attempt/$max)"
+                    statusHint = buildString {
+                        append("$attempt/$max")
+                        if (serverMsg != null) append("|$serverMsg")
+                    }
                 )
             } else snapshot
         }

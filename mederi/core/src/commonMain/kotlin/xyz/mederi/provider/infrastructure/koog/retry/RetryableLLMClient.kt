@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
 import xyz.mederi.debug.DebugLog
+import xyz.mederi.debug.ErrorCollector
 import xyz.mederi.debug.StreamTrace
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
@@ -186,8 +187,15 @@ class RetryableLLMClient(
         return false
     }
 
+    /**
+     * 重试提示用的错误摘要：优先取 errorBody 里解析出的供应商真实报错（如
+     * "Insufficient Balance"/"Engine overloaded"），否则回退异常 message 首行。
+     * 直接决定 StatusBar 重试态第二行 + StreamTrace 留痕的文本质量。
+     */
     private fun firstLine(e: Throwable): String =
-        (e.message ?: e.javaClass.simpleName).lineSequence().firstOrNull()?.take(120) ?: e.javaClass.simpleName
+        ErrorCollector.extractServerMessage(e)
+            ?: (e.message ?: e.javaClass.simpleName).lineSequence().firstOrNull()?.take(120)
+                ?: e.javaClass.simpleName
 
     companion object {
         /**

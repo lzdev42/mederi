@@ -232,21 +232,23 @@ class Mederi private constructor(
             val mcpConnector = McpConnector(mcpServerStore)
             val providerManager = ProviderManagerImpl(providerStore, apiKeyStore)
             val projectManager = ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)
+            val mcpServerManager = McpServerManagerImpl(mcpServerStore, mcpConnector)
+            val mcpMarketManager = McpMarketManagerImpl(OfficialRegistrySource())
+            // skills 需在 sessionManager 构造前就绪（注入系统提示词：主代理 + EXECUTOR 继承，见 AgentCapabilities）
+            val skillManager = SkillManagerImpl(
+                settingsStore = settingsStore,
+                // 无 configDir（纯内存模式）时仍指向 ~/.mederi/skills，避免扫描整个 home 目录
+                defaultSkillsRoot = paths?.skillsDir?.absolutePath
+                    ?: java.io.File(System.getProperty("user.home"), ".mederi/skills").absolutePath
+            )
             val sessionManager = SessionManagerImpl(
                 sessionStore = sessionStore,
                 historyStore = historyStore,
                 projectManager = projectManager,
                 providerManager = providerManager,
                 diffStore = diffStore,
-                mcpConnector = mcpConnector
-            )
-            val mcpServerManager = McpServerManagerImpl(mcpServerStore, mcpConnector)
-            val mcpMarketManager = McpMarketManagerImpl(OfficialRegistrySource())
-            val skillManager = SkillManagerImpl(
-                settingsStore = settingsStore,
-                // 无 configDir（纯内存模式）时仍指向 ~/.mederi/skills，避免扫描整个 home 目录
-                defaultSkillsRoot = paths?.skillsDir?.absolutePath
-                    ?: java.io.File(System.getProperty("user.home"), ".mederi/skills").absolutePath
+                mcpConnector = mcpConnector,
+                skills = skillManager
             )
 
             // === API 层装配 ===

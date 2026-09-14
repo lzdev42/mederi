@@ -20,6 +20,7 @@ import xyz.mederi.store.DiffStore
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.RawMessageRecord
 import xyz.mederi.store.SessionStore
+import xyz.mederi.skills.SkillManager
 import xyz.mederi.tools.diff.countChanges
 import java.time.Instant
 import java.util.UUID
@@ -47,7 +48,8 @@ class SessionManagerImpl(
         extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     ),
-    private val mcpConnector: McpConnector? = null
+    private val mcpConnector: McpConnector? = null,
+    private val skills: SkillManager? = null
 ) : SessionManager {
 
     private val turnExecutor = TurnExecutor(
@@ -57,7 +59,8 @@ class SessionManagerImpl(
         providerManager = providerManager,
         projectManager = projectManager,
         diffStore = diffStore,
-        mcpConnector = mcpConnector
+        mcpConnector = mcpConnector,
+        skills = skills
     )
 
     override suspend fun list(): List<Session> = sessionStore.list()
