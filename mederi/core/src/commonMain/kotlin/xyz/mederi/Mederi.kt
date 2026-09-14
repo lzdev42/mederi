@@ -6,12 +6,14 @@ import xyz.mederi.api.ModelApi
 import xyz.mederi.api.ProjectApi
 import xyz.mederi.api.ProviderApi
 import xyz.mederi.api.SessionApi
+import xyz.mederi.api.SkillApi
 import xyz.mederi.api.impl.McpMarketApiImpl
 import xyz.mederi.api.impl.McpServerApiImpl
 import xyz.mederi.api.impl.ModelApiImpl
 import xyz.mederi.api.impl.ProjectApiImpl
 import xyz.mederi.api.impl.ProviderApiImpl
 import xyz.mederi.api.impl.SessionApiImpl
+import xyz.mederi.api.impl.SkillApiImpl
 import xyz.mederi.config.ConfigMigrationRequester
 import xyz.mederi.config.MederiConfig
 import xyz.mederi.config.MederiPaths
@@ -25,6 +27,8 @@ import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.ProviderManagerImpl
 import xyz.mederi.session.SessionManager
 import xyz.mederi.session.SessionManagerImpl
+import xyz.mederi.skills.SkillManager
+import xyz.mederi.skills.SkillManagerImpl
 import xyz.mederi.store.ApiKeyStore
 import xyz.mederi.store.DiffStore
 import xyz.mederi.store.HistoryStore
@@ -35,10 +39,12 @@ import xyz.mederi.store.InMemoryMcpServersStore
 import xyz.mederi.store.InMemoryProjectStore
 import xyz.mederi.store.InMemoryProviderStore
 import xyz.mederi.store.InMemorySessionStore
+import xyz.mederi.store.InMemorySettingsStore
 import xyz.mederi.store.McpServersStore
 import xyz.mederi.store.ProjectStore
 import xyz.mederi.store.ProviderStore
 import xyz.mederi.store.SessionStore
+import xyz.mederi.store.SettingsStore
 import xyz.mederi.db.config.MederiConfigDatabase
 import xyz.mederi.db.data.MederiDataDatabase
 import xyz.mederi.store.sqlite.SqliteApiKeyStore
@@ -48,6 +54,7 @@ import xyz.mederi.store.sqlite.SqliteMcpServersStore
 import xyz.mederi.store.sqlite.SqliteProjectStore
 import xyz.mederi.store.sqlite.SqliteProviderStore
 import xyz.mederi.store.sqlite.SqliteSessionStore
+import xyz.mederi.store.sqlite.SqliteSettingsStore
 
 /**
  * Mederi 核心入口。
@@ -93,6 +100,10 @@ class Mederi private constructor(
      * MCP 配置管理：安装（标准 mcpServers JSON 进）/ 列表 / 编辑 / 启停 / 删除 / 可用性验证。
      */
     val mcpServers: McpServerApi,
+    /**
+     * Skill 管理：列表 / 设根目录 / 安装（下载+解压）/ 卸载。UI 薄触发，文件操作全在 core。
+     */
+    val skills: SkillApi,
     /**
      * models.dev 模型元数据目录（内存索引，启动后调用 [ModelCatalog.start] 开始
      * 立即拉取 + 每小时刷新；不 start 也可用，查询返回空）。
@@ -197,6 +208,10 @@ class Mederi private constructor(
                 ?: configDriver?.let { SqliteMcpServersStore(it) }
                 ?: InMemoryMcpServersStore()
 
+            val settingsStore = config.settingsStore
+                ?: configDriver?.let { SqliteSettingsStore(it) }
+                ?: InMemorySettingsStore()
+
             // === 数据库 store（data.db） ===
             val historyStore = config.historyStore
                 ?: dataDriver?.let { SqliteHistoryStore(it) }
@@ -227,6 +242,12 @@ class Mederi private constructor(
             )
             val mcpServerManager = McpServerManagerImpl(mcpServerStore, mcpConnector)
             val mcpMarketManager = McpMarketManagerImpl(OfficialRegistrySource())
+            val skillManager = SkillManagerImpl(
+                settingsStore = settingsStore,
+                // 无 configDir（纯内存模式）时仍指向 ~/.mederi/skills，避免扫描整个 home 目录
+                defaultSkillsRoot = paths?.skillsDir?.absolutePath
+                    ?: java.io.File(System.getProperty("user.home"), ".mederi/skills").absolutePath
+            )
 
             // === API 层装配 ===
             val providerApi = ProviderApiImpl(providerManager, modelCatalog)
@@ -235,6 +256,7 @@ class Mederi private constructor(
             val sessionApi = SessionApiImpl(sessionManager)
             val mcpServerApi = McpServerApiImpl(mcpServerManager)
             val mcpMarketApi = McpMarketApiImpl(mcpMarketManager)
+            val skillApi = SkillApiImpl(skillManager)
 
             return Mederi(
                 paths = paths,
@@ -250,6 +272,7 @@ class Mederi private constructor(
                 models = modelApi,
                 mcpMarket = mcpMarketApi,
                 mcpServers = mcpServerApi,
+                skills = skillApi,
                 modelCatalog = modelCatalog
             )
         }

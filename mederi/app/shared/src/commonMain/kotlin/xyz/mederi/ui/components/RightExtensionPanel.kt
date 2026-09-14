@@ -686,9 +686,15 @@ private fun OverviewTabContent(
             }
         }
 
-        // MCP 服务管理卡片
+        // MCP 服务管理卡片（与后续市场共享唯一真理源 mcpStore）
         McpManagementCard(
-            viewModel = viewModel,
+            mcpStore = viewModel.mcpStore,
+            colors = colors
+        )
+
+        // Skill 技能管理卡片（与后续市场共享唯一真理源 skillStore）
+        SkillManagementCard(
+            skillStore = viewModel.skillStore,
             colors = colors
         )
 

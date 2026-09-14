@@ -146,6 +146,34 @@ DELETE FROM projects
 WHERE id = ?;
 
 -- ============================================================
+-- 配置表（通用 key-value）
+-- ============================================================
+-- 零散但需持久化的配置项（如 skill 根目录 `skills.root`）。
+-- 单一 key-value，避免为单个配置项建专属表。
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (key)
+);
+
+-- 读取单个配置项
+getSetting:
+SELECT value
+FROM settings
+WHERE key = ?;
+
+-- 写入配置项（upsert）
+upsertSetting:
+INSERT OR REPLACE INTO settings (key, value)
+VALUES (?, ?);
+
+-- 删除配置项
+deleteSetting:
+DELETE FROM settings
+WHERE key = ?;
+
+-- ============================================================
 -- MCP server 配置表
 -- ============================================================
 -- McpServerConfig 整行 JSON 存储（raw 是任意 JsonElement，天然整行存）。

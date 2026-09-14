@@ -51,8 +51,11 @@ import xyz.mederi.core.contract.dto.CreateConversationInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.CreateProjectInput
 import xyz.mederi.core.contract.dto.InstallMcpServerInput
+import xyz.mederi.core.contract.dto.InstallSkillInput
 import xyz.mederi.core.contract.dto.McpServerJsonResponse
 import xyz.mederi.core.contract.dto.SetMcpServerEnabledInput
+import xyz.mederi.core.contract.dto.SetSkillsRootInput
+import xyz.mederi.core.contract.dto.SkillsRootResponse
 import xyz.mederi.core.contract.dto.UpdateMcpServerInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.ReadyInfo
@@ -417,6 +420,28 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     get("/v1/mcp/servers/{name}/json") {
         call.respondResult(aiCore.getMcpServerJson(call.parameters["name"]!!).map { McpServerJsonResponse(it) })
+    }
+
+    // ------------------------------------------------------------------
+    // Skill 管理
+    // ------------------------------------------------------------------
+
+    get("/v1/skills") {
+        call.respondResult(aiCore.listSkills())
+    }
+    get("/v1/skills/root") {
+        call.respondResult(aiCore.getSkillsRoot().map { SkillsRootResponse(it) })
+    }
+    post("/v1/skills/root") {
+        val input = call.receive<SetSkillsRootInput>()
+        call.respondResult(aiCore.setSkillsRoot(input.path))
+    }
+    post("/v1/skills/install") {
+        val input = call.receive<InstallSkillInput>()
+        call.respondResult(aiCore.installSkill(input.url))
+    }
+    delete("/v1/skills/{name}") {
+        call.respondResult(aiCore.uninstallSkill(call.parameters["name"]!!))
     }
 }
 

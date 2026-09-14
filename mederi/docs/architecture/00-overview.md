@@ -123,12 +123,12 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    A["API 层<br/>ProviderApi / ProjectApi / SessionApi / ModelApi / McpServerApi / McpMarketApi<br/>职责 = DTO 转换 + mederiCall 异常包装（只抛 MederiException）"]
-    M["Manager 层（唯一真理源）<br/>ProviderManager / ProjectManager / SessionManager / McpServerManager / McpMarketManager"]
-    S["Store 层（纯持久化，可注入）<br/>ProviderStore / ApiKeyStore / ProjectStore / SessionStore / HistoryStore / DiffStore / McpServersStore"]
+    A["API 层<br/>ProviderApi / ProjectApi / SessionApi / ModelApi / McpServerApi / McpMarketApi / SkillApi<br/>职责 = DTO 转换 + mederiCall 异常包装（只抛 MederiException）"]
+    M["Manager 层（唯一真理源）<br/>ProviderManager / ProjectManager / SessionManager / McpServerManager / McpMarketManager / SkillManager"]
+    S["Store 层（纯持久化，可注入）<br/>ProviderStore / ApiKeyStore / ProjectStore / SessionStore / HistoryStore / DiffStore / McpServersStore / SettingsStore"]
     T["Koog 执行引擎（被 SessionManager 创建）<br/>TurnExecutor → ToolFactory / Strategies / ChatHistoryProvider / Compression"]
     P["Plan/Notebook（项目 .mederi/ 目录，不走 DB）"]
-    DB[("config.db<br/>providers/api_keys/projects/mcp_servers")]
+    DB[("config.db<br/>providers/api_keys/projects/mcp_servers/settings")]
     DB2[("data.db<br/>sessions/message_history/diffs")]
 
     A --> M
@@ -146,8 +146,9 @@ flowchart TD
 
 | 库 | 内容 | 特性 | store |
 |---|---|---|---|
-| `~/.mederi/config.db` | providers、api_keys、projects、mcp_servers | 极小、低频写、事务一致 | Sqlite*Store(configDriver) |
+| `~/.mederi/config.db` | providers、api_keys、projects、mcp_servers、settings（skill 根目录等） | 极小、低频写、事务一致 | Sqlite*Store(configDriver) |
 | `~/.mederi/data/data.db` | sessions、message_history、diffs | 高频 append、随使用增长 | Sqlite*Store(dataDriver) |
+| `~/.mederi/skills/` | skill 包（每个 skill 一个子目录，含 SKILL.md） | Koog discoverSkills 自动发现根 | SkillManagerImpl |
 | `~/.mederi/preferences.json` | UI 偏好（theme、遥控端口、选中态、推理档位记忆、沙盒白名单） | **设备级语义**，app:shared 层管理，不进库 | PreferencesStore |
 | `<项目>/.mederi/` | plans/*.json+md、plans-done/、notebook.md | 计划系统文件（机器+人读双份） | PlanStore / Notebook |
 

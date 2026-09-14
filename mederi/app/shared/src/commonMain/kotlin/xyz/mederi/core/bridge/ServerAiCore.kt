@@ -47,6 +47,9 @@ import xyz.mederi.core.contract.dto.McpServerJsonResponse
 import xyz.mederi.core.contract.dto.InstallMcpServerInput
 import xyz.mederi.core.contract.dto.UpdateMcpServerInput
 import xyz.mederi.core.contract.dto.SetMcpServerEnabledInput
+import xyz.mederi.core.contract.dto.SetSkillsRootInput
+import xyz.mederi.core.contract.dto.InstallSkillInput
+import xyz.mederi.core.contract.dto.SkillsRootResponse
 import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.RawMessageDto
@@ -60,6 +63,7 @@ import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.FileDiff
 import xyz.mederi.core.contract.models.McpServerItem
+import xyz.mederi.core.contract.models.SkillItem
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.Project
@@ -566,5 +570,29 @@ class ServerAiCore(
 
     override suspend fun getMcpServerJson(name: String): Result<String> = runCatching {
         httpGet<McpServerJsonResponse>("/v1/mcp/servers/${name.encodeURLParameter()}/json").json
+    }
+
+    // ------------------------------------------------------------------
+    // Skill 管理（遥控 REST 桥）
+    // ------------------------------------------------------------------
+
+    override suspend fun listSkills(): Result<List<SkillItem>> = runCatching {
+        httpGet("/v1/skills")
+    }
+
+    override suspend fun getSkillsRoot(): Result<String> = runCatching {
+        httpGet<SkillsRootResponse>("/v1/skills/root").path
+    }
+
+    override suspend fun setSkillsRoot(path: String): Result<Unit> = runCatching {
+        httpCall("/v1/skills/root", requestBody = SetSkillsRootInput(path))
+    }
+
+    override suspend fun installSkill(url: String): Result<SkillItem> = runCatching {
+        httpSend<SkillItem>("/v1/skills/install", requestBody = InstallSkillInput(url))
+    }
+
+    override suspend fun uninstallSkill(name: String): Result<Unit> = runCatching {
+        httpCall("/v1/skills/${name.encodeURLParameter()}", method = HttpMethod.Delete)
     }
 }

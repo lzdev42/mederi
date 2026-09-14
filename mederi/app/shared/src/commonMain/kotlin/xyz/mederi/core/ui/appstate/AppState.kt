@@ -102,6 +102,14 @@ class AppState(
     /** 宿主启动后注入；null = 当前端无本地终端（wasm/移动端为遥控端，后续接远程 WS 客户端） */
     var terminalManager: TerminalManager? = null
 
+    /** Skill 状态唯一真理源：概览面板、Skill 市场等全局共享 */
+    val skillStore: SkillStore = SkillStore(aiCore, scope)
+
+    /** MCP 服务状态唯一真理源：概览面板、MCP 市场等全局共享 */
+    val mcpStore: McpStore = McpStore(aiCore, scope)
+
+
+
     // ───── A. 引擎侧 alias(直接 forward;零缓存) ─────
     val isReady: StateFlow<Boolean> get() = aiCore.isReady
     val projects: StateFlow<List<Project>> get() = aiCore.projects

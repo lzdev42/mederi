@@ -24,28 +24,31 @@ import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.models.McpServerItem
 import xyz.mederi.core.contract.models.McpServerStatus
 import xyz.mederi.core.ui.WorkspaceViewModel
+import xyz.mederi.core.ui.appstate.McpStore
 import xyz.mederi.theme.MederiColors
 
 /**
  * 概览面板内的 MCP 管理卡片：具备展示列表、启停开关、刷新、新增、修改与删除能力。
+ *
+ * 依赖全局唯一真理源 [McpStore]，与后续 MCP 市场等组件实时共享状态。
  */
 @Composable
 fun McpManagementCard(
-    viewModel: WorkspaceViewModel,
+    mcpStore: McpStore,
     colors: MederiColors,
     modifier: Modifier = Modifier
 ) {
     var isAddDialogOpen by remember { mutableStateOf(false) }
     var editServerName by remember { mutableStateOf<String?>(null) }
 
-    val mcpServers = viewModel.mcpServers
-    val isRefreshing = viewModel.isMcpRefreshing
+    val mcpServers by mcpStore.mcpServers.collectAsState()
+    val isRefreshing by mcpStore.isRefreshing.collectAsState()
     val enabledCount = mcpServers.count { it.enabled }
 
     LaunchedEffect(Unit) {
         xyz.mederi.core.ui.DebugLog.info("MCP", "McpManagementCard mounted, current servers count=${mcpServers.size}")
         if (mcpServers.isEmpty()) {
-            viewModel.refreshMcpServers()
+            mcpStore.refresh()
         }
     }
 
@@ -98,7 +101,7 @@ fun McpManagementCard(
                     modifier = Modifier
                         .size(22.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .clickable { viewModel.refreshMcpServers() },
+                        .clickable { mcpStore.refresh() },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -153,7 +156,7 @@ fun McpManagementCard(
                 mcpServers.forEach { server ->
                     McpServerRow(
                         server = server,
-                        viewModel = viewModel,
+                        mcpStore = mcpStore,
                         colors = colors,
                         onEdit = { editServerName = server.name }
                     )
@@ -168,7 +171,7 @@ fun McpManagementCard(
             title = "添加 MCP 服务",
             initialJson = DEFAULT_MCP_TEMPLATE,
             onDismiss = { isAddDialogOpen = false },
-            onConfirm = { json -> viewModel.installMcpServer(json) },
+            onConfirm = { json -> mcpStore.install(json) },
             colors = colors
         )
     }
@@ -179,7 +182,7 @@ fun McpManagementCard(
         var isLoading by remember { mutableStateOf(true) }
 
         LaunchedEffect(serverName) {
-            val res = viewModel.getMcpServerJson(serverName)
+            val res = mcpStore.getJson(serverName)
             currentJson = res.getOrDefault("{}")
             isLoading = false
         }
@@ -189,17 +192,31 @@ fun McpManagementCard(
                 title = "编辑 MCP 服务 - $serverName",
                 initialJson = currentJson ?: "{}",
                 onDismiss = { editServerName = null },
-                onConfirm = { json -> viewModel.updateMcpServer(serverName, json) },
+                onConfirm = { json -> mcpStore.update(serverName, json) },
                 colors = colors
             )
         }
     }
 }
 
+/** 兼容 WorkspaceViewModel 调用的重载 */
+@Composable
+fun McpManagementCard(
+    viewModel: WorkspaceViewModel,
+    colors: MederiColors,
+    modifier: Modifier = Modifier
+) {
+    McpManagementCard(
+        mcpStore = viewModel.mcpStore,
+        colors = colors,
+        modifier = modifier
+    )
+}
+
 @Composable
 private fun McpServerRow(
     server: McpServerItem,
-    viewModel: WorkspaceViewModel,
+    mcpStore: McpStore,
     colors: MederiColors,
     onEdit: () -> Unit
 ) {
@@ -217,7 +234,7 @@ private fun McpServerRow(
         // 微型开关
         Switch(
             checked = server.enabled,
-            onCheckedChange = { checked -> viewModel.toggleMcpServer(server.name, checked) },
+            onCheckedChange = { checked -> mcpStore.toggleEnabled(server.name, checked) },
             modifier = Modifier
                 .scale(0.65f)
                 .size(width = 30.dp, height = 20.dp),
@@ -314,7 +331,7 @@ private fun McpServerRow(
                     leadingIcon = { Icon(FeatherIcons.CheckCircle, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp)) },
                     onClick = {
                         isMenuOpen = false
-                        viewModel.verifyMcpServer(server.name)
+                        mcpStore.verify(server.name)
                     }
                 )
                 DropdownMenuItem(
@@ -331,7 +348,7 @@ private fun McpServerRow(
                     leadingIcon = { Icon(FeatherIcons.Trash2, null, tint = colors.accentDanger, modifier = Modifier.size(13.dp)) },
                     onClick = {
                         isMenuOpen = false
-                        viewModel.deleteMcpServer(server.name)
+                        mcpStore.delete(server.name)
                     }
                 )
             }
@@ -434,13 +451,9 @@ private fun McpConfigDialog(
                             }
                         },
                         enabled = !isSaving && jsonText.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colors.accentPrimary,
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(6.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
                     ) {
-                        Text(if (isSaving) "保存中..." else "确定保存", fontSize = 11.sp)
+                        Text(if (isSaving) "保存中..." else "保存", fontSize = 11.sp)
                     }
                 }
             }
@@ -449,10 +462,7 @@ private fun McpConfigDialog(
 }
 
 private const val DEFAULT_MCP_TEMPLATE = """{
-  "mcpServers": {
-    "my-service": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-everything"]
-    }
-  }
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-everything"],
+  "env": {}
 }"""

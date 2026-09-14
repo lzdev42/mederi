@@ -58,6 +58,7 @@ coil-svg = { module = "io.coil-kt.coil3:coil-svg", version.ref = "coil" }
 composeIcons-feather = { module = "br.com.devsrsouza.compose.icons:feather", version.ref = "composeIcons" }
 androidx-graphics-path = { module = "androidx.graphics:graphics-path", version.ref = "androidx-graphics-path" }
 koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
+koog-skills = { module = "ai.koog:skills", version.ref = "koogEX" }
 koog-mcp = { module = "ai.koog:agents-mcp", version.ref = "koogEX" }
 koog-google-client = { module = "ai.koog:prompt-executor-google-client", version = "1.2.0-beta" }
 sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }

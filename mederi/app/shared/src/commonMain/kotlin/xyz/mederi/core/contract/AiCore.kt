@@ -92,4 +92,13 @@ interface AiCore {
     suspend fun deleteMcpServer(name: String): Result<Unit> = Result.success(Unit)
     suspend fun verifyMcpServer(name: String): Result<Unit> = Result.success(Unit)
     suspend fun getMcpServerJson(name: String): Result<String> = Result.success("{}")
+
+    // ==========================================
+    // Skill 管理契约（UI 薄触发，文件操作全在 core）
+    // ==========================================
+    suspend fun listSkills(): Result<List<SkillItem>> = Result.success(emptyList())
+    suspend fun getSkillsRoot(): Result<String> = Result.success("")
+    suspend fun setSkillsRoot(path: String): Result<Unit> = Result.success(Unit)
+    suspend fun installSkill(url: String): Result<SkillItem> = Result.failure(IllegalStateException("skills 未启用"))
+    suspend fun uninstallSkill(name: String): Result<Unit> = Result.success(Unit)
 }

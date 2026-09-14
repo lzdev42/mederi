@@ -7,6 +7,7 @@ import xyz.mederi.store.McpServersStore
 import xyz.mederi.store.ProjectStore
 import xyz.mederi.store.ProviderStore
 import xyz.mederi.store.SessionStore
+import xyz.mederi.store.SettingsStore
 
 /**
  * Mederi 核心配置。
@@ -98,6 +99,15 @@ class MederiConfig {
      * 如果都未指定 = 不持久化 MCP 配置。
      */
     var mcpServerStore: McpServersStore? = null
+
+    /**
+     * 通用 key-value 配置存储（如 skill 根目录）。
+     *
+     * 如果指定了 [configDir]，Mederi 会自动创建 SqliteSettingsStore（config.db）。
+     * 如果手动传入此值，优先使用手动传入的。
+     * 如果都未指定 = 不持久化（InMemorySettingsStore）。
+     */
+    var settingsStore: SettingsStore? = null
 
     /**
      * 出站 HTTP 请求的 User-Agent 身份头值。

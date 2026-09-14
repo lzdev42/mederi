@@ -40,6 +40,7 @@ import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CostSummary
 import xyz.mederi.core.contract.models.McpServerItem
 import xyz.mederi.core.contract.models.McpServerStatus
+import xyz.mederi.core.contract.models.SkillItem
 import xyz.mederi.core.contract.models.FileDiff
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.Project
@@ -849,5 +850,62 @@ class MederiAiCore(
 
     override suspend fun getMcpServerJson(name: String): Result<String> = runCatching {
         mederi.mcpServers.getJson(name)
+    }
+
+    // ==========================================
+    // Skill 管理（进程内直调 core）
+    // ==========================================
+
+    override suspend fun listSkills(): Result<List<SkillItem>> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.skills.list().map {
+            SkillItem(
+                name = it.name,
+                description = it.description,
+                location = it.location,
+                license = it.license,
+                compatibility = it.compatibility,
+                allowedTools = it.allowedTools,
+            )
+        }
+    }
+
+    override suspend fun getSkillsRoot(): Result<String> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.skills.getRootDirectory()
+    }
+
+    override suspend fun setSkillsRoot(path: String): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.skills.setRootDirectory(path)
+    }
+
+    override suspend fun installSkill(url: String): Result<SkillItem> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.skills.install(url).let {
+            SkillItem(
+                name = it.name,
+                description = it.description,
+                location = it.location,
+                license = it.license,
+                compatibility = it.compatibility,
+                allowedTools = it.allowedTools,
+            )
+        }
+    }
+
+    override suspend fun uninstallSkill(name: String): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.skills.uninstall(name)
     }
 }

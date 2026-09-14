@@ -24,6 +24,9 @@ import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.FileAttachment
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.ui.appstate.AppState
+import xyz.mederi.core.ui.appstate.McpStore
+import xyz.mederi.core.ui.appstate.SkillStore
+
 import xyz.mederi.isDesktopPlatform
 import xyz.emuci.inkcompose.MermaidCacheConfig
 import xyz.mederi.ui.components.TurnStatus
@@ -218,15 +221,8 @@ class WorkspaceViewModel(
                 }
             }
         }
-        viewModelScope.launch {
-            appState.isReady.collect { ready ->
-                DebugLog.info("MCP", "WorkspaceViewModel: appState.isReady changed to $ready")
-                if (ready) {
-                    refreshMcpServers()
-                }
-            }
-        }
     }
+
 
     // ==========================================
     // 图片能力（唯一推导，UI 显隐/警告与发送门禁同源）
@@ -388,78 +384,24 @@ class WorkspaceViewModel(
         activeDockPanel = null
     }
 
-    /** 已安装 MCP Server 列表（概览面板消费） */
-    var mcpServers by mutableStateOf<List<xyz.mederi.core.contract.models.McpServerItem>>(emptyList()); private set
-    var isMcpRefreshing by mutableStateOf(false); private set
+    /** Skill 唯一真理源代理（与 AppState 共享同一实例） */
+    val skillStore: SkillStore get() = appState.skillStore
 
-    /** 刷新 MCP Server 列表 */
-    fun refreshMcpServers() {
-        viewModelScope.launch {
-            isMcpRefreshing = true
-            try {
-                DebugLog.info("MCP", "refreshMcpServers started. appState.isReady=${appState.isReady.value}")
-                val res = appState.aiCore.listMcpServers()
-                if (res.isSuccess) {
-                    val list = res.getOrDefault(emptyList())
-                    DebugLog.info("MCP", "refreshMcpServers success. Found ${list.size} servers: ${list.map { it.name }}")
-                    mcpServers = list
-                } else {
-                    val err = res.exceptionOrNull()
-                    DebugLog.error("MCP", "refreshMcpServers failed: ${err?.message}", err)
-                }
-            } finally {
-                isMcpRefreshing = false
-            }
-        }
-    }
+    /** MCP 唯一真理源代理（与 AppState 共享同一实例） */
+    val mcpStore: McpStore get() = appState.mcpStore
 
-    /** 启停 MCP Server */
-    fun toggleMcpServer(name: String, enabled: Boolean) {
-        viewModelScope.launch {
-            mcpServers = mcpServers.map { if (it.name == name) it.copy(enabled = enabled) else it }
-            appState.aiCore.setMcpServerEnabled(name, enabled)
-            refreshMcpServers()
-        }
-    }
+    /** 已安装 MCP Server 列表（由 McpStore 统一驱动，向后兼容快捷访问） */
+    val mcpServers: List<xyz.mederi.core.contract.models.McpServerItem> get() = mcpStore.mcpServers.value
+    val isMcpRefreshing: Boolean get() = mcpStore.isRefreshing.value
 
-    /** 安装/新增 MCP Server */
-    suspend fun installMcpServer(json: String): Result<Unit> {
-        val res = appState.aiCore.installMcpServer(json)
-        if (res.isSuccess) {
-            refreshMcpServers()
-        }
-        return res
-    }
+    fun refreshMcpServers() = mcpStore.refresh()
+    fun toggleMcpServer(name: String, enabled: Boolean) = mcpStore.toggleEnabled(name, enabled)
+    suspend fun installMcpServer(json: String): Result<Unit> = mcpStore.install(json)
+    suspend fun updateMcpServer(name: String, json: String): Result<Unit> = mcpStore.update(name, json)
+    fun deleteMcpServer(name: String) = mcpStore.delete(name)
+    fun verifyMcpServer(name: String) = mcpStore.verify(name)
+    suspend fun getMcpServerJson(name: String): Result<String> = mcpStore.getJson(name)
 
-    /** 更新/编辑 MCP Server */
-    suspend fun updateMcpServer(name: String, json: String): Result<Unit> {
-        val res = appState.aiCore.updateMcpServer(name, json)
-        if (res.isSuccess) {
-            refreshMcpServers()
-        }
-        return res
-    }
-
-    /** 删除 MCP Server */
-    fun deleteMcpServer(name: String) {
-        viewModelScope.launch {
-            appState.aiCore.deleteMcpServer(name)
-            refreshMcpServers()
-        }
-    }
-
-    /** 验证/测试 MCP Server */
-    fun verifyMcpServer(name: String) {
-        viewModelScope.launch {
-            appState.aiCore.verifyMcpServer(name)
-            refreshMcpServers()
-        }
-    }
-
-    /** 读取单个 MCP Server 的原始 JSON */
-    suspend fun getMcpServerJson(name: String): Result<String> {
-        return appState.aiCore.getMcpServerJson(name)
-    }
 
     /** 当前展示的实施计划内容。写操作只经 openPlanInExtension（单向数据流） */
     var currentPlan by mutableStateOf<PlanItem?>(null); private set
