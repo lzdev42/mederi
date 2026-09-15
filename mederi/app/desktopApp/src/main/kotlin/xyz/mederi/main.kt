@@ -43,6 +43,7 @@ fun main() = application {
         onCloseRequest = {
             RemoteServer.stop()
             terminalHub.shutdown()
+            browserHostHolder?.shutdown()
             appStateHolder.value?.remoteControl?.stopTunnel()
             appStateHolder.value?.let { runBlocking { it.flushPreferences() } }
             exitApplication()
@@ -57,6 +58,19 @@ fun main() = application {
                 val aiCore = appState.aiCore
                 if (aiCore is MederiAiCore) {
                     appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)
+
+                    // 注入内置 JCEF 浏览器宿主（tab = KBPage）+ 注册进 BrowserRegistry。
+                    // 注册在 MederiAiCore 注册 camoufox 之后，且 BrowserRegistry 幂等覆盖——即使
+                    // 注册顺序变化，"jcef" 也能正确解析。AI 通过 run_browser_task(browser="jcef") 选择。
+                    val browserHost = JcefBrowserHost()
+                    browserHostHolder = browserHost
+                    appState.uiBrowserHost = browserHost
+                    xyz.mederi.browser.BrowserRegistry.register(
+                        name = "jcef",
+                        kind = xyz.mederi.browser.BrowserKind.JCEF,
+                        factory = { taskId -> browserHost.createAiTab(taskId) },
+                        statusSource = xyz.mederi.browser.BrowserStatusSource { browserHost.statusSnapshot() }
+                    )
                 }
 
                 // 注入本地终端：pty4j registry（desktop 进程内直连，jediterm 渲染）
@@ -65,3 +79,6 @@ fun main() = application {
         )
     }
 }
+
+/** 内置浏览器宿主引用（退出时回收 JCEF）。 */
+private var browserHostHolder: JcefBrowserHost? = null

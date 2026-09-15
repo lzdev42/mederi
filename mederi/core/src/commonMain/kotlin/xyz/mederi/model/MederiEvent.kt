@@ -30,7 +30,18 @@ enum class EventType {
      * scope=provider, code=RETRYING, message, attempt, maxAttempts。
      * UI 据此显示"重试中"；session status 不受影响（仍 RUNNING）。
      */
-    STATUS
+    STATUS,
+
+    /**
+     * 浏览器任务生命周期事件（异步，主代理通过 run_browser_task 工具派发）。
+     * payload 约定（key 统一）：taskId, status(STARTED/RUNNING/COMPLETED/ERROR/STOPPED),
+     * step?, thought?, results?, message?。UI 浏览器任务面板消费；主代理只经工具查 status。
+     */
+    BROWSER_TASK_STARTED,
+    BROWSER_TASK_STEP,
+    BROWSER_TASK_COMPLETED,
+    BROWSER_TASK_ERROR,
+    BROWSER_TASK_STOPPED
 }
 
 /**

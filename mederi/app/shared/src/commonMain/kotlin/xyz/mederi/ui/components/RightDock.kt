@@ -59,7 +59,8 @@ fun RightDock(
         DockItemData(RightDockPanel.PLAN, FeatherIcons.FileText, "实施计划"),
         DockItemData(RightDockPanel.SUB_AGENTS, FeatherIcons.Users, "子 Agent 协同"),
         DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.File, "文档与媒体"),
-        DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal, "终端")
+        DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal, "终端"),
+        DockItemData(RightDockPanel.BROWSER, FeatherIcons.Globe, "内置浏览器")
     )
 
     Column(

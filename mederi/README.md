@@ -1,3 +1,5 @@
+> **开发中（Development）**：写代码（Code）模式基本可用，未全面测试；Work 模式已实现但未充分验证；内置（JCEF）/外置（Camoufox）浏览器操控已接通，待测试与 debug。
+
 This is a Kotlin Multiplatform project targeting Android, iOS, Web, Desktop (JVM), Server.
 
 * [/app/iosApp](./app/iosApp/iosApp) contains an iOS application. Even if you’re sharing your UI with Compose

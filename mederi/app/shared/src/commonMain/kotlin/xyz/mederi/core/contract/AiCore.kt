@@ -82,6 +82,12 @@ interface AiCore {
 
     suspend fun getFileDiffs(conversationId: String, messageId: String? = null): Result<List<FileDiff>>
 
+    /**
+     * 将 Office 文档（.docx/.xlsx/.pptx）转换为 HTML，供 UI 内置浏览器预览。
+     * path 解析与会话所属项目目录同源。返回完整 HTML 文档字符串。
+     */
+    suspend fun previewOffice(conversationId: String, path: String): Result<String>
+
     // ==========================================
     // MCP Server 管理契约
     // ==========================================

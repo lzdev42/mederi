@@ -240,7 +240,7 @@ flowchart TB
 
 ### 7.1 AppState（`…/commonMain/core/ui/appstate/AppState.kt`）
 
-`class AppState(aiCore, preferences: PreferencesStore, scope)`；宿主注入点 = `remoteControl: RemoteControlHooks?` 与 `terminalManager: TerminalManager?`；`LocalAppState` CompositionLocal。
+`class AppState(aiCore, preferences: PreferencesStore, scope)`；宿主注入点 = `remoteControl: RemoteControlHooks?`、`terminalManager: TerminalManager?` 与 `uiBrowserHost: UiBrowserHost?`（内置 JCEF 浏览器宿主，仅 desktop 注入）；`canRenderJcef = uiBrowserHost != null`（遥控端/wasm 恒 false）；`LocalAppState` CompositionLocal。
 
 **持久化字段**：
 
@@ -287,6 +287,7 @@ classDiagram
         +approvePlan(planId, approved) / replyQuestion(...) 
         +tryAttachImage(...) Boolean  % 图片能力门禁
         +openDiff/closeDiff + toggleDockPanel...
+        % 全局事件监听：BROWSER_TASK_STARTED(browser=="jcef") 且 canRenderJcef → 自动展开 BROWSER 面板
     }
     class SidebarViewModel {
         +uiState(expandedProjectIds, isBusy, error)
@@ -310,6 +311,7 @@ classDiagram
     AppState --> SidebarViewModel
     AppState --> RawMessagesViewModel
     AppState --> TerminalViewModel : terminalManager
+    AppState --> UiBrowserHost : uiBrowserHost（desktop 注入 JCEF）
 ```
 
 - **WorkspaceViewModel 要点**：`attach(id)` = getSnapshot 校验可达 + observeConversation 订阅 + 乐观消息对账；`send(text)` = 校验就绪/模型/图片门禁 guardImageSupport（send 与 rollbackMessage 共用唯一实现）→ PromptComposer.compose → 乐观更新 → 无会话自动 createConversation → 有待审批先 resolvePlanApproval(false) → sendMessage（thinkingLevel 只发 computeEffectiveThinkingLevel()）；`rollbackMessage` = 先验后切（restoreInputFromMessage 反解主指令/大段文本/图片 → 本地切片 → rollbackToMessage）→ **成功后才把内容粘贴回输入框重建待发态**（inputDraft + pendingPastedTexts + pendingImages，用户切模型/模式/改内容后自行发送），失败走 ErrorBoard；`restoreInputFromMessage(targetMsg?, fallbackText)` 为纯函数（PromptComposer.parse 拆主指令与大段文本、data: File block base64 还原图片）；`chatItems` 预计算 toolSummary/target/headerSummary/isReasoningActive。
@@ -345,7 +347,7 @@ flowchart TD
 - `ChatLayout.kt` 不是 Composable，是**布局常量对象**（contentMaxWidth=1000dp、userBubbleMaxWidth=680dp、sidebarWidth=260dp、rightPanelWidth=360dp、headerHeight=40dp、turnSpacing=14dp 等）。
 - 三个职责分离的条栏：**StatusBar**（消息区，AI 运转状态，`deriveTurnStatus(snapshot)`，永不显示错误；计时锚定"发送请求时刻"`WorkspaceViewModel.turnStartedAt`（send 时记录、turn 结束清除），每秒 `now - turnStartedAt` 重算——切会话回来不重置；**与 footer durationMs 语义不同：StatusBar=从发请求起算，footer=API 有回应起算到回复结束**）、**ErrorBoard**（ChatInputCard 顶部，错误/警告唯一出口：单行简报 + "详细报告"展开 + 关闭；断流时（快照 errorIsStreamInterrupted）额外显示"继续"按钮 → `continueAfterInterruption()` 重发 Continue 续写半截回复，数据源=快照 errorMessage）、**SystemInfoBar**（最底部，纯 CPU/RSS/JVM 资源监控，不接错误）。
 - **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
-- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`SegmentedControl`（WorkType/AgentMode 复用）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）。
+- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`SegmentedControl`（WorkType/AgentMode 复用）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：uiBrowserHost 注入则渲染 JCEF 浏览器，未注入显示"当前端不支持内置浏览器"占位——遥控/wasm 端门禁）。
 - 渲染 AI 回复使用 `:inkcompose` 的 `MarkdownView`（见 03-inkcompose.md）。
 
 ## 9. 平台入口与特性
@@ -377,7 +379,8 @@ flowchart TD
 
 ### 9.3 desktopApp（`app/desktopApp/src/main/kotlin/xyz/mederi/`）
 
-- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)`；`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`RemoteServer.stop()` → `terminalHub.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
+- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **创建 `JcefBrowserHost()` → `appState.uiBrowserHost` + `BrowserRegistry.register("jcef", BrowserKind.JCEF) { host.createAiTab() }`**（camoufox 在 MederiAiCore 注册，jcef 在 desktopApp 注册，幂等覆盖）；`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`RemoteServer.stop()` → `terminalHub.shutdown()` → `browserHost?.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
+- **内置 JCEF 浏览器（desktopApp `browser/`）**：`JcefBrowserHost`（UiBrowserHost 实现，"一个 tab = 一个 KBPage" 轻量标签容器）——`createAiTab()`（desktopApp 专属，**不在接口上**——core 仅有 jvm 目标，commonMain 禁止引用 core 浏览器类型）惰性初始化 KBrowser（JcefChecker 检查 + `initializeConfig(useOsr=true)` + `initializeKBrowser()`，与 inkcompose mermaid worker 共用运行时）→ `KBrowser.newPage()`（viewport-less，挂 KBWebView 渲染）→ 返回 `JCEFBrowserControl`；`BrowserContent` = tab 栏（新建/关闭/切换）+ 激活 tab 的 `KBWebView` + 定时回读 document.title；`closeTab`/`shutdown` 关闭 KBPage。`JCEFBrowserControl`（BrowserControl 实现，绑定单个 KBPage）：**start/close 均幂等空实现**（任务结束 finally 总调 close()，但 tab 保留让用户看结果，手动关或退出才回收）、navigate/click/type（click 聚焦后逐字符输入）/scroll/press/snapshot/screenshot 全落对应 KBPage——AI 切 tab 不影响绑定页。desktopApp 新增 `libs.kbrowser` 依赖（与 inkcompose 同版本同源）。`UiBrowserHost`（commonMain）= `isAvailable` + `@Composable BrowserContent(colors)` + `shutdown()`，不引用 core 类型（wasm/移动端可编译）。
 - `DesktopRemoteControlHooks.kt`：`start(port, password) = RemoteServer.start(...)`；`localAddress` = 枚举 site-local IPv4（10/8、172.16/12、192.168/16）；`isCloudflaredInstalled()` = `cloudflared --version` 探测（未装 UI 提示自行安装，不代装）；`startTunnel(port)` = **pty4j** 真实 pty 拉起 `cloudflared tunnel run`（读 `~/.cloudflared/config.yml`），幂等；**生命周期** = 本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（无需看门狗）；`parseTunnelDomain()` = 解析 config.yml 第一条 ingress hostname 拼 `https://<host>`。
 
 ### 9.4 其他入口

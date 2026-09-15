@@ -5,6 +5,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
@@ -39,14 +40,14 @@ data class SpawnAgentArgs(
 /**
  * spawn_agent 工具。
  *
- * 在父 Agent 的 turn 中同步调用，阻塞等待子 Agent 单 turn 执行完毕后返回结果。
- * 子 Agent 运行在内存中，不创建持久化的 Session。
- * 子 Agent 继承父 Agent 的所有配置（模型、推理等级等）。
+ * **异步派工**：调用后立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`，不阻塞父 Agent 的 turn。
+ * 子 Agent 在后台运行（内存中，不创建持久化 Session）。需要结果时用 `wait_agent(agentId)` 等待，
+ * 或 `agent_status` 查询、`stop_agent` 主动停止。子 Agent 继承父 Agent 的所有配置。
  *
  * 门禁（代码强制）：spec 必须已由 generate_spec 写入 Subtask.spec（非空才放行），
  * 杜绝"未生成 spec 直接派活"绕过；brief（planDetail）随 briefing 一并带给子代理作意图上下文。
  *
- * @param subagentRunner 子 Agent 执行器。
+ * @param subagentManager 子 Agent 生命周期管理器（异步）。
  * @param directories 项目目录列表，子 Agent 工具的作用域。
  * @param aiModel 使用的模型，子 Agent 继承父 Agent 的模型配置。
  * @param reasoningLevel 推理等级，子 Agent 继承父 Agent 的推理等级配置。
@@ -56,7 +57,7 @@ data class SpawnAgentArgs(
  * @param eventBus 事件总线（派工后发 PLAN_PROGRESS 携带子任务投影，驱动 UI todo 面板）。
  */
 class SpawnAgentTool(
-    private val subagentRunner: SubagentRunner,
+    private val subagentManager: SubagentManager,
     private val directories: List<String>,
     private val aiModel: AIModel,
     private val reasoningLevel: ReasoningLevel,
@@ -67,11 +68,19 @@ class SpawnAgentTool(
 ) : SimpleTool<SpawnAgentArgs>(
     argsType = typeToken<SpawnAgentArgs>(),
     name = "spawn_agent",
-    description = "Creates a subagent to handle a sub-task. The subagent inherits all configuration from the parent. " +
-        "Requires planId + subtaskIndex; the subagent executes the exact spec stored by generate_spec. " +
-        "Call generate_spec(planId, subtaskIndex) first, then spawn with both. " +
-        "Multiple spawn calls sent together in one message run in parallel — use that for independent subtasks."
+    description = "Asynchronously creates a subagent to handle a sub-task. Returns immediately with an " +
+        "agentId — the subagent runs in the background. Requires planId + subtaskIndex; the subagent " +
+        "executes the exact spec stored by generate_spec. Call generate_spec(planId, subtaskIndex) first, " +
+        "then spawn with both. Multiple spawn calls sent together in one message run in parallel. " +
+        "After spawning, use wait_agent(agentId) to block for the result (plan workflow), or " +
+        "agent_status / stop_agent to monitor or stop it."
 ) {
+
+    @Serializable
+    data class SpawnResult(
+        val agentId: String,
+        val status: String
+    )
 
     override suspend fun execute(args: SpawnAgentArgs): String {
         if (args.task.isBlank()) {
@@ -122,27 +131,23 @@ class SpawnAgentTool(
             timestamp = Instant.now().toString()
         ))
 
-        return try {
-            val result = subagentRunner.run(
-                task = args.task,
-                // brief（用户批准的意图）拼进 briefing 给子代理作上下文；spec 是主执行清单
-                briefing = listOfNotNull(
-                    args.briefing.takeIf { it.isNotBlank() },
-                    st.planDetail.takeIf { it.isNotBlank() }?.let { "Brief: $it" }
-                ).takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
-                plan = st.spec,
-                role = SubagentRole.EXECUTOR,
-                workType = plan.workType,
-                directories = directories,
-                aiModel = aiModel,
-                reasoningLevel = reasoningLevel,
-                projectId = projectId,
-                parentSessionId = parentSessionId
-            )
-            result
-        } catch (e: Throwable) {
-            "Error: subagent failed - ${e.message ?: e.javaClass.simpleName}"
-        }
+        val agentId = subagentManager.spawn(
+            task = args.task,
+            // brief（用户批准的意图）拼进 briefing 给子代理作上下文；spec 是主执行清单
+            briefing = listOfNotNull(
+                args.briefing.takeIf { it.isNotBlank() },
+                st.planDetail.takeIf { it.isNotBlank() }?.let { "Brief: $it" }
+            ).takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
+            plan = st.spec,
+            role = SubagentRole.EXECUTOR,
+            workType = plan.workType,
+            directories = directories,
+            aiModel = aiModel,
+            reasoningLevel = reasoningLevel,
+            projectId = projectId,
+            parentSessionId = parentSessionId
+        )
+        return Json.encodeToString(SpawnResult.serializer(), SpawnResult(agentId = agentId, status = "RUNNING"))
     }
 }
 
@@ -160,14 +165,14 @@ data class SpawnResearcherArgs(
 /**
  * spawn_researcher 工具：研究型子代理，只读文件、无写权限、无命令执行。
  *
+ * **异步派工**：调用后立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`，不阻塞父 Agent 的 turn。
+ * 需要结果时用 `wait_agent(agentId)` 等待。
+ *
  * 不需要计划，不需要 spec——研究发生在计划之前（调研代码以支撑制定计划）。
  * 子代理的意识：自己是研究助手，不对用户发问，自主调研、汇总结果、返回给父 Agent。
- *
- * 门禁：无计划门禁（研究是只读的，不涉及修改）。spawn_agent 的 full-tool 门禁
- * 由 planId+subtaskIndex 硬绑定控制，与此无关。
  */
 class SpawnResearcherTool(
-    private val subagentRunner: SubagentRunner,
+    private val subagentManager: SubagentManager,
     private val directories: List<String>,
     private val aiModel: AIModel,
     private val reasoningLevel: ReasoningLevel,
@@ -176,8 +181,9 @@ class SpawnResearcherTool(
 ) : SimpleTool<SpawnResearcherArgs>(
     argsType = typeToken<SpawnResearcherArgs>(),
     name = "spawn_researcher",
-    description = "Creates a read-only subagent to investigate the codebase: read files, explore " +
-        "the directory structure, and synthesize a structured summary for the parent. " +
+    description = "Asynchronously creates a read-only subagent to investigate the codebase: read files, " +
+        "explore the directory structure, and synthesize a structured summary for the parent. " +
+        "Returns immediately with an agentId — use wait_agent(agentId) to get the result. " +
         "No write access, no command execution. The subagent reports findings and terminates — " +
         "it does not ask the parent clarifying questions."
 ) {
@@ -185,22 +191,18 @@ class SpawnResearcherTool(
         if (args.task.isBlank()) {
             return "Error: task must not be empty."
         }
-        return try {
-            val result = subagentRunner.run(
-                task = args.task,
-                briefing = args.briefing.takeIf { it.isNotBlank() },
-                plan = null,
-                role = SubagentRole.RESEARCHER,
-                workType = WorkType.CODE,
-                directories = directories,
-                aiModel = aiModel,
-                reasoningLevel = reasoningLevel,
-                projectId = projectId,
-                parentSessionId = parentSessionId
-            )
-            result
-        } catch (e: Throwable) {
-            "Error: subagent failed - ${e.message ?: e.javaClass.simpleName}"
-        }
+        val agentId = subagentManager.spawn(
+            task = args.task,
+            briefing = args.briefing.takeIf { it.isNotBlank() },
+            plan = null,
+            role = SubagentRole.RESEARCHER,
+            workType = WorkType.CODE,
+            directories = directories,
+            aiModel = aiModel,
+            reasoningLevel = reasoningLevel,
+            projectId = projectId,
+            parentSessionId = parentSessionId
+        )
+        return Json.encodeToString(SpawnAgentTool.SpawnResult.serializer(), SpawnAgentTool.SpawnResult(agentId = agentId, status = "RUNNING"))
     }
 }

@@ -131,8 +131,9 @@ flowchart TD
     WAIT -- "拒绝" --> REJ["告知用户结束/修改"]
     WAIT -- "批准" --> GEN
     AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变"]
-    GEN --> SPAWN["spawn_agent(planId, subtaskIndex)<br/>硬校验 planId/index/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>PLAN_PROGRESS('subtask-started'+todos投影)<br/>独立子任务可同消息并行 spawn(无上限)"]
-    SPAWN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
+    GEN --> SPAWN["spawn_agent(planId, subtaskIndex)<br/>硬校验 planId/index/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>PLAN_PROGRESS('subtask-started'+todos投影)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
+    SPAWN --> WAITAG["wait_agent(agentId, timeout)<br/>阻塞拿子代理执行报告"]
+    WAITAG --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
     SUB --> VER["verify_subtask(planId, subtaskIndex, status, evidence)<br/>自动执行 Subtask.verification 命令(10s)"]
     VER --> CHK{"verify 结果"}
     CHK -- "PASS(且命令 exit=0)" --> NEXT["子任务 COMPLETED → 下一个子任务"]
@@ -144,7 +145,7 @@ flowchart TD
     CONV & REGEN --> SPAWN
 ```
 
-**并行执行（2026-09）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；并行批量时不得并发写同一文件、不得重复执行同一命令。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。
+**并行执行（2026-09，2026-09-14 异步化）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；并行批量时不得并发写同一文件、不得重复执行同一命令。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）**：spawn_agent / spawn_researcher 改为异步派工（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；plan workflow 中父代理在 spawn 后调 `wait_agent(agentId)` 阻塞拿结果再 verify。
 
 **Plan 审批时序（APPROVAL 模式）**：
 
@@ -221,14 +222,19 @@ sequenceDiagram
     end
 ```
 
-## 7. 子代理（spawn_agent / spawn_researcher）时序
+## 7. 子代理（spawn_agent / spawn_researcher / 异步管理）时序
+
+> 2026-09-14：spawn 改为**异步派工**——`SpawnAgentTool` 调 `SubagentManager.spawn` 立即返回 agentId，
+> 子代理在后台协程运行，父代理 turn 不被阻塞。需要结果时父代理再调 `wait_agent` 阻塞拿结果，
+> 或 `agent_status` 查询、`stop_agent` 主动停止。
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant M as 主代理工具协程(SpawnAgentTool)
+    participant SM as SubagentManager
     participant PS as PlanStore
-    participant SR as SubagentRunnerImpl
+    participant SR as SubagentRunnerImpl<br/>(后台协程)
     participant ITE as 独立 TurnExecutor<br/>(InMemory store + 独立 eventBus)
     participant EB as 主 eventBus
 
@@ -238,7 +244,11 @@ sequenceDiagram
     end
     M->>PS: updatePlan 原子置 subtask IN_PROGRESS
     M->>EB: PLAN_PROGRESS('subtask-started' + todos 投影)
-    M->>SR: run(task, briefing(含 planDetail), plan=st.spec, role=EXECUTOR, ...)
+    M->>SM: spawn(task, briefing(含 planDetail), plan=st.spec, role=EXECUTOR, ...)
+    SM->>SM: agents[agentId]=RUNNING; scope.launch { SR.run(...) }
+    SM-->>M: 立即返回 {"agentId":"sub_xxx","status":"RUNNING"} (不阻塞)
+    M-->>M: 主代理继续对话/派发其他任务/调 wait_agent
+    Note over SM,ITE: 后台执行(与父 turn 并行)
     SR->>SR: 内存建临时 Session(sub_xxxxxxxx, AUTONOMOUS)
     SR->>ITE: sendMessage(inputText=spec清单自顶向下+SPEC_FEEDBACK约定, subagentRole=EXECUTOR)
     Note over ITE: RESEARCHER 则 inputText=只读调研任务<br/>工具裁剪=read_file+list_directory
@@ -247,10 +257,12 @@ sequenceDiagram
         ITE->>ITE: 正常 TurnExecutor 流程(事件走独立 eventBus)
     end
     SR->>SR: 等 MESSAGE_COMPLETED/MESSAGE_ERROR 终态事件
-    SR->>SR: 取最后一条 ASSISTANT 消息文本
-    SR-->>M: 返回报告字符串(异常转 "[subagent error] ...")
+    SR->>SR: 取最后一条 ASSISTANT 消息文本 → SM 更新状态 COMPLETED/ERROR
+    Note over SM,SR: scope 继承调用方协程上下文: stop_agent 取消可级联取消内部 turn
+    M->>SM: wait_agent(agentId, timeout) [父代理需要结果时]
+    SM-->>M: 返回最终状态+结果(超时 TIMEOUT, 子代理继续后台跑)
     M->>EB: (主代理继续) verify_subtask / converge_plan / 下一个 spawn
-    Note over M: 独立子任务可同消息并行: 多个 SpawnAgentTool 协程各自 SR.run,<br/>无并发上限, 由 AI 调度(信任 AI); 返回后逐个 verify_subtask
+    Note over M: 独立子任务可同消息并行: 多个 spawn 各自后台跑,<br/>无并发上限, 由 AI 调度(信任 AI); 逐个 wait_agent 拿结果后 verify_subtask
     Note over ITE: 子代理一次任务即死; 无会话残留
 ```
 
@@ -267,6 +279,56 @@ flowchart TD
     TE --> HS["historyStore.replace(id, msgs.take(targetIndex))<br/>(目标不存在显式抛错)"]
     HS --> RE["回退成功 → 内容粘贴回输入框重建待发态:<br/>inputDraft=主指令 + pendingPastedTexts=大段文本 + pendingImages=图片<br/>用户切换模型/模式/Agent、修改后自行发送<br/>(失败 → error 走 ErrorBoard，输入区保持原状)"]
 ```
+
+## 8.1 浏览器任务（run_browser_task，2026-09-14）
+
+> 主代理只派发/看状态/停止，浏览器内部对主代理完全透明。BROWSER agent 在后台协程跑
+> 4-phase 循环（perceive→decide→execute→postprocess），页面快照每步新鲜取、用完即丢，
+> memory 是 AI 自总结。细节经 BROWSER_TASK_* 事件给 UI，用户自己看。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant MA as 主代理 turn
+    participant RBT as RunBrowserTaskTool
+    participant BTM as BrowserTaskManager
+    participant BA as BrowserAgentRunner(后台协程)
+    participant BC as BrowserControl(Camoufox/JCEF)
+    participant EB as eventBus
+    participant WV as WorkspaceViewModel
+
+    U->>MA: "搜一下51job的Java开发工作"
+    MA->>RBT: run_browser_task(task, browser="jcef")
+    RBT->>BTM: runTask(task, model, projectId, sessionId, browser)
+    BTM->>BTM: resolve(browser)→factory(suspend)→createBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
+    BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="jcef")
+    RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"jcef"} (立即返回, 不阻塞)
+    MA-->>U: 主代理继续对话(浏览器任务在后台跑)
+    Note over WV: JCEF 分支：UI 自动展开浏览器面板
+    EB-->>WV: BROWSER_TASK_STARTED(browser=="jcef")
+    Note over WV: canRenderJcef==true → openDockPanel(BROWSER)
+    Note over BTM,BC: 后台执行(与主 turn 并行)
+    BTM->>BC: JCEF: createAiTab()→新建 tab=KBPage→JCEFBrowserControl<br/>Camoufox: BiDiBrowserControl(binary 已下载)→start()
+    BTM->>BA: runner.run(task)
+    loop 4-phase 循环(每步)
+        BA->>BC: snapshot() → 新鲜 a11y tree
+        BA->>BA: LLM 一次调用([system+memory+history+snapshot]) → decision{actions,memory,is_done}
+        BA->>BC: 执行 actions(navigate/click/type/scroll/done)
+        BA->>BTM: onStep(step, thought, results)
+        BTM->>EB: BROWSER_TASK_STEP(taskId, step, thought, results, browser)
+        Note over BA: memory = decision.memory(AI自总结)<br/>stepHistory 保留最后10条<br/>snapshot 用完即丢
+    end
+    BA-->>BTM: BrowserTaskResult(success, message)
+    BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, message, browser)
+    Note over U: 用户自己在浏览器任务面板看细节<br/>JCEF 任务时浏览器面板已自动展开(tab=该任务页面)
+    Note over MA: 用户问"任务怎样了?" → 主代理查 browser_task_status
+```
+
+> 浏览器选择（2026-09-15）：`run_browser_task` 的 `browser` 参数缺省 → BrowserRegistry 默认。
+> AI 提示词：测用户自己的网页 → `jcef`（内置可见，UI 自动展开浏览器面板显示该 tab）；
+> 第三方自动化/抓取 → `camoufox`（无头，不展开面板）。遥控端/wasm 无 JCEF 宿主（canRenderJcef=false），
+> 收到 jcef 事件不展开。
 
 ## 9. 会话自动改名（SessionTitleService）
 

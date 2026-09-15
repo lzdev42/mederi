@@ -102,6 +102,12 @@ class AppState(
     /** 宿主启动后注入；null = 当前端无本地终端（wasm/移动端为遥控端，后续接远程 WS 客户端） */
     var terminalManager: TerminalManager? = null
 
+    /** 宿主启动后注入；null = 当前端不渲染内置浏览器（遥控/wasm 端为 null，见 canRenderJcef） */
+    var uiBrowserHost: xyz.mederi.core.ui.browser.UiBrowserHost? = null
+
+    /** 是否可渲染内置 JCEF 浏览器（仅 desktop + 已注入宿主时为 true；遥控端/wasm 恒 false） */
+    val canRenderJcef: Boolean get() = uiBrowserHost != null
+
     /** Skill 状态唯一真理源：概览面板、Skill 市场等全局共享 */
     val skillStore: SkillStore = SkillStore(aiCore, scope)
 

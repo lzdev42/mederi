@@ -28,6 +28,8 @@ koogEX = "1.2.0-beta"
 pty4j = "0.13.12"
 jediterm = "3.74"
 kbrowser = "0.1.0-alpha47"
+poi = "5.4.1"
+mammoth = "1.12.0"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -67,6 +69,7 @@ sqldelight-dialect-sqlite338 = { module = "app.cash.sqldelight:sqlite-3-38-diale
 kotlinx-serializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization-json" }
 ktor-clientCore = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-clientCio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-clientWebsockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-sse = { module = "io.ktor:ktor-sse", version.ref = "ktor" }
 ktor-clientContentNegotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-clientSerializationJson = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
@@ -85,6 +88,8 @@ pty4j = { module = "org.jetbrains.pty4j:pty4j", version.ref = "pty4j" }
 jediterm-ui = { module = "org.jetbrains.jediterm:jediterm-ui", version.ref = "jediterm" }
 jediterm-core = { module = "org.jetbrains.jediterm:jediterm-core", version.ref = "jediterm" }
 kbrowser = { module = "io.github.lzdev42:kbrowser", version.ref = "kbrowser" }
+poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
+mammoth = { module = "org.zwobble.mammoth:mammoth", version.ref = "mammoth" }
 
 
 

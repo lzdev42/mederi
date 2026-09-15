@@ -116,6 +116,31 @@ class MederiAiCore(
                 configDir = this@MederiAiCore.configDir
                 // 出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带上 Mederi 身份头
                 userAgent = AppInfo.userAgent
+                // 浏览器自动化：注册 Camoufox（core 默认）。UI 层（desktop）再注册内置 JCEF。
+                // AI 通过 run_browser_task(browser=...) 选择：测自己网页→jcef，第三方自动化→camoufox。
+                xyz.mederi.browser.BrowserRegistry.register(
+                    name = "camoufox",
+                    kind = xyz.mederi.browser.BrowserKind.CAMOUFOX,
+                    factory = {
+                        val browserHome = xyz.mederi.browser.install.BrowserHome.of(
+                            xyz.mederi.browser.BrowserRuntime.browserHome
+                        )
+                        val binary = browserHome
+                            ?.let { home -> xyz.mederi.browser.install.CamoufoxInstaller(home).installedBinaryPath() }
+                            ?: xyz.mederi.browser.BrowserRuntime.camoufoxPath
+                            ?: error(
+                                "未找到 Camoufox：请先在设置里配置浏览器工作目录并下载 Camoufox，" +
+                                    "或手动指定 camoufoxPath"
+                            )
+                        val profileDir = browserHome
+                            ?.profilesDir?.let { it.mkdirs(); it.toPath() }
+                            ?: java.nio.file.Files.createTempDirectory("mederi-camoufox-profile-")
+                        xyz.mederi.browser.BiDiBrowserControl(
+                            binaryPath = binary,
+                            profilePath = profileDir
+                        )
+                    }
+                )
             }
             cleanupLegacyBuiltinProviders()
             cleanupStaleRunningSessions()
@@ -133,6 +158,32 @@ class MederiAiCore(
             // 共用同一桥实现，谁初始化谁生效，宿主无需各自接线。
             autotitleService.start()
             startSessionStatusSync()
+            startCamoufoxUpdateCheck()
+        }
+    }
+
+    /**
+     * 启动时静默检查 Camoufox 是否有更新（不自动下载——浏览器体积大，只在有 browserHome
+     * 配置时才查，结果打日志；后续 UI 可订阅/展示）。
+     */
+    private fun startCamoufoxUpdateCheck() {
+        val home = xyz.mederi.browser.install.BrowserHome.of(xyz.mederi.browser.BrowserRuntime.browserHome)
+            ?: return  // 未设置浏览器工作目录，跳过
+        if (!xyz.mederi.browser.install.CamoufoxPlatform.supported) {
+            xyz.mederi.debug.DebugLog.info(
+                "Camoufox",
+                xyz.mederi.browser.install.CamoufoxPlatform.unsupportedReason
+            )
+            return
+        }
+        scope.launch {
+            try {
+                val installer = xyz.mederi.browser.install.CamoufoxInstaller(home)
+                val info = installer.checkForUpdate()
+                xyz.mederi.debug.DebugLog.info("Camoufox", "启动更新检查: ${info.reason}")
+            } catch (e: Throwable) {
+                xyz.mederi.debug.DebugLog.error("Camoufox", "启动更新检查失败: ${e.message}")
+            }
         }
     }
 
@@ -389,18 +440,16 @@ class MederiAiCore(
         // 1. 删除磁盘上的 Mermaid 缓存图片
         runCatching {
             val session = mederi.sessions.get(conversationId)
-            if (session != null) {
-                val project = mederi.projects.get(session.projectId)
-                project?.directory?.let { dirPath ->
-                    val mermaidDir = File(dirPath, ".mederi/mermaid")
-                    if (mermaidDir.exists() && mermaidDir.isDirectory) {
-                        val sanitized = conversationId.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32)
-                        val prefix = "${sanitized}_"
-                        mermaidDir.listFiles()?.forEach { file ->
-                            if (file.name.startsWith(prefix) && file.name.endsWith(".png")) {
-                                file.delete()
-                                DebugLog.event("AiCore", "Deleted session mermaid cache: ${file.name}")
-                            }
+            val project = mederi.projects.get(session.projectId)
+            project.directory.let { dirPath ->
+                val mermaidDir = File(dirPath, ".mederi/mermaid")
+                if (mermaidDir.exists() && mermaidDir.isDirectory) {
+                    val sanitized = conversationId.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32)
+                    val prefix = "${sanitized}_"
+                    mermaidDir.listFiles()?.forEach { file ->
+                        if (file.name.startsWith(prefix) && file.name.endsWith(".png")) {
+                            file.delete()
+                            DebugLog.event("AiCore", "Deleted session mermaid cache: ${file.name}")
                         }
                     }
                 }
@@ -731,6 +780,18 @@ class MederiAiCore(
     ): Result<List<FileDiff>> = runCatching {
         mederi.sessions.getFileDiffs(conversationId, messageId)
             .map { MederiModelMapper.toFileDiff(it) }
+    }
+
+    override suspend fun previewOffice(conversationId: String, path: String): Result<String> = runCatching {
+        val session = mederi.sessions.get(conversationId)
+        val project = mederi.projects.get(session.projectId)
+        // 路径解析：相对路径基于项目目录
+        val file = java.io.File(path).let { f ->
+            if (f.isAbsolute) f else java.io.File(project.directory, path)
+        }
+        if (!file.exists()) throw IllegalArgumentException("File not found: $path")
+        if (!file.isFile) throw IllegalArgumentException("Not a file: $path")
+        xyz.mederi.office.OfficeConverter.toHtml(file.absolutePath)
     }
 
     // ------------------------------------------------------------------

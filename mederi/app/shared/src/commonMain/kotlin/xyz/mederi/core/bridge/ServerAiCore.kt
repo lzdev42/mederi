@@ -536,6 +536,11 @@ class ServerAiCore(
         httpGet("/v1/sessions/$conversationId/diffs$query")
     }
 
+    override suspend fun previewOffice(conversationId: String, path: String): Result<String> = runCatching {
+        val encodedPath = path.encodeURLParameter()
+        httpGet("/v1/sessions/$conversationId/office-preview?path=$encodedPath")
+    }
+
     // ------------------------------------------------------------------
     // MCP Server 管理（遥控 REST 桥）
     // ------------------------------------------------------------------

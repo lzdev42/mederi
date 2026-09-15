@@ -300,6 +300,9 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     get("/v1/sessions/{id}/diffs") {
         call.respondResult(aiCore.getFileDiffs(call.parameters["id"]!!, call.parameters["messageId"]))
     }
+    get("/v1/sessions/{id}/office-preview") {
+        call.respondResult(aiCore.previewOffice(call.parameters["id"]!!, call.parameters["path"] ?: ""))
+    }
 
     // ------------------------------------------------------------------
     // 事件 SSE

@@ -240,6 +240,13 @@ object SnapshotReducer {
                 planApprovals = updatedList
             )
         }
+
+        // 浏览器任务事件不改变会话快照（UI 通过事件 payload 直接消费：browser=="jcef" 时自动展开面板）
+        CoreEventType.BROWSER_TASK_STARTED,
+        CoreEventType.BROWSER_TASK_STEP,
+        CoreEventType.BROWSER_TASK_COMPLETED,
+        CoreEventType.BROWSER_TASK_ERROR,
+        CoreEventType.BROWSER_TASK_STOPPED -> snapshot
     }
 
     // ------------------------------------------------------------------

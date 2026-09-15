@@ -449,6 +449,10 @@ class MockAiCore(
         ))
     }
 
+    override suspend fun previewOffice(conversationId: String, path: String): Result<String> = runCatching {
+        "<html><body><h1>Mock preview for $path</h1></body></html>"
+    }
+
     fun injectSnapshot(conversationId: String, snapshot: ConversationSnapshot) {
         conversations[conversationId]?.value = snapshot
     }

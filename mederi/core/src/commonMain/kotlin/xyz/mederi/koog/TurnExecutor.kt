@@ -62,6 +62,7 @@ import xyz.mederi.store.SessionStore
 import xyz.mederi.skills.SkillManager
 import xyz.mederi.tools.ToolFactory
 import xyz.mederi.tools.diff.TurnDiffTracker
+import xyz.mederi.tools.subagent.SubagentManager
 import xyz.mederi.tools.subagent.SubagentRunnerImpl
 import java.time.Instant
 import java.util.UUID
@@ -112,7 +113,13 @@ class TurnExecutor(
     private val projectManager: ProjectManager,
     private val diffStore: DiffStore? = null,
     private val mcpConnector: McpConnector? = null,
-    private val skills: SkillManager? = null
+    private val skills: SkillManager? = null,
+    private val scope: CoroutineScope = CoroutineScope(
+        Dispatchers.IO + SupervisorJob() +
+        CoroutineExceptionHandler { _, error ->
+            DebugLog.error("TurnExec", "Uncaught background error: ${error.message}", error)
+        }
+    )
 ) {
 
     private val subagentRunner = SubagentRunnerImpl(
@@ -122,12 +129,20 @@ class TurnExecutor(
         skills = skills
     )
 
-    private val scope = CoroutineScope(
-        Dispatchers.IO + SupervisorJob() +
-        CoroutineExceptionHandler { _, error ->
-            DebugLog.error("TurnExec", "Uncaught background error: ${error.message}", error)
-        }
+    private val subagentManager = SubagentManager(
+        subagentRunner = subagentRunner,
+        scope = scope
     )
+
+    // 浏览器任务管理：持有 BrowserRegistry（UI 注册 JCEF、core 注册 Camoufox，启动装配时填充）。
+    // 主代理获得 run_browser_task / browser_task_status / stop_browser_task 三个工具；
+    // 注册表为空时 runTask 返回明确错误引导用户配置。
+    private val browserTaskManager: xyz.mederi.browser.BrowserTaskService? =
+        xyz.mederi.browser.BrowserTaskManager(
+            providerManager = providerManager,
+            scope = scope,
+            eventBus = eventBus
+        )
 
     private val activeJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
@@ -668,7 +683,8 @@ class TurnExecutor(
                 modelContextWindow = model.contextWindow,
                 newContextWindowFlag = newContextWindowFlag,
                 diffTracker = diffTracker,
-                subagentRunner = subagentRunner,
+                subagentManager = subagentManager,
+                browserTaskService = browserTaskManager,
                 aiModel = model,
                 reasoningLevel = reasoningLevel,
                 projectId = session.projectId,

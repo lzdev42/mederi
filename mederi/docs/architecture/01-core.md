@@ -23,7 +23,7 @@
 
 ### config 包
 
-- `MederiConfig`（`…/config/MederiConfig.kt`）：可注入容器。`configDir: String?`、`configMigrationRequester: ConfigMigrationRequester?`、`providerStore/projectStore/historyStore/apiKeyStore/sessionStore/diffStore/mcpServerStore`（全部可空 = 默认推导链生效）、`userAgent: String`（出站 HTTP User-Agent，装配层注入，默认 `Mederi/dev`）。
+- `MederiConfig`（`…/config/MederiConfig.kt`）：可注入容器。`configDir: String?`、`configMigrationRequester: ConfigMigrationRequester?`、`providerStore/projectStore/historyStore/apiKeyStore/sessionStore/diffStore/mcpServerStore`（全部可空 = 默认推导链生效）、`userAgent: String`（出站 HTTP User-Agent，装配层注入，默认 `Mederi/dev`）、`camoufoxPath: String?`（Camoufox 二进制路径，浏览器自动化默认实现用）。**浏览器选择走全局 `BrowserRegistry`，不经过 MederiConfig**。
 - `MederiPaths`（`…/config/MederiPaths.kt`）：`root: File`、`dataDir = root/data`、`configDatabaseFile = root/config.db`、`dataDatabaseFile = dataDir/data.db`、`ensureDirectories()`。
 - `ConfigMigrationRequester`（接口，`…/config/ConfigMigrationRequester.kt`）：`suspend fun requestDeletion(legacyFiles: List<String>): Boolean`。
 
@@ -270,6 +270,8 @@ classDiagram
         -activeJobs: ConcurrentHashMap
         -questionRequesters / planApprovalRequesters
         -subagentRunner: SubagentRunnerImpl
+        -subagentManager: SubagentManager   % 异步子代理生命周期管理（spawn 返回 agentId 不阻塞）
+        -browserTaskManager: BrowserTaskService?  % 浏览器任务管理（持有 BrowserRegistry）
         +sendMessage(sessionId, request, subagentRole?)
         -sendMessageInternal()   % durable-first: 用户消息先落库
         -runTurn()               % preflight 压缩 → ToolFactory → buildTurnAgent → agent.run
@@ -313,6 +315,18 @@ classDiagram
         +run(task, briefing, plan, role, workType, directories, aiModel, reasoningLevel, projectId, parentSessionId) String
         % 内存 InMemory store + 独立 TurnExecutor，等终态事件取最后 ASSISTANT
         % 注入 mcpConnector + skills（父 TurnExecutor 透传）；继承开关=AgentCapabilities 表
+        % 传入 scope=继承调用方协程上下文（CoroutineScope(coroutineContext + SupervisorJob())）——
+        % 外部取消能级联取消内部 turn；CancellationException 重新抛出不吞
+    }
+    class SubagentManager {
+        +spawn(...) String agentId   % 后台协程跑 SubagentRunner.run，立即返回 agentId
+        +status(agentId) String      % RUNNING/COMPLETED/ERROR/STOPPED/NOT_FOUND
+        +stop(agentId) String        % cancel job + 部分结果
+        +wait(agentId, timeoutMs) String  % 带超时挂起等待，超时 TIMEOUT（子代理继续后台跑）
+        % agents: ConcurrentHashMap<agentId, BackgroundAgent>；全状态收敛在此表
+    }
+    class SubagentAsyncTools {
+        % agent_status / stop_agent / wait_agent 三个工具，仅主代理可调
     }
     class RetryableLLMClient {
         +execute/executeStreaming/executeMultipleChoices
@@ -323,6 +337,8 @@ classDiagram
     TurnExecutor --> MederiAgentStrategies : graphStrategy
     TurnExecutor --> TurnIncrementalPersister
     TurnExecutor --> SubagentRunnerImpl
+    TurnExecutor --> SubagentManager
+    SubagentManager --> SubagentRunnerImpl
     TurnExecutor --> RetryableLLMClient : retryWrapped
     TurnExecutor --> ToolFactory
     MederiAgentStrategies --> MederiCompressionStrategy
@@ -377,14 +393,17 @@ FS_TOOL_NAMES      = [read_file, write_file, edit_file, list_directory, execute_
 AGENT_TOOL_NAMES   = [update_todo, ask_user]          # get_context_remaining / new_context 已实现未开放
 PLAN_TOOL_NAMES    = [create_plan, generate_spec, write_log, converge_plan]
 SUBAGENT_TOOL_NAMES= [spawn_agent, spawn_researcher]
+SUBAGENT_MGMT_TOOL_NAMES= [agent_status, stop_agent, wait_agent]   # 异步子代理生命周期管理，仅主代理
+BROWSER_TASK_TOOL_NAMES= [run_browser_task, browser_task_status, stop_browser_task, browser_info]  # 浏览器任务，仅主代理
+OFFICE_TOOL_NAMES      = [office_read, office_write]  # Office 文档读写，主代理 + EXECUTOR
 VERIFY_TOOL_NAMES  = [verify_subtask]
 PROCESS_TOOL_NAMES = [list_processes, stop_process]   # 宿主侧进程管理，主代理 + EXECUTOR
-ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + PROCESS
+ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + SUBAGENT_MGMT + BROWSER_TASK + OFFICE + PROCESS
 ```
 
-`build(toolNames, directories, sessionId, historyStore, eventBus, modelContextWindow, newContextWindowFlag, diffTracker?, subagentRunner?, aiModel?, reasoningLevel?, projectId?, questionRequester?, agentMode=AUTONOMOUS, workType?, subagentRole?, planApprovalRequester?, planStore?, notebook?, commandSandbox?, sessionStore?): ToolRegistry`
+`build(toolNames, directories, sessionId, historyStore, eventBus, modelContextWindow, newContextWindowFlag, diffTracker?, subagentManager?, browserTaskService?, aiModel?, reasoningLevel?, projectId?, questionRequester?, agentMode=AUTONOMOUS, workType?, subagentRole?, planApprovalRequester?, planStore?, notebook?, commandSandbox?, sessionStore?): ToolRegistry`
 
-**裁剪规则**：RESEARCHER 只给 read_file/list_directory；子代理（isSubagent）无 plan/spawn/verify/ask_user/todo 工具；主代理 canPlan/canSpawn/canAskUser/canTodo 依赖相应依赖项非空。
+**裁剪规则**：RESEARCHER 只给 read_file/list_directory；子代理（isSubagent）无 plan/spawn/verify/ask_user/todo 工具；主代理 canPlan/canSpawn/canAskUser/canTodo 依赖相应依赖项非空。浏览器任务工具（run_browser_task 等）**仅主代理**，且 `browserTaskService != null` 才注册——子代理（含 BROWSER agent）不派发浏览器任务。
 
 ### 7.2 各工具与安全模型
 
@@ -396,8 +415,10 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + PROCESS
 | `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：**硬门禁**（APPROVED/IN_PROGRESS 计划存在即拒）；校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
 | `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：validatePlan 聚合校验 → PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（superseded/approved/rejected）→ notebook.append → emitPlanTodos（PLAN_PROGRESS + todos 投影）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）+ PLAN_PROGRESS("spec-generated")。converge_plan：append-only 追加补救子任务 |
 | `VerifyTools.kt` | verify_subtask(planId, subtaskIndex, status: PASS/PARTIAL/FAIL, evidence, gapType?, remediation?) | **自动执行** Subtask.verification 命令（shellTools.runCommand, 10s）；PASS 但 exit≠0 → 拒绝存储让模型重判；PASS→COMPLETED、PARTIAL/FAIL→FAILED；**updatePlan 原子写入**验证结果+状态；全部 COMPLETED → plan 置 COMPLETED + `planStore.archive`；发 PLAN_PROGRESS |
-| `subagent/SpawnAgentTool.kt` | spawn_agent(task, briefing, planId, subtaskIndex) / spawn_researcher(task, briefing) | spawn_agent **硬校验** planId/subtaskIndex/spec 存在性（spec 空即拒）→ **updatePlan 原子置 IN_PROGRESS**（并行 spawn 防互相覆盖）→ PLAN_PROGRESS("subtask-started") → subagentRunner.run(plan=st.spec, role=EXECUTOR, briefing 含 planDetail)；spawn_researcher 无计划门禁，role=RESEARCHER, plan=null；独立子任务可同消息并行 spawn（工具并行无上限，由 AI 调度） |
-| `subagent/SubagentRunner(Impl).kt` | 接口 + 实现 | Impl 依赖 ProviderManager+ProjectManager+**mcpConnector+skills（由父 TurnExecutor 注入，仅透传；实际开关在 runTurn 的 AgentCapabilities 表）**；内存 InMemorySessionStore/HistoryStore + 独立 eventBus(replay=64) + 临时 Session(`sub_xxxxxxxx`, AUTONOMOUS) → 独立 TurnExecutor → 按角色拼 inputText（EXECUTOR: spec 清单自顶向下 + SPEC_FEEDBACK 回报机制；RESEARCHER: 只读调研）→ sendMessage(subagentRole=role) → 等 MESSAGE_COMPLETED/ERROR 终态 → 取最后 ASSISTANT 文本；异常转 "[subagent error] ..." |
+| `subagent/SpawnAgentTool.kt` | spawn_agent(task, briefing, planId, subtaskIndex) / spawn_researcher(task, briefing) | **异步派工**：spawn_agent **硬校验** planId/subtaskIndex/spec 存在性（spec 空即拒）→ **updatePlan 原子置 IN_PROGRESS**（并行 spawn 防互相覆盖）→ PLAN_PROGRESS("subtask-started") → `subagentManager.spawn(...)` 立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`（不阻塞父 turn）；spawn_researcher 无计划门禁，role=RESEARCHER, plan=null；需要结果时父代理调 `wait_agent(agentId)`，或 `agent_status`/`stop_agent` 查询/停止 |
+| `subagent/SubagentManager.kt` | spawn/status/stop/wait | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态；stop = cancel job（协程上下文级联取消内部 turn）；wait = withTimeout 轮询状态，超时 TIMEOUT |
+| `subagent/SubagentAsyncTools.kt` | agent_status / stop_agent / wait_agent | 异步子代理管理工具，仅主代理（canSpawn 才注册）：agent_status(agentId)→状态 JSON；stop_agent(agentId)→取消+部分结果；wait_agent(agentId, timeoutMs)→带超时阻塞等结果 |
+| `subagent/SubagentRunner(Impl).kt` | 接口 + 实现 | Impl 依赖 ProviderManager+ProjectManager+**mcpConnector+skills（由父 TurnExecutor 注入，仅透传；实际开关在 runTurn 的 AgentCapabilities 表）**；内存 InMemorySessionStore/HistoryStore + 独立 eventBus(replay=64) + 临时 Session(`sub_xxxxxxxx`, AUTONOMOUS) → 独立 TurnExecutor（**scope 继承调用方协程上下文**，取消可级联）→ 按角色拼 inputText（EXECUTOR: spec 清单自顶向下 + SPEC_FEEDBACK 回报机制；RESEARCHER: 只读调研）→ sendMessage(subagentRole=role) → 等 MESSAGE_COMPLETED/ERROR 终态 → 取最后 ASSISTANT 文本；**CancellationException 重新抛出**（标记 STOPPED）；异常转 "[subagent error] ..." |
 | `sandbox/CommandSandbox.kt` | `CommandSandbox(projectDirs)` + `SandboxStatus` | **永远开、无开关**；读全盘放行、写锁白名单（项目目录 + SandboxConfig.extraWritablePaths + 临时目录 + 构建缓存 ~/.gradle ~/.m2 ~/.cache ~/.konan ~/Library/Caches ~/Library/Java + /dev）；shell 探测链 bash→sh（Windows bash.exe→cmd）；`wrap(command)` → `WrappedCommand(argv, warning, processGroupLeader)`：macOS Seatbelt（sandbox-exec -f，SBPL profile 按白名单 hash 缓存）+ **进程组长包装**（macOS perl `setpgrp(0,0)`+exec / Linux setsid，使整条命令树共享 PGID=直接子进程 pid）/ Linux bwrap 功能烟测（只检测不代装）/ Windows 降级警告（无进程组）；companion `environmentNote()` 注入环境块（含 Process control 行） |
 | `sandbox/ProcessRegistry.kt` | object（全局单例） | **进程组注册表**：`register(pid, pgid, command, workDir)` 只在 runCommand 启动点写入；`list()` 惰性剔除已死组；`killGroup(pid, pgid, force)` 宿主侧 kill -- -pgid / Windows taskkill /T；`isAlive` = kill -0 组探测。安全边界：只杀 mederi spawn 的进程，沙箱内命令无法写注册表 |
 | `sandbox/SandboxConfig.kt` | object | `@Volatile extraWritablePaths` 进程级全局白名单（UI 写穿、下个 turn 生效） |
@@ -406,6 +427,39 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + PROCESS
 | `diff/`模型 | `TurnDiff(sessionId, messageId?, changes: List<FileChange>, unifiedDiff, createdAt)`；`FileChange(path, status, before?, after?)`；`PatchChange(path, status, before?, after?)` | |
 | `patch/PatchParser.kt` | parse(patch): List<PatchHunk> | Codex 风格补丁状态机（`*** Begin Patch / Add File / Delete File / Update File / Move to / @@ / End of File / End Patch`），heredoc 剥离兜底；`PatchHunk = AddFile / DeleteFile / UpdateFile(path, movePath?, chunks)`；`UpdateChunk(changeContext?, oldLines, newLines, isEndOfFile)`；异常 `PatchParseException{InvalidPatch; InvalidHunk}` |
 | `patch/PatchApplier.kt` | seekSequence / computeReplacements / applyReplacements / deriveNewContents | seekSequence 四级放宽匹配（精确→trimEnd→trim→Unicode 标点归一化）；Replacement 游标只增不减；applyReplacements 倒序应用 |
+
+## 7.3 浏览器自动化模块（`…/browser/`，2026-09-14 新增）
+
+**架构**：从 BrowserPilot 取架构经验（4-phase 循环 / AI 自总结记忆 / drill / skill），适配 mederi 的 Koog + 项目体系。浏览器控制抽象在 core，Camoufox（BiDi）是 core 默认实现，JCEF 是 app 层可选实现。
+
+**分层**（commonMain = 核心能力，jvmMain = 平台实现）：
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| commonMain | `…/browser/BrowserControl.kt` | 浏览器控制抽象接口（navigate/click/type/scroll/press/snapshot/screenshot）+ `PageSnapshot(yaml, rawTree)`。**refid 定位**（KBrowser 与 BiDi 同为 refid，API 对齐）；start/close 语义：Camoufox 真拉起/关闭，JCEF 由 UI 拥有生命周期可为幂等空实现 |
+| commonMain | `…/browser/BrowserRegistry.kt` | **浏览器注册中心**：UI 注册 JCEF、core 注册 Camoufox；`BrowserKind(JCEF/CAMOUFOX)`（AI 可感知选择）；resolve/default/list/availableNames；**工厂 suspend**（JCEF 创建 KBPage 需 Main+suspend；Camoufox 工厂仅构造对象，进程启动在 start()） |
+| commonMain | `…/browser/BrowserAgentRunner.kt` | BROWSER agent：4-phase 循环（perceive→decide→execute→postprocess），**不用 Koog ChatMemory**，每步重建 prompt，AI 自总结 memory + 紧凑 step history（10 条），页面快照用完即丢 |
+| commonMain | `…/browser/BrowserActions.kt` | action 模型（navigate/click/type/scroll/done）+ `BrowserDecisionParser`（容错解析 LLM JSON） |
+| commonMain | `…/browser/BrowserTaskManager.kt` | 浏览器任务管理（唯一入口）：异步派发/查状态/停止，**浏览器选择走 BrowserRegistry**（任务记 browserName，status 带 browser），状态收敛在 `tasks` 表，事件发全局 eventBus（BROWSER_TASK_*） |
+| commonMain | `…/browser/BrowserTaskService.kt` | 主代理工具依赖的服务接口（runTask(task,aiModel,reasoning,project,parent,browser?)/taskStatus/stopTask/availableBrowsers/defaultBrowser） |
+| commonMain | `…/browser/BrowserTaskTools.kt` | 主代理 3 工具：`run_browser_task`(task)→taskId / `browser_task_status`(taskId)→状态 / `stop_browser_task`(taskId) |
+| commonMain | `…/browser/bidi/{BiDiModels,OperationResult,BiDiException}.kt` | BiDi 数据模型（AxTreeData/SnapshotMode/KeyboardKey 等，纯 Kotlin） |
+| jvmMain | `…/browser/BiDiBrowserControl.kt` | BrowserControl 的 Camoufox 实现（包装 BiDiBrowser） |
+| jvmMain | `…/browser/BrowserRuntime.kt` | 装配点：`browserHome`（受管目录）+ `camoufoxPath`（手动） |
+| jvmMain | `…/browser/bidi/{BiDiBrowser,BiDiPage,BiDiTransport,BiDiSnapshot,BiDiLocator,BiDiJsScripts,HumanMouse,BiDiLog}.kt` | BiDi 协议层（从 BrowserPilot 直接 copy 改造：包名 + AILogger→BiDiLog） |
+| jvmMain | `…/browser/install/BrowserHome.kt` | 浏览器工作目录（**强制设置**）：camoufox/version.json/skills/drills/reports/records/profiles/config |
+| jvmMain | `…/browser/install/CamoufoxPlatform.kt` | 平台检测：os(mac/lin/win) + arch(arm64/x86_64/i686)；win.arm64 等官方无 asset → supported=false |
+| jvmMain | `…/browser/install/CamoufoxInstaller.kt` | 下载/安装/更新：GitHub 官方 releases，命名 `camoufox-{ver}-{os}.{arch}.zip`；`findLatestForPlatform` 从最新往回找本平台 asset（跨平台发布不同步）；下载→解压→找二进制→写 version.json |
+| jvmMain | `…/browser/install/CamoufoxModels.kt` | release/version.json 数据模型 + 更新检查结果 |
+
+**关键设计决策**：
+- **主代理只派发/看状态，不看细节**：`run_browser_task` 立即返回 taskId；`browser_task_status` 只给 RUNNING/COMPLETED/ERROR/STOPPED；任务步骤细节通过 `BROWSER_TASK_*` 事件给 UI，用户自己看。
+- **BROWSER agent 是自包含的执行器**：内部操作浏览器、自管理记忆，主代理无感。BrowserBrain 判定为后续迭代（P1）。
+- **工具隔离**：浏览器操作不是 Koog Tool，是 BROWSER agent 内部的 action 类型（`BrowserAction`），不经过 ToolFactory，不污染主代理工具集。主代理只看到 run_browser_task 等 3 个派发工具。
+- **LLM 调用**：直接 `KoogClientFactory.create(provider, apiKey)` + `client.execute(prompt, model)` 单次调用，每步重建 prompt。不用 ChatMemory / mederiSingleRunStrategy（tool-calling loop 会累积 page snapshot）。
+- **记忆**：`decision.memory` 是 AI 自总结（无独立总结 LLM 调用）；`StepHistory` 系统维护紧凑文本（最后 10 步）；snapshot 每步新鲜取，rawTree 仅供同批 refid 重映射，用完即丢。
+- **装配与浏览器选择**：全局 `BrowserRegistry`——MederiAiCore（jvmMain）启动注册 `camoufox`（BiDiBrowserControl，二进制 = browserHome 已下载的 > 手动 camoufoxPath）；desktop UI（desktopApp main.kt）注册 `jcef`（JcefBrowserHost.createAiTab → 新建 tab=KBPage，返回 JCEFBrowserControl）。TurnExecutor 直接引用注册中心创建 BrowserTaskManager（注册表为空时 run_browser_task 返回引导错误）。AI 通过 `run_browser_task(browser=name)` 选择，工具描述动态列出可用浏览器 + 选择指引（测自己网页→jcef，第三方自动化→camoufox）。工厂 suspend：JCEF 创建 KBPage 需挂 Main 线程。
+- **Camoufox 下载**：必须在设置里配置 `browserHome`（强制目录，浏览器体积大），`CamoufoxInstaller` 从 GitHub 官方拉取当前平台版本（跨平台不同步→往回找）；安装信息写 version.json；启动时 MederiAiCore 静默 `checkForUpdate` 比对最新。profile 目录用 `browserHome/profiles`（缓存/登录态归置受管目录）。
 
 ## 8. Plan 系统（`…/plan/`）
 
@@ -641,7 +695,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 
 总线 = `SessionManagerImpl` 内 `MutableSharedFlow<MederiEvent>`（replay=0、extraBufferCapacity=256、DROP_OLDEST）。TurnExecutor/工具/RetryableLLMClient/Requester 均 emit。
 
-| EventType（全部 14 个） | payload 约定 |
+| EventType（全部 19 个） | payload 约定 |
 |---|---|
 | `SESSION_CREATED` / `SESSION_UPDATED` | 无 / 状态变化 |
 | `MESSAGE_DELTA` | `type`(text/reasoning/tool_call)、`content`；tool_call 另有 `name`、`state`(running/completed) |
@@ -656,6 +710,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 | `PLAN_PROGRESS` | `planId`、`action`(created/approved/subtask-started/spec-generated/verified/converged/completed)、计数与 `todos`（`Plan.toTodoProjection().encodeTodos()`） |
 | `TODO_UPDATED` | `todos`(JSON)、可选 `explanation` |
 | `STATUS` | 环境态（不落库不改状态机）：`scope=provider`、`code=RETRYING`、`message`、`attempt`、`maxAttempts` |
+| `BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` | 浏览器任务生命周期（异步，UI 浏览器任务面板消费；主代理只经 run_browser_task 等工具查 status）：`taskId`、`status`(STARTED/RUNNING/COMPLETED/ERROR/STOPPED)、`step?`、`thought?`、`results?`、`message?`。sessionId 为空字符串（任务不属于某 session 对话，UI 用 taskId 过滤） |
 
 ## 12. QuestionRequester（`…/question/QuestionRequester.kt`）
 

@@ -3,6 +3,12 @@ package xyz.mederi.tools
 import ai.koog.agents.core.tools.ToolBase
 import ai.koog.agents.core.tools.ToolRegistry
 import kotlinx.coroutines.flow.MutableSharedFlow
+import xyz.mederi.browser.BrowserInfoTool
+import xyz.mederi.browser.BrowserTaskService
+import xyz.mederi.browser.BrowserTaskStatusTool
+import xyz.mederi.browser.RunBrowserTaskTool
+import xyz.mederi.browser.StopBrowserTaskTool
+import xyz.mederi.office.OfficeTools
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.MederiEvent
@@ -14,9 +20,12 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
 import xyz.mederi.tools.diff.TurnDiffTracker
+import xyz.mederi.tools.subagent.AgentStatusTool
 import xyz.mederi.tools.subagent.SpawnAgentTool
 import xyz.mederi.tools.subagent.SpawnResearcherTool
-import xyz.mederi.tools.subagent.SubagentRunner
+import xyz.mederi.tools.subagent.StopAgentTool
+import xyz.mederi.tools.subagent.SubagentManager
+import xyz.mederi.tools.subagent.WaitAgentTool
 import java.util.concurrent.atomic.AtomicBoolean
 
 object ToolFactory {
@@ -31,9 +40,12 @@ object ToolFactory {
     )
     val PLAN_TOOL_NAMES = listOf("create_plan", "generate_spec", "write_log", "converge_plan")
     val SUBAGENT_TOOL_NAMES = listOf("spawn_agent", "spawn_researcher")
+    val SUBAGENT_MGMT_TOOL_NAMES = listOf("agent_status", "stop_agent", "wait_agent")
+    val BROWSER_TASK_TOOL_NAMES = listOf("run_browser_task", "browser_task_status", "stop_browser_task", "browser_info")
+    val OFFICE_TOOL_NAMES = listOf("office_read", "office_write")
     val VERIFY_TOOL_NAMES = listOf("verify_subtask")
     val PROCESS_TOOL_NAMES = listOf("list_processes", "stop_process")
-    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + PROCESS_TOOL_NAMES
+    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + SUBAGENT_MGMT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES
 
     fun build(
         toolNames: List<String>,
@@ -44,7 +56,8 @@ object ToolFactory {
         modelContextWindow: Int?,
         newContextWindowFlag: AtomicBoolean,
         diffTracker: TurnDiffTracker? = null,
-        subagentRunner: SubagentRunner? = null,
+        subagentManager: SubagentManager? = null,
+        browserTaskService: BrowserTaskService? = null,
         aiModel: AIModel? = null,
         reasoningLevel: ReasoningLevel? = null,
         projectId: String? = null,
@@ -71,7 +84,7 @@ object ToolFactory {
         val canWrite = !isResearcher
         val canExecute = !isResearcher
         val canPlan = !isSubagent && planStore != null && planApprovalRequester != null && notebook != null
-        val canSpawn = !isSubagent && subagentRunner != null && aiModel != null && reasoningLevel != null && projectId != null
+        val canSpawn = !isSubagent && subagentManager != null && aiModel != null && reasoningLevel != null && projectId != null
         val canAskUser = !isSubagent && questionRequester != null
         // todo 工具仅主代理：子代理的进度单是 spec 清单，不养第二份进度
         val canTodo = !isSubagent && sessionStore != null
@@ -144,7 +157,7 @@ object ToolFactory {
             mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
                 "spawn_agent" to {
                     SpawnAgentTool(
-                        subagentRunner = subagentRunner!!,
+                        subagentManager = subagentManager!!,
                         directories = directories,
                         aiModel = aiModel!!,
                         reasoningLevel = reasoningLevel!!,
@@ -156,7 +169,7 @@ object ToolFactory {
                 },
                 "spawn_researcher" to {
                     SpawnResearcherTool(
-                        subagentRunner = subagentRunner!!,
+                        subagentManager = subagentManager!!,
                         directories = directories,
                         aiModel = aiModel!!,
                         reasoningLevel = reasoningLevel!!,
@@ -167,7 +180,50 @@ object ToolFactory {
             )
         } else emptyMap()
 
-        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + processToolMap
+        // 异步子代理生命周期管理工具：仅主代理（子代理自身不管理别人）
+        val subagentMgmtToolMap = if (canSpawn) {
+            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                "agent_status" to { AgentStatusTool(subagentManager!!) },
+                "stop_agent" to { StopAgentTool(subagentManager!!) },
+                "wait_agent" to { WaitAgentTool(subagentManager!!) }
+            )
+        } else emptyMap()
+
+        // 浏览器任务工具：仅主代理（子代理不派发浏览器任务）
+        val browserTaskToolMap = if (!isSubagent && browserTaskService != null && aiModel != null && reasoningLevel != null && projectId != null) {
+            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                "run_browser_task" to {
+                    RunBrowserTaskTool(
+                        service = browserTaskService!!,
+                        aiModel = aiModel!!,
+                        reasoningLevel = reasoningLevel!!,
+                        projectId = projectId!!,
+                        sessionId = sessionId
+                    )
+                },
+                "browser_task_status" to { BrowserTaskStatusTool(browserTaskService!!) },
+                "stop_browser_task" to { StopBrowserTaskTool(browserTaskService!!) },
+                "browser_info" to { BrowserInfoTool(browserTaskService!!, sessionId) }
+            )
+        } else emptyMap()
+
+        // Office 文档工具（主代理 + EXECUTOR 可用，RESEARCHER 只读）
+        val officeTools = OfficeTools(directories)
+        val officeToolMap = if (canWrite) {
+            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                "office_read" to { officeTools.OfficeReadTool() },
+                "office_write" to { officeTools.OfficeWriteTool() }
+            )
+        } else if (!isResearcher) {
+            // EXECUTOR 可读不可写？实际上 EXECUTOR canWrite=true。此处保守留空。
+            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                "office_read" to { officeTools.OfficeReadTool() }
+            )
+        } else {
+            emptyMap()
+        }
+
+        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + subagentMgmtToolMap + browserTaskToolMap + officeToolMap + processToolMap
         val requested = if (toolNames.isEmpty()) allAvailableMaps.keys.toList() else toolNames
 
         val built = ToolRegistry {

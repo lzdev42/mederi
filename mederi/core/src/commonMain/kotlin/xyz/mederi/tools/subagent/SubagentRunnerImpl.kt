@@ -1,8 +1,12 @@
 package xyz.mederi.tools.subagent
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlin.coroutines.coroutineContext
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.domain.model.AgentMode
@@ -25,7 +29,6 @@ import xyz.mederi.store.InMemoryHistoryStore
 import xyz.mederi.store.InMemorySessionStore
 import java.time.Instant
 import java.util.UUID
-
 /**
  * [SubagentRunner] 的默认实现。
  *
@@ -84,7 +87,10 @@ class SubagentRunnerImpl(
             projectManager = projectManager,
             diffStore = null,
             mcpConnector = mcpConnector,
-            skills = skills
+            skills = skills,
+            // 继承调用方协程上下文：外部取消（SubagentManager.stop）能级联取消内部 turn，
+            // 避免"外层 job 取消但内层 Koog turn 继续跑"的资源泄漏。
+            scope = CoroutineScope(coroutineContext + SupervisorJob())
         )
 
         val inputText = when (role) {
@@ -151,6 +157,9 @@ class SubagentRunnerImpl(
                 ?.filterIsInstance<MessagePart.Text>()
                 ?.joinToString("") { it.text }
                 ?: "[subagent completed with no response]"
+        } catch (e: CancellationException) {
+            // 协程规范：取消必须重新抛出，不得吞掉（外部 SubagentManager 据此标记 STOPPED）
+            throw e
         } catch (e: Throwable) {
             "[subagent error] ${e.message ?: e.javaClass.simpleName}"
         }

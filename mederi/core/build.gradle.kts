@@ -25,10 +25,18 @@ kotlin {
             implementation(libs.sqldelight.coroutines)
             implementation(libs.ktor.clientCore)
             implementation(libs.ktor.clientCio)
+            implementation(libs.ktor.clientWebsockets)
             implementation(libs.ktor.sse)
+            // Office 文档处理（JVM-only，无 KMP 替代品）：docx/xlsx/pptx 读写 + docx→HTML 预览
+            implementation(libs.poi.ooxml)
+            implementation(libs.mammoth)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+        }
+        jvmTest.dependencies {
+            implementation(libs.kotlin.testJunit)
+            implementation(libs.kotlinx.coroutinesCore)
         }
     }
 }

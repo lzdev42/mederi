@@ -52,7 +52,8 @@ fun RightExtensionPanel(
     isCompact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    var panelWidthDp by remember { mutableStateOf(320f) }
+    var defaultPanelWidthDp by remember { mutableStateOf(340f) }
+    var browserPanelWidthDp by remember { mutableStateOf(850f) }
 
     val currentPanel = viewModel.activeDockPanel
     // 关闭动画期间保持上一个面板渲染（收缩动画中内容不闪空）。
@@ -62,12 +63,23 @@ fun RightExtensionPanel(
         if (currentPanel != null) panelToDisplay = currentPanel
     }
 
-    DebugLog.debug("UI", "RightExtensionPanel: isOpen=$isOpen, currentPanel=$currentPanel, rendering=$panelToDisplay")
+    val isBrowser = panelToDisplay == RightDockPanel.BROWSER
+    val panelWidthDp = if (isBrowser) browserPanelWidthDp else defaultPanelWidthDp
+
+    DebugLog.debug("UI", "RightExtensionPanel: isOpen=$isOpen, currentPanel=$currentPanel, rendering=$panelToDisplay, width=$panelWidthDp")
+
+    val handleWidthChange: (Float) -> Unit = { newWidth ->
+        if (isBrowser) {
+            browserPanelWidthDp = newWidth.coerceIn(400f, 1600f)
+        } else {
+            defaultPanelWidthDp = newWidth.coerceIn(240f, 800f)
+        }
+    }
 
     if (isCompact) {
         RightExtensionPanelContent(
             panelWidthDp = panelWidthDp,
-            onWidthChange = { panelWidthDp = it },
+            onWidthChange = handleWidthChange,
             onClose = onClose,
             panel = panelToDisplay,
             viewModel = viewModel,
@@ -82,7 +94,7 @@ fun RightExtensionPanel(
         ) {
             RightExtensionPanelContent(
                 panelWidthDp = panelWidthDp,
-                onWidthChange = { panelWidthDp = it },
+                onWidthChange = handleWidthChange,
                 onClose = onClose,
                 panel = panelToDisplay,
                 viewModel = viewModel,
@@ -115,6 +127,7 @@ private fun RightExtensionPanelContent(
         RightDockPanel.SUB_AGENTS -> FeatherIcons.Users
         RightDockPanel.ARTIFACTS -> FeatherIcons.File
         RightDockPanel.TERMINAL -> FeatherIcons.Terminal
+        RightDockPanel.BROWSER -> FeatherIcons.Globe
     }
 
     Row(
@@ -136,7 +149,8 @@ private fun RightExtensionPanelContent(
                             change.consume()
                             val dragDp = with(density) { dragAmount.toDp().value }
                             val current = currentWidthState.value
-                            val newWidth = (current - dragDp).coerceIn(200f, 1600f)
+                            val minW = if (panel == RightDockPanel.BROWSER) 400f else 200f
+                            val newWidth = (current - dragDp).coerceIn(minW, 1600f)
                             DebugLog.event("UI", "RightExtensionPanel drag: dragAmountPx=$dragAmount, dragDp=$dragDp, currentWidth=${current}dp, newWidth=${newWidth}dp")
                             onWidthChangeState.value(newWidth)
                         }
@@ -199,6 +213,10 @@ private fun RightExtensionPanelContent(
                         colors = colors
                     )
                     RightDockPanel.TERMINAL -> TerminalPanelContent(
+                        viewModel = viewModel,
+                        colors = colors
+                    )
+                    RightDockPanel.BROWSER -> BrowserPanelContent(
                         viewModel = viewModel,
                         colors = colors
                     )
@@ -1162,4 +1180,51 @@ private fun TextReaderTabContent(
             )
         }
     }
+}
+
+/**
+ * 内置浏览器面板：desktop 注入 UiBrowserHost（tab = KBPage）渲染真内容；
+ * 遥控端/wasm 未注入 → 显示"当前端不可用"占位（不尝试渲染 JCEF）。
+ */
+@Composable
+private fun BrowserPanelContent(
+    viewModel: WorkspaceViewModel,
+    colors: MederiColors
+) {
+    val host = viewModel.appStateRef.uiBrowserHost
+    if (host == null || !host.isAvailable) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(colors.surfaceWorkspace),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Globe,
+                    contentDescription = "内置浏览器",
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(36.dp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "当前端不支持内置浏览器",
+                    color = colors.textSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "仅桌面版可用；遥控端 / Web 端请使用浏览器自动化任务（camoufox 无头）",
+                    color = colors.textMuted,
+                    fontSize = 11.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+        return
+    }
+
+    host.BrowserContent(colors = colors)
 }

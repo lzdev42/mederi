@@ -18,6 +18,13 @@ dependencies {
     // pty 前台进程组发 SIGHUP 使 cloudflared 随之退出（"终端关了进程就死"的语义）。
     // JVM-only 库，无 KMP 替代品，desktop 专属，放这里不进 shared。
     implementation(libs.pty4j)
+
+    // 内置 JCEF 浏览器（多 tab = KBPage）：desktop 宿主专属，UI 端浏览器宿主用。
+    // 与 inkcompose 的 mermaid JCEF worker 共用同一 KBrowser 运行时（useOsr=true）。
+    implementation(libs.kbrowser)
+
+    // 图标库：用于浏览器工具栏后退、前进、刷新等图标
+    implementation(libs.composeIcons.feather)
 }
 
 compose.desktop {

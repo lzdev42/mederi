@@ -201,7 +201,8 @@ Complete example (shape to follow, content from your real task):
 ```
 
 After approval, per subtask: generate_spec(planId, subtaskIndex, spec) with the
-spec as an ordered checklist, then spawn_agent(planId, subtaskIndex), then
-verify_subtask(planId, subtaskIndex, status, evidence).
+spec as an ordered checklist, then spawn_agent(planId, subtaskIndex) — returns an
+agentId (the subagent runs in the background) — then wait_agent(agentId) to get
+its result, then verify_subtask(planId, subtaskIndex, status, evidence).
 """.trimIndent()
 }

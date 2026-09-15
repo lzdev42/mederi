@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import okio.ByteString.Companion.decodeBase64
@@ -134,7 +136,8 @@ enum class RightDockPanel(val title: String) {
     PLAN("实施计划"),
     SUB_AGENTS("子 Agent 协同"),
     ARTIFACTS("文档与媒体"),
-    TERMINAL("终端")
+    TERMINAL("终端"),
+    BROWSER("内置浏览器")
 }
 
 data class PlanItem(
@@ -382,6 +385,27 @@ class WorkspaceViewModel(
 
     fun closeDockPanel() {
         activeDockPanel = null
+    }
+
+    /**
+     * 在内置浏览器面板预览 Office 文档（.docx/.xlsx/.pptx）。
+     * 调 core 转换为 HTML → 注入 uiBrowserHost.loadHtml → 自动打开浏览器面板。
+     */
+    fun previewOffice(path: String) {
+        val host = appState.uiBrowserHost ?: return
+        if (!host.isAvailable) return
+        val conversationId = this.conversationId ?: return
+        viewModelScope.launch {
+            appState.aiCore.previewOffice(conversationId, path)
+                .onSuccess { html ->
+                    val title = path.substringAfterLast('/').ifBlank { "Office Preview" }
+                    host.loadHtml(title, html)
+                    openDockPanel(RightDockPanel.BROWSER)
+                }
+                .onFailure { err ->
+                    DebugLog.event("UI", "previewOffice failed: ${err.message}")
+                }
+        }
     }
 
     /** Skill 唯一真理源代理（与 AppState 共享同一实例） */
@@ -1257,6 +1281,22 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
             appState.selectedConversationId.collect { id ->
                 if (id != conversationId) attach(id)
             }
+        }
+        // 浏览器任务监听（app 级，不绑定会话）：子 agent 启动内置 JCEF 浏览器 → 自动展开浏览器面板。
+        // 遥控端/wasm 端 uiBrowserHost 为 null（canRenderJcef=false）→ 不展开；camoufox 无头任务不展开。
+        // 先等 isReady：MederiAiCore.events() 访问 lateinit mederi，初始化完成前订阅会崩。
+        viewModelScope.launch {
+            appState.aiCore.isReady.first { it }
+            appState.aiCore.events()
+                .filter {
+                    it.type == xyz.mederi.core.contract.models.CoreEventType.BROWSER_TASK_STARTED &&
+                        it.payload["browser"] == "jcef"
+                }
+                .collect {
+                    if (appState.canRenderJcef && activeDockPanel != RightDockPanel.BROWSER) {
+                        openDockPanel(RightDockPanel.BROWSER)
+                    }
+                }
         }
     }
 

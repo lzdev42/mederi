@@ -175,7 +175,17 @@ enum class CoreEventType {
      * 业务结果"的事实。payload: scope/code/message/attempt/maxAttempts。
      * UI 据此在状态栏显示"重试中"；会话 status 仍为 Working，不进 Error。
      */
-    STATUS
+    STATUS,
+
+    /**
+     * 浏览器任务事件。payload: taskId / status / browser(jcef|camoufox) / step / thought / message。
+     * UI 据此展开浏览器面板（browser=="jcef" 时自动展开 JCEF 窗口）。
+     */
+    BROWSER_TASK_STARTED,
+    BROWSER_TASK_STEP,
+    BROWSER_TASK_COMPLETED,
+    BROWSER_TASK_ERROR,
+    BROWSER_TASK_STOPPED
 }
 
 /**
