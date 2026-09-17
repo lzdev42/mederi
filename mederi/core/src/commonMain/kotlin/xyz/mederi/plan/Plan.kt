@@ -97,7 +97,7 @@ enum class ProjectContextType { GREENFIELD, BROWNFIELD }
  * [dataAndParams] 可选：读写的数据源 + 新增/变更的参数及默认值；不涉及数据/参数的任务为空。
  *
  * [sessionId] 将 plan 与对话记录关联，TurnExecutor 按 sessionId 加载活跃计划。
- * [architecture] 可选，存放 Mermaid/PlantUML 代码块，UI 用 InkCompose 渲染。
+ * [architecture] 可选，存放 Mermaid 代码块（InkCompose 唯一可渲染的图表格式，其他语法只降级为源码展示）。
  */
 @Serializable
 data class Plan(

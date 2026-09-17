@@ -65,6 +65,8 @@ import xyz.emuci.markdown.renderer.internal.core.model.DiagramBlockModel
 import xyz.emuci.markdown.renderer.internal.core.model.DiagramBlockWidgetModel
 import xyz.emuci.markdown.renderer.internal.core.model.VerticalTextBlockModel
 import xyz.emuci.markdown.renderer.internal.core.model.VerticalTextBlockWidgetModel
+import xyz.emuci.markdown.renderer.internal.util.parseDimensionDp
+import xyz.emuci.markdown.renderer.internal.util.parseFontSizeSp
 import xyz.emuci.markdown.renderer.internal.core.model.DirectiveBlockModel
 import xyz.emuci.markdown.renderer.internal.core.model.FallbackContainerBlockModel
 import xyz.emuci.markdown.renderer.internal.core.model.FallbackLeafBlockModel
@@ -239,14 +241,22 @@ private fun compileBlock(
             ),
         )
 
-        is VerticalTextBlock -> VerticalTextBlockModel(
-            identity = identity,
-            text = node.literal,
-            widget = VerticalTextBlockWidgetModel(
+        is VerticalTextBlock -> {
+            val h = parseDimensionDp(node.height)
+            val fs = parseFontSizeSp(node.fontSize)
+            val isWrap = node.wrap ?: false
+            VerticalTextBlockModel(
                 identity = identity,
                 text = node.literal,
-            ),
-        )
+                widget = VerticalTextBlockWidgetModel(
+                    identity = identity,
+                    text = node.literal,
+                    height = h,
+                    fontSize = fs,
+                    wrap = isWrap,
+                ),
+            )
+        }
 
         is HtmlBlock -> HtmlBlockModel(
             identity = identity,

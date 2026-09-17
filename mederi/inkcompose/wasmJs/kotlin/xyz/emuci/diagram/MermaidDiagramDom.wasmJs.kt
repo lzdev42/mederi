@@ -157,7 +157,7 @@ internal object MermaidDiagramDom {
                     lastThemeKey = themeKey;
                   }
                   seq++;
-                  var renderId = 'mederi-m' + id + '-' + seq;
+                  var renderId = 'ink-m' + id + '-' + seq;
                   console.log('[MermaidDiagramJS] calling mermaid.render: ' + renderId);
                   return mermaid.render(renderId, code).then(function(result) {
                     return new Promise(function(resolve) {

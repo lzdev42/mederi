@@ -483,13 +483,51 @@ class HtmlRenderer(
     }
 
     override fun visitVerticalTextBlock(node: VerticalTextBlock) {
-        val attrs = mapOf<String, String?>("class" to "vtext vertical-text", "style" to "writing-mode: vertical-rl; text-orientation: mixed;")
+        val classNames = buildList {
+            add("vtext")
+            add("vertical-text")
+            addAll(node.attributes.classes)
+        }.joinToString(" ")
+
+        val style = buildString {
+            append("writing-mode: vertical-lr; text-orientation: mixed; font-family: 'Noto Sans Mongolian', sans-serif; max-width: 100%; box-sizing: border-box;")
+            node.height?.let { h ->
+                val cssH = formatCssDimension(h)
+                append(" height: $cssH;")
+            }
+            node.fontSize?.let { s ->
+                val cssS = formatCssDimension(s)
+                append(" font-size: $cssS;")
+            }
+            if (node.wrap == true) {
+                append(" white-space: normal; overflow-x: auto;")
+            } else {
+                append(" white-space: pre; overflow-x: auto; overflow-y: auto;")
+            }
+        }
+
+        val attrs = buildMap<String, String?> {
+            put("class", classNames)
+            put("style", style)
+            node.attributes.id?.let { put("id", it) }
+        }
         tag("div", attrs)
         sb.append('\n')
         sb.append(escape(node.literal))
         sb.append('\n')
         closeTag("div")
         sb.append('\n')
+    }
+
+    private fun formatCssDimension(raw: String): String {
+        val trimmed = raw.trim()
+        val num = trimmed.toDoubleOrNull()
+        if (num != null) return "${num}px"
+        if (trimmed.endsWith("dp", ignoreCase = true) || trimmed.endsWith("sp", ignoreCase = true)) {
+            val prefix = trimmed.substring(0, trimmed.length - 2).trim()
+            if (prefix.toDoubleOrNull() != null) return "${prefix}px"
+        }
+        return trimmed
     }
 
     override fun visitColumnsLayout(node: ColumnsLayout) {
@@ -863,6 +901,133 @@ class HtmlRenderer(
             val parser = xyz.emuci.markdown.parser.MarkdownParser(flavour)
             val document = parser.parse(markdown)
             return HtmlRenderer(softBreak = softBreak, escapeHtml = escapeHtml).render(document)
+        }
+
+        /**
+         * 将 Markdown AST 渲染为完整的、自包含样式的独立 HTML 页面。
+         *
+         * 适合在 WebView / JCEF 中离屏加载并执行打印（Print to PDF）。
+         *
+         * @param document Markdown AST
+         * @param title 页面标题
+         * @param customCss 自定义附加 CSS
+         * @param embeddedFontBase64 可选 Base64 编码的 Noto Sans Mongolian TTF 字体
+         */
+        fun renderFullHtmlPage(
+            document: Document,
+            title: String = "Markdown Export",
+            customCss: String = "",
+            embeddedFontBase64: String? = null,
+        ): String {
+            val bodyHtml = HtmlRenderer().render(document)
+            val fontFaceCss = if (!embeddedFontBase64.isNullOrBlank()) {
+                """
+                @font-face {
+                    font-family: 'Noto Sans Mongolian';
+                    src: url('data:font/truetype;charset=utf-8;base64,$embeddedFontBase64') format('truetype');
+                    font-weight: normal;
+                    font-style: normal;
+                }
+                """.trimIndent()
+            } else ""
+
+            return """
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>${escapeHtmlText(title)}</title>
+                <style>
+                    $fontFaceCss
+                    
+                    /* Reset & Base Typography */
+                    *, *::before, *::after { box-sizing: border-box; }
+                    body {
+                        margin: 0;
+                        padding: 32px;
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+                        font-size: 16px;
+                        line-height: 1.6;
+                        color: #24292f;
+                        background-color: #ffffff;
+                    }
+                    
+                    /* Markdown Body Defaults */
+                    h1, h2, h3, h4, h5, h6 { margin-top: 24px; margin-bottom: 16px; font-weight: 600; line-height: 1.25; }
+                    h1 { font-size: 2em; border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
+                    h2 { font-size: 1.5em; border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
+                    h3 { font-size: 1.25em; }
+                    p { margin-top: 0; margin-bottom: 16px; }
+                    blockquote { margin: 0 0 16px; padding: 0 1em; color: #57606a; border-left: .25em solid #d0d7de; }
+                    ul, ol { padding-left: 2em; margin-top: 0; margin-bottom: 16px; }
+                    table { border-spacing: 0; border-collapse: collapse; margin-top: 0; margin-bottom: 16px; width: 100%; overflow: auto; display: block; }
+                    table th, table td { padding: 6px 13px; border: 1px solid #d0d7de; }
+                    table tr:nth-child(2n) { background-color: #f6f8fa; }
+                    
+                    /* Code Blocks */
+                    pre {
+                        padding: 16px;
+                        overflow: auto;
+                        font-size: 85%;
+                        line-height: 1.45;
+                        background-color: #f6f8fa;
+                        border-radius: 6px;
+                        margin-top: 0;
+                        margin-bottom: 16px;
+                        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+                    }
+                    code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+                    
+                    /* Math & Diagram */
+                    .math-display { text-align: center; margin: 16px 0; overflow-x: auto; }
+                    
+                    /* Vertical Text (vlr) Container */
+                    .vtext, .vertical-text {
+                        background-color: #f6f8fa;
+                        border-radius: 6px;
+                        padding: 16px;
+                        margin-bottom: 16px;
+                        border: 1px solid #e1e4e8;
+                    }
+                    
+                    /* Page Break */
+                    .page-break {
+                        display: block;
+                        height: 0;
+                        page-break-after: always;
+                        break-after: page;
+                    }
+                    
+                    /* Print Media Settings */
+                    @media print {
+                        body { padding: 0; }
+                        pre, code, table, img, .admonition, .math-display, .vtext {
+                            break-inside: avoid;
+                            page-break-inside: avoid;
+                        }
+                    }
+                    
+                    $customCss
+                </style>
+            </head>
+            <body>
+            $bodyHtml
+            </body>
+            </html>
+            """.trimIndent()
+        }
+
+        private fun escapeHtmlText(text: String): String = buildString(text.length) {
+            for (ch in text) {
+                when (ch) {
+                    '&' -> append("&amp;")
+                    '<' -> append("&lt;")
+                    '>' -> append("&gt;")
+                    '"' -> append("&quot;")
+                    else -> append(ch)
+                }
+            }
         }
     }
 }

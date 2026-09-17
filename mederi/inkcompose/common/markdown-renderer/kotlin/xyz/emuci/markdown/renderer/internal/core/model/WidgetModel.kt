@@ -1,5 +1,7 @@
 package xyz.emuci.markdown.renderer.internal.core.model
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import xyz.emuci.markdown.renderer.internal.core.identity.RenderIdentity
 
 sealed interface RenderWidgetModel {
@@ -70,4 +72,7 @@ data class DiagramBlockWidgetModel(
 data class VerticalTextBlockWidgetModel(
     override val identity: RenderIdentity,
     val text: String,
+    val height: Dp? = null,
+    val fontSize: TextUnit? = null,
+    val wrap: Boolean = false,
 ) : BlockWidgetModel

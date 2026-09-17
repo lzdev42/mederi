@@ -458,4 +458,33 @@ class HtmlRendererTest {
         assertContains(html, "<h1")
         assertContains(html, "Test")
     }
+
+    @Test
+    fun should_render_vlr_block_with_vertical_lr_and_attributes() {
+        val md = "```vlr {height=300dp fontSize=18sp wrap=true}\nᠮᠣᠩᠭᠣᠯ\n```"
+        val html = render(md)
+        assertContains(html, "writing-mode: vertical-lr")
+        assertContains(html, "height: 300px")
+        assertContains(html, "font-size: 18px")
+        assertContains(html, "white-space: normal")
+        assertContains(html, "ᠮᠣᠩᠭᠣᠯ")
+    }
+
+    @Test
+    fun should_render_vlr_block_with_wrap_false() {
+        val md = "```vlr {wrap=false}\nᠮᠣᠩᠭᠣᠯ\n```"
+        val html = render(md)
+        assertContains(html, "writing-mode: vertical-lr")
+        assertContains(html, "white-space: pre")
+    }
+
+    @Test
+    fun should_render_full_html_page() {
+        val doc = MarkdownParser().parse("# Title\n\n```vlr\nᠮᠣᠩᠭᠣᠯ\n```")
+        val fullHtml = HtmlRenderer.renderFullHtmlPage(doc, title = "My Document")
+        assertContains(fullHtml, "<!DOCTYPE html>")
+        assertContains(fullHtml, "<title>My Document</title>")
+        assertContains(fullHtml, "@media print")
+        assertContains(fullHtml, "writing-mode: vertical-lr")
+    }
 }

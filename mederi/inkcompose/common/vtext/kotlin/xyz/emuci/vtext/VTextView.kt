@@ -58,6 +58,7 @@ fun VTextView(
             baselineShift = config.baselineShift,
             fixedWidth = config.fixedWidth,
             columnSpacing = config.columnSpacing,
+            softWrap = config.softWrap,
         )
     }
 

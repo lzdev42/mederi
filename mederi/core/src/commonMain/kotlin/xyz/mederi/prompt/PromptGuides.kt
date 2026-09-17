@@ -103,6 +103,7 @@ Use GitHub-style alerts strategically to emphasize critical information. They wi
   > High-risk actions that could cause data loss or security vulnerabilities
 
 ## Mermaid Diagrams
+Mermaid is the only diagram format we can render — use ```mermaid for ALL diagrams (flow, sequence, architecture, ER, Gantt...). Never emit PlantUML/DOT/d2 or other diagram DSLs unless the user explicitly asks for that format as source text (they would show as plain code, not a diagram).
 Create mermaid diagrams using fenced code blocks with language `mermaid` to visualize complex relationships, workflows, and architectures.
 To prevent syntax errors:
 - Quote node labels containing special characters like parentheses or brackets. For example, `id["Label (Extra Info)"]` instead of `id[Label (Extra Info)]`.
@@ -120,12 +121,17 @@ graph TD
      * Mermaid 绘图与架构图拆分规范。
      *
      * 核心规则：
+     * - 能力边界：只有 Mermaid 能渲染成图，所有结构图必须用 ```mermaid；PlantUML/DOT 等只会显示源码
      * - 语法安全：特殊字符用引号、禁用 HTML 标签、避免未转义字符
      * - 结构拆分：严禁单张巨图；先总览后分层/分模块详解；每图单一关注点；嵌套超一层或连线混乱即拆分
      */
     val MERMAID_GUIDELINES: String = """
 # Mermaid Tips
 
+- Mermaid is the ONLY diagram format we render: every diagram must be a
+  ```mermaid block. PlantUML / Graphviz DOT / d2 have no renderer and would
+  display as plain source — do not emit them unless the user explicitly asks
+  for that format as text.
 - Quote labels that contain special characters: `id["Label (v2)"]`.
 - No raw HTML inside labels.
 - One concern per diagram. Split a complex system into an overview plus one

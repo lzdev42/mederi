@@ -18,7 +18,7 @@ class MermaidDiskCacheTest {
 
     @BeforeTest
     fun setUp() {
-        tempDir = Files.createTempDirectory("mederi-mermaid-test").toFile()
+        tempDir = Files.createTempDirectory("inkcompose-mermaid-test").toFile()
         MermaidCacheConfig.setBaseDirectory(tempDir.absolutePath)
     }
 

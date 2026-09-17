@@ -1548,4 +1548,26 @@ class VerticalTextBlockTest {
         assertIs<BlockQuote>(quote)
         assertIs<VerticalTextBlock>(quote.children.first())
     }
+
+    @Test
+    fun should_parse_vlr_attributes() {
+        val md = "```vlr {height=300dp fontSize=18sp wrap=true}\nᠮᠣᠩᠭᠣᠯ\n```"
+        val doc = parser.parse(md)
+        val block = doc.children.first()
+        assertIs<VerticalTextBlock>(block)
+        assertEquals("300dp", block.height)
+        assertEquals("18sp", block.fontSize)
+        assertEquals(true, block.wrap)
+    }
+
+    @Test
+    fun should_parse_vlr_wrap_false_and_aliases() {
+        val md = "```vlr {h=250px font-size=16px autowrap=false}\nᠮᠣᠩᠭᠣᠯ\n```"
+        val doc = parser.parse(md)
+        val block = doc.children.first()
+        assertIs<VerticalTextBlock>(block)
+        assertEquals("250px", block.height)
+        assertEquals("16px", block.fontSize)
+        assertEquals(false, block.wrap)
+    }
 }

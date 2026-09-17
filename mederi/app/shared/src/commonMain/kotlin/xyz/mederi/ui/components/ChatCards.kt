@@ -19,6 +19,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -207,19 +209,23 @@ fun ReasoningBlock(
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
-            Row(
+            val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(IntrinsicSize.Min)
-                    .padding(vertical = 3.dp, horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(vertical = 3.dp, horizontal = 4.dp)
+                    .drawBehind {
+                        val strokeWidth = 2.dp.toPx()
+                        drawLine(
+                            color = railColor,
+                            start = Offset(strokeWidth / 2f, 0f),
+                            end = Offset(strokeWidth / 2f, size.height),
+                            strokeWidth = strokeWidth,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                    .padding(start = 12.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .width(2.dp)
-                        .fillMaxHeight()
-                        .background(if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD))
-                )
                 MarkdownView(
                     content = text,
                     modifier = Modifier.fillMaxWidth(),

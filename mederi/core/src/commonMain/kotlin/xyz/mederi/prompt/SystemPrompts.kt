@@ -241,11 +241,16 @@ above is guidance — use your judgment.
 
 Your reply renders as rich Markdown: headings, lists, tables, fenced code
 blocks (with a language tag), LaTeX math (inline `${'$'}...${'$'}` and display
-`${'$'}${'$'}...${'$'}${'$'}`), and Mermaid / PlantUML / DOT diagrams.
+`${'$'}${'$'}...${'$'}${'$'}`), and Mermaid diagrams.
 
-Most requests are answered in the reply itself. For a diagram, output a fenced
-```mermaid block — it renders inline. Create a file only when the user asks to
-persist something into the project.
+Mermaid is the ONLY diagram format that renders. For any diagram — flow,
+sequence, architecture, ER, state, Gantt — output a fenced ```mermaid block;
+it renders inline. We have no PlantUML / Graphviz DOT / d2 renderer: such
+blocks would show as plain source code, so never emit them unless the user
+explicitly asks for that format as text.
+
+Most requests are answered in the reply itself. Create a file only when the
+user asks to persist something into the project.
 """
 
     // ============================ Code 模式 ============================

@@ -160,13 +160,17 @@ internal fun VerticalText(
     Spacer(
         modifier = modifier
             .layout { measurable, constraints ->
-                // 横排 maxWidth = 竖排列高，决定何时换列
-                val measuredMaxWidth = if (constraints.hasBoundedHeight) constraints.maxHeight else Constraints.Infinity
+                // 横排 maxWidth = 竖排列高，决定何时换列（仅在高度有界且启用 softWrap 时按高度折列）
+                val measuredMaxWidth = if (constraints.hasBoundedHeight && config.softWrap) {
+                    constraints.maxHeight
+                } else {
+                    Constraints.Infinity
+                }
                 val result = textMeasurer.measure(
                     text = annotatedText,
                     style = measuredStyle,
                     constraints = Constraints(maxWidth = measuredMaxWidth),
-                    softWrap = true,
+                    softWrap = config.softWrap,
                 )
                 onTextLayout(result)
 

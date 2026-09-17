@@ -51,13 +51,26 @@ import xyz.mederi.theme.MederiColors
 import java.io.File
 
 /**
+ * 内置浏览器 KBrowser 渲染模式总开关（实验性）：
+ * false = 非 OSR（CEF 原生窗口渲染，支持 WebGL 满帧，但不能叠加 Compose 元素）；
+ * true = OSR（离屏渲染，融入 Compose 视图树）。非 OSR 验证不佳时改回 true 即整体回退。
+ *
+ * 注意：KBrowser.useOsrMode 是进程级全局字段（后写覆盖），inkcompose 的 mermaid worker
+ * 会为其后台页面写回 true；因此每个 tab 创建 newPage 前都要重新断言本开关值。
+ * 进程级 CefApp（windowless_rendering_enabled / remote 模式）由最先执行
+ * initializeKBrowser() 的一方定死，mermaid worker 若在浏览器之前初始化过，
+ * 两种模式并存的行为未定义——这是本实验的已知风险点。
+ */
+private const val BROWSER_USE_OSR = false
+
+/**
  * 内置 JCEF 浏览器宿主：一个 tab = 一个 [KBPage] 的轻量标签容器。
  *
  * - AI 任务启动 → [createAiTab] 新建专属 KBPage tab，返回绑定它的 [JCEFBrowserControl]；
  *   同时自动切到该 tab（用户能看到 AI 在做什么）。
  * - 用户可手动开新 tab / 关 tab；切 tab 不影响已绑定页面（AI 操作作用在绑定 KBPage 上）。
- * - KBrowser 初始化惰性（首次创建 tab 时），useOsr=true 与 inkcompose 的 mermaid worker 一致
- *   （KBrowser.initializeConfig 幂等，重复调用只覆盖字段）。
+ * - KBrowser 初始化惰性（首次创建 tab 时），渲染模式由 [BROWSER_USE_OSR] 控制
+ *   （KBrowser.initializeConfig 只覆盖全局字段，重复调用安全）。
  */
 class JcefBrowserHost(
     private val kbrowserStorageDir: String = System.getProperty("java.io.tmpdir") + File.separator + "mederi-jcef",
@@ -80,12 +93,17 @@ class JcefBrowserHost(
 
     override val isAvailable: Boolean get() = JcefChecker.isJcefAvailable
 
+    /** 重新断言本宿主的渲染模式（mermaid worker 可能已把全局 useOsrMode 改写）。 */
+    private fun applyRenderMode() {
+        KBrowser.initializeConfig(kbrowserStorageDir, useOsr = BROWSER_USE_OSR)
+    }
+
     /** 初始化 KBrowser（惰性、幂等、线程安全；JCEF 不可用返回 false）。 */
     private suspend fun ensureInit(): Boolean = initMutex.withLock {
         if (initialized) return@withLock true
         if (!JcefChecker.isJcefAvailable) return@withLock false
         File(kbrowserStorageDir).mkdirs()
-        KBrowser.initializeConfig(kbrowserStorageDir, useOsr = true)
+        applyRenderMode()
         initializeKBrowser()
         initialized = true
         true
@@ -110,6 +128,7 @@ class JcefBrowserHost(
             throw IllegalStateException("JCEF 不可用：当前 JBR 缺少 jcef 支持")
         }
         return withContext(Dispatchers.Main) {
+            applyRenderMode()
             val page = KBrowser.newPage()
             val tab = BrowserTab(nextTabId++, page, taskId = taskId)
             bindTab(tab)
@@ -161,6 +180,7 @@ class JcefBrowserHost(
     suspend fun createUserTab(): BrowserTab {
         if (!ensureInit()) throw IllegalStateException("JCEF 不可用")
         return withContext(Dispatchers.Main) {
+            applyRenderMode()
             val page = KBrowser.newPage()
             val tab = BrowserTab(nextTabId++, page)
             bindTab(tab)
@@ -182,6 +202,7 @@ class JcefBrowserHost(
     override fun loadHtml(title: String, html: String) {
         kotlinx.coroutines.runBlocking(Dispatchers.Main) {
             if (!ensureInit()) return@runBlocking
+            applyRenderMode()
             val page = KBrowser.newPage()
             // data URL 方式加载 HTML（避免依赖 KBPage.loadHtml 方法是否存在）
             val encoded = java.util.Base64.getEncoder().encodeToString(html.toByteArray(Charsets.UTF_8))

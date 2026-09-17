@@ -27,6 +27,7 @@ data class VTextConfig(
     val baselineShift: Float = DEFAULT_BASELINE_SHIFT,
     val fixedWidth: Boolean = true,
     val columnSpacing: Dp = DEFAULT_COLUMN_SPACING,
+    val softWrap: Boolean = false,
 )
 
 internal data class VTextInternalConfig(
@@ -35,6 +36,7 @@ internal data class VTextInternalConfig(
     val baselineShift: Float = DEFAULT_BASELINE_SHIFT,
     val fixedWidth: Boolean = true,
     val columnSpacing: Dp = DEFAULT_COLUMN_SPACING,
+    val softWrap: Boolean = false,
 )
 
 /**

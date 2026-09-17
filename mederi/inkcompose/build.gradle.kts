@@ -99,6 +99,7 @@ kotlin {
                 implementation(compose.desktop.currentOs)
                 // JVM 上 Ktor 需要 CIO 等引擎，无默认引擎
                 implementation(libs.ktor.clientCio)
+                implementation(libs.kotlinx.coroutinesSwing)
             }
         }
         jvmTest {

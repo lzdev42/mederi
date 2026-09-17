@@ -381,7 +381,15 @@ class DiagramBlock(
  */
 class VerticalTextBlock(
     /** 原始文字内容 */
-    override var literal: String = ""
+    override var literal: String = "",
+    /** 容器固定高度约束，如 "300dp"、"300px" */
+    var height: String? = null,
+    /** 字号大小，如 "18sp"、"18px" */
+    var fontSize: String? = null,
+    /** 是否自动折行换列；null 表示未显式指定 */
+    var wrap: Boolean? = null,
+    /** Kramdown / Pandoc 风格扩展属性集 */
+    var attributes: Attributes = Attributes(),
 ) : LeafNode() {
     override fun <R> accept(visitor: NodeVisitor<R>): R = visitor.visitVerticalTextBlock(this)
 }

@@ -219,7 +219,7 @@ class PlanTools(
         @LLMDescription("Success criteria: how to know the task is done. Also the verification basis.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val successCriteria: List<String> = emptyList(),
-        @LLMDescription("Optional: Mermaid or PlantUML diagram code for architecture visualization.")
+        @LLMDescription("Optional: Mermaid diagram code (without fence) for architecture visualization. Mermaid is the only diagram format the UI renders; do not use PlantUML/DOT or other DSLs.")
         val architecture: String? = null,
         @LLMDescription("Subtask list (the skeleton). Each must include name, brief intent, targetFiles (Code mode), and verification. Detailed implementation specs are generated after approval via generate_spec.")
         val subtasks: List<SubtaskArg>

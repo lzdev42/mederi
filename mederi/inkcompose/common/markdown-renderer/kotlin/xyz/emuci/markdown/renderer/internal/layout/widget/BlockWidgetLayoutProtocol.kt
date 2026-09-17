@@ -79,13 +79,15 @@ private fun measureVerticalTextWidget(
     widget: VerticalTextBlockWidgetModel,
     viewportWidthPx: Float,
 ): BlockWidgetMeasurement {
-    // 竖排文字：每列宽度约等于行高（字号 × 1.6），列数由文字长度决定
-    val charCount = widget.text.length.coerceAtLeast(1)
-    // 估算：每列可容纳字符数 = 视口高度 / 行高，按视口高约 200px 的保守估算
-    val charsPerColumn = 8
-    val preferredHeight = minOf(charCount, charsPerColumn) * 24f + 24f
+    val preferredHeight = if (widget.height != null) {
+        widget.height.value * 2f
+    } else {
+        val lines = widget.text.lines()
+        val maxCharsPerColumn = lines.maxOfOrNull { it.length }?.coerceAtLeast(1) ?: 1
+        maxCharsPerColumn * 24f + 20f
+    }
     return BlockWidgetMeasurement(
         widthPx = viewportWidthPx,
-        heightPx = preferredHeight.coerceAtLeast(120f),
+        heightPx = preferredHeight.coerceAtLeast(24f),
     )
 }
