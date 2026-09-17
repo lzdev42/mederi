@@ -525,8 +525,8 @@ classDiagram
         <<object>>
         +create(provider, apiKey) LLMClient
         -createOpenAIClient(provider, apiKey)
-        % responseSanitization||reasoningParameter!=null → MederiOpenAILLMClient
-        % 否则 Koog 原版 OpenAILLMClient
+        % 始终 MederiOpenAILLMClient（超集：解析 reasoning_content/reasoning）
+        % 标准 Koog OpenAILLMClient 无 reasoningContent 字段会静默丢弃推理内容
         -createGoogleClient(provider, apiKey) GoogleLLMClient
     }
     class KoogModelBuilder {
@@ -546,6 +546,7 @@ classDiagram
         % 覆盖 Koog 默认 client 的兼容性修复
         % reasoning_content + vLLM `reasoning` 别名; Ktor SSE 自建解析
         % Responses API 全套自实现(delta 事件→StreamFrame)
+        % SSE 自计空闲超时: SSE_IDLE_TIMEOUT=10min 无任何行(含 keep-alive)才判死连接
     }
     class RetryableLLMClient {
         +maxRetries=10, minDelayMs=1s, maxDelayMs=10s
@@ -583,6 +584,8 @@ classDiagram
         +create(clientName, baseUrl, headers, ...) KoogHttpClient
         +userAgent: String  % @Volatile, 装配层注入(MederiConfig.userAgent)
         % 出站 HTTP 唯一工厂: 统一注入 User-Agent 身份头(权威覆盖同名头)
+        % 禁用 Koog/Ktor requestTimeout+socketTimeout(0): 超长推理不被总时限切断
+        % 连接死亡超时由 MederiOpenAILLMClient.SSE_IDLE_TIMEOUT 自计
         % 禁止在其他位置直接 HttpClientFactoryResolver.resolve()
     }
     KoogClientFactory --> MederiHttpClientFactory
@@ -597,7 +600,7 @@ classDiagram
 
 **sanitize 包**（`…/provider/infrastructure/koog/sanitize/`）：`MederiOpenAILLMClient`（非流式/流式 Chat Completions 用 SanitizedModels 解析；`executeResponsesAPI/buildResponsesRequestJson/executeStreamingResponsesAPI/processResponsesStreamingFlow` 自实现 Responses；`processStreamingFlow` Chat 流式帧 toolCall index 归一化）、`SanitizeJson`（Json: ignoreUnknownKeys+isLenient+explicitNulls=false+SnakeCase）、`SanitizedModels`（`SanitizedChatCompletionResponse/.../SanitizedResponsesAPI*`，`effectiveReasoning = reasoningContent ?: reasoningAlias`）。
 
-**出站 HTTP 唯一工厂**（`…/http/MederiHttpClientFactory.kt`）：`MederiHttpClientFactory`（object，实现 `KoogHttpClient.Factory`）是所有 Koog 链路出站请求（LLM 对话 / models.dev 目录 / MCP registry / 模型列表拉取）的唯一创建入口，`create()` 统一注入 `User-Agent` 身份头（`Mederi/<version> (<os> <os-version>; <arch>)`，值来自 `MederiConfig.userAgent`，由装配层注入）。**硬性规则：禁止在其他位置直接 `HttpClientFactoryResolver.resolve()`**——KoogClientFactory（LLM 三客户端）、ProviderManagerImpl.fetchRemoteModels、ModelCatalog.fetch、OfficialRegistrySource.withClient 均已切换。
+**出站 HTTP 唯一工厂**（`…/http/MederiHttpClientFactory.kt`）：`MederiHttpClientFactory`（object，实现 `KoogHttpClient.Factory`）是所有 Koog 链路出站请求（LLM 对话 / models.dev 目录 / MCP registry / 模型列表拉取）的唯一创建入口，`create()` 统一注入 `User-Agent` 身份头（`Mederi/<version> (<os> <os-version>; <arch>)`，值来自 `MederiConfig.userAgent`，由装配层注入）。**硬性规则：禁止在其他位置直接 `HttpClientFactoryResolver.resolve()`**——KoogClientFactory（LLM 三客户端）、ProviderManagerImpl.fetchRemoteModels、ModelCatalog.fetch、OfficialRegistrySource.withClient 均已切换。**超时策略（2026-09）**：Koog/Ktor 默认 requestTimeout=15min / socketTimeout=15min 是"从发请求/首帧起算的总时限"，超长推理（30min+）会被切断（本质在约束 AI 处理时长）。本工厂将两者置 0（禁用），连接"死亡"判定完全交由 `MederiOpenAILLMClient` 自计：SSE 只要还在收到任何一行（含 keep-alive 注释行）就不超时，连续 `SSE_IDLE_TIMEOUT`（10 分钟）无数据才抛超时。
 
 **硬性规则**：
 - 推理机制不对供应商参数做语义解释：用户填什么发什么，机制不纠错；内置供应商参数按官方文档预填且 UI 不可编辑，仅自定义供应商可配。
@@ -720,6 +723,12 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 
 ## 13. 提示词组装（`…/prompt/`）
 
+> **压缩原则（2026-09）**：只保留 mederi 特有事实，删重复与铺陈——通用常识不教（模型本来
+> 就懂），模型不会天然知道的（工具语义、Plan 流程、沙箱规则、InkCompose 渲染特性、artifact
+> 导出）一个不丢，措辞压到信息密度最高。主代理静态提示词 ≈ 3.8k tokens（CODE+APPROVAL 无活跃
+> 计划），子代理 EXECUTOR ≈ 1.3k tokens。子代理不重复注入主代理 IDENTITY（内容已被
+> CORE_PRINCIPLES 覆盖），Mermaid 规范只留 MERMAID_GUIDELINES 一份。
+
 ```mermaid
 flowchart LR
     subgraph SP["SystemPrompts（骨架）"]
@@ -732,9 +741,9 @@ flowchart LR
     end
     subgraph PG["PromptGuides（素材库,英文常量）"]
         G1["SANDBOX_USAGE(命令沙箱教程+Long-running processes & process control 段)"]
-        G2["MARKDOWN_FORMAT(GFM/file链接/vlr/KaTeX/Alerts/Mermaid安全)"]
-        G3["MERMAID_GUIDELINES(语法安全+结构图拆分)"]
-        G4["PLAN_TOOL_GUIDE(计划工具硬规则+create_plan完整JSON范例)"]
+        G2["MARKDOWN_FORMAT(GFM/file链接/vlr/KaTeX/Alerts)"]
+        G3["MERMAID_GUIDELINES(语法安全+结构图拆分,唯一一份)"]
+        G4["PLAN_TOOL_GUIDE(计划工具硬规则+create_plan字段清单+精简JSON范例)"]
     end
     PG --> COMMON
     C --> OUT["build(agentMode, workType, activePlan?, activeTodo?)"]
@@ -743,8 +752,8 @@ flowchart LR
     W --> OUT
     PLAN --> OUT
     TODO --> OUT
-    OUT2["forSubagent(role, workType)"] --> EXEC["Executor: Config+SUBAGENT_IDENTITY+IDENTITY+CORE_PRINCIPLES<br/>+EXECUTOR_TOOL_GUIDELINES+WORKING_DIRECTORY+SANDBOX_USAGE<br/>+(WORK时)WORK_DOCUMENT_BACKUP+OUTPUT_FORMAT"]
-    OUT2 --> RES["Researcher: …+RESEARCHER_TOOL_GUIDELINES<br/>+RESEARCH_DISCIPLINE+OUTPUT_FORMAT+MERMAID_GUIDELINES"]
+    OUT2["forSubagent(role, workType)"] --> EXEC["Executor: Config+SUBAGENT_IDENTITY+CORE_PRINCIPLES<br/>+EXECUTOR_TOOL_GUIDELINES+WORKING_DIRECTORY+SANDBOX_USAGE<br/>+(WORK时)WORK_DOCUMENT_BACKUP+OUTPUT_FORMAT"]
+    OUT2 --> RES["Researcher: Config+SUBAGENT_IDENTITY+CORE_PRINCIPLES<br/>+RESEARCHER_TOOL_GUIDELINES+RESEARCH_DISCIPLINE<br/>+OUTPUT_FORMAT+MERMAID_GUIDELINES"]
 ```
 
 ## 14. debug 包（`…/debug/`）

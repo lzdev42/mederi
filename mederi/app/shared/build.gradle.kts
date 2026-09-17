@@ -113,6 +113,10 @@ kotlin {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+}
+
 // 生成的 AppVersion.kt 挂到 commonMain（四个平台 + 对应 test 都可见）
 kotlin.sourceSets.commonMain {
     kotlin.srcDir(layout.buildDirectory.dir("generated/version/commonMain"))

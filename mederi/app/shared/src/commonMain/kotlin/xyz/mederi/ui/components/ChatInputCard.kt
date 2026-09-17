@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -71,20 +72,26 @@ fun formatReasoningLevelLabel(level: String): String = when (level.uppercase()) 
     else -> level
 }
 
-/** 模型能力小标签（Thinking / Image），桌面下拉与移动端抽屉共用。 */
+/** 模型能力小标签（Thinking / Image），桌面下拉与移动端抽屉共用。具有防折行与精致描边。 */
 @Composable
 private fun ModelCapabilityTag(text: String, tint: Color) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(tint.copy(alpha = 0.15f))
-            .padding(horizontal = 4.dp, vertical = 1.dp)
+            .background(tint.copy(alpha = 0.12f))
+            .border(0.5.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 4.5.dp, vertical = 1.dp),
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             color = tint,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Medium
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.2.sp,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip
         )
     }
 }
@@ -607,45 +614,106 @@ private fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) {
             expanded = expanded,
             onDismissRequest = { expanded = false },
             containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(10.dp),
             modifier = Modifier
-                .widthIn(min = if (compact) 260.dp else 280.dp, max = if (compact) 340.dp else 360.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+                .widthIn(min = if (compact) 400.dp else 500.dp, max = if (compact) 480.dp else 560.dp)
+                .heightIn(max = 480.dp)
+                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
         ) {
             groupedModels.entries.forEachIndexed { groupIndex, (providerId, providerModels) ->
                 val providerDisplayName = (providerNameMap[providerId] ?: providerId).uppercase()
                 if (groupIndex > 0) {
-                    HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 4.dp))
+                    HorizontalDivider(color = colors.divider.copy(alpha = 0.6f), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
                 }
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(FeatherIcons.Cpu, null, tint = colors.textMuted, modifier = Modifier.size(13.dp))
-                    Text(providerDisplayName, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textMuted, modifier = Modifier.weight(1f))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        Icon(FeatherIcons.Cpu, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
+                        Text(
+                            text = providerDisplayName,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.textMuted,
+                            letterSpacing = 0.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = "${providerModels.size}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textMuted.copy(alpha = 0.6f)
+                    )
                 }
                 providerModels.forEach { model ->
                     val isSelected = selectedModel?.id == model.id
                     val contextSizeStr = formatContextWindow(model.contextWindow)
                     DropdownMenuItem(
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent),
                         text = {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    modifier = Modifier.weight(1f)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f, fill = false)
                                 ) {
-                                    Text(model.name, fontSize = if (compact) 12.5.sp else 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, color = colors.textPrimary)
+                                    Text(
+                                        text = model.name,
+                                        fontSize = if (compact) 12.sp else 12.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                        color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
                                     if (model.supportsThinking) ModelCapabilityTag("Thinking", colors.thoughtAccent)
                                     if (model.supportsImages) ModelCapabilityTag("Image", colors.accentSecondary)
                                 }
-                                if (contextSizeStr != null) {
-                                    Text(contextSizeStr, fontSize = if (compact) 10.5.sp else 11.sp, color = colors.textSecondary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (contextSizeStr != null) {
+                                        Text(
+                                            text = contextSizeStr,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = if (isSelected) colors.textPrimary else colors.textSecondary
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = FeatherIcons.Check,
+                                            contentDescription = "已选择",
+                                            tint = colors.accentPrimary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    } else {
+                                        Spacer(modifier = Modifier.size(14.dp))
+                                    }
                                 }
                             }
                         },
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         onClick = {
                             viewModel.selectModel(model)
                             expanded = false
@@ -1148,16 +1216,33 @@ private fun MobileModelBottomSheet(
                                     .padding(vertical = 4.dp)
                             ) {
                                 Row(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Icon(FeatherIcons.Cpu, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    ) {
+                                        Icon(FeatherIcons.Cpu, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
+                                        Text(
+                                            text = providerDisplayName,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = colors.textMuted,
+                                            letterSpacing = 0.5.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                     Text(
-                                        providerDisplayName,
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colors.textMuted
+                                        text = "${providerModels.size}",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colors.textMuted.copy(alpha = 0.6f)
                                     )
                                 }
                                 providerModels.forEach { model ->
@@ -1166,59 +1251,63 @@ private fun MobileModelBottomSheet(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent)
                                             .clickable {
                                                 viewModel.selectModel(model)
                                                 onDismiss()
                                             }
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            .padding(horizontal = 8.dp, vertical = 7.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Row(
                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.weight(1f)
+                                            modifier = Modifier.weight(1f, fill = false)
                                         ) {
                                             Text(
-                                                model.name,
+                                                text = model.name,
                                                 fontSize = 13.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) colors.accentPrimary else colors.textPrimary
+                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                                color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
                                             )
                                             if (model.supportsThinking) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(4.dp))
-                                                        .background(colors.thoughtAccent.copy(alpha = 0.15f))
-                                                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "Thinking",
-                                                        color = colors.thoughtAccent,
-                                                        fontSize = 9.sp,
-                                                        fontWeight = FontWeight.Medium
-                                                    )
-                                                }
+                                                ModelCapabilityTag("Thinking", colors.thoughtAccent)
                                             }
                                             if (model.supportsImages) {
                                                 ModelCapabilityTag("Image", colors.accentSecondary)
                                             }
                                         }
 
+                                        Spacer(modifier = Modifier.width(8.dp))
+
                                         Row(
                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             if (contextSizeStr != null) {
-                                                Text(contextSizeStr, fontSize = 11.sp, color = colors.textMuted)
+                                                Text(
+                                                    text = contextSizeStr,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    color = if (isSelected) colors.textPrimary else colors.textMuted
+                                                )
                                             }
                                             if (isSelected) {
                                                 Icon(
-                                                    FeatherIcons.Check,
-                                                    null,
+                                                    imageVector = FeatherIcons.Check,
+                                                    contentDescription = "已选择",
                                                     tint = colors.accentPrimary,
                                                     modifier = Modifier.size(15.dp)
                                                 )
+                                            } else {
+                                                Spacer(modifier = Modifier.size(15.dp))
                                             }
                                         }
                                     }

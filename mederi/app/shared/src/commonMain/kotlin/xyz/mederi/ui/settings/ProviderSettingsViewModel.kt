@@ -237,13 +237,40 @@ class ProviderSettingsViewModel(
 
     /**
      * 按内置预设添加供应商。用户只需填 API Key，BaseURL/协议/推理参数由预设定义。
+     * 协程由 viewModelScope 管理，避免 UI 层泄露 SuspendLambda 匿名类与生命周期问题。
      *
      * @param name 预设完整名（必须来自 [builtinPresets]，如 "Agnes SG"）
      * @param apiKey 必填，明文 Key
-     * @return 成功时携带新建/更新后的 ProviderConfig；同名预设已存在时只追加 Key 不重复创建
      */
-    suspend fun addBuiltinProvider(name: String, apiKey: String): Result<ProviderConfig> {
-        return appState.aiCore.addBuiltinProvider(name, apiKey)
+    fun addBuiltinProvider(
+        name: String,
+        apiKey: String,
+        onComplete: ((Result<ProviderConfig>) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            uiState = uiState.copy(isSavingCredentials = true, errorMessage = null)
+            val result = appState.aiCore.addBuiltinProvider(name, apiKey)
+            result.fold(
+                onSuccess = { config ->
+                    uiState = uiState.copy(
+                        isSavingCredentials = false,
+                        selectedProviderId = config.id,
+                        isCreatingCustom = false,
+                        successMessage = "已成功添加供应商 ${config.name}"
+                    )
+                    if (config.isConnected) {
+                        autoFetchModels(config.id)
+                    }
+                },
+                onFailure = { e ->
+                    uiState = uiState.copy(
+                        isSavingCredentials = false,
+                        errorMessage = "添加供应商失败: ${e.message}"
+                    )
+                }
+            )
+            onComplete?.invoke(result)
+        }
     }
 
     init {

@@ -80,7 +80,6 @@ fun ProviderSettingsPanel() {
     val viewModel: ProviderSettingsViewModel = viewModel { ProviderSettingsViewModel(appState) }
     val colors = LocalMederiColors.current
     val uiState = viewModel.uiState
-    val scope = rememberCoroutineScope()
     var addingBuiltin by remember { mutableStateOf<String?>(null) }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -280,10 +279,8 @@ fun ProviderSettingsPanel() {
             colors = colors,
             onDismiss = { addingBuiltin = null },
             onAdd = { apiKey ->
-                scope.launch {
-                    viewModel.addBuiltinProvider(preset, apiKey)
-                    addingBuiltin = null
-                }
+                viewModel.addBuiltinProvider(preset, apiKey)
+                addingBuiltin = null
             }
         )
     }

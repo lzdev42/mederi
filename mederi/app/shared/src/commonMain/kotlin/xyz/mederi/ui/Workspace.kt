@@ -56,6 +56,7 @@ import xyz.mederi.ui.components.ErrorDetailDialog
 import xyz.mederi.ui.components.UserPastedTextCard
 import xyz.mederi.ui.components.UserMessageFooter
 import xyz.mederi.ui.components.AssistantMessageFooter
+import xyz.mederi.ui.components.DocumentArtifactCard
 import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
 import xyz.emuci.inkcompose.InkImage
@@ -592,6 +593,38 @@ private fun MessageList(
                                     val content = item.request.planContent
                                         ?: "# ${item.request.title}\n\n${item.request.summary}"
                                     viewModel.openPlanInExtension(item.request.id, item.request.title, content)
+                                },
+                                modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
+                            )
+                        }
+                    }
+
+                    is ChatListItem.DocumentCard -> {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = contentMaxWidth)
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
+                                    bottom = 4.dp
+                                )
+                        ) {
+                            DocumentArtifactCard(
+                                title = item.title,
+                                lineCount = item.lineCount,
+                                charCount = item.charCount,
+                                createdAt = item.createdAt,
+                                isStreaming = item.isStreaming,
+                                isCompleted = item.isCompleted,
+                                onOpenInExtension = {
+                                    viewModel.openTextInExtension(
+                                        title = item.title,
+                                        content = item.content,
+                                        lineCount = item.lineCount,
+                                        charCount = item.charCount,
+                                        id = item.artifactId,
+                                        isStreaming = item.isStreaming,
+                                    )
                                 },
                                 modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
                             )

@@ -6,21 +6,32 @@ expect fun openUrl(url: String)
 expect fun openFile(path: String)
 
 /**
- * 格式化 Token / 上下文窗口数字（例如 1024000 -> "102.4万"，262144 -> "26.2万"，8192 -> "8K"）。
+ * 格式化 Token / 上下文窗口规格（例如 1048576/1000000 -> "1M", 512000 -> "512K", 262144 -> "256K", 200000 -> "200K", 131072 -> "128K", 8192 -> "8K"）。
  */
 fun formatContextWindow(tokens: Int?): String? {
     if (tokens == null || tokens <= 0) return null
-    return if (tokens >= 10_000) {
-        val count = tokens / 10_000.0
-        val formatted = if (count % 1.0 == 0.0) {
-            "${count.toInt()}"
-        } else {
-            val rounded = ((count * 10).toLong()) / 10.0
-            "$rounded"
+    return when {
+        tokens in 950_000..1_100_000 -> "1M"
+        tokens in 1_900_000..2_150_000 -> "2M"
+        tokens in 3_800_000..4_200_000 -> "4M"
+        tokens >= 1_000_000 -> {
+            val m = tokens / 1_000_000.0
+            if (m % 1.0 == 0.0) "${m.toInt()}M" else "${((m * 10).toLong()) / 10.0}M"
         }
-        "${formatted}万"
-    } else {
-        "${tokens / 1000}K"
+        tokens in 500_000..530_000 -> "512K"
+        tokens in 250_000..270_000 -> "256K"
+        tokens in 190_000..210_000 -> "200K"
+        tokens in 125_000..135_000 -> "128K"
+        tokens in 60_000..68_000 -> "64K"
+        tokens in 30_000..35_000 -> "32K"
+        tokens in 15_000..18_000 -> "16K"
+        tokens in 7_800..8_500 -> "8K"
+        tokens in 3_800..4_300 -> "4K"
+        tokens >= 1_000 -> {
+            val k = if (tokens % 1024 == 0) tokens / 1024 else tokens / 1000
+            "${k}K"
+        }
+        else -> "$tokens"
     }
 }
 

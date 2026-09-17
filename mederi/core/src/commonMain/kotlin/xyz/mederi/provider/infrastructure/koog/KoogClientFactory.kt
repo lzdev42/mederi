@@ -4,7 +4,6 @@ import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.google.GoogleClientSettings
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.http.MederiHttpClientFactory
 import xyz.mederi.provider.domain.model.Provider
@@ -65,13 +64,14 @@ object KoogClientFactory {
     /**
      * 创建 OpenAI 兼容客户端。
      *
-     * 选择 [MederiOpenAILLMClient] 的条件（满足任一即可）：
-     * - [Provider.responseSanitization] = true：供应商返回字段不标准（如 vLLM 兼容端点）
-     * - [Provider.reasoningParameter] != null：供应商配了推理参数。
-     *   Koog 原版 [OpenAILLMClient] 的 Chat Completions 流式 delta 没有 reasoningContent 字段，
-     *   会静默丢弃 SSE 中的推理内容。[MederiOpenAILLMClient] 正确解析 reasoning_content / reasoning。
+     * **始终使用 [MederiOpenAILLMClient]**：它是 Koog 原版 [OpenAILLMClient] 的超集——
+     * 正确解析 `reasoning_content` / `reasoning`（SSE 推理内容），且 `ignoreUnknownKeys=true`
+     * 保证不认识的字段安全跳过。标准 [OpenAILLMClient] 的流式 delta 没有 reasoningContent 字段，
+     * 会静默丢弃 SSE 中的推理内容——任何 OpenAI 兼容供应商只要模型支持推理都会受影响。
      *
-     * 两者都不满足时直通 Koog 原版 [OpenAILLMClient]，零开销。
+     * 历史上只在 `responseSanitization=true` 或 `reasoningParameter != null` 时才用自定义 client，
+     * 但 OpenRouter（两者都没设）代理 GLM 等推理模型时推理内容被静默丢弃——Bug 2 的根因。
+     * 统一用 [MederiOpenAILLMClient] 消除此类条件遗漏，零副作用。
      */
     fun createOpenAIClient(provider: Provider, apiKey: String): LLMClient {
         val normalized = UrlNormalizer.normalize(provider.baseUrl)
@@ -84,17 +84,6 @@ object KoogClientFactory {
             moderationsPath = "${prefix}moderations",
             modelsPath = "${prefix}models"
         )
-
-        val needsCustomClient = provider.responseSanitization || provider.reasoningParameter != null
-
-        if (!needsCustomClient) {
-            DebugLog.event("ClientFactory", "created OpenAILLMClient (standard)")
-            return OpenAILLMClient(
-                apiKey = apiKey,
-                settings = settings,
-                httpClientFactory = MederiHttpClientFactory
-            )
-        }
 
         DebugLog.event("ClientFactory", "created MederiOpenAILLMClient (reasoning=${provider.reasoningParameter != null}, sanitization=${provider.responseSanitization})")
         return MederiOpenAILLMClient(

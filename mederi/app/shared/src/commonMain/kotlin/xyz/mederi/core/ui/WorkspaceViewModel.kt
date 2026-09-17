@@ -10,6 +10,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,6 +35,8 @@ import xyz.emuci.inkcompose.MermaidCacheConfig
 import xyz.mederi.ui.components.TurnStatus
 import xyz.mederi.ui.components.deriveTurnStatus
 import xyz.mederi.util.PromptComposer
+import xyz.mederi.util.ArtifactParser
+import xyz.mederi.util.ParsedArtifact
 
 /**
  * 展平后的聊天列表 item — 每个文本块/思考面板都是独立 LazyColumn item。
@@ -87,6 +90,20 @@ sealed interface ChatListItem {
         val createdAt: Long = 0L,
         /** assistant 消息的 footer 元数据——只挂在该轮次最后一个文本块上，其余为 null */
         val assistantFooter: AssistantFooterInfo? = null,
+    ) : ChatListItem
+
+    /** 独立长文 Markdown 产物卡片（点击在右侧扩展窗口打开） */
+    data class DocumentCard(
+        override val key: String,
+        val artifactId: String,
+        val title: String,
+        val content: String,
+        val lineCount: Int,
+        val charCount: Int,
+        val isCompleted: Boolean,
+        val isStreaming: Boolean,
+        val createdAt: Long = 0L,
+        override val isTurnStart: Boolean = false,
     ) : ChatListItem
 
     /** assistant 轮次底部的诊断与状态栏（沉底挂载） */
@@ -155,7 +172,8 @@ sealed interface ArtifactItem {
         override val title: String,
         val content: String,
         val lineCount: Int = 0,
-        val charCount: Int = 0
+        val charCount: Int = 0,
+        val isStreaming: Boolean = false,
     ) : ArtifactItem
 
     data class Image(
@@ -360,6 +378,21 @@ class WorkspaceViewModel(
     var conversationId by mutableStateOf<String?>(null); internal set
     var snapshot by mutableStateOf<ConversationSnapshot?>(null); private set
     var isAttached by mutableStateOf(false); private set
+
+    /**
+     * 按会话缓存的快照（conversationId → 最后一次的 ConversationSnapshot）。
+     *
+     * **解决会话切换闪烁问题（Bug 1 根因）**：
+     * 切换会话时不再 `snapshot = null` 再从 store 重建——而是缓存当前快照，
+     * 切回来时立即渲染缓存（含正在流式的推理/消息），再由事件流持续更新。
+     *
+     * 之前切回 Working 会话时，store 里的 listMessages 不含未持久化的 streaming 消息
+     * （TurnIncrementalPersister 只在 LLM 响应结束后落库），导致初始快照缺失 streaming 数据，
+     * StatusBar 闪烁"排队较长"黄色警告后才被新事件修正。
+     *
+     * 缓存仅在会话离开 Working 后清理（turn 结束/出错/删除）。
+     */
+    private val snapshotCache = mutableStateMapOf<String, ConversationSnapshot>()
     var reasoningExpanded by mutableStateOf<Map<String, Boolean>>(emptyMap()); private set
     var diffItems by mutableStateOf<List<FileDiff>>(emptyList()); private set
     var showDiffPanel by mutableStateOf(false); private set
@@ -454,25 +487,51 @@ class WorkspaceViewModel(
         DebugLog.event("UI", "openImageInExtension: title='$title', activeArtifactId=$activeArtifactId")
     }
 
-    fun openTextInExtension(title: String, content: String, lineCount: Int = 0, charCount: Int = 0) {
-        val existing = artifactItems.filterIsInstance<ArtifactItem.Text>().find { it.content == content }
-        if (existing != null) {
-            activeArtifactId = existing.id
+    fun openTextInExtension(
+        title: String,
+        content: String,
+        lineCount: Int = 0,
+        charCount: Int = 0,
+        id: String? = null,
+        isStreaming: Boolean = false,
+    ) {
+        val targetId = id ?: "txt_${title.hashCode().toUInt()}"
+        val existingIndex = artifactItems.indexOfFirst { it.id == targetId }
+        val updatedItem = ArtifactItem.Text(
+            id = targetId,
+            title = title,
+            content = content,
+            lineCount = lineCount,
+            charCount = charCount,
+            isStreaming = isStreaming,
+        )
+        if (existingIndex != -1) {
+            artifactItems[existingIndex] = updatedItem
+            activeArtifactId = targetId
         } else {
-            val id = "txt_${xyz.mederi.currentTimeMillis()}"
-            artifactItems.add(
-                ArtifactItem.Text(
-                    id = id,
-                    title = title,
-                    content = content,
-                    lineCount = lineCount,
-                    charCount = charCount
-                )
-            )
-            activeArtifactId = id
+            artifactItems.add(updatedItem)
+            activeArtifactId = targetId
         }
         openDockPanel(RightDockPanel.ARTIFACTS)
-        DebugLog.event("UI", "openTextInExtension: title='$title', activeArtifactId=$activeArtifactId, chars=$charCount")
+        DebugLog.event("UI", "openTextInExtension: title='$title', activeArtifactId=$activeArtifactId, chars=$charCount, isStreaming=$isStreaming")
+    }
+
+    /**
+     * 获取当前最新的产物文档模型（结合当前活跃聊天流中最新的流式内容动态响应）
+     */
+    fun getLiveArtifactItem(id: String): ArtifactItem.Text? {
+        val docCard = chatItems.filterIsInstance<ChatListItem.DocumentCard>().lastOrNull { it.artifactId == id }
+        if (docCard != null) {
+            return ArtifactItem.Text(
+                id = docCard.artifactId,
+                title = docCard.title,
+                content = docCard.content,
+                lineCount = docCard.lineCount,
+                charCount = docCard.charCount,
+                isStreaming = docCard.isStreaming
+            )
+        }
+        return artifactItems.filterIsInstance<ArtifactItem.Text>().find { it.id == id }
     }
 
     fun openPlanInExtension(planId: String, title: String, content: String) {
@@ -996,24 +1055,84 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
 
                         is ChatBlock.Text -> {
                             if (block.text.isNotBlank()) {
-                                result.add(
-                                    ChatListItem.TextMessage(
-                                        key = "${msg.id}_${block.id}",
-                                        isUser = false,
-                                        isStreaming = isStreaming,
-                                        isActiveAssistant = isActiveAssistant,
-                                        text = block.text,
-                                        partId = block.id,
-                                        conversationId = msg.conversationId,
-                                        images = if (!imagesHandled) messageImages else emptyList(),
-                                        isTurnStart = !turnHasFirstItem,
-                                        messageId = msg.id,
-                                        createdAt = msg.createdAt,
-                                        assistantFooter = null
+                                val parseResult = ArtifactParser.parse(block.text, isStreaming = isStreaming)
+                                val artifact = parseResult.artifact
+                                if (artifact != null) {
+                                    if (parseResult.preamble.isNotBlank()) {
+                                        result.add(
+                                            ChatListItem.TextMessage(
+                                                key = "${msg.id}_${block.id}_pre",
+                                                isUser = false,
+                                                isStreaming = false,
+                                                isActiveAssistant = false,
+                                                text = parseResult.preamble,
+                                                partId = "${block.id}_pre",
+                                                conversationId = msg.conversationId,
+                                                images = if (!imagesHandled) messageImages else emptyList(),
+                                                isTurnStart = !turnHasFirstItem,
+                                                messageId = msg.id,
+                                                createdAt = msg.createdAt,
+                                                assistantFooter = null
+                                            )
+                                        )
+                                        imagesHandled = true
+                                        turnHasFirstItem = true
+                                    }
+
+                                    result.add(
+                                        ChatListItem.DocumentCard(
+                                            key = "${msg.id}_${block.id}_art_${artifact.identifier}",
+                                            artifactId = artifact.identifier,
+                                            title = artifact.title,
+                                            content = artifact.content,
+                                            lineCount = artifact.lineCount,
+                                            charCount = artifact.charCount,
+                                            isCompleted = artifact.isCompleted,
+                                            isStreaming = isStreaming && !artifact.isCompleted,
+                                            createdAt = msg.createdAt,
+                                            isTurnStart = !turnHasFirstItem,
+                                        )
                                     )
-                                )
-                                imagesHandled = true
-                                turnHasFirstItem = true
+                                    turnHasFirstItem = true
+
+                                    if (parseResult.postscript.isNotBlank()) {
+                                        result.add(
+                                            ChatListItem.TextMessage(
+                                                key = "${msg.id}_${block.id}_post",
+                                                isUser = false,
+                                                isStreaming = isStreaming,
+                                                isActiveAssistant = isActiveAssistant,
+                                                text = parseResult.postscript,
+                                                partId = "${block.id}_post",
+                                                conversationId = msg.conversationId,
+                                                images = emptyList(),
+                                                isTurnStart = false,
+                                                messageId = msg.id,
+                                                createdAt = msg.createdAt,
+                                                assistantFooter = null
+                                            )
+                                        )
+                                    }
+                                } else {
+                                    result.add(
+                                        ChatListItem.TextMessage(
+                                            key = "${msg.id}_${block.id}",
+                                            isUser = false,
+                                            isStreaming = isStreaming,
+                                            isActiveAssistant = isActiveAssistant,
+                                            text = block.text,
+                                            partId = block.id,
+                                            conversationId = msg.conversationId,
+                                            images = if (!imagesHandled) messageImages else emptyList(),
+                                            isTurnStart = !turnHasFirstItem,
+                                            messageId = msg.id,
+                                            createdAt = msg.createdAt,
+                                            assistantFooter = null
+                                        )
+                                    )
+                                    imagesHandled = true
+                                    turnHasFirstItem = true
+                                }
                             }
                         }
 
@@ -1271,7 +1390,19 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
             cleanUrl.endsWith(".bmp") || cleanUrl.endsWith(".ico")
     }
 
-    private var observeJob: Job? = null
+    /**
+     * 各会话的后台观察 Job（conversationId → Job）。
+     *
+     * **核心机制：会话一旦被 attach 过，就常驻一条观察流持续更新 [snapshotCache]，
+     * 切走不 cancel、切回不重建。** SSE 事件来了 → observeConversation 流 emit →
+     * applySnapshot 写入缓存 → 当前会话时同步渲染。切换会话只是把 [conversationId]
+     * 指向另一个缓存的键，UI 立即渲染最新缓存（零闪烁、不丢 streaming 增量）。
+     *
+     * 生命周期：随 viewModelScope 销毁；会话观察抛异常（如会话被删除）时移除并清缓存。
+     * 会话离开 Working（turn 结束/出错）后缓存清除（数据已完整落库，下次切回从 store 重建即可），
+     * 但观察流保留——新 turn 的事件仍持续聚合。
+     */
+    private val observeJobs = mutableMapOf<String, Job>()
     // 乐观消息对账日志去重：同一会话的 matched/unmatched 结论只打一次（状态翻转时重置）
     private val pendingOptReconciled = mutableSetOf<String>()
     private var selectionHydrated = false
@@ -1302,7 +1433,6 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
 
     fun attach(id: String?) {
         DebugLog.event("UI", "attach: id=$id")
-        observeJob?.cancel()
         selectionHydrated = false
         resetQuestionState()
         if (id == null) {
@@ -1317,71 +1447,120 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
             return
         }
         conversationId = id
-        snapshot = null
-        isAttached = false
         pendingOptReconciled.clear()
         error = null
         errorDiagnostic = null
         errorId = null
         isErrorDetailOpen = false
-        observeJob = viewModelScope.launch {
-            // 先校验会话可达（不存在/已删 → 失败）。启动时 lastConversationId 可能指向
-            // 已被删除的会话（如删库重建），此时按"没有了就是没有"处理：清空选择态并
-            // 清掉残留偏好，而不是让 observe 流抛 Session not found 异常。
-            val initial = appState.aiCore.getSnapshot(id).getOrNull()
-            if (initial == null) {
-                DebugLog.event("UI", "attach: conversation $id not found, clearing stale selection")
-                if (conversationId == id) {
-                    conversationId = null
-                    snapshot = null
-                    isAttached = false
-                    appState.selectConversation(null)
+
+        // 切换只换渲染源：立即用该会话的缓存快照渲染（后台观察流一直在持续更新它），
+        // 不再 snapshot = null 再从 store 重建，也绝不 cancel 该会话的观察 Job——
+        // 这样切回正在流式的会话时 UI 零闪烁、流式增量一个不丢。
+        val cached = snapshotCache[id]
+        if (cached != null) {
+            snapshot = cached
+            isAttached = true
+            error = cached.errorMessage
+            errorDiagnostic = cached.errorDiagnostic
+            errorId = cached.errorId
+            isStreamInterrupted = cached.errorIsStreamInterrupted
+            DebugLog.event("UI", "attach: rendered from cache (status=${cached.conversation.status}, messages=${cached.messages.size})")
+        } else {
+            // 无缓存（首次打开 / 已 Idle 清理）：异步拉一次初始快照渲染，再交给观察流持续更新
+            snapshot = null
+            isAttached = false
+            viewModelScope.launch {
+                val snap = appState.aiCore.getSnapshot(id).getOrNull()
+                if (snap == null) {
+                    DebugLog.event("UI", "attach: conversation $id not found, clearing stale selection")
+                    snapshotCache.remove(id)
+                    if (conversationId == id) {
+                        conversationId = null
+                        snapshot = null
+                        isAttached = false
+                        appState.selectConversation(null)
+                    }
+                    return@launch
                 }
-                return@launch
+                applySnapshot(id, snap)
             }
-            appState.aiCore.observeConversation(id).collect { snap ->
-                DebugLog.debug("UI", "snapshot received: status=${snap.conversation.status}, messages=${snap.messages.size}")
-                // 乐观消息与快照对账：真实消息已落库（turn 结束/出错兜底时 core 写入）→ 移除乐观消息
-                // 日志只在状态变化时打一条（matched/unmatched 翻转），避免流式期间每快照重复刷屏
-                val pendingOpt = pendingUserMessages[id]
-                if (pendingOpt != null) {
-                    val optText = pendingOpt.blocks
-                        .filterIsInstance<ChatBlock.Text>()
+        }
+        ensureObserving(id)
+    }
+
+    /**
+     * 确保该会话有一条常驻观察流（幂等：已有活跃 Job 则不动）。
+     *
+     * 观察流 = [AiCore.observeConversation]（从 store 构建初始快照 + 订阅该会话事件聚合）。
+     * 它持续把最新快照写入 [snapshotCache]（及当前会话的渲染状态）——即使 UI 已切到别的会话，
+     * 这条流也不会被取消，所以该会话的流式增量（推理/正文/tool delta）始终完整、始终最新。
+     */
+    private fun ensureObserving(id: String) {
+        if (observeJobs[id]?.isActive == true) return
+        observeJobs[id] = viewModelScope.launch {
+            try {
+                appState.aiCore.observeConversation(id).collect { snap ->
+                    applySnapshot(id, snap)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DebugLog.error("UI", "observe conversation $id failed: ${e.message}", e)
+                observeJobs.remove(id)
+                snapshotCache.remove(id)
+            }
+        }
+    }
+
+    /**
+     * 将新快照写入缓存，若该会话是当前渲染会话则同步到 UI 状态（attach/后台观察流共用）。
+     */
+    private fun applySnapshot(id: String, snap: ConversationSnapshot) {
+        DebugLog.debug("UI", "snapshot received: status=${snap.conversation.status}, messages=${snap.messages.size}")
+        // 乐观消息与快照对账：真实消息已落库（turn 结束/出错兜底时 core 写入）→ 移除乐观消息
+        val pendingOpt = pendingUserMessages[id]
+        if (pendingOpt != null) {
+            val optText = pendingOpt.blocks
+                .filterIsInstance<ChatBlock.Text>()
+                .joinToString("") { it.text }
+            val hasReal = snap.messages.any { msg ->
+                if (msg.role == ChatRole.User) {
+                    val realText = msg.blocks.filterIsInstance<ChatBlock.Text>()
                         .joinToString("") { it.text }
-                    val hasReal = snap.messages.any { msg ->
-                        if (msg.role == ChatRole.User) {
-                            val realText = msg.blocks.filterIsInstance<ChatBlock.Text>()
-                                .joinToString("") { it.text }
-                            realText == optText || (optText.isNotBlank() && realText.trim() == optText.trim())
-                        } else false
-                    }
-                    if (hasReal) {
-                        if (!pendingOptReconciled.contains(id)) {
-                            pendingOptReconciled.add(id)
-                            DebugLog.info("UI", "optimistic user message matched real message in snapshot, clearing optimistic message (id=${pendingOpt.id})")
-                        }
-                        pendingUserMessages.remove(id)
-                        pendingOptReconciled.remove(id)
-                    } else if (!pendingOptReconciled.contains(id)) {
-                        pendingOptReconciled.add(id)
-                        DebugLog.debug("UI", "optimistic user message NOT matched in snapshot, keeping optimistic (id=${pendingOpt.id}, optText='$optText')")
-                    }
-                }
-                snapshot = snap
-                isAttached = true
-                error = snap.errorMessage
-                errorDiagnostic = snap.errorDiagnostic
-                errorId = snap.errorId
-                isStreamInterrupted = snap.errorIsStreamInterrupted
-                // turn 结束（离开 Working）清除 StatusBar 计时锚点
-                if (snap.conversation.status != ConversationStatus.Working) {
-                    turnStartByConv.remove(id)
-                }
-                if (!selectionHydrated) {
-                    selectionHydrated = true
-                    hydrateSelectionFromConversation(snap.conversation)
-                }
+                    realText == optText || (optText.isNotBlank() && realText.trim() == optText.trim())
+                } else false
             }
+            if (hasReal) {
+                if (!pendingOptReconciled.contains(id)) {
+                    pendingOptReconciled.add(id)
+                    DebugLog.info("UI", "optimistic user message matched real message in snapshot, clearing optimistic message (id=${pendingOpt.id})")
+                }
+                pendingUserMessages.remove(id)
+                pendingOptReconciled.remove(id)
+            } else if (!pendingOptReconciled.contains(id)) {
+                pendingOptReconciled.add(id)
+                DebugLog.debug("UI", "optimistic user message NOT matched in snapshot, keeping optimistic (id=${pendingOpt.id}, optText='$optText')")
+            }
+        }
+        snapshotCache[id] = snap
+        if (conversationId == id) {
+            snapshot = snap
+            isAttached = true
+            error = snap.errorMessage
+            errorDiagnostic = snap.errorDiagnostic
+            errorId = snap.errorId
+            isStreamInterrupted = snap.errorIsStreamInterrupted
+        }
+        // turn 结束（离开 Working）清除 StatusBar 计时锚点 + 快照缓存
+        if (snap.conversation.status != ConversationStatus.Working) {
+            turnStartByConv.remove(id)
+            // turn 已结束：store 已有完整数据，缓存不再需要（下次切回走 getSnapshot 即可）。
+            // 观察流保留——后续新 turn 的事件仍持续聚合进缓存。
+            snapshotCache.remove(id)
+        }
+        if (conversationId == id && !selectionHydrated) {
+            selectionHydrated = true
+            hydrateSelectionFromConversation(snap.conversation)
         }
     }
 
@@ -1733,7 +1912,8 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
     }
 
     override fun onCleared() {
-        observeJob?.cancel()
+        observeJobs.values.forEach { it.cancel() }
+        observeJobs.clear()
         super.onCleared()
     }
 }

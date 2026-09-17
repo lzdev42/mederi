@@ -4,9 +4,11 @@ package xyz.mederi.prompt
  * 提示词"教程"常量库（Prompt Guides）。
  *
  * 与 SystemPrompts 的分工：SystemPrompts 是骨架（身份/原则/工具清单/工作流拼接），
- * 本文件是拼装素材——每个主题一份完整指导常量，往 SystemPrompts 里拼装。
+ * 本文件是拼装素材——每个主题一份指导常量，往 SystemPrompts 里拼装。
  * 新主题（如何用 git、如何写测试……）在这里加常量即可。
  *
+ * 压缩原则（2026-09）：只保留 mederi 特有事实，删重复与铺陈——通用常识不教，
+ * 模型不会天然知道的（沙箱规则/渲染特性/计划字段）一个不丢，措辞压到信息密度最高。
  * 全部用英文：减少 token，且模型对英文指令遵循更稳。
  */
 object PromptGuides {
@@ -21,194 +23,138 @@ object PromptGuides {
      *   Windows：无命令沙箱，文件工具约束仍然生效
      */
     val SANDBOX_USAGE: String = """
-# Command Sandbox (how shell writes are isolated)
+# Command Sandbox (shell write isolation)
 
-File-tool writes are path-checked in code on every platform (see Working
-Directory above). Shell commands run under an OS-level sandbox that varies by
-platform:
+File-tool writes are path-checked in code on every platform. Shell commands run under
+an OS-level sandbox:
 
-- macOS: every command runs under Seatbelt (sandbox-exec). Writes outside the
-  whitelist fail with "Operation not permitted". This always works.
-- Linux: commands run under bubblewrap (bwrap). If not installed, they run
-  unsandboxed with a "[sandbox]" warning; install via
-  `sudo apt/dnf/pacman install bubblewrap`.
-- Windows: no native command sandbox; shell writes are unrestricted, but the
-  file-tool path check above still applies fully.
+- macOS: Seatbelt (sandbox-exec), always on. Writes outside the whitelist fail with
+  "Operation not permitted".
+- Linux: bubblewrap. Not installed → commands run unsandboxed with a "[sandbox]" warning
+  (install via `sudo apt/dnf/pacman install bubblewrap`).
+- Windows: no native command sandbox; the file-tool path check still applies fully.
 
-If a legitimate write is blocked, the target is outside the project — ask the
-user to add the directory to the project or the global sandbox whitelist
-(Settings). Never retry the same blocked command expecting a different result.
+Write whitelist = project directory + `.mederi/` + system temp + build caches + global
+whitelist. A blocked write means the target is outside the project — ask the user to
+add it to the project or the global sandbox whitelist (Settings). Never retry the same
+blocked command.
 
-## Long-running processes & process control
-
-Start long-running processes with execute_command, backgrounded, and redirect
-their output to a file under the project so a later command can read it:
+Long-running processes: background them and redirect output to a file under the project:
 
     python3 -m http.server 8000 > server.log 2>&1 &
 
-Track them with list_processes (shows mederi-spawned pids) and stop them with
-stop_process(pid). macOS note: Seatbelt does not allow ANY cross-process signal —
-a sandboxed command cannot `kill` even a process it started itself, so `kill`,
-`pkill`, `kill -9` inside execute_command fail with "Operation not permitted"
-on macOS. stop_process runs outside the sandbox and only affects processes that
-mederi itself started, so it is the only reliable way to stop your servers.
+Track with list_processes (mederi-spawned pids), stop with stop_process(pid). macOS
+Seatbelt forbids ALL cross-process signals — `kill`/`pkill`/`kill -9` inside
+execute_command fail. stop_process runs outside the sandbox and only touches
+mederi-started processes, so it is the only reliable way to stop your servers.
 """.trimIndent()
 
     /**
      * Markdown & 格式化公共指南（教 AI 输出能被 InkCompose 正确渲染的富文本）。
      *
-     * 覆盖：GFM 基础 + 本地文件 file:// 可点击链接 + vlr 竖排文字围栏（蒙古文/满文/锡伯文）
-     * + KaTeX 数学（含 `$` 误触发提醒）+ GitHub Alerts + Mermaid 语法安全。
+     * 只保留 mederi 特有渲染事实：file:// 可点击链接 + vlr 竖排文字 + KaTeX 数学 +
+     * GitHub Alerts。Mermaid 规范已收敛到 [MERMAID_GUIDELINES]（一份，不重复）。
      */
     val MARKDOWN_FORMAT: String = """
-# Markdown & Formatting Guidelines
+# Markdown & Formatting
 
-- Format your responses in github-style markdown (GitHub Flavored Markdown).
-- Maintain documentation integrity. Preserve all existing comments and docstrings that are unrelated to your code changes, unless the user specifies otherwise.
+GitHub-flavored markdown. Preserve all existing comments/docstrings unrelated to your
+changes unless the user says otherwise.
 
 ## Code, Paths & Local Links
-- Use backticks for code, identifiers, paths, flags, and shell variables in inline text.
-- You MUST create clickable links for all referenced local files, directories, and code symbols (classes, types, functions, structs). Use github style markdown links with the `file://` scheme:
-  - File link: `[filename](file:///absolute/path/to/file)` or `[filename#L10-L20](file:///absolute/path/to/file#L10-L20)`
-  - Directory link: `[dirname/](file:///absolute/path/to/directory/)`
-  - For Windows, use forward slashes for paths.
-- Embed images and videos with `![caption](/absolute/path/to/file.jpg)`. Always use absolute paths. The caption should be a short description of the image or video, and it will always be displayed below the image or video.
+- Backticks for code, identifiers, paths, flags, shell variables in inline text.
+- Clickable `file://` links for ALL referenced local files/dirs/symbols:
+  `[name](file:///abs/path)` / `[name#L10-L20](file:///abs/path#L10-L20)` / `[dir/](file:///abs/dir/)`.
+  Windows: forward slashes.
+- Embed images/videos with `![caption](/abs/path.jpg)`. Absolute paths; caption shows below.
 
-## Vertical Text Layout (`vlr`)
-- Render vertical top-to-bottom, left-to-right text (Mongolian ᠮᠣᠩᠭᠣᠯ, Manchu, Xibe) using `vlr` code blocks:
-```vlr
-ᠮᠣᠩᠭᠣᠯ ᠪᠢᠴᠢᠭ
-```
+## Vertical Text (`vlr`)
+- A fenced block with info string `vlr` renders its body as vertical text (top-to-bottom,
+  left-to-right columns) for vertical scripts — Mongolian, Manchu, Xibe only.
+- Attributes in the info string, `key=value` space-separated in braces:
+  height (alias `h`, dp/px, default = content-adaptive) · fontSize (aliases `font-size`,
+  `size`, sp/px) · wrap (aliases `autowrap`, `auto-wrap`, true/false, only effective with height).
+- Layout: no height → columns break ONLY at explicit newlines, horizontal scroll if too wide;
+  height+wrap=true → text auto-wraps into the next column at the given height;
+  height+wrap=false → one column may extend past the height, two-way scrolling.
+- Inside an artifact, vlr blocks are preserved on HTML/PDF export (font embedded, no page split).
 
 ## LaTeX / Math
-- You can render LaTeX math (KaTeX): inline with `\(...\)` or `${'$'}...${'$'}`, display with `\[...\]` or `${'$'}${'$'}...${'$'}${'$'}` placed on its own line.
+- Inline `\(...\)` or `${'$'}...${'$'}`; display `\[...\]` or `${'$'}${'$'}...${'$'}${'$'}` on its own line.
 - Use math only for genuine mathematical content.
-- `${'$'}` opens inline math, so write a literal dollar as `\${'$'}` or wrap it in backticks. Two unescaped `${'$'}` in the same paragraph turn everything between them into math — this bites prices (`\${'$'}100`) and shell syntax written in prose (`${'$'}HOME`, awk `${'$'}1`).
+- `${'$'}` opens inline math: write a literal dollar as `\${'$'}` or backticks. Two unescaped
+  `${'$'}` in one paragraph turn everything between them into math (bites prices, `${'$'}HOME`, awk `${'$'}1`).
 
 ## Alerts
-Use GitHub-style alerts strategically to emphasize critical information. They will display with distinct colors and icons. Do not place consecutively or nest within other elements. The `[!TYPE]` tag is fixed syntax; the text inside must be in the user's input language:
-  > [!NOTE]
-  > Background context, implementation details, or helpful explanations
-
-  > [!TIP]
-  > Performance optimizations, best practices, or efficiency suggestions
-
-  > [!IMPORTANT]
-  > Essential requirements, critical steps, or must-know information
-
-  > [!WARNING]
-  > Breaking changes, compatibility issues, or potential problems
-
-  > [!CAUTION]
-  > High-risk actions that could cause data loss or security vulnerabilities
-
-## Mermaid Diagrams
-Mermaid is the only diagram format we can render — use ```mermaid for ALL diagrams (flow, sequence, architecture, ER, Gantt...). Never emit PlantUML/DOT/d2 or other diagram DSLs unless the user explicitly asks for that format as source text (they would show as plain code, not a diagram).
-Create mermaid diagrams using fenced code blocks with language `mermaid` to visualize complex relationships, workflows, and architectures.
-To prevent syntax errors:
-- Quote node labels containing special characters like parentheses or brackets. For example, `id["Label (Extra Info)"]` instead of `id[Label (Extra Info)]`.
-- Avoid HTML tags in labels.
-- One concern per diagram. Split a complex system into an overview plus one diagram per module/layer; if subgraphs would nest deeper than one level, split into separate diagrams instead.
-- Syntax example:
-```mermaid
-graph TD
-    A["Start"] --> B["Process"]
-    B --> C["End"]
-```
+GitHub-style alerts for critical information; text inside must be in the user's input language;
+don't place consecutively or nest: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]` `[!CAUTION]`.
 """.trimIndent()
 
     /**
-     * Mermaid 绘图与架构图拆分规范。
-     *
-     * 核心规则：
-     * - 能力边界：只有 Mermaid 能渲染成图，所有结构图必须用 ```mermaid；PlantUML/DOT 等只会显示源码
-     * - 语法安全：特殊字符用引号、禁用 HTML 标签、避免未转义字符
-     * - 结构拆分：严禁单张巨图；先总览后分层/分模块详解；每图单一关注点；嵌套超一层或连线混乱即拆分
+     * Mermaid 绘图规范（唯一一份；OUTPUT_FORMAT 不再重复讲 mermaid 能力边界）。
      */
     val MERMAID_GUIDELINES: String = """
 # Mermaid Tips
 
-- Mermaid is the ONLY diagram format we render: every diagram must be a
-  ```mermaid block. PlantUML / Graphviz DOT / d2 have no renderer and would
-  display as plain source — do not emit them unless the user explicitly asks
-  for that format as text.
-- Quote labels that contain special characters: `id["Label (v2)"]`.
-- No raw HTML inside labels.
-- One concern per diagram. Split a complex system into an overview plus one
-  diagram per module/layer; if subgraphs would nest deeper than one level, split
-  into separate diagrams instead.
+- Mermaid is the ONLY diagram format we render: every diagram must be a ```mermaid block.
+  PlantUML / Graphviz DOT / d2 have no renderer and show as plain source — never emit them
+  unless the user explicitly asks for that format as text.
+- Quote labels with special characters: `id["Label (v2)"]`. No raw HTML inside labels.
+- One concern per diagram. Split a complex system into an overview plus one diagram per
+  module/layer; no subgraphs nested deeper than one level.
 """.trimIndent()
 
     /**
-     * 计划工具纪律 + create_plan 完整参数范例。
+     * create_plan 参数纪律：字段清单 + 精简范例 + 时序硬规则。
      *
-     * 实测背景（端到端审计，2026-09）：弱模型会
-     * 1) 把 overview 等结构化字段塞进 architecture 大杂烩、漏填必填字段 → 解析/校验连环失败；
-     * 2) 编造 planId（"placeholder"）继续调 generate_spec/spawn_agent → 全部被拒还继续跑；
-     * 3) 同一条消息里并行发射 create_plan+generate_spec+spawn_agent 霰弹枪乱调。
-     * 本指南三味药：硬规则（顺序/报错即停/禁止编造）+ 完整 JSON 范例 + 聚合校验配合说明。
+     * 压缩原则：与 SystemPrompts.PLANNING_DISCIPLINE 的重复内容（"别编造 planId"、
+     * "顺序执行"）收敛到这里，PLANNING_DISCIPLINE 只讲流程判断；两个文件各讲各的。
      */
     val PLAN_TOOL_GUIDE: String = """
 # Plan Tool Discipline (create_plan / generate_spec / spawn_agent / verify_subtask)
 
-Hard rules — violating any of these wastes the entire turn:
+Hard rules — violating any wastes the whole turn:
+1. Plan tools are STRICTLY SEQUENTIAL, one per message step: create_plan must SUCCEED before
+   generate_spec, generate_spec before spawn_agent. Never fire later steps in the same message
+   as an earlier one.
+2. A planId exists ONLY after create_plan succeeds. If you have no real planId, the only correct
+   call is create_plan. NEVER invent an id.
+3. Any plan-tool Error → STOP and fix that call (validation errors list every missing item).
+   Never continue to dependent calls after a failure; never report plan progress that never ran.
 
-1. Plan tools are STRICTLY SEQUENTIAL and each depends on the previous one's
-   result. One call per message step: create_plan must SUCCEED before
-   generate_spec; generate_spec before spawn_agent. Never fire later steps in
-   the same message as an earlier step.
-2. A planId exists ONLY after create_plan succeeds and returns it in its
-   result. If you don't have a real planId, the only correct call is
-   create_plan. NEVER invent an id (e.g. "placeholder").
-3. When any tool returns an Error, STOP and fix that call. Read the error —
-   validation errors list EVERY missing item; fix all of them in the retry.
-   Never continue to dependent calls after a failure, and never report
-   plan-based progress (subtasks, verification) that never actually ran.
+create_plan takes ONE JSON object. CODE required fields: title, overview, businessLogic,
+languageStack, inScope, keyDecisions, changes, successCriteria, subtasks. Optional: summary,
+projectContext (default BROWNFIELD), outScope, dataAndParams, risks, architecture. List fields
+are arrays of strings. Every subtask: name, planDetail, targetFiles, verification; dependsOn is
+an array of 0-based indices.
 
-create_plan arguments are ONE JSON object. Required fields in CODE mode:
-title, overview, businessLogic, languageStack, inScope, keyDecisions, changes,
-successCriteria, subtasks. Optional: summary, projectContext (default
-BROWNFIELD), outScope, dataAndParams, risks, architecture. List fields take
-JSON arrays of strings. Every subtask needs name, planDetail, targetFiles,
-verification; dependsOn is an array of 0-based indices.
-
-Complete example (shape to follow, content from your real task):
+Example (shape to follow; content from your real task):
 
 ```json
 {
   "title": "Add subtraction feature",
   "summary": "One sentence: what changes and to what end.",
-  "projectContext": "BROWNFIELD",
   "overview": "Background and goals, 1-2 sentences.",
-  "businessLogic": "Entry point, before/after behavior, where the new logic hooks into the call chain.",
+  "businessLogic": "Entry point, before/after behavior, where logic hooks into the call chain.",
   "languageStack": "Python 3.12",
   "inScope": ["Add sub(a,b) to pkg/calc.py", "Export sub in pkg/api.py"],
   "outScope": ["No CLI changes"],
-  "keyDecisions": [
-    {"question": "How to test?", "choice": "plain assert script",
-     "rationale": "no test framework in the project",
-     "alternatives": ["pytest", "unittest"]}
-  ],
-  "changes": [
-    {"module": "core", "action": "MODIFY", "filePath": "pkg/calc.py",
+  "keyDecisions": [{"question": "How to test?", "choice": "plain assert script",
+     "rationale": "no test framework in the project", "alternatives": ["pytest"]}],
+  "changes": [{"module": "core", "action": "MODIFY", "filePath": "pkg/calc.py",
      "description": "Add sub(a,b) function", "rationale": "extends core math"},
-    {"module": "test", "action": "NEW", "filePath": "pkg/test_calc.py",
-     "description": "Add sub test", "rationale": "no existing test file to modify"}
-  ],
+     {"module": "test", "action": "NEW", "filePath": "pkg/test_calc.py",
+     "description": "Add sub test", "rationale": "no existing test file"}],
   "successCriteria": ["Verification command for the last subtask passes"],
-  "subtasks": [
-    {"name": "Implement sub",
-     "planDetail": "Add sub(a,b) to pkg/calc.py, matching existing style.",
+  "subtasks": [{"name": "Implement sub", "planDetail": "Add sub(a,b) to pkg/calc.py.",
      "targetFiles": ["pkg/calc.py"],
      "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",
-     "dependsOn": [], "parallelizable": false}
-  ]
+     "dependsOn": [], "parallelizable": false}]
 }
 ```
 
-After approval, per subtask: generate_spec(planId, subtaskIndex, spec) with the
-spec as an ordered checklist, then spawn_agent(planId, subtaskIndex) — returns an
-agentId (the subagent runs in the background) — then wait_agent(agentId) to get
-its result, then verify_subtask(planId, subtaskIndex, status, evidence).
+After approval, per subtask: generate_spec(planId, subtaskIndex, spec) as an ordered checklist,
+then spawn_agent(planId, subtaskIndex) (returns agentId, runs in background),
+then wait_agent(agentId) for the result, then verify_subtask(planId, subtaskIndex, status, evidence).
 """.trimIndent()
 }

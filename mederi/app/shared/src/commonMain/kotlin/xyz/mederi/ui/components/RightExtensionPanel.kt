@@ -37,12 +37,18 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 
 import androidx.compose.animation.*
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import xyz.mederi.core.ui.DebugLog
+import xyz.emuci.inkcompose.MarkdownExporter
+import xyz.emuci.inkcompose.HtmlExportOptions
+import xyz.emuci.inkcompose.PdfExportOptions
+import xyz.mederi.util.pickSaveFile
+import xyz.mederi.util.writeTextToFile
+import xyz.mederi.util.openFile
+import kotlinx.coroutines.launch
 
 @Composable
 fun RightExtensionPanel(
@@ -613,11 +619,13 @@ private fun ArtifactsPanelContent(
                     )
                 }
                 is ArtifactItem.Text -> {
+                    val liveItem = viewModel.getLiveArtifactItem(activeItem.id) ?: activeItem
                     TextReaderTabContent(
-                        title = activeItem.title,
-                        content = activeItem.content,
-                        lineCount = activeItem.lineCount,
-                        charCount = activeItem.charCount,
+                        title = liveItem.title,
+                        content = liveItem.content,
+                        lineCount = liveItem.lineCount,
+                        charCount = liveItem.charCount,
+                        isStreaming = liveItem.isStreaming,
                         colors = colors
                     )
                 }
@@ -1087,10 +1095,20 @@ private fun TextReaderTabContent(
     content: String,
     lineCount: Int,
     charCount: Int,
+    isStreaming: Boolean = false,
     colors: MederiColors
 ) {
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val coroutineScope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
+
+    var exportingHtml by remember { mutableStateOf(false) }
+    var exportedHtml by remember { mutableStateOf(false) }
+
+    var exportingPdf by remember { mutableStateOf(false) }
+    var exportedPdf by remember { mutableStateOf(false) }
+
+    var exportError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -1098,6 +1116,43 @@ private fun TextReaderTabContent(
             copied = false
         }
     }
+
+    LaunchedEffect(exportedHtml) {
+        if (exportedHtml) {
+            kotlinx.coroutines.delay(2500)
+            exportedHtml = false
+        }
+    }
+
+    LaunchedEffect(exportedPdf) {
+        if (exportedPdf) {
+            kotlinx.coroutines.delay(2500)
+            exportedPdf = false
+        }
+    }
+
+    LaunchedEffect(exportError) {
+        if (exportError != null) {
+            kotlinx.coroutines.delay(3500)
+            exportError = null
+        }
+    }
+
+    val safeBaseName = remember(title) {
+        val cleaned = title.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+        cleaned.ifBlank { "document" }
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "streamingIndicator")
+    val streamGlowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "streamGlowAlpha"
+    )
 
     Column(modifier = Modifier.fillMaxSize()) {
         // 顶部信息条
@@ -1132,41 +1187,198 @@ private fun TextReaderTabContent(
                 )
                 if (charCount > 0 || lineCount > 0) {
                     Text(
-                        text = "( 行 ·  字符)",
+                        text = "($lineCount 行 · $charCount 字符)",
                         color = colors.textMuted,
                         fontSize = 11.sp
                     )
                 }
+                if (isStreaming) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(colors.accentPrimary.copy(alpha = 0.12f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(colors.accentPrimary.copy(alpha = streamGlowAlpha))
+                        )
+                        Text(
+                            text = "生成中...",
+                            color = colors.accentPrimary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
 
-            // 复制按钮
+            // 操作按钮区：复制全文、导出 HTML、导出 PDF
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (copied) colors.accentSuccess.copy(alpha = 0.15f) else colors.surfaceWorkspace)
-                    .clickable {
-                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(content))
-                        copied = true
-                    }
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(
-                    imageVector = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
-                    contentDescription = null,
-                    tint = if (copied) colors.accentSuccess else colors.textMuted,
-                    modifier = Modifier.size(12.dp)
-                )
-                Text(
-                    text = if (copied) "已复制" else "复制全文",
-                    color = if (copied) colors.accentSuccess else colors.textPrimary,
-                    fontSize = 11.sp
-                )
+                if (exportError != null) {
+                    Text(
+                        text = exportError ?: "",
+                        color = colors.accentDanger,
+                        fontSize = 10.5.sp,
+                        maxLines = 1
+                    )
+                }
+
+                // 复制全文按钮
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (copied) colors.accentSuccess.copy(alpha = 0.15f) else colors.surfaceWorkspace)
+                        .clickable {
+                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(content))
+                            copied = true
+                        }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Icon(
+                        imageVector = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
+                        contentDescription = null,
+                        tint = if (copied) colors.accentSuccess else colors.textMuted,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = if (copied) "已复制" else "复制全文",
+                        color = if (copied) colors.accentSuccess else colors.textPrimary,
+                        fontSize = 11.sp
+                    )
+                }
+
+                // 导出 HTML 按钮
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            when {
+                                exportedHtml -> colors.accentSuccess.copy(alpha = 0.15f)
+                                exportingHtml -> colors.accentPrimary.copy(alpha = 0.15f)
+                                else -> colors.surfaceWorkspace
+                            }
+                        )
+                        .clickable(enabled = !exportingHtml && !exportingPdf) {
+                            coroutineScope.launch {
+                                val path = pickSaveFile(safeBaseName, "html") ?: return@launch
+                                exportingHtml = true
+                                try {
+                                    val html = MarkdownExporter.toHtml(content, HtmlExportOptions(title = title))
+                                    val ok = writeTextToFile(path, html)
+                                    if (ok) {
+                                        exportedHtml = true
+                                        openFile(path)
+                                    } else {
+                                        exportError = "HTML 保存失败"
+                                    }
+                                } catch (e: Exception) {
+                                    exportError = e.message ?: "导出异常"
+                                } finally {
+                                    exportingHtml = false
+                                }
+                            }
+                        }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Icon(
+                        imageVector = if (exportedHtml) FeatherIcons.Check else FeatherIcons.Code,
+                        contentDescription = null,
+                        tint = when {
+                            exportedHtml -> colors.accentSuccess
+                            exportingHtml -> colors.accentPrimary
+                            else -> colors.textMuted
+                        },
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = when {
+                            exportingHtml -> "导出中..."
+                            exportedHtml -> "已导出"
+                            else -> "导出 HTML"
+                        },
+                        color = when {
+                            exportedHtml -> colors.accentSuccess
+                            exportingHtml -> colors.accentPrimary
+                            else -> colors.textPrimary
+                        },
+                        fontSize = 11.sp
+                    )
+                }
+
+                // 导出 PDF 按钮
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            when {
+                                exportedPdf -> colors.accentSuccess.copy(alpha = 0.15f)
+                                exportingPdf -> colors.accentPrimary.copy(alpha = 0.15f)
+                                else -> colors.surfaceWorkspace
+                            }
+                        )
+                        .clickable(enabled = !exportingHtml && !exportingPdf) {
+                            coroutineScope.launch {
+                                val path = pickSaveFile(safeBaseName, "pdf") ?: return@launch
+                                exportingPdf = true
+                                try {
+                                    val result = MarkdownExporter.toPdf(content, path, PdfExportOptions(title = title))
+                                    if (result.isSuccess) {
+                                        exportedPdf = true
+                                        openFile(path)
+                                    } else {
+                                        exportError = result.exceptionOrNull()?.message ?: "PDF 导出失败"
+                                    }
+                                } catch (e: Exception) {
+                                    exportError = e.message ?: "导出异常"
+                                } finally {
+                                    exportingPdf = false
+                                }
+                            }
+                        }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Icon(
+                        imageVector = if (exportedPdf) FeatherIcons.Check else FeatherIcons.Download,
+                        contentDescription = null,
+                        tint = when {
+                            exportedPdf -> colors.accentSuccess
+                            exportingPdf -> colors.accentPrimary
+                            else -> colors.textMuted
+                        },
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = when {
+                            exportingPdf -> "导出中..."
+                            exportedPdf -> "已导出"
+                            else -> "导出 PDF"
+                        },
+                        color = when {
+                            exportedPdf -> colors.accentSuccess
+                            exportingPdf -> colors.accentPrimary
+                            else -> colors.textPrimary
+                        },
+                        fontSize = 11.sp
+                    )
+                }
             }
         }
 
-        // 正文阅读器区域：使用 inkcompose.MarkdownView 统一高质量渲染
+        // 正文阅读器区域：使用 inkcompose.MarkdownView 统一高质量渲染，支持流式渲染状态
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1176,7 +1388,8 @@ private fun TextReaderTabContent(
             MarkdownView(
                 content = content,
                 modifier = Modifier.fillMaxSize(),
-                enableScrollOverride = true
+                enableScrollOverride = true,
+                isStreaming = isStreaming
             )
         }
     }
