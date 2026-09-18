@@ -37,6 +37,7 @@ import xyz.mederi.core.ui.DebugLog
 import xyz.mederi.core.ui.RightDockPanel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.ChatLayout
 
 data class DockItemData(
     val panel: RightDockPanel,
@@ -66,7 +67,7 @@ fun RightDock(
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .width(46.dp)
+            .width(ChatLayout.rightDockWidth)
             .background(colors.surfaceSidebar)
             .border(width = 1.dp, color = colors.divider)
             .padding(vertical = 10.dp, horizontal = 5.dp),

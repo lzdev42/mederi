@@ -51,7 +51,8 @@ object MederiModelMapper {
             id = coreProject.id,
             name = coreProject.name,
             directory = coreProject.directory,
-            conversations = conversations
+            conversations = conversations,
+            createdAt = parseIsoToMillis(coreProject.createdAt)
         )
 
     // ------------------------------------------------------------------
@@ -213,7 +214,8 @@ object MederiModelMapper {
             .filterNot { it.id.isNullOrBlank() }
             .associateBy { it.id!! }
 
-        val blocks = message.parts.mapIndexedNotNull { index, part ->
+        val mergedParts = message.parts.mergeAdjacentParts()
+        val blocks = mergedParts.mapIndexedNotNull { index, part ->
             toChatBlock(part, index, message, results)
         }
 
@@ -258,6 +260,35 @@ object MederiModelMapper {
         CoreMessageRole.SUMMARY -> ChatRole.Summary
     }
 
+    private fun List<CoreMessagePart>.mergeAdjacentParts(): List<CoreMessagePart> {
+        if (size <= 1) return this
+        val merged = mutableListOf<CoreMessagePart>()
+        for (part in this) {
+            val last = merged.lastOrNull()
+            if (part is CoreMessagePart.Reasoning && last is CoreMessagePart.Reasoning) {
+                val combinedContent = last.content + part.content
+                val lastSummary = last.summary
+                val partSummary = part.summary
+                val combinedSummary = when {
+                    lastSummary != null && partSummary != null -> lastSummary + partSummary
+                    lastSummary != null -> lastSummary
+                    else -> partSummary
+                }
+                merged[merged.lastIndex] = CoreMessagePart.Reasoning(
+                    content = combinedContent,
+                    summary = combinedSummary,
+                    encrypted = last.encrypted ?: part.encrypted,
+                    id = last.id ?: part.id
+                )
+            } else if (part is CoreMessagePart.Text && last is CoreMessagePart.Text) {
+                merged[merged.lastIndex] = CoreMessagePart.Text(text = last.text + part.text)
+            } else {
+                merged.add(part)
+            }
+        }
+        return merged
+    }
+
     private fun toChatBlock(
         part: CoreMessagePart,
         index: Int,
@@ -271,7 +302,7 @@ object MederiModelMapper {
         )
         is CoreMessagePart.Reasoning -> ChatBlock.Reasoning(
             id = blockId(message, index),
-            text = part.content.joinToString("\n")
+            text = part.content.joinToString("")
         )
         is CoreMessagePart.ToolCall -> {
             val input = parseArgsJson(part.args)

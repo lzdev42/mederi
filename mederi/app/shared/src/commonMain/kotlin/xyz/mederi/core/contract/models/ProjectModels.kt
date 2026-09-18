@@ -8,4 +8,5 @@ data class Project(
     val name: String,
     val directory: String,
     val conversations: List<Conversation>,
+    val createdAt: Long = 0L,
 )

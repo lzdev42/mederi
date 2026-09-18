@@ -1,0 +1,124 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish as GitHub Release (true/false)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 1. macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            platform: macos
+            arch: arm64
+            architecture: aarch64
+            arch_cmd: ""
+
+          # 2. macOS x86_64 (Intel) - 跑在 ARM Runner 上，通过 Rosetta 2 模拟编译
+          - os: macos-latest
+            platform: macos
+            arch: x64
+            architecture: x64
+            arch_cmd: "arch -x86_64"
+
+          # 3. Linux x86_64 (绿色便携包)
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            architecture: x64
+            arch_cmd: ""
+
+          # 4. Windows x86_64
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            architecture: x64
+            arch_cmd: ""
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    env:
+      APP_NAME: Mederi
+      GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 确保 macOS 启用 Rosetta 2（针对 Intel x64 构建）
+      - name: Ensure Rosetta 2 (macOS Intel on ARM)
+        if: runner.os == 'macOS' && matrix.arch == 'x64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+
+      # 配置对应架构的 JetBrains Runtime (含 JCEF)
+      - name: Setup Java 25 (JBR with JCEF)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'jetbrains'
+          java-package: 'jdk+jcef'
+          architecture: ${{ matrix.architecture }}
+          cache: 'gradle'
+
+      # 执行打包脚本
+      - name: Run Build Script
+        shell: bash
+        run: |
+          chmod +x ./build_release.sh
+          ${{ matrix.arch_cmd }} ./build_release.sh --name "${{ env.APP_NAME }}" --skip-sign
+
+      # Windows 打包产物压缩为 zip
+      - name: Package Windows ZIP
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $appDir = Get-ChildItem -Path release -Directory | Select-Object -First 1
+          if ($appDir) {
+            Compress-Archive -Path $appDir.FullName -DestinationPath "./release/${{ env.APP_NAME }}-${{ matrix.arch }}-windows.zip" -Force
+            Remove-Item -Recurse -Force $appDir.FullName
+          }
+
+      # 上传当前平台的构建产物
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/*
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: release-artifacts/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

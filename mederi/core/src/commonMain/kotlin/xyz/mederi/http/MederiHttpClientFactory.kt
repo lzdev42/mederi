@@ -41,15 +41,15 @@ object MederiHttpClientFactory : KoogHttpClient.Factory {
         // Mederi 身份头永远权威：即使调用处传入同名头也以它为准
         headers = headers + (USER_AGENT_HEADER to userAgent),
         queryParameters = queryParameters,
-        // **禁用 Koog/Ktor 的请求超时与 socket 超时（0 = 禁用）**。
+        // **禁用 Koog/Ktor 的请求超时与 socket 超时（INFINITE_TIMEOUT_MS = 禁用）**。
         // 它们是从"发出请求/收到首帧"起算的总时限——超长推理（30+ 分钟甚至 1 小时）只要
         // 没在时限内跑完就会被切断，这本质是在约束 AI 的处理时长，不是真正意义的超时。
         // 真正的"连接死亡"超时由 [MederiOpenAILLMClient.SSE_IDLE_TIMEOUT] 自行掌控：
         // SSE 只要还在吐任何一行（含 keep-alive 注释行）就不超时；只有连续一段时间没有任何
         // 数据到达才判超时。
-        requestTimeoutMillis = 0,
+        requestTimeoutMillis = io.ktor.client.plugins.HttpTimeoutConfig.INFINITE_TIMEOUT_MS,
         connectTimeoutMillis = connectTimeoutMillis,
-        socketTimeoutMillis = 0,
+        socketTimeoutMillis = io.ktor.client.plugins.HttpTimeoutConfig.INFINITE_TIMEOUT_MS,
         json = json,
     )
 }

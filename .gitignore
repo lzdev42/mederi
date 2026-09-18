@@ -1,6 +1,13 @@
 # Temporary & Reference（临时解压/拉取/实验一律放 temp/，见 AGENTS.md）
 temp/
 .freebuff/
+
+# Mederi 工作目录（会话记录/浏览器运行数据，不应入库）
+.mederi/
+
+# 发布产物
+release/
+
 # 工具 scratch（playwright MCP 截图/日志、反编译 class 产物）
 .playwright-mcp/
 /com/

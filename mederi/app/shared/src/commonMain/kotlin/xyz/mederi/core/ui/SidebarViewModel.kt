@@ -36,14 +36,16 @@ class SidebarViewModel(
      */
     val filteredProjects: StateFlow<List<Project>> =
         combine(appState.projects, appState.selectedWorkType) { projects, workType ->
-            projects.mapNotNull { project ->
-                val matching = project.conversations.filter { it.workType == workType }
-                if (project.conversations.isEmpty() || matching.isNotEmpty()) {
-                    project.copy(conversations = matching)
-                } else {
-                    null
+            projects
+                .mapNotNull { project ->
+                    val matching = project.conversations.filter { it.workType == workType }
+                    if (project.conversations.isEmpty() || matching.isNotEmpty()) {
+                        project.copy(conversations = matching)
+                    } else {
+                        null
+                    }
                 }
-            }
+                .sortedByDescending { it.createdAt }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** 确保会话所属的项目在侧边栏展开（覆盖程序化选择：自动创建会话、子代理跳转等） */
@@ -56,13 +58,35 @@ class SidebarViewModel(
         }
     }
 
-    fun createProject(input: CreateProjectInput) = launch {
-        appState.aiCore.createProject(input)
+    fun createProject(input: CreateProjectInput) {
+        viewModelScope.launch {
+            uiState = uiState.copy(isBusy = true)
+            // 目录查重：若该目录已存在项目，则直接选中并展开，避免重复创建
+            val existing = appState.projects.value.firstOrNull { it.directory == input.directory }
+            if (existing != null) {
+                uiState = uiState.copy(
+                    isBusy = false,
+                    expandedProjectIds = uiState.expandedProjectIds + existing.id
+                )
+                appState.selectProject(existing.id)
+                return@launch
+            }
+
+            val result = appState.aiCore.createProject(input)
+            uiState = uiState.copy(isBusy = false)
+            result.fold(
+                onSuccess = { project ->
+                    uiState = uiState.copy(expandedProjectIds = uiState.expandedProjectIds + project.id)
+                    appState.selectProject(project.id)
+                },
+                onFailure = { uiState = uiState.copy(error = it.message) }
+            )
+        }
     }
 
-    fun createProjectFromDirectory(dir: String) = launch {
+    fun createProjectFromDirectory(dir: String) {
         val name = dir.substringAfterLast("/").substringAfterLast("\\").ifBlank { dir }
-        appState.aiCore.createProject(CreateProjectInput(name = name, directory = dir))
+        createProject(CreateProjectInput(name = name, directory = dir))
     }
 
     fun renameProject(projectId: String, newName: String) = launch {

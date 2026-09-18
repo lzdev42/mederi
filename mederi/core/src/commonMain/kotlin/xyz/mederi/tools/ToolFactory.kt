@@ -70,9 +70,10 @@ object ToolFactory {
         notebook: Notebook? = null,
         commandSandbox: xyz.mederi.tools.sandbox.CommandSandbox? = null,
         sessionStore: SessionStore? = null,
-        mcpTools: List<ToolBase<*, *>> = emptyList()
+        mcpTools: List<ToolBase<*, *>> = emptyList(),
+        agentsDiscovery: AgentsSubtreeDiscovery? = null
     ): ToolRegistry {
-        val fsTools = FileSystemTools(directories, diffTracker)
+        val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery)
         val shellTools = ShellTools(directories, commandSandbox)
         val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester, planStore)
 

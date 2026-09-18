@@ -40,7 +40,7 @@ import kotlinx.coroutines.flow.toList
  * 合并规则：相邻的 ToolCallComplete，若后片的 id/name 均空（纯 args 续片），
  * 并入前片（args 拼接、name 补缺）。id 非空 = 新调用，不合并。
  */
-private fun List<StreamFrame>.mergeFragmentedToolCalls(): List<StreamFrame> {
+internal fun List<StreamFrame>.mergeFragmentedToolCalls(): List<StreamFrame> {
     if (none { it is StreamFrame.ToolCallComplete }) return this
     val out = mutableListOf<StreamFrame>()
     // 上一个命名 ToolCallComplete 在 out 中的下标；续片（id/name 空）的 args 并入它。
@@ -64,10 +64,53 @@ private fun List<StreamFrame>.mergeFragmentedToolCalls(): List<StreamFrame> {
     return out
 }
 
-private fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
+internal fun List<StreamFrame>.mergeFragmentedReasoning(): List<StreamFrame> {
+    if (count { it is StreamFrame.ReasoningComplete } <= 1) return this
+    val out = mutableListOf<StreamFrame>()
+    for (frame in this) {
+        val last = out.lastOrNull()
+        if (frame is StreamFrame.ReasoningComplete && last is StreamFrame.ReasoningComplete) {
+            val mergedContent = last.content + frame.content
+            val lastSummary = last.summary
+            val frameSummary = frame.summary
+            val mergedSummary = when {
+                lastSummary != null && frameSummary != null -> lastSummary + frameSummary
+                lastSummary != null -> lastSummary
+                else -> frameSummary
+            }
+            out[out.lastIndex] = last.copy(
+                content = mergedContent,
+                summary = mergedSummary,
+                id = last.id ?: frame.id
+            )
+        } else {
+            out.add(frame)
+        }
+    }
+    return out
+}
+
+internal fun List<StreamFrame>.mergeFragmentedText(): List<StreamFrame> {
+    if (count { it is StreamFrame.TextComplete } <= 1) return this
+    val out = mutableListOf<StreamFrame>()
+    for (frame in this) {
+        val last = out.lastOrNull()
+        if (frame is StreamFrame.TextComplete && last is StreamFrame.TextComplete) {
+            out[out.lastIndex] = last.copy(text = last.text + frame.text)
+        } else {
+            out.add(frame)
+        }
+    }
+    return out
+}
+
+internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
     val start = System.nanoTime()
     val rebuilt = try {
-        mergeFragmentedToolCalls().toMessageResponse()
+        mergeFragmentedToolCalls()
+            .mergeFragmentedReasoning()
+            .mergeFragmentedText()
+            .toMessageResponse()
     } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
         xyz.mederi.debug.DebugLog.error(

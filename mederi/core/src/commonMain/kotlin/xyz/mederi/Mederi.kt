@@ -289,6 +289,7 @@ class Mederi private constructor(
 
         /** 创建 SQLite driver（WAL + 外键约束），建表。 */
         private fun createDriver(dbPath: String): app.cash.sqldelight.db.SqlDriver {
+            runCatching { Class.forName("org.sqlite.JDBC") }
             val driver = app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver(
                 url = "jdbc:sqlite:$dbPath",
                 properties = java.util.Properties().apply {

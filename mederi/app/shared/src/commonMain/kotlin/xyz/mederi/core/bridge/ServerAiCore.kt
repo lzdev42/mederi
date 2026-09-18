@@ -600,4 +600,15 @@ class ServerAiCore(
     override suspend fun uninstallSkill(name: String): Result<Unit> = runCatching {
         httpCall("/v1/skills/${name.encodeURLParameter()}", method = HttpMethod.Delete)
     }
+
+    // ------------------------------------------------------------------
+    // AGENTS.md 生成（遥控 REST 桥）
+    // ------------------------------------------------------------------
+
+    override suspend fun generateAgentsFile(projectId: String, modelId: String?): Result<String> = runCatching {
+        httpSend<xyz.mederi.core.contract.dto.GenerateAgentsFileResponse>(
+            "/v1/projects/${projectId.encodeURLParameter()}/agents-file/generate",
+            requestBody = xyz.mederi.core.contract.dto.GenerateAgentsFileInput(modelId)
+        ).content
+    }
 }

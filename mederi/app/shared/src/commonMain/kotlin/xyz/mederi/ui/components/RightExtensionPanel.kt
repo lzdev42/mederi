@@ -21,6 +21,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
@@ -56,6 +57,7 @@ fun RightExtensionPanel(
     onClose: () -> Unit,
     viewModel: WorkspaceViewModel,
     isCompact: Boolean = false,
+    maxPanelWidth: Dp = Dp.Infinity,
     modifier: Modifier = Modifier
 ) {
     var defaultPanelWidthDp by remember { mutableStateOf(340f) }
@@ -71,20 +73,24 @@ fun RightExtensionPanel(
 
     val isBrowser = panelToDisplay == RightDockPanel.BROWSER
     val panelWidthDp = if (isBrowser) browserPanelWidthDp else defaultPanelWidthDp
+    // 布局期钳制：面板拖宽后窗口缩小、或面板打开时窗口较窄，面板让位给对话区（不超 maxPanelWidth）
+    val effectivePanelWidthDp = panelWidthDp.coerceAtMost(maxPanelWidth.value)
 
-    DebugLog.debug("UI", "RightExtensionPanel: isOpen=$isOpen, currentPanel=$currentPanel, rendering=$panelToDisplay, width=$panelWidthDp")
+    DebugLog.debug("UI", "RightExtensionPanel: isOpen=$isOpen, currentPanel=$currentPanel, rendering=$panelToDisplay, width=$effectivePanelWidthDp (raw=$panelWidthDp, maxPanel=$maxPanelWidth)")
 
     val handleWidthChange: (Float) -> Unit = { newWidth ->
+        // 不设固定上限（原 800/1600dp）：宽度上限 = maxPanelWidth，保证对话区 ≥ 手机宽度
         if (isBrowser) {
-            browserPanelWidthDp = newWidth.coerceIn(400f, 1600f)
+            browserPanelWidthDp = newWidth.coerceAtLeast(400f).coerceAtMost(maxPanelWidth.value)
         } else {
-            defaultPanelWidthDp = newWidth.coerceIn(240f, 800f)
+            defaultPanelWidthDp = newWidth.coerceAtLeast(240f).coerceAtMost(maxPanelWidth.value)
         }
     }
 
     if (isCompact) {
         RightExtensionPanelContent(
-            panelWidthDp = panelWidthDp,
+            panelWidthDp = effectivePanelWidthDp,
+            maxPanelWidth = maxPanelWidth,
             onWidthChange = handleWidthChange,
             onClose = onClose,
             panel = panelToDisplay,
@@ -95,11 +101,13 @@ fun RightExtensionPanel(
     } else {
         AnimatedVisibility(
             visible = isOpen,
-            enter = fadeIn() + expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)),
-            exit = fadeOut() + shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy))
+            // 右侧面板从右边缘展开/收缩（expandFrom=End）：居中展开会在动画期间两侧露出底层白缝
+            enter = fadeIn() + expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), expandFrom = Alignment.End),
+            exit = fadeOut() + shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), shrinkTowards = Alignment.End)
         ) {
             RightExtensionPanelContent(
-                panelWidthDp = panelWidthDp,
+                panelWidthDp = effectivePanelWidthDp,
+                maxPanelWidth = maxPanelWidth,
                 onWidthChange = handleWidthChange,
                 onClose = onClose,
                 panel = panelToDisplay,
@@ -114,6 +122,7 @@ fun RightExtensionPanel(
 @Composable
 private fun RightExtensionPanelContent(
     panelWidthDp: Float,
+    maxPanelWidth: Dp = Dp.Infinity,
     onWidthChange: (Float) -> Unit,
     onClose: () -> Unit,
     panel: RightDockPanel,
@@ -124,6 +133,7 @@ private fun RightExtensionPanelContent(
     val colors = LocalMederiColors.current
     val density = LocalDensity.current
     val currentWidthState = rememberUpdatedState(panelWidthDp)
+    val maxPanelWidthState = rememberUpdatedState(maxPanelWidth)
     val onWidthChangeState = rememberUpdatedState(onWidthChange)
 
     val panelIcon = when (panel) {
@@ -156,7 +166,8 @@ private fun RightExtensionPanelContent(
                             val dragDp = with(density) { dragAmount.toDp().value }
                             val current = currentWidthState.value
                             val minW = if (panel == RightDockPanel.BROWSER) 400f else 200f
-                            val newWidth = (current - dragDp).coerceIn(minW, 1600f)
+                            // 上限 = maxPanelWidth（对话区保底手机宽度），不设固定上限
+                            val newWidth = (current - dragDp).coerceAtLeast(minW).coerceAtMost(maxPanelWidthState.value.value)
                             DebugLog.event("UI", "RightExtensionPanel drag: dragAmountPx=$dragAmount, dragDp=$dragDp, currentWidth=${current}dp, newWidth=${newWidth}dp")
                             onWidthChangeState.value(newWidth)
                         }

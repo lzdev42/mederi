@@ -91,6 +91,10 @@ fun Workspace(
                 .fillMaxWidth()
         ) {
             val screenWidth = maxWidth
+            // 右侧扩展面板可用最大宽度 = 工作区宽度 - 对话视图最小宽度（手机宽度）- 常驻 Dock 宽度。
+            // 面板不设固定上限（原 800/1600dp）：唯一约束是不得把对话区压到手机宽度以下。
+            val maxPanelWidth = (screenWidth - ChatLayout.conversationMinWidth - ChatLayout.rightDockWidth)
+                .coerceAtLeast(0.dp)
             Row(
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -99,6 +103,8 @@ fun Workspace(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
+                        // 对话视图最小宽度 = 手机宽度：扩展面板再宽也不能把对话区压到手机宽度以下
+                        .widthIn(min = if (isCompact) Dp.Unspecified else ChatLayout.conversationMinWidth)
                 ) {
                     // 中央区 Header (40dp 高度对齐全屏顶栏线条)
                     Box(
@@ -342,7 +348,8 @@ fun Workspace(
                         isOpen = isRightPanelOpen,
                         onClose = { viewModel.closeDockPanel() },
                         viewModel = viewModel,
-                        isCompact = false
+                        isCompact = false,
+                        maxPanelWidth = maxPanelWidth
                     )
 
                     RightDock(
@@ -957,4 +964,3 @@ private fun AssistantImagesView(
         }
     }
 }
-

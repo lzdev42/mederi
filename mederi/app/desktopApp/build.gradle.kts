@@ -40,6 +40,22 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "xyz.mederi"
             packageVersion = "1.0.0"
+
+            modules(
+                "java.instrument",
+                "java.naming",
+                "java.security.jgss",
+                "java.sql",
+                "java.xml.crypto",
+                "jcef",
+                "jdk.jfr",
+                "jdk.management",
+                "jdk.unsupported"
+            )
+        }
+
+        buildTypes.release.proguard {
+            isEnabled.set(false)
         }
     }
 }

@@ -6,7 +6,7 @@ import androidx.compose.ui.unit.dp
 
 internal const val DEFAULT_ASCENT_TRIM = 0.15f
 internal const val DEFAULT_BASELINE_SHIFT = 0f
-internal val DEFAULT_COLUMN_SPACING = 0.dp
+internal val DEFAULT_COLUMN_SPACING = 12.dp
 
 /**
  * 竖排文字渲染配置。

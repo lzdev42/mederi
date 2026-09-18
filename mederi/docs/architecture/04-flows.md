@@ -22,7 +22,7 @@ sequenceDiagram
     AC->>SM: SessionManager.sendMessage(id, SendMessageRequest)
     SM->>TE: TurnExecutor.sendMessage(sessionId, request)
     TE->>TE: 校验 IDLE → 读 Project → PlanStore.loadBySession<br/>组装 activePlanContent/spec指针/activeTodoContent(互斥)
-    TE->>TE: SystemPrompts.build(agentMode, workType, activePlan, activeTodo)
+    TE->>TE: SystemPrompts.build(agentMode, workType, activePlan, activeTodo)<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深)
     TE->>TE: effectiveModel/effectiveReasoningLevel → sessionStore.updateAgentConfig
     TE->>HS: append(用户消息+durable环境块) 【durable-first】
     TE->>EB: SESSION_UPDATED
@@ -33,7 +33,7 @@ sequenceDiagram
     rect rgb(235, 244, 255)
         note over TE,LLM: runTurn（后台协程）
         TE->>TE: preflightCompressionIfNeeded<br/>(contextUsedTokens > 70% 窗口 → compressOnce)
-        TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪)
+        TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪)<br/>透传 AgentsSubtreeDiscovery: read/list 工具访问路径上<br/>发现未注入过的 AGENTS.md 时追加进工具返回文本(会话级去重)
         TE->>TE: buildTurnAgent: KoogClientFactory(+RetryableLLMClient)<br/>+ KoogModelBuilder + KoogParamsBuilder<br/>+ ChatMemory(HistoryStoreChatHistoryProvider)<br/>+ graphStrategy(+Compression) + EventHandler
         K->>HS: load → aiViewWindow(最后 SUMMARY 之后) → KoogMessageMapper
         K->>LLM: requestLLMStreaming(系统提示+AI视图窗口+哨兵输入)
@@ -71,7 +71,7 @@ flowchart TD
     S["sendMessage(sessionId, request, subagentRole?)"] --> V{"会话状态 == IDLE?"}
     V -- "否" --> E1["上抛异常(上游包装 MederiException)"]
     V -- "是" --> PREP["组装上下文: Project/PlanStore/Notebook<br/>activePlanContent(计划+spec指针+活跃spec)<br/>activeTodoContent(仅无活跃Plan)"]
-    PREP --> SP["SystemPrompts.build / forSubagent"]
+    PREP --> SP["SystemPrompts.build / forSubagent<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深)"]
     SP --> CFG["解析 effectiveModel + effectiveReasoningLevel<br/>回写 sessionStore.updateAgentConfig"]
     CFG --> DF["durable-first: buildUserMessage(注入 NOT_FOR_UI 隐藏标记)<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
     DF --> BG["scope.launch runTurn"]

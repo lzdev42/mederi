@@ -51,6 +51,7 @@ fun Sidebar(
     isDrawer: Boolean = false,
     onRequestClose: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenProjectPicker: () -> Unit = {},
 ) {
     val appState = LocalAppState.current
     val colors = LocalMederiColors.current
@@ -165,6 +166,20 @@ fun Sidebar(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold
             )
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { onOpenProjectPicker() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Plus,
+                    contentDescription = "打开项目目录",
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
@@ -383,6 +398,7 @@ private fun ProjectTreeRow(
                         .size(22.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .clickable {
+                            appState.selectProject(project.id)
                             viewModel.createConversation(project.id)
                             navigate()
                         },
@@ -390,7 +406,7 @@ private fun ProjectTreeRow(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.Plus,
-                        contentDescription = "新建当前项目对话",
+                        contentDescription = "新建对话",
                         tint = colors.textSecondary,
                         modifier = Modifier.size(13.dp)
                     )

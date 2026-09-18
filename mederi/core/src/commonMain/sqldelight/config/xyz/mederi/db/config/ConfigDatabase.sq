@@ -123,11 +123,11 @@ CREATE TABLE IF NOT EXISTS projects (
     PRIMARY KEY (id)
 );
 
--- 查询所有项目（按创建时间升序，顺序稳定）
+-- 查询所有项目（按创建时间降序，最新项目在最前）
 listProjects:
 SELECT id, name, payload
 FROM projects
-ORDER BY created_at ASC, name ASC;
+ORDER BY created_at DESC, name ASC;
 
 -- 按 ID 查询项目
 getProject:

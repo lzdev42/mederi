@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
@@ -111,7 +112,8 @@ fun MainScreen() {
                         onOpenSettings = {
                             isSettingsVisible = true
                             isLeftSidebarOpen = false
-                        }
+                        },
+                        onOpenProjectPicker = openProjectPicker
                     )
                 }
             }
@@ -119,20 +121,23 @@ fun MainScreen() {
             // ==========================================
             // 桌面端布局 (Desktop: Side-by-side)
             // ==========================================
-            Row(modifier = Modifier.fillMaxSize()) {
+            // 容器底层必须上色（surfaceSidebar）：侧边栏开合动画期间透明底层会露出窗口白底
+            Row(modifier = Modifier.fillMaxSize().background(colors.surfaceSidebar)) {
                 AnimatedVisibility(
                     visible = isLeftSidebarOpen,
+                    // 左侧边栏从左边缘展开/收缩（expandFrom=Start）：默认居中展开会在动画期间两侧露出底层白底
                     enter = slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { -it } +
-                            expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) +
+                            expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), expandFrom = Alignment.Start) +
                             fadeIn(),
                     exit = slideOutHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { -it } +
-                            shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) +
+                            shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), shrinkTowards = Alignment.Start) +
                             fadeOut()
                 ) {
                     Sidebar(
                         viewModel = sidebarViewModel,
                         onRequestClose = { isLeftSidebarOpen = false },
-                        onOpenSettings = { isSettingsVisible = true }
+                        onOpenSettings = { isSettingsVisible = true },
+                        onOpenProjectPicker = openProjectPicker
                     )
                 }
                 Workspace(

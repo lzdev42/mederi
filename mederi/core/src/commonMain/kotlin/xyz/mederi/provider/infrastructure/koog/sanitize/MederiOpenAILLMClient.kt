@@ -619,22 +619,22 @@ class MederiOpenAILLMClient(
                     }
                 }
                 "response.reasoning_text.delta" -> {
-                    event.delta?.let { delta ->
+                    event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
                         emitReasoningDelta(id = event.itemId, text = delta, index = event.outputIndex)
                     }
                 }
                 "response.reasoning_summary_text.delta" -> {
-                    event.delta?.let { delta ->
+                    event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
                         emitReasoningDelta(id = event.itemId, summary = delta, index = event.outputIndex)
                     }
                 }
                 "response.output_text.delta", "response.refusal.delta" -> {
-                    event.delta?.let { delta ->
+                    event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
                         emitTextDelta(delta, event.outputIndex)
                     }
                 }
                 "response.function_call_arguments.delta" -> {
-                    event.delta?.let { delta ->
+                    event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
                         val resolvedIndex = event.outputIndex ?: event.itemId?.let { indexByItemId[it] }
                         val meta = resolvedIndex?.let { toolMetaByIndex[it] }
                         DebugLog.event(
@@ -712,11 +712,11 @@ class MederiOpenAILLMClient(
 
             response.collect { chunk ->
                 chunk.choices.firstOrNull()?.let { choice ->
-                    choice.delta.content?.let {
+                    choice.delta.content?.takeIf { it.isNotEmpty() }?.let {
                         DebugLog.debug("SSE-Frame", "chat textDelta len=${it.length}")
                         emitTextDelta(it, choice.index)
                     }
-                    choice.delta.effectiveReasoning?.let { reasoning ->
+                    choice.delta.effectiveReasoning?.takeIf { it.isNotEmpty() }?.let { reasoning ->
                         DebugLog.debug("SSE-Frame", "chat reasoningDelta len=${reasoning.length}")
                         emitReasoningDelta(text = reasoning, index = choice.index)
                     }

@@ -387,6 +387,30 @@ current via update_todo (one call replaces the whole list).
         return basePrompt + "\n" + section.trimIndent()
     }
 
+    /**
+     * 在基础系统提示词末尾追加项目 AGENTS.md 规则段。
+     *
+     * 文件由 [xyz.mederi.project.AgentsFileLoader] 代码级读取（浅 → 深排列），
+     * 每轮 turn 重建系统提示词时调用。深层文件细化/覆盖浅层。无文件时不追加任何内容。
+     */
+    fun withProjectRules(basePrompt: String, files: List<xyz.mederi.project.AgentsFileLoader.AgentsFile>): String {
+        if (files.isEmpty()) return basePrompt
+        val section = buildString {
+            appendLine("# Project Instructions (AGENTS.md)")
+            appendLine()
+            appendLine("This project defines AGENTS.md files (ordered shallow to deep; deeper files refine")
+            appendLine("and override shallower ones). Treat them as binding project conventions:")
+            appendLine()
+            files.forEach { file ->
+                appendLine("## ${file.relativePath}")
+                appendLine()
+                appendLine(file.content.trimEnd())
+                appendLine()
+            }
+        }
+        return basePrompt + "\n\n" + section.trimEnd()
+    }
+
     /** Work 模式系统提示词。 */
     fun forWork(): String = COMMON + "\n\n" + WORK_MODE.trimIndent()
 

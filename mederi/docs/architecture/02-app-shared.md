@@ -69,6 +69,9 @@ interface AiCore {
     suspend fun setSkillsRoot(path: String): Result<Unit>
     suspend fun installSkill(url: String): Result<SkillItem>
     suspend fun uninstallSkill(name: String): Result<Unit>
+
+    // AGENTS.md 生成（API 形态，暂无命令/UI 入口；读取/注入在 core 代码级自动完成，见 01-core.md §7.4）
+    suspend fun generateAgentsFile(projectId, modelId: String? = null): Result<String>  // 返回写入内容；modelId 缺省用项目最近会话模型
 }
 ```
 
@@ -224,6 +227,7 @@ flowchart TB
 | POST `/v1/providers/{id}/keys`；DELETE `.../keys/{keyId}`；POST `.../keys/{keyId}/set-default` | Key 组 |
 | GET `/v1/mcp/servers`；POST `/v1/mcp/servers`（InstallMcpServerInput）；PATCH/DELETE `/v1/mcp/servers/{name}`；POST `.../enabled`；POST `.../verify`；GET `.../json`（→McpServerJsonResponse） | MCP 组（ServerAiCore 遥控桥，desktop 直调不经过） |
 | GET `/v1/skills`；GET `/v1/skills/root`（→SkillsRootResponse）；POST `/v1/skills/root`（SetSkillsRootInput）；POST `/v1/skills/install`（InstallSkillInput → SkillItem）；DELETE `/v1/skills/{name}` | Skill 组（UI 薄触发：列表/根目录/安装/卸载，文件操作全在 core） |
+| POST `/v1/projects/{id}/agents-file/generate`（GenerateAgentsFileInput → GenerateAgentsFileResponse） | AGENTS.md 生成：扫描项目生成（已存在则原地改进）项目根 AGENTS.md（暂无 UI 入口，纯 API 形态） |
 
 响应助手：`respondResult(Result)`（Unit 成功返回 `{}`，失败按 MederiException 子类映射 404/400/409/500 + ApiError）、`respondData(裸值)`、`respondError`。
 
@@ -325,7 +329,7 @@ classDiagram
 flowchart TD
     MA["MederiApp<br/>创建 AppState + LocalAppState 注入<br/>initialize → hydrate（全平台唯一入口）"]
     APP["App<br/>AppTheme(AppState.theme) 包裹"]
-    MS["MainScreen<br/>创建 SidebarViewModel + WorkspaceViewModel<br/>宽 <768dp=全屏 Workspace+Sidebar 抽屉 Overlay<br/>否则 Row: Sidebar + Workspace<br/>外层 InitLoadingOverlay + SettingsDialog"]
+    MS["MainScreen<br/>创建 SidebarViewModel + WorkspaceViewModel<br/>宽 <768dp=全屏 Workspace+Sidebar 抽屉 Overlay<br/>否则 Row: Sidebar + Workspace（Row 底层 surfaceSidebar 防动画露白）<br/>侧边栏开合动画 expandFrom=Start 从左缘展开<br/>外层 InitLoadingOverlay + SettingsDialog"]
     SB["Sidebar<br/>项目/会话树 + WORK/CODE 分段<br/>+ 主题切换 + 设置入口"]
     WS["Workspace<br/>中央聊天区"]
     HDR["Workspace Header（标题/模型）"]
@@ -333,7 +337,7 @@ flowchart TD
     INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft<br/>顶部 ErrorBoard（错误/警告唯一出口）"]
     SBAR["StatusBar（原 TurnStatusBar）<br/>deriveTurnStatus(snapshot) 纯函数<br/>只显示 AI 运转状态（思考/生成/工具/重试），永不显示错误"]
     DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/SUB_AGENTS/ARTIFACTS/TERMINAL"]
-    REP["RightExtensionPanel(360dp)<br/>按 activePanel 分发面板内容<br/>含 RawMessagesCard/图片与大文本阅读器"]
+    REP["RightExtensionPanel(360dp，拖拽调宽)<br/>宽度无固定上限：上限 = 工作区宽 - 对话区最小宽(360dp) - Dock 宽<br/>展开动画 expandFrom=End 从右缘展开<br/>按 activePanel 分发面板内容<br/>含 RawMessagesCard/图片与大文本阅读器"]
     SD["SettingsDialog<br/>6 Tab: PROVIDERS/GENERAL/SANDBOX/AGENTS/REMOTE/SYSTEM<br/>ProviderSettingsPanel+ProviderSettingsViewModel<br/>(Master-Detail/移动端下钻自适应)"]
     MA --> APP --> MS
     MS --> SB
@@ -346,7 +350,7 @@ flowchart TD
     MS --> SD
 ```
 
-- `ChatLayout.kt` 不是 Composable，是**布局常量对象**（contentMaxWidth=1000dp、userBubbleMaxWidth=680dp、sidebarWidth=260dp、rightPanelWidth=360dp、headerHeight=40dp、turnSpacing=14dp 等）。
+- `ChatLayout.kt` 不是 Composable，是**布局常量对象**（contentMaxWidth=1000dp、userBubbleMaxWidth=680dp、sidebarWidth=260dp、rightPanelWidth=360dp、**conversationMinWidth=360dp（对话区最小宽度=手机宽度）**、**rightDockWidth=46dp**、headerHeight=40dp、turnSpacing=14dp 等）。
 - 三个职责分离的条栏：**StatusBar**（消息区，AI 运转状态，`deriveTurnStatus(snapshot)`，永不显示错误；计时锚定"发送请求时刻"`WorkspaceViewModel.turnStartedAt`（send 时记录、turn 结束清除），每秒 `now - turnStartedAt` 重算——切会话回来不重置；**与 footer durationMs 语义不同：StatusBar=从发请求起算，footer=API 有回应起算到回复结束**）、**ErrorBoard**（ChatInputCard 顶部，错误/警告唯一出口：单行简报 + "详细报告"展开 + 关闭；断流时（快照 errorIsStreamInterrupted）额外显示"继续"按钮 → `continueAfterInterruption()` 重发 Continue 续写半截回复，数据源=快照 errorMessage）、**SystemInfoBar**（最底部，纯 CPU/RSS/JVM 资源监控，不接错误）。
 - **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
 - 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`SegmentedControl`（WorkType/AgentMode 复用）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：uiBrowserHost 注入则渲染 JCEF 浏览器，未注入显示"当前端不支持内置浏览器"占位——遥控/wasm 端门禁）。

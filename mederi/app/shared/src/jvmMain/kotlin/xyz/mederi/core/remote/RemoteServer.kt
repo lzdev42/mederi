@@ -50,6 +50,8 @@ import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.CreateConversationInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.CreateProjectInput
+import xyz.mederi.core.contract.dto.GenerateAgentsFileInput
+import xyz.mederi.core.contract.dto.GenerateAgentsFileResponse
 import xyz.mederi.core.contract.dto.InstallMcpServerInput
 import xyz.mederi.core.contract.dto.InstallSkillInput
 import xyz.mederi.core.contract.dto.McpServerJsonResponse
@@ -245,6 +247,14 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     delete("/v1/projects/{id}") {
         call.respondResult(aiCore.deleteProject(call.parameters["id"]!!))
+    }
+    // AGENTS.md 生成：扫描项目并生成（已存在则原地改进）项目根 AGENTS.md
+    post("/v1/projects/{id}/agents-file/generate") {
+        val input = call.receive<GenerateAgentsFileInput>()
+        call.respondResult(
+            aiCore.generateAgentsFile(call.parameters["id"]!!, input.modelId)
+                .map { GenerateAgentsFileResponse(it) }
+        )
     }
 
     // ------------------------------------------------------------------

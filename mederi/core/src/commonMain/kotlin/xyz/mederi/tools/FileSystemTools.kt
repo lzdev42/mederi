@@ -27,6 +27,17 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 /**
+ * AGENTS.md 子树懒发现回调。
+ *
+ * 文件工具（read_file / list_directory）成功访问某路径后调用 [onAccessed]；
+ * 返回本次**新发现**（调用方 registry 未登记过）的 AGENTS.md，无新发现返回 null。
+ * 由 TurnExecutor 组合 AgentsFileLoader + 会话级 registry 提供。
+ */
+fun interface AgentsSubtreeDiscovery {
+    fun onAccessed(accessedPath: String): xyz.mederi.project.AgentsFileLoader.AgentsFile?
+}
+
+/**
  * apply_patch dry-run 验证产物：单个文件的变更。
  */
 private sealed interface VerifiedChange {
@@ -42,10 +53,13 @@ private sealed interface VerifiedChange {
  * 路径校验：解析后的绝对路径必须在某个允许目录内，否则拒绝操作。
  *
  * @param allowedDirectories 项目目录列表（绝对路径），工具操作的作用域。
+ * @param diffTracker 变更追踪器。
+ * @param agentsDiscovery AGENTS.md 子树懒发现回调；read/list 成功后触发，新发现的内容追加到返回文本。
  */
 class FileSystemTools(
     private val allowedDirectories: List<String>,
-    private val diffTracker: TurnDiffTracker? = null
+    private val diffTracker: TurnDiffTracker? = null,
+    private val agentsDiscovery: AgentsSubtreeDiscovery? = null
 ) {
 
     // ==================== 参数定义 ====================
@@ -112,10 +126,13 @@ class FileSystemTools(
         override suspend fun execute(args: ReadFileArgs): String {
             val file = resolveForRead(args.path, mustExist = true, mustBeFile = true)
             val content = file.readText()
-            if (args.maxLines <= 0) return content
-            val lines = content.lines()
-            return if (lines.size <= args.maxLines) content
-            else lines.take(args.maxLines).joinToString("\n") + "\n... (truncated, ${lines.size - args.maxLines} more lines)"
+            val result = if (args.maxLines <= 0) content
+            else {
+                val lines = content.lines()
+                if (lines.size <= args.maxLines) content
+                else lines.take(args.maxLines).joinToString("\n") + "\n... (truncated, ${lines.size - args.maxLines} more lines)"
+            }
+            return appendDiscoveredAgents(result, file)
         }
     }
 
@@ -162,10 +179,11 @@ class FileSystemTools(
             val dir = resolveForRead(dirPath, mustExist = true, mustBeFile = false)
             val entries = dir.listFiles()?.sortedBy { it.name } ?: return "Directory is empty or inaccessible"
             if (entries.isEmpty()) return "Directory is empty"
-            return entries.joinToString("\n") { entry ->
+            val listing = entries.joinToString("\n") { entry ->
                 val prefix = if (entry.isDirectory) "[DIR]  " else "[FILE] "
                 "$prefix${entry.name}${if (entry.isFile && entry.length() > 0) " (${entry.length()} bytes)" else ""}"
             }
+            return appendDiscoveredAgents(listing, dir)
         }
     }
 
@@ -342,6 +360,21 @@ class FileSystemTools(
     }
 
     // ==================== 路径安全校验 ====================
+
+    /**
+     * AGENTS.md 子树懒发现：read/list 成功访问后，若访问路径上（项目目录内、向上）
+     * 有本会话未注入过的 AGENTS.md，将其内容追加到工具返回文本末尾。
+     * 访问对象自身就是 AGENTS.md 时跳过（内容已在返回文本里，追加即重复）。
+     */
+    private fun appendDiscoveredAgents(result: String, accessed: File): String {
+        if (accessed.isFile && accessed.name.equals(xyz.mederi.project.AgentsFileLoader.FILE_NAME, ignoreCase = true)) {
+            return result
+        }
+        val discovered = agentsDiscovery?.onAccessed(
+            accessed.toPath().absolute().normalize().toString()
+        ) ?: return result
+        return result + "\n\n--- AGENTS.md (${discovered.relativePath}) ---\n${discovered.content}"
+    }
 
     /**
      * 读路径解析：**全盘可读**，不做目录包含校验。

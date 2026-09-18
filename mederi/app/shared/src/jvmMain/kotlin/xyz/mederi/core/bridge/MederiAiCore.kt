@@ -969,4 +969,24 @@ class MederiAiCore(
         }
         mederi.skills.uninstall(name)
     }
+
+    // ==========================================
+    // AGENTS.md 生成（进程内直调 core；读取/注入在 TurnExecutor 代码级完成）
+    // ==========================================
+
+    /** 懒构造：依赖 mederi（lateinit），推迟到首次调用（同 autotitleService 模式） */
+    private val agentsFileGenerator by lazy {
+        xyz.mederi.infrastructure.koog.AgentsFileGenerator(
+            projectManager = mederi.projectManager,
+            sessionManager = mederi.sessionManager,
+            providerManager = mederi.providerManager
+        )
+    }
+
+    override suspend fun generateAgentsFile(projectId: String, modelId: String?): Result<String> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        agentsFileGenerator.generate(projectId, modelId).getOrThrow()
+    }
 }

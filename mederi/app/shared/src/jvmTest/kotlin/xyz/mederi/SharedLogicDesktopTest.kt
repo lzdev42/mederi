@@ -125,8 +125,80 @@ class SharedLogicDesktopTest {
         )
         val chatMsg = xyz.mederi.core.bridge.MederiModelMapper.toChatMessage(coreMsg)
         val textBlock = chatMsg.blocks.filterIsInstance<xyz.mederi.core.contract.models.ChatBlock.Text>().first()
-        println("DEBUG_TEST: textBlock.text='${textBlock.text}' (len=${textBlock.text.length}), expected='$userPrompt' (len=${userPrompt.length})")
         assertEquals(userPrompt, textBlock.text, "真实用户消息解析后不应残留多余换行符")
+    }
+
+    @Test
+    fun testFragmentedReasoningPartsMergedToSingleBlock() {
+        val coreMsg = xyz.mederi.domain.model.Message(
+            id = "msg_a7c1c280",
+            sessionId = "sess_8ed809f2",
+            role = xyz.mederi.domain.model.MessageRole.ASSISTANT,
+            parts = listOf(
+                xyz.mederi.domain.model.MessagePart.Reasoning(content = listOf("The")),
+                xyz.mederi.domain.model.MessagePart.Reasoning(content = listOf(" user")),
+                xyz.mederi.domain.model.MessagePart.Reasoning(content = listOf(" describes")),
+                xyz.mederi.domain.model.MessagePart.Reasoning(content = listOf(" a UI bug.")),
+                xyz.mederi.domain.model.MessagePart.ToolCall(
+                    id = "call_1",
+                    tool = "read_file",
+                    args = "{\"path\":\"foo.kt\"}"
+                )
+            ),
+            status = xyz.mederi.domain.model.MessageStatus.COMPLETED,
+            createdAt = "2026-09-17T12:26:44Z"
+        )
+        val chatMsg = xyz.mederi.core.bridge.MederiModelMapper.toChatMessage(coreMsg)
+        val reasoningBlocks = chatMsg.blocks.filterIsInstance<xyz.mederi.core.contract.models.ChatBlock.Reasoning>()
+        val toolCallBlocks = chatMsg.blocks.filterIsInstance<xyz.mederi.core.contract.models.ChatBlock.ToolCall>()
+        assertEquals(1, reasoningBlocks.size, "连续的碎片化 Reasoning 必须合并为单个 ChatBlock.Reasoning")
+        assertEquals("The user describes a UI bug.", reasoningBlocks.first().text, "合并后的 Reasoning 文本必须自然拼接无多余分隔符")
+        assertEquals(1, toolCallBlocks.size, "工具调用块保持正常")
+    }
+
+    @Test
+    fun testToProjectIncludesCreatedAt() {
+        val coreProject = xyz.mederi.domain.model.Project(
+            id = "proj_1",
+            name = "Test Project",
+            directory = "/path/to/dir",
+            createdAt = "2026-09-17T12:00:00Z",
+            updatedAt = "2026-09-17T12:00:00Z"
+        )
+        val uiProject = xyz.mederi.core.bridge.MederiModelMapper.toProject(coreProject, emptyList())
+        assertTrue(uiProject.createdAt > 0L, "toProject 应正确映射 createdAt")
+    }
+
+    @Test
+    fun testCreateProjectFromDirectoryAutoSelectsProject() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.SidebarViewModel(appState)
+
+            // 1. 创建新目录
+            viewModel.createProjectFromDirectory("/tmp/new_project_1")
+            kotlinx.coroutines.delay(100)
+
+            val selectedId = appState.selectedProjectId.value
+            assertTrue(selectedId != null, "创建项目后应自动设置 selectedProjectId")
+            assertTrue(viewModel.uiState.expandedProjectIds.contains(selectedId), "新建的项目应自动在侧边栏展开")
+
+            // 2. 传入相同目录查重，应直接选中已有项目
+            viewModel.createProjectFromDirectory("/tmp/new_project_1")
+            kotlinx.coroutines.delay(100)
+            assertEquals(selectedId, appState.selectedProjectId.value, "重复目录应直接复用并保持选中")
+        } finally {
+            testScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
     }
 
     @Test

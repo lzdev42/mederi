@@ -107,4 +107,18 @@ interface AiCore {
     suspend fun setSkillsRoot(path: String): Result<Unit> = Result.success(Unit)
     suspend fun installSkill(url: String): Result<SkillItem> = Result.failure(IllegalStateException("skills 未启用"))
     suspend fun uninstallSkill(name: String): Result<Unit> = Result.success(Unit)
+
+    // ==========================================
+    // AGENTS.md 生成契约（API 形态，暂无命令/UI 入口）
+    // ==========================================
+
+    /**
+     * 扫描项目并生成（已存在则原地改进）项目根的 AGENTS.md，返回写入的内容。
+     * 读取与注入是代码级自动完成的（系统提示词 + 工具懒发现），本方法只提供"生成/改进"能力。
+     *
+     * @param projectId 项目 ID。
+     * @param modelId 生成用模型 ID；null 时用项目最近会话选用的模型，都没有则 failure。
+     */
+    suspend fun generateAgentsFile(projectId: String, modelId: String? = null): Result<String> =
+        Result.failure(IllegalStateException("AGENTS.md 生成未启用"))
 }

@@ -80,7 +80,7 @@ import java.util.concurrent.atomic.AtomicReference
  * ignoreUnknownKeys/coerceInputValues/explicitNulls=false 对 LLM 生成的参数健壮
  * （多传字段忽略、null 当缺省、非法枚举回退默认）。
  */
-private val mederiToolSerializer = ai.koog.serialization.kotlinx.KotlinxSerializer(
+internal val mederiToolSerializer = ai.koog.serialization.kotlinx.KotlinxSerializer(
     kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true
         coerceInputValues = true
@@ -145,6 +145,12 @@ class TurnExecutor(
         )
 
     private val activeJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+
+    // AGENTS.md 加载器：指令链注入（每轮 turn）+ 子树懒发现（工具访问触发，经 ToolFactory 传入 registry）
+    private val agentsFileLoader = xyz.mederi.project.AgentsFileLoader()
+
+    // 会话级懒发现去重：sessionId → 已注入过的 AGENTS.md 绝对路径。v1 内存态，不持久化。
+    private val agentsDiscovered = ConcurrentHashMap<String, MutableSet<String>>()
 
     private val questionRequesters = ConcurrentHashMap<String, xyz.mederi.question.QuestionRequester>()
     private val planApprovalRequesters = ConcurrentHashMap<String, xyz.mederi.plan.PlanApprovalRequester>()
@@ -284,13 +290,24 @@ class TurnExecutor(
         // 是否注入已安装 skills：一律读中心化 AgentCapabilities 表（主代理 + EXECUTOR 注入，RESEARCHER 不注入）。
         val basePrompt = if (subagentRole != null) SystemPrompts.forSubagent(subagentRole, workType)
         else SystemPrompts.build(agentMode, workType, activePlanContent, activeTodoContent)
-        val systemPrompt = if (AgentCapabilities.of(subagentRole).inheritSkills) {
+        val systemPromptWithSkills = if (AgentCapabilities.of(subagentRole).inheritSkills) {
             val skillList = runCatching { skills?.list() }.getOrElse { e ->
                 DebugLog.error("TurnExec", "加载 skills 列表失败（不阻塞 turn）: ${e.message}", e)
                 null
             }
             SystemPrompts.withSkills(basePrompt, skillList.orEmpty())
         } else basePrompt
+        // AGENTS.md 指令链注入（代码级自动读取）：git 根 → 项目目录浅→深。
+        // 每轮重建（文件可能被用户/模型改过）；读取失败不阻塞 turn。
+        val systemPrompt = runCatching {
+            SystemPrompts.withProjectRules(
+                systemPromptWithSkills,
+                agentsFileLoader.loadInstructionChain(project.directory)
+            )
+        }.getOrElse { e ->
+            DebugLog.error("TurnExec", "加载 AGENTS.md 失败（不阻塞 turn）: ${e.message}", e)
+            systemPromptWithSkills
+        }
         DebugLog.data("TurnExec", "agentMode", agentMode)
         DebugLog.data("TurnExec", "workType", workType)
         DebugLog.data("TurnExec", "activePlan", activePlan?.id ?: "none")
@@ -674,6 +691,15 @@ class TurnExecutor(
             val questionRequester = xyz.mederi.question.QuestionRequester(sessionId, eventBus)
             questionRequesters[sessionId] = questionRequester
 
+            // AGENTS.md 子树懒发现：loader 发现 + 会话级去重 registry（v1 内存态，
+            // 重启后首个访问会重复注入一次，可接受）。read/list 工具访问触发。
+            val agentsDiscovery = xyz.mederi.tools.AgentsSubtreeDiscovery { accessedPath ->
+                val found = agentsFileLoader.discoverSubtree(directories.first(), accessedPath)
+                    ?: return@AgentsSubtreeDiscovery null
+                val seen = agentsDiscovered.computeIfAbsent(sessionId) { ConcurrentHashMap.newKeySet() }
+                if (seen.add(found.path)) found else null
+            }
+
             val toolRegistry = ToolFactory.build(
                 toolNames = ToolFactory.ALL_TOOL_NAMES,
                 directories = directories,
@@ -697,7 +723,8 @@ class TurnExecutor(
                 notebook = notebook,
                 commandSandbox = commandSandbox,
                 sessionStore = sessionStore,
-                mcpTools = mcpSession?.tools ?: emptyList()
+                mcpTools = mcpSession?.tools ?: emptyList(),
+                agentsDiscovery = agentsDiscovery
             )
 
             val agent = buildTurnAgent(

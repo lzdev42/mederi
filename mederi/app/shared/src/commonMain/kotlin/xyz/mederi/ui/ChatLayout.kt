@@ -28,6 +28,12 @@ object ChatLayout {
     /** 右侧扩展面板宽度 */
     val rightPanelWidth: Dp = 360.dp
 
+    /** 对话视图最小宽度（手机宽度下限）：右侧扩展面板 + Dock 不得把对话区压缩到小于此宽度 */
+    val conversationMinWidth: Dp = 360.dp
+
+    /** 右侧常驻 Dock 栏宽度（RightDock） */
+    val rightDockWidth: Dp = 46.dp
+
     /** 顶部 Header 高度（全屏顶栏线条对齐） */
     val headerHeight: Dp = 40.dp
 
