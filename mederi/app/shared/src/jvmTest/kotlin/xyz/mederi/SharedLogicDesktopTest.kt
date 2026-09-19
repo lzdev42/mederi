@@ -2,6 +2,7 @@ package xyz.mederi
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -11,9 +12,14 @@ import kotlinx.serialization.json.Json
 import okio.ByteString.Companion.toByteString
 import xyz.mederi.core.bridge.BuiltinProviders
 import xyz.mederi.core.bridge.MederiModelMapper
+import xyz.mederi.core.bridge.mapMessageErrorToStatus
+import xyz.mederi.core.contract.models.ConversationStatus
+import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.core.contract.ToolArgParser
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.ToolCallState
+import xyz.mederi.core.ui.ChatListItem
+import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.domain.model.Message as CoreMessage
 import xyz.mederi.domain.model.MessagePart as CoreMessagePart
 import xyz.mederi.domain.model.MessageRole
@@ -1097,30 +1103,33 @@ class SharedLogicDesktopTest {
             )
 
             val items = viewModel.computeChatItems(listOf(userMsg, assistantMsg))
-            println("DEBUG_TEST: items classes = ${items.map { it::class.simpleName }}")
 
-            // 预期分为：1条用户文本、1条思考项、1条助手正文、1条沉底工具调用项、1条沉底 Footer
-            assertEquals(5, items.size, "应生成5个独立的列表项：用户消息、思考项、助手正文、沉底工具调用项、Footer")
+            // 预期分为：1条用户文本、1条工作过程汇总栏(内置思考与工具调用)、1条助手交付正文、1条Footer
+            assertEquals(4, items.size, "单步含工具调用的轮次应生成4个项：用户消息、工作过程汇总栏、助手正文、Footer")
 
-            val userItem = items[0] as xyz.mederi.core.ui.ChatListItem.TextMessage
+            val userItem = items[0] as ChatListItem.TextMessage
             assertEquals("你好", userItem.text)
             assertEquals(true, userItem.isUser)
 
-            val reasoningItem = items[1] as xyz.mederi.core.ui.ChatListItem.Reasoning
-            assertEquals("正在分析用户的意图...", reasoningItem.text)
-            assertEquals(1500L, reasoningItem.durationMs)
-            assertEquals(true, reasoningItem.isTurnStart)
+            val workTraceItem = items[1] as ChatListItem.WorkTraceBlock
+            assertEquals(true, workTraceItem.isTurnStart)
+            assertEquals(1, workTraceItem.totalToolsCount)
+            assertEquals(2, workTraceItem.items.size)
 
-            val textItem = items[2] as xyz.mederi.core.ui.ChatListItem.TextMessage
+            val reasoningSubItem = workTraceItem.items[0] as ChatListItem.Reasoning
+            assertEquals("正在分析用户的意图...", reasoningSubItem.text)
+            assertEquals(1500L, reasoningSubItem.durationMs)
+
+            val toolCallsSubItem = workTraceItem.items[1] as ChatListItem.ToolCalls
+            assertEquals(1, toolCallsSubItem.toolCalls.size)
+            assertEquals("search_code", toolCallsSubItem.toolCalls.first().name)
+
+            val textItem = items[2] as ChatListItem.TextMessage
             assertEquals("这是最终的清晰回答。", textItem.text)
             assertEquals(false, textItem.isUser)
+            assertEquals(false, textItem.isStepNarration)
 
-            val toolCallsItem = items[3] as xyz.mederi.core.ui.ChatListItem.ToolCalls
-            assertEquals(1, toolCallsItem.toolCalls.size)
-            assertEquals("search_code", toolCallsItem.toolCalls.first().name)
-            assertEquals(false, toolCallsItem.isTurnStart)
-
-            val footerItem = items[4] as xyz.mederi.core.ui.ChatListItem.Footer
+            val footerItem = items[3] as ChatListItem.Footer
             assertNotNull(footerItem.footer)
             Unit
         } finally {
@@ -1141,7 +1150,7 @@ class SharedLogicDesktopTest {
                 scope = testScope
             )
             appState.hydrate()
-            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+            val viewModel = WorkspaceViewModel(appState)
 
             val userMsg = xyz.mederi.core.contract.models.ChatMessage(
                 id = "u1",
@@ -1201,44 +1210,205 @@ class SharedLogicDesktopTest {
 
             val rawMessages = listOf(userMsg, asst1, toolResultUser1, asst2)
             val currentItems = viewModel.computeChatItems(rawMessages)
-            println("Computed chat items count: ${currentItems.size}")
-            currentItems.forEachIndexed { idx, item ->
-                println("  item[$idx]: class=${item::class.simpleName}, key=${item.key}, isTurnStart=${item.isTurnStart}")
-            }
 
-            // 预期分为：1用户文本 + 1思考 + 1文本 + 1思考 + 1文本 + 1普通工具调用 + 1子代理调用 + 1Footer = 8项
-            assertEquals(8, currentItems.size, "多步轮次应汇聚为单轮，时序交错，底部汇总普通工具与子代理")
+            // 预期分为：1用户文本 + 1工作过程汇总栏 + 1Footer = 3项
+            assertEquals(3, currentItems.size, "多步轮次的所有工作步骤应汇聚为一个 WorkTraceBlock 汇总栏")
 
-            assertTrue(currentItems[0] is xyz.mederi.core.ui.ChatListItem.TextMessage)
-            assertEquals("请修复并验证", (currentItems[0] as xyz.mederi.core.ui.ChatListItem.TextMessage).text)
+            assertTrue(currentItems[0] is ChatListItem.TextMessage)
+            assertEquals("请修复并验证", (currentItems[0] as ChatListItem.TextMessage).text)
+            assertEquals(false, (currentItems[0] as ChatListItem.TextMessage).isStepNarration)
 
-            assertTrue(currentItems[1] is xyz.mederi.core.ui.ChatListItem.Reasoning)
-            assertEquals("先阅读代码...", (currentItems[1] as xyz.mederi.core.ui.ChatListItem.Reasoning).text)
+            assertTrue(currentItems[1] is ChatListItem.WorkTraceBlock)
+            val workTrace = currentItems[1] as ChatListItem.WorkTraceBlock
+            assertEquals(2, workTrace.totalToolsCount)
+            assertEquals(2000L, workTrace.totalDurationMs)
+            assertEquals(6, workTrace.items.size)
 
-            assertTrue(currentItems[2] is xyz.mederi.core.ui.ChatListItem.TextMessage)
-            assertEquals("先读现有代码：", (currentItems[2] as xyz.mederi.core.ui.ChatListItem.TextMessage).text)
+            // 检查 WorkTrace 内部的 6 个时序步骤
+            assertTrue(workTrace.items[0] is ChatListItem.Reasoning)
+            assertEquals("先阅读代码...", (workTrace.items[0] as ChatListItem.Reasoning).text)
 
-            assertTrue(currentItems[3] is xyz.mederi.core.ui.ChatListItem.Reasoning)
-            assertEquals("派发子代理执行...", (currentItems[3] as xyz.mederi.core.ui.ChatListItem.Reasoning).text)
+            assertTrue(workTrace.items[1] is ChatListItem.TextMessage)
+            val asst1Text = workTrace.items[1] as ChatListItem.TextMessage
+            assertEquals("先读现有代码：", asst1Text.text)
+            assertTrue(asst1Text.isStepNarration, "伴随工具调用的文本应被标记为步骤过渡语")
 
-            assertTrue(currentItems[4] is xyz.mederi.core.ui.ChatListItem.TextMessage)
-            assertEquals("派子代理执行任务：", (currentItems[4] as xyz.mederi.core.ui.ChatListItem.TextMessage).text)
-
-            // 沉底汇总：普通工具（过滤掉 spawn_agent）
-            assertTrue(currentItems[5] is xyz.mederi.core.ui.ChatListItem.ToolCalls)
-            val toolCalls = (currentItems[5] as xyz.mederi.core.ui.ChatListItem.ToolCalls).toolCalls
+            assertTrue(workTrace.items[2] is ChatListItem.ToolCalls)
+            val toolCalls = (workTrace.items[2] as ChatListItem.ToolCalls).toolCalls
             assertEquals(1, toolCalls.size)
             assertEquals("read_file", toolCalls.first().name)
 
-            // 沉底汇总：子代理（包含 spawn_agent，提取 task）
-            assertTrue(currentItems[6] is xyz.mederi.core.ui.ChatListItem.SubagentCalls)
-            val subagents = (currentItems[6] as xyz.mederi.core.ui.ChatListItem.SubagentCalls).subagents
+            assertTrue(workTrace.items[3] is ChatListItem.Reasoning)
+            assertEquals("派发子代理执行...", (workTrace.items[3] as ChatListItem.Reasoning).text)
+
+            assertTrue(workTrace.items[4] is ChatListItem.TextMessage)
+            val asst2Text = workTrace.items[4] as ChatListItem.TextMessage
+            assertEquals("派子代理执行任务：", asst2Text.text)
+            assertTrue(asst2Text.isStepNarration, "伴随子代理调用的文本应被标记为步骤过渡语")
+
+            assertTrue(workTrace.items[5] is ChatListItem.SubagentCalls)
+            val subagents = (workTrace.items[5] as ChatListItem.SubagentCalls).subagents
             assertEquals(1, subagents.size)
             assertEquals("spawn_agent", subagents.first().name)
             assertEquals("子任务0", subagents.first().target)
 
             // 沉底 Footer
-            assertTrue(currentItems[7] is xyz.mederi.core.ui.ChatListItem.Footer)
+            assertTrue(currentItems[2] is ChatListItem.Footer)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testFinalResponseVsStepNarrationDistinction() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            // 构造多步调试后最终回答的场景（类似真实 sess_ac33d9f8）
+            val step1 = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_step_1",
+                conversationId = "conv_test",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Text(id = "t_step", text = "我先调研这两个 UI 问题的相关代码。"),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "tc_step",
+                        name = "read_file",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Completed(
+                            input = mapOf("path" to "Workspace.kt"),
+                            output = "// code"
+                        )
+                    )
+                ),
+                createdAt = 1000L,
+                completedAt = 2000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+            val stepFinal = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_step_final",
+                conversationId = "conv_test",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Text(id = "t_final", text = "两个问题都已修复，编译通过。")
+                ),
+                createdAt = 3000L,
+                completedAt = 4000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            val items = viewModel.computeChatItems(listOf(step1, stepFinal))
+
+            // 包含 WorkTraceBlock、最终交付正文 TextMessage 和 Footer
+            val workTraceItem = items.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
+
+            // 第一条文本伴随工具调用，必须收入 WorkTraceBlock 且 isStepNarration = true
+            val narrationItem = workTraceItem.items.filterIsInstance<ChatListItem.TextMessage>().first { it.partId == "t_step" }
+            assertTrue(narrationItem.isStepNarration, "中间过渡语必须被识别为 isStepNarration=true")
+
+            // 最终答复不含工具调用，必须留在外部主流中且 isStepNarration = false
+            val finalItem = items.filterIsInstance<ChatListItem.TextMessage>().first { it.partId == "t_final" }
+            assertFalse(finalItem.isStepNarration, "最终交付回答必须为 isStepNarration=false")
+
+            // 验证工具调用就地挂载在 WorkTraceBlock 内部
+            val toolCallItem = workTraceItem.items.filterIsInstance<ChatListItem.ToolCalls>().first()
+            assertEquals("msg_step_1_toolcalls", toolCallItem.key, "工具调用必须就地关联到触发它的 step1 消息")
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    /**
+     * 最后一个工具调用之后的「最终综合推理」不应被收入折叠的 WorkTraceBlock，
+     * 而是作为顶层 ChatListItem.Reasoning 留在外部（与最终正文一致的分类规则）。
+     */
+    @Test
+    fun testFinalReasoningStaysOutsideWorkTrace() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_user_final_reasoning",
+                conversationId = "conv_fr",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text(id = "u1", text = "帮我分析问题")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+            // 三块顺序：Reasoning("先分析") → ToolCall(read_file, Completed) → Reasoning("综合结论：问题在 X")
+            val asstMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_final_reasoning",
+                conversationId = "conv_fr",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning(id = "r1", text = "先分析"),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "t1",
+                        name = "read_file",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Completed(
+                            input = mapOf("path" to "foo.kt"),
+                            output = "// code"
+                        )
+                    ),
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning(id = "r2", text = "综合结论：问题在 X")
+                ),
+                createdAt = 2000L,
+                completedAt = 3500L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            val items = viewModel.computeChatItems(listOf(userMsg, asstMsg))
+
+            // 存在 WorkTraceBlock
+            val workTrace = items.filterIsInstance<ChatListItem.WorkTraceBlock>().firstOrNull()
+            assertNotNull(workTrace, "应存在 WorkTraceBlock（轮次含工具调用 + 前置推理）")
+
+            // 第一个 Reasoning（"先分析"）在工具调用之前 → 有后续工具调用 → 归 workItems
+            val firstReasoningInWork = workTrace.items.filterIsInstance<ChatListItem.Reasoning>()
+                .firstOrNull { it.text == "先分析" }
+            assertNotNull(firstReasoningInWork, "第一个 Reasoning（工具调用之前）应在 WorkTraceBlock.items 内")
+
+            // 第二个 Reasoning（"综合结论"）在最后一个工具调用之后 → 无后续工具调用 → 归 deliverableItems
+            val secondReasoningInWork = workTrace.items.filterIsInstance<ChatListItem.Reasoning>()
+                .firstOrNull { it.text == "综合结论：问题在 X" }
+            assertNull(secondReasoningInWork, "最后一个工具调用之后的 Reasoning 不应出现在 WorkTraceBlock.items 内")
+
+            // 第二个 Reasoning 应作为顶层 ChatListItem.Reasoning 出现在 items 列表
+            val topReasoning = items.filterIsInstance<ChatListItem.Reasoning>()
+                .firstOrNull { it.text == "综合结论：问题在 X" }
+            assertNotNull(topReasoning, "最后一个工具调用之后的 Reasoning 应作为顶层 deliverable 出现在 items 列表中")
         } finally {
             testScope.cancel()
         }
@@ -1257,7 +1427,7 @@ class SharedLogicDesktopTest {
                 scope = testScope
             )
             appState.hydrate()
-            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+            val viewModel = WorkspaceViewModel(appState)
 
             // 测试 1: list_directory 参数为空时
             val assistantMsgEmptyInput = xyz.mederi.core.contract.models.ChatMessage(
@@ -1283,13 +1453,9 @@ class SharedLogicDesktopTest {
             )
 
             val items = viewModel.computeChatItems(listOf(assistantMsgEmptyInput))
-            val toolCallsItem = items.filterIsInstance<xyz.mederi.core.ui.ChatListItem.ToolCalls>().first()
+            val workTrace = items.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
+            val toolCallsItem = workTrace.items.filterIsInstance<ChatListItem.ToolCalls>().first()
             val toolCallUi = toolCallsItem.toolCalls.first()
-            println("=== DEBUG LOG FOR RULE 6 ===")
-            println("toolCall.name: ${toolCallUi.name}")
-            println("toolCall.target: ${toolCallUi.target}")
-            println("toolCall.state output line count: ${(toolCallUi.state as? xyz.mederi.core.contract.models.ToolCallState.Completed)?.output?.lines()?.size}")
-            println("============================")
 
             assertEquals("directory", toolCallUi.target, "list_directory 缺省参数应指向 'directory'")
 
@@ -1316,10 +1482,236 @@ class SharedLogicDesktopTest {
                 isStreaming = false
             )
             val items2 = viewModel.computeChatItems(listOf(assistantMsgWithPath))
-            val toolCallUi2 = items2.filterIsInstance<xyz.mederi.core.ui.ChatListItem.ToolCalls>().first().toolCalls.first()
+            val workTrace2 = items2.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
+            val toolCallUi2 = workTrace2.items.filterIsInstance<ChatListItem.ToolCalls>().first().toolCalls.first()
             assertEquals("app/shared", toolCallUi2.target, "带有 DirectoryPath 参数时应正确提取目标路径")
         } finally {
             testScope.cancel()
         }
+    }
+
+    @Test
+    fun testRetryHintCountdownParsing() {
+        val now = 1000000L
+        val retryAt = now + 4000L
+        val hintStr = "2/11|Inference exceeds tpm/rpm limit|$retryAt"
+        val parsed = xyz.mederi.ui.components.parseRetryHint(hintStr)
+        assertNotNull(parsed)
+        val remainingSec = ((parsed.retryAtMillis!! - now + 999) / 1000).coerceAtLeast(0L)
+        assertEquals("2", parsed.attempt)
+        assertEquals("11", parsed.max)
+        assertEquals("Inference exceeds tpm/rpm limit", parsed.serverMsg)
+        assertEquals(retryAt, parsed.retryAtMillis)
+        assertEquals(4L, remainingSec)
+    }
+
+    @Test
+    fun testParseRetryHintNoThirdSegment() {
+        // 无第三段（delayMs 缺失，SnapshotReducer 不拼 retryAt）→ retryAtMillis == null
+        val hintStr = "2/11|限流"
+        val parsed = xyz.mederi.ui.components.parseRetryHint(hintStr)
+        assertNotNull(parsed, "hint 应成功解析")
+        assertEquals("2", parsed.attempt)
+        assertEquals("11", parsed.max)
+        assertEquals("限流", parsed.serverMsg)
+        assertNull(parsed.retryAtMillis, "无第三段时 retryAtMillis 必须为 null，不得兜底伪造")
+    }
+
+    @Test
+    fun testParseRetryHintServerMsgWithPipe() {
+        // 右向左解析：末段是数字 → retryAt，中间是 serverMsg（可含 |）
+        val hintStr = "1/3|msg with | pipe|1700000000000"
+        val parsed = xyz.mederi.ui.components.parseRetryHint(hintStr)
+        assertNotNull(parsed)
+        assertEquals("1", parsed.attempt)
+        assertEquals("3", parsed.max)
+        assertEquals("msg with | pipe", parsed.serverMsg, "serverMsg 含 | 不应被截断（右向左解析保护）")
+        assertEquals(1700000000000L, parsed.retryAtMillis)
+    }
+
+    @Test
+    fun testWorkTraceRunningStabilityAndActiveActivityText() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = WorkspaceViewModel(appState)
+
+            // 场景 1: 调用命令工具运行中
+            val cmdMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "m_cmd",
+                conversationId = "c1",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "分析中..."),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc1", "execute_command", xyz.mederi.core.contract.models.ToolCallState.Running(mapOf("command" to "git status")))
+                ),
+                createdAt = 1000L,
+                completedAt = null,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = true
+            )
+            val items1 = viewModel.computeChatItems(listOf(cmdMsg))
+            val wt1 = items1.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
+            assertTrue(wt1.isRunning, "流式执行命令中 isRunning 必须为 true")
+            assertTrue(wt1.activeActivityText?.contains("执行命令") == true, "活动文案应识别为执行命令")
+
+            // 场景 2: 自言自语过渡语
+            // 构造一条正在流式输出过渡语（尚未有下一个 toolcall）的消息，但在一个包含后续工具调用的轮次中
+            val stepNarrationOnly = xyz.mederi.core.contract.models.ChatMessage(
+                id = "m_narr_only",
+                conversationId = "c1",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Text("t_narr_only", "我要看看下一步应该干什么\n详细计划说明")
+                ),
+                createdAt = 3000L,
+                completedAt = null,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = true
+            )
+            val futureToolMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "m_future_tool",
+                conversationId = "c1",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc3", "call_mcp_tool", xyz.mederi.core.contract.models.ToolCallState.Completed(emptyMap(), ""))
+                ),
+                createdAt = 4000L,
+                completedAt = null,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = true
+            )
+            val items2 = viewModel.computeChatItems(listOf(stepNarrationOnly, futureToolMsg))
+            val wt2 = items2.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
+            assertTrue(wt2.isRunning, "流式自言自语中 isRunning 必须为 true")
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testLastErrorFromPayload() {
+        val payload = mapOf(
+            "error" to "boom",
+            "errorId" to "e1",
+            "fullDiagnostic" to "diag",
+            "failureMode" to "PREMATURE_CLOSE"
+        )
+        val le = xyz.mederi.core.bridge.lastErrorFromPayload(payload)
+        assertEquals("boom", le.errorMessage)
+        assertEquals("e1", le.errorId)
+        assertEquals("diag", le.errorDiagnostic)
+        assertTrue(le.isStreamInterrupted, "failureMode=PREMATURE_CLOSE → isStreamInterrupted=true")
+        assertTrue(le.atMs > 0)
+
+        // failureMode 非 PREMATURE_CLOSE → isStreamInterrupted=false
+        val payloadHttp = mapOf(
+            "error" to "oops",
+            "errorId" to "e2",
+            "fullDiagnostic" to "diag2",
+            "failureMode" to "HTTP_ERROR"
+        )
+        val le2 = xyz.mederi.core.bridge.lastErrorFromPayload(payloadHttp)
+        assertFalse(le2.isStreamInterrupted, "failureMode=HTTP_ERROR → isStreamInterrupted=false")
+    }
+
+    @Test
+    fun testHydrateLastError() {
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_hydrate",
+            projectId = "proj_1",
+            title = "Hydrate Test",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Idle,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val base = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+
+        // null → 原样返回
+        val unchanged = xyz.mederi.core.bridge.hydrateLastError(base, null)
+        assertNull(unchanged.errorMessage)
+        assertNull(unchanged.errorId)
+        assertNull(unchanged.errorDiagnostic)
+        assertFalse(unchanged.errorIsStreamInterrupted)
+
+        // 非空 → 各错误字段被写入
+        val err = xyz.mederi.core.bridge.LastSessionError(
+            errorMessage = "boom",
+            errorId = "e1",
+            errorDiagnostic = "diag",
+            isStreamInterrupted = true,
+            atMs = 12345L
+        )
+        val hydrated = xyz.mederi.core.bridge.hydrateLastError(base, err)
+        assertEquals("boom", hydrated.errorMessage)
+        assertEquals("e1", hydrated.errorId)
+        assertEquals("diag", hydrated.errorDiagnostic)
+        assertTrue(hydrated.errorIsStreamInterrupted)
+    }
+
+    @Test
+    fun testSilentFailureWhenNavigatingToErroredConversation() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            val viewModel = WorkspaceViewModel(appState)
+
+            // 测试场景 1: 直接切换到已处于 Error 状态的会话 (conv_error)
+            val snapBefore = mockAiCore.getSnapshot("conv_error").getOrThrow()
+
+            viewModel.attach("conv_error")
+            kotlinx.coroutines.delay(100)
+
+            // 测试场景 2: 用户在会话 A，后台会话 B 发生错误，然后用户切进会话 B
+            val conv101 = "conv_101"
+            viewModel.attach(conv101)
+            kotlinx.coroutines.delay(100)
+            val erroredSnap = snapBefore.copy(
+                errorMessage = "API Rate limit exceeded (429)",
+                errorId = "err_rate_limit",
+                errorDiagnostic = "Detailed 429 diagnostic"
+            )
+            // 触发 conv_error 快照更新
+            mockAiCore.injectSnapshot("conv_error", erroredSnap)
+            kotlinx.coroutines.delay(100)
+
+            // 此时切换到 conv_error
+            viewModel.attach("conv_error")
+            kotlinx.coroutines.delay(100)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    /** MESSAGE_ERROR 事件按权威 sessionStore 状态决定侧边栏状态点（红/蓝），避免 transient 错误误显红点 */
+    @Test
+    fun testMapMessageErrorToStatus() {
+        // session ERROR（非 transient）→ 红点
+        assertEquals(ConversationStatus.Error, mapMessageErrorToStatus(SessionStatus.ERROR))
+        // session IDLE（transient 可恢复，如限流重试耗尽）→ 蓝点
+        assertEquals(ConversationStatus.Idle, mapMessageErrorToStatus(SessionStatus.IDLE))
     }
 }

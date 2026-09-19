@@ -184,7 +184,8 @@ inkcompose/
 沙盒（路径/命令强制）兜底。不变量 = 文件工具只能写项目目录、execute_command 走 OS 级写沙箱（macOS Seatbelt / Linux bwrap 检测 / Windows 降级警告）、读全盘放行。全局白名单在设置页配置。
 
 **不变量（代码强制，全平台）**：
-- 文件工具（write_file/edit_file/apply_patch）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
+- 文件工具（write_file/edit_file，含未注册的 apply_patch 实现）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
+- **同文件并发写硬拒绝（2026-09）**：write_file/edit_file 落盘前经进程级 `FileWriteRegistry`（`tools/FileWriteRegistry.kt`）try-lock——文件已被其他并发工具调用占用则直接返回 Error，写完（含异常）finally 释放；键 = canonical path，跨 turn/跨子代理/跨 session 生效。execute_command 与 MCP 工具是外部进程，不在注册表管辖内（提示词约束兜底）
 - execute_command：macOS Seatbelt（sandbox-exec）/ Linux bwrap（只检测不代装）/ Windows 降级警告；shell 探测链 bash→sh（Windows bash.exe→cmd）
 - **进程回收**：每条命令是独立进程组，execute_command 启动即登记 `ProcessRegistry`；`list_processes`/`stop_process` 宿主侧（沙箱外）按注册表整组回收——macOS 沙箱内信号不可用（profile 无 process-signal，实测 unbound），只能靠宿主侧。**只杀 mederi 自己启动的进程**，注册表查不到 pid 即拒绝，沙箱内命令无法写注册表
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行
@@ -199,7 +200,7 @@ verify 三分支：PASS / 执行错→converge_plan / **spec 错→重新 genera
 **并行工具调度（2026-09 定稿）**：Koog 工具执行节点已开 `parallel=true`——同一条消息里的多个工具调用并行执行，**无并发上限，由 AI 调度**（信任 AI 策略）。配套硬性约束：
 - `create_plan` 必须单独发一条消息，不得与任何工具同消息批量；
 - **禁止同消息混发 `generate_spec` 与 `spawn_agent`**（并行无序，spawn 可能读到未写入的 spec）——先为所有独立子任务生成 spec，再同消息一起 spawn；
-- 并行批量时杜绝竞争：不并发写同一文件、不重复执行同一命令。
+- 并行批量时杜绝竞争：同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（占用即 Error，AI 下轮重试）；不重复执行同一命令仍靠 AI 自律（shell 是外部进程，管不了）。
 - 因并行而生，plan 状态写入必须原子：`spawn_agent` 的 IN_PROGRESS 标记、`generate_spec` 的 spec 写入、`verify_subtask` 的验证结果一律走 `PlanStore.updatePlan`（原子读改写，进程级锁），禁止裸 load→copy→save。
 
 **系统环境注入**：每条用户消息尾部 `<<<NOT_FOR_UI>>>` 隐藏块注入时间、OS/版本/arch、
@@ -218,8 +219,8 @@ shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该
 用户请求 → 主代理判断：
 ├─【纯读】问答/讨论/分析 → 主代理直接读文件回答；
 │    读不够深（跨多文件/链路长/根因未知）→ spawn_researcher → 完整报告 → 据此回答
-├─【小改动】已知根因/简单逻辑/几行代码 → 主代理直接 edit_file/write_file/apply_patch
-│    （不建 plan、不 spawn）
+├─【小改动】已知根因/简单逻辑/几行代码 → 主代理直接 edit_file/write_file
+│    （不建 plan、不 spawn；apply_patch 已注销，不注册给 AI）
 └─【复杂改动】多文件/逻辑变化/需用户决策 → Plan Loop：
      （理解不足先 spawn_researcher）→ create_plan → 批准 → generate_spec
      → spawn_agent(planId, subtaskIndex) → verify_subtask

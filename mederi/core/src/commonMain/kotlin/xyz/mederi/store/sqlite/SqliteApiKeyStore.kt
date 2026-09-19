@@ -77,4 +77,11 @@ class SqliteApiKeyStore(driver: SqlDriver) : ApiKeyStore {
     override suspend fun getDefaultValue(providerId: String): String? = withContext(Dispatchers.IO) {
         queries.getDefaultKey(providerId).executeAsOneOrNull()?.key_value
     }
+
+    override suspend fun getValue(providerId: String, keyId: String): String? = withContext(Dispatchers.IO) {
+        // 归属校验：keyId 必须属于该 provider，避免跨供应商误用
+        val row = queries.getKeyById(keyId).executeAsOneOrNull()
+            ?.takeIf { it.provider_id == providerId }
+        row?.key_value
+    }
 }

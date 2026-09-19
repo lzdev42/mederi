@@ -166,6 +166,10 @@ class AppState(
     private val _modelReasoningLevels = MutableStateFlow<Map<String, String>>(emptyMap())
     val modelReasoningLevels: StateFlow<Map<String, String>> = _modelReasoningLevels.asStateFlow()
 
+    /** 供应商 → 该供应商选定的 API Key ID（providerId -> apiKeyId）。按供应商记忆，跨重启恢复；缺省 = 用默认 key。 */
+    private val _selectedApiKeyIds = MutableStateFlow<Map<String, String>>(emptyMap())
+    val selectedApiKeyIds: StateFlow<Map<String, String>> = _selectedApiKeyIds.asStateFlow()
+
     /** 当前选中的工作用途（CODE/WORK），由选中 Agent 派生；无选择时回退 CODE */
     val selectedWorkType: StateFlow<WorkType> =
         combine(_selectedAgentId, availableAgents) { agentId, agents ->
@@ -204,6 +208,19 @@ class AppState(
                     _processStats.value = stats
                 }
                 delay(1000)
+            }
+        }
+
+        // 按供应商恢复上次选定的 API Key（persist 的 workspace.apiKey.$providerId）；缺省无持久化值 = 用默认 key。
+        scope.launch {
+            aiCore.providers.collect { providers ->
+                providers.forEach { p ->
+                    if (_selectedApiKeyIds.value[p.id] == null) {
+                        preferences.getString("workspace.apiKey.${p.id}")?.let { key ->
+                            _selectedApiKeyIds.update { it + (p.id to key) }
+                        }
+                    }
+                }
             }
         }
     }
@@ -386,6 +403,17 @@ class AppState(
             if (level != null) current + (modelId to level) else current - modelId
         }
         persist("workspace.reasoningLevel.$modelId", level) { it }
+    }
+
+    /** 该供应商选定的 API Key ID；null = 用默认 key。 */
+    fun getApiKeyId(providerId: String): String? = _selectedApiKeyIds.value[providerId]
+
+    /** 选定该供应商的 API Key（唯一入口）；apiKeyId 为 null 表示用默认 key。按供应商记忆，跨重启恢复。 */
+    fun selectApiKey(providerId: String, apiKeyId: String?) {
+        _selectedApiKeyIds.update { current ->
+            if (apiKeyId != null) current + (providerId to apiKeyId) else current - providerId
+        }
+        persist("workspace.apiKey.$providerId", apiKeyId) { it }
     }
 
     fun selectAgent(id: String?) {

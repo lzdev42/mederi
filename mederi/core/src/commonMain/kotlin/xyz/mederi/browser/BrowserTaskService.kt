@@ -21,7 +21,8 @@ interface BrowserTaskService {
         reasoningLevel: ReasoningLevel,
         projectId: String,
         parentSessionId: String,
-        browser: String? = null
+        browser: String? = null,
+        apiKeyId: String? = null
     ): String
 
     /** 查询任务状态，返回 JSON（RUNNING/COMPLETED/ERROR/STOPPED/NOT_FOUND + 简短消息 + browser）。 */

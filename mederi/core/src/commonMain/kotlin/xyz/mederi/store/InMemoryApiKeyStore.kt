@@ -61,4 +61,7 @@ class InMemoryApiKeyStore : ApiKeyStore {
     override suspend fun getDefaultValue(providerId: String): String? =
         keys.find { it.providerId == providerId && it.isDefault }?.value
             ?: keys.find { it.providerId == providerId }?.value
+
+    override suspend fun getValue(providerId: String, keyId: String): String? =
+        keys.find { it.id == keyId && it.providerId == providerId }?.value
 }

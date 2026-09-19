@@ -35,6 +35,7 @@ import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.File
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.Image
+import compose.icons.feathericons.Key
 import compose.icons.feathericons.Paperclip
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Shield
@@ -519,6 +520,7 @@ fun ChatInputCard(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                ApiKeySelectorMenu(viewModel = viewModel)
                                 ChipSelectorPill(
                                     icon = FeatherIcons.Cpu,
                                     label = (selectedModel?.name ?: "选择模型").take(12),
@@ -564,6 +566,7 @@ fun ChatInputCard(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                ApiKeySelectorMenu(viewModel = viewModel)
                                 ModelSelectorMenu(viewModel = viewModel, compact = false)
                                 AnimatedVisibility(
                                     visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
@@ -720,6 +723,128 @@ private fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) {
                         }
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * API Key 选择器（模型选择器左侧）。**派生自选中模型所在供应商**：读该 ProviderConfig 的 apiKeys，
+ * 当前选中项 = AppState.selectedApiKeyIds[provider.id]（缺省 = 用默认 key）。
+ * 选择写入 AppState（按供应商记忆，跨重启恢复）。
+ */
+@Composable
+private fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
+    val colors = LocalMederiColors.current
+    val appState = LocalAppState.current
+    val providers by appState.providers.collectAsState()
+    val selectedModel by appState.selectedModel.collectAsState()
+    val selectedApiKeys by appState.selectedApiKeyIds.collectAsState()
+
+    // 关联：选中模型 → 其供应商 → 该供应商的 apiKeys。无供应商或无 key 时不显示选择器
+    val provider = selectedModel?.let { m -> providers.find { it.id == m.provider } }
+    val keys = provider?.apiKeys.orEmpty()
+    if (provider == null || keys.isEmpty()) return
+
+    val providerId = provider.id
+    val selectedId = selectedApiKeys[providerId]
+    val selectedKey = keys.find { it.id == selectedId }
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        ChipSelectorPill(
+            icon = FeatherIcons.Key,
+            label = selectedKey?.name ?: "默认 Key",
+            onClick = { expanded = true }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = colors.surfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .widthIn(min = 220.dp, max = 280.dp)
+                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+        ) {
+            // 供应商默认 key（未选定）
+            DropdownMenuItem(
+                text = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "供应商默认",
+                            fontSize = 12.sp,
+                            fontWeight = if (selectedId == null) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (selectedId == null) colors.accentPrimary else colors.textPrimary
+                        )
+                        if (selectedId == null) {
+                            Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
+                        }
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                onClick = {
+                    viewModel.selectApiKey(providerId, null)
+                    expanded = false
+                }
+            )
+            if (keys.isNotEmpty()) HorizontalDivider(color = colors.divider.copy(alpha = 0.6f), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            keys.forEach { key ->
+                val isSelected = selectedId == key.id
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.weight(1f, fill = false)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Text(
+                                        text = key.name,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                        color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (key.isDefault) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(colors.accentSecondary.copy(alpha = 0.15f))
+                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                        ) {
+                                            Text("默认", fontSize = 9.sp, color = colors.accentSecondary, fontWeight = FontWeight.Medium, maxLines = 1)
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = key.maskedValue,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = colors.textMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (isSelected) {
+                                Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
+                            }
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    onClick = {
+                        viewModel.selectApiKey(providerId, key.id)
+                        expanded = false
+                    }
+                )
             }
         }
     }

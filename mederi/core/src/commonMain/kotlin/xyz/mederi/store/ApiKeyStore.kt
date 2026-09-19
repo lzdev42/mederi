@@ -59,4 +59,15 @@ interface ApiKeyStore {
      * @return 明文 API 密钥，如果没有默认密钥返回 null。
      */
     suspend fun getDefaultValue(providerId: String): String?
+
+    /**
+     * 获取供应商指定密钥的明文。
+     *
+     * 用于 agent 运行时按用户选定的 key 创建 LLM 客户端。
+     *
+     * @param providerId 供应商 ID。
+     * @param keyId 目标密钥 ID；密钥不属于该供应商时返回 null。
+     * @return 明文 API 密钥，找不到返回 null。
+     */
+    suspend fun getValue(providerId: String, keyId: String): String?
 }

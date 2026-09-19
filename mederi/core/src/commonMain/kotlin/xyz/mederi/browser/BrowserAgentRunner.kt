@@ -37,6 +37,7 @@ class BrowserAgentRunner(
     private val browserControl: BrowserControl,
     private val aiModel: AIModel,
     private val reasoningLevel: ReasoningLevel,
+    private val apiKeyId: String? = null,
     private val maxSteps: Int = 50,
     private val onStep: (suspend (step: Int, thought: String, results: List<ActionResult>) -> Unit)? = null
 ) {
@@ -221,7 +222,9 @@ class BrowserAgentRunner(
         val p = providerManager.listWithoutKeys()
             .firstOrNull { it.models.any { m -> m.id == aiModel.id } }
             ?: return null
-        val apiKey = providerManager.getDefaultKeyValue(p.id) ?: return null
+        val apiKey = apiKeyId?.let { providerManager.getKeyValue(p.id, it) }
+            ?: providerManager.getDefaultKeyValue(p.id)
+            ?: return null
         provider = p
         return KoogClientFactory.create(p, apiKey)
     }

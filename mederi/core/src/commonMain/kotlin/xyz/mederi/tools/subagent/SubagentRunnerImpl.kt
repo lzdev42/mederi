@@ -25,6 +25,7 @@ import xyz.mederi.project.ProjectManager
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.skills.SkillManager
+import xyz.mederi.plan.PlanStore
 import xyz.mederi.store.InMemoryHistoryStore
 import xyz.mederi.store.InMemorySessionStore
 import java.time.Instant
@@ -55,7 +56,12 @@ class SubagentRunnerImpl(
         aiModel: AIModel,
         reasoningLevel: ReasoningLevel,
         projectId: String,
-        parentSessionId: String
+        parentSessionId: String,
+        apiKeyId: String?,
+        /** 执行器子代理所属的 plan/subtask（SpawnAgentTool 传入）。非 null 时把 touched files flush 到 Subtask.executorTouchedFiles。 */
+        executorPlanId: String?,
+        executorSubtaskIndex: Int?,
+        planStore: PlanStore?
     ): String {
         val sessionId = "sub_${UUID.randomUUID().toString().take(8)}"
         val now = Instant.now().toString()
@@ -63,6 +69,8 @@ class SubagentRunnerImpl(
         val sessionStore = InMemorySessionStore()
         val historyStore = InMemoryHistoryStore()
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 64)
+        // 文件写入缓冲：子代理的文件工具经 onFileTouched 回调 append，turn 结束 finally 时 flush 到 PlanStore。
+        val touchedFiles = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
         val session = Session(
             id = sessionId,
@@ -90,7 +98,9 @@ class SubagentRunnerImpl(
             skills = skills,
             // 继承调用方协程上下文：外部取消（SubagentManager.stop）能级联取消内部 turn，
             // 避免"外层 job 取消但内层 Koog turn 继续跑"的资源泄漏。
-            scope = CoroutineScope(coroutineContext + SupervisorJob())
+            scope = CoroutineScope(coroutineContext + SupervisorJob()),
+            // 文件写入追踪：写工具成功后回调入队，turn 结束 finally 时 flush（见 flushTouchedFiles）
+            onFileTouched = { path -> touchedFiles.add(path) }
         )
 
         val inputText = when (role) {
@@ -133,7 +143,9 @@ class SubagentRunnerImpl(
                         aiModel = aiModel,
                         reasoningLevel = reasoningLevel
                     ),
-                    parts = listOf(MessagePart.Text(inputText))
+                    parts = listOf(MessagePart.Text(inputText)),
+                    // 继承父 Agent 选定 key：子代理与父代理同供应商，用同一把 key
+                    apiKeyId = apiKeyId
                 ),
                 // 子代理标记：豁免计划门禁（spawn 入口已校验存在批准计划），工具集按角色裁剪
                 subagentRole = role
@@ -162,6 +174,17 @@ class SubagentRunnerImpl(
             throw e
         } catch (e: Throwable) {
             "[subagent error] ${e.message ?: e.javaClass.simpleName}"
+        } finally {
+            // 无论成功/失败/取消，都把已写入的文件清单 flush 回 PlanStore——agent 丢失后父代理可据此恢复/查越界。
+            if (executorPlanId != null && executorSubtaskIndex != null && planStore != null && touchedFiles.isNotEmpty()) {
+                val files = touchedFiles.toList()
+                planStore.updatePlan(executorPlanId) { p ->
+                    p.copy(subtasks = p.subtasks.map { st ->
+                        if (st.index == executorSubtaskIndex) st.copy(executorTouchedFiles = (st.executorTouchedFiles + files).distinct())
+                        else st
+                    })
+                }
+            }
         }
     }
 }

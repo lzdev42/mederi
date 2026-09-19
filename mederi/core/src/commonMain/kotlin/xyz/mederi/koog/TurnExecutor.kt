@@ -119,7 +119,9 @@ class TurnExecutor(
         CoroutineExceptionHandler { _, error ->
             DebugLog.error("TurnExec", "Uncaught background error: ${error.message}", error)
         }
-    )
+    ),
+    /** 执行器子代理的文件写入回调（SubagentRunnerImpl 挂，收集 touched files）。 */
+    private val onFileTouched: ((String) -> Unit)? = null
 ) {
 
     private val subagentRunner = SubagentRunnerImpl(
@@ -232,6 +234,8 @@ class TurnExecutor(
 
         val agentMode = request.agentConfig.agentMode
         val workType = request.agentConfig.workType
+        // 唯一真理源 = 本次发送携带的 apiKeyId（null = 用该供应商默认 key）；本 turn 全链路继承
+        val activeApiKeyId = request.apiKeyId
         val project = projectManager.get(session.projectId)
             ?: throw IllegalStateException("Project not found: ${session.projectId}")
         val projectDirs = listOf(project.directory)
@@ -269,7 +273,7 @@ class TurnExecutor(
                             appendLine("  Spec: (stored on disk; mounted only for the active subtask)")
                     }
                     st.decisions.forEach { d -> appendLine("  Decision: ${d.question} -> ${d.choice} (${d.rationale})") }
-                    appendLine("  Verification: ${st.verification}")
+                    appendLine("  Verification: ${st.verification.command}")
                     st.verificationResult?.let { r ->
                         appendLine("  Result: ${r.status}" + (r.gapType?.let { g -> " ($g)" } ?: ""))
                         appendLine("  Evidence: ${r.evidence}")
@@ -381,7 +385,8 @@ class TurnExecutor(
                 planStore = planStore,
                 notebook = notebook,
                 planApprovalRequester = planApprovalRequester,
-                subagentRole = subagentRole
+                subagentRole = subagentRole,
+                apiKeyId = activeApiKeyId
             )
         }
         activeJobs[sessionId] = job
@@ -550,9 +555,11 @@ class TurnExecutor(
         provider: xyz.mederi.provider.domain.model.Provider,
         model: AIModel,
         reasoningLevel: ReasoningLevel,
-        systemPrompt: String
+        systemPrompt: String,
+        apiKeyId: String? = null
     ) {
-        val apiKey = providerManager.getDefaultKeyValue(provider.id)
+        val apiKey = apiKeyId?.let { providerManager.getKeyValue(provider.id, it) }
+            ?: providerManager.getDefaultKeyValue(provider.id)
             ?: throw IllegalStateException("No API key available for provider: ${provider.id}")
 
         val client = retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
@@ -612,7 +619,8 @@ class TurnExecutor(
         planStore: xyz.mederi.plan.PlanStore,
         notebook: xyz.mederi.plan.Notebook,
         planApprovalRequester: xyz.mederi.plan.PlanApprovalRequester,
-        subagentRole: SubagentRole? = null
+        subagentRole: SubagentRole? = null,
+        apiKeyId: String? = null
     ) {
         val newContextWindowFlag = AtomicBoolean(false)
         val frameChannel = Channel<StreamFrame>(Channel.UNLIMITED)
@@ -677,16 +685,19 @@ class TurnExecutor(
         } else null
 
         try {
-            val apiKey = providerManager.getDefaultKeyValue(provider.id)
+            // 选定 key 优先，未选回退默认 key
+            val apiKey = apiKeyId?.let { providerManager.getKeyValue(provider.id, it) }
+                ?: providerManager.getDefaultKeyValue(provider.id)
                 ?: throw IllegalStateException("No API key available for provider: ${provider.id}")
 
             DebugLog.section("TurnExec", "TurnExecutor.runTurn")
             DebugLog.data("TurnExec", "apiKey", "${apiKey.take(4)}****${apiKey.takeLast(4)}")
+            DebugLog.data("TurnExec", "apiKeyId", apiKeyId)
             DebugLog.data("TurnExec", "inputText", "'$inputText'")
             DebugLog.data("TurnExec", "provider.type", provider.type)
             DebugLog.data("TurnExec", "provider.baseUrl", provider.baseUrl)
 
-            preflightCompressionIfNeeded(session, provider, model, reasoningLevel, systemPrompt)
+            preflightCompressionIfNeeded(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
 
             val questionRequester = xyz.mederi.question.QuestionRequester(sessionId, eventBus)
             questionRequesters[sessionId] = questionRequester
@@ -724,7 +735,9 @@ class TurnExecutor(
                 commandSandbox = commandSandbox,
                 sessionStore = sessionStore,
                 mcpTools = mcpSession?.tools ?: emptyList(),
-                agentsDiscovery = agentsDiscovery
+                agentsDiscovery = agentsDiscovery,
+                onFileTouched = onFileTouched,
+                apiKeyId = apiKeyId
             )
 
             val agent = buildTurnAgent(
@@ -971,7 +984,8 @@ class TurnExecutor(
         provider: xyz.mederi.provider.domain.model.Provider,
         model: AIModel,
         reasoningLevel: ReasoningLevel,
-        systemPrompt: String
+        systemPrompt: String,
+        apiKeyId: String? = null
     ) {
         val contextWindow = model.contextWindow ?: return
         val window = HistoryStoreChatHistoryProvider.aiViewWindow(historyStore, session.id)
@@ -993,7 +1007,7 @@ class TurnExecutor(
             "pre-flight compression triggered: used=$usedTokens > budget=$budget"
         )
         runCatching {
-            compressOnce(session, provider, model, reasoningLevel, systemPrompt)
+            compressOnce(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
         }.onFailure {
             DebugLog.error("TurnExec", "pre-flight compression failed: ${it.message}", it)
         }

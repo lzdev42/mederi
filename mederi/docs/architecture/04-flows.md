@@ -17,10 +17,11 @@ sequenceDiagram
     participant EB as eventBus (SharedFlow)
 
     UI->>UI: guardImageSupport 图片门禁<br/>PromptComposer.compose(主指令+粘贴文本)<br/>乐观消息入 pendingUserMessages
-    UI->>AC: sendMessage(conversationId, ChatPromptInput{text, model, agent, thinkingLevel=effectiveThinkingLevel})
-    AC->>AC: MederiInputMapper.toMessageParts / toAgentConfig
-    AC->>SM: SessionManager.sendMessage(id, SendMessageRequest)
+    UI->>AC: sendMessage(conversationId, ChatPromptInput{text, model, agent, thinkingLevel=effectiveThinkingLevel, apiKeyId=getApiKeyId(model.provider)})
+    AC->>AC: MederiInputMapper.toMessageParts / toAgentConfig；记录 lastApiKeyIdByProvider（自动命名跟随用）
+    AC->>SM: SessionManager.sendMessage(id, SendMessageRequest{..., apiKeyId})
     SM->>TE: TurnExecutor.sendMessage(sessionId, request)
+    TE->>TE: activeApiKeyId = request.apiKeyId（本 turn 唯一真理源）
     TE->>TE: 校验 IDLE → 读 Project → PlanStore.loadBySession<br/>组装 activePlanContent/spec指针/activeTodoContent(互斥)
     TE->>TE: SystemPrompts.build(agentMode, workType, activePlan, activeTodo)<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深)
     TE->>TE: effectiveModel/effectiveReasoningLevel → sessionStore.updateAgentConfig
@@ -32,7 +33,8 @@ sequenceDiagram
 
     rect rgb(235, 244, 255)
         note over TE,LLM: runTurn（后台协程）
-        TE->>TE: preflightCompressionIfNeeded<br/>(contextUsedTokens > 70% 窗口 → compressOnce)
+        TE->>TE: 解析 apiKey = activeApiKeyId?.let{getKeyValue(provider,it)} ?: getDefaultKeyValue(provider)<br/>(选定 key 优先，未选回退默认；压缩/子代理/浏览器同类同源)
+        TE->>TE: preflightCompressionIfNeeded<br/>(contextUsedTokens > 70% 窗口 → compressOnce，带 apiKeyId)
         TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪)<br/>透传 AgentsSubtreeDiscovery: read/list 工具访问路径上<br/>发现未注入过的 AGENTS.md 时追加进工具返回文本(会话级去重)
         TE->>TE: buildTurnAgent: KoogClientFactory(+RetryableLLMClient)<br/>+ KoogModelBuilder + KoogParamsBuilder<br/>+ ChatMemory(HistoryStoreChatHistoryProvider)<br/>+ graphStrategy(+Compression) + EventHandler
         K->>HS: load → aiViewWindow(最后 SUMMARY 之后) → KoogMessageMapper
@@ -122,7 +124,7 @@ flowchart TD
 flowchart TD
     U["用户请求"] --> T{"主代理分诊(Triage Flow, 提示词强制)"}
     T -- "纯读" --> R1["直接读文件回答<br/>不够深 → spawn_researcher → 完整报告 → 回答"]
-    T -- "小改动(已知根因/几行代码)" --> R2["主代理直接 edit/write/apply_patch<br/>进度走 update_todo(无Plan)"]
+    T -- "小改动(已知根因/几行代码)" --> R2["主代理直接 edit/write<br/>进度走 update_todo(无Plan)"]
     T -- "复杂改动" --> RES["(理解不足先 spawn_researcher)"]
     RES --> CP["create_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
     CP --> MODE{"agentMode"}
@@ -145,7 +147,7 @@ flowchart TD
     CONV & REGEN --> SPAWN
 ```
 
-**并行执行（2026-09，2026-09-14 异步化）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；并行批量时不得并发写同一文件、不得重复执行同一命令。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）**：spawn_agent / spawn_researcher 改为异步派工（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；plan workflow 中父代理在 spawn 后调 `wait_agent(agentId)` 阻塞拿结果再 verify。
+**并行执行（2026-09，2026-09-14 异步化）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）**：spawn_agent / spawn_researcher 改为异步派工（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；plan workflow 中父代理在 spawn 后调 `wait_agent(agentId)` 阻塞拿结果再 verify。
 
 **Plan 审批时序（APPROVAL 模式）**：
 
@@ -349,7 +351,7 @@ sequenceDiagram
         ST->>ST: 选模型(当前供应商优先→其他已连接; 全量模型不过滤 isEnabled)<br/>① 免费(input==0&&output==0)<br/>② 小模型(flash/lite, 排除 mini)
         Note over ST: 有候选 → 逐个请求, 报错换下一个
         ST->>MC: getFor(providerKey, baseUrl, modelId) 查免费/价格
-        ST->>OC: execute(provider, model, key): 候选之一
+        ST->>OC: execute(provider, model, key): 候选之一<br/>key = preferredApiKeyId(provider)?.let{getKeyValue} ?: 默认<br/>(候选即当前会话供应商时用该会话最近选定 key, 其余默认)
         OC-->>ST: ≤40 字标题
         alt 全部候选失败
             ST->>OC: execute(用户发信息用的模型): 兜底
@@ -417,7 +419,7 @@ sequenceDiagram
     M->>M: 观察 remoteControlEnabled → 自动启停内嵌 RemoteServer
 ```
 
-## 12. apply_patch 工具三阶段
+## 12. apply_patch 工具三阶段（已注销，不注册给 AI——实现保留备用）
 
 ```mermaid
 flowchart LR

@@ -17,6 +17,16 @@ import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.tools.ShellTools.CommandResult
 import java.time.Instant
 
+/** 自动验证命令的三态判定结果：exit 0→PASS；超时→TIMEOUT；非零非超时→FAIL。 */
+internal enum class VerifyCommandOutcome { PASS, FAIL, TIMEOUT }
+
+/** 三态判定：exit 0→PASS；超时→TIMEOUT；非零非超时→FAIL。 */
+internal fun verifyCommandOutcome(exitCode: Int, timedOut: Boolean): VerifyCommandOutcome = when {
+    timedOut -> VerifyCommandOutcome.TIMEOUT
+    exitCode == 0 -> VerifyCommandOutcome.PASS
+    else -> VerifyCommandOutcome.FAIL
+}
+
 /**
  * 验证工具。主代理在 spawn_agent 返回后调用 verify_subtask。
  *
@@ -87,24 +97,47 @@ class VerifyTools(
 
             // 自动执行子任务的 verification 命令（若存了），在存储 status 之前。
             // 这把"验证"从模型自觉行为变成工具强制行为——主代理无法回避真实输出。
-            val verifyCmd = subtask.verification?.takeIf { it.isNotBlank() }
+            val spec = subtask.verification
+            val verifyCmd = spec.command.takeIf { it.isNotBlank() }
             val autoVerify: CommandResult? = verifyCmd?.let { cmd ->
-                runCatching { shellTools?.runCommand(cmd, 10) }.getOrNull()
+                runCatching {
+                    shellTools?.runCommand(cmd, spec.timeoutSeconds ?: 30, spec.cwd)
+                }.getOrNull()
             }
 
-            // PASS 时若验证命令 exit 非 0：拒绝存储，把真实输出返回让模型重判
-            if (verifyStatus == VerifyStatus.PASS && autoVerify != null && autoVerify.exitCode != 0) {
-                return "Verification command (auto-executed from plan):\n  $verifyCmd\n" +
-                    "Exit code: ${autoVerify.exitCode}\n" +
-                    "Output:\n${autoVerify.output.take(2000)}\n\n" +
-                    "The verification command exited non-zero — the result does NOT match the plan's criteria. " +
-                    "Do NOT declare PASS. Re-examine the actual output and call verify_subtask again with " +
-                    "the correct status (FAIL with remediation, or PARTIAL with gapType)."
+            // PASS 时按三态判定自动验证结果（exit0→正常存储；非零→拒绝存储；
+            // 超时→不存 PASS 也不硬拒，回报 inconclusive 让主代理决定）：
+            // 环境超时与真实失败必须分开——超时可能是缓存未热/资源争抢，不能当失败盖棺。
+            if (verifyStatus == VerifyStatus.PASS && autoVerify != null) {
+                when (verifyCommandOutcome(autoVerify.exitCode, autoVerify.timedOut)) {
+                    VerifyCommandOutcome.TIMEOUT -> return "Verification command (auto-executed) TIMED OUT (inconclusive):\n  $verifyCmd\n" +
+                        "Output:\n${autoVerify.output.take(2000)}\n\n" +
+                        "The verification timed out instead of failing — PASS is not stored. " +
+                        "Re-run verify_subtask after warming the cache, or accept manual evidence."
+                    VerifyCommandOutcome.FAIL -> return "Verification command (auto-executed from plan):\n  $verifyCmd\n" +
+                        "Exit code: ${autoVerify.exitCode}\n" +
+                        "Output:\n${autoVerify.output.take(2000)}\n\n" +
+                        "The verification command exited non-zero — the result does NOT match the plan's criteria. " +
+                        "Do NOT declare PASS. Re-examine the actual output and call verify_subtask again with " +
+                        "the correct status (FAIL with remediation, or PARTIAL with gapType)."
+                    VerifyCommandOutcome.PASS -> {} // exit 0：继续正常存储
+                }
             }
+
+            // scope 越界检查（信任 AI 哲学：只报告、不硬拒 PASS/FAIL 判定）：
+            // 执行器实际改动的文件（Subtask.executorTouchedFiles）vs 子任务声明的 targetFiles——
+            // 越界文件追加进 evidence，供主代理判断（越界可能是合理的：用户并行工作、共享文件）。
+            val outOfScopeFiles = subtask.executorTouchedFiles.filter { touched ->
+                subtask.targetFiles.none { target ->
+                    target.endsWith(touched) || touched.endsWith(target)
+                }
+            }
+            val evidenceWithScope = if (outOfScopeFiles.isEmpty()) args.evidence else
+                args.evidence + "\n\n[scope] 执行器改动超出 targetFiles 的文件: " + outOfScopeFiles.joinToString(", ")
 
             val result = VerificationResult(
                 status = verifyStatus,
-                evidence = args.evidence,
+                evidence = evidenceWithScope,
                 gapType = gapType,
                 remediation = args.remediation
             )

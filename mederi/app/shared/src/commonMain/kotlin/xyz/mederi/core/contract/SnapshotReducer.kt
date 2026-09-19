@@ -146,10 +146,13 @@ object SnapshotReducer {
                 // message 是 Core 传来的真实错误原因（如 "Insufficient Balance"、"Engine overloaded"），
                 // 直接保留到 statusHint，由 UI 层决定怎么渲染，不在这里写死文案。
                 val serverMsg = event.payload["message"]?.takeIf { it.isNotBlank() }
+                val delayMs = event.payload["delayMs"]?.toLongOrNull()
+                val retryAt = delayMs?.let { xyz.mederi.currentTimeMillis() + it }
                 snapshot.copy(
                     statusHint = buildString {
                         append("$attempt/$max")
-                        if (serverMsg != null) append("|$serverMsg")
+                        append("|${serverMsg ?: ""}")
+                        if (retryAt != null) append("|$retryAt")
                     }
                 )
             } else snapshot

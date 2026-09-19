@@ -144,6 +144,9 @@ class ProviderManagerImpl(
     override suspend fun getDefaultKeyValue(providerId: String): String? =
         apiKeyStore.getDefaultValue(providerId)
 
+    override suspend fun getKeyValue(providerId: String, keyId: String): String? =
+        apiKeyStore.getValue(providerId, keyId)
+
     // ==================== Model ====================
 
     override suspend fun listModels(providerId: String): List<AIModel> =

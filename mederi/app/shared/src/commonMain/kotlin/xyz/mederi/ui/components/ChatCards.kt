@@ -42,6 +42,7 @@ import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.core.ui.AssistantFooterInfo
+import xyz.mederi.core.ui.ChatListItem
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.core.contract.models.ToolCallUi
 import xyz.mederi.theme.LocalMederiColors
@@ -128,12 +129,14 @@ fun ReasoningBlock(
     durationMs: Long = 0,
     isStreaming: Boolean = false,
     isReasoningActive: Boolean = false,
+    userExpanded: Boolean? = null,
     modifier: Modifier = Modifier
 ) {
     if (text.isBlank() && !isReasoningActive) return
 
     val colors = LocalMederiColors.current
-    var isExpanded by remember { mutableStateOf(false) }
+    var localExpanded by remember { mutableStateOf(false) }
+    val isExpanded = userExpanded ?: localExpanded
 
     val infiniteTransition = rememberInfiniteTransition()
     val pulseAlpha by infiniteTransition.animateFloat(
@@ -159,7 +162,7 @@ fun ReasoningBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { isExpanded = !isExpanded }
+                .clickable { localExpanded = !isExpanded }
                 .padding(vertical = 2.dp, horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -247,12 +250,15 @@ fun ToolCallsBlock(
     isRunning: Boolean = false,
     hasFailedTool: Boolean = false,
     toolSummary: String = "",
+    userExpanded: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     if (toolCalls.isEmpty()) return
 
     val colors = LocalMederiColors.current
-    var isExpanded by remember { mutableStateOf(false) }
+    var userChoice by remember { mutableStateOf<Boolean?>(null) }
+    val autoExpanded = hasFailedTool || toolCalls.size in 1..2
+    val isExpanded = userExpanded ?: userChoice ?: autoExpanded
 
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
@@ -268,7 +274,7 @@ fun ToolCallsBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { isExpanded = !isExpanded }
+                .clickable { userChoice = !isExpanded }
                 .padding(vertical = 2.dp, horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -352,12 +358,15 @@ fun SubagentCallsBlock(
     isStreaming: Boolean = false,
     isRunning: Boolean = false,
     hasFailed: Boolean = false,
+    userExpanded: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     if (subagents.isEmpty()) return
 
     val colors = LocalMederiColors.current
-    var isExpanded by remember { mutableStateOf(false) }
+    var userChoice by remember { mutableStateOf<Boolean?>(null) }
+    val autoExpanded = hasFailed || subagents.size in 1..2
+    val isExpanded = userExpanded ?: userChoice ?: autoExpanded
 
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
@@ -375,7 +384,7 @@ fun SubagentCallsBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { isExpanded = !isExpanded }
+                .clickable { userChoice = !isExpanded }
                 .padding(vertical = 2.dp, horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1462,5 +1471,165 @@ private fun formatCharCount(count: Int): String {
         "${k}.${dec}k 字符"
     } else {
         "$count 字符"
+    }
+}
+
+/**
+ * 结构化多步工作过程聚合栏 (WorkTraceCard)
+ * 统一汇总折叠条：将一轮对话中的全部中间步骤（思考过程、过渡语、工具调用）折叠进一个栏目，
+ * 默认显示：[Activity图标] 工作过程 (N 项操作 · 耗时 X.Xs)  ›
+ * 展开后，在内部按时序渲染各个步骤子项，左侧带有贯通的微导轨线。
+ */
+@Composable
+fun WorkTraceCard(
+    workTrace: ChatListItem.WorkTraceBlock,
+    userExpanded: Boolean? = null,
+    onToggleGlobalExpansion: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    renderStepItem: @Composable (ChatListItem) -> Unit,
+) {
+    if (workTrace.items.isEmpty()) return
+
+    val colors = LocalMederiColors.current
+    var userChoice by remember(workTrace.key) { mutableStateOf<Boolean?>(null) }
+    val autoExpanded = false
+    val isExpanded = userExpanded ?: userChoice ?: autoExpanded
+
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(150)
+    )
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // 汇总微栏整行可点击
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { userChoice = !isExpanded }
+                .padding(vertical = 4.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (workTrace.isRunning) {
+                CircularProgressIndicator(
+                    color = colors.accentPrimary,
+                    strokeWidth = 1.4.dp,
+                    modifier = Modifier.size(13.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = FeatherIcons.Activity,
+                    contentDescription = null,
+                    tint = if (workTrace.hasFailedTool) colors.accentDanger else colors.accentPrimary,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+
+            val durationStr = if (workTrace.totalDurationMs > 0) {
+                val sec = workTrace.totalDurationMs / 1000
+                if (sec >= 60) "${sec / 60}m ${sec % 60}s" else "${sec}s"
+            } else ""
+
+            val titleText = buildString {
+                append("工作过程")
+                val details = mutableListOf<String>()
+                if (workTrace.totalToolsCount > 0) {
+                    details.add("${workTrace.totalToolsCount} 项操作")
+                }
+                if (durationStr.isNotBlank()) {
+                    details.add("耗时 $durationStr")
+                }
+                if (workTrace.hasFailedTool) {
+                    details.add("存在失败")
+                }
+                if (details.isNotEmpty()) {
+                    append(" (${details.joinToString(" · ")})")
+                }
+            }
+
+            Text(
+                text = titleText,
+                color = if (workTrace.hasFailedTool) colors.accentDanger else (if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary),
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.width(2.dp))
+
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
+                modifier = Modifier
+                    .size(11.dp)
+                    .graphicsLayer { rotationZ = arrowRotation }
+            )
+
+            // 折叠态右侧单行实时信息流（图二位置：自言自语/具体工具类型/思考中）
+            if (!isExpanded && !workTrace.activeActivityText.isNullOrBlank()) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = workTrace.activeActivityText,
+                    color = if (colors.isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+
+            // 全局三态展开按钮（自动/全部展开/全部折叠），仅当有工具操作时显示
+            if (onToggleGlobalExpansion != null && workTrace.totalToolsCount > 0) {
+                Spacer(modifier = Modifier.width(6.dp))
+                val label = when (userExpanded) {
+                    true -> "折叠全部"
+                    false -> "展开全部"
+                    null -> "自动"
+                }
+                Text(
+                    text = label,
+                    color = if (colors.isDark) Color(0xFF94A3B8) else colors.textMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { onToggleGlobalExpansion() }
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
+        }
+
+        // 展开后的完整工作轨迹子项（左侧细微导轨线）
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp, horizontal = 4.dp)
+                    .drawBehind {
+                        val strokeWidth = 1.5.dp.toPx()
+                        drawLine(
+                            color = railColor,
+                            start = Offset(strokeWidth / 2f, 0f),
+                            end = Offset(strokeWidth / 2f, size.height),
+                            strokeWidth = strokeWidth,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                    .padding(start = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                workTrace.items.forEach { stepItem ->
+                    renderStepItem(stepItem)
+                }
+            }
+        }
     }
 }

@@ -59,7 +59,12 @@ private sealed interface VerifiedChange {
 class FileSystemTools(
     private val allowedDirectories: List<String>,
     private val diffTracker: TurnDiffTracker? = null,
-    private val agentsDiscovery: AgentsSubtreeDiscovery? = null
+    private val agentsDiscovery: AgentsSubtreeDiscovery? = null,
+    /**
+     * 文件写入回调：write/edit/apply_patch 成功写入后上报路径。
+     * 执行器子代理经 SubagentRunnerImpl 挂回调收集 touched files（flush 到 Subtask.executorTouchedFiles）。
+     */
+    private val onFileTouched: ((String) -> Unit)? = null
 ) {
 
     // ==================== 参数定义 ====================
@@ -85,10 +90,13 @@ class FileSystemTools(
     data class EditFileArgs(
         @LLMDescription("文件路径，相对于项目根目录（如 src/Main.kt）。绝对路径仅限项目目录内；不确定时先 read/list 查清，不要凭空构造。")
         val path: String = "",
-        @LLMDescription("要替换的原文，必须与文件内容精确匹配。")
+        @LLMDescription("要替换的原文，必须与文件内容精确匹配。默认要求在文件中唯一——多处出现会报错，需提供更长的上下文使其唯一。")
         val original: String = "",
         @LLMDescription("替换后的新文本。")
-        val replacement: String = ""
+        val replacement: String = "",
+        @LLMDescription("true 时替换 original 的所有出现，而非要求唯一匹配。")
+        @kotlinx.serialization.SerialName("replace_all")
+        val replaceAll: Boolean = false
     )
 
     @Serializable
@@ -143,30 +151,76 @@ class FileSystemTools(
     ) {
         override suspend fun execute(args: WriteFileArgs): String {
             val file = resolveForWrite(args.path, mustExist = false, mustBeFile = true)
-            file.parentFile?.mkdirs()
-            val oldContent = file.takeIf { it.exists() }?.readText()
-            file.writeText(args.content)
-            diffTracker?.recordWrite(displayPath(file), oldContent, args.content)
-            return "Written ${args.content.length} chars to ${displayPath(file)}"
+            val conflict = FileWriteRegistry.tryAcquire(listOf(file))
+            if (conflict != null) {
+                return "Error: ${displayPath(file)} is currently being modified by another concurrent tool call. " +
+                    "Retry after the other edit completes, or send this write in a separate message."
+            }
+            try {
+                file.parentFile?.mkdirs()
+                val oldContent = file.takeIf { it.exists() }?.readText()
+                file.writeText(args.content)
+                diffTracker?.recordWrite(displayPath(file), oldContent, args.content)
+                onFileTouched?.invoke(displayPath(file))
+                return "Written ${args.content.length} chars to ${displayPath(file)}"
+            } finally {
+                FileWriteRegistry.release(listOf(file))
+            }
         }
     }
 
     inner class EditFileTool : SimpleTool<EditFileArgs>(
         argsType = typeToken<EditFileArgs>(),
         name = "edit_file",
-        description = "在文件中用 replacement 替换首次出现的 original 文本。需要精确的原文上下文。"
+        description =
+            "在文件中用 replacement 替换 original 文本。original 必须在文件中唯一（多处出现会报错，" +
+                "需提供更长上下文使其唯一）；要替换所有出现用 replace_all=true。"
     ) {
         override suspend fun execute(args: EditFileArgs): String {
             validate(args.original.isNotEmpty()) { "original must not be empty" }
             val file = resolveForWrite(args.path, mustExist = true, mustBeFile = true)
-            val content = file.readText()
-            val idx = content.indexOf(args.original)
-            validate(idx >= 0) { "original text not found in ${displayPath(file)}" }
-            val updated = content.substring(0, idx) + args.replacement + content.substring(idx + args.original.length)
-            file.writeText(updated)
-            diffTracker?.recordWrite(displayPath(file), content, updated)
-            return "Edited ${displayPath(file)}: replaced ${args.original.length} chars with ${args.replacement.length} chars"
+            val conflict = FileWriteRegistry.tryAcquire(listOf(file))
+            if (conflict != null) {
+                return "Error: ${displayPath(file)} is currently being modified by another concurrent tool call. " +
+                    "Retry after the other edit completes, or send this edit in a separate message."
+            }
+            try {
+                val content = file.readText()
+                val count = countOccurrences(content, args.original)
+                if (count == 0) {
+                    validate(false) { "original text not found in ${displayPath(file)}" }
+                }
+                if (count > 1 && !args.replaceAll) {
+                    validate(false) {
+                        "original text found ${count} times in ${displayPath(file)} — not unique. " +
+                            "Provide a longer original with more surrounding context, or set replace_all=true."
+                    }
+                }
+                val updated = if (args.replaceAll) {
+                    content.replace(args.original, args.replacement)
+                } else {
+                    content.replaceFirst(args.original, args.replacement)
+                }
+                file.writeText(updated)
+                diffTracker?.recordWrite(displayPath(file), content, updated)
+                onFileTouched?.invoke(displayPath(file))
+                val replaced = if (args.replaceAll) count else 1
+                return "Edited ${displayPath(file)}: replaced $replaced occurrence(s), ${args.original.length} chars → ${args.replacement.length} chars"
+            } finally {
+                FileWriteRegistry.release(listOf(file))
+            }
         }
+    }
+
+    /** 统计 needle 在 haystack 中的非重叠出现次数。 */
+    private fun countOccurrences(haystack: String, needle: String): Int {
+        var count = 0
+        var idx = haystack.indexOf(needle)
+        while (idx >= 0) {
+            count++
+            idx = haystack.indexOf(needle, idx + needle.length)
+        }
+        return count
     }
 
     inner class ListDirectoryTool : SimpleTool<ListDirectoryArgs>(
@@ -226,7 +280,11 @@ class FileSystemTools(
 
             // 阶段 3：应用
             return try {
-                applyHunks(hunks, verified)
+                val result = applyHunks(hunks, verified)
+                if (onFileTouched != null && !result.startsWith("apply_patch failed")) {
+                    verified.keys.forEach { onFileTouched.invoke(it) }
+                }
+                result
             } catch (e: Exception) {
                 "apply_patch failed: ${e.message}"
             }

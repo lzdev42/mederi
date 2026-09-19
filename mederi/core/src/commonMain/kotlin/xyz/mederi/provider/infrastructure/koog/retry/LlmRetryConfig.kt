@@ -12,7 +12,7 @@ package xyz.mederi.provider.infrastructure.koog.retry
 object LlmRetryConfig {
     /** 最大重试次数（不含首次请求）。默认 10。设 0 = 关闭重试 */
     @Volatile
-    var maxRetries: Int = 10
+    var maxRetries: Int = 100
 
     /** 随机退避下限（毫秒），默认 1 秒 */
     @Volatile

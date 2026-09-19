@@ -22,6 +22,8 @@ interface SessionApi {
     suspend fun rename(id: String, request: RenameSessionRequest): Session
     suspend fun delete(id: String)
     suspend fun abort(id: String)
+    /** 中止并等待 turn 完全终止；对进程重启残留的 RUNNING 状态兜底复位为 IDLE（供启动清理用）。 */
+    suspend fun abortAndJoin(id: String)
 
     suspend fun sendMessage(sessionId: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(sessionId: String, messageId: String)
@@ -87,7 +89,12 @@ data class RenameSessionRequest(
  */
 data class SendMessageRequest(
     val agentConfig: AgentConfig,
-    val parts: List<MessagePart>
+    val parts: List<MessagePart>,
+    /**
+     * 本次消息选定的供应商 API Key 的 ID。null = 用该供应商默认 key。
+     * 唯一真理源 = 每次发送携带的 apiKeyId，本 turn 内所有操作（主链路/压缩/子代理/浏览器）继承。
+     */
+    val apiKeyId: String? = null
 )
 
 /**

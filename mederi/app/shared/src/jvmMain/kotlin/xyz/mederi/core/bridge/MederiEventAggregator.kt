@@ -6,6 +6,7 @@ import xyz.mederi.api.SessionApi
 import xyz.mederi.core.contract.SnapshotReducer
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.MessagesPage
+import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.TodoItem
 import xyz.mederi.debug.DebugLog
@@ -30,7 +31,8 @@ object MederiEventAggregator {
         conversationId: String,
         sessions: SessionApi,
         modelToProvider: (String) -> String?,
-        planTodos: suspend (String) -> List<TodoItem> = { emptyList() }
+        planTodos: suspend (String) -> List<TodoItem> = { emptyList() },
+        lastError: (String) -> LastSessionError? = { null }
     ): Flow<ConversationSnapshot> = flow {
         DebugLog.section("Aggregator", "MederiEventAggregator.observe start")
         DebugLog.data("Aggregator", "conversationId", conversationId)
@@ -40,7 +42,7 @@ object MederiEventAggregator {
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
         DebugLog.data("Aggregator", "initial messages", messages.size)
 
-        var snapshot = ConversationSnapshot(
+        val base = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let(modelToProvider)),
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
@@ -48,6 +50,7 @@ object MederiEventAggregator {
             cost = MederiModelMapper.toCostSummary(),
             todos = planTodos(conversationId).ifEmpty { MederiModelMapper.toTodos(session.todos) }
         )
+        var snapshot = hydrateLastError(base, lastError(conversationId))
         DebugLog.event("Aggregator", "initial snapshot built: status=${snapshot.conversation.status}, messages=${snapshot.messages.size}")
         emit(snapshot)
 
@@ -105,6 +108,12 @@ object MederiEventAggregator {
                     DebugLog.debug(
                         "Aggregator",
                         "event applied: type=${enriched.type}, status=${it.conversation.status}, messages=${it.messages.size}, blocks=$blockCount"
+                    )
+                }
+                if (it.conversation.status == ConversationStatus.Error) {
+                    DebugLog.event(
+                        "Aggregator",
+                        "session errored: id=$conversationId, isCurrent=false(observe-flow), error='${it.errorMessage}', errorId=${it.errorId}, failureMode=${it.conversation.status}"
                     )
                 }
                 emit(it)

@@ -12,6 +12,7 @@ import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.PlanStatus
 import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.SubtaskStatus
+import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.tools.PlanTools
 import java.io.File
 import java.util.UUID
@@ -70,7 +71,7 @@ class ConvergePlanMechanismTest {
                     planDetail = "do something",
                     spec = "spec content",
                     targetFiles = listOf("file.txt"),
-                    verification = "test -f file.txt",
+                    verification = VerificationSpec(command = "test -f file.txt"),
                     dependsOn = emptyList(),
                     parallelizable = false
                 )

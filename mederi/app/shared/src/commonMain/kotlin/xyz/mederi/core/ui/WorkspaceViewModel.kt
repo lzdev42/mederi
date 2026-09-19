@@ -62,18 +62,34 @@ sealed interface ChatListItem {
         val toolCalls: List<ToolCallUi>,
         val isStreaming: Boolean,
         override val isTurnStart: Boolean = false,
-        val toolSummary: String = "",
-        val hasFailedTool: Boolean = false,
-        val isRunning: Boolean = false,
-    ) : ChatListItem
+       val toolSummary: String = "",
+       val hasFailedTool: Boolean = false,
+       val isRunning: Boolean = false,
+   ) : ChatListItem
 
     data class SubagentCalls(
         override val key: String,
         val subagents: List<ToolCallUi>,
         val isStreaming: Boolean,
         override val isTurnStart: Boolean = false,
-        val isRunning: Boolean = false,
-        val hasFailed: Boolean = false,
+       val isRunning: Boolean = false,
+       val hasFailed: Boolean = false,
+   ) : ChatListItem
+
+    /**
+     * 多步任务的工作过程聚合栏（Work 栏）。
+     * 将轮次内的所有推理、自说自话过渡语与工具调用折叠聚合为单行汇总条，默认折叠突出最终正文。
+     */
+    data class WorkTraceBlock(
+        override val key: String,
+        val items: List<ChatListItem>,
+        val totalToolsCount: Int,
+        val totalDurationMs: Long,
+        val isRunning: Boolean,
+       val isStreaming: Boolean,
+       val hasFailedTool: Boolean,
+       val activeActivityText: String? = null,
+        override val isTurnStart: Boolean = false,
     ) : ChatListItem
 
     data class TextMessage(
@@ -90,6 +106,8 @@ sealed interface ChatListItem {
         val createdAt: Long = 0L,
         /** assistant 消息的 footer 元数据——只挂在该轮次最后一个文本块上，其余为 null */
         val assistantFooter: AssistantFooterInfo? = null,
+        /** 是否为伴随工具调用的步骤过渡语（自说自话，弱化展示与最终主交付区分） */
+        val isStepNarration: Boolean = false,
     ) : ChatListItem
 
     /** 独立长文 Markdown 产物卡片（点击在右侧扩展窗口打开） */
@@ -148,13 +166,13 @@ data class AssistantFooterInfo(
  * 右侧独立功能活动栏枚举。
  */
 enum class RightDockPanel(val title: String) {
-    OVERVIEW("概览与指标"),
-    DIFF("代码差异审查"),
-    PLAN("实施计划"),
+    OVERVIEW("概览"),
+    DIFF("审查"),
+    PLAN("计划"),
     SUB_AGENTS("子 Agent 协同"),
     ARTIFACTS("文档与媒体"),
     TERMINAL("终端"),
-    BROWSER("内置浏览器")
+    BROWSER("浏览器")
 }
 
 data class PlanItem(
@@ -774,6 +792,19 @@ class WorkspaceViewModel(
     val conversation: Conversation? get() = snapshot?.conversation
 
     /**
+     * 过程步骤全局展开状态：null=按数量/失败自动展开，true=全局强制展开，false=全局强制折叠。
+     */
+    var isAllStepsExpanded by mutableStateOf<Boolean?>(null)
+
+    fun toggleAllSteps() {
+        isAllStepsExpanded = when (isAllStepsExpanded) {
+            true -> false
+            false -> null
+            null -> true
+        }
+    }
+
+    /**
      * 展平后的聊天列表（派生缓存）。
      *
      * derivedStateOf：snapshot / optimisticUserMessage 任一变化时自动重算，
@@ -1014,42 +1045,61 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
             val isStreaming = turnMessages.any { it.isStreaming }
             val isActiveAssistant = isStreaming || (isWorking && turnMessages == lastAssistantTurn)
 
-            val allToolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
-                .map { toToolCallUi(it) }
-            val regularToolCalls = allToolCalls.filter { it.name !in SUBAGENT_TOOL_NAMES }
-            val subagentCalls = allToolCalls.filter { it.name in SUBAGENT_TOOL_NAMES }
-
+            val hasAnyToolCallInTurn = turnMessages.any { m -> m.blocks.any { it is ChatBlock.ToolCall } }
             var turnHasFirstItem = false
 
-            // 按真实时序遍历本轮的消息与块，交替输出 Reasoning 和 Text
-            for (msg in turnMessages) {
+            val workItems = mutableListOf<ChatListItem>()
+            val deliverableItems = mutableListOf<ChatListItem>()
+
+            // 后缀扫描（O(n) 一次倒序遍历）：预计算每条消息"之后"是否还有工具调用/非空文本，
+            // 替代循环内原先对后续消息的 O(n) 线性扫描（整轮 O(n²)），改为 O(1) 查表。
+            val n = turnMessages.size
+            val suffixMsgHasToolCall = BooleanArray(n)
+            for (i in n - 2 downTo 0) {
+                val nextHasTool = turnMessages[i + 1].blocks.any { it is ChatBlock.ToolCall }
+                suffixMsgHasToolCall[i] = nextHasTool || suffixMsgHasToolCall[i + 1]
+            }
+            val suffixMsgHasText = BooleanArray(n)
+            for (i in n - 2 downTo 0) {
+                val nextHasText = turnMessages[i + 1].blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
+                suffixMsgHasText[i] = nextHasText || suffixMsgHasText[i + 1]
+            }
+
+            // 按真实时序遍历本轮的消息与块，交替收集 Reasoning、Text 与就地工具调用
+            for ((msgIndex, msg) in turnMessages.withIndex()) {
+                val subsequentHasToolCall = suffixMsgHasToolCall[msgIndex]
+                val isMsgStepNarration = hasAnyToolCallInTurn && (msg.blocks.any { it is ChatBlock.ToolCall } || subsequentHasToolCall)
+
                 val messageImages = msg.blocks.filterIsInstance<ChatBlock.File>()
                     .filter { isImageBlock(it) }
                     .map { it.url }
                 var imagesHandled = false
 
                 for ((blockIndex, block) in msg.blocks.withIndex()) {
+                    val hasSubsequentToolCall = msg.blocks.drop(blockIndex + 1).any { it is ChatBlock.ToolCall } || subsequentHasToolCall
+                    val isStepNarration = hasAnyToolCallInTurn && hasSubsequentToolCall
                     when (block) {
                         is ChatBlock.Reasoning -> {
                             if (block.text.isNotBlank()) {
                                 val durationMs = if (msg.completedAt != null && msg.completedAt > msg.createdAt) {
                                     msg.completedAt - msg.createdAt
                                 } else (msg.durationMs ?: 0L)
-                                val hasSubsequentText = msg.blocks.drop(blockIndex + 1).any { it is ChatBlock.Text && it.text.isNotBlank() }
-                                    || turnMessages.dropWhile { it != msg }.drop(1).any { m -> m.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() } }
+                                val hasSubsequentText = msg.blocks.drop(blockIndex + 1).any { it is ChatBlock.Text && it.text.isNotBlank() } || suffixMsgHasText[msgIndex]
                                 val isReasoningActive = isStreaming && !hasSubsequentText
 
-                                result.add(
-                                    ChatListItem.Reasoning(
-                                        key = "${msg.id}_${block.id}",
-                                        text = block.text,
-                                        isStreaming = isStreaming,
-                                        isTurnStart = !turnHasFirstItem,
-                                        durationMs = durationMs,
-                                        isReasoningActive = isReasoningActive,
-                                    )
+                                val item = ChatListItem.Reasoning(
+                                    key = "${msg.id}_${block.id}",
+                                    text = block.text,
+                                    isStreaming = isStreaming,
+                                    isTurnStart = !turnHasFirstItem && workItems.isEmpty(),
+                                    durationMs = durationMs,
+                                    isReasoningActive = isReasoningActive,
                                 )
-                                turnHasFirstItem = true
+                                if (hasAnyToolCallInTurn && hasSubsequentToolCall) {
+                                    workItems.add(item)
+                                } else {
+                                    deliverableItems.add(item)
+                                }
                             }
                         }
 
@@ -1059,27 +1109,26 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
                                 val artifact = parseResult.artifact
                                 if (artifact != null) {
                                     if (parseResult.preamble.isNotBlank()) {
-                                        result.add(
-                                            ChatListItem.TextMessage(
-                                                key = "${msg.id}_${block.id}_pre",
-                                                isUser = false,
-                                                isStreaming = false,
-                                                isActiveAssistant = false,
-                                                text = parseResult.preamble,
-                                                partId = "${block.id}_pre",
-                                                conversationId = msg.conversationId,
-                                                images = if (!imagesHandled) messageImages else emptyList(),
-                                                isTurnStart = !turnHasFirstItem,
-                                                messageId = msg.id,
-                                                createdAt = msg.createdAt,
-                                                assistantFooter = null
-                                            )
+                                        val preItem = ChatListItem.TextMessage(
+                                            key = "${msg.id}_${block.id}_pre",
+                                            isUser = false,
+                                            isStreaming = false,
+                                            isActiveAssistant = false,
+                                            text = parseResult.preamble,
+                                            partId = "${block.id}_pre",
+                                            conversationId = msg.conversationId,
+                                            images = if (!imagesHandled) messageImages else emptyList(),
+                                            isTurnStart = false,
+                                            messageId = msg.id,
+                                            createdAt = msg.createdAt,
+                                            assistantFooter = null,
+                                            isStepNarration = isStepNarration,
                                         )
+                                        if (isStepNarration) workItems.add(preItem) else deliverableItems.add(preItem)
                                         imagesHandled = true
-                                        turnHasFirstItem = true
                                     }
 
-                                    result.add(
+                                    deliverableItems.add(
                                         ChatListItem.DocumentCard(
                                             key = "${msg.id}_${block.id}_art_${artifact.identifier}",
                                             artifactId = artifact.identifier,
@@ -1090,48 +1139,50 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
                                             isCompleted = artifact.isCompleted,
                                             isStreaming = isStreaming && !artifact.isCompleted,
                                             createdAt = msg.createdAt,
-                                            isTurnStart = !turnHasFirstItem,
+                                            isTurnStart = false,
                                         )
                                     )
-                                    turnHasFirstItem = true
 
                                     if (parseResult.postscript.isNotBlank()) {
-                                        result.add(
-                                            ChatListItem.TextMessage(
-                                                key = "${msg.id}_${block.id}_post",
-                                                isUser = false,
-                                                isStreaming = isStreaming,
-                                                isActiveAssistant = isActiveAssistant,
-                                                text = parseResult.postscript,
-                                                partId = "${block.id}_post",
-                                                conversationId = msg.conversationId,
-                                                images = emptyList(),
-                                                isTurnStart = false,
-                                                messageId = msg.id,
-                                                createdAt = msg.createdAt,
-                                                assistantFooter = null
-                                            )
-                                        )
-                                    }
-                                } else {
-                                    result.add(
-                                        ChatListItem.TextMessage(
-                                            key = "${msg.id}_${block.id}",
+                                        val postItem = ChatListItem.TextMessage(
+                                            key = "${msg.id}_${block.id}_post",
                                             isUser = false,
                                             isStreaming = isStreaming,
                                             isActiveAssistant = isActiveAssistant,
-                                            text = block.text,
-                                            partId = block.id,
+                                            text = parseResult.postscript,
+                                            partId = "${block.id}_post",
                                             conversationId = msg.conversationId,
-                                            images = if (!imagesHandled) messageImages else emptyList(),
-                                            isTurnStart = !turnHasFirstItem,
+                                            images = emptyList(),
+                                            isTurnStart = false,
                                             messageId = msg.id,
                                             createdAt = msg.createdAt,
-                                            assistantFooter = null
+                                            assistantFooter = null,
+                                            isStepNarration = isStepNarration,
                                         )
+                                        if (isStepNarration) workItems.add(postItem) else deliverableItems.add(postItem)
+                                    }
+                                } else {
+                                    val textItem = ChatListItem.TextMessage(
+                                        key = "${msg.id}_${block.id}",
+                                        isUser = false,
+                                        isStreaming = isStreaming,
+                                        isActiveAssistant = isActiveAssistant,
+                                        text = block.text,
+                                        partId = block.id,
+                                        conversationId = msg.conversationId,
+                                        images = if (!imagesHandled) messageImages else emptyList(),
+                                        isTurnStart = false,
+                                        messageId = msg.id,
+                                        createdAt = msg.createdAt,
+                                        assistantFooter = null,
+                                        isStepNarration = isStepNarration,
                                     )
+                                    if (isStepNarration) {
+                                        workItems.add(textItem)
+                                    } else {
+                                        deliverableItems.add(textItem)
+                                    }
                                     imagesHandled = true
-                                    turnHasFirstItem = true
                                 }
                             }
                         }
@@ -1141,26 +1192,118 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
                 }
 
                 if (!imagesHandled && messageImages.isNotEmpty()) {
-                    result.add(
-                        ChatListItem.TextMessage(
-                            key = "${msg.id}_img",
-                            isUser = false,
-                            isStreaming = isStreaming,
-                            isActiveAssistant = isActiveAssistant,
-                            text = "",
-                            partId = "img",
-                            conversationId = msg.conversationId,
-                            images = messageImages,
-                            isTurnStart = !turnHasFirstItem,
-                            messageId = msg.id,
-                            createdAt = msg.createdAt,
-                        )
+                    val imgItem = ChatListItem.TextMessage(
+                        key = "${msg.id}_img",
+                        isUser = false,
+                        isStreaming = isStreaming,
+                        isActiveAssistant = isActiveAssistant,
+                        text = "",
+                        partId = "img",
+                        conversationId = msg.conversationId,
+                        images = messageImages,
+                        isTurnStart = false,
+                        messageId = msg.id,
+                        createdAt = msg.createdAt,
+                        isStepNarration = isMsgStepNarration,
                     )
-                    turnHasFirstItem = true
+                    if (isMsgStepNarration) workItems.add(imgItem) else deliverableItems.add(imgItem)
+                }
+
+                // 就地收集属于当前 msg 的工具调用
+                val msgToolCalls = msg.blocks.filterIsInstance<ChatBlock.ToolCall>().map { toToolCallUi(it) }
+                if (msgToolCalls.isNotEmpty()) {
+                    val regular = msgToolCalls.filter { it.name !in SUBAGENT_TOOL_NAMES }
+                    val subagents = msgToolCalls.filter { it.name in SUBAGENT_TOOL_NAMES }
+
+                   if (regular.isNotEmpty()) {
+                       val hasFailed = regular.any { it.isFailed }
+                       workItems.add(
+                           ChatListItem.ToolCalls(
+                               key = "${msg.id}_toolcalls",
+                               toolCalls = regular,
+                               isStreaming = isStreaming,
+                               isTurnStart = false,
+                               toolSummary = buildToolSummary(regular),
+                               hasFailedTool = hasFailed,
+                               isRunning = isStreaming && regular.any { it.state is ToolCallState.Running },
+                           )
+                       )
+                   }
+
+                   if (subagents.isNotEmpty()) {
+                       val hasFailed = subagents.any { it.isFailed }
+                       workItems.add(
+                           ChatListItem.SubagentCalls(
+                               key = "${msg.id}_subagents",
+                               subagents = subagents,
+                               isStreaming = isStreaming,
+                               isTurnStart = false,
+                               isRunning = isStreaming && subagents.any { it.state is ToolCallState.Running },
+                               hasFailed = hasFailed,
+                           )
+                       )
+                   }
                 }
             }
 
-            // 活跃 assistant 刚开始流式时，若尚无内容输出，放一个占位思考微条
+            // 如果存在中间工作步骤，汇聚打包为一个统一的 Work 汇总折叠栏（WorkTraceBlock）
+            if (workItems.isNotEmpty()) {
+                var totalToolsCount = 0
+                var hasFailed = false
+                var anyToolRunning = false
+                for (it in workItems) {
+                    when (it) {
+                        is ChatListItem.ToolCalls -> {
+                            totalToolsCount += it.toolCalls.size
+                            if (it.hasFailedTool) hasFailed = true
+                            if (it.isRunning) anyToolRunning = true
+                        }
+                        is ChatListItem.SubagentCalls -> {
+                            totalToolsCount += it.subagents.size
+                            if (it.hasFailed) hasFailed = true
+                            if (it.isRunning) anyToolRunning = true
+                        }
+                        else -> {}
+                    }
+                }
+                val totalDurationMs = turnMessages.mapNotNull { it.durationMs }.sum()
+                val isRunning = isActiveAssistant || isStreaming || anyToolRunning
+                val activeActivityText = if (isRunning) {
+                    when (val last = workItems.lastOrNull()) {
+                        is ChatListItem.TextMessage -> {
+                            val line = last.text.trim().lines().firstOrNull { it.isNotBlank() } ?: last.text.trim()
+                            line.take(80)
+                        }
+                        is ChatListItem.ToolCalls -> {
+                            val tool = last.toolCalls.find { it.state is ToolCallState.Running } ?: last.toolCalls.lastOrNull()
+                            if (tool != null) formatToolActivity(tool.name, tool.target) else "执行操作中…"
+                        }
+                        is ChatListItem.SubagentCalls -> {
+                            val sub = last.subagents.find { it.state is ToolCallState.Running } ?: last.subagents.lastOrNull()
+                            if (sub != null && !sub.target.isNullOrBlank()) "派发子任务: ${sub.target}" else "子代理执行中…"
+                        }
+                        is ChatListItem.Reasoning -> "思考中…"
+                        else -> "推理中…"
+                    }
+                } else null
+
+               result.add(
+                   ChatListItem.WorkTraceBlock(
+                       key = "${turnMessages.first().id}_worktrace",
+                       items = workItems,
+                       totalToolsCount = totalToolsCount,
+                       totalDurationMs = totalDurationMs,
+                       isRunning = isRunning,
+                       isStreaming = isStreaming,
+                       hasFailedTool = hasFailed,
+                       activeActivityText = activeActivityText,
+                       isTurnStart = !turnHasFirstItem,
+                   )
+               )
+                turnHasFirstItem = true
+            }
+
+            // 活跃 assistant 刚开始流式时，若尚无内容输出且无 workItems，放一个占位思考微条
             if (isActiveAssistant && !turnHasFirstItem) {
                 val firstMsg = turnMessages.firstOrNull()
                 result.add(
@@ -1176,37 +1319,15 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
                 turnHasFirstItem = true
             }
 
-            // 沉底汇总区（红框位置）：
-            // 1. 普通工具调用汇总微条
-            if (regularToolCalls.isNotEmpty()) {
-                result.add(
-                    ChatListItem.ToolCalls(
-                        key = "${turnMessages.first().id}_toolcalls",
-                        toolCalls = regularToolCalls,
-                        isStreaming = isStreaming,
-                        isTurnStart = !turnHasFirstItem,
-                        toolSummary = buildToolSummary(regularToolCalls),
-                        hasFailedTool = regularToolCalls.any { it.isFailed },
-                        isRunning = isStreaming && regularToolCalls.any { it.state is ToolCallState.Running },
-                    )
-                )
+            // 交付内容（最终答复正文、产物卡片等，露在外面作为视觉焦点）
+            deliverableItems.forEach { item ->
+                result.add(item)
                 turnHasFirstItem = true
             }
 
-            // 2. 子 Agent 独立汇总微条
-            if (subagentCalls.isNotEmpty()) {
-                result.add(
-                    ChatListItem.SubagentCalls(
-                        key = "${turnMessages.first().id}_subagents",
-                        subagents = subagentCalls,
-                        isStreaming = isStreaming,
-                        isTurnStart = !turnHasFirstItem,
-                        isRunning = isStreaming && subagentCalls.any { it.state is ToolCallState.Running },
-                        hasFailed = subagentCalls.any { it.isFailed },
-                    )
-                )
-                turnHasFirstItem = true
-            }
+            // 沉底汇总区：
+            val allToolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
+                .map { toToolCallUi(it) }
 
             // 3. 计划审批卡片
             val createPlanCall = allToolCalls.find { it.name == "create_plan" }
@@ -1377,6 +1498,26 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
         }
     }
 
+    private fun formatToolActivity(name: String, target: String?): String {
+        val lower = name.lowercase()
+        val t = target?.trim()?.ifBlank { null }
+        return when {
+            lower.contains("command") || lower.contains("bash") || lower.contains("exec") || lower == "terminal" ->
+                if (t != null) "执行命令: $t" else "执行命令中…"
+            lower.contains("mcp") ->
+                if (t != null) "调用 MCP: $t" else "调用 MCP 中…"
+            lower.contains("skill") ->
+                if (t != null) "阅读 SKILL: $t" else "阅读 SKILL 中…"
+            lower.contains("read") || lower.contains("view") || lower.contains("cat") ->
+                if (t != null) "阅读代码: $t" else "阅读文件中…"
+            lower.contains("edit") || lower.contains("write") || lower.contains("patch") ->
+                if (t != null) "编辑文件: $t" else "编辑文件中…"
+            lower.contains("search") || lower.contains("grep") || lower.contains("find") ->
+                if (t != null) "检索代码: $t" else "检索代码中…"
+            else -> if (t != null) "调用工具: $t" else "调用工具: $name…"
+        }
+    }
+
 
     internal fun isImageBlock(block: ChatBlock.File): Boolean {
         val mime = block.mimeType?.lowercase()
@@ -1517,6 +1658,12 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
      */
     private fun applySnapshot(id: String, snap: ConversationSnapshot) {
         DebugLog.debug("UI", "snapshot received: status=${snap.conversation.status}, messages=${snap.messages.size}")
+        if (conversationId != id && snap.conversation.status == ConversationStatus.Error) {
+            DebugLog.event(
+                "UI",
+                "background session failed: id=$id, current=$conversationId, error='${snap.errorMessage}', errorId=${snap.errorId}"
+            )
+        }
         // 乐观消息与快照对账：真实消息已落库（turn 结束/出错兜底时 core 写入）→ 移除乐观消息
         val pendingOpt = pendingUserMessages[id]
         if (pendingOpt != null) {
@@ -1606,6 +1753,11 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
         appState.selectModel(model)
         // 思考级别无需在此设置副本：生效值由 effectiveThinkingLevel 现算
         // （模型记忆 > 默认档），切换模型后自动跟随新模型
+    }
+
+    /** 选定当前模型所在供应商的 API Key（UI key 选择器唯一入口）；null = 用该供应商默认 key。 */
+    fun selectApiKey(providerId: String, apiKeyId: String?) {
+        appState.selectApiKey(providerId, apiKeyId)
     }
 
     fun selectProject(id: String?) {
@@ -1723,6 +1875,8 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
                     bytes = it.bytes
                 )
             },
+            // 唯一真理源：所选模型供应商选定的 API Key ID（null = 用默认 key）
+            apiKeyId = appState.getApiKeyId(model.provider),
         )
         DebugLog.data("UI", "conversationId", convId)
         DebugLog.data("UI", "model", "${model.id} (${model.name}), provider=${model.provider}")

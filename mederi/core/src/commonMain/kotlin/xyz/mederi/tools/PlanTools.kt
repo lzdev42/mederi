@@ -25,6 +25,7 @@ import xyz.mederi.plan.PlanStatus
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.PlannedChange
 import xyz.mederi.plan.Subtask
+import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.plan.SubtaskStatus
 import xyz.mederi.plan.toTodoProjection
 import java.time.Instant
@@ -160,8 +161,12 @@ class PlanTools(
         val targetFiles: List<String> = emptyList(),
         @LLMDescription("Design decisions resolved during planning this subtask.")
         val decisions: List<DecisionArg> = emptyList(),
-        @LLMDescription("Verification method: specific commands + expected results + pass criteria.")
+        @LLMDescription("Verification: 单条可执行命令（ASCII、assert 风格），verify_subtask 会实际执行它。散文/自然语言描述会被拒绝。")
         val verification: String,
+        @LLMDescription("可选：验证命令的工作目录（相对项目根）。缺省 = 项目主目录。")
+        val verificationCwd: String? = null,
+        @LLMDescription("可选：验证命令的超时秒数。缺省 = 30。")
+        val verificationTimeoutSeconds: Int? = null,
         @LLMDescription("Indices of subtasks this depends on (0-based).")
         val dependsOn: List<Int> = emptyList(),
         @LLMDescription("Whether this can run in parallel with other subtasks.")
@@ -284,7 +289,11 @@ class PlanTools(
                         planDetail = st.planDetail,
                         targetFiles = st.targetFiles,
                         decisions = st.decisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
-                        verification = st.verification,
+                        verification = VerificationSpec(
+                            command = st.verification,
+                            cwd = st.verificationCwd,
+                            timeoutSeconds = st.verificationTimeoutSeconds,
+                        ),
                         dependsOn = st.dependsOn,
                         parallelizable = st.parallelizable
                     )
@@ -387,14 +396,20 @@ class PlanTools(
                     planDetail = st.planDetail,
                     targetFiles = st.targetFiles,
                     decisions = st.decisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
-                    verification = st.verification,
+                    verification = VerificationSpec(
+                        command = st.verification,
+                        cwd = st.verificationCwd,
+                        timeoutSeconds = st.verificationTimeoutSeconds,
+                    ),
                     dependsOn = st.dependsOn,
                     parallelizable = st.parallelizable
                 )
             }
 
-            val updatedPlan = plan.copy(subtasks = plan.subtasks + newSubtasks)
-            planStore.save(updatedPlan)
+            // 原子 RMW（AGENTS.md §5.5）：converge 与并行工具调度共存时，裸 load→copy→save 会覆盖他人写入
+            val updatedPlan = planStore.updatePlan(args.planId) { p ->
+                p.copy(subtasks = p.subtasks + newSubtasks)
+            } ?: return "Error: Plan not found: ${args.planId}"
 
             val passed = updatedPlan.subtasks.count { it.status == SubtaskStatus.COMPLETED }
             val failed = updatedPlan.subtasks.count { it.status == SubtaskStatus.FAILED }
@@ -553,6 +568,12 @@ class PlanTools(
         args.subtasks.forEachIndexed { i, st ->
             if (st.verification.isBlank())
                 errors.add("Subtask $i (${st.name}): verification is required.")
+            val hasCJK = st.verification.any { it.code in 0x4E00..0x9FFF }
+            if (hasCJK)
+                errors.add(
+                    "Subtask $i (${st.name}): verification 必须是单条可执行命令（ASCII），不能是散文描述。" +
+                        "示例：`python3 -c 'assert 1+1==2'`。"
+                )
             if (workType == WorkType.CODE && st.targetFiles.isEmpty())
                 errors.add("Subtask $i (${st.name}): targetFiles required in CODE mode (which files will be changed?).")
             for (dep in st.dependsOn) {
@@ -579,4 +600,52 @@ class PlanTools(
         return "Plan validation failed — fix ALL of the following items, then retry create_plan once with the complete arguments:\n" +
             errors.mapIndexed { i, e -> "${i + 1}. $e" }.joinToString("\n")
     }
+    @Serializable
+    data class UpdateVerificationArgs(
+        @LLMDescription("Plan ID.")
+        val planId: String,
+        @LLMDescription("Subtask index (0-based) to amend.")
+        val subtaskIndex: Int,
+        @LLMDescription("New verification command: single executable command (ASCII, assert-style). Prose is rejected.")
+        val command: String = "",
+        @LLMDescription("Optional: working directory for the verification command (relative to project root).")
+        val cwd: String? = null,
+        @LLMDescription("Optional: timeout seconds. Default 30.")
+        val timeoutSeconds: Int? = null
+    )
+
+    inner class UpdateVerificationTool : SimpleTool<UpdateVerificationArgs>(
+        argsType = typeToken<UpdateVerificationArgs>(),
+        name = "update_verification",
+        description = "Amend an existing subtask's verification (command/cwd/timeout) atomically via PlanStore.updatePlan. " +
+            "Allowed for non-COMPLETED subtasks (PENDING/IN_PROGRESS/FAILED). Use when a verification command was " +
+            "written wrong and needs fixing before re-verify — the legal amendment entry, no store hand-editing."
+    ) {
+        override suspend fun execute(args: UpdateVerificationArgs): String {
+            if (args.command.isBlank()) return "Error: command must not be blank."
+            val hasCJK = args.command.any { it.code in 0x4E00..0x9FFF }
+            if (hasCJK) return "Error: command 必须是单条可执行命令（ASCII），不能是散文描述。"
+            val updated = planStore.updatePlan(args.planId) { p ->
+                val st = p.subtasks.getOrNull(args.subtaskIndex) ?: return@updatePlan null
+                if (st.status == SubtaskStatus.COMPLETED) return@updatePlan null
+                p.copy(subtasks = p.subtasks.map { s ->
+                    if (s.index == args.subtaskIndex) s.copy(
+                        verification = VerificationSpec(
+                            command = args.command,
+                            cwd = args.cwd,
+                            timeoutSeconds = args.timeoutSeconds,
+                        )
+                    ) else s
+                })
+            } ?: return "Error: Plan not found, or subtask ${args.subtaskIndex} missing/COMPLETED (cannot amend)."
+            eventBus.emit(MederiEvent(
+                type = EventType.PLAN_PROGRESS,
+                sessionId = sessionId,
+                payload = mapOf("planId" to args.planId, "action" to "verification-updated", "subtaskIndex" to args.subtaskIndex.toString()),
+                timestamp = java.time.Instant.now().toString()
+            ))
+            return "Updated verification for subtask ${args.subtaskIndex}."
+        }
+    }
+
 }

@@ -18,6 +18,7 @@ import xyz.mederi.plan.PlanStatus
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.SubtaskStatus
+import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.store.InMemoryHistoryStore
 import xyz.mederi.store.InMemorySessionStore
@@ -168,7 +169,7 @@ class TodoToolTest {
             overview = "o",
             sessionId = "sess_todo_test",
             subtasks = listOf(
-                Subtask(index = 0, name = "only", planDetail = "d", verification = "v", status = SubtaskStatus.IN_PROGRESS)
+                Subtask(index = 0, name = "only", planDetail = "d", verification = VerificationSpec(command = "v"), status = SubtaskStatus.IN_PROGRESS)
             ),
             createdAt = "2026-09-11T00:00:00Z",
             status = PlanStatus.APPROVED,
@@ -209,10 +210,10 @@ class TodoToolTest {
             overview = "o",
             sessionId = "s",
             subtasks = listOf(
-                Subtask(index = 0, name = "first", planDetail = "d", verification = "v", status = SubtaskStatus.COMPLETED),
-                Subtask(index = 1, name = "second", planDetail = "d", verification = "v", status = SubtaskStatus.IN_PROGRESS),
-                Subtask(index = 2, name = "third", planDetail = "d", verification = "v", status = SubtaskStatus.FAILED),
-                Subtask(index = 3, name = "fourth", planDetail = "d", verification = "v", status = SubtaskStatus.PENDING)
+                Subtask(index = 0, name = "first", planDetail = "d", verification = VerificationSpec(command = "v"), status = SubtaskStatus.COMPLETED),
+                Subtask(index = 1, name = "second", planDetail = "d", verification = VerificationSpec(command = "v"), status = SubtaskStatus.IN_PROGRESS),
+                Subtask(index = 2, name = "third", planDetail = "d", verification = VerificationSpec(command = "v"), status = SubtaskStatus.FAILED),
+                Subtask(index = 3, name = "fourth", planDetail = "d", verification = VerificationSpec(command = "v"), status = SubtaskStatus.PENDING)
             ),
             createdAt = "2026-09-11T00:00:00Z",
             status = PlanStatus.IN_PROGRESS,
@@ -240,7 +241,7 @@ class TodoToolTest {
             overview = "o",
             sessionId = "s",
             subtasks = listOf(
-                Subtask(index = 0, name = "only", planDetail = "d", verification = "v", status = SubtaskStatus.IN_PROGRESS)
+                Subtask(index = 0, name = "only", planDetail = "d", verification = VerificationSpec(command = "v"), status = SubtaskStatus.IN_PROGRESS)
             ),
             createdAt = "2026-09-11T00:00:00Z",
             status = PlanStatus.IN_PROGRESS,

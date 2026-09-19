@@ -57,6 +57,7 @@ import xyz.mederi.ui.components.UserPastedTextCard
 import xyz.mederi.ui.components.UserMessageFooter
 import xyz.mederi.ui.components.AssistantMessageFooter
 import xyz.mederi.ui.components.DocumentArtifactCard
+import xyz.mederi.ui.components.WorkTraceCard
 import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
 import xyz.emuci.inkcompose.InkImage
@@ -638,12 +639,89 @@ private fun MessageList(
                         }
                     }
 
+                    is ChatListItem.WorkTraceBlock -> {
+                        WorkTraceCard(
+                            workTrace = item,
+                            userExpanded = viewModel.isAllStepsExpanded,
+                            onToggleGlobalExpansion = { viewModel.toggleAllSteps() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
+                                    bottom = ChatLayout.thoughtBottomSpacing
+                                ),
+                            renderStepItem = { stepItem ->
+                                when (stepItem) {
+                                    is ChatListItem.Reasoning -> {
+                                        ReasoningBlock(
+                                            text = stepItem.text,
+                                            isStreaming = stepItem.isStreaming,
+                                            durationMs = stepItem.durationMs,
+                                            isReasoningActive = stepItem.isReasoningActive,
+                                            userExpanded = viewModel.isAllStepsExpanded,
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
+                                        )
+                                    }
+                                    is ChatListItem.ToolCalls -> {
+                                        ToolCallsBlock(
+                                            toolCalls = stepItem.toolCalls,
+                                            isStreaming = stepItem.isStreaming,
+                                            isRunning = stepItem.isRunning,
+                                            hasFailedTool = stepItem.hasFailedTool,
+                                            toolSummary = stepItem.toolSummary,
+                                            userExpanded = viewModel.isAllStepsExpanded,
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
+                                        )
+                                    }
+                                    is ChatListItem.SubagentCalls -> {
+                                        SubagentCallsBlock(
+                                            subagents = stepItem.subagents,
+                                            isStreaming = stepItem.isStreaming,
+                                            isRunning = stepItem.isRunning,
+                                            hasFailed = stepItem.hasFailed,
+                                            userExpanded = viewModel.isAllStepsExpanded,
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
+                                        )
+                                    }
+                                    is ChatListItem.TextMessage -> {
+                                        if (stepItem.text.isNotBlank()) {
+                                            Text(
+                                                text = stepItem.text.trim(),
+                                                color = if (colors.isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                                fontSize = 13.sp,
+                                                lineHeight = 19.sp,
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                            )
+                                        }
+                                        if (stepItem.images.isNotEmpty()) {
+                                            AssistantImagesView(
+                                                images = stepItem.images,
+                                                viewModel = viewModel,
+                                                colors = colors,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    }
+                                    // WorkTrace 的 items 由 computeChatItems 构造时只可能是
+                                    // Reasoning/ToolCalls/SubagentCalls/TextMessage 四类，
+                                    // 以下分支为不可达的穷尽性占位。
+                                    is ChatListItem.DocumentCard -> {}
+                                    is ChatListItem.Footer -> {}
+                                    is ChatListItem.SummaryCard -> {}
+                                    is ChatListItem.PlanApproval -> {}
+                                    is ChatListItem.WorkTraceBlock -> {}
+                                }
+                            }
+                        )
+                    }
+
                     is ChatListItem.Reasoning -> {
                         ReasoningBlock(
                             text = item.text,
                             isStreaming = item.isStreaming,
                             durationMs = item.durationMs,
                             isReasoningActive = item.isReasoningActive,
+                            userExpanded = viewModel.isAllStepsExpanded,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -660,6 +738,7 @@ private fun MessageList(
                             isRunning = item.isRunning,
                             hasFailedTool = item.hasFailedTool,
                             toolSummary = item.toolSummary,
+                            userExpanded = viewModel.isAllStepsExpanded,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -675,6 +754,7 @@ private fun MessageList(
                             isStreaming = item.isStreaming,
                             isRunning = item.isRunning,
                             hasFailed = item.hasFailed,
+                            userExpanded = viewModel.isAllStepsExpanded,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -770,10 +850,12 @@ private fun MessageList(
                                     }
                                 }
                             } else {
-                                // 助手消息：新轮次回复左侧增加极细视觉锚点
+                                // 助手消息：步骤过渡语使用紧凑说明样式，交付正文保留完整 Markdown 与视觉锚点
                                 val assistantContent: @Composable (Modifier) -> Unit = { contentModifier ->
                                     Column(modifier = contentModifier) {
                                         if (item.text.isNotBlank()) {
+                                            // narration item 全部进 WorkTraceBlock，顶层不可能出现，
+                                            // 因此这里无条件渲染 Markdown（原 isStepNarration 弱化分支为不可达死代码）
                                             MarkdownView(
                                                 content = item.text,
                                                 sessionKey = item.conversationId,

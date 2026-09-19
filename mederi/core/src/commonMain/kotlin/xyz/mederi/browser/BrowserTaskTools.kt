@@ -48,7 +48,8 @@ class RunBrowserTaskTool(
     private val aiModel: AIModel,
     private val reasoningLevel: ReasoningLevel,
     private val projectId: String,
-    private val sessionId: String
+    private val sessionId: String,
+    private val apiKeyId: String? = null
 ) : SimpleTool<RunBrowserTaskArgs>(
     argsType = typeToken<RunBrowserTaskArgs>(),
     name = "run_browser_task",
@@ -63,7 +64,8 @@ class RunBrowserTaskTool(
             reasoningLevel = reasoningLevel,
             projectId = projectId,
             parentSessionId = sessionId,
-            browser = browser
+            browser = browser,
+            apiKeyId = apiKeyId
         )
         return Json.encodeToString(
             RunBrowserTaskResult.serializer(),

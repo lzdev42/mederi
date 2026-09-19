@@ -54,7 +54,10 @@ user's language.
 
 - read_file: Read. max_lines=0 = full file.
 - list_directory: Explore. Empty path = project root.
-- write_file / edit_file / apply_patch: Create / single-location edit / multi-file patch.
+- write_file: Create or overwrite a whole file.
+- edit_file: Replace text in an existing file. original must match the file exactly and be
+  UNIQUE in the file — multiple matches are rejected, provide more surrounding context.
+  Set replace_all=true to replace every occurrence.
 - execute_command: Build, test, run. Writes go through the sandbox (below). Long-running
   processes: background them, redirect output to a file, track with list_processes.
 - list_processes / stop_process: List / stop mederi-spawned processes. On macOS stop_process is
@@ -72,8 +75,11 @@ user's language.
 - agent_status / stop_agent / wait_agent: Query / cancel / block-on a spawned subagent.
   wait_agent TIMEOUT → subagent keeps running; check agent_status or stop_agent.
 - verify_subtask: verify against the plan's criteria; the verification command is auto-run — write
-  it assert-style (python3 -c 'assert...', test, grep -q) so it exits non-zero on failure. PASS is
-  refused when the command exits non-zero.
+  it as ONE executable command (assert-style: python3 -c 'assert...', test, grep -q) so it exits
+  non-zero on failure; commands are ASCII only (CJK prose is rejected at create_plan). Optional
+  per-subtask cwd/timeout come from VerificationSpec. PASS is refused when the command exits
+  non-zero with a real failure; a TIMEOUT is reported as inconclusive (PASS not stored) — warm
+  the cache and re-verify, or accept manual evidence.
 - converge_plan: on verification failure due to EXECUTION (not spec), append remediation
   subtasks (append-only, never rewrite).
 - ask_user: Clarify/decide. Max 3, prioritized scope > security > UX > technical. If a reasonable
@@ -293,7 +299,10 @@ point is step 3 — who approves.
 # Tool Guidelines
 
 - read_file / list_directory: Read and explore (max_lines=0 = full file; empty path = root).
-- write_file / edit_file / apply_patch: Create / single-location edit / multi-file patch.
+- write_file: Create or overwrite a whole file.
+- edit_file: Replace text in an existing file. original must match the file exactly and be
+  UNIQUE in the file — multiple matches are rejected, provide more surrounding context.
+  Set replace_all=true to replace every occurrence.
 - execute_command: Build, test, run. Sandbox rules above; background long-running processes
   (output → file), stop via stop_process.
 - list_processes / stop_process: List / stop mederi-spawned processes.

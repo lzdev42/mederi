@@ -126,6 +126,10 @@ class SessionManagerImpl(
         turnExecutor.abort(id)
     }
 
+    override suspend fun abortAndJoin(id: String) {
+        turnExecutor.abortAndJoin(id)
+    }
+
     override suspend fun rollbackToMessage(id: String, messageId: String) {
         DebugLog.event("SessionMgr", "rollbackToMessage: sessionId=$id, messageId=$messageId")
         // 必须等旧 turn 完全死透（cancel + join）再截断历史：abort() 只发取消信号不等死，

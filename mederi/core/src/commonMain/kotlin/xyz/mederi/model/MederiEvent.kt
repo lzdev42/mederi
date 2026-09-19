@@ -27,7 +27,7 @@ enum class EventType {
     /**
      * 环境态状态事件（不改变 session 状态机、不落库）：限流重试、供应商抖动等
      * "正在发生但不是业务结果"的事实。payload 约定：
-     * scope=provider, code=RETRYING, message, attempt, maxAttempts。
+     * scope=provider, code=RETRYING, message, attempt, maxAttempts, delayMs（重试延迟毫秒，可选）。
      * UI 据此显示"重试中"；session status 不受影响（仍 RUNNING）。
      */
     STATUS,

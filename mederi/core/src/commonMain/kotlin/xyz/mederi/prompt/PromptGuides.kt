@@ -149,6 +149,8 @@ Example (shape to follow; content from your real task):
   "subtasks": [{"name": "Implement sub", "planDetail": "Add sub(a,b) to pkg/calc.py.",
      "targetFiles": ["pkg/calc.py"],
      "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",
+     "verificationCwd": null,        // 可选：验证命令工作目录（相对项目根）；null=项目主目录
+     "verificationTimeoutSeconds": 30, // 可选：验证超时秒数；verification 必须是单条 ASCII 命令（散文将被拒绝）
      "dependsOn": [], "parallelizable": false}]
 }
 ```

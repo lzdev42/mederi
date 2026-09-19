@@ -101,7 +101,7 @@ class RetryableLLMClient(
                         "executeStreaming transient failure (attempt ${attempt + 1}/${maxRetries + 1}), " +
                             "retrying in ${delayMs}ms: ${firstLine(e)}"
                     )
-                    emitStatus("RETRYING", firstLine(e), attempt + 1, maxRetries + 1)
+                    emitStatus("RETRYING", firstLine(e), attempt + 1, maxRetries + 1, delayMs)
                     delay(delayMs)
                 }
             }
@@ -140,27 +140,28 @@ class RetryableLLMClient(
                     "$op transient failure (attempt ${attempt + 1}/${maxRetries + 1}), " +
                         "retrying in ${delayMs}ms: ${firstLine(e)}"
                 )
-                emitStatus("RETRYING", firstLine(e), attempt + 1, maxRetries + 1)
+                emitStatus("RETRYING", firstLine(e), attempt + 1, maxRetries + 1, delayMs)
                 delay(delayMs)
             }
         }
         throw lastError ?: IllegalStateException("retry loop exited without result or error")
     }
 
-    private fun emitStatus(code: String, message: String, attempt: Int, maxAttempts: Int) {
+    private fun emitStatus(code: String, message: String, attempt: Int, maxAttempts: Int, delayMs: Long = 0L) {
         val bus = statusBus ?: return
         val sid = sessionIdProvider() ?: return
         bus.tryEmit(
             MederiEvent(
                 type = EventType.STATUS,
                 sessionId = sid,
-                payload = mapOf(
-                    "scope" to "provider",
-                    "code" to code,
-                    "message" to message,
-                    "attempt" to attempt.toString(),
-                    "maxAttempts" to maxAttempts.toString()
-                ),
+                payload = buildMap {
+                    put("scope", "provider")
+                    put("code", code)
+                    put("message", message)
+                    put("attempt", attempt.toString())
+                    put("maxAttempts", maxAttempts.toString())
+                    if (delayMs > 0) put("delayMs", delayMs.toString())
+                },
                 timestamp = Instant.now().toString()
             )
         )

@@ -30,7 +30,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object ToolFactory {
 
-    val FS_TOOL_NAMES = listOf("read_file", "write_file", "edit_file", "list_directory", "execute_command", "apply_patch")
+    // apply_patch 不注册给 AI（2026-09 裁定：模型实际不用，单文件场景 edit_file + replace_all 全覆盖）；
+    // 实现保留在 FileSystemTools.ApplyPatchTool，恢复时在此列表与下方注册表各加回一行
+    val FS_TOOL_NAMES = listOf("read_file", "write_file", "edit_file", "list_directory", "execute_command")
     // get_context_remaining / new_context 未开放给 AI（AgentTools 实现保留），恢复时取消注释
     val AGENT_TOOL_NAMES = listOf(
         "update_todo",
@@ -71,9 +73,12 @@ object ToolFactory {
         commandSandbox: xyz.mederi.tools.sandbox.CommandSandbox? = null,
         sessionStore: SessionStore? = null,
         mcpTools: List<ToolBase<*, *>> = emptyList(),
-        agentsDiscovery: AgentsSubtreeDiscovery? = null
+        agentsDiscovery: AgentsSubtreeDiscovery? = null,
+        apiKeyId: String? = null,
+        /** 执行器子代理的文件写入回调（SubagentRunnerImpl 挂，收集 touched files）。 */
+        onFileTouched: ((String) -> Unit)? = null
     ): ToolRegistry {
-        val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery)
+        val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched)
         val shellTools = ShellTools(directories, commandSandbox)
         val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester, planStore)
 
@@ -103,7 +108,6 @@ object ToolFactory {
         if (canExecute) {
             // 非破坏命令自由执行；OS 沙箱（macOS Seatbelt / Linux bwrap）锁写白名单
             fsToolMap["execute_command"] = { shellTools.ExecuteCommandTool() }
-            fsToolMap["apply_patch"] = { fsTools.ApplyPatchTool() }
         }
 
         // 进程管理：只对能执行命令的角色开放（主代理 + EXECUTOR）。
@@ -141,7 +145,8 @@ object ToolFactory {
                 "create_plan" to { planTools.CreatePlanTool() },
                 "generate_spec" to { planTools.GenerateSpecTool() },
                 "write_log" to { planTools.WriteLogTool() },
-                "converge_plan" to { planTools.ConvergePlanTool() }
+                "converge_plan" to { planTools.ConvergePlanTool() },
+                "update_verification" to { planTools.UpdateVerificationTool() }
             )
         } else emptyMap()
 
@@ -165,7 +170,8 @@ object ToolFactory {
                         projectId = projectId!!,
                         parentSessionId = sessionId,
                         planStore = planStore,
-                        eventBus = eventBus
+                        eventBus = eventBus,
+                        apiKeyId = apiKeyId
                     )
                 },
                 "spawn_researcher" to {
@@ -175,7 +181,8 @@ object ToolFactory {
                         aiModel = aiModel!!,
                         reasoningLevel = reasoningLevel!!,
                         projectId = projectId!!,
-                        parentSessionId = sessionId
+                        parentSessionId = sessionId,
+                        apiKeyId = apiKeyId
                     )
                 }
             )
@@ -199,7 +206,8 @@ object ToolFactory {
                         aiModel = aiModel!!,
                         reasoningLevel = reasoningLevel!!,
                         projectId = projectId!!,
-                        sessionId = sessionId
+                        sessionId = sessionId,
+                        apiKeyId = apiKeyId
                     )
                 },
                 "browser_task_status" to { BrowserTaskStatusTool(browserTaskService!!) },

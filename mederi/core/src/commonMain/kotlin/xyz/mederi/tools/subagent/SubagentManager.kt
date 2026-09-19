@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.domain.model.WorkType
+import xyz.mederi.plan.PlanStore
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -43,10 +44,29 @@ class SubagentManager(
         @Volatile var job: kotlinx.coroutines.Job,
         @Volatile var status: SubagentStatus,
         @Volatile var result: String?,
-        @Volatile var progress: String
+        @Volatile var progress: String,
+        /** 执行器子代理的 plan/subtask 归属（SpawnAgentTool 传入），用于丢失后恢复与 scope 检查。 */
+        val executorPlanId: String? = null,
+        val executorSubtaskIndex: Int? = null,
+        val planStore: PlanStore? = null
     )
 
     private val agents = ConcurrentHashMap<String, BackgroundAgent>()
+
+    /**
+     * 已结束/丢失 agent 的恢复记录（内存驻留，供 agent_status 的 NOT_FOUND 兜底）。
+     * 执行器崩溃后父代理凭此拿到「改过哪些文件」的部分认知，而非纯 NOT_FOUND。
+     */
+    data class AgentRecoveryInfo(
+        val status: String,
+        val progress: String,
+        val result: String?,
+        val touchedFiles: List<String>,
+        val subtaskIndex: Int?,
+        val atMs: Long
+    )
+
+    private val retired = ConcurrentHashMap<String, AgentRecoveryInfo>()
 
     /**
      * 后台启动子 Agent，返回 agentId。
@@ -63,7 +83,12 @@ class SubagentManager(
         aiModel: AIModel,
         reasoningLevel: ReasoningLevel,
         projectId: String,
-        parentSessionId: String
+        parentSessionId: String,
+        apiKeyId: String? = null,
+        /** 执行器子代理的 plan/subtask 归属（SpawnAgentTool 传入，透传给 SubagentRunnerImpl flush touched files）。 */
+        executorPlanId: String? = null,
+        executorSubtaskIndex: Int? = null,
+        planStore: PlanStore? = null
     ): String {
         val agentId = "sub_${UUID.randomUUID().toString().take(8)}"
         // 先占位注册，保证 spawn 返回后立即可以 query 到（RUNNING）
@@ -73,7 +98,10 @@ class SubagentManager(
             job = kotlinx.coroutines.Job(),
             status = SubagentStatus.RUNNING,
             result = null,
-            progress = "starting"
+            progress = "starting",
+            executorPlanId = executorPlanId,
+            executorSubtaskIndex = executorSubtaskIndex,
+            planStore = planStore
         )
         agents[agentId] = bg
 
@@ -90,7 +118,11 @@ class SubagentManager(
                     aiModel = aiModel,
                     reasoningLevel = reasoningLevel,
                     projectId = projectId,
-                    parentSessionId = parentSessionId
+                    parentSessionId = parentSessionId,
+                    apiKeyId = apiKeyId,
+                    executorPlanId = executorPlanId,
+                    executorSubtaskIndex = executorSubtaskIndex,
+                    planStore = planStore
                 )
                 bg.result = result
                 bg.status = if (result.startsWith("[subagent error]")) {
@@ -108,6 +140,22 @@ class SubagentManager(
                 bg.result = "[subagent error] ${e.message ?: e.javaClass.simpleName}"
                 bg.status = SubagentStatus.ERROR
                 bg.progress = "error"
+            } finally {
+                // 归档恢复记录：agent 丢失/归档后，agent_status 的 NOT_FOUND 也能返回部分认知
+                val touched = bg.executorPlanId?.let { pid ->
+                    bg.planStore?.load(pid)?.subtasks
+                        ?.getOrNull(bg.executorSubtaskIndex ?: -1)
+                        ?.executorTouchedFiles
+                        .orEmpty()
+                }.orEmpty()
+                retired[agentId] = AgentRecoveryInfo(
+                    status = bg.status.name,
+                    progress = bg.progress,
+                    result = bg.result,
+                    touchedFiles = touched,
+                    subtaskIndex = bg.executorSubtaskIndex,
+                    atMs = System.currentTimeMillis()
+                )
             }
         }
         bg.job = job
@@ -117,15 +165,39 @@ class SubagentManager(
     /** 查询子 Agent 状态，返回 JSON 字符串。 */
     fun status(agentId: String): String {
         val bg = agents[agentId]
-            ?: return Json.encodeToString(StatusResult(agentId = agentId, status = "NOT_FOUND"))
-        return Json.encodeToString(
-            StatusResult(
-                agentId = agentId,
-                status = bg.status.name,
-                progress = bg.progress,
-                result = if (bg.status == SubagentStatus.COMPLETED) bg.result else null
+        if (bg != null) {
+            return Json.encodeToString(
+                StatusResult(
+                    agentId = agentId,
+                    status = bg.status.name,
+                    progress = bg.progress,
+                    result = if (bg.status == SubagentStatus.COMPLETED) bg.result else null
+                )
             )
-        )
+        }
+        // agent 已不在内存表（丢失/归档）：从 retired 恢复部分认知，而不是纯 NOT_FOUND
+        val rec = retired[agentId]
+        if (rec != null) {
+            return Json.encodeToString(
+                StatusResult(
+                    agentId = agentId,
+                    status = "NOT_FOUND",
+                    progress = rec.progress,
+                    result = rec.result,
+                    recovery = buildString {
+                        append("agent no longer active (last status ${rec.status}). ")
+                        if (rec.subtaskIndex != null) append("subtaskIndex=${rec.subtaskIndex}. ")
+                        if (rec.touchedFiles.isNotEmpty()) {
+                            append("touchedFiles=[${rec.touchedFiles.joinToString(", ")}] ")
+                        } else {
+                            append("no touched files recorded. ")
+                        }
+                        append("恢复：父代理可据此判断该子任务已改动的文件（与 targetFiles 比对查越界），再决定重跑或接受部分成果。")
+                    }
+                )
+            )
+        }
+        return Json.encodeToString(StatusResult(agentId = agentId, status = "NOT_FOUND"))
     }
 
     /** 取消子 Agent，返回 JSON（含部分结果）。 */
@@ -180,6 +252,8 @@ class SubagentManager(
         val agentId: String,
         val status: String,
         val progress: String? = null,
-        val result: String? = null
+        val result: String? = null,
+        /** agent 已从内存表移除（丢失/归档）时，携带可恢复的部分认知（touched files 等）。 */
+        val recovery: String? = null
     )
 }

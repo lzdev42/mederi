@@ -39,6 +39,8 @@ interface SessionManager {
 
     suspend fun delete(id: String)
     suspend fun abort(id: String)
+    /** 中止并等待 turn 完全终止；对"进程重启残留的 RUNNING 状态"兜底复位为 IDLE。 */
+    suspend fun abortAndJoin(id: String)
 
     suspend fun sendMessage(id: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(id: String, messageId: String)

@@ -10,7 +10,7 @@
 ```
 用户请求 → 主代理判断：
 ├─【纯读】问答/讨论/分析 → 直接读文件回答；读不够深 → spawn_researcher → 报告 → 据此回答
-├─【小改动】已知根因/简单逻辑/几行代码 → 直接 edit_file/write_file/apply_patch（无 plan）
+├─【小改动】已知根因/简单逻辑/几行代码 → 直接 edit_file/write_file（无 plan；apply_patch 已注销）
 └─【复杂改动】多文件/逻辑变化/需用户决策 → 下面的 Plan Loop（阶段 1-5）
 ```
 
@@ -59,7 +59,7 @@ WORK → 文档/知识工作，Plan 简单（不含 deep spec）
 
 | 层 | 约束 | 生效 |
 |---|---|---|
-| write_file/edit_file/apply_patch | 路径必须在白名单内（`resolveForWrite` containment 校验） | 全平台永远 |
+| write_file/edit_file | 路径必须在白名单内（`resolveForWrite` containment 校验）；同文件并发写硬拒绝（`FileWriteRegistry`） | 全平台永远 |
 | execute_command | macOS Seatbelt 内核级拒绝 / Linux bubblewrap 挂载 / Windows 降级警告 | 按平台尽力 |
 
 > 是否可以写、要不要建计划，由主代理按 Triage Flow 分诊判断（见 `AGENTS.md §5.6`）。
@@ -129,7 +129,7 @@ WORK → 文档/知识工作，Plan 简单（不含 deep spec）
 **并行执行规则（2026-09）**：工具调用同一消息并行（`nodeExecuteTools(parallel=true)`），
 无并发上限，由 AI 调度。`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**
 （并行无序，spawn 可能读到未写入的 spec）——先为所有独立子任务生成 spec，再一起 spawn。
-并行批量时不得并发写同一文件、不得重复执行同一命令。独立子任务全部 spawn 返回后再逐个 verify。
+同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（占用即 Error，AI 下轮重试）；不得重复执行同一命令仍靠 AI 自律。独立子任务全部 spawn 返回后再逐个 verify。
 
 ### 阶段 4：验证与修正
 

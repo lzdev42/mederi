@@ -43,6 +43,10 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         mederiCall { sessionManager.abort(id) }
     }
 
+    override suspend fun abortAndJoin(id: String) {
+        mederiCall { sessionManager.abortAndJoin(id) }
+    }
+
     override suspend fun sendMessage(sessionId: String, request: SendMessageRequest) = mederiCall {
         sessionManager.sendMessage(sessionId, request)
     }

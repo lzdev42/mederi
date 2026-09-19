@@ -3,6 +3,7 @@ package xyz.mederi.tools.subagent
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.domain.model.WorkType
+import xyz.mederi.plan.PlanStore
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
 /**
@@ -39,6 +40,11 @@ interface SubagentRunner {
         aiModel: AIModel,
         reasoningLevel: ReasoningLevel,
         projectId: String,
-        parentSessionId: String
+        parentSessionId: String,
+        apiKeyId: String? = null,
+        /** 执行器子代理所属的 plan/subtask（SpawnAgentTool 传入）。非 null 时把 touched files flush 到 Subtask.executorTouchedFiles。 */
+        executorPlanId: String? = null,
+        executorSubtaskIndex: Int? = null,
+        planStore: PlanStore? = null
     ): String
 }

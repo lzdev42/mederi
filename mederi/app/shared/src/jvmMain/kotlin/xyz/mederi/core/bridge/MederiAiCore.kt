@@ -1,6 +1,7 @@
 package xyz.mederi.core.bridge
 
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +54,49 @@ import xyz.mederi.domain.model.Session
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.provider.domain.model.Provider
 
+/** 会话最近一次终态错误的瞬态登记（内存态，不持久化；MESSAGE_ERROR 写入，MESSAGE_COMPLETED/新 turn 清除）。 */
+data class LastSessionError(
+    val errorMessage: String?,
+    val errorId: String?,
+    val errorDiagnostic: String?,
+    val isStreamInterrupted: Boolean,
+    val atMs: Long,
+)
+
+/** 从 MESSAGE_ERROR 事件 payload 解析 LastSessionError（payload 键与 SnapshotReducer 读取的一致：error/errorId/fullDiagnostic/failureMode）。 */
+internal fun lastErrorFromPayload(payload: Map<String, String>): LastSessionError =
+    LastSessionError(
+        errorMessage = payload["error"],
+        errorId = payload["errorId"],
+        errorDiagnostic = payload["fullDiagnostic"],
+        isStreamInterrupted = payload["failureMode"] == "PREMATURE_CLOSE",
+        atMs = xyz.mederi.currentTimeMillis(),
+    )
+
+/**
+ * MESSAGE_ERROR 事件到达时按权威会话状态决定侧边栏状态点：
+ * - sessionStore 状态为 ERROR（非 transient，不可恢复）→ ConversationStatus.Error（红点）
+ * - sessionStore 状态为 IDLE（transient 可恢复，如限流重试耗尽）→ ConversationStatus.Idle（蓝点）
+ * - 其他/读取失败 → 保守回退 Error（保持可见，不静默）
+ */
+internal fun mapMessageErrorToStatus(sessionStatus: xyz.mederi.domain.model.SessionStatus): ConversationStatus =
+    when (sessionStatus) {
+        xyz.mederi.domain.model.SessionStatus.ERROR -> ConversationStatus.Error
+        xyz.mederi.domain.model.SessionStatus.IDLE -> ConversationStatus.Idle
+        else -> ConversationStatus.Error
+    }
+
+/** 水合：error 为 null 时原样返回，否则把错误字段写进快照。 */
+internal fun hydrateLastError(snapshot: ConversationSnapshot, error: LastSessionError?): ConversationSnapshot {
+    if (error == null) return snapshot
+    return snapshot.copy(
+        errorMessage = error.errorMessage,
+        errorId = error.errorId,
+        errorDiagnostic = error.errorDiagnostic,
+        errorIsStreamInterrupted = error.isStreamInterrupted,
+    )
+}
+
 /**
  * 基于真实 Mederi core 的 [AiCore] 实现。
  *
@@ -70,8 +114,19 @@ class MederiAiCore(
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val stateMutex = Mutex()
 
+    /** 会话终态错误内存注册表：MESSAGE_ERROR 写入，MESSAGE_COMPLETED/新 turn 清除。跨 re-attach 水合用。 */
+    private val lastErrorBySessionId = ConcurrentHashMap<String, LastSessionError>()
+
     /** 会话自动命名服务（首条消息发出后生成标题），随 initialize 挂载事件流；依赖 mederi（lateinit），lazy 推迟到 start() 时构造 */
-    private val autotitleService by lazy { SessionTitleService(mederi) { refreshProjects() } }
+    private val autotitleService by lazy {
+        SessionTitleService(mederi, onRenamed = { refreshProjects() }, preferredApiKeyId = lastApiKeyIdByProvider::get)
+    }
+
+    /**
+     * 供应商 → 该供应商最近一次发送选定的 apiKeyId（仅内存记忆，方案 A 不落库）。
+     * 供会话自动命名等"非本 turn"操作跟随用户选定的 key；null = 用默认 key。
+     */
+    private val lastApiKeyIdByProvider = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private lateinit var mederi: Mederi
 
@@ -196,7 +251,14 @@ class MederiAiCore(
                 val newStatus = when (event.type) {
                     xyz.mederi.domain.model.EventType.SESSION_UPDATED -> ConversationStatus.Working
                     xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED -> ConversationStatus.Idle
-                    xyz.mederi.domain.model.EventType.MESSAGE_ERROR -> ConversationStatus.Error
+                    xyz.mederi.domain.model.EventType.MESSAGE_ERROR -> {
+                        // TurnExecutor 在发 MESSAGE_ERROR 前已更新 sessionStore（ERROR 或 IDLE），
+                        // sessionStore 的状态是权威终态：ERROR→红点，IDLE（transient 可恢复，如限流重试耗尽）→蓝点。
+                        // 会话被删等异常取不到时保守回退 Error（保持可见，不静默）。
+                        val ss = runCatching { mederi.sessions.get(event.sessionId).status }.getOrNull()
+                            ?: xyz.mederi.domain.model.SessionStatus.ERROR
+                        mapMessageErrorToStatus(ss)
+                    }
                     xyz.mederi.domain.model.EventType.QUESTION_REQUESTED -> ConversationStatus.WaitingUser
                     xyz.mederi.domain.model.EventType.QUESTION_RESOLVED -> ConversationStatus.Working
                     xyz.mederi.domain.model.EventType.PLAN_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
@@ -205,6 +267,14 @@ class MederiAiCore(
                 }
                 if (newStatus != null) {
                     updateConversationStatus(event.sessionId, newStatus)
+                }
+                // 终态错误内存注册表：MESSAGE_ERROR 写入，MESSAGE_COMPLETED 清除（跨 re-attach 水合用）
+                when (event.type) {
+                    xyz.mederi.domain.model.EventType.MESSAGE_ERROR ->
+                        lastErrorBySessionId[event.sessionId] = lastErrorFromPayload(event.payload)
+                    xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED ->
+                        lastErrorBySessionId.remove(event.sessionId)
+                    else -> {}
                 }
             }
         }
@@ -255,11 +325,14 @@ class MederiAiCore(
     /**
      * 启动时清理上次崩溃残留的 RUNNING 状态 session。
      * 上次如果 agent 正在跑时被杀进程，session 状态会卡在 RUNNING，UI 会永远显示"发送中"。
+     * 必须用 abortAndJoin 而非 abort：abort 对"无活跃 turn 的残留 RUNNING"整体 no-op
+     * （activeJobs 是内存态，新建进程后为空，abort 直接 return），状态永远复位不回来；
+     * abortAndJoin 对陈旧 RUNNING 有兜底复位（sessionStore.update(IDLE)），且同步等待完成无竞态。
      */
     private suspend fun cleanupStaleRunningSessions() {
         val runningSessions = mederi.sessions.list().filter { it.status == xyz.mederi.domain.model.SessionStatus.RUNNING }
         for (session in runningSessions) {
-            mederi.sessions.abort(session.id)
+            mederi.sessions.abortAndJoin(session.id)
         }
     }
 
@@ -472,7 +545,8 @@ class MederiAiCore(
             conversationId = conversationId,
             sessions = mederi.sessions,
             modelToProvider = { modelToProvider[it] },
-            planTodos = { id -> initialTodos(id) }
+            planTodos = { id -> initialTodos(id) },
+            lastError = { lastErrorBySessionId[it] }
         )
     }
 
@@ -499,7 +573,7 @@ class MederiAiCore(
         val session = mederi.sessions.get(conversationId)
         val messages = mederi.sessions.listMessages(conversationId)
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
-        ConversationSnapshot(
+        val base = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }),
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
@@ -507,6 +581,7 @@ class MederiAiCore(
             cost = MederiModelMapper.toCostSummary(),
             todos = initialTodos(conversationId)
         )
+        hydrateLastError(base, lastErrorBySessionId[conversationId])
     }
 
     // ------------------------------------------------------------------
@@ -672,6 +747,7 @@ class MederiAiCore(
         DebugLog.section("AiCore", "MederiAiCore.sendMessage")
         DebugLog.data("AiCore", "conversationId", conversationId)
         DebugLog.data("AiCore", "input.model", "${input.model?.id} (${input.model?.name})")
+        DebugLog.data("AiCore", "input.apiKeyId", input.apiKeyId)
         DebugLog.data("AiCore", "input.agent", "${input.agent?.id} (${input.agent?.name})")
         DebugLog.data("AiCore", "input.thinkingLevel", input.thinkingLevel)
         val model = input.model?.let { findCoreModel(it.id) }
@@ -683,8 +759,15 @@ class MederiAiCore(
         DebugLog.data("AiCore", "text", (parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.Text>().firstOrNull()?.text ?: ""))
         val request = SendMessageRequest(
             agentConfig = agentConfig,
-            parts = parts
+            parts = parts,
+            apiKeyId = input.apiKeyId
         )
+        // 记录该供应商最近一次选定的 key（供自动命名等非 turn 操作跟随；仅内存，不落库）
+        if (input.apiKeyId != null) {
+            input.model?.let { lastApiKeyIdByProvider[it.provider] = input.apiKeyId }
+        }
+        // 新 turn 开始：清除陈旧错误，避免 re-attach 水合到上一轮的错误
+        lastErrorBySessionId.remove(conversationId)
         mederi.sessions.sendMessage(conversationId, request)
     }
 

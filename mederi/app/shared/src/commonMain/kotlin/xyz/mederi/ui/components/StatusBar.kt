@@ -27,6 +27,7 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.delay
 import xyz.mederi.theme.LocalMederiColors
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 对话轮次状态栏。在用户消息与 AI 回复之间动态显示当前 AI 正在做什么。
@@ -55,28 +56,41 @@ fun StatusBar(
     var now by remember { mutableLongStateOf(xyz.mederi.currentTimeMillis()) }
     LaunchedEffect(status) {
         while (true) {
-            delay(1000)
+            delay(1000.milliseconds)
             now = xyz.mederi.currentTimeMillis()
         }
     }
+
+
+    // Retrying 状态：解析 statusHint 得到真实错误信息、重试轮次及重试目标时间
+    val retryHint = if (status == TurnStatus.Retrying) parseRetryHint(statusHint) else null
+
+    val retryCountdownSec = if (retryHint?.retryAtMillis != null) {
+        val remMs = retryHint.retryAtMillis - now
+        if (remMs > 0) (remMs + 999) / 1000 else 0L
+    } else null
 
     val elapsedMs = if (startedAtMillis != null && startedAtMillis > 0) {
         (now - startedAtMillis).coerceAtLeast(0L)
     } else 0L
 
-    val showElapsed = status == TurnStatus.Sending
-        || status == TurnStatus.Preparing
-        || status == TurnStatus.Retrying
+    val showElapsed = status == TurnStatus.Sending || status == TurnStatus.Preparing
     val slowResponse = status == TurnStatus.Preparing && elapsedMs >= 20_000
-
-    // Retrying 状态：解析 statusHint 得到真实错误信息和重试轮次
-    val retryHint = if (status == TurnStatus.Retrying) parseRetryHint(statusHint) else null
 
     // 主标签文案
     val labelText = when {
         status == TurnStatus.Preparing && slowResponse -> "排队较长，仍在等待"
         status == TurnStatus.Retrying -> "正在自动重试 (${retryHint?.attempt ?: "?"}/${retryHint?.max ?: "?"})"
         else -> status.label
+    }
+
+    val timerText = when {
+        status == TurnStatus.Retrying -> {
+            if (retryCountdownSec != null && retryCountdownSec > 0) "(${retryCountdownSec}s 后重试)"
+            else "(${elapsedMs / 1000}s)"   // 无 retryAt（旧格式/缺 delayMs）回退已耗时
+        }
+        showElapsed -> "(${elapsedMs / 1000}s)"
+        else -> ""
     }
 
     AnimatedVisibility(
@@ -91,7 +105,7 @@ fun StatusBar(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            // 主行：图标 + 状态文案 + 耗时
+            // 主行：图标 + 状态文案 + 耗时/倒计时
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -136,10 +150,10 @@ fun StatusBar(
                     fontWeight = FontWeight.Medium,
                 )
 
-                // 已耗时（Preparing/Sending/Retrying 持续显示，计时器不删）
-                if (showElapsed) {
+                // 倒计时或耗时
+                if (timerText.isNotBlank()) {
                     Text(
-                        text = "(${elapsedMs / 1000}s)",
+                        text = timerText,
                         color = if (slowResponse) colors.accentWarning else colors.textMuted,
                         fontSize = 11.sp,
                     )

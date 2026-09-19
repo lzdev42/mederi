@@ -40,20 +40,48 @@ data class RetryHint(
     val attempt: String,
     val max: String,
     val serverMsg: String?,
+    val retryAtMillis: Long? = null,
 )
 
 /**
- * 将 SnapshotReducer 存入 statusHint 的格式（"attempt/max" 或 "attempt/max|serverMsg"）
+ * 将 SnapshotReducer 存入 statusHint 的格式（"attempt/max"、"attempt/max|serverMsg" 或 "attempt/max|serverMsg|retryAt"）
  * 解析成结构体，供 StatusBar 按需渲染。
  */
 fun parseRetryHint(statusHint: String?): RetryHint? {
     if (statusHint == null) return null
-    val parts = statusHint.split("|", limit = 2)
-    val progress = parts[0].split("/")
+    val firstPipe = statusHint.indexOf('|')
+    // 无 '|'：仅 "attempt/max"
+    if (firstPipe < 0) {
+        val progress = statusHint.split("/")
+        return RetryHint(
+            attempt = progress.getOrNull(0) ?: "?",
+            max = progress.getOrNull(1) ?: "?",
+            serverMsg = null,
+            retryAtMillis = null,
+        )
+    }
+    val progress = statusHint.substring(0, firstPipe).split("/")
     val attempt = progress.getOrNull(0) ?: "?"
     val max = progress.getOrNull(1) ?: "?"
-    val serverMsg = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
-    return RetryHint(attempt = attempt, max = max, serverMsg = serverMsg)
+    val rest = statusHint.substring(firstPipe + 1) // "serverMsg|retryAt" 或 "serverMsg"
+    val lastPipe = rest.lastIndexOf('|')
+    if (lastPipe < 0) {
+        // 仅 serverMsg，无 retryAt
+        return RetryHint(attempt, max, serverMsg = rest.takeIf { it.isNotBlank() }, retryAtMillis = null)
+    }
+    val possibleRetryAt = rest.substring(lastPipe + 1).toLongOrNull()
+    return if (possibleRetryAt != null) {
+        // 末段是数字 → retryAt，中间是 serverMsg（可含 |）
+        RetryHint(
+            attempt = attempt,
+            max = max,
+            serverMsg = rest.substring(0, lastPipe).takeIf { it.isNotBlank() },
+            retryAtMillis = possibleRetryAt,
+        )
+    } else {
+        // 末段非数字 → 整个 rest 是 serverMsg，无 retryAt
+        RetryHint(attempt, max, serverMsg = rest.takeIf { it.isNotBlank() }, retryAtMillis = null)
+    }
 }
 
 fun deriveTurnStatus(snapshot: ConversationSnapshot?): TurnStatus {

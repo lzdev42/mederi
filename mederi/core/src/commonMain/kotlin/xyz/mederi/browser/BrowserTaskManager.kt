@@ -48,6 +48,7 @@ class BrowserTaskManager(
         val reasoningLevel: ReasoningLevel,
         val projectId: String,
         val parentSessionId: String,
+        val apiKeyId: String? = null,
         @Volatile var browserName: String,
         @Volatile var job: Job,
         @Volatile var status: TaskStatus,
@@ -74,7 +75,8 @@ class BrowserTaskManager(
         reasoningLevel: ReasoningLevel,
         projectId: String,
         parentSessionId: String,
-        browser: String?
+        browser: String?,
+        apiKeyId: String?
     ): String {
         val resolved = BrowserRegistry.resolve(browser)
             ?: return Json.encodeToString(
@@ -92,6 +94,7 @@ class BrowserTaskManager(
             reasoningLevel = reasoningLevel,
             projectId = projectId,
             parentSessionId = parentSessionId,
+            apiKeyId = apiKeyId,
             browserName = resolved.name,
             job = Job(),
             status = TaskStatus.STARTED,
@@ -111,6 +114,7 @@ class BrowserTaskManager(
                 browserControl = control,
                 aiModel = aiModel,
                 reasoningLevel = reasoningLevel,
+                apiKeyId = apiKeyId,
                 onStep = { step, thought, results ->
                     taskObj.lastStep = step
                     taskObj.lastThought = thought

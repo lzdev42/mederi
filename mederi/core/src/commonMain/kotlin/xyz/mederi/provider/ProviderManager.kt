@@ -57,6 +57,13 @@ interface ProviderManager {
     suspend fun setDefaultKey(providerId: String, keyId: String)
     suspend fun getDefaultKeyValue(providerId: String): String?
 
+    /**
+     * 获取供应商指定密钥的明文值。
+     *
+     * agent 运行时按用户选定的 keyId 创建 LLM 客户端。keyId 不属于该供应商时返回 null。
+     */
+    suspend fun getKeyValue(providerId: String, keyId: String): String?
+
     // === Model ===
 
     suspend fun listModels(providerId: String): List<AIModel>

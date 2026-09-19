@@ -43,6 +43,8 @@ class SessionTitleService(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     /** 改名成功后回调（桥层用它刷新 projects StateFlow，侧边栏即时变名）。 */
     private val onRenamed: suspend () -> Unit = {},
+    /** 供应商 → 该会话最近一次发送选定的 apiKeyId（桥层内存记忆，不落库；null = 用默认 key）。 */
+    private val preferredApiKeyId: (String) -> String? = { null },
 ) {
 
     private val processedSessions: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -156,7 +158,10 @@ class SessionTitleService(
 
     /** 用该供应商的 baseUrl + Key 请求标题；任何异常/空返回都视为该候选失败。 */
     private suspend fun requestTitle(provider: Provider, model: AIModel, prompt: String): String? {
-        val apiKey = mederi.providerManager.getDefaultKeyValue(provider.id) ?: return null
+        // 候选是"当前会话供应商"时才可能命中该会话选定的 key；其它候选供应商仍用默认 key
+        val apiKey = preferredApiKeyId(provider.id)?.let { mederi.providerManager.getKeyValue(provider.id, it) }
+            ?: mederi.providerManager.getDefaultKeyValue(provider.id)
+            ?: return null
         val raw = runCatching {
             OneShotCompletion.execute(
                 provider = provider,

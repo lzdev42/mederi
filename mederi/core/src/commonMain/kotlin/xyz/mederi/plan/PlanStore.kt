@@ -252,7 +252,7 @@ class PlanStore(private val projectDirectories: List<String>) {
                 sb.appendLine()
             }
             sb.appendLine("#### Verification")
-            sb.appendLine(st.verification)
+            sb.appendLine(st.verification.command)
             st.verificationResult?.let { r ->
                 sb.appendLine()
                 sb.appendLine("#### Verification Result")

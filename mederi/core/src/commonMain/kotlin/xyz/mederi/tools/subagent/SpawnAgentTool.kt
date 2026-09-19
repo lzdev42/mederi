@@ -64,7 +64,8 @@ class SpawnAgentTool(
     private val projectId: String,
     private val parentSessionId: String,
     private val planStore: PlanStore? = null,
-    private val eventBus: MutableSharedFlow<MederiEvent>? = null
+    private val eventBus: MutableSharedFlow<MederiEvent>? = null,
+    private val apiKeyId: String? = null
 ) : SimpleTool<SpawnAgentArgs>(
     argsType = typeToken<SpawnAgentArgs>(),
     name = "spawn_agent",
@@ -145,7 +146,12 @@ class SpawnAgentTool(
             aiModel = aiModel,
             reasoningLevel = reasoningLevel,
             projectId = projectId,
-            parentSessionId = parentSessionId
+            parentSessionId = parentSessionId,
+            apiKeyId = apiKeyId,
+            // 执行器 touched-files 追踪：子代理完成后 flush 到 Subtask.executorTouchedFiles
+            executorPlanId = args.planId,
+            executorSubtaskIndex = args.subtaskIndex,
+            planStore = planStore
         )
         return Json.encodeToString(SpawnResult.serializer(), SpawnResult(agentId = agentId, status = "RUNNING"))
     }
@@ -177,7 +183,8 @@ class SpawnResearcherTool(
     private val aiModel: AIModel,
     private val reasoningLevel: ReasoningLevel,
     private val projectId: String,
-    private val parentSessionId: String
+    private val parentSessionId: String,
+    private val apiKeyId: String? = null
 ) : SimpleTool<SpawnResearcherArgs>(
     argsType = typeToken<SpawnResearcherArgs>(),
     name = "spawn_researcher",
@@ -201,7 +208,8 @@ class SpawnResearcherTool(
             aiModel = aiModel,
             reasoningLevel = reasoningLevel,
             projectId = projectId,
-            parentSessionId = parentSessionId
+            parentSessionId = parentSessionId,
+            apiKeyId = apiKeyId
         )
         return Json.encodeToString(SpawnAgentTool.SpawnResult.serializer(), SpawnAgentTool.SpawnResult(agentId = agentId, status = "RUNNING"))
     }

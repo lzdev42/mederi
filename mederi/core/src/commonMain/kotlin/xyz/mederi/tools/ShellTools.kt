@@ -26,21 +26,28 @@ class ShellTools(
     private val sandbox: CommandSandbox? = null
 ) {
 
-    /** 命令执行结果（输出 + exit code 分离，供 ExecuteCommandTool 格式化和 VerifyTools 判定） */
-    data class CommandResult(val output: String, val exitCode: Int)
+    /**
+     * 命令执行结果（输出 + exit code + 超时标志，供 ExecuteCommandTool 格式化和 VerifyTools 判定）。
+     *
+     * [timedOut] 为 true 表示进程未在 [ShellTools.runCommand] 的 timeoutSeconds 内完成被强制回收——
+     * 与「进程正常退出但 exitCode 非零」的真实失败区分开（VerifyTools 三态判定依赖此标志）。
+     */
+    data class CommandResult(val output: String, val exitCode: Int, val timedOut: Boolean = false)
 
     /**
      * 执行一条 shell 命令，返回 [CommandResult]。
      *
      * ExecuteCommandTool 和 VerifyTools 的自动验证共用此方法——
      * 沙箱包装、工作目录、输出读取线程、超时处理全一致。
+     *
+     * @param cwd 命令工作目录（绝对路径）；null 或空白时回退到项目主目录（allowedDirectories.first()）。
      */
-    suspend fun runCommand(command: String, timeoutSeconds: Int = 120): CommandResult {
+    suspend fun runCommand(command: String, timeoutSeconds: Int = 120, cwd: String? = null): CommandResult {
         if (command.isBlank()) return CommandResult("Error: command is empty", -1)
 
             val wrapped = sandbox?.wrap(command)
                 ?: CommandSandbox.WrappedCommand(listOf(sandbox?.shell ?: "sh", "-c", command), null, false)
-            val workDir = File(allowedDirectories.first())
+            val workDir = cwd?.takeIf { it.isNotBlank() }?.let { File(it) } ?: File(allowedDirectories.first())
             val builder = ProcessBuilder(wrapped.argv)
             builder.directory(workDir)
             builder.redirectErrorStream(true)
@@ -71,7 +78,7 @@ class ShellTools(
                 process.destroyForcibly()
                 outputFuture.get(1, java.util.concurrent.TimeUnit.SECONDS)
                 val partialOutput = outputFuture.get()
-                return CommandResult("Command timed out after ${timeoutSeconds}s\n$partialOutput", -1)
+                return CommandResult("Command timed out after ${timeoutSeconds}s\n$partialOutput", -1, timedOut = true)
             }
 
             val output = outputFuture.get(1, java.util.concurrent.TimeUnit.SECONDS)

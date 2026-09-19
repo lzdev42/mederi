@@ -1,6 +1,12 @@
 package xyz.mederi.plan
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.*
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.*
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.WorkType
 
@@ -39,6 +45,60 @@ data class VerificationResult(
 )
 
 /**
+ * 子任务的验证规范：可执行命令 + 可选工作目录 + 可选超时秒数。
+ * 替代旧 verification: String（无结构散文被当命令盲执行）。
+ * 自定义 KSerializer 兼容旧 JSON：遇纯 String → VerificationSpec(command=string, cwd=null, timeout=null)。
+ */
+@Serializable(with = VerificationSpecSerializer::class)
+data class VerificationSpec(
+    val command: String,
+    val cwd: String? = null,
+    val timeoutSeconds: Int? = null,
+)
+
+/**
+ * VerificationSpec 自定义序列化器（兼容旧 String 与新 Object 两种 JSON 形态）。
+ *
+ * - 序列化：始终输出 Object（{"command":"...","cwd":"...","timeoutSeconds":30}）。
+ * - 反序列化：遇 JsonPrimitive（纯字符串）→ VerificationSpec(command=string)；
+ *   遇 JsonObject → 正常解析各字段。
+ *
+ * 依赖 JsonDecoder/JsonEncoder——PlanStore 用 Json 格式存储，兼容。
+ */
+object VerificationSpecSerializer : KSerializer<VerificationSpec> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("VerificationSpec") {
+        element<String>("command")
+        element<String?>("cwd", isOptional = true)
+        element<Int?>("timeoutSeconds", isOptional = true)
+    }
+
+    override fun serialize(encoder: Encoder, value: VerificationSpec) {
+        val jsonEncoder = encoder as? JsonEncoder
+            ?: throw SerializationException("VerificationSpec requires Json format")
+        val obj = buildJsonObject {
+            put("command", value.command)
+            value.cwd?.let { put("cwd", it) }
+            value.timeoutSeconds?.let { put("timeoutSeconds", it) }
+        }
+        jsonEncoder.encodeJsonElement(obj)
+    }
+
+    override fun deserialize(decoder: Decoder): VerificationSpec {
+        val jsonDecoder = decoder as? JsonDecoder
+            ?: throw SerializationException("VerificationSpec requires Json format")
+        return when (val element = jsonDecoder.decodeJsonElement()) {
+            is JsonPrimitive -> VerificationSpec(command = element.content)
+            is JsonObject -> VerificationSpec(
+                command = element["command"]?.jsonPrimitive?.contentOrNull ?: "",
+                cwd = element["cwd"]?.jsonPrimitive?.contentOrNull,
+                timeoutSeconds = element["timeoutSeconds"]?.jsonPrimitive?.intOrNull,
+            )
+            else -> throw SerializationException("VerificationSpec must be a JSON string or object")
+        }
+    }
+}
+
+/**
  * 计划改动项。对应 Implementation Plan 模板的 §4 详细改动方案。
  */
 @Serializable
@@ -58,6 +118,9 @@ data class PlannedChange(
  * 与 brief 分离——spec 可反复覆盖重写，用户批准过的 brief 永不失真；
  * spawn_agent 以 [spec] 非空为派工前提。
  * [targetFiles] 在 CODE 模式必填，WORK 模式不用。
+ * [verification] 结构化验证规范（命令 + 可选 cwd + 可选超时），替代旧无结构 String。
+ * [executorTouchedFiles] 由 executor 回写实际改动的文件列表（供 verify 对照 targetFiles）。
+ * [executorProgress] 由 executor 回写进度摘要（供主代理轮询活跃子任务状态）。
  * [verificationResult] 由 verify_subtask 工具回写。
  */
 @Serializable
@@ -69,8 +132,10 @@ data class Subtask(
     val spec: String? = null,
     val targetFiles: List<String> = emptyList(),
     val decisions: List<Decision> = emptyList(),
-    val verification: String,
+    val verification: VerificationSpec,
     val verificationResult: VerificationResult? = null,
+    val executorTouchedFiles: List<String> = emptyList(),
+    val executorProgress: String? = null,
     val dependsOn: List<Int> = emptyList(),
     val parallelizable: Boolean = false
 )
