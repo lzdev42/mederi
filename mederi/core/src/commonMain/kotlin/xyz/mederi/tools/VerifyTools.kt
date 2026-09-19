@@ -66,9 +66,9 @@ class VerifyTools(
     inner class VerifySubtaskTool : SimpleTool<VerifySubtaskArgs>(
         argsType = typeToken<VerifySubtaskArgs>(),
         name = "verify_subtask",
-        description = "After spawn_agent returns, verify the subtask result against its verification criteria. " +
-            "Read the actual code/files, run verification commands, and report PASS, PARTIAL, or FAIL. " +
-            "NEVER declare a subtask done without calling this tool."
+        description = "Verifies a subtask result against its verification criteria (the plan's stored " +
+            "verification command and targetFiles). Reads the actual code/files, runs the stored " +
+            "verification command, and records PASS, PARTIAL, or FAIL."
     ) {
         override suspend fun execute(args: VerifySubtaskArgs): String {
             val plan = planStore.load(args.planId)

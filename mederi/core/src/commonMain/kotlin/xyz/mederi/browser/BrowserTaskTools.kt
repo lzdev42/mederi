@@ -20,17 +20,16 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
 @Serializable
 data class RunBrowserTaskArgs(
     @LLMDescription(
-        "给浏览器子 agent 的任务命令（自然语言，面向结果）：要访问哪个网站、要达到什么结果。" +
-            "这是命令不是操作手册——子 agent 自己会导航/点击/输入，你只需要描述目标和验收标准。" +
-            "例如 '去 51job 搜 Java 开发岗位，列出前 10 条职位名和公司'，而不是'点击搜索框输入xxx再点按钮'。"
+        "给浏览器子 agent 的任务指令（自然语言，面向结果）：要访问哪个网站、要达到什么结果。" +
+            "低层导航/点击/输入由子 agent 自行决定。示例：'去 51job 搜 Java 开发岗位，列出前 10 条职位名和公司'。"
     )
     val task: String = "",
     @LLMDescription(
         "使用的浏览器（可选）：\n" +
             "- 不填 = 用默认浏览器。\n" +
             "- 可用列表来自注册表（jcef / camoufox 等）。\n" +
-            "- 测试用户自己开发的网页 → 优先 jcef（内置可见，用户能看）；\n" +
-            "- 第三方网站的自动化操作/抓取 → 优先 camoufox（无头反检测）。"
+            "- jcef：内置可见浏览器，用户可观看运行过程。\n" +
+            "- camoufox：无头反检测，适合第三方网站的自动化操作/抓取。"
     )
     val browser: String = ""
 )
@@ -83,18 +82,13 @@ class RunBrowserTaskTool(
             } else {
                 "Available browsers: ${available.joinToString(", ")} (default: ${default ?: "first registered"})"
             }
-            return "Asynchronously dispatches a browser automation task to a DEDICATED BROWSER SUB-AGENT " +
-                "(not run by you). Write a HIGH-LEVEL COMMAND describing the goal and desired outcome — " +
-                "the sub-agent itself navigates, clicks, types, and reports back. Do NOT list low-level steps " +
-                "or try to operate the page yourself; give the result you want. Returns immediately with a " +
-                "taskId — the sub-agent runs in the background and does NOT block your turn, so you can keep " +
-                "talking to the user. Later check browser_task_status(taskId) or stop it with " +
-                "stop_browser_task(taskId). The user can watch task details in the browser panel. Use for " +
-                "anything requiring web interaction: searching, filling forms, extracting page content, " +
-                "monitoring a page. " +
-                "Browser choice: prefer jcef when testing the user's OWN web pages (built-in visible browser, " +
-                "user can watch); prefer camoufox for automation/scraping on third-party sites (headless, " +
-                "anti-detection). " +
+            return "Asynchronously dispatches a browser automation task to a DEDICATED BROWSER SUB-AGENT (not " +
+                "run by you). The sub-agent navigates, clicks, types, and reports back; the task argument is " +
+                "its instruction. Returns immediately with a taskId — the sub-agent runs in the background and " +
+                "does not block your turn. Query it with browser_task_status(taskId) or stop it with " +
+                "stop_browser_task(taskId). Task details are viewable in the browser panel. " +
+                "Registered browser values: jcef (built-in, visible, user can watch); camoufox (headless, " +
+                "anti-detection, for automation/scraping on third-party sites). " +
                 browserHint
         }
     }
@@ -113,9 +107,8 @@ class BrowserTaskStatusTool(
 ) : SimpleTool<BrowserTaskStatusArgs>(
     argsType = typeToken<BrowserTaskStatusArgs>(),
     name = "browser_task_status",
-    description = "Queries the status of a browser sub-agent task you dispatched with run_browser_task: " +
-        "STARTED / RUNNING / COMPLETED / ERROR / STOPPED. Use only when the user asks about a browser " +
-        "task. Do not poll repeatedly."
+    description = "Queries the current status of a browser task dispatched with run_browser_task: " +
+        "STARTED / RUNNING / COMPLETED / ERROR / STOPPED."
 ) {
     override suspend fun execute(args: BrowserTaskStatusArgs): String {
         if (args.taskId.isBlank()) return "Error: taskId must not be empty."
@@ -137,7 +130,7 @@ class StopBrowserTaskTool(
     argsType = typeToken<StopBrowserTaskArgs>(),
     name = "stop_browser_task",
     description = "Stops a running browser sub-agent task and closes its browser. The task cannot be " +
-        "resumed. Use when the task is stuck, taking too long, or the user no longer needs it."
+        "resumed."
 ) {
     override suspend fun execute(args: StopBrowserTaskArgs): String {
         if (args.taskId.isBlank()) return "Error: taskId must not be empty."
@@ -164,10 +157,9 @@ class BrowserInfoTool(
     argsType = typeToken<BrowserInfoArgs>(),
     name = "browser_info",
     description = "Reads the current browser runtime status (no side effects, does NOT dispatch a task). " +
-        "Use when the user asks about the browser state or before deciding which browser to use. " +
         "Returns per registered browser (jcef built-in visible / camoufox headless — BOTH may be open at " +
         "once): inUse, count of open tabs/instances, each one's current page URL + title, and whether it " +
-        "was started by the CURRENT session. Distinct from browser_task_status which queries a specific " +
+        "was started by the CURRENT session. Distinct from browser_task_status, which queries a specific " +
         "dispatched task."
 ) {
     override suspend fun execute(args: BrowserInfoArgs): String = service.browserStatus(sessionId)

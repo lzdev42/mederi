@@ -69,11 +69,9 @@ class AgentTools(
     inner class UpdateTodoTool : SimpleTool<UpdateTodoArgs>(
         argsType = typeToken<UpdateTodoArgs>(),
         name = "update_todo",
-        description = "Create or replace your todo list to track multi-step progress on work WITHOUT a plan " +
-            "(small multi-step fixes, ad-hoc refactors — anything not running through create_plan). " +
-            "One call replaces the whole list; at most one item in_progress; an empty list clears it. " +
-            "Do NOT use it when an Active Plan exists — the plan's subtask statuses are the tracker. " +
-            "Skip it for single-step replies."
+        description = "Replace the entire current todo list. One call sets the whole list (passing an empty " +
+            "list clears it); at most one item may be in_progress. Disabled while an Active Plan is " +
+            "executing — the plan's subtask statuses are the tracker then."
     ) {
         override suspend fun execute(args: UpdateTodoArgs): String {
             if (sessionStore == null) {
