@@ -2,15 +2,13 @@ package xyz.mederi.prompt
 
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.skills.domain.SkillInfo
 
 /**
  * 系统提示词常量。
  *
- * 架构：配置声明（当前 WorkType + AgentMode 显式声明）
+ * 架构：配置声明（当前 AgentMode 显式声明）
  * + COMMON（身份 + 核心原则 + 工具指南 + 规划纪律 + 输出格式 + 沙箱 + 格式）
- * + 模式段（CODE_MODE / WORK_MODE）
  * + 工作流段（APPROVAL / AUTONOMOUS）
  * + 活跃计划段（如有）
  *
@@ -67,14 +65,13 @@ user's language.
   (intent + targetFiles + verification).
 - generate_spec: after approval, per subtask right before executing it — the HOW, grounded in
   the real code. Re-call to replace a spec verification proved wrong.
-- spawn_agent(planId, subtaskIndex): async-delegate a subtask (AUTONOMOUS, full tools). Returns
-  agentId immediately; the subagent runs in the background. Follow up with wait_agent /
-  agent_status / stop_agent.
-- spawn_researcher: async-delegate a READ-ONLY research question (read/list only, no write, no
-  commands). Returns agentId; use wait_agent for the report. Use for deep/broad investigation;
-  answer trivial lookups yourself.
-- agent_status / stop_agent / wait_agent: Query / cancel / block-on a spawned subagent.
-  wait_agent TIMEOUT → subagent keeps running; check agent_status or stop_agent.
+- subagent: single tool to delegate and manage sub-agents, dispatched by action=
+  SPAWN(planId, subtaskIndex[, task, briefing]): delegate a planned subtask — the sub-agent
+    executes the exact spec stored by generate_spec; returns agentId immediately, runs in background.
+  SPAWN_RESEARCHER(task[, briefing]): delegate a READ-ONLY investigation (read/list only, no write,
+    no commands); returns agentId. For deep/broad lookups; answer trivial ones yourself.
+  STATUS(agentId) / STOP(agentId): query / cancel a spawned sub-agent (STOP cannot resume).
+  WAIT(agentId[, timeoutMs]): block until it finishes; returns the final report. TIMEOUT → still running.
 - verify_subtask: verify against the plan's criteria; the verification command is auto-run — write
   it as ONE executable command (assert-style: python3 -c 'assert...', test, grep -q) so it exits
   non-zero on failure; commands are ASCII only (CJK prose is rejected at create_plan). Optional
@@ -89,13 +86,14 @@ user's language.
   at most one item in_progress; empty list clears. Not allowed when an Active Plan exists (plan
   subtask statuses are the tracker). Skip for single-step replies.
 - write_log: Record decisions/findings to .mederi/notebook.md.
-- run_browser_task: DELEGATE web work to a BROWSER sub-agent (you never operate the page).
-  Returns taskId; runs in the background. Browser: jcef = built-in visible (prefer for the user's
-  own pages), camoufox = headless anti-detection (third-party scraping). Check via
-  browser_task_status / stop via stop_browser_task.
-- browser_task_status / stop_browser_task / browser_info: task status (STARTED/RUNNING/COMPLETED/
-  ERROR/STOPPED) / stop a stuck task (cannot resume) / read runtime browser state (which browsers,
-  tabs, URLs) before picking a browser or when asked.
+- browser: single tool to dispatch and manage browser sub-agent tasks (page operation is done by
+  a dedicated browser sub-agent, never by you), dispatched by action=
+  RUN(task[, browser]): dispatch a web task — returns taskId immediately, runs in the background.
+  STATUS(taskId): task status (STARTED/RUNNING/COMPLETED/ERROR/STOPPED).
+  STOP(taskId): cancel a task and close its browser (cannot resume).
+  INFO: runtime browser state (per browser: inUse, open tabs, current URLs, started by this
+  session or not). Browser kinds: jcef = built-in, visible; camoufox = headless anti-detection
+  (third-party automation/scraping).
 - office_read: Read .docx/.xlsx/.pptx to markdown (view/review/extract; writable back via office_write).
 - office_write: Generate/overwrite .docx/.xlsx from markdown. docx: #/## headings, - lists,
   |...| tables. xlsx: ## SheetName starts a sheet, |...| rows (first = header). Always office_read
@@ -121,7 +119,7 @@ confined to the project directory plus `.mederi/` inside it; the sandbox rejects
 
 Triage every request:
 - Answer/produce directly (question, explanation, diagram, snippet, summary) → reply inline;
-  read only for facts you lack. Deep lookup (many files, long chains) → spawn_researcher.
+  read only for facts you lack. Deep lookup (many files, long chains) → subagent(action=SPAWN_RESEARCHER).
 - Small fix (known root cause, a few lines) → edit/write directly. No plan.
 - Complex work (multi-file, logic changes, decisions the user should review) → Plan Loop below.
 When unsure between small fix and complex work, investigate first, then decide.
@@ -137,7 +135,7 @@ When unsure between small fix and complex work, investigate first, then decide.
    do NOT retry create_plan — ask why and end the turn; revise only after the user answers.
 4. Per subtask: generate_spec — the HOW (signatures, branches, edits) grounded in the real code.
    Read files first; names/signatures must match reality; later subtasks build on earlier output.
-5. spawn_agent(planId, subtaskIndex) → background; then wait_agent(agentId) for its result.
+5. subagent(action=SPAWN, planId, subtaskIndex) → background; then subagent(WAIT, agentId) for its result.
 6. verify_subtask:
    - PASS → next subtask.
    - Execution wrong → converge_plan (append remediation) → re-run.
@@ -147,11 +145,11 @@ When unsure between small fix and complex work, investigate first, then decide.
 7. write_log key decisions to .mederi/notebook.md — hard: only when every subtask shows verified
    PASS. Any PENDING/FAILED/IN_PROGRESS → write_log is forbidden; continue the loop.
 
-Batching parallel spawns: generate specs for all independent subtasks first, then spawn them
-together in one message; wait_agent each agentId (any order) before verifying any.
+Batching parallel spawns: generate specs for all independent subtasks first, then subagent(SPAWN…)
+them together in one message; subagent(WAIT, agentId) each (any order) before verifying any.
 
 Timing/hard-rule summary: the ordering above is the only hard requirement for complex work —
-create_plan → generate_spec → spawn_agent → verify. Everything else is guidance.
+create_plan → generate_spec → subagent(SPAWN) → verify. Everything else is guidance.
 """
 
     private const val OUTPUT_FORMAT = """
@@ -177,33 +175,16 @@ text outside an artifact tag has no export path. Rules:
   card (heuristic fallback). Prefer the explicit tag for documents; keep non-document replies compact.
 """
 
-    // ============================ Code 模式 ============================
+    // ============================ 模式 ============================
 
-    private const val CODE_MODE = """
-# Your Mode: Code
+    private const val AGENT_MODE_SECTION = """
+# Your Mode
 
 You help a developer write, debug, and understand code. Read the codebase before changing it;
 match existing style; check build files before assuming a library. Complex work → Plan Loop
-(plan template structure lives in create_plan; after approval generate_spec → spawn_agent →
+(plan template structure lives in create_plan; after approval generate_spec → subagent(SPAWN) →
 verify_subtask). Small fixes you fully understand need no plan — edit directly. Bug fixes:
 confirm the root cause by reading the code before writing the fix.
-"""
-
-    // ============================ Work 模式 ============================
-
-    private const val WORK_MODE = """
-# Your Mode: Work
-
-You help with knowledge work: documents, data, research summaries, Office files. Your plan is
-single-part — the step description IS the spec (Goal, Scope in/out, Key Decisions, Steps,
-Verification; no [MODIFY]/[NEW]/[DELETE], no signatures). Verification checks completeness,
-accuracy, formatting — not builds; fail → converge_plan to append a fix step, then re-execute.
-
-Read files before processing. When summarizing preserve nuance; when editing keep the author's
-voice unless asked otherwise; when creating produce clear, structured, ready-to-use output.
-
-When modifying existing documents, back the original up to `.mederi/backups/` first (timestamped
-name, keep at most 10 per file).
 """
 
     // ============================ 工作流 ============================
@@ -238,12 +219,12 @@ point is step 3 — who approves.
      * EXECUTOR：执行计划内子任务，全量文件/命令工具（无 plan/spawn/verify/ask_user）。
      * RESEARCHER：只读调研，read_file/list_directory 之外一律没有（无写、无命令）。
      */
-    fun forSubagent(role: SubagentRole, workType: WorkType): String = when (role) {
-        SubagentRole.EXECUTOR -> forSubagentExecutor(workType)
+    fun forSubagent(role: SubagentRole): String = when (role) {
+        SubagentRole.EXECUTOR -> forSubagentExecutor()
         SubagentRole.RESEARCHER -> forSubagentResearcher()
     }
 
-    private fun forSubagentExecutor(workType: WorkType): String = buildString {
+    private fun forSubagentExecutor(): String = buildString {
         append(
             """
             # Current Configuration
@@ -251,7 +232,6 @@ point is step 3 — who approves.
             - Role: SUBAGENT EXECUTOR — you receive a task plus a spec checklist and execute it
               directly with your tools. Planning, spec generation, spawning, and verification
               are the PARENT agent's job; those tools are not available to you.
-            - WorkType: ${if (workType == WorkType.CODE) "CODE — you write and modify code." else "WORK — you process documents and knowledge work."}
             """.trimIndent()
         ).append("\n\n")
         append(SUBAGENT_IDENTITY.trimIndent()).append("\n\n")
@@ -259,9 +239,6 @@ point is step 3 — who approves.
         append(EXECUTOR_TOOL_GUIDELINES.trimIndent()).append("\n\n")
         append(WORKING_DIRECTORY.trimIndent()).append("\n\n")
         append(PromptGuides.SANDBOX_USAGE).append("\n\n")
-        if (workType == WorkType.WORK) {
-            append(WORK_DOCUMENT_BACKUP.trimIndent()).append("\n\n")
-        }
         append(OUTPUT_FORMAT.trimIndent())
     }
 
@@ -339,15 +316,6 @@ question needs more, note the limitation in your answer instead of working aroun
 - End with a concise structured summary: key findings, open questions, recommended next actions.
 """.trimIndent()
 
-    /** WORK 模式子代理的文档备份纪律（与主代理 WORK_MODE 的备份规则一致）。 */
-    private val WORK_DOCUMENT_BACKUP = """
-# Document Backup (Work Mode)
-
-When modifying existing documents (write_file/edit_file on non-.mederi files):
-- Back up the original to `.mederi/backups/` first (timestamped name, keep at most 10 per file).
-- This protects user documents from irreversible changes.
-""".trimIndent()
-
     private const val PLAN_SECTION_TEMPLATE = """
 # Active Plan
 {plan}
@@ -421,56 +389,42 @@ current via update_todo (one call replaces the whole list).
         return basePrompt + "\n\n" + section.trimEnd()
     }
 
-    /** Work 模式系统提示词。 */
-    fun forWork(): String = COMMON + "\n\n" + WORK_MODE.trimIndent()
-
-    /** Code 模式系统提示词。 */
-    fun forCode(): String = COMMON + "\n\n" + CODE_MODE.trimIndent()
-
     /**
-     * 显式配置声明段：一行说清当前 WorkType + AgentMode 组合。
+     * 显式配置声明段：一行说清当前 AgentMode。
      *
-     * 模式段（CODE_MODE 等）标题虽然各自说明了模式，但分散在长文里；
+     * 模式段（AGENT_MODE_SECTION 等）标题虽然各自说明了模式，但分散在长文里；
      * 动态切换模式时 system prompt 整体替换，这一段放在最前面保证 AI 第一眼就知道当前配置。
      */
-    private fun configSection(agentMode: AgentMode, workType: WorkType): String {
-        val workLine = when (workType) {
-            WorkType.CODE -> "WorkType: CODE — you write and modify code."
-            WorkType.WORK -> "WorkType: WORK — you process documents and knowledge work."
-        }
+    private fun configSection(agentMode: AgentMode): String {
         val modeLine = when (agentMode) {
             AgentMode.APPROVAL ->
                 "AgentMode: APPROVAL — you always create a plan and the USER must approve it before execution."
             AgentMode.AUTONOMOUS ->
                 "AgentMode: AUTONOMOUS — you always create a plan and it is auto-approved; proceed immediately."
         }
-        return "# Current Configuration\n\n- $workLine\n- $modeLine"
+        return "# Current Configuration\n\n- $modeLine"
     }
 
     /**
-     * 根据 agentMode、workType、活跃计划和当前 todo 构建完整系统提示词。
+     * 根据 agentMode、活跃计划和当前 todo 构建完整系统提示词。
      *
-     * 拼接顺序：配置声明 + COMMON + workType 段 + agentMode 段 + 活跃计划段（如有）+ 当前 todo 段（仅无计划时）。
+     * 拼接顺序：配置声明 + COMMON + 模式段 + agentMode 段 + 活跃计划段（如有）+ 当前 todo 段（仅无计划时）。
      * 互斥规则：有活跃计划时 todo 面板/挂载都走 Plan 子任务投影，不挂模型自管理的 todo——
      * 防止同一进度出现两份真理源。
      */
     fun build(
         agentMode: AgentMode,
-        workType: WorkType,
         activePlan: String? = null,
         activeTodo: String? = null
     ): String {
-        val workSection = when (workType) {
-            WorkType.WORK -> WORK_MODE.trimIndent()
-            WorkType.CODE -> CODE_MODE.trimIndent()
-        }
+        val workSection = AGENT_MODE_SECTION.trimIndent()
         val modeSection = workflowSection(agentMode)
         val planSection = activePlan?.let { PLAN_SECTION_TEMPLATE.replace("{plan}", it) }
         val todoSection = if (activePlan == null && !activeTodo.isNullOrBlank()) {
             TODO_SECTION_TEMPLATE.replace("{todo}", activeTodo)
         } else null
         return buildString {
-            append(configSection(agentMode, workType)).append("\n\n")
+            append(configSection(agentMode)).append("\n\n")
             append(COMMON).append("\n\n")
             append(workSection).append("\n\n")
             append(modeSection)

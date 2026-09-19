@@ -20,16 +20,16 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
 @Serializable
 data class RunBrowserTaskArgs(
     @LLMDescription(
-        "给浏览器子 agent 的任务指令（自然语言，面向结果）：要访问哪个网站、要达到什么结果。" +
-            "低层导航/点击/输入由子 agent 自行决定。示例：'去 51job 搜 Java 开发岗位，列出前 10 条职位名和公司'。"
+        "Task instruction for the browser sub-agent (natural language, outcome-oriented): which site " +
+            "to visit and what result to produce. Low-level navigation/click/input is decided by the sub-agent."
     )
     val task: String = "",
     @LLMDescription(
-        "使用的浏览器（可选）：\n" +
-            "- 不填 = 用默认浏览器。\n" +
-            "- 可用列表来自注册表（jcef / camoufox 等）。\n" +
-            "- jcef：内置可见浏览器，用户可观看运行过程。\n" +
-            "- camoufox：无头反检测，适合第三方网站的自动化操作/抓取。"
+        "Browser to use (optional):\n" +
+            "- Empty = default browser.\n" +
+            "- Value from the registered browsers (jcef / camoufox etc.).\n" +
+            "- jcef: built-in visible browser, user can watch.\n" +
+            "- camoufox: headless anti-detection, for third-party automation/scraping."
     )
     val browser: String = ""
 )
@@ -97,7 +97,7 @@ class RunBrowserTaskTool(
 /** browser_task_status 工具参数。 */
 @Serializable
 data class BrowserTaskStatusArgs(
-    @LLMDescription("浏览器任务 ID（run_browser_task 返回的 taskId）。")
+    @LLMDescription("Browser task ID (taskId returned by browser RUN).")
     val taskId: String = ""
 )
 
@@ -119,7 +119,7 @@ class BrowserTaskStatusTool(
 /** stop_browser_task 工具参数。 */
 @Serializable
 data class StopBrowserTaskArgs(
-    @LLMDescription("要停止的浏览器任务 ID。")
+    @LLMDescription("Browser task ID to stop.")
     val taskId: String = ""
 )
 
@@ -141,7 +141,7 @@ class StopBrowserTaskTool(
 /** browser_info 工具参数（无实际字段：直接返回当前浏览器运行状态）。 */
 @Serializable
 data class BrowserInfoArgs(
-    @LLMDescription("留空即可，此工具无需参数。")
+    @LLMDescription("Unused; the tool takes no parameters.")
     val unused: String = ""
 )
 
@@ -163,4 +163,97 @@ class BrowserInfoTool(
         "dispatched task."
 ) {
     override suspend fun execute(args: BrowserInfoArgs): String = service.browserStatus(sessionId)
+}
+
+// ==================== 合并入口（2026-09，4→1） ====================
+
+/**
+ * browser 工具的分派键（任务编排层；与 BrowserActions.kt 的页面操作原语 BrowserAction 区分）。
+ */
+@Serializable
+enum class BrowserTaskAction {
+    /** 派浏览器子代理执行任务（需要 task；可选 browser）。 */
+    RUN,
+    /** 查询已派发任务的状态（需要 taskId）。 */
+    STATUS,
+    /** 停止已派发的任务并关闭其浏览器（需要 taskId；不可恢复）。 */
+    STOP,
+    /** 读取浏览器运行时状态（无参数，只读无副作用）。 */
+    INFO
+}
+
+/**
+ * browser 工具参数。不同 [BrowserTaskAction] 使用其中不同的字段组合（见各字段说明）。
+ */
+@Serializable
+data class BrowserArgs(
+    @LLMDescription("Operation to perform: RUN (dispatch a task to the browser sub-agent), " +
+        "STATUS (query a dispatched task), STOP (cancel a dispatched task), INFO (read browser " +
+        "runtime state — no side effects).")
+    val action: BrowserTaskAction,
+    @LLMDescription("RUN: task instruction for the browser sub-agent (natural language, " +
+        "outcome-oriented: which site, what result).")
+    val task: String = "",
+    @LLMDescription("RUN: browser to use, from the registered browsers. Empty = default browser.")
+    val browser: String = "",
+    @LLMDescription("STATUS / STOP: task ID from a previous RUN.")
+    val taskId: String = ""
+)
+
+/**
+ * 浏览器任务单一入口工具（2026-09 合并精简，4→1）。
+ *
+ * 原四个工具（run_browser_task / browser_task_status / stop_browser_task / browser_info）
+ * 封装为一个 `browser`，用 [BrowserTaskAction] 分流，全部委托原工具类（保留各自校验与返回格式）。
+ * 架构：页面操作由专用 BROWSER 子代理执行（jcef 可见 / camoufox 无头反检测，经
+ * BrowserRegistry 抽象，RUN 的 browser 参数选择）——主代理只做编排：下命令、看状态、
+ * 关任务、看运行时。无 WAIT：浏览器任务为分钟级长跑，主代理不阻塞等待（设计使然）。
+ *
+ * 仅主代理注册。返回值：RUN → {taskId,status,browser}；STATUS/STOP → 任务状态/停止结果；
+ * INFO → 浏览器运行时 JSON。
+ */
+class BrowserTool(
+    private val run: RunBrowserTaskTool,
+    private val status: BrowserTaskStatusTool,
+    private val stop: StopBrowserTaskTool,
+    private val info: BrowserInfoTool,
+    private val service: BrowserTaskService
+) : SimpleTool<BrowserArgs>(
+    argsType = typeToken<BrowserArgs>(),
+    name = "browser",
+    description = buildDescription(service)
+) {
+    override suspend fun execute(args: BrowserArgs): String = when (args.action) {
+        BrowserTaskAction.RUN -> run.execute(RunBrowserTaskArgs(task = args.task, browser = args.browser))
+        BrowserTaskAction.STATUS ->
+            if (args.taskId.isBlank()) "Error: STATUS requires taskId (from a previous RUN)."
+            else status.execute(BrowserTaskStatusArgs(taskId = args.taskId))
+        BrowserTaskAction.STOP ->
+            if (args.taskId.isBlank()) "Error: STOP requires taskId (from a previous RUN)."
+            else stop.execute(StopBrowserTaskArgs(taskId = args.taskId))
+        BrowserTaskAction.INFO -> info.execute(BrowserInfoArgs())
+    }
+
+    companion object {
+        /** 动态生成工具描述：列出当前已注册浏览器。 */
+        fun buildDescription(service: BrowserTaskService): String {
+            val available = service.availableBrowsers()
+            val default = service.defaultBrowser()
+            val browserHint = if (available.isEmpty()) {
+                "No browsers available (set browserHome to download Camoufox, or let the UI register the built-in JCEF)."
+            } else {
+                "Registered browsers: ${available.joinToString(", ")} (default: ${default ?: "first registered"})."
+            }
+            return "Single tool to dispatch and manage browser sub-agent tasks. The actual page operation " +
+                "is done by a DEDICATED BROWSER SUB-AGENT — you never operate the page. " +
+                "action=RUN(task[, browser]): dispatch a task, returns a taskId immediately, the sub-agent " +
+                "runs in the background and does not block your turn. " +
+                "action=STATUS(taskId): query a dispatched task (STARTED/RUNNING/COMPLETED/ERROR/STOPPED). " +
+                "action=STOP(taskId): cancel a task and close its browser (cannot resume). " +
+                "action=INFO: read the runtime browser state (per browser: inUse, open tabs, current URLs, " +
+                "started by this session or not). Task details are viewable in the browser panel. " +
+                "Browser kinds: jcef = built-in, visible (user can watch); camoufox = headless, " +
+                "anti-detection (third-party automation/scraping). " + browserHint
+        }
+    }
 }

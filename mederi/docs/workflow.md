@@ -41,14 +41,7 @@ AUTONOMOUS → 计划自动批准（自己批准自己），立即执行
 |---|---|---|
 | create_plan 后 | 挂起 → 等用户批准 | 立即批准，继续执行 |
 
-## 三、工作类型（WorkType）
-
-```
-CODE → 写代码，Plan 包含 businessLogic / changes / targetFiles
-WORK → 文档/知识工作，Plan 简单（不含 deep spec）
-```
-
-## 四、写入边界（跨平台，代码强制）
+## 三、写入边界（跨平台，代码强制）
 
 ```
 写白名单 = 项目 directories ∪ .mederi/ ∪ 系统临时目录与 TMPDIR
@@ -64,13 +57,13 @@ WORK → 文档/知识工作，Plan 简单（不含 deep spec）
 
 > 是否可以写、要不要建计划，由主代理按 Triage Flow 分诊判断（见 `AGENTS.md §5.6`）。
 
-## 五、完整工作流（按顺序）
+## 四、完整工作流（按顺序）
 
 ### 阶段 0：准备
 
 ```
 1. 用户选择项目（决定了 directories）
-2. 用户选择 Agent 模式（APPROVAL / AUTONOMOUS）和工作类型（CODE / WORK）
+2. 用户选择 Agent 模式（APPROVAL / AUTONOMOUS）
 3. 用户发送消息
 ```
 
@@ -151,7 +144,7 @@ WORK → 文档/知识工作，Plan 简单（不含 deep spec）
 14. 主代理写 notebook 总结
 ```
 
-## 六、代码级强制清单
+## 五、代码级强制清单
 
 | 机制 | 作用 | 位置 |
 |---|---|---|
@@ -161,7 +154,7 @@ WORK → 文档/知识工作，Plan 简单（不含 deep spec）
 | `GenerateSpecTool.targetFiles 白名单` | spec 引用的文件 ⊆ 已批准的 targetFiles，越界拒绝 | `PlanTools.kt` |
 | `PlanApprovalRequester` | APPROVAL 模式下 create_plan 挂起等用户批准 | `PlanApprovalRequester.kt` |
 
-## 七、关键文件一览
+## 六、关键文件一览
 
 | 文件 | 职责 |
 |---|---|

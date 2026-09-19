@@ -56,19 +56,9 @@ enum class AgentMode {
 }
 
 /**
- * Agent 工作用途，与 core 的 WorkType 枚举名称一一对应。
- * WORK：非程序员（文档处理、总结资料、协助创作）。
- * CODE：程序员（写代码、调试、工程实现）。
- */
-enum class WorkType {
-    WORK,
-    CODE
-}
-
-/**
- * UI 层的 Agent 选项，捆绑 AgentMode + WorkType 两个正交维度。
+ * UI 层的 Agent 选项，由 AgentMode 维度配置行为。
  *
- * 不存在自定义 Agent。Agent = 运行时实例，由 AgentMode + WorkType 配置行为。
+ * 不存在自定义 Agent。Agent = 运行时实例，由 AgentMode 配置行为。
  */
 @Serializable
 data class AgentOption(
@@ -76,7 +66,6 @@ data class AgentOption(
     val name: String,
     val description: String?,
     val mode: AgentMode,
-    val workType: WorkType = WorkType.CODE,
     val model: ModelOption? = null,
     val reasoningLevel: String? = null,
     val systemPrompt: String? = null,

@@ -10,7 +10,6 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.TodoItem
 import xyz.mederi.domain.model.TodoStatus
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.domain.model.decodeTodos
 import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.Plan
@@ -50,7 +49,6 @@ class TodoToolTest {
                 title = "t",
                 status = xyz.mederi.domain.model.SessionStatus.IDLE,
                 agentMode = AgentMode.AUTONOMOUS,
-                workType = WorkType.CODE,
                 aiModel = null,
                 reasoningLevel = null,
                 createdAt = "2026-09-11T00:00:00Z",
@@ -173,8 +171,7 @@ class TodoToolTest {
             ),
             createdAt = "2026-09-11T00:00:00Z",
             status = PlanStatus.APPROVED,
-            agentMode = AgentMode.AUTONOMOUS,
-            workType = WorkType.CODE
+            agentMode = AgentMode.AUTONOMOUS
         )
         planStore.save(plan)
         makeSession()
@@ -217,8 +214,7 @@ class TodoToolTest {
             ),
             createdAt = "2026-09-11T00:00:00Z",
             status = PlanStatus.IN_PROGRESS,
-            agentMode = AgentMode.AUTONOMOUS,
-            workType = WorkType.CODE
+            agentMode = AgentMode.AUTONOMOUS
         )
         val projection = plan.toTodoProjection()
         assertEquals(
@@ -245,8 +241,7 @@ class TodoToolTest {
             ),
             createdAt = "2026-09-11T00:00:00Z",
             status = PlanStatus.IN_PROGRESS,
-            agentMode = AgentMode.AUTONOMOUS,
-            workType = WorkType.CODE
+            agentMode = AgentMode.AUTONOMOUS
         )
         val encoded = plan.toTodoProjection().encodeTodos()
         assertEquals(plan.toTodoProjection(), decodeTodos(encoded), "encode/decode 必须共用同一 Json 配置且对称")

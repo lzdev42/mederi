@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import xyz.mederi.browser.BrowserInfoTool
 import xyz.mederi.browser.BrowserTaskService
 import xyz.mederi.browser.BrowserTaskStatusTool
+import xyz.mederi.browser.BrowserTool
 import xyz.mederi.browser.RunBrowserTaskTool
 import xyz.mederi.browser.StopBrowserTaskTool
 import xyz.mederi.office.OfficeTools
@@ -20,12 +21,10 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
 import xyz.mederi.tools.diff.TurnDiffTracker
-import xyz.mederi.tools.subagent.AgentStatusTool
 import xyz.mederi.tools.subagent.SpawnAgentTool
 import xyz.mederi.tools.subagent.SpawnResearcherTool
-import xyz.mederi.tools.subagent.StopAgentTool
 import xyz.mederi.tools.subagent.SubagentManager
-import xyz.mederi.tools.subagent.WaitAgentTool
+import xyz.mederi.tools.subagent.SubagentTool
 import java.util.concurrent.atomic.AtomicBoolean
 
 object ToolFactory {
@@ -41,13 +40,14 @@ object ToolFactory {
         "ask_user"
     )
     val PLAN_TOOL_NAMES = listOf("create_plan", "generate_spec", "write_log", "converge_plan")
-    val SUBAGENT_TOOL_NAMES = listOf("spawn_agent", "spawn_researcher")
-    val SUBAGENT_MGMT_TOOL_NAMES = listOf("agent_status", "stop_agent", "wait_agent")
-    val BROWSER_TASK_TOOL_NAMES = listOf("run_browser_task", "browser_task_status", "stop_browser_task", "browser_info")
+    // subagent 单一入口：封装原 spawn_agent/spawn_researcher/agent_status/stop_agent/wait_agent（action 分流）
+    val SUBAGENT_TOOL_NAMES = listOf("subagent")
+    // browser 单一入口：封装原 run_browser_task/browser_task_status/stop_browser_task/browser_info（action 分流）
+    val BROWSER_TASK_TOOL_NAMES = listOf("browser")
     val OFFICE_TOOL_NAMES = listOf("office_read", "office_write")
     val VERIFY_TOOL_NAMES = listOf("verify_subtask")
     val PROCESS_TOOL_NAMES = listOf("list_processes", "stop_process")
-    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + SUBAGENT_MGMT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES
+    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES
 
     fun build(
         toolNames: List<String>,
@@ -65,7 +65,6 @@ object ToolFactory {
         projectId: String? = null,
         questionRequester: xyz.mederi.question.QuestionRequester? = null,
         agentMode: AgentMode = AgentMode.AUTONOMOUS,
-        workType: xyz.mederi.domain.model.WorkType? = null,
         subagentRole: SubagentRole? = null,
         planApprovalRequester: PlanApprovalRequester? = null,
         planStore: PlanStore? = null,
@@ -138,7 +137,7 @@ object ToolFactory {
         } else emptyMap()
 
         val planTools = if (canPlan) {
-            PlanTools(sessionId, agentMode, workType ?: xyz.mederi.domain.model.WorkType.CODE, planStore!!, planApprovalRequester!!, notebook!!, eventBus)
+            PlanTools(sessionId, agentMode, planStore!!, planApprovalRequester!!, notebook!!, eventBus)
         } else null
         val planToolMap = if (planTools != null) {
             mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
@@ -161,60 +160,43 @@ object ToolFactory {
 
         val subagentToolMap = if (canSpawn) {
             mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "spawn_agent" to {
-                    SpawnAgentTool(
-                        subagentManager = subagentManager!!,
-                        directories = directories,
-                        aiModel = aiModel!!,
-                        reasoningLevel = reasoningLevel!!,
-                        projectId = projectId!!,
-                        parentSessionId = sessionId,
-                        planStore = planStore,
-                        eventBus = eventBus,
-                        apiKeyId = apiKeyId,
-                        sessionStore = sessionStore
-                    )
-                },
-                "spawn_researcher" to {
-                    SpawnResearcherTool(
-                        subagentManager = subagentManager!!,
-                        directories = directories,
-                        aiModel = aiModel!!,
-                        reasoningLevel = reasoningLevel!!,
-                        projectId = projectId!!,
-                        parentSessionId = sessionId,
-                        apiKeyId = apiKeyId,
-                        sessionStore = sessionStore
+                "subagent" to {
+                    val mgr = subagentManager!!
+                    SubagentTool(
+                        spawnExecutor = SpawnAgentTool(
+                            mgr, directories, aiModel!!, reasoningLevel!!, projectId!!,
+                            sessionId, planStore, eventBus, apiKeyId, sessionStore
+                        ),
+                        spawnResearcher = SpawnResearcherTool(
+                            mgr, directories, aiModel!!, reasoningLevel!!, projectId!!,
+                            sessionId, apiKeyId, sessionStore
+                        ),
+                        manager = mgr
                     )
                 }
             )
         } else emptyMap()
 
-        // 异步子代理生命周期管理工具：仅主代理（子代理自身不管理别人）
-        val subagentMgmtToolMap = if (canSpawn) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "agent_status" to { AgentStatusTool(subagentManager!!) },
-                "stop_agent" to { StopAgentTool(subagentManager!!) },
-                "wait_agent" to { WaitAgentTool(subagentManager!!) }
-            )
-        } else emptyMap()
-
-        // 浏览器任务工具：仅主代理（子代理不派发浏览器任务）
+        // 浏览器任务工具：仅主代理（子代理不派发浏览器任务），4→1 单一入口（action 分流）
         val browserTaskToolMap = if (!isSubagent && browserTaskService != null && aiModel != null && reasoningLevel != null && projectId != null) {
             mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "run_browser_task" to {
-                    RunBrowserTaskTool(
-                        service = browserTaskService!!,
-                        aiModel = aiModel!!,
-                        reasoningLevel = reasoningLevel!!,
-                        projectId = projectId!!,
-                        sessionId = sessionId,
-                        apiKeyId = apiKeyId
+                "browser" to {
+                    val svc = browserTaskService!!
+                    BrowserTool(
+                        run = RunBrowserTaskTool(
+                            service = svc,
+                            aiModel = aiModel!!,
+                            reasoningLevel = reasoningLevel!!,
+                            projectId = projectId!!,
+                            sessionId = sessionId,
+                            apiKeyId = apiKeyId
+                        ),
+                        status = BrowserTaskStatusTool(svc),
+                        stop = StopBrowserTaskTool(svc),
+                        info = BrowserInfoTool(svc, sessionId),
+                        service = svc
                     )
-                },
-                "browser_task_status" to { BrowserTaskStatusTool(browserTaskService!!) },
-                "stop_browser_task" to { StopBrowserTaskTool(browserTaskService!!) },
-                "browser_info" to { BrowserInfoTool(browserTaskService!!, sessionId) }
+                }
             )
         } else emptyMap()
 
@@ -234,7 +216,7 @@ object ToolFactory {
             emptyMap()
         }
 
-        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + subagentMgmtToolMap + browserTaskToolMap + officeToolMap + processToolMap
+        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + browserTaskToolMap + officeToolMap + processToolMap
         val requested = if (toolNames.isEmpty()) allAvailableMaps.keys.toList() else toolNames
 
         val built = ToolRegistry {

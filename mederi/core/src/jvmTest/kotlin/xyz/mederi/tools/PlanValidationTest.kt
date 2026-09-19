@@ -4,7 +4,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.MederiEvent
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.PlanApprovalRequester
 import xyz.mederi.plan.PlanStore
@@ -21,8 +20,7 @@ import kotlin.test.assertTrue
  * - 纯 ASCII 命令 → 通过
  * - SubtaskArg 的 verificationCwd/verificationTimeoutSeconds → 构造出的 VerificationSpec 字段正确
  *
- * 全部用 WorkType.WORK + AUTONOMOUS：避免 CODE 模式额外的必填校验干扰，
- * 且 AUTONOMOUS 下 execute 校验通过即落盘返回，无需等待人工批准。
+ * 全部用 AUTONOMOUS：execute 校验通过即落盘返回，无需等待人工批准。
  */
 class PlanValidationTest {
 
@@ -36,10 +34,9 @@ class PlanValidationTest {
     private val eventBus = MutableSharedFlow<MederiEvent>(replay = 64)
     private val planApprovalRequester = PlanApprovalRequester("sess_validation", eventBus)
 
-    private fun planTools(workType: WorkType) = PlanTools(
+    private fun planTools() = PlanTools(
         sessionId = "sess_validation",
         agentMode = AgentMode.AUTONOMOUS,
-        workType = workType,
         planStore = planStore,
         planApprovalRequester = planApprovalRequester,
         notebook = Notebook(listOf(tmpDir.absolutePath)),
@@ -53,7 +50,7 @@ class PlanValidationTest {
 
     @Test
     fun `CJK prose verification is rejected`() = runBlocking {
-        val result = planTools(WorkType.WORK).CreatePlanTool().execute(
+        val result = planTools().CreatePlanTool().execute(
             PlanTools.CreatePlanArgs(
                 title = "test plan",
                 summary = "test summary",
@@ -74,14 +71,36 @@ class PlanValidationTest {
 
     @Test
     fun `pure ASCII command passes validation`() = runBlocking {
-        val result = planTools(WorkType.WORK).CreatePlanTool().execute(
+        val result = planTools().CreatePlanTool().execute(
             PlanTools.CreatePlanArgs(
                 title = "test plan",
                 summary = "test summary",
                 overview = "test overview",
+                businessLogic = "Entry: CLI command; before: no grep check exists; after: runs the grep assertion and reports the result.",
+                inScope = listOf("Add grep check"),
+                keyDecisions = listOf(
+                    PlanTools.DecisionArg(
+                        question = "How to run the check?",
+                        choice = "Single shell command",
+                        rationale = "Keeps verification directly executable."
+                    )
+                ),
+                changes = listOf(
+                    PlanTools.PlannedChangeArg(
+                        module = "cli",
+                        action = "NEW",
+                        filePath = "check.sh",
+                        description = "grep check script",
+                        rationale = "No existing file fits this purpose."
+                    )
+                ),
+                successCriteria = listOf("grep -q foo file.txt exits 0"),
+                languageStack = "Shell",
                 subtasks = listOf(
                     PlanTools.SubtaskArg(
                         name = "grep check",
+                        planDetail = "run grep check",
+                        targetFiles = listOf("check.sh"),
                         verification = "grep -q foo file.txt"
                     )
                 )
@@ -92,14 +111,36 @@ class PlanValidationTest {
 
     @Test
     fun `cwd and timeout flow into VerificationSpec`() = runBlocking {
-        val result = planTools(WorkType.WORK).CreatePlanTool().execute(
+        val result = planTools().CreatePlanTool().execute(
             PlanTools.CreatePlanArgs(
                 title = "test plan",
                 summary = "test summary",
                 overview = "test overview",
+                businessLogic = "Entry: CLI command; before: no check exists; after: runs the compile assertion and reports the result.",
+                inScope = listOf("Add compile check"),
+                keyDecisions = listOf(
+                    PlanTools.DecisionArg(
+                        question = "How to run the check?",
+                        choice = "Single shell command",
+                        rationale = "Keeps verification directly executable."
+                    )
+                ),
+                changes = listOf(
+                    PlanTools.PlannedChangeArg(
+                        module = "cli",
+                        action = "NEW",
+                        filePath = "compile.sh",
+                        description = "compile check script",
+                        rationale = "No existing file fits this purpose."
+                    )
+                ),
+                successCriteria = listOf("grep -q foo file.txt exits 0"),
+                languageStack = "Shell",
                 subtasks = listOf(
                     PlanTools.SubtaskArg(
                         name = "compile",
+                        planDetail = "run compile check",
+                        targetFiles = listOf("compile.sh"),
                         verification = "grep -q foo file.txt",
                         verificationCwd = "sub/dir",
                         verificationTimeoutSeconds = 120

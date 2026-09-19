@@ -8,7 +8,6 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.*
 import xyz.mederi.domain.model.AgentMode
-import xyz.mederi.domain.model.WorkType
 
 @Serializable
 enum class PlanStatus { PENDING_APPROVAL, APPROVED, IN_PROGRESS, COMPLETED }
@@ -185,8 +184,7 @@ data class Plan(
     val subtasks: List<Subtask>,
     val status: PlanStatus = PlanStatus.PENDING_APPROVAL,
     val createdAt: String,
-    val agentMode: AgentMode,
-    val workType: WorkType
+    val agentMode: AgentMode
 ) {
     val isAllCompleted: Boolean get() =
         subtasks.isNotEmpty() &&

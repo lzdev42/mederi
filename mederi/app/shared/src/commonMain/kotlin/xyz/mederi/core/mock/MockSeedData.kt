@@ -82,10 +82,8 @@ object MockSeedData {
     )
 
     val agents = listOf(
-        AgentOption(id = "autonomous-code", name = "自主 · 编程", description = "AI 自主判断直接执行，适合写代码、调试", mode = AgentMode.AUTONOMOUS, workType = WorkType.CODE),
-        AgentOption(id = "approval-code", name = "审批 · 编程", description = "先列计划等批准后再执行", mode = AgentMode.APPROVAL, workType = WorkType.CODE),
-        AgentOption(id = "autonomous-work", name = "自主 · 通用", description = "AI 自主执行，适合文档处理、协助创作", mode = AgentMode.AUTONOMOUS, workType = WorkType.WORK),
-        AgentOption(id = "approval-work", name = "审批 · 通用", description = "先列计划等批准后再执行", mode = AgentMode.APPROVAL, workType = WorkType.WORK),
+        AgentOption(id = "autonomous", name = "自主模式", description = "AI 自主判断直接执行", mode = AgentMode.AUTONOMOUS),
+        AgentOption(id = "approval", name = "审批模式", description = "先列计划等批准后再执行", mode = AgentMode.APPROVAL),
     )
 
     val providers = listOf(

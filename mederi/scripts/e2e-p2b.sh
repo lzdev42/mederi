@@ -47,19 +47,18 @@ if m is None: sys.stderr.write(f"model {mid} not found\n"); sys.exit(1)
 json.dump(m, sys.stdout)
 ' > "$MODEL_JSON"
 
-new_session() {  # $1 = agent id (autonomous-code / autonomous-work)
+new_session() {  # $1 = agent id (default: autonomous)
   PROJ="$(curl -s -m 10 -X POST "$BASE/v1/projects" -H 'Content-Type: application/json' \
     --data "{\"name\":\"e2e-p2b\",\"directory\":\"$FIXTURE\"}")"
   P="$(echo "$PROJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
-  local AGENT_NAME="自主 · 编程"
-  [ "$1" = "autonomous-work" ] && AGENT_NAME="自主 · 通用"
+  local AGENT_NAME="自主模式"
   SESS="$(curl -s -m 10 -X POST "$BASE/v1/sessions" -H 'Content-Type: application/json' \
-    --data "{\"projectId\":\"$P\",\"agent\":{\"id\":\"$1\",\"name\":\"$AGENT_NAME\",\"description\":null,\"mode\":\"AUTONOMOUS\",\"workType\":\"$([ "$1" = "autonomous-work" ] && echo WORK || echo CODE)\"}}")"
+    --data "{\"projectId\":\"$P\",\"agent\":{\"id\":\"$1\",\"name\":\"$AGENT_NAME\",\"description\":null,\"mode\":\"AUTONOMOUS\"}}")"
   echo "$SESS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])'
 }
 
 send_and_wait() {  # $1=SID $2=prompt $3=agentId
-  local SID=$1 PROMPT=$2 AGENT=${3:-autonomous-code}
+  local SID=$1 PROMPT=$2 AGENT=${3:-autonomous}
   EVENTS_LOG="$WORK/events.log"
   : > "$EVENTS_LOG"
   curl -sN -m "$((TIMEOUT+60))" "$BASE/v1/sessions/$SID/events" > "$EVENTS_LOG" 2>/dev/null &
@@ -68,8 +67,7 @@ send_and_wait() {  # $1=SID $2=prompt $3=agentId
   python3 - "$PROMPT" "$MODEL_JSON" "$AGENT" > "$WORK/msg.json" <<'PY'
 import json,sys
 model=json.loads(open(sys.argv[2]).read())
-isWork = sys.argv[3]=="autonomous-work"
-body={"text":sys.argv[1],"model":model,"agent":{"id":sys.argv[3],"name":"a","description":None,"mode":"AUTONOMOUS","workType":"WORK" if isWork else "CODE"},"thinkingLevel":None}
+body={"text":sys.argv[1],"model":model,"agent":{"id":sys.argv[3],"name":"a","description":None,"mode":"AUTONOMOUS"},"thinkingLevel":None}
 json.dump(body, sys.stdout, ensure_ascii=False)
 PY
   HTTP=$(curl -s -m 30 -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/sessions/$SID/messages" -H 'Content-Type: application/json' --data @"$WORK/msg.json")
@@ -114,7 +112,7 @@ for m in reversed(msgs):
 # =====================================================================
 say "R3: 手动压缩（compress endpoint）"
 # =====================================================================
-SID3=$(new_session autonomous-code)
+SID3=$(new_session autonomous)
 echo "  session: $SID3"
 
 # 先造一段有可压缩事实的对话（多轮：压缩策略要求 older 消息 >=2 才动手）
@@ -151,11 +149,11 @@ echo "  R3.4 压缩标记在历史 ✓"
 pass "R3 手动压缩"
 
 # =====================================================================
-say "R4: WORK 模式（非编码任务）"
+say "R4: 纯阅读任务（总结笔记，不写文件）"
 # =====================================================================
-SID4=$(new_session autonomous-work)
+SID4=$(new_session autonomous)
 echo "  session: $SID4"
-send_and_wait "$SID4" "Read notes.md and summarize the key decisions in one short paragraph. Answer in chat only, do not write files." autonomous-work
+send_and_wait "$SID4" "Read notes.md and summarize the key decisions in one short paragraph. Answer in chat only, do not write files."
 grep -q "MESSAGE_ERROR" "$EVENTS_LOG" && fail "R4 turn MESSAGE_ERROR"
 SEQ_R4="$(tool_sequence)"
 echo "  工具序列: $SEQ_R4"
@@ -165,12 +163,12 @@ case "$SEQ_R4" in
 esac
 SUM4="$(last_assistant_text "$SID4")"
 case "$SUM4" in *budget*|*Budget*|*Alice*|*November*) echo "  R4.2 总结引用真实事实 ✓" ;; *) fail "R4.2 总结无真实事实: $(echo "$SUM4" | tail -c 150)" ;; esac
-pass "R4 WORK 模式"
+pass "R4 阅读总结"
 
 # =====================================================================
 say "R5: ask_user 挂起/恢复"
 # =====================================================================
-SID5=$(new_session autonomous-code)
+SID5=$(new_session autonomous)
 echo "  session: $SID5"
 EVENTS_LOG="$WORK/events5.log"
 : > "$EVENTS_LOG"
@@ -180,7 +178,7 @@ sleep 1
 python3 - 'Create a config file named app.cfg at the project root. The content must contain a port number — I cannot decide the value, so ask me which port to use before creating it. Use the ask_user tool.' "$MODEL_JSON" > "$WORK/msg5.json" <<'PY'
 import json,sys
 model=json.loads(open(sys.argv[2]).read())
-body={"text":sys.argv[1],"model":model,"agent":{"id":"autonomous-code","name":"a","description":None,"mode":"AUTONOMOUS","workType":"CODE"},"thinkingLevel":None}
+body={"text":sys.argv[1],"model":model,"agent":{"id":"autonomous","name":"a","description":None,"mode":"AUTONOMOUS"},"thinkingLevel":None}
 json.dump(body, sys.stdout, ensure_ascii=False)
 PY
 HTTP=$(curl -s -m 30 -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/sessions/$SID5/messages" -H 'Content-Type: application/json' --data @"$WORK/msg5.json")

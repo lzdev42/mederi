@@ -19,7 +19,7 @@
 Mederi 是 Koog 的易用化、插件化包装库：让开发者快速构建 AI Agent 应用。
 Koog 是执行引擎（给 LLM 发请求、收响应、调工具），Mederi 是应用框架（供应商配置、项目管理、持久化、Session、审批、计划系统）。
 
-**不存在自定义 Agent**。Agent = LLM 驱动的工具集 + 工作流，是运行时实例，通过 AgentMode（APPROVAL/AUTONOMOUS）+ WorkType（WORK/CODE）配置。
+**不存在自定义 Agent**。Agent = LLM 驱动的工具集 + 工作流，是运行时实例，通过 AgentMode（APPROVAL 审批 / AUTONOMOUS 自主）配置行为；不区分编程/通用工作用途。
 
 **InkCompose** 是本项目的富文本渲染核心：Markdown / LaTeX / 代码高亮 / 图表（Mermaid，KBrowser webview 渲染）/ 竖排文字（蒙古文/满文）。Mederi 计划系统产出的 architecture（Mermaid 代码块）由 InkCompose 渲染。
 
@@ -189,19 +189,19 @@ inkcompose/
 - execute_command：macOS Seatbelt（sandbox-exec）/ Linux bwrap（只检测不代装）/ Windows 降级警告；shell 探测链 bash→sh（Windows bash.exe→cmd）
 - **进程回收**：每条命令是独立进程组，execute_command 启动即登记 `ProcessRegistry`；`list_processes`/`stop_process` 宿主侧（沙箱外）按注册表整组回收——macOS 沙箱内信号不可用（profile 无 process-signal，实测 unbound），只能靠宿主侧。**只杀 mederi 自己启动的进程**，注册表查不到 pid 即拒绝，沙箱内命令无法写注册表
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行
-- `spawn_agent` 硬校验 planId/subtaskIndex/spec 存在性（spec 不存在即拒）
+- `subagent`(action=SPAWN) 硬校验 planId/subtaskIndex/spec 存在性（spec 不存在即拒）
 
 **项目目录模型**：`directories.first()` = 主目录（承载 `.mederi/` 工作区、shell cwd、相对路径解析首选），
 其余目录平等读写。多目录 containment 白名单有效。
 
-**计划/Spec 分层（2026-09 定稿）**：create_plan = WHAT（中层技术方案，用户批准的对象）；批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）；spawn_agent(planId, subtaskIndex) 硬绑定执行存储的 spec；
+**计划/Spec 分层（2026-09 定稿）**：create_plan = WHAT（中层技术方案，用户批准的对象）；批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）；subagent(SPAWN, planId, subtaskIndex) 硬绑定执行存储的 spec；
 verify 三分支：PASS / 执行错→converge_plan / **spec 错→重新 generate_spec 覆盖→重执行**。
 
 **并行工具调度（2026-09 定稿）**：Koog 工具执行节点已开 `parallel=true`——同一条消息里的多个工具调用并行执行，**无并发上限，由 AI 调度**（信任 AI 策略）。配套硬性约束：
 - `create_plan` 必须单独发一条消息，不得与任何工具同消息批量；
-- **禁止同消息混发 `generate_spec` 与 `spawn_agent`**（并行无序，spawn 可能读到未写入的 spec）——先为所有独立子任务生成 spec，再同消息一起 spawn；
+- **禁止同消息混发 `generate_spec` 与 `subagent`(SPAWN)**（并行无序，spawn 可能读到未写入的 spec）——先为所有独立子任务生成 spec，再同消息一起 subagent(SPAWN)；
 - 并行批量时杜绝竞争：同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（占用即 Error，AI 下轮重试）；不重复执行同一命令仍靠 AI 自律（shell 是外部进程，管不了）。
-- 因并行而生，plan 状态写入必须原子：`spawn_agent` 的 IN_PROGRESS 标记、`generate_spec` 的 spec 写入、`verify_subtask` 的验证结果一律走 `PlanStore.updatePlan`（原子读改写，进程级锁），禁止裸 load→copy→save。
+- 因并行而生，plan 状态写入必须原子：`subagent`(SPAWN) 的 IN_PROGRESS 标记、`generate_spec` 的 spec 写入、`verify_subtask` 的验证结果一律走 `PlanStore.updatePlan`（原子读改写，进程级锁），禁止裸 load→copy→save。
 
 **系统环境注入**：每条用户消息尾部 `<<<NOT_FOR_UI>>>` 隐藏块注入时间、OS/版本/arch、
 shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该让用户重复输入的环境事实。
@@ -218,12 +218,12 @@ shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该
 ```
 用户请求 → 主代理判断：
 ├─【纯读】问答/讨论/分析 → 主代理直接读文件回答；
-│    读不够深（跨多文件/链路长/根因未知）→ spawn_researcher → 完整报告 → 据此回答
+│    读不够深（跨多文件/链路长/根因未知）→ subagent(SPAWN_RESEARCHER) → 完整报告 → 据此回答
 ├─【小改动】已知根因/简单逻辑/几行代码 → 主代理直接 edit_file/write_file
 │    （不建 plan、不 spawn；apply_patch 已注销，不注册给 AI）
 └─【复杂改动】多文件/逻辑变化/需用户决策 → Plan Loop：
-     （理解不足先 spawn_researcher）→ create_plan → 批准 → generate_spec
-     → spawn_agent(planId, subtaskIndex) → verify_subtask
+     （理解不足先 subagent(SPAWN_RESEARCHER)）→ create_plan → 批准 → generate_spec
+     → subagent(SPAWN, planId, subtaskIndex) → verify_subtask
        ├─ PASS → 下一个子任务
        ├─ 执行错 → converge_plan 追加补救 → 重执行
        └─ spec 错 → 重新 generate_spec 覆盖→重执行
@@ -251,7 +251,7 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 ### 并行执行（2026-09）
 
 **相互独立（无 dependsOn、不写同一批文件）的子任务用并行 spawn 执行**：先为这些子任务逐个
-`generate_spec`，然后同一条消息发多个 `spawn_agent` 一起跑，全部返回后再逐个 `verify_subtask`。
+`generate_spec`，然后同一条消息发多个 `subagent`(SPAWN) 一起跑，全部返回后再逐个 `verify_subtask`。
 有依赖的子任务保持串行。并行度不设上限，由 AI 自己判断——信任 AI 调度，代码不设闸门（仅沙箱兜底）。
 
 ### 上下文挂载（防失忆）

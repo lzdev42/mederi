@@ -5,7 +5,6 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.TodoItem
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
 /**
@@ -36,12 +35,11 @@ interface SessionStore {
     suspend fun update(id: String, status: SessionStatus? = null, title: String? = null)
 
     /**
-     * 更新会话的 Agent 配置（agentMode / workType / aiModel / reasoningLevel）。
+     * 更新会话的 Agent 配置（agentMode / aiModel / reasoningLevel）。
      */
     suspend fun updateAgentConfig(
         id: String,
         agentMode: AgentMode? = null,
-        workType: WorkType? = null,
         aiModel: AIModel? = null,
         reasoningLevel: ReasoningLevel? = null
     )

@@ -7,12 +7,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.dto.CreateProjectInput
 import xyz.mederi.core.contract.models.Project
-import xyz.mederi.core.contract.models.WorkType
 import xyz.mederi.core.ui.appstate.AppState
 
 data class SidebarUiState(
@@ -27,25 +26,12 @@ class SidebarViewModel(
 
     var uiState by mutableStateOf(SidebarUiState()); private set
 
-    /** 当前工作用途（透传 AppState 派生流） */
-    val selectedWorkType: StateFlow<WorkType> get() = appState.selectedWorkType
-
     /**
-     * 按当前工作用途过滤的项目/会话树：
-     * 只保留没有会话的项目，或包含匹配 workType 会话的项目（且只展示匹配的会话）。
+     * 侧边栏项目/会话树（全部展示，按项目创建时间倒序）。
      */
     val filteredProjects: StateFlow<List<Project>> =
-        combine(appState.projects, appState.selectedWorkType) { projects, workType ->
-            projects
-                .mapNotNull { project ->
-                    val matching = project.conversations.filter { it.workType == workType }
-                    if (project.conversations.isEmpty() || matching.isNotEmpty()) {
-                        project.copy(conversations = matching)
-                    } else {
-                        null
-                    }
-                }
-                .sortedByDescending { it.createdAt }
+        appState.projects.map { projects ->
+            projects.sortedByDescending { it.createdAt }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** 确保会话所属的项目在侧边栏展开（覆盖程序化选择：自动创建会话、子代理跳转等） */
@@ -154,10 +140,6 @@ class SidebarViewModel(
 
     fun selectConversation(id: String?) {
         appState.selectConversation(id)
-    }
-
-    fun selectWorkType(workType: WorkType) {
-        appState.selectWorkType(workType)
     }
 
     fun newSession() {

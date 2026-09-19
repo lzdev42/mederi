@@ -23,19 +23,19 @@ class OfficeTools(
 
     @Serializable
     data class OfficeReadArgs(
-        @LLMDescription("要读取的 Office 文件路径（.docx/.xlsx/.pptx）。可以是绝对路径或相对路径。")
+        @LLMDescription("Office file path (.docx/.xlsx/.pptx), absolute or relative.")
         val path: String = ""
     )
 
     @Serializable
     data class OfficeWriteArgs(
-        @LLMDescription("要写入的 Office 文件路径（.docx 或 .xlsx）。必须是项目目录内的路径。")
+        @LLMDescription("Office file path to write (.docx or .xlsx). Must be inside project directories.")
         val path: String = "",
         @LLMDescription(
-            "要写入的 markdown 内容。格式要求：\n" +
-            "- docx：用 #/##/### 表示标题，- 表示列表，|...|... 表示表格，普通段落直接写。\n" +
-            "- xlsx：用 ## SheetName 表示 sheet，|...|... 表示表格行（第一行为表头）。\n" +
-            "内容会完整替换原文件。"
+            "Markdown content to write. Format:\n" +
+            "- docx: #/##/### headings, - lists, |...| tables, plain paragraphs.\n" +
+            "- xlsx: ## SheetName starts a sheet, |...| rows (first row = header).\n" +
+            "The content fully replaces the file."
         )
         val content: String = ""
     )
@@ -44,8 +44,7 @@ class OfficeTools(
     inner class OfficeReadTool : SimpleTool<OfficeReadArgs>(
         argsType = typeToken<OfficeReadArgs>(),
         name = "office_read",
-        description = "读取 Office 文档（.docx/.xlsx/.pptx）并转换为 markdown 文本。" +
-            "用于查看 Word/Excel/PowerPoint 文件内容。读后可用 office_write 写回修改。"
+        description = "Read an Office document (.docx/.xlsx/.pptx) and convert it to markdown text."
     ) {
         override suspend fun execute(args: OfficeReadArgs): String {
             if (args.path.isBlank()) return "Error: path must not be empty."
@@ -66,9 +65,7 @@ class OfficeTools(
     inner class OfficeWriteTool : SimpleTool<OfficeWriteArgs>(
         argsType = typeToken<OfficeWriteArgs>(),
         name = "office_write",
-        description = "从 markdown 内容生成或覆盖 Office 文档（.docx/.xlsx）。" +
-            "支持格式：docx（#/##/### 标题、- 列表、| 表格、段落）；xlsx（## sheet名、| 表格行）。" +
-            "写入路径必须在项目目录内。内容完整替换原文件。"
+        description = "Generate or overwrite an Office document (.docx/.xlsx) from markdown content. docx: #/##/### headings, - lists, | tables, paragraphs; xlsx: ## sheet names, | rows. The content fully replaces the file; the path must be inside project directories."
     ) {
         override suspend fun execute(args: OfficeWriteArgs): String {
             if (args.path.isBlank()) return "Error: path must not be empty."

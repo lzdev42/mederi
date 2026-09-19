@@ -9,18 +9,22 @@ import org.junit.Test
  * TurnExecutor 构建主代理工具时传 `ToolFactory.ALL_TOOL_NAMES` 作为显式过滤，
  * 工具即使注册进了 browserTaskToolMap，只要没进 BROWSER_TASK_TOOL_NAMES 就会被静默丢弃。
  * （真实事故：browser_info 只进了 map、没进名单，AI 一直说没有该工具。）
+ *
+ * 2026-09 合并后：四件套封装为单一 `browser`（action 分流）——
+ * 名单不变量 = BROWSER_TASK_TOOL_NAMES 恰为 ["browser"] 且它在 ALL_TOOL_NAMES。
  */
 class BrowserTaskToolNamesTest {
 
     @Test
-    fun `browser 工具四件套全在某名单，且 browser_info 在 ALL_TOOL_NAMES`() {
+    fun `browser 合并入口在名单中且 ALL_TOOL_NAMES 包含它`() {
         assertEquals(
-            setOf("run_browser_task", "browser_task_status", "stop_browser_task", "browser_info"),
-            ToolFactory.BROWSER_TASK_TOOL_NAMES.toSet()
+            listOf("browser"),
+            ToolFactory.BROWSER_TASK_TOOL_NAMES
         )
-        assertTrue("browser_info must be in ALL_TOOL_NAMES", "browser_info" in ToolFactory.ALL_TOOL_NAMES)
-        assertTrue("run_browser_task must be in ALL_TOOL_NAMES", "run_browser_task" in ToolFactory.ALL_TOOL_NAMES)
-        assertTrue("browser_task_status must be in ALL_TOOL_NAMES", "browser_task_status" in ToolFactory.ALL_TOOL_NAMES)
-        assertTrue("stop_browser_task must be in ALL_TOOL_NAMES", "stop_browser_task" in ToolFactory.ALL_TOOL_NAMES)
+        assertTrue("browser must be in ALL_TOOL_NAMES", "browser" in ToolFactory.ALL_TOOL_NAMES)
+        // 旧名不得残留（残留 = 静默丢弃的幽灵注册）
+        listOf("run_browser_task", "browser_task_status", "stop_browser_task", "browser_info").forEach {
+            assertTrue("$it must NOT be in ALL_TOOL_NAMES after the merge", it !in ToolFactory.ALL_TOOL_NAMES)
+        }
     }
 }

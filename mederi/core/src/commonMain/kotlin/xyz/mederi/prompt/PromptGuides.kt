@@ -111,11 +111,11 @@ don't place consecutively or nest: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]
      * "顺序执行"）收敛到这里，PLANNING_DISCIPLINE 只讲流程判断；两个文件各讲各的。
      */
     val PLAN_TOOL_GUIDE: String = """
-# Plan Tool Discipline (create_plan / generate_spec / spawn_agent / verify_subtask)
+# Plan Tool Discipline (create_plan / generate_spec / subagent(SPAWN) / verify_subtask)
 
 Hard rules — violating any wastes the whole turn:
 1. Plan tools are STRICTLY SEQUENTIAL, one per message step: create_plan must SUCCEED before
-   generate_spec, generate_spec before spawn_agent. Never fire later steps in the same message
+   generate_spec, generate_spec before subagent(SPAWN). Never fire later steps in the same message
    as an earlier one.
 2. A planId exists ONLY after create_plan succeeds. If you have no real planId, the only correct
    call is create_plan. NEVER invent an id.
@@ -149,14 +149,14 @@ Example (shape to follow; content from your real task):
   "subtasks": [{"name": "Implement sub", "planDetail": "Add sub(a,b) to pkg/calc.py.",
      "targetFiles": ["pkg/calc.py"],
      "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",
-     "verificationCwd": null,        // 可选：验证命令工作目录（相对项目根）；null=项目主目录
-     "verificationTimeoutSeconds": 30, // 可选：验证超时秒数；verification 必须是单条 ASCII 命令（散文将被拒绝）
+     "verificationCwd": null,        // optional: verification working dir (relative to project root); null = project root
+     "verificationTimeoutSeconds": 30, // optional: verification timeout seconds; verification must be a single ASCII command (prose rejected)
      "dependsOn": [], "parallelizable": false}]
 }
 ```
 
 After approval, per subtask: generate_spec(planId, subtaskIndex, spec) as an ordered checklist,
-then spawn_agent(planId, subtaskIndex) (returns agentId, runs in background),
-then wait_agent(agentId) for the result, then verify_subtask(planId, subtaskIndex, status, evidence).
+then subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background),
+then subagent(WAIT, agentId) for the result, then verify_subtask(planId, subtaskIndex, status, evidence).
 """.trimIndent()
 }

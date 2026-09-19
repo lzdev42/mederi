@@ -8,7 +8,6 @@ import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.Session
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
 /**
@@ -63,13 +62,11 @@ interface SessionApi {
  * Agent 运行时配置。
  *
  * @param agentMode 执行策略（APPROVAL / AUTONOMOUS），决定系统提示词。
- * @param workType 工作用途（WORK / CODE），决定提示词引导。
  * @param aiModel 选用的模型。null 时继承 Session 记住的模型。
  * @param reasoningLevel 推理等级。null 时继承 Session 记住的等级。
  */
 data class AgentConfig(
     val agentMode: AgentMode,
-    val workType: WorkType = WorkType.CODE,
     val aiModel: AIModel? = null,
     val reasoningLevel: ReasoningLevel? = null
 )

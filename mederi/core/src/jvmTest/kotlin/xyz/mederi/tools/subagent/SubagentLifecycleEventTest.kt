@@ -12,7 +12,6 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,7 +31,7 @@ class SubagentLifecycleEventTest {
         enum class Mode { COMPLETE, HANG, THROW }
         override suspend fun run(
             task: String, briefing: String?, plan: String?, role: SubagentRole,
-            workType: WorkType, directories: List<String>, aiModel: AIModel,
+            directories: List<String>, aiModel: AIModel,
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
             apiKeyId: String?, executorPlanId: String?, executorSubtaskIndex: Int?,
             planStore: xyz.mederi.plan.PlanStore?
@@ -46,7 +45,7 @@ class SubagentLifecycleEventTest {
     private fun spawn(manager: SubagentManager, task: String = "do it", briefing: String? = null): String =
         manager.spawn(
             task = task, briefing = briefing, plan = null, role = SubagentRole.EXECUTOR,
-            workType = WorkType.CODE, directories = emptyList(),
+            directories = emptyList(),
             aiModel = AIModel(id = "m1", providerModelId = "m1", name = "ModelB"),
             reasoningLevel = ReasoningLevel.HIGH,
             projectId = "p1", parentSessionId = "sess_parent"

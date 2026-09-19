@@ -66,7 +66,7 @@ start_approval_session() {  # $1 = 任务提示词
   PID_A="$(echo "$PROJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
 
   SESS="$(curl -s -m 10 -X POST "$BASE/v1/sessions" -H 'Content-Type: application/json' \
-    --data "{\"projectId\":\"$PID_A\",\"agent\":{\"id\":\"approval-code\",\"mode\":\"APPROVAL\",\"workType\":\"CODE\"}}")"
+    --data "{\"projectId\":\"$PID_A\",\"agent\":{\"id\":\"approval\",\"mode\":\"APPROVAL\"}}")"
   APPROVAL_SID="$(echo "$SESS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
   echo "  session: $APPROVAL_SID"
 

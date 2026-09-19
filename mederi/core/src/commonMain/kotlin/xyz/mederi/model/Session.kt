@@ -14,7 +14,7 @@ enum class SessionStatus {
  * 持久会话容器。
  *
  * Session 是对话历史的容器，记录用户最后一次选择的配置。
- * 系统提示词由 agentMode + workType 每轮现算，不在 Session 中冗余存储。
+ * 系统提示词由 agentMode 每轮现算，不在 Session 中冗余存储。
  *
  * Session 必须属于一个 Project。
  *
@@ -23,7 +23,6 @@ enum class SessionStatus {
  * @param title 标题。
  * @param status 当前状态。
  * @param agentMode 执行策略（APPROVAL / AUTONOMOUS）。
- * @param workType 工作用途（WORK / CODE）。
  * @param aiModel 用户最后一次选择的模型，可为 null（首次未选择时）。
  * @param reasoningLevel 用户最后一次选择的推理等级，可为 null。
  * @param env 会话环境变量。
@@ -39,7 +38,6 @@ data class Session(
     val title: String,
     val status: SessionStatus,
     val agentMode: AgentMode,
-    val workType: WorkType = WorkType.CODE,
     val aiModel: AIModel?,
     val reasoningLevel: ReasoningLevel?,
     val env: Map<String, String> = emptyMap(),

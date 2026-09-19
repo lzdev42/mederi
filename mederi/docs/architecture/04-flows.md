@@ -23,7 +23,7 @@ sequenceDiagram
     SM->>TE: TurnExecutor.sendMessage(sessionId, request)
     TE->>TE: activeApiKeyId = request.apiKeyId（本 turn 唯一真理源）
     TE->>TE: 校验 IDLE → 读 Project → PlanStore.loadBySession<br/>组装 activePlanContent/spec指针/activeTodoContent(互斥)
-    TE->>TE: SystemPrompts.build(agentMode, workType, activePlan, activeTodo)<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深)
+    TE->>TE: SystemPrompts.build(agentMode, activePlan, activeTodo)<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深)
     TE->>TE: effectiveModel/effectiveReasoningLevel → sessionStore.updateAgentConfig
     TE->>HS: append(用户消息+durable环境块) 【durable-first】
     TE->>EB: SESSION_UPDATED
@@ -315,18 +315,19 @@ flowchart TD
     HS --> RE["回退成功 → 内容粘贴回输入框重建待发态:<br/>inputDraft=主指令 + pendingPastedTexts=大段文本 + pendingImages=图片<br/>用户切换模型/模式/Agent、修改后自行发送<br/>(失败 → error 走 ErrorBoard，输入区保持原状)"]
 ```
 
-## 8.1 浏览器任务（run_browser_task，2026-09-14）
+## 8.1 浏览器任务（browser，2026-09-14；2026-09 合并为单一入口）
 
 > 主代理只派发/看状态/停止，浏览器内部对主代理完全透明。BROWSER agent 在后台协程跑
 > 4-phase 循环（perceive→decide→execute→postprocess），页面快照每步新鲜取、用完即丢，
 > memory 是 AI 自总结。细节经 BROWSER_TASK_* 事件给 UI，用户自己看。
+> 主代理入口为 `browser` 工具（action=RUN/STATUS/STOP/INFO，委托原 run_browser_task 等四个工具类）。
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as 用户
     participant MA as 主代理 turn
-    participant RBT as RunBrowserTaskTool
+    participant RBT as browser(RUN)→RunBrowserTaskTool
     participant BTM as BrowserTaskManager
     participant BA as BrowserAgentRunner(后台协程)
     participant BC as BrowserControl(Camoufox/JCEF)
@@ -334,7 +335,7 @@ sequenceDiagram
     participant WV as WorkspaceViewModel
 
     U->>MA: "搜一下51job的Java开发工作"
-    MA->>RBT: run_browser_task(task, browser="jcef")
+    MA->>RBT: browser(action=RUN, task, browser="jcef")
     RBT->>BTM: runTask(task, model, projectId, sessionId, browser)
     BTM->>BTM: resolve(browser)→factory(suspend)→createBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
     BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="jcef")
@@ -357,10 +358,10 @@ sequenceDiagram
     BA-->>BTM: BrowserTaskResult(success, message)
     BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, message, browser)
     Note over U: 用户自己在浏览器任务面板看细节<br/>JCEF 任务时浏览器面板已自动展开(tab=该任务页面)
-    Note over MA: 用户问"任务怎样了?" → 主代理查 browser_task_status
+    Note over MA: 用户问"任务怎样了?" → 主代理查 browser(STATUS, taskId)
 ```
 
-> 浏览器选择（2026-09-15）：`run_browser_task` 的 `browser` 参数缺省 → BrowserRegistry 默认。
+> 浏览器选择（2026-09-15）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认。
 > AI 提示词：测用户自己的网页 → `jcef`（内置可见，UI 自动展开浏览器面板显示该 tab）；
 > 第三方自动化/抓取 → `camoufox`（无头，不展开面板）。遥控端/wasm 无 JCEF 宿主（canRenderJcef=false），
 > 收到 jcef 事件不展开。

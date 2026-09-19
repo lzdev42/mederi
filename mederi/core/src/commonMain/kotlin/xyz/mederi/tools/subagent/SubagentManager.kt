@@ -12,7 +12,6 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import java.util.UUID
@@ -115,7 +114,6 @@ class SubagentManager(
         briefing: String?,
         plan: String?,
         role: SubagentRole,
-        workType: WorkType,
         directories: List<String>,
         aiModel: AIModel,
         reasoningLevel: ReasoningLevel,
@@ -163,7 +161,6 @@ class SubagentManager(
                     briefing = briefing,
                     plan = plan,
                     role = role,
-                    workType = workType,
                     directories = directories,
                     aiModel = aiModel,
                     reasoningLevel = reasoningLevel,

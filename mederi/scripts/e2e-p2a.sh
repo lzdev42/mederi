@@ -54,7 +54,7 @@ new_session() {
     --data "{\"name\":\"e2e-p2a\",\"directory\":\"$FIXTURE\"}")"
   P="$(echo "$PROJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
   SESS="$(curl -s -m 10 -X POST "$BASE/v1/sessions" -H 'Content-Type: application/json' \
-    --data "{\"projectId\":\"$P\",\"agent\":{\"id\":\"autonomous-code\",\"name\":\"自主 · 编程\",\"description\":null,\"mode\":\"AUTONOMOUS\",\"workType\":\"CODE\"}}")"
+    --data "{\"projectId\":\"$P\",\"agent\":{\"id\":\"autonomous\",\"name\":\"自主模式\",\"description\":null,\"mode\":\"AUTONOMOUS\"}}")"
   echo "$SESS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])'
 }
 
@@ -68,7 +68,7 @@ send_and_wait() {  # $1=SID $2=prompt → 填充 EVENTS_LOG，等 turn 终态
   python3 - "$PROMPT" "$MODEL_JSON" > "$WORK/msg.json" <<'PY'
 import json,sys
 model=json.loads(open(sys.argv[2]).read())
-body={"text":sys.argv[1],"model":model,"agent":{"id":"autonomous-code","name":"自主 · 编程","description":None,"mode":"AUTONOMOUS","workType":"CODE"},"thinkingLevel":None}
+body={"text":sys.argv[1],"model":model,"agent":{"id":"autonomous","name":"自主模式","description":None,"mode":"AUTONOMOUS"},"thinkingLevel":None}
 json.dump(body, sys.stdout, ensure_ascii=False)
 PY
   HTTP=$(curl -s -m 30 -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/sessions/$SID/messages" -H 'Content-Type: application/json' --data @"$WORK/msg.json")

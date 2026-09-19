@@ -24,7 +24,6 @@ data class MessageDiagnostics(
     val modelName: String? = null,
     val reasoningLevel: String? = null,
     val agentMode: String? = null,
-    val workType: String? = null,
     val projectId: String? = null
 )
 
@@ -66,7 +65,6 @@ internal fun xyz.mederi.domain.model.Message.withDiagnostics(d: MessageDiagnosti
         modelName = modelName ?: d.modelName,
         reasoningLevel = reasoningLevel ?: d.reasoningLevel,
         agentMode = agentMode ?: d.agentMode,
-        workType = workType ?: d.workType,
         projectId = projectId ?: d.projectId
     )
 

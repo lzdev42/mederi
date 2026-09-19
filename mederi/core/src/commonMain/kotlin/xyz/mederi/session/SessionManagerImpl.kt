@@ -96,7 +96,6 @@ class SessionManagerImpl(
             title = title.ifEmpty { "New Session" },
             status = SessionStatus.IDLE,
             agentMode = agentConfig.agentMode,
-            workType = agentConfig.workType,
             aiModel = agentConfig.aiModel,
             reasoningLevel = agentConfig.reasoningLevel,
             env = env,

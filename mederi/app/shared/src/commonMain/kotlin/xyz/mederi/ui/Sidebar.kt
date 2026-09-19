@@ -35,10 +35,6 @@ import xyz.mederi.theme.AppThemeMode
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 
-import xyz.mederi.core.contract.models.WorkType
-import xyz.mederi.ui.components.SegmentItem
-import xyz.mederi.ui.components.SegmentedControl
-
 /**
  * 侧边栏。状态与动作统一经 [SidebarViewModel]（内部转发 AppState 全局真理源），
  * 仅布局导航类副作用（收起抽屉/打开设置）以回调形式上抛。
@@ -58,7 +54,6 @@ fun Sidebar(
     val projects by viewModel.filteredProjects.collectAsState()
     val selectedProjectId by appState.selectedProjectId.collectAsState()
     val selectedConversationId by appState.selectedConversationId.collectAsState()
-    val selectedWorkType by viewModel.selectedWorkType.collectAsState()
     val theme by appState.theme.collectAsState()
 
     // 抽屉模式下，改变会话/项目选择的操作同时收起抽屉（桌面常驻侧栏不收起）
@@ -108,19 +103,6 @@ fun Sidebar(
                 SidebarIconButton(imageVector = FeatherIcons.Search, colors = colors)
             }
         }
-
-        // Work / Code 工作模式选择器
-        SegmentedControl(
-            items = listOf(
-                SegmentItem(WorkType.WORK, "Work", FeatherIcons.Briefcase),
-                SegmentItem(WorkType.CODE, "Code", FeatherIcons.Code)
-            ),
-            selectedKey = selectedWorkType,
-            onSelect = { viewModel.selectWorkType(it) },
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            height = 32.dp,
-            equalWeight = true
-        )
 
         // 顶层三大固定菜单 (新建任务、插件市场、自动化 - 对齐图 2)
         Column(
@@ -184,7 +166,7 @@ fun Sidebar(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // 项目层级树与会话列表（已由 SidebarViewModel.filteredProjects 按 workType 过滤）
+        // 项目层级树与会话列表（已由 SidebarViewModel.filteredProjects 提供）
         val scrollState = rememberScrollState()
         Column(
             modifier = Modifier

@@ -16,7 +16,7 @@ import kotlinx.serialization.Serializable
 /** agent_status 工具参数。 */
 @Serializable
 data class AgentStatusArgs(
-    @LLMDescription("子代理 ID（spawn_agent / spawn_researcher 返回的 agentId）。")
+    @LLMDescription("Sub-agent ID (agentId returned by SPAWN).")
     val agentId: String = ""
 )
 
@@ -39,7 +39,7 @@ class AgentStatusTool(
 /** stop_agent 工具参数。 */
 @Serializable
 data class StopAgentArgs(
-    @LLMDescription("要停止的子代理 ID（spawn_agent / spawn_researcher 返回的 agentId）。")
+    @LLMDescription("Sub-agent ID to stop (from SPAWN).")
     val agentId: String = ""
 )
 
@@ -61,9 +61,9 @@ class StopAgentTool(
 /** wait_agent 工具参数。 */
 @Serializable
 data class WaitAgentArgs(
-    @LLMDescription("要等待的子代理 ID（spawn_agent / spawn_researcher 返回的 agentId）。")
+    @LLMDescription("Sub-agent ID to wait on (from SPAWN).")
     val agentId: String = "",
-    @LLMDescription("等待超时时间（毫秒）。默认 120000（2 分钟）。超时返回 TIMEOUT，子代理继续在后台运行。")
+    @LLMDescription("Timeout in ms. Default 120000 (2 min). On timeout (TIMEOUT) the sub-agent keeps running.")
     val timeoutMs: Long = 120_000
 )
 

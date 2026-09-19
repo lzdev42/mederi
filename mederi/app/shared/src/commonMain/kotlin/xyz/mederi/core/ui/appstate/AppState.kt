@@ -170,13 +170,6 @@ class AppState(
     private val _selectedApiKeyIds = MutableStateFlow<Map<String, String>>(emptyMap())
     val selectedApiKeyIds: StateFlow<Map<String, String>> = _selectedApiKeyIds.asStateFlow()
 
-    /** 当前选中的工作用途（CODE/WORK），由选中 Agent 派生；无选择时回退 CODE */
-    val selectedWorkType: StateFlow<WorkType> =
-        combine(_selectedAgentId, availableAgents) { agentId, agents ->
-            val list = agents.ifEmpty { BuiltinAgents.ALL }
-            list.find { it.id == agentId }?.workType ?: WorkType.CODE
-        }.stateIn(scope, SharingStarted.Eagerly, WorkType.CODE)
-
     /** 当前选中的执行策略（AUTONOMOUS/APPROVAL），由选中 Agent 派生；无选择时回退 AUTONOMOUS */
     val selectedAgentMode: StateFlow<AgentMode> =
         combine(_selectedAgentId, availableAgents) { agentId, agents ->
@@ -423,32 +416,14 @@ class AppState(
     }
 
     /**
-     * 按工作用途（CODE / WORK）切换 Agent。
-     * 保持当前的执行策略（AUTONOMOUS / APPROVAL）不变。
-     */
-    fun selectWorkType(workType: WorkType) {
-        val agents = availableAgents.value.ifEmpty { BuiltinAgents.ALL }
-        val currentAgent = agents.find { it.id == _selectedAgentId.value }
-        val currentMode = currentAgent?.mode ?: AgentMode.AUTONOMOUS
-        val targetAgent = agents.find { it.workType == workType && it.mode == currentMode }
-            ?: agents.find { it.workType == workType }
-            ?: BuiltinAgents.ALL.find { it.workType == workType && it.mode == currentMode }
-        DebugLog.info("AppState", "selectWorkType: requested=$workType, currentAgentId=${currentAgent?.id}, currentMode=$currentMode, targetAgentId=${targetAgent?.id}")
-        selectAgent(targetAgent?.id)
-    }
-
-    /**
      * 按执行策略（AUTONOMOUS / APPROVAL）切换 Agent。
-     * 保持当前的工作用途（CODE / WORK）不变。
      */
     fun selectAgentMode(mode: AgentMode) {
         val agents = availableAgents.value.ifEmpty { BuiltinAgents.ALL }
         val currentAgent = agents.find { it.id == _selectedAgentId.value }
-        val currentWork = currentAgent?.workType ?: WorkType.CODE
-        val targetAgent = agents.find { it.workType == currentWork && it.mode == mode }
-            ?: agents.find { it.mode == mode }
-            ?: BuiltinAgents.ALL.find { it.workType == currentWork && it.mode == mode }
-        DebugLog.info("AppState", "selectAgentMode: requested=$mode, currentAgentId=${currentAgent?.id}, currentWork=$currentWork, targetAgentId=${targetAgent?.id}")
+        val targetAgent = agents.find { it.mode == mode }
+            ?: BuiltinAgents.ALL.find { it.mode == mode }
+        DebugLog.info("AppState", "selectAgentMode: requested=$mode, currentAgentId=${currentAgent?.id}, targetAgentId=${targetAgent?.id}")
         selectAgent(targetAgent?.id)
     }
 

@@ -31,8 +31,6 @@ data class Conversation(
     val agent: String? = null,
     /** 会话挂载目录（来自 session.location.directory）。用于本地按项目子目录分组。 */
     val directory: String? = null,
-    /** 工作用途（来自 session.workType）。用于区分 Code / Work 过滤显示。 */
-    val workType: WorkType = WorkType.CODE,
 )
 
 enum class ChatRole { User, Assistant, System, Summary }

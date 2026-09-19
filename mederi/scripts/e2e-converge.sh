@@ -62,7 +62,7 @@ PROJ="$(curl -s -m 10 -X POST "$BASE/v1/projects" -H 'Content-Type: application/
   --data "{\"name\":\"e2e-converge\",\"directory\":\"$FIXTURE\"}")"
 PID_C="$(echo "$PROJ" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
 SESS="$(curl -s -m 10 -X POST "$BASE/v1/sessions" -H 'Content-Type: application/json' \
-  --data "{\"projectId\":\"$PID_C\",\"agent\":{\"id\":\"autonomous-code\",\"name\":\"自主 · 编程\",\"description\":null,\"mode\":\"AUTONOMOUS\",\"workType\":\"CODE\"}}")"
+  --data "{\"projectId\":\"$PID_C\",\"agent\":{\"id\":\"autonomous\",\"name\":\"自主模式\",\"description\":null,\"mode\":\"AUTONOMOUS\"}}")"
 SID="$(echo "$SESS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
 echo "  session: $SID"
 
@@ -79,7 +79,7 @@ python3 - "$PROMPT" "$MODEL_JSON" > "$WORK/msg.json" <<'PY'
 import json,sys
 prompt=sys.argv[1]
 model=json.loads(open(sys.argv[2]).read())
-body={"text":prompt,"model":model,"agent":{"id":"autonomous-code","name":"自主 · 编程","description":None,"mode":"AUTONOMOUS","workType":"CODE"},"thinkingLevel":None}
+body={"text":prompt,"model":model,"agent":{"id":"autonomous","name":"自主模式","description":None,"mode":"AUTONOMOUS"},"thinkingLevel":None}
 json.dump(body, sys.stdout, ensure_ascii=False)
 PY
 curl -s -m 30 -X POST "$BASE/v1/sessions/$SID/messages" -H 'Content-Type: application/json' --data @"$WORK/msg.json" > /dev/null

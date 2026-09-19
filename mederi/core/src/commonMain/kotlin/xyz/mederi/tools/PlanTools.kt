@@ -15,7 +15,6 @@ import kotlinx.serialization.json.JsonTransformingSerializer
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.Decision
 import xyz.mederi.plan.Notebook
@@ -111,7 +110,6 @@ private fun JsonElement.subelement(name: String): JsonElement? =
 class PlanTools(
     private val sessionId: String,
     private val agentMode: AgentMode,
-    private val workType: WorkType,
     private val planStore: PlanStore,
     private val planApprovalRequester: PlanApprovalRequester,
     private val notebook: Notebook,
@@ -156,16 +154,16 @@ class PlanTools(
                 "AFTER plan approval via generate_spec, grounded in the actual codebase."
         )
         val planDetail: String = "",
-        @LLMDescription("Exact file paths that will be created or modified (list them as an array). Required in Code mode, not needed in Work mode.")
+        @LLMDescription("Exact file paths that will be created or modified (list them as an array).")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val targetFiles: List<String> = emptyList(),
         @LLMDescription("Design decisions resolved during planning this subtask.")
         val decisions: List<DecisionArg> = emptyList(),
-        @LLMDescription("Verification: 单条可执行命令（ASCII、assert 风格），verify_subtask 会实际执行它。散文/自然语言描述会被拒绝。")
+        @LLMDescription("Verification: a single executable command (ASCII, assert-style). verify_subtask actually runs it; prose is rejected.")
         val verification: String,
-        @LLMDescription("可选：验证命令的工作目录（相对项目根）。缺省 = 项目主目录。")
+        @LLMDescription("Optional working directory for the verification command (relative to project root). Default = project root.")
         val verificationCwd: String? = null,
-        @LLMDescription("可选：验证命令的超时秒数。缺省 = 30。")
+        @LLMDescription("Optional timeout for the verification command, in seconds. Default = 30.")
         val verificationTimeoutSeconds: Int? = null,
         @LLMDescription("Indices of subtasks this depends on (0-based).")
         val dependsOn: List<Int> = emptyList(),
@@ -196,8 +194,7 @@ class PlanTools(
             "Business logic in coherent, human-readable prose: where the requirement enters " +
                 "(UI action, API, command — and which function/call chain receives it), how behavior changes " +
                 "(before vs after), and where the new logic hooks into the existing call chain. " +
-                "Write flowing sentences that survive being read aloud once — no telegraphic fragments. " +
-                "Required in Code mode, not needed in Work mode."
+                "Write flowing sentences that survive being read aloud once — no telegraphic fragments. "
         )
         val businessLogic: String = "",
         @LLMDescription("Goal and background: what to build and why.")
@@ -210,7 +207,7 @@ class PlanTools(
         val outScope: List<String> = emptyList(),
         @LLMDescription("Key decisions: trade-offs, breaking changes, and rationale.")
         val keyDecisions: List<DecisionArg> = emptyList(),
-        @LLMDescription("Proposed changes per module with [MODIFY]/[NEW]/[DELETE] markers. Required in Code mode.")
+        @LLMDescription("Proposed changes per module with [MODIFY]/[NEW]/[DELETE] markers.")
         val changes: List<PlannedChangeArg> = emptyList(),
         @LLMDescription(
             "Optional: data sources read or written (tables, files, endpoints, formats) and new or changed " +
@@ -226,7 +223,7 @@ class PlanTools(
         val successCriteria: List<String> = emptyList(),
         @LLMDescription("Optional: Mermaid diagram code (without fence) for architecture visualization. Mermaid is the only diagram format the UI renders; do not use PlantUML/DOT or other DSLs.")
         val architecture: String? = null,
-        @LLMDescription("Subtask list (the skeleton). Each must include name, brief intent, targetFiles (Code mode), and verification. Detailed implementation specs are generated after approval via generate_spec.")
+        @LLMDescription("Subtask list (the skeleton). Each must include name, brief intent, targetFiles, and verification. Detailed implementation specs are generated after approval via generate_spec.")
         val subtasks: List<SubtaskArg>
     )
 
@@ -300,8 +297,7 @@ class PlanTools(
                 },
                 status = if (agentMode == AgentMode.AUTONOMOUS) PlanStatus.APPROVED else PlanStatus.PENDING_APPROVAL,
                 createdAt = timestamp,
-                agentMode = agentMode,
-                workType = workType
+                agentMode = agentMode
             )
 
             planStore.save(plan)
@@ -334,7 +330,7 @@ class PlanTools(
                     planStore.update(plan.copy(status = PlanStatus.APPROVED))
                     notebook.append("## ${Instant.now()} — Plan approved: ${plan.title}")
                     emitPlanTodos(plan.copy(status = PlanStatus.APPROVED), "approved")
-                    "Plan approved. Plan ID: ${plan.id}. Use spawn_agent to execute subtasks."
+                    "Plan approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
                 } else {
                     // 拒绝后不盲目重提：直接在最终回复里问用户理由，turn 正常结束，
                     // 用户答复后（下一轮）再修订重提——避免被拒后疯狂 create_plan 循环
@@ -346,7 +342,7 @@ class PlanTools(
             } else {
                 notebook.append("## ${Instant.now()} — Plan created (auto-approved): ${plan.title}")
                 emitPlanTodos(plan, "created")
-                "Plan created and auto-approved. Plan ID: ${plan.id}. Use spawn_agent to execute subtasks."
+                "Plan created and auto-approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
             }
         }
 
@@ -432,7 +428,7 @@ class PlanTools(
 
             return "Converged: ${args.remediationSubtasks.size} remediation subtasks appended " +
                 "(indices $nextIndex..${nextIndex + newSubtasks.size - 1}). " +
-                "Use spawn_agent to execute."
+                "Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute."
         }
     }
 
@@ -471,7 +467,7 @@ class PlanTools(
             "grounded in the actual codebase (read the real files first: function names, signatures, " +
             "data structures must match reality). Call this right before spawning an agent for the " +
             "subtask — and re-call it to REPLACE the spec whenever verification shows the spec itself " +
-            "contradicts reality. The spec is stored per (planId, subtaskIndex); spawn_agent will " +
+            "contradicts reality. The spec is stored per (planId, subtaskIndex); subagent(SPAWN) will " +
             "execute exactly this spec."
     ) {
         override suspend fun execute(args: GenerateSpecArgs): String {
@@ -532,38 +528,36 @@ class PlanTools(
                     "card (what will change); Overview = background and goals (1-2 paragraphs)."
             )
         val isGreenfield = args.projectContext.equals("GREENFIELD", ignoreCase = true)
-        if (workType == WorkType.CODE) {
-            // 二值不变量校验：只检查"有没有"，不限制"写多少"（篇幅交给提示词约束）
-            if (args.businessLogic.isBlank())
+        // 二值不变量校验：只检查"有没有"，不限制"写多少"（篇幅交给提示词约束）
+        if (args.businessLogic.isBlank())
+            errors.add(
+                "Business logic is required: entry point, before/after behavior, " +
+                    "and where the new logic hooks into the call chain."
+            )
+        if (args.inScope.isEmpty())
+            errors.add("In Scope is required: what will this plan do?")
+        if (args.keyDecisions.isEmpty())
+            errors.add(
+                "Key Decisions is required: surface your assumptions and choices explicitly " +
+                    "(storage location, formats, algorithms, libraries) instead of burying them in prose."
+            )
+        if (args.changes.isEmpty())
+            errors.add(
+                "Changes is required: list every file with [MODIFY]/[NEW]/[DELETE] markers. " +
+                    "Every [NEW] file must justify why an existing file cannot be modified instead."
+            )
+        if (args.successCriteria.isEmpty())
+            errors.add("Success criteria is required: how do we know the whole task is done?")
+        if (args.languageStack.isBlank())
+            errors.add("Language stack is required, e.g. 'Go 1.22', 'Kotlin 2.1 + Gradle 8.10'.")
+        for (c in args.changes) {
+            if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
                 errors.add(
-                    "Business logic is required in CODE mode: entry point, before/after behavior, " +
-                        "and where the new logic hooks into the call chain."
+                    "Change ${c.filePath}: action must be MODIFY, NEW, or DELETE (got \"${c.action}\"). " +
+                        "Example: {module: \"core\", action: \"NEW\", filePath: \"main.go\", description: \"...\", rationale: \"...\"}."
                 )
-            if (args.inScope.isEmpty())
-                errors.add("In Scope is required: what will this plan do?")
-            if (args.keyDecisions.isEmpty())
-                errors.add(
-                    "Key Decisions is required: surface your assumptions and choices explicitly " +
-                        "(storage location, formats, algorithms, libraries) instead of burying them in prose."
-                )
-            if (args.changes.isEmpty())
-                errors.add(
-                    "Changes is required in CODE mode: list every file with [MODIFY]/[NEW]/[DELETE] markers. " +
-                        "Every [NEW] file must justify why an existing file cannot be modified instead."
-                )
-            if (args.successCriteria.isEmpty())
-                errors.add("Success criteria is required: how do we know the whole task is done?")
-            if (args.languageStack.isBlank())
-                errors.add("Language stack is required in CODE mode, e.g. 'Go 1.22', 'Kotlin 2.1 + Gradle 8.10'.")
-            for (c in args.changes) {
-                if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
-                    errors.add(
-                        "Change ${c.filePath}: action must be MODIFY, NEW, or DELETE (got \"${c.action}\"). " +
-                            "Example: {module: \"core\", action: \"NEW\", filePath: \"main.go\", description: \"...\", rationale: \"...\"}."
-                    )
-                if (c.action.equals("NEW", ignoreCase = true) && c.rationale.isBlank())
-                    errors.add("Change ${c.filePath}: a [NEW] file must justify why an existing file cannot be modified instead.")
-            }
+            if (c.action.equals("NEW", ignoreCase = true) && c.rationale.isBlank())
+                errors.add("Change ${c.filePath}: a [NEW] file must justify why an existing file cannot be modified instead.")
         }
         args.subtasks.forEachIndexed { i, st ->
             if (st.verification.isBlank())
@@ -574,14 +568,14 @@ class PlanTools(
                     "Subtask $i (${st.name}): verification 必须是单条可执行命令（ASCII），不能是散文描述。" +
                         "示例：`python3 -c 'assert 1+1==2'`。"
                 )
-            if (workType == WorkType.CODE && st.targetFiles.isEmpty())
-                errors.add("Subtask $i (${st.name}): targetFiles required in CODE mode (which files will be changed?).")
+            if (st.targetFiles.isEmpty())
+                errors.add("Subtask $i (${st.name}): targetFiles required (which files will be changed?).")
             for (dep in st.dependsOn) {
                 if (dep >= args.subtasks.size || dep < 0)
                     errors.add("Subtask $i (${st.name}): dependsOn $dep out of range (0..${args.subtasks.size - 1}).")
             }
         }
-        if (isGreenfield && workType == WorkType.CODE) {
+        if (isGreenfield) {
             // Greenfield 第一个子任务必须做项目骨架：否则后续子任务产出的代码根本无法编译
             args.subtasks.firstOrNull()?.let { first ->
                 val bootstrapHint = first.name + " " + first.planDetail

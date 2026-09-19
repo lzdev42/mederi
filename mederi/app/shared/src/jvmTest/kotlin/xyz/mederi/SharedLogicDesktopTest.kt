@@ -235,7 +235,7 @@ class SharedLogicDesktopTest {
             println("DEBUG_TEST: after selectAgentMode APPROVAL: selectedAgentId=${appState.selectedAgentId.value}, selectedAgentMode=${viewModel.selectedAgentMode.value}")
             assertEquals(xyz.mederi.core.contract.models.AgentMode.APPROVAL, viewModel.selectedAgentMode.value)
             assertEquals(xyz.mederi.core.contract.models.AgentMode.APPROVAL, appState.selectedAgentMode.value)
-            assertEquals("approval-code", appState.selectedAgentId.value)
+            assertEquals("approval", appState.selectedAgentId.value)
 
             println("DEBUG_TEST: switching back to AUTONOMOUS...")
             viewModel.selectAgentMode(xyz.mederi.core.contract.models.AgentMode.AUTONOMOUS)
@@ -244,23 +244,7 @@ class SharedLogicDesktopTest {
             }
             assertEquals(xyz.mederi.core.contract.models.AgentMode.AUTONOMOUS, appState.selectedAgentMode.value)
             assertEquals(xyz.mederi.core.contract.models.AgentMode.AUTONOMOUS, viewModel.selectedAgentMode.value)
-            assertEquals("autonomous-code", appState.selectedAgentId.value)
-
-            println("DEBUG_TEST: switching workType to WORK while mode is AUTONOMOUS...")
-            viewModel.selectWorkType(xyz.mederi.core.contract.models.WorkType.WORK)
-            kotlinx.coroutines.withTimeout(1_000) {
-                appState.selectedWorkType.first { it == xyz.mederi.core.contract.models.WorkType.WORK }
-            }
-            assertEquals(xyz.mederi.core.contract.models.AgentMode.AUTONOMOUS, viewModel.selectedAgentMode.value)
-            assertEquals("autonomous-work", appState.selectedAgentId.value)
-
-            println("DEBUG_TEST: switching mode to APPROVAL while workType is WORK...")
-            viewModel.selectAgentMode(xyz.mederi.core.contract.models.AgentMode.APPROVAL)
-            kotlinx.coroutines.withTimeout(1_000) {
-                appState.selectedAgentMode.first { it == xyz.mederi.core.contract.models.AgentMode.APPROVAL }
-            }
-            assertEquals(xyz.mederi.core.contract.models.AgentMode.APPROVAL, viewModel.selectedAgentMode.value)
-            assertEquals("approval-work", appState.selectedAgentId.value)
+            assertEquals("autonomous", appState.selectedAgentId.value)
         } finally {
             testScope.cancel()
         }
@@ -997,7 +981,6 @@ class SharedLogicDesktopTest {
             modelName = "Claude Sonnet",
             reasoningLevel = "HIGH",
             agentMode = "APPROVAL",
-            workType = "CODE",
             projectId = "proj_1",
             durationMs = 1500
         )
@@ -1198,7 +1181,7 @@ class SharedLogicDesktopTest {
                 blocks = listOf(
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r2", "派发子代理执行..."),
                     xyz.mederi.core.contract.models.ChatBlock.Text("t2", "派子代理执行任务："),
-                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("call_2", "spawn_agent", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("task" to "子任务0"), "done report"))
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("call_2", "subagent", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("action" to "SPAWN", "task" to "子任务0"), "done report"))
                 ),
                 createdAt = 4000L,
                 completedAt = 5000L,
@@ -1249,7 +1232,7 @@ class SharedLogicDesktopTest {
             assertTrue(workTrace.items[5] is ChatListItem.SubagentCalls)
             val subagents = (workTrace.items[5] as ChatListItem.SubagentCalls).subagents
             assertEquals(1, subagents.size)
-            assertEquals("spawn_agent", subagents.first().name)
+            assertEquals("subagent", subagents.first().name)
             assertEquals("子任务0", subagents.first().target)
 
             // 沉底 Footer

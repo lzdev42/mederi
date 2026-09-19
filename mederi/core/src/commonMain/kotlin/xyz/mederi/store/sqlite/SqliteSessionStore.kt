@@ -13,7 +13,6 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.TodoItem
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.domain.model.decodeTodos
 import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.provider.domain.model.ReasoningLevel
@@ -44,7 +43,6 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 title = row.title,
                 status = SessionStatus.valueOf(row.status),
                 agentMode = AgentMode.valueOf(row.agent_mode),
-                workType = row.work_type?.let { WorkType.valueOf(it) } ?: WorkType.CODE,
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
                 env = parseEnv(row.env),
@@ -63,7 +61,6 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 title = row.title,
                 status = SessionStatus.valueOf(row.status),
                 agentMode = AgentMode.valueOf(row.agent_mode),
-                workType = row.work_type?.let { WorkType.valueOf(it) } ?: WorkType.CODE,
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
                 env = parseEnv(row.env),
@@ -81,7 +78,6 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             title = session.title,
             status = session.status.name,
             agent_mode = session.agentMode.name,
-            work_type = session.workType.name,
             ai_model = session.aiModel?.let { serializeAIModel(it) },
             reasoning_level = session.reasoningLevel?.name,
             env = serializeEnv(session.env),
@@ -106,13 +102,11 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
     override suspend fun updateAgentConfig(
         id: String,
         agentMode: AgentMode?,
-        workType: WorkType?,
         aiModel: AIModel?,
         reasoningLevel: ReasoningLevel?
     ): Unit = withContext(Dispatchers.IO) {
         queries.updateSessionAgentConfig(
             agentMode?.name,
-            workType?.name,
             aiModel?.let { serializeAIModel(it) },
             reasoningLevel?.name,
             Instant.now().toString(),

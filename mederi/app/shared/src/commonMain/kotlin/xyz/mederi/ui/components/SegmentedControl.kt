@@ -22,7 +22,7 @@ import xyz.mederi.theme.LocalMederiColors
 /**
  * 分段选择器单项定义。
  *
- * @param key 选项业务值（如 [xyz.mederi.core.contract.models.WorkType.CODE] / [xyz.mederi.core.contract.models.AgentMode.AUTONOMOUS]）
+ * @param key 选项业务值（如 [xyz.mederi.core.contract.models.AgentMode.AUTONOMOUS] / [xyz.mederi.core.contract.models.AgentMode.APPROVAL]）
  * @param label 选项显示文案（如 "Code" / "自主"）
  * @param icon 可选前置图标（如 [compose.icons.FeatherIcons.Code] / [compose.icons.FeatherIcons.Shield]）
  */

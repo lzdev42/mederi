@@ -108,7 +108,6 @@ sealed class MessagePart {
  * @param providerId 供应商 ID（原始消息诊断字段）。
  * @param modelId 模型 ID（原始消息诊断字段）。
  * @param agentMode Agent 模式（原始消息诊断字段）。
- * @param workType 工作类型（原始消息诊断字段）。
  * @param projectId 所属项目（原始消息诊断字段）。
  * @param durationMs LLM 请求耗时毫秒（仅 Assistant 消息；从响应创建到落库的近似值）。
  */
@@ -132,7 +131,6 @@ data class Message(
     /** 实际使用的推理档位（effectiveReasoningLevel，原始消息诊断字段）——footer 展示用 */
     val reasoningLevel: String? = null,
     val agentMode: String? = null,
-    val workType: String? = null,
     val projectId: String? = null,
     val durationMs: Long? = null
 )

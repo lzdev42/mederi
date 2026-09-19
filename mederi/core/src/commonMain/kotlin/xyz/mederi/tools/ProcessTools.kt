@@ -19,15 +19,14 @@ class ProcessTools {
 
     @Serializable
     data class ListProcessesArgs(
-        @LLMDescription("按命令文本子串过滤（可选，大小写不敏感）。留空列出全部。")
+        @LLMDescription("Substring filter on the command text (optional, case-insensitive). Empty = list all.")
         val filter: String = ""
     )
 
     inner class ListProcessesTool : SimpleTool<ListProcessesArgs>(
         argsType = typeToken<ListProcessesArgs>(),
         name = "list_processes",
-        description = "列出 mederi 通过 execute_command 启动、当前仍在运行的进程组（pid / 命令 / 工作目录 / 启动时间）。" +
-            "适合追踪 dev server、后台任务。输出的 pid 供 stop_process 使用。"
+        description = "List process groups started by mederi via execute_command that are still running (pid / command / working dir / start time). The pid output is used by stop_process."
     ) {
         override suspend fun execute(args: ListProcessesArgs): String {
             val entries = ProcessRegistry.list()
@@ -45,18 +44,16 @@ class ProcessTools {
 
     @Serializable
     data class StopProcessArgs(
-        @LLMDescription("进程 pid（来自 list_processes 输出）。")
+        @LLMDescription("Process pid (from list_processes output).")
         val pid: Long = 0,
-        @LLMDescription("为 true 时若 SIGTERM 未能停止，自动升级为 SIGKILL 强杀。默认 false 只发 SIGTERM。")
+        @LLMDescription("true = escalate to SIGKILL if SIGTERM does not stop it; false (default) = SIGTERM only.")
         val force: Boolean = false
     )
 
     inner class StopProcessTool : SimpleTool<StopProcessArgs>(
         argsType = typeToken<StopProcessArgs>(),
         name = "stop_process",
-        description = "停止 mederi 通过 execute_command 启动的进程（含其派生的全部子进程）。" +
-            "仅能作用于 mederi 自己启动的进程（list_processes 可查）。" +
-            "macOS 沙箱内命令无法 kill 任何进程，停止自己起的 dev server / 后台任务必须用本工具。"
+        description = "Stop a process started by mederi via execute_command (and its whole child tree). Only processes started by mederi (listable via list_processes) can be stopped."
     ) {
         override suspend fun execute(args: StopProcessArgs): String {
             if (args.pid <= 0) return "Error: pid must be a positive number from list_processes."

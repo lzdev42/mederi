@@ -5,7 +5,6 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.TodoItem
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
 /**
@@ -39,14 +38,12 @@ class InMemorySessionStore : SessionStore {
     override suspend fun updateAgentConfig(
         id: String,
         agentMode: AgentMode?,
-        workType: WorkType?,
         aiModel: AIModel?,
         reasoningLevel: ReasoningLevel?
     ) {
         sessions[id] = sessions[id]?.let { s ->
             s.copy(
                 agentMode = agentMode ?: s.agentMode,
-                workType = workType ?: s.workType,
                 aiModel = aiModel ?: s.aiModel,
                 reasoningLevel = reasoningLevel ?: s.reasoningLevel,
                 updatedAt = java.time.Instant.now().toString()

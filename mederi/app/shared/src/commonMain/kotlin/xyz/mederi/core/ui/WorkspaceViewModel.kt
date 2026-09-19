@@ -221,7 +221,7 @@ sealed interface ArtifactItem {
  * | 发送消息 | `send(text)`；发送前置校验失败会写 [error]，UI 展示并 `clearError()` |
  * | 中止生成 | `abort()`（流式中发送按钮变停止按钮） |
  * | 切换模型 | `selectModel(modelOption)`（数据源 appState.availableModels） |
- * | 切换 Agent（APPROVAL/AUTONOMOUS × WORK/CODE） | `selectAgent(id)`，列表 [availableAgents] |
+ * | 切换 Agent（AUTONOMOUS / APPROVAL） | `selectAgent(id)`，列表 [availableAgents] |
  * | 切换思考等级 | `updateThinkingLevel(level)`，可选项来自选中模型的 `reasoningLevels` |
  * | AI 问询卡片 | 观察 [pendingQuestion]，回复调 `replyQuestion(id, answers)` |
  * | 计划审批卡片（APPROVAL 模式） | 观察 [pendingPlanApproval]，回复调 `approvePlan(id, approved)` |
@@ -277,18 +277,17 @@ class WorkspaceViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // ==========================================
-    // Agent 选择（AgentMode × WorkType 切换）
+    // Agent 选择（AgentMode 切换）
     // ==========================================
 
     /**
-     * 可选 Agent 列表（4 个预设：APPROVAL/AUTONOMOUS × WORK/CODE 组合）。
+     * 可选 Agent 列表（2 个预设：AUTONOMOUS 自主 / APPROVAL 审批）。
      *
      * UI 渲染 Agent 选择器（下拉/Chip）时观察此 StateFlow：
      * ```
      * val agents by viewModel.availableAgents.collectAsState()
      * ```
      * 每项的 [AgentOption.mode] 是执行策略（APPROVAL=审批模式 / AUTONOMOUS=自主模式）、
-     * [AgentOption.workType] 是工作用途（WORK=非程序员 / CODE=程序员）、
      * [AgentOption.name]/[AgentOption.description] 是现成的显示文案。
      */
     val availableAgents: StateFlow<List<AgentOption>> get() = appState.availableAgents
@@ -306,7 +305,7 @@ class WorkspaceViewModel(
      */
     val selectedAgentMode: StateFlow<AgentMode> get() = appState.selectedAgentMode
 
-    /** 当前选中的 Agent 派生值，未选择时为 null（发消息会回退到默认 AUTONOMOUS+CODE）。 */
+    /** 当前选中的 Agent 派生值，未选择时为 null（发消息会回退到默认 AUTONOMOUS）。 */
     val selectedAgent: AgentOption?
         get() = availableAgents.value.find { it.id == selectedAgentId.value }
 
@@ -329,17 +328,8 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 切换工作用途（CODE / WORK）。
-     * 保持当前的执行策略（自主/审批）不变。
-     */
-    fun selectWorkType(workType: WorkType) {
-        DebugLog.info("UI", "WorkspaceViewModel.selectWorkType: workType=$workType")
-        appState.selectWorkType(workType)
-    }
-
-    /**
      * 切换执行策略（AUTONOMOUS / APPROVAL）。
-     * 保持当前的工作用途（编程/通用）不变。只写 AppState（唯一真理源），派生流自动更新。
+     * 只写 AppState（唯一真理源），派生流自动更新。
      */
     fun selectAgentMode(mode: AgentMode) {
         DebugLog.info("UI", "WorkspaceViewModel.selectAgentMode: requested=$mode, currentAgentId=${selectedAgentId.value}")
@@ -976,7 +966,7 @@ class WorkspaceViewModel(
         questionPage = 0
     }
 
-val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
+val SUBAGENT_TOOL_NAMES = setOf("subagent")
 
 /** 子代理生命周期事件集（init 订阅过滤用；SubagentTracker 消费）。 */
 private val SUBAGENT_EVENT_TYPES = setOf(
@@ -1776,8 +1766,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         val agent: AgentOption? = conv.agent?.let { agentOrMode ->
             val mode = runCatching { AgentMode.valueOf(agentOrMode) }.getOrNull()
             if (mode != null) {
-                appState.availableAgents.value.find { it.workType == conv.workType && it.mode == mode }
-                    ?: appState.availableAgents.value.find { it.mode == mode }
+                appState.availableAgents.value.find { it.mode == mode }
             } else {
                 appState.availableAgents.value.find { it.id == agentOrMode }
             }

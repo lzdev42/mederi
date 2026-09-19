@@ -48,7 +48,6 @@ import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.domain.model.MessageStatus
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.prompt.SystemPrompts
 import xyz.mederi.provider.ProviderManager
@@ -92,8 +91,8 @@ internal val mederiToolSerializer = ai.koog.serialization.kotlinx.KotlinxSeriali
  * Turn 执行器。
  *
  * 每次 sendMessage 创建一个 Koog AIAgent，跑完销毁。
- * Session 只记录 agentMode/workType 和用户最后一次选择的 aiModel / reasoningLevel。
- * 系统提示词由 agentMode + workType 通过 [SystemPrompts.build] 现算。
+ * Session 只记录 agentMode 和用户最后一次选择的 aiModel / reasoningLevel。
+ * 系统提示词由 agentMode 通过 [SystemPrompts.build] 现算。
  *
  * 使用 AIAgent 的 EventHandler 拦截 LLM 流式输出帧，通过 eventBus 发送 MESSAGE_DELTA。
  * 对话历史通过 ChatMemory + HistoryStoreChatHistoryProvider 按 sessionId 管理。
@@ -214,7 +213,6 @@ class TurnExecutor(
         DebugLog.data("TurnExec", "sessionId", sessionId)
         DebugLog.data("TurnExec", "session.status", session.status)
         DebugLog.data("TurnExec", "session.agentMode", session.agentMode)
-        DebugLog.data("TurnExec", "session.workType", session.workType)
         DebugLog.data("TurnExec", "session.aiModel", "${session.aiModel?.id} (${session.aiModel?.name}), providerModelId=${session.aiModel?.providerModelId}")
         DebugLog.data("TurnExec", "session.reasoningLevel", session.reasoningLevel)
 
@@ -235,7 +233,6 @@ class TurnExecutor(
         }
 
         val agentMode = request.agentConfig.agentMode
-        val workType = request.agentConfig.workType
         // 唯一真理源 = 本次发送携带的 apiKeyId（null = 用该供应商默认 key）；本 turn 全链路继承
         val activeApiKeyId = request.apiKeyId
         val project = projectManager.get(session.projectId)
@@ -294,8 +291,8 @@ class TurnExecutor(
         // 子代理用专用执行者/研究者提示词（无 plan/spawn/verify 工具，主代理工作流指令对它全是误导）；
         // 主代理用完整提示词（含工作流与活跃计划段）。
         // 是否注入已安装 skills：一律读中心化 AgentCapabilities 表（主代理 + EXECUTOR 注入，RESEARCHER 不注入）。
-        val basePrompt = if (subagentRole != null) SystemPrompts.forSubagent(subagentRole, workType)
-        else SystemPrompts.build(agentMode, workType, activePlanContent, activeTodoContent)
+        val basePrompt = if (subagentRole != null) SystemPrompts.forSubagent(subagentRole)
+        else SystemPrompts.build(agentMode, activePlanContent, activeTodoContent)
         val systemPromptWithSkills = if (AgentCapabilities.of(subagentRole).inheritSkills) {
             val skillList = runCatching { skills?.list() }.getOrElse { e ->
                 DebugLog.error("TurnExec", "加载 skills 列表失败（不阻塞 turn）: ${e.message}", e)
@@ -315,7 +312,6 @@ class TurnExecutor(
             systemPromptWithSkills
         }
         DebugLog.data("TurnExec", "agentMode", agentMode)
-        DebugLog.data("TurnExec", "workType", workType)
         DebugLog.data("TurnExec", "activePlan", activePlan?.id ?: "none")
         DebugLog.data("TurnExec", "systemPrompt (first 100)", "${systemPrompt.take(100)}...")
 
@@ -347,7 +343,6 @@ class TurnExecutor(
         sessionStore.updateAgentConfig(
             sessionId,
             agentMode = agentMode,
-            workType = workType,
             aiModel = effectiveModel,
             reasoningLevel = effectiveReasoningLevel
         )
@@ -382,7 +377,6 @@ class TurnExecutor(
                 systemPrompt = systemPrompt,
                 reasoningLevel = effectiveReasoningLevel,
                 agentMode = agentMode,
-                workType = workType,
                 directories = projectDirs,
                 planStore = planStore,
                 notebook = notebook,
@@ -513,7 +507,7 @@ class TurnExecutor(
         reasoningLevel: ReasoningLevel? = null
     ): Boolean {
         // 批准模型 = 用户批准时刻输入框选中的模型：写入 session（"最后一次选择"语义，
-        // updateAgentConfig 的 null=不覆盖，agentMode/workType 保持原值）。
+        // updateAgentConfig 的 null=不覆盖，agentMode 保持原值）。
         // 场景：create_plan（模型A）挂起等批准期间用户切到模型B再点批准——
         // 同一 turn 后续 spawn_agent 动态读 session 拿到 B，子代理按 B 执行。
         // 仅批准时写入；拒绝不动（拒绝后的修订走新 turn，sendMessage 自带模型）。
@@ -563,7 +557,7 @@ class TurnExecutor(
         emit(sessionId, EventType.SESSION_UPDATED)
 
         try {
-            compressOnce(session, provider, model, effectiveReasoningLevel, SystemPrompts.build(session.agentMode, session.workType))
+            compressOnce(session, provider, model, effectiveReasoningLevel, SystemPrompts.build(session.agentMode))
         } catch (e: Throwable) {
             val record = ErrorCollector.collect(e, ErrorContext(
                 phase = "compression",
@@ -647,7 +641,6 @@ class TurnExecutor(
         systemPrompt: String,
         reasoningLevel: ReasoningLevel,
         agentMode: AgentMode,
-        workType: WorkType,
         directories: List<String>,
         planStore: xyz.mederi.plan.PlanStore,
         notebook: xyz.mederi.plan.Notebook,
@@ -697,7 +690,6 @@ class TurnExecutor(
             modelName = model.name,
             reasoningLevel = reasoningLevel.name,
             agentMode = agentMode.name,
-            workType = workType.name,
             projectId = session.projectId
         )
         val toolTimings = TurnToolTimings()
@@ -760,7 +752,6 @@ class TurnExecutor(
                 projectId = session.projectId,
                 questionRequester = questionRequester,
                 agentMode = agentMode,
-                workType = workType,
                 subagentRole = subagentRole,
                 planApprovalRequester = planApprovalRequester,
                 planStore = planStore,

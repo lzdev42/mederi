@@ -8,7 +8,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -27,7 +26,7 @@ class SubagentManagerStopAllTest {
         var hang = false
         override suspend fun run(
             task: String, briefing: String?, plan: String?, role: SubagentRole,
-            workType: WorkType, directories: List<String>, aiModel: AIModel,
+            directories: List<String>, aiModel: AIModel,
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
             apiKeyId: String?, executorPlanId: String?, executorSubtaskIndex: Int?,
             planStore: xyz.mederi.plan.PlanStore?
@@ -41,7 +40,7 @@ class SubagentManagerStopAllTest {
 
     private fun spawn(manager: SubagentManager, sessionId: String): String = manager.spawn(
         task = "t", briefing = null, plan = null, role = SubagentRole.EXECUTOR,
-        workType = WorkType.CODE, directories = emptyList(),
+        directories = emptyList(),
         aiModel = AIModel(id = "m", providerModelId = "m", name = "m"), reasoningLevel = ReasoningLevel.NONE,
         projectId = "p", parentSessionId = sessionId
     )

@@ -140,7 +140,7 @@ class PlanStore(private val projectDirectories: List<String>) {
         // ===== Part 1: Implementation Plan（给人读，纯 Markdown）=====
         sb.appendLine("# Implementation Plan: ${plan.title}")
         sb.appendLine()
-        // 内部状态（Status/Created/AgentMode/WorkType）由 UI 卡片与侧边栏呈现，不写进文档
+        // 内部状态（Status/Created/AgentMode）由 UI 卡片与侧边栏呈现，不写进文档
         sb.appendLine("## Project Context")
         sb.appendLine("- Type: ${if (plan.projectContext == ProjectContextType.GREENFIELD) "GREENFIELD (brand-new project)" else "BROWNFIELD (iterating existing codebase)"}")
         if (plan.languageStack.isNotBlank()) sb.appendLine("- Stack: ${plan.languageStack}")

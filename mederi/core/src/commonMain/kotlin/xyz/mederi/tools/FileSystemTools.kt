@@ -71,39 +71,39 @@ class FileSystemTools(
 
     @Serializable
     data class ReadFileArgs(
-        @LLMDescription("要读取的文件路径。可以是绝对路径，也可以是相对于项目根目录的相对路径。")
+        @LLMDescription("File path, absolute or relative to the project root.")
         val path: String = "",
-        @LLMDescription("起始行号（从 0 开始计数，即为该行在文件中的第几行）。返回内容从此行开始。默认 0 = 从头读。配合 max_lines 用于分段读取文件的不同部分。")
+        @LLMDescription("Starting line number (0-based). Returned content begins here. Default 0. Use with max_lines to read different slices of a file.")
         val offset: Int = 0,
-        @LLMDescription("最多读取的行数，超出将被截断。0 表示不限制。")
+        @LLMDescription("Max lines to return; 0 = no limit.")
         @kotlinx.serialization.SerialName("max_lines")
         val maxLines: Int = 2000
     )
 
     @Serializable
     data class WriteFileArgs(
-        @LLMDescription("文件路径，相对于项目根目录（如 src/Main.kt）。绝对路径仅限项目目录内；不确定时先 read/list 查清，不要凭空构造。")
+        @LLMDescription("File path, relative to the project root (e.g. src/Main.kt). Absolute paths only inside the project directory.")
         val path: String = "",
-        @LLMDescription("要写入文件的完整内容。")
+        @LLMDescription("Full content to write to the file.")
         val content: String = ""
     )
 
     @Serializable
     data class EditFileArgs(
-        @LLMDescription("文件路径，相对于项目根目录（如 src/Main.kt）。绝对路径仅限项目目录内；不确定时先 read/list 查清，不要凭空构造。")
+        @LLMDescription("File path, relative to the project root (e.g. src/Main.kt). Absolute paths only inside the project directory.")
         val path: String = "",
-        @LLMDescription("要替换的原文，必须与文件内容精确匹配。默认要求在文件中唯一——多处出现会报错，需提供更长的上下文使其唯一。")
+        @LLMDescription("Exact original text to replace. Must match the file exactly and be UNIQUE in it — multiple matches are rejected; provide more surrounding context.")
         val original: String = "",
-        @LLMDescription("替换后的新文本。")
+        @LLMDescription("Replacement text.")
         val replacement: String = "",
-        @LLMDescription("true 时替换 original 的所有出现，而非要求唯一匹配。")
+        @LLMDescription("true = replace every occurrence of original; false (default) = require uniqueness and replace once.")
         @kotlinx.serialization.SerialName("replace_all")
         val replaceAll: Boolean = false
     )
 
     @Serializable
     data class ListDirectoryArgs(
-        @LLMDescription("要列出的目录路径。可以是绝对路径，也可以是相对于项目根目录的相对路径。留空表示项目根目录。")
+        @LLMDescription("Directory path, absolute or relative to the project root. Empty = project root.")
         val path: String = ""
     )
 
@@ -131,8 +131,7 @@ class FileSystemTools(
     inner class ReadFileTool : SimpleTool<ReadFileArgs>(
         argsType = typeToken<ReadFileArgs>(),
         name = "read_file",
-        description = "读取本地文件并返回其文本内容。默认从头读取最多 max_lines 行（起始行号 offset 可指定，从 0 计）；" +
-            "返回内容含实际行号范围与是否仍有后续行，便于分段读取文件的不同部分。适用于查看源码、配置文件、文档等。"
+        description = "Read a local file and return its text content, starting at offset (0-based) up to max_lines lines. The result reports the returned line range [start, end) and the next offset when more remain."
     ) {
         override suspend fun execute(args: ReadFileArgs): String {
             val file = resolveForRead(args.path, mustExist = true, mustBeFile = true)
@@ -167,7 +166,7 @@ class FileSystemTools(
     inner class WriteFileTool : SimpleTool<WriteFileArgs>(
         argsType = typeToken<WriteFileArgs>(),
         name = "write_file",
-        description = "将内容写入文件。如果文件已存在则覆盖，不存在则创建（含父目录）。"
+        description = "Write content to a file, creating it (and parent directories) if absent, overwriting it if present."
     ) {
         override suspend fun execute(args: WriteFileArgs): String {
             val file = resolveForWrite(args.path, mustExist = false, mustBeFile = true)
@@ -192,9 +191,7 @@ class FileSystemTools(
     inner class EditFileTool : SimpleTool<EditFileArgs>(
         argsType = typeToken<EditFileArgs>(),
         name = "edit_file",
-        description =
-            "在文件中用 replacement 替换 original 文本。original 必须在文件中唯一（多处出现会报错，" +
-                "需提供更长上下文使其唯一）；要替换所有出现用 replace_all=true。"
+        description = "Replace original text in an existing file. original must be UNIQUE in the file — multiple matches are rejected (provide more context). replace_all=true replaces every occurrence."
     ) {
         override suspend fun execute(args: EditFileArgs): String {
             validate(args.original.isNotEmpty()) { "original must not be empty" }
@@ -246,7 +243,7 @@ class FileSystemTools(
     inner class ListDirectoryTool : SimpleTool<ListDirectoryArgs>(
         argsType = typeToken<ListDirectoryArgs>(),
         name = "list_directory",
-        description = "列出目录下的文件和子目录。留空 path 默认列出项目根目录。"
+        description = "List files and subdirectories in a directory. Empty path = project root."
     ) {
         override suspend fun execute(args: ListDirectoryArgs): String {
             val dirPath = if (args.path.isBlank()) allowedDirectories.first() else args.path

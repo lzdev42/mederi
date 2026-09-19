@@ -10,7 +10,6 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.plan.Plan
 import xyz.mederi.plan.PlanStatus
 import xyz.mederi.plan.PlanStore
@@ -39,7 +38,7 @@ class SpawnToolDynamicModelTest {
         var lastReasoning: ReasoningLevel? = null
         override suspend fun run(
             task: String, briefing: String?, plan: String?, role: SubagentRole,
-            workType: WorkType, directories: List<String>, aiModel: AIModel,
+            directories: List<String>, aiModel: AIModel,
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
             apiKeyId: String?, executorPlanId: String?, executorSubtaskIndex: Int?,
             planStore: xyz.mederi.plan.PlanStore?
@@ -67,7 +66,7 @@ class SpawnToolDynamicModelTest {
         val now = java.time.Instant.now().toString()
         store.insert(Session(
             id = "sess_parent", projectId = "p1", title = "t", status = SessionStatus.IDLE,
-            agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE,
+            agentMode = AgentMode.AUTONOMOUS,
             aiModel = model, reasoningLevel = reasoning,
             env = emptyMap(), createdAt = now, updatedAt = now
         ))
@@ -85,7 +84,7 @@ class SpawnToolDynamicModelTest {
                 verification = VerificationSpec(command = "true")
             )),
             status = PlanStatus.APPROVED, createdAt = "2026-01-01T00:00:00Z",
-            agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE
+            agentMode = AgentMode.AUTONOMOUS
         )
         planStore.save(plan)
         return planStore to plan.id

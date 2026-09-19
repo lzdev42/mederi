@@ -4,7 +4,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.MederiEvent
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.Plan
 import xyz.mederi.plan.PlanApprovalRequester
@@ -45,7 +44,6 @@ class ConvergePlanMechanismTest {
     private val planTools = PlanTools(
         sessionId = "sess_test",
         agentMode = AgentMode.AUTONOMOUS,
-        workType = WorkType.CODE,
         planStore = planStore,
         planApprovalRequester = planApprovalRequester,
         notebook = Notebook(listOf(tmpDir.absolutePath)),
@@ -62,7 +60,6 @@ class ConvergePlanMechanismTest {
             status = PlanStatus.IN_PROGRESS,
             createdAt = "2026-09-08T00:00:00Z",
             agentMode = AgentMode.AUTONOMOUS,
-            workType = WorkType.CODE,
             subtasks = listOf(
                 Subtask(
                     index = 0,

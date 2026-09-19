@@ -6,7 +6,6 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.domain.model.Project
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.provider.ProviderManager
@@ -20,7 +19,7 @@ import kotlin.test.assertNull
 /**
  * 计划批准携带模型（P2）行为锁定：
  * - 批准 + 带模型 → session 的 aiModel / reasoningLevel 更新为批准时刻的选择
- *   （"最后一次选择"语义；agentMode / workType 不被触碰）
+ *   （"最后一次选择"语义；agentMode 不被触碰）
  * - 拒绝（approved=false）或模型为 null → session 保持不变（旧客户端兼容）
  */
 class PlanApprovalModelOverrideTest {
@@ -78,7 +77,7 @@ class PlanApprovalModelOverrideTest {
         val now = java.time.Instant.now().toString()
         store.insert(Session(
             id = sessionId, projectId = "p1", title = "t", status = SessionStatus.IDLE,
-            agentMode = AgentMode.APPROVAL, workType = WorkType.CODE,
+            agentMode = AgentMode.APPROVAL,
             aiModel = model("A"), reasoningLevel = ReasoningLevel.LOW,
             env = emptyMap(), createdAt = now, updatedAt = now
         ))
@@ -101,7 +100,6 @@ class PlanApprovalModelOverrideTest {
         assertEquals("B", session.aiModel?.id, "批准后 session 模型应为 B（批准时刻选择）")
         assertEquals(ReasoningLevel.HIGH, session.reasoningLevel, "批准后推理档位应为 HIGH")
         assertEquals(AgentMode.APPROVAL, session.agentMode, "agentMode 不被触碰")
-        assertEquals(WorkType.CODE, session.workType, "workType 不被触碰")
     }
 
     @Test

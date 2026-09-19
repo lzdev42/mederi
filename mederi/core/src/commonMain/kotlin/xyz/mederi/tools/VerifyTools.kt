@@ -201,7 +201,7 @@ class VerifyTools(
                 // 其余 = 执行错（converge_plan 追加补救）。
                 val guidance = if (gapType == GapType.CONTRADICTS) {
                     "The spec contradicts reality — re-call generate_spec(planId=${args.planId}, " +
-                        "subtaskIndex=${args.subtaskIndex}) to replace the spec, then spawn_agent to re-execute. " +
+                        "subtaskIndex=${args.subtaskIndex}) to replace the spec, then subagent(SPAWN) to re-execute. " +
                         "Do NOT use converge_plan for a spec error."
                 } else {
                     "Call converge_plan to append remediation subtasks."

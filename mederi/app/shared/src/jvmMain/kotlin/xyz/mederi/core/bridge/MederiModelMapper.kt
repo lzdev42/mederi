@@ -20,8 +20,6 @@ import xyz.mederi.core.contract.models.ProviderConfig
 import xyz.mederi.core.contract.models.ProviderType as UiProviderType
 import xyz.mederi.core.contract.models.TokenUsage
 import xyz.mederi.core.contract.models.ToolCallState
-import xyz.mederi.core.contract.models.WorkType as UiWorkType
-import xyz.mederi.domain.model.WorkType as CoreWorkType
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.FileDiff as CoreFileDiff
 import xyz.mederi.domain.model.Message as CoreMessage
@@ -75,10 +73,6 @@ object MederiModelMapper {
             thinkingLevel = session.reasoningLevel?.name,
             agent = session.agentMode.name,
             directory = null,
-            workType = when (session.workType) {
-                CoreWorkType.WORK -> UiWorkType.WORK
-                CoreWorkType.CODE -> UiWorkType.CODE
-            }
         )
 
     private fun toConversationStatus(status: SessionStatus): ConversationStatus = when (status) {

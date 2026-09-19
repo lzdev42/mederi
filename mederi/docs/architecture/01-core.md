@@ -36,7 +36,7 @@ classDiagram
     class Project { +id +name +directory +createdAt +updatedAt }
     class Session {
         +id +projectId +title +status: SessionStatus
-        +agentMode: AgentMode +workType: WorkType
+        +agentMode: AgentMode
         +aiModel: AIModel? +reasoningLevel: ReasoningLevel?
         +env: Map +todos: List~TodoItem~ +createdAt +updatedAt
     }
@@ -52,7 +52,7 @@ classDiagram
         +parts: List~MessagePart~ +status: MessageStatus
         +createdAt +finishReason
         +totalTokens +inputTokens +outputTokens +cachedTokens
-        +providerId +modelId +modelName +reasoningLevel +agentMode +workType +projectId +durationMs
+        +providerId +modelId +modelName +reasoningLevel +agentMode +projectId +durationMs
     }
     class MessagePart {
         <<sealed>>
@@ -64,7 +64,7 @@ classDiagram
         +id +title +summary +sessionId
         +overview +keyDecisions +changes +risks +successCriteria
         +architecture(Mermaid) +subtasks: List~Subtask~
-        +status: PlanStatus +agentMode +workType
+        +status: PlanStatus +agentMode
     }
     class Subtask {
         +index +name +status +planDetail(brief恒不变)
@@ -90,7 +90,6 @@ classDiagram
 | `MessageRole` | `SYSTEM, USER, ASSISTANT, SUMMARY` | SUMMARY=压缩标记消息（UI 可见，prompt 压缩节点） |
 | `MessageStatus` | `PROCESSING, COMPLETED, ERROR` | 消息状态 |
 | `AgentMode` | `APPROVAL, AUTONOMOUS` | 工具集完全一致，唯一区别=计划批准者 |
-| `WorkType` | `WORK, CODE` | 差异只在提示词引导 |
 | `SubagentRole` | `EXECUTOR, RESEARCHER` | EXECUTOR=全工具（无 plan/spawn/verify/ask_user/todo）；RESEARCHER=只读 read_file/list_directory |
 | `AgentCapabilities` | `MAIN, EXECUTOR, RESEARCHER`（每值含 `inheritMcp` / `inheritSkills`） | **中心化继承策略唯一表**：MAIN(true,true) / EXECUTOR(true,true) / RESEARCHER(true,false)。`of(subagentRole?)` 映射；TurnExecutor 开 MCP 会话与注入 skills 提示词都只读此表。**新增子代理=SubagentRole 加值 + 本表加一行 + of 加一个分支** |
 | `ModelOrigin` | `FETCHED, MANUAL` | FETCHED=端点/目录权威（唯一写路径 ModelMerge）；MANUAL=用户权威 |
@@ -214,13 +213,13 @@ suspend fun uninstall(name: String)                    // 删除根目录下对�
 | `McpMarketApi` | search(query,cursor,pageSize) / detail(id) / installOptions(detail) / installConfig(detail,...) / installConfig(id,...) | |
 | `SkillApi` | list / getRootDirectory / setRootDirectory(path) / install(url) / uninstall(name) | UI 薄触发；下载/解压/删除全在 core（`SkillManagerImpl`） |
 
-SessionApi 同文件 DTO：`AgentConfig(agentMode, workType=CODE, aiModel=null, reasoningLevel=null)`、`CreateSessionRequest(agentConfig, projectId, title="", env)`、`RenameSessionRequest(title)`、`SendMessageRequest(agentConfig, parts: List<MessagePart>, apiKeyId: String?=null)`——`apiKeyId` 为本次消息选定 key 的 ID（null=默认 key），唯一真理源 = 每次发送携带，本 turn 全链路（主链路/压缩/子代理/浏览器）继承；`RawMessageRecord(seq, messageId?, role, payload, createdAt, modelId?, durationMs?, finishReason?, status?)`、`MessageSummary(seq, messageId?, role, content, createdAt)`（HistoryStore.kt 内）。
+SessionApi 同文件 DTO：`AgentConfig(agentMode, aiModel=null, reasoningLevel=null)`、`CreateSessionRequest(agentConfig, projectId, title="", env)`、`RenameSessionRequest(title)`、`SendMessageRequest(agentConfig, parts: List<MessagePart>, apiKeyId: String?=null)`——`apiKeyId` 为本次消息选定 key 的 ID（null=默认 key），唯一真理源 = 每次发送携带，本 turn 全链路（主链路/压缩/子代理/浏览器）继承；`RawMessageRecord(seq, messageId?, role, payload, createdAt, modelId?, durationMs?, finishReason?, status?)`、`MessageSummary(seq, messageId?, role, content, createdAt)`（HistoryStore.kt 内）。
 
 ## 5. Store 层（`…/store/`）
 
 | Store 接口 | 方法 | Sqlite 实现 → 表（库） |
 |---|---|---|
-| `SessionStore` | list / get / insert / update(id, status?, title?) / updateAgentConfig(id, agentMode?, workType?, aiModel?, reasoningLevel?) / updateTodos / delete | `SqliteSessionStore` → **sessions**（data.db） |
+| `SessionStore` | list / get / insert / update(id, status?, title?) / updateAgentConfig(id, agentMode?, aiModel?, reasoningLevel?) / updateTodos / delete | `SqliteSessionStore` → **sessions**（data.db） |
 | `HistoryStore` | load(sessionId) / append / replace(sessionId, messages) / delete(sessionId) / rollbackTo(sessionId, seq) / listSummary / listRaw | `SqliteHistoryStore` → **message_history**（data.db） |
 | `ProjectStore` | list / get / save(upsert) / delete | `SqliteProjectStore` → **projects**（config.db） |
 | `ProviderStore` | list（不含 keys）/ get / save / delete | `SqliteProviderStore` → **providers**（config.db） |
@@ -247,7 +246,7 @@ settings(key PK, value)                                     -- 通用 key-value�
 
 ```sql
 sessions(id PK, project_id IDX, title, status DEFAULT 'IDLE',
-         agent_mode DEFAULT 'AUTONOMOUS', work_type DEFAULT 'CODE',
+         agent_mode DEFAULT 'AUTONOMOUS',
          ai_model(JSON), reasoning_level, env DEFAULT '{}', todos DEFAULT '[]',
          created_at, updated_at)                            -- 按 updated_at DESC 排序
 message_history(session_id+seq 复合PK, message_id, role, content,
@@ -317,7 +316,7 @@ classDiagram
         +persistToolResults(results)  % + withAssistantDuration（durationMs = API 有回应→落库，footer 耗时）
     }
     class SubagentRunnerImpl {
-        +run(task, briefing, plan, role, workType, directories, aiModel, reasoningLevel, projectId, parentSessionId) String
+        +run(task, briefing, plan, role, directories, aiModel, reasoningLevel, projectId, parentSessionId) String
         % 内存 InMemory store + 独立 TurnExecutor，等终态事件取最后 ASSISTANT
         % 注入 mcpConnector + skills（父 TurnExecutor 透传）；继承开关=AgentCapabilities 表
         % 传入 scope=继承调用方协程上下文（CoroutineScope(coroutineContext + SupervisorJob())）——
@@ -401,32 +400,31 @@ token 估算统一入口（真实值优先，估算兜底）：`estimateTokens/c
 FS_TOOL_NAMES      = [read_file, write_file, edit_file, list_directory, execute_command]   # apply_patch 已注销（实现保留，2026-09：模型不用，单文件场景 edit_file+replace_all 覆盖）
 AGENT_TOOL_NAMES   = [update_todo, ask_user]          # get_context_remaining / new_context 已实现未开放
 PLAN_TOOL_NAMES    = [create_plan, generate_spec, write_log, converge_plan]
-SUBAGENT_TOOL_NAMES= [spawn_agent, spawn_researcher]
-SUBAGENT_MGMT_TOOL_NAMES= [agent_status, stop_agent, wait_agent]   # 异步子代理生命周期管理，仅主代理
-BROWSER_TASK_TOOL_NAMES= [run_browser_task, browser_task_status, stop_browser_task, browser_info]  # 浏览器任务，仅主代理
+SUBAGENT_TOOL_NAMES= [subagent]   # 6→1 单一入口（2026-09），action 分流封装原 spawn_agent/spawn_researcher/agent_status/stop_agent/wait_agent，仅主代理
+BROWSER_TASK_TOOL_NAMES= [browser]   # 4→1 单一入口（2026-09），action 分流封装原 run_browser_task/browser_task_status/stop_browser_task/browser_info，仅主代理
 OFFICE_TOOL_NAMES      = [office_read, office_write]  # Office 文档读写，主代理 + EXECUTOR
 VERIFY_TOOL_NAMES  = [verify_subtask]
 PROCESS_TOOL_NAMES = [list_processes, stop_process]   # 宿主侧进程管理，主代理 + EXECUTOR
-ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + SUBAGENT_MGMT + BROWSER_TASK + OFFICE + PROCESS
+ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFICE + PROCESS   # 无 SUBAGENT_MGMT（已并入 subagent）
 ```
 
-`build(toolNames, directories, sessionId, historyStore, eventBus, modelContextWindow, newContextWindowFlag, diffTracker?, subagentManager?, browserTaskService?, aiModel?, reasoningLevel?, projectId?, questionRequester?, agentMode=AUTONOMOUS, workType?, subagentRole?, planApprovalRequester?, planStore?, notebook?, commandSandbox?, sessionStore?, mcpTools, agentsDiscovery?): ToolRegistry`
+`build(toolNames, directories, sessionId, historyStore, eventBus, modelContextWindow, newContextWindowFlag, diffTracker?, subagentManager?, browserTaskService?, aiModel?, reasoningLevel?, projectId?, questionRequester?, agentMode=AUTONOMOUS, subagentRole?, planApprovalRequester?, planStore?, notebook?, commandSandbox?, sessionStore?, mcpTools, agentsDiscovery?): ToolRegistry`
 
-**裁剪规则**：RESEARCHER 只给 read_file/list_directory；子代理（isSubagent）无 plan/spawn/verify/ask_user/todo 工具；主代理 canPlan/canSpawn/canAskUser/canTodo 依赖相应依赖项非空。浏览器任务工具（run_browser_task 等）**仅主代理**，且 `browserTaskService != null` 才注册——子代理（含 BROWSER agent）不派发浏览器任务。
+**裁剪规则**：RESEARCHER 只给 read_file/list_directory；子代理（isSubagent）无 plan/spawn/verify/ask_user/todo 工具；主代理 canPlan/canSpawn/canAskUser/canTodo 依赖相应依赖项非空。浏览器任务工具（`browser`，action=RUN/STATUS/STOP/INFO）**仅主代理**，且 `browserTaskService != null` 才注册——子代理（含 BROWSER agent）不派发浏览器任务。
 
 ### 7.2 各工具与安全模型
 
 | 文件 | 工具/类 | 要点 |
 |---|---|---|
-| `FileSystemTools.kt` | read_file(path, max_lines=2000) / write_file / edit_file(original 唯一匹配，多处报错；replace_all 全量替换) / list_directory / apply_patch(patch)（**已注销，不注册给 AI**） | `resolveForRead` **全盘可读**（相对路径在项目目录解析）；`resolveForWrite` **必须在项目目录内**（containment 白名单，代码强制）；write/edit→diffTracker.recordWrite；**write/edit 落盘前经 `FileWriteRegistry` try-lock**（同文件并发写硬拒绝，见 §7.2 FileWriteRegistry 行）；apply_patch 三阶段=PatchParser.parse → verifyHunks（dry-run 全部校验，失败磁盘零改动）→ applyHunks（产出 A/M/D + `List<PatchChange>` → diffTracker.trackPatch）；**read/list 成功后触发 `AgentsSubtreeDiscovery` 回调**（构造参数，AGENTS.md 子树懒发现，见 §7.4） |
-| `ShellTools.kt` | execute_command(command, timeout_seconds=120) → `CommandResult(output, exitCode)` | `runCommand`：sandbox.wrap 包装、主目录执行、**启动即注册 ProcessRegistry**（进程组回收）、超时 destroyForcibly **+ 整组 SIGKILL**、警告前缀 |
+| `FileSystemTools.kt` | read_file(path, offset=0, max_lines=2000) / write_file / edit_file(original 唯一匹配，多处报错；replace_all 全量替换) / list_directory / apply_patch(patch)（**已注销，不注册给 AI**） | `resolveForRead` **全盘可读**（相对路径在项目目录解析）；`resolveForWrite` **必须在项目目录内**（containment 白名单，代码强制）；write/edit→diffTracker.recordWrite；**write/edit 落盘前经 `FileWriteRegistry` try-lock**（同文件并发写硬拒绝，见 §7.2 FileWriteRegistry 行）；**read_file 支持 offset（0-based 分页）**：返回区间 `[start, end)` 前闭后开，end 即续读的下一 offset，超界/空文件有明确返回；apply_patch 三阶段=PatchParser.parse → verifyHunks（dry-run 全部校验，失败磁盘零改动）→ applyHunks（产出 A/M/D + `List<PatchChange>` → diffTracker.trackPatch）；**read/list 成功后触发 `AgentsSubtreeDiscovery` 回调**（构造参数，AGENTS.md 子树懒发现，见 §7.4） |
+| `ShellTools.kt` | execute_command(command, cwd="", timeout_seconds=120) → `CommandResult(output, exitCode)` | `runCommand`：sandbox.wrap 包装、**cwd 可指定**（空=项目主目录，底层 runCommand 本就支持、2026-09 工具层补暴露）、**启动即注册 ProcessRegistry**（进程组回收）、超时 destroyForcibly **+ 整组 SIGKILL**、警告前缀 |
 | `ProcessTools.kt` | list_processes(filter?) / stop_process(pid, force=false) | **宿主侧进程回收**（沙箱外）：list 惰性剔除已死组、输出 pid/命令/工作目录/启动时间；stop 只按 ProcessRegistry 定向 kill -- -pgid（TERM→轮询→force 时 SIGKILL），**查不到 pid 即拒绝**，只杀 mederi 自己启动的进程 |
 | `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：**硬门禁**（APPROVED/IN_PROGRESS 计划存在即拒）；校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
 | `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：validatePlan 聚合校验 → PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（superseded/approved/rejected）→ notebook.append → emitPlanTodos（PLAN_PROGRESS + todos 投影）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）+ PLAN_PROGRESS("spec-generated")。converge_plan：append-only 追加补救子任务 |
 | `VerifyTools.kt` | verify_subtask(planId, subtaskIndex, status: PASS/PARTIAL/FAIL, evidence, gapType?, remediation?) | **自动执行** Subtask.verification（VerificationSpec.command）命令（shellTools.runCommand, 默认 30s, cwd 可配）；三态判定：exit0→PASS 存储 / 非零非超时→FAIL 拒 PASS 重判 / timedOut→TIMEOUT 不存 PASS 不硬拒（inconclusive 暖缓存重验）；同时读 Subtask.executorTouchedFiles vs targetFiles 报告 scope 越界（追加 evidence，非硬拒）；PASS→COMPLETED、PARTIAL/FAIL→FAILED；**updatePlan 原子写入**验证结果+状态；全部 COMPLETED → plan 置 COMPLETED + `planStore.archive`；发 PLAN_PROGRESS |
-| `subagent/SpawnAgentTool.kt` | spawn_agent(task, briefing, planId, subtaskIndex) / spawn_researcher(task, briefing) | **异步派工**：spawn_agent **硬校验** planId/subtaskIndex/spec 存在性（spec 空即拒）→ **updatePlan 原子置 IN_PROGRESS**（并行 spawn 防互相覆盖）→ PLAN_PROGRESS("subtask-started") → `subagentManager.spawn(...)` 立即返回 `{"agentId":"sub_xxx","status":"RUNNING","modelName":"..."}`（不阻塞父 turn）；**模型/推理档位动态读 session 现值**（构造注入 sessionStore，execute 时 `session.aiModel ?: 构造捕获的 turn 模型`——计划批准时用户可能已切模型，resolvePlanApproval 把批准时刻选择写入 session）；spawn_researcher 无计划门禁，role=RESEARCHER, plan=null，同动态读策略；需要结果时父代理调 `wait_agent(agentId)`，或 `agent_status`/`stop_agent` 查询/停止 |
+| `subagent/SubagentTool.kt` | subagent(action, task?, briefing?, planId?, subtaskIndex?, agentId?, timeoutMs?) → JSON | **6→1 单一入口（2026-09）**，action 分流：SPAWN=委托 `SpawnAgentTool`（**硬校验** planId/subtaskIndex/spec 存在性→`updatePlan` 原子置 IN_PROGRESS→PLAN_PROGRESS("subtask-started")→spawn 返回 `{agentId,status,modelName}`；**模型/推理档位动态读 session**——批准时用户可能切了模型）；SPAWN_RESEARCHER=委托 `SpawnResearcherTool`（只读，无计划门禁）；STATUS/STOP/WAIT=委托 `SubagentManager.status/stop/wait`（agentId 空返回 Error 文本；WAIT 超时 TIMEOUT 子代理继续后台）。仅主代理注册（canSpawn） |
 | `subagent/SubagentManager.kt` | spawn/status/stop/wait + stopAllForSession | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态（含 parentSessionId/aiModel/reasoningLevel/task/briefing 元数据）；stop = cancel job（协程上下文级联取消内部 turn）；wait = withTimeout 轮询状态，超时 TIMEOUT；**stopAllForSession(parentSessionId)** = abort/abortAndJoin 级联收割本会话 RUNNING 子代理（幂等）——子代理挂在全局 scope 不随父 turn 取消而亡，不收割即孤儿；status/wait 返回 JSON 带 modelName/reasoningLevel；**生命周期事件**（可选注入 eventBus）：spawn 发 SUBAGENT_STARTED（全量元数据）→ 终态发 SUBAGENT_COMPLETED/ERROR/STOPPED（NonCancellable 包 emit，取消路径不吞事件） |
-| `subagent/SubagentAsyncTools.kt` | agent_status / stop_agent / wait_agent | 异步子代理管理工具，仅主代理（canSpawn 才注册）：agent_status(agentId)→状态 JSON（含模型元数据）；stop_agent(agentId)→取消+部分结果；wait_agent(agentId, timeoutMs)→带超时阻塞等结果（COMPLETED 时 result=汇报全文，落库在 tool result 里） |
+| `subagent/SpawnAgentTool.kt / SubagentAsyncTools.kt` | spawn_agent/spawn_researcher/agent_status/stop_agent/wait_agent | 内部实现类（被 `subagent` 工具委托），不再单独对外注册；`SubagentAsyncTools` 的 agent_status/stop_agent/wait_agent 类保留未删除（工程内部引用） |
 | `subagent/SubagentRunner(Impl).kt` | 接口 + 实现 | Impl 依赖 ProviderManager+ProjectManager+**mcpConnector+skills（由父 TurnExecutor 注入，仅透传；实际开关在 runTurn 的 AgentCapabilities 表）**；内存 InMemorySessionStore/HistoryStore + 独立 eventBus(replay=64) + 临时 Session(`sub_xxxxxxxx`, AUTONOMOUS) → 独立 TurnExecutor（**scope 继承调用方协程上下文**，取消可级联）→ 按角色拼 inputText（EXECUTOR: spec 清单自顶向下 + SPEC_FEEDBACK 回报机制；RESEARCHER: 只读调研）→ sendMessage(subagentRole=role) → 等 MESSAGE_COMPLETED/ERROR 终态 → 取最后 ASSISTANT 文本；**CancellationException 重新抛出**（标记 STOPPED）；异常转 "[subagent error] ..." |
 | `sandbox/CommandSandbox.kt` | `CommandSandbox(projectDirs)` + `SandboxStatus` | **永远开、无开关**；读全盘放行、写锁白名单（项目目录 + SandboxConfig.extraWritablePaths + 临时目录 + 构建缓存 ~/.gradle ~/.m2 ~/.cache ~/.konan ~/Library/Caches ~/Library/Java + /dev）；shell 探测链 bash→sh（Windows bash.exe→cmd）；`wrap(command)` → `WrappedCommand(argv, warning, processGroupLeader)`：macOS Seatbelt（sandbox-exec -f，SBPL profile 按白名单 hash 缓存）+ **进程组长包装**（macOS perl `setpgrp(0,0)`+exec / Linux setsid，使整条命令树共享 PGID=直接子进程 pid）/ Linux bwrap 功能烟测（只检测不代装）/ Windows 降级警告（无进程组）；companion `environmentNote()` 注入环境块（含 Process control 行） |
 | `sandbox/ProcessRegistry.kt` | object（全局单例） | **进程组注册表**：`register(pid, pgid, command, workDir)` 只在 runCommand 启动点写入；`list()` 惰性剔除已死组；`killGroup(pid, pgid, force)` 宿主侧 kill -- -pgid / Windows taskkill /T；`isAlive` = kill -0 组探测。安全边界：只杀 mederi spawn 的进程，沙箱内命令无法写注册表 |
@@ -452,7 +450,7 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + SUBAGENT_MGMT + BRO
 | commonMain | `…/browser/BrowserActions.kt` | action 模型（navigate/click/type/scroll/done）+ `BrowserDecisionParser`（容错解析 LLM JSON） |
 | commonMain | `…/browser/BrowserTaskManager.kt` | 浏览器任务管理（唯一入口）：异步派发/查状态/停止，**浏览器选择走 BrowserRegistry**（任务记 browserName，status 带 browser），状态收敛在 `tasks` 表，事件发全局 eventBus（BROWSER_TASK_*） |
 | commonMain | `…/browser/BrowserTaskService.kt` | 主代理工具依赖的服务接口（runTask(task,aiModel,reasoning,project,parent,browser?)/taskStatus/stopTask/availableBrowsers/defaultBrowser） |
-| commonMain | `…/browser/BrowserTaskTools.kt` | 主代理 3 工具：`run_browser_task`(task)→taskId / `browser_task_status`(taskId)→状态 / `stop_browser_task`(taskId) |
+| commonMain | `…/browser/BrowserTaskTools.kt` | **主代理单一入口 `browser`（2026-09 合并 4→1）**：BrowserTaskAction=RUN/STATUS/STOP/INFO 分流，委托原工具类（`run_browser_task`/`browser_task_status`/`stop_browser_task`/`browser_info`，保留为内部实现）；动态描述列出已注册浏览器 |
 | commonMain | `…/browser/bidi/{BiDiModels,OperationResult,BiDiException}.kt` | BiDi 数据模型（AxTreeData/SnapshotMode/KeyboardKey 等，纯 Kotlin） |
 | jvmMain | `…/browser/BiDiBrowserControl.kt` | BrowserControl 的 Camoufox 实现（包装 BiDiBrowser） |
 | jvmMain | `…/browser/BrowserRuntime.kt` | 装配点：`browserHome`（受管目录）+ `camoufoxPath`（手动） |
@@ -463,9 +461,9 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + SUBAGENT_MGMT + BRO
 | jvmMain | `…/browser/install/CamoufoxModels.kt` | release/version.json 数据模型 + 更新检查结果 |
 
 **关键设计决策**：
-- **主代理只派发/看状态，不看细节**：`run_browser_task` 立即返回 taskId；`browser_task_status` 只给 RUNNING/COMPLETED/ERROR/STOPPED；任务步骤细节通过 `BROWSER_TASK_*` 事件给 UI，用户自己看。
+- **主代理只派发/看状态，不看细节**：`browser`(RUN) 立即返回 taskId；`browser`(STATUS) 只给 RUNNING/COMPLETED/ERROR/STOPPED；任务步骤细节通过 `BROWSER_TASK_*` 事件给 UI，用户自己看。
 - **BROWSER agent 是自包含的执行器**：内部操作浏览器、自管理记忆，主代理无感。BrowserBrain 判定为后续迭代（P1）。
-- **工具隔离**：浏览器操作不是 Koog Tool，是 BROWSER agent 内部的 action 类型（`BrowserAction`），不经过 ToolFactory，不污染主代理工具集。主代理只看到 run_browser_task 等 3 个派发工具。
+- **工具隔离**：浏览器操作不是 Koog Tool，是 BROWSER agent 内部的 action 类型（`BrowserAction`），不经过 ToolFactory，不污染主代理工具集。主代理只看到 `browser` 一个编排工具（RUN/STATUS/STOP/INFO）。
 - **LLM 调用**：直接 `KoogClientFactory.create(provider, apiKey)` + `client.execute(prompt, model)` 单次调用，每步重建 prompt。不用 ChatMemory / mederiSingleRunStrategy（tool-calling loop 会累积 page snapshot）。
 - **记忆**：`decision.memory` 是 AI 自总结（无独立总结 LLM 调用）；`StepHistory` 系统维护紧凑文本（最后 10 步）；snapshot 每步新鲜取，rawTree 仅供同批 refid 重映射，用完即丢。
 - **装配与浏览器选择**：全局 `BrowserRegistry`——MederiAiCore（jvmMain）启动注册 `camoufox`（BiDiBrowserControl，二进制 = browserHome 已下载的 > 手动 camoufoxPath）；desktop UI（desktopApp main.kt）注册 `jcef`（JcefBrowserHost.createAiTab → 新建 tab=KBPage，返回 JCEFBrowserControl）。TurnExecutor 直接引用注册中心创建 BrowserTaskManager（注册表为空时 run_browser_task 返回引导错误）。AI 通过 `run_browser_task(browser=name)` 选择，工具描述动态列出可用浏览器 + 选择指引（测自己网页→jcef，第三方自动化→camoufox）。工厂 suspend：JCEF 创建 KBPage 需挂 Main 线程。
@@ -499,7 +497,7 @@ classDiagram
         +changes: List~PlannedChange~ +dataAndParams +risks +successCriteria
         +architecture: String?  % Mermaid 代码，InkCompose 渲染
         +subtasks: List~Subtask~ +status: PlanStatus
-        +createdAt +agentMode +workType
+        +createdAt +agentMode
         +isAllCompleted +needsConvergence +currentSubtask +nextPending
     }
     class Subtask {
@@ -737,7 +735,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 | `PLAN_PROGRESS` | `planId`、`action`(created/approved/subtask-started/spec-generated/verified/converged/completed)、计数与 `todos`（`Plan.toTodoProjection().encodeTodos()`） |
 | `TODO_UPDATED` | `todos`(JSON)、可选 `explanation` |
 | `STATUS` | 环境态（不落库不改状态机）：`scope=provider`、`code=RETRYING`、`message`、`attempt`、`maxAttempts`、`delayMs?`(重试延迟毫秒，可选) |
-| `BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` | 浏览器任务生命周期（异步，UI 浏览器任务面板消费；主代理只经 run_browser_task 等工具查 status）：`taskId`、`status`(STARTED/RUNNING/COMPLETED/ERROR/STOPPED)、`step?`、`thought?`、`results?`、`message?`。sessionId 为空字符串（任务不属于某 session 对话，UI 用 taskId 过滤） |
+| `BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` | 浏览器任务生命周期（异步，UI 浏览器任务面板消费；主代理只经 `browser`(STATUS) 查 status）：`taskId`、`status`(STARTED/RUNNING/COMPLETED/ERROR/STOPPED)、`step?`、`thought?`、`results?`、`message?`。sessionId 为空字符串（任务不属于某 session 对话，UI 用 taskId 过滤） |
 | `SUBAGENT_STARTED` | 子代理启动（SubagentManager 发，UI 子代理面板消费）：`agentId`、`role`(EXECUTOR/RESEARCHER)、`modelId`、`modelName`、`reasoningLevel`、`task`(主代理派发的命令)、`briefing?`。sessionId = 父会话 ID |
 | `SUBAGENT_COMPLETED/ERROR/STOPPED` | 子代理终态：`agentId`。STOPPED 覆盖 stop_agent 与 abort 级联收割（stopAllForSession）两条路径；汇报全文不进事件（在 wait_agent 的 tool result 里） |
 
@@ -751,17 +749,17 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 
 > **压缩原则（2026-09）**：只保留 mederi 特有事实，删重复与铺陈——通用常识不教（模型本来
 > 就懂），模型不会天然知道的（工具语义、Plan 流程、沙箱规则、InkCompose 渲染特性、artifact
-> 导出）一个不丢，措辞压到信息密度最高。主代理静态提示词 ≈ 3.8k tokens（CODE+APPROVAL 无活跃
+> 导出）一个不丢，措辞压到信息密度最高。主代理静态提示词 ≈ 3.8k tokens（无活跃
 > 计划），子代理 EXECUTOR ≈ 1.3k tokens。子代理不重复注入主代理 IDENTITY（内容已被
 > CORE_PRINCIPLES 覆盖），Mermaid 规范只留 MERMAID_GUIDELINES 一份。
 
 ```mermaid
 flowchart LR
     subgraph SP["SystemPrompts（骨架）"]
-        C["configSection(agentMode,workType)<br/>一行显式配置声明(最前)"]
+        C["configSection(agentMode)<br/>一行显式配置声明(最前)"]
         COMMON["COMMON = IDENTITY + CORE_PRINCIPLES<br/>+ TOOL_GUIDELINES + PromptGuides.PLAN_TOOL_GUIDE<br/>+ WORKING_DIRECTORY + PromptGuides.SANDBOX_USAGE<br/>+ PLANNING_DISCIPLINE(Triage+PlanLoop七步)<br/>+ OUTPUT_FORMAT + PromptGuides.MARKDOWN_FORMAT"]
         W["workflowSection(agentMode)<br/>APPROVAL/AUTONOMOUS 唯一差异=计划批准者"]
-        MODE["forWork() / forCode() 模式段"]
+        MODE["AGENT_MODE_SECTION（# Your Mode）"]
         PLAN["# Active Plan 段(如有活跃计划)<br/>Current: Subtask N 指针 + Progress + 活跃spec"]
         TODO["# Current Todo 段(仅无活跃计划时,互斥)"]
     end
@@ -772,13 +770,13 @@ flowchart LR
         G4["PLAN_TOOL_GUIDE(计划工具硬规则+create_plan字段清单+精简JSON范例)"]
     end
     PG --> COMMON
-    C --> OUT["build(agentMode, workType, activePlan?, activeTodo?)"]
+    C --> OUT["build(agentMode, activePlan?, activeTodo?)"]
     COMMON --> OUT
     MODE --> OUT
     W --> OUT
     PLAN --> OUT
     TODO --> OUT
-    OUT2["forSubagent(role, workType)"] --> EXEC["Executor: Config+SUBAGENT_IDENTITY+CORE_PRINCIPLES<br/>+EXECUTOR_TOOL_GUIDELINES+WORKING_DIRECTORY+SANDBOX_USAGE<br/>+(WORK时)WORK_DOCUMENT_BACKUP+OUTPUT_FORMAT"]
+    OUT2["forSubagent(role)"] --> EXEC["Executor: Config+SUBAGENT_IDENTITY+CORE_PRINCIPLES<br/>+EXECUTOR_TOOL_GUIDELINES+WORKING_DIRECTORY+SANDBOX_USAGE<br/>+OUTPUT_FORMAT"]
     OUT2 --> RES["Researcher: Config+SUBAGENT_IDENTITY+CORE_PRINCIPLES<br/>+RESEARCHER_TOOL_GUIDELINES+RESEARCH_DISCIPLINE<br/>+OUTPUT_FORMAT+MERMAID_GUIDELINES"]
 ```
 

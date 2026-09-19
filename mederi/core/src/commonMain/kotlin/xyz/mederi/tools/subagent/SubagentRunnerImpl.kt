@@ -18,7 +18,6 @@ import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.infrastructure.koog.TurnExecutor
 import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.project.ProjectManager
@@ -34,7 +33,7 @@ import java.util.UUID
  * [SubagentRunner] 的默认实现。
  *
  * 在内存中创建临时 Session 和 HistoryStore，使用独立的 [TurnExecutor] 运行单 turn。
- * 子 Agent 继承父 Agent 的 workType，使用 AUTONOMOUS agentMode。
+ * 子 Agent 使用 AUTONOMOUS agentMode。
  * 子 Agent 是否继承 MCP / skills 由中心化 [xyz.mederi.domain.model.AgentCapabilities] 表
  * 决定（runTurn 内部据此开关），本类只负责把父级注入的 [mcpConnector] / [skills] 传递下去。
  * 所有异常都在内部 catch 并转换为错误信息字符串返回，不会抛到父 Agent。
@@ -51,7 +50,6 @@ class SubagentRunnerImpl(
         briefing: String?,
         plan: String?,
         role: SubagentRole,
-        workType: WorkType,
         directories: List<String>,
         aiModel: AIModel,
         reasoningLevel: ReasoningLevel,
@@ -78,7 +76,6 @@ class SubagentRunnerImpl(
             title = "Subagent",
             status = SessionStatus.IDLE,
             agentMode = AgentMode.AUTONOMOUS,
-            workType = workType,
             aiModel = aiModel,
             reasoningLevel = reasoningLevel,
             env = emptyMap(),
@@ -139,7 +136,6 @@ class SubagentRunnerImpl(
                 request = SendMessageRequest(
                     agentConfig = AgentConfig(
                         agentMode = AgentMode.AUTONOMOUS,
-                        workType = workType,
                         aiModel = aiModel,
                         reasoningLevel = reasoningLevel
                     ),

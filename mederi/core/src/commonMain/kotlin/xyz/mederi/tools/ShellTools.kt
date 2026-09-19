@@ -89,11 +89,11 @@ class ShellTools(
 
     @Serializable
     data class ExecuteCommandArgs(
-        @LLMDescription("要执行的 shell 命令。")
+        @LLMDescription("Shell command to execute.")
         val command: String = "",
-        @LLMDescription("命令工作目录（绝对路径或项目内相对路径）。留空 = 项目主目录。")
+        @LLMDescription("Working directory (absolute or project-relative path). Empty = project root.")
         val cwd: String = "",
-        @LLMDescription("命令超时时间（秒），默认 120 秒。")
+        @LLMDescription("Timeout in seconds; default 120.")
         @kotlinx.serialization.SerialName("timeout_seconds")
         val timeoutSeconds: Int = 120
     )
@@ -101,8 +101,7 @@ class ShellTools(
     inner class ExecuteCommandTool : SimpleTool<ExecuteCommandArgs>(
         argsType = typeToken<ExecuteCommandArgs>(),
         name = "execute_command",
-        description = "在指定工作目录下执行一条 shell 命令并返回标准输出和标准stderr。cwd 留空时在项目主目录执行。适用于编译、运行测试、构建、git 操作等。" +
-            "写入受沙箱限制：仅项目目录、临时目录与构建缓存可写；需要写其他位置时引导用户把目录加入项目或全局白名单。"
+        description = "Execute a shell command in the given working directory (empty cwd = project root) and return its stdout and stderr. Writes are sandbox-limited: project directories, temp dirs, and build caches only."
     ) {
         override suspend fun execute(args: ExecuteCommandArgs): String {
             val result = runCommand(args.command, args.timeoutSeconds, args.cwd.takeIf { it.isNotBlank() })

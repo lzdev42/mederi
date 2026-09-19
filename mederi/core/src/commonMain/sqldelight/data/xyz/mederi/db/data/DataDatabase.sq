@@ -9,7 +9,7 @@
 -- 会话表
 -- ============================================================
 -- Session 不引用 Agent，只记录用户最后一次选择的
--- agent_mode / work_type / ai_model / reasoning_level。系统提示词由 agentMode + workType 动态决定。
+-- agent_mode / ai_model / reasoning_level。系统提示词由 agentMode 动态决定。
 -- ai_model 存储 AIModel 的 JSON 序列化（modelId + thinkingLevel + 模型元信息）。
 -- project_id 表示该 Session 所属的项目，Agent 的读写权限作用于该项目下的目录。
 
@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     title           TEXT NOT NULL DEFAULT '',
     status          TEXT NOT NULL DEFAULT 'IDLE',
     agent_mode      TEXT NOT NULL DEFAULT 'AUTONOMOUS',
-    work_type       TEXT NOT NULL DEFAULT 'CODE',
     ai_model        TEXT,
     reasoning_level TEXT,
     env             TEXT NOT NULL DEFAULT '{}',
@@ -33,24 +32,24 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 
 -- 插入会话
 insertSession:
-INSERT INTO sessions (id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO sessions (id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- 查询所有会话（按更新时间降序）
 listSessions:
-SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at
 FROM sessions
 ORDER BY updated_at DESC;
 
 -- 按 ID 查询会话
 getSession:
-SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at
 FROM sessions
 WHERE id = ?;
 
 -- 按项目查询会话
 listSessionsByProject:
-SELECT id, project_id, title, status, agent_mode, work_type, ai_model, reasoning_level, env, todos, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at
 FROM sessions
 WHERE project_id = ?
 ORDER BY updated_at DESC;
@@ -72,7 +71,7 @@ WHERE id = ?;
 
 -- 更新会话 Agent 配置（COALESCE 使 NOT NULL 的列可接受 null 参数）
 updateSessionAgentConfig:
-UPDATE sessions SET agent_mode = COALESCE(?, agent_mode), work_type = COALESCE(?, work_type), ai_model = COALESCE(?, ai_model), reasoning_level = COALESCE(?, reasoning_level), updated_at = ?
+UPDATE sessions SET agent_mode = COALESCE(?, agent_mode), ai_model = COALESCE(?, ai_model), reasoning_level = COALESCE(?, reasoning_level), updated_at = ?
 WHERE id = ?;
 
 -- 删除会话

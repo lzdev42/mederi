@@ -4,7 +4,6 @@ import kotlinx.coroutines.runBlocking
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.SessionStatus
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.project.ProjectManagerImpl
 import xyz.mederi.store.InMemoryDiffStore
 import xyz.mederi.store.InMemoryHistoryStore
@@ -41,7 +40,7 @@ class SessionAndProjectCascadeDeleteTest {
 
         val project = projectManager.create("TestProj", "/tmp/test-proj")
         val session = sessionManager.create(
-            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE),
+            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS),
             projectId = project.id,
             title = "Test Session",
             env = emptyMap(),
@@ -78,13 +77,13 @@ class SessionAndProjectCascadeDeleteTest {
 
         val project = projectManager.create("TestProj", "/tmp/test-proj")
         val s1 = sessionManager.create(
-            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE),
+            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS),
             projectId = project.id,
             title = "Session 1",
             env = emptyMap(),
         )
         val s2 = sessionManager.create(
-            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE),
+            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS),
             projectId = project.id,
             title = "Session 2",
             env = emptyMap(),
@@ -129,7 +128,7 @@ class SessionAndProjectCascadeDeleteTest {
 
         val project = projectManager.create("TestProj", "/tmp/test-proj")
         val session = sessionManager.create(
-            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS, workType = WorkType.CODE),
+            agentConfig = AgentConfig(agentMode = AgentMode.AUTONOMOUS),
             projectId = project.id,
             title = "Stale Running",
             env = emptyMap(),

@@ -17,7 +17,6 @@ import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.MessagePart
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.provider.domain.model.ReasoningParameter
 
@@ -119,12 +118,8 @@ object MederiInputMapper {
         val agentMode = agent?.let {
             runCatching { AgentMode.valueOf(it.mode.name) }.getOrNull()
         } ?: AgentMode.AUTONOMOUS
-        val workType = agent?.let {
-            runCatching { WorkType.valueOf(it.workType.name) }.getOrNull()
-        } ?: WorkType.CODE
         return AgentConfig(
             agentMode = agentMode,
-            workType = workType,
             aiModel = model,
             reasoningLevel = toReasoningLevel(thinkingLevel)
         )

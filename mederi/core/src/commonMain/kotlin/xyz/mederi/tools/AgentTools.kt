@@ -85,7 +85,7 @@ class AgentTools(
             if (executingPlan != null) {
                 return "Error: an Active Plan (${executingPlan.id}) is being executed — its subtask " +
                     "statuses are the tracker. Do NOT maintain a separate todo list; continue the " +
-                    "Plan Loop (generate_spec / spawn_agent / verify_subtask) instead."
+                    "Plan Loop (generate_spec / subagent(SPAWN) / verify_subtask) instead."
             }
             // 聚合校验：一轮列出全部问题（逐条报错实测爬不完）
             val errors = mutableListOf<String>()
@@ -131,7 +131,7 @@ class AgentTools(
 
     @Serializable
     data class GetContextRemainingArgs(
-        @LLMDescription("留空即可，此参数保留用于未来扩展。")
+        @LLMDescription("Leave empty; reserved for future use.")
         val placeholder: String = ""
     )
 
@@ -161,7 +161,7 @@ class AgentTools(
 
     @Serializable
     data class NewContextWindowArgs(
-        @LLMDescription("留空即可，此参数保留用于未来扩展。")
+        @LLMDescription("Leave empty; reserved for future use.")
         val placeholder: String = ""
     )
 
@@ -181,35 +181,35 @@ class AgentTools(
 
     @Serializable
     data class AskUserAnswer(
-        @LLMDescription("问题 ID，与 ask_user 工具传回的 id 对应。")
+        @LLMDescription("Question ID, matching an id from the ask_user call.")
         val questionId: String,
-        @LLMDescription("用户选择的答案列表，支持多选。")
+        @LLMDescription("Answers selected by the user; supports multi-select.")
         val answers: List<String>
     )
 
     @Serializable
     data class AskUserResult(
-        @LLMDescription("所有问题的回答列表。")
+        @LLMDescription("All of the answers, one entry per question asked.")
         val answers: List<AskUserAnswer>
     )
 
     @Serializable
     data class AskUserQuestionArg(
-        @LLMDescription("问题 ID，唯一标识。")
+        @LLMDescription("Question ID, unique.")
         val id: String,
-        @LLMDescription("问题文本。")
+        @LLMDescription("Question text.")
         val prompt: String,
-        @LLMDescription("可选项列表。空列表表示自由输入。")
+        @LLMDescription("List of options. Empty = free-text input.")
         val options: List<String> = emptyList(),
-        @LLMDescription("是否允许自定义答案（输入选项外的内容）。")
+        @LLMDescription("true = allow a custom answer outside the options.")
         val allowCustom: Boolean = false,
-        @LLMDescription("是否允许多选。")
+        @LLMDescription("true = allow selecting multiple answers.")
         val multiSelect: Boolean = false
     )
 
     @Serializable
     data class AskUserArgs(
-        @LLMDescription("要问用户的问题列表。可包含多个问题。")
+        @LLMDescription("Questions to ask the user. May contain multiple.")
         val questions: List<AskUserQuestionArg>
     )
 

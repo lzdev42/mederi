@@ -492,14 +492,10 @@ class MederiAiCore(
         val agentMode = agent?.let {
             runCatching { AgentMode.valueOf(it.mode.name) }.getOrNull()
         } ?: AgentMode.AUTONOMOUS
-        val workType = agent?.let {
-            runCatching { xyz.mederi.domain.model.WorkType.valueOf(it.workType.name) }.getOrNull()
-        } ?: xyz.mederi.domain.model.WorkType.CODE
         val session = mederi.sessions.create(
             CreateSessionRequest(
                 agentConfig = AgentConfig(
-                    agentMode = agentMode,
-                    workType = workType
+                    agentMode = agentMode
                 ),
                 projectId = projectId,
                 title = ""
@@ -753,7 +749,7 @@ class MederiAiCore(
         val model = input.model?.let { findCoreModel(it.id) }
         DebugLog.data("AiCore", "findCoreModel result", "${model?.id} (${model?.name}), providerModelId=${model?.providerModelId}, supportsReasoning=${model?.supportsReasoning}")
         val agentConfig = MederiInputMapper.toAgentConfig(input.agent, model, input.thinkingLevel)
-        DebugLog.data("AiCore", "AgentConfig", "agentMode=${agentConfig.agentMode}, workType=${agentConfig.workType}, aiModel=${agentConfig.aiModel?.id}, reasoningLevel=${agentConfig.reasoningLevel}")
+        DebugLog.data("AiCore", "AgentConfig", "agentMode=${agentConfig.agentMode}, aiModel=${agentConfig.aiModel?.id}, reasoningLevel=${agentConfig.reasoningLevel}")
         val parts = MederiInputMapper.toMessageParts(input)
         DebugLog.data("AiCore", "parts count", parts.size)
         DebugLog.data("AiCore", "text", (parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.Text>().firstOrNull()?.text ?: ""))

@@ -10,7 +10,6 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.WorkType
 import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.toTodoProjection
@@ -27,13 +26,13 @@ import java.time.Instant
  */
 @Serializable
 data class SpawnAgentArgs(
-    @LLMDescription("交给子 Agent 完成的任务描述，应清晰、具体、可独立执行。")
+    @LLMDescription("Task description for the sub-agent; clear, specific, independently executable.")
     val task: String = "",
-    @LLMDescription("补充信息：父 Agent 已掌握的关键结论、限制条件、相关文件路径等。")
+    @LLMDescription("Extra context from the parent: key constraints and relevant file paths.")
     val briefing: String = "",
-    @LLMDescription("已批准计划的 ID。与 subtaskIndex 一起指定要执行的子任务——子代理执行的是 generate_spec 存储的确切 spec，零漂移。")
+    @LLMDescription("Approved plan ID. With subtaskIndex, selects the subtask; the sub-agent runs the exact spec stored by generate_spec.")
     val planId: String = "",
-    @LLMDescription("要执行的子任务索引（0 基）。需要 planId。")
+    @LLMDescription("Subtask index to execute (0-based). Requires planId.")
     val subtaskIndex: Int = -1
 )
 
@@ -154,7 +153,6 @@ class SpawnAgentTool(
             ).takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
             plan = st.spec,
             role = SubagentRole.EXECUTOR,
-            workType = plan.workType,
             directories = directories,
             aiModel = effectiveAiModel,
             reasoningLevel = effectiveReasoningLevel,
@@ -177,9 +175,9 @@ class SpawnAgentTool(
  */
 @Serializable
 data class SpawnResearcherArgs(
-    @LLMDescription("调研任务描述：要查清什么问题，要产出什么结论。")
+    @LLMDescription("Investigation task: what to resolve and what conclusion to produce.")
     val task: String = "",
-    @LLMDescription("补充信息：父 Agent 已掌握的关键结论、限制条件、相关文件路径等。")
+    @LLMDescription("Extra context from the parent: key constraints and relevant file paths.")
     val briefing: String = ""
 )
 
@@ -225,7 +223,6 @@ class SpawnResearcherTool(
             briefing = args.briefing.takeIf { it.isNotBlank() },
             plan = null,
             role = SubagentRole.RESEARCHER,
-            workType = WorkType.CODE,
             directories = directories,
             aiModel = effectiveAiModel,
             reasoningLevel = effectiveReasoningLevel,
