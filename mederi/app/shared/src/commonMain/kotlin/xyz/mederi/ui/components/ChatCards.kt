@@ -43,8 +43,10 @@ import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.core.ui.AssistantFooterInfo
 import xyz.mederi.core.ui.ChatListItem
+import xyz.mederi.core.contract.models.SubagentToolResult
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.core.contract.models.ToolCallUi
+import xyz.mederi.core.ui.SubagentReportMarkdown
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 
@@ -465,6 +467,7 @@ fun SubagentCallsBlock(
 private fun resolveActionVerb(toolName: String): String = when {
     toolName == "spawn_agent" -> "agent"
     toolName == "spawn_researcher" -> "research"
+    toolName == "wait_agent" || toolName == "agent_status" -> "wait"
     toolName.contains("edit") || toolName.contains("patch") || toolName.contains("replace") -> "edit"
     toolName.contains("write") || toolName.contains("create") -> "create"
     toolName.contains("read") || toolName.contains("view") -> "read"
@@ -494,9 +497,34 @@ private fun ToolCallItemRow(
     }?.takeIf { it.isNotBlank() }
     var resultExpanded by remember { mutableStateOf(false) }
 
-    val verb = resolveActionVerb(toolCall.name)
+    val completedState = toolCall.state as? ToolCallState.Completed
+    val isReportTool = toolCall.name in SubagentReportMarkdown.REPORT_TOOL_NAMES
+    val reportMarkdown = if (isReportTool && completedState != null) {
+        SubagentReportMarkdown.fromToolResult(toolCall.name, completedState.output)
+    } else null
+    val isReport = reportMarkdown != null
+    val decodedReport = if (isReport && completedState != null) {
+        SubagentToolResult.decode(completedState.output)
+    } else null
+
+    val spawnModel = if ((toolCall.name == "spawn_agent" || toolCall.name == "spawn_researcher") && completedState != null) {
+        SubagentToolResult.decode(completedState.output)?.modelName
+    } else null
+
+    val verb = if (isReport) "report" else resolveActionVerb(toolCall.name)
     val rawTarget = toolCall.target?.trim()
     val targetText = when {
+        isReport && decodedReport != null -> {
+            val model = decodedReport.modelName ?: decodedReport.modelId
+            if (model != null) "${decodedReport.agentId} · $model" else decodedReport.agentId
+        }
+        spawnModel != null -> {
+            if (!rawTarget.isNullOrBlank() && rawTarget != "." && rawTarget != toolCall.name) {
+                "$rawTarget · $spawnModel"
+            } else {
+                spawnModel
+            }
+        }
         !rawTarget.isNullOrBlank() && rawTarget != "." && rawTarget != toolCall.name -> rawTarget
         verb == "list" -> "directory"
         else -> toolCall.name.removePrefix(verb).removePrefix("_").ifBlank { "action" }
@@ -561,7 +589,7 @@ private fun ToolCallItemRow(
                 }
             }
 
-            // 动词（如 edit, run, list, ask, read）
+            // 动词（如 edit, run, list, ask, read, report）
             Text(
                 text = verb,
                 color = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
@@ -570,7 +598,7 @@ private fun ToolCallItemRow(
                 fontWeight = FontWeight.Medium
             )
 
-            // 目标参数（如 SnapshotReducer.kt, ./gradlew test, directory）
+            // 目标参数（如 SnapshotReducer.kt, ./gradlew test, sub_xxx · gpt-4o）
             Text(
                 text = targetText,
                 color = if (colors.isDark) Color(0xFFCBD5E1) else colors.textPrimary,
@@ -599,8 +627,24 @@ private fun ToolCallItemRow(
             }
         }
 
-        // 执行输出微框（严格限高 130dp，轻量暗色背景）
-        if (result != null && resultExpanded) {
+        // 子代理汇报 Markdown 展开卡片（InkCompose MarkdownView 富文本排版渲染）
+        if (reportMarkdown != null && resultExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (colors.isDark) Color(0xFF161822) else Color(0xFFF8FAFC))
+                    .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                MarkdownView(
+                    content = reportMarkdown,
+                    modifier = Modifier.fillMaxWidth(),
+                    enableScrollOverride = false
+                )
+            }
+        } else if (result != null && resultExpanded) {
+            // 执行输出微框（严格限高 130dp，轻量暗色背景）
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

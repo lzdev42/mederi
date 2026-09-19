@@ -73,6 +73,8 @@ class FileSystemTools(
     data class ReadFileArgs(
         @LLMDescription("要读取的文件路径。可以是绝对路径，也可以是相对于项目根目录的相对路径。")
         val path: String = "",
+        @LLMDescription("起始行号（从 0 开始计数，即为该行在文件中的第几行）。返回内容从此行开始。默认 0 = 从头读。配合 max_lines 用于分段读取文件的不同部分。")
+        val offset: Int = 0,
         @LLMDescription("最多读取的行数，超出将被截断。0 表示不限制。")
         @kotlinx.serialization.SerialName("max_lines")
         val maxLines: Int = 2000
@@ -129,17 +131,35 @@ class FileSystemTools(
     inner class ReadFileTool : SimpleTool<ReadFileArgs>(
         argsType = typeToken<ReadFileArgs>(),
         name = "read_file",
-        description = "读取本地文件并返回其文本内容。适用于查看源码、配置文件、文档等。"
+        description = "读取本地文件并返回其文本内容。默认从头读取最多 max_lines 行（起始行号 offset 可指定，从 0 计）；" +
+            "返回内容含实际行号范围与是否仍有后续行，便于分段读取文件的不同部分。适用于查看源码、配置文件、文档等。"
     ) {
         override suspend fun execute(args: ReadFileArgs): String {
             val file = resolveForRead(args.path, mustExist = true, mustBeFile = true)
             val content = file.readText()
-            val result = if (args.maxLines <= 0) content
-            else {
-                val lines = content.lines()
-                if (lines.size <= args.maxLines) content
-                else lines.take(args.maxLines).joinToString("\n") + "\n... (truncated, ${lines.size - args.maxLines} more lines)"
+            // 空文件特判："" 的 lines() 在 Kotlin 返回 [" "]（非空），会误报 total=1
+            val allLines = if (content.isEmpty()) emptyList() else content.lines()
+            val total = allLines.size
+
+            // offset/maxLines 均 0-based。区间 [start, end) 前闭后开（subList 语义），
+            // end 即"下一个 offset"——续读时直接将返回的 end 作为 offset 传入，零换算。
+            val start = if (args.offset < 0) 0 else args.offset.coerceAtMost(total)
+            val limit = if (args.maxLines <= 0) Int.MAX_VALUE else args.maxLines
+            val end = (start.toLong() + limit).coerceAtMost(total.toLong()).toInt()
+            val slice = allLines.subList(start, end)
+
+            val hasMore = end < total
+            val header = when {
+                slice.isEmpty() && total == 0 -> "read_file: (empty file, 0 lines)"
+                slice.isEmpty() -> "read_file: offset ${args.offset} beyond end of file; file has $total lines"
+                else -> "read_file: lines[$start, $end) (0-based, end-exclusive), total=$total" +
+                    if (hasMore) ", next offset=$end" else ""
             }
+            val truncatedNote = if (hasMore) {
+                "\n... (truncated: ${total - end} lines remain; continue from offset $end)"
+            } else ""
+
+            val result = header + if (slice.isEmpty()) "" else "\n" + slice.joinToString("\n") + truncatedNote
             return appendDiscoveredAgents(result, file)
         }
     }

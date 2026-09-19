@@ -6,43 +6,55 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.CheckCircle
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.Cpu
-import compose.icons.feathericons.Play
-import xyz.mederi.core.contract.models.Conversation
-import xyz.mederi.core.contract.models.ConversationStatus
+import compose.icons.feathericons.Search
+import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 
 @Composable
 fun SubAgentCard(
-    conversation: Conversation,
+    subagent: SubagentState,
+    colors: MederiColors = LocalMederiColors.current,
     isExpandedDefault: Boolean = false,
-    onSelectConversation: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val colors = LocalMederiColors.current
     var isExpanded by remember { mutableStateOf(isExpandedDefault) }
 
-    val subAgentName = conversation.title
-    val status = if (conversation.status == ConversationStatus.Working) "Running..." else "Idle"
-    val goal = "智能体关联目标: General"
+    val roleIcon = if (subagent.role.equals("RESEARCHER", ignoreCase = true)) FeatherIcons.Search else FeatherIcons.Cpu
+    val roleLabel = if (subagent.role.equals("RESEARCHER", ignoreCase = true)) "Researcher" else "Executor"
+
+    val modelLabel = buildString {
+        append(subagent.modelName.ifBlank { subagent.modelId })
+        if (!subagent.reasoningLevel.isNullOrBlank()) {
+            append(" (${subagent.reasoningLevel})")
+        }
+    }
+
+    val (statusLabel, statusColor) = when (subagent.status.uppercase()) {
+        "RUNNING" -> "运行中" to colors.accentPrimary
+        "COMPLETED" -> "已完成" to colors.accentSuccess
+        "ERROR" -> "失败" to colors.accentDanger
+        "STOPPED" -> "已终止" to colors.textMuted
+        else -> subagent.status to colors.textSecondary
+    }
 
     Column(
         modifier = modifier
@@ -53,6 +65,7 @@ fun SubAgentCard(
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // Header Row: [Role Icon + Role/Model] ... [Status Badge + Expand Chevron]
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -60,19 +73,32 @@ fun SubAgentCard(
         ) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f, fill = false)
             ) {
                 Icon(
-                    imageVector = FeatherIcons.Cpu,
+                    imageVector = roleIcon,
                     contentDescription = null,
                     tint = colors.accentPrimary,
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
-                    text = "SubAgent: $subAgentName",
+                    text = roleLabel,
                     color = colors.textPrimary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "·",
+                    color = colors.textMuted,
+                    fontSize = 12.sp
+                )
+                Text(
+                    text = modelLabel,
+                    color = colors.textSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -84,12 +110,12 @@ fun SubAgentCard(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (status.contains("Done") || status.contains("Completed")) colors.accentSuccess.copy(alpha = 0.2f) else colors.accentPrimary.copy(alpha = 0.2f))
+                        .background(statusColor.copy(alpha = 0.15f))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = status,
-                        color = if (status.contains("Done") || status.contains("Completed")) colors.accentSuccess else colors.accentPrimary,
+                        text = statusLabel,
+                        color = statusColor,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -97,7 +123,7 @@ fun SubAgentCard(
 
                 Icon(
                     imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                    contentDescription = "展开",
+                    contentDescription = if (isExpanded) "收起" else "展开",
                     tint = colors.textMuted,
                     modifier = Modifier
                         .size(14.dp)
@@ -106,16 +132,19 @@ fun SubAgentCard(
             }
         }
 
-        if (goal.isNotEmpty()) {
+        // Task preview / content
+        if (subagent.task.isNotBlank()) {
             Text(
-                text = "目标: $goal",
-                color = colors.textSecondary,
-                fontSize = 11.sp,
-                maxLines = if (isExpanded) 10 else 2,
+                text = subagent.task,
+                color = colors.textPrimary,
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp,
+                maxLines = if (isExpanded) Int.MAX_VALUE else 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
 
+        // Expanded Details
         AnimatedVisibility(visible = isExpanded) {
             Column(
                 modifier = Modifier
@@ -124,17 +153,34 @@ fun SubAgentCard(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 HorizontalDivider(color = colors.divider)
-                Text(
-                    text = "子 Agent 后台异步运行中，输出已同步回主流程。",
-                    color = colors.textMuted,
-                    fontSize = 10.sp
-                )
-                TextButton(
-                    onClick = { onSelectConversation(conversation.id) },
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier.height(24.dp)
+
+                if (!subagent.briefing.isNullOrBlank()) {
+                    Text(
+                        text = "简报: ${subagent.briefing}",
+                        color = colors.textSecondary,
+                        fontSize = 10.5.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("查看独立日志详情 >", color = colors.accentPrimary, fontSize = 11.sp)
+                    Text(
+                        text = "ID: ${subagent.agentId}",
+                        color = colors.textMuted,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (subagent.startedAt.isNotBlank()) {
+                        Text(
+                            text = subagent.startedAt,
+                            color = colors.textMuted,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
         }
@@ -143,28 +189,28 @@ fun SubAgentCard(
 
 @Composable
 fun SubAgentTabContent(
-    subAgents: List<Conversation>,
-    colors: MederiColors,
-    onSelectConversation: (String) -> Unit = {}
+    subagents: List<SubagentState>,
+    colors: MederiColors = LocalMederiColors.current,
+    modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
-            text = "子 AGENT 任务追踪器 (${subAgents.size})",
+            text = "子 AGENT 任务追踪器 (${subagents.size})",
             color = colors.textMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.5.sp
         )
 
-        if (subAgents.isEmpty()) {
+        if (subagents.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -178,11 +224,11 @@ fun SubAgentTabContent(
                 )
             }
         } else {
-            subAgents.forEach { conversation ->
+            subagents.forEach { subagent ->
                 SubAgentCard(
-                    conversation = conversation,
-                    isExpandedDefault = false,
-                    onSelectConversation = onSelectConversation
+                    subagent = subagent,
+                    colors = colors,
+                    isExpandedDefault = false
                 )
             }
         }

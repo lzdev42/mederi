@@ -221,9 +221,8 @@ private fun RightExtensionPanelContent(
                         colors = colors
                     )
                     RightDockPanel.SUB_AGENTS -> SubAgentTabContent(
-                        subAgents = viewModel.childConversations,
-                        colors = colors,
-                        onSelectConversation = { id -> viewModel.selectConversation(id) }
+                        subagents = viewModel.subagents,
+                        colors = colors
                     )
                     RightDockPanel.ARTIFACTS -> ArtifactsPanelContent(
                         viewModel = viewModel,

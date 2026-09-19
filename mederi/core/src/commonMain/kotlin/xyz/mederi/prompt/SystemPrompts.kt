@@ -52,7 +52,8 @@ user's language.
     private const val TOOL_GUIDELINES = """
 # Tool Guidelines
 
-- read_file: Read. max_lines=0 = full file.
+- read_file: Read. offset = starting line (0-based, default 0); max_lines = max lines to return (0 = full file).
+  Result header reports the returned line range [start, end) and the next offset when more remain.
 - list_directory: Explore. Empty path = project root.
 - write_file: Create or overwrite a whole file.
 - edit_file: Replace text in an existing file. original must match the file exactly and be
@@ -298,7 +299,7 @@ point is step 3 — who approves.
     private val EXECUTOR_TOOL_GUIDELINES = """
 # Tool Guidelines
 
-- read_file / list_directory: Read and explore (max_lines=0 = full file; empty path = root).
+- read_file / list_directory: Read and explore (offset = 0-based starting line, default 0; max_lines=0 = full file; empty path = root).
 - write_file: Create or overwrite a whole file.
 - edit_file: Replace text in an existing file. original must match the file exactly and be
   UNIQUE in the file — multiple matches are rejected, provide more surrounding context.
@@ -320,7 +321,7 @@ report the outcome. Report SPEC_FEEDBACK kinds:
     private val RESEARCHER_TOOL_GUIDELINES = """
 # Tool Guidelines
 
-- read_file / list_directory: Read and explore (max_lines=0 = full file; empty path = root).
+- read_file / list_directory: Read and explore (offset = 0-based starting line, default 0; max_lines=0 = full file; empty path = root).
 - MCP server tools: `<server>_<tool>` when enabled — stay read-only, investigate only.
 
 You have ONLY the above. No write, no edit, no shell, no planning, no spawning. If the research
