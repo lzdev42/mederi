@@ -133,11 +133,15 @@ suspend fun create(agentConfig: AgentConfig, projectId: String, title: String, e
 suspend fun rename(id: String, title: String): Session
 suspend fun delete(id: String)          // turnExecutor.abortAndJoin → 级联删 session/history/diff
 suspend fun abort(id: String)
-suspend fun abortAndJoin(id: String)    // turnExecutor.abortAndJoin：cancel+join + 对残留 RUNNING 兜底复位 IDLE（cleanupStaleRunningSessions 启动清理用）
+% turnExecutor.abort：cancel turn job → stopAllForSession 级联收割本会话 RUNNING 子代理 → 取消
+% question/planApproval requesters → 异步写 IDLE + MESSAGE_ERROR(用户中止)；无活跃 turn 整体 no-op
+suspend fun abortAndJoin(id: String)    // turnExecutor.abortAndJoin：cancel+join + stopAllForSession + 对残留 RUNNING 兜底复位 IDLE（cleanupStaleRunningSessions 启动清理用）
 suspend fun sendMessage(id: String, request: SendMessageRequest)
 suspend fun rollbackToMessage(id: String, messageId: String)   // abortAndJoin 后 historyStore.replace(截断)
 suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
-suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean)
+suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean, aiModel: AIModel? = null, reasoningLevel: ReasoningLevel? = null)
+% 批准 + aiModel 非 null 时先 updateAgentConfig 写 session（"最后一次选择"语义）再 resolve requester——
+% create_plan 挂起等批准期间用户切模型，同 turn 后续 spawn 动态读到新模型；拒绝/null 不写
 suspend fun compressHistory(id: String)
 suspend fun listMessages(id: String): List<Message>
 suspend fun getMessage(id: String, messageId: String): Message
@@ -321,10 +325,14 @@ classDiagram
     }
     class SubagentManager {
         +spawn(...) String agentId   % 后台协程跑 SubagentRunner.run，立即返回 agentId
-        +status(agentId) String      % RUNNING/COMPLETED/ERROR/STOPPED/NOT_FOUND
+        +status(agentId) String      % RUNNING/COMPLETED/ERROR/STOPPED/NOT_FOUND + modelName/reasoningLevel 元数据
         +stop(agentId) String        % cancel job + 部分结果
         +wait(agentId, timeoutMs) String  % 带超时挂起等待，超时 TIMEOUT（子代理继续后台跑）
+        +stopAllForSession(parentSessionId) Int  % abort/abortAndJoin 级联收割本会话 RUNNING 子代理（幂等，返回取消数）
         % agents: ConcurrentHashMap<agentId, BackgroundAgent>；全状态收敛在此表
+        % BackgroundAgent 记录 parentSessionId/aiModel/reasoningLevel/task/briefing（元数据）
+        % eventBus 可选注入：spawn 发 SUBAGENT_STARTED（全量元数据），终态发 COMPLETED/ERROR/STOPPED
+        % （NonCancellable 包裹 emit——STOPPED 处于取消路径，裸 emit 会被吞）；sessionId=父会话
     }
     class SubagentAsyncTools {
         % agent_status / stop_agent / wait_agent 三个工具，仅主代理可调
@@ -416,9 +424,9 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + SUBAGENT_MGMT + BRO
 | `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：**硬门禁**（APPROVED/IN_PROGRESS 计划存在即拒）；校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
 | `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：validatePlan 聚合校验 → PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（superseded/approved/rejected）→ notebook.append → emitPlanTodos（PLAN_PROGRESS + todos 投影）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）+ PLAN_PROGRESS("spec-generated")。converge_plan：append-only 追加补救子任务 |
 | `VerifyTools.kt` | verify_subtask(planId, subtaskIndex, status: PASS/PARTIAL/FAIL, evidence, gapType?, remediation?) | **自动执行** Subtask.verification（VerificationSpec.command）命令（shellTools.runCommand, 默认 30s, cwd 可配）；三态判定：exit0→PASS 存储 / 非零非超时→FAIL 拒 PASS 重判 / timedOut→TIMEOUT 不存 PASS 不硬拒（inconclusive 暖缓存重验）；同时读 Subtask.executorTouchedFiles vs targetFiles 报告 scope 越界（追加 evidence，非硬拒）；PASS→COMPLETED、PARTIAL/FAIL→FAILED；**updatePlan 原子写入**验证结果+状态；全部 COMPLETED → plan 置 COMPLETED + `planStore.archive`；发 PLAN_PROGRESS |
-| `subagent/SpawnAgentTool.kt` | spawn_agent(task, briefing, planId, subtaskIndex) / spawn_researcher(task, briefing) | **异步派工**：spawn_agent **硬校验** planId/subtaskIndex/spec 存在性（spec 空即拒）→ **updatePlan 原子置 IN_PROGRESS**（并行 spawn 防互相覆盖）→ PLAN_PROGRESS("subtask-started") → `subagentManager.spawn(...)` 立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`（不阻塞父 turn）；spawn_researcher 无计划门禁，role=RESEARCHER, plan=null；需要结果时父代理调 `wait_agent(agentId)`，或 `agent_status`/`stop_agent` 查询/停止 |
-| `subagent/SubagentManager.kt` | spawn/status/stop/wait | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态；stop = cancel job（协程上下文级联取消内部 turn）；wait = withTimeout 轮询状态，超时 TIMEOUT |
-| `subagent/SubagentAsyncTools.kt` | agent_status / stop_agent / wait_agent | 异步子代理管理工具，仅主代理（canSpawn 才注册）：agent_status(agentId)→状态 JSON；stop_agent(agentId)→取消+部分结果；wait_agent(agentId, timeoutMs)→带超时阻塞等结果 |
+| `subagent/SpawnAgentTool.kt` | spawn_agent(task, briefing, planId, subtaskIndex) / spawn_researcher(task, briefing) | **异步派工**：spawn_agent **硬校验** planId/subtaskIndex/spec 存在性（spec 空即拒）→ **updatePlan 原子置 IN_PROGRESS**（并行 spawn 防互相覆盖）→ PLAN_PROGRESS("subtask-started") → `subagentManager.spawn(...)` 立即返回 `{"agentId":"sub_xxx","status":"RUNNING","modelName":"..."}`（不阻塞父 turn）；**模型/推理档位动态读 session 现值**（构造注入 sessionStore，execute 时 `session.aiModel ?: 构造捕获的 turn 模型`——计划批准时用户可能已切模型，resolvePlanApproval 把批准时刻选择写入 session）；spawn_researcher 无计划门禁，role=RESEARCHER, plan=null，同动态读策略；需要结果时父代理调 `wait_agent(agentId)`，或 `agent_status`/`stop_agent` 查询/停止 |
+| `subagent/SubagentManager.kt` | spawn/status/stop/wait + stopAllForSession | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态（含 parentSessionId/aiModel/reasoningLevel/task/briefing 元数据）；stop = cancel job（协程上下文级联取消内部 turn）；wait = withTimeout 轮询状态，超时 TIMEOUT；**stopAllForSession(parentSessionId)** = abort/abortAndJoin 级联收割本会话 RUNNING 子代理（幂等）——子代理挂在全局 scope 不随父 turn 取消而亡，不收割即孤儿；status/wait 返回 JSON 带 modelName/reasoningLevel；**生命周期事件**（可选注入 eventBus）：spawn 发 SUBAGENT_STARTED（全量元数据）→ 终态发 SUBAGENT_COMPLETED/ERROR/STOPPED（NonCancellable 包 emit，取消路径不吞事件） |
+| `subagent/SubagentAsyncTools.kt` | agent_status / stop_agent / wait_agent | 异步子代理管理工具，仅主代理（canSpawn 才注册）：agent_status(agentId)→状态 JSON（含模型元数据）；stop_agent(agentId)→取消+部分结果；wait_agent(agentId, timeoutMs)→带超时阻塞等结果（COMPLETED 时 result=汇报全文，落库在 tool result 里） |
 | `subagent/SubagentRunner(Impl).kt` | 接口 + 实现 | Impl 依赖 ProviderManager+ProjectManager+**mcpConnector+skills（由父 TurnExecutor 注入，仅透传；实际开关在 runTurn 的 AgentCapabilities 表）**；内存 InMemorySessionStore/HistoryStore + 独立 eventBus(replay=64) + 临时 Session(`sub_xxxxxxxx`, AUTONOMOUS) → 独立 TurnExecutor（**scope 继承调用方协程上下文**，取消可级联）→ 按角色拼 inputText（EXECUTOR: spec 清单自顶向下 + SPEC_FEEDBACK 回报机制；RESEARCHER: 只读调研）→ sendMessage(subagentRole=role) → 等 MESSAGE_COMPLETED/ERROR 终态 → 取最后 ASSISTANT 文本；**CancellationException 重新抛出**（标记 STOPPED）；异常转 "[subagent error] ..." |
 | `sandbox/CommandSandbox.kt` | `CommandSandbox(projectDirs)` + `SandboxStatus` | **永远开、无开关**；读全盘放行、写锁白名单（项目目录 + SandboxConfig.extraWritablePaths + 临时目录 + 构建缓存 ~/.gradle ~/.m2 ~/.cache ~/.konan ~/Library/Caches ~/Library/Java + /dev）；shell 探测链 bash→sh（Windows bash.exe→cmd）；`wrap(command)` → `WrappedCommand(argv, warning, processGroupLeader)`：macOS Seatbelt（sandbox-exec -f，SBPL profile 按白名单 hash 缓存）+ **进程组长包装**（macOS perl `setpgrp(0,0)`+exec / Linux setsid，使整条命令树共享 PGID=直接子进程 pid）/ Linux bwrap 功能烟测（只检测不代装）/ Windows 降级警告（无进程组）；companion `environmentNote()` 注入环境块（含 Process control 行） |
 | `sandbox/ProcessRegistry.kt` | object（全局单例） | **进程组注册表**：`register(pid, pgid, command, workDir)` 只在 runCommand 启动点写入；`list()` 惰性剔除已死组；`killGroup(pid, pgid, force)` 宿主侧 kill -- -pgid / Windows taskkill /T；`isAlive` = kill -0 组探测。安全边界：只杀 mederi spawn 的进程，沙箱内命令无法写注册表 |
@@ -714,7 +722,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 
 总线 = `SessionManagerImpl` 内 `MutableSharedFlow<MederiEvent>`（replay=0、extraBufferCapacity=256、DROP_OLDEST）。TurnExecutor/工具/RetryableLLMClient/Requester 均 emit。
 
-| EventType（全部 19 个） | payload 约定 |
+| EventType（全部 23 个） | payload 约定 |
 |---|---|
 | `SESSION_CREATED` / `SESSION_UPDATED` | 无 / 状态变化 |
 | `MESSAGE_DELTA` | `type`(text/reasoning/tool_call)、`content`；tool_call 另有 `name`、`state`(running/completed) |
@@ -730,6 +738,8 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 | `TODO_UPDATED` | `todos`(JSON)、可选 `explanation` |
 | `STATUS` | 环境态（不落库不改状态机）：`scope=provider`、`code=RETRYING`、`message`、`attempt`、`maxAttempts`、`delayMs?`(重试延迟毫秒，可选) |
 | `BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` | 浏览器任务生命周期（异步，UI 浏览器任务面板消费；主代理只经 run_browser_task 等工具查 status）：`taskId`、`status`(STARTED/RUNNING/COMPLETED/ERROR/STOPPED)、`step?`、`thought?`、`results?`、`message?`。sessionId 为空字符串（任务不属于某 session 对话，UI 用 taskId 过滤） |
+| `SUBAGENT_STARTED` | 子代理启动（SubagentManager 发，UI 子代理面板消费）：`agentId`、`role`(EXECUTOR/RESEARCHER)、`modelId`、`modelName`、`reasoningLevel`、`task`(主代理派发的命令)、`briefing?`。sessionId = 父会话 ID |
+| `SUBAGENT_COMPLETED/ERROR/STOPPED` | 子代理终态：`agentId`。STOPPED 覆盖 stop_agent 与 abort 级联收割（stopAllForSession）两条路径；汇报全文不进事件（在 wait_agent 的 tool result 里） |
 
 ## 12. QuestionRequester（`…/question/QuestionRequester.kt`）
 

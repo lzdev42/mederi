@@ -494,10 +494,20 @@ class ServerAiCore(
         )
     }
 
-    override suspend fun resolvePlanApproval(conversationId: String, planId: String, approved: Boolean): Result<Unit> = runCatching {
+    override suspend fun resolvePlanApproval(
+        conversationId: String,
+        planId: String,
+        approved: Boolean,
+        model: xyz.mederi.core.contract.models.ModelOption?,
+        thinkingLevel: String?
+    ): Result<Unit> = runCatching {
         httpCall(
             "/v1/sessions/$conversationId/plans/$planId/approve",
-            requestBody = xyz.mederi.core.contract.dto.ResolvePlanApprovalInput(approved)
+            requestBody = xyz.mederi.core.contract.dto.ResolvePlanApprovalInput(
+                approved = approved,
+                model = model,
+                thinkingLevel = thinkingLevel
+            )
         )
     }
 

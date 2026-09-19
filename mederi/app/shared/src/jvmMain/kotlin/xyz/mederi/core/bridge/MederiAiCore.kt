@@ -790,9 +790,18 @@ class MederiAiCore(
     override suspend fun resolvePlanApproval(
         conversationId: String,
         planId: String,
-        approved: Boolean
+        approved: Boolean,
+        model: ModelOption?,
+        thinkingLevel: String?
     ): Result<Unit> = runCatching {
-        mederi.sessions.resolvePlanApproval(conversationId, planId, approved)
+        // 契约 ModelOption → core AIModel（与 sendMessage 同转换：按 id 从供应商解析），
+        // thinkingLevel → ReasoningLevel（复用 mapper；null = 不带，core 保留 session 原值）
+        val coreModel = model?.let { findCoreModel(it.id) }
+        mederi.sessions.resolvePlanApproval(
+            conversationId, planId, approved,
+            aiModel = coreModel,
+            reasoningLevel = MederiInputMapper.toReasoningLevel(thinkingLevel)
+        )
     }
 
     override suspend fun compressHistory(conversationId: String): Result<Unit> = runCatching {

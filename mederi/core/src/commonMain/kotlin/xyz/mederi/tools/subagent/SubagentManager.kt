@@ -9,12 +9,15 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.EventType
+import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.domain.model.WorkType
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.flow.MutableSharedFlow
 
 /**
  * 子 Agent 生命周期管理。
@@ -28,12 +31,19 @@ import java.util.concurrent.ConcurrentHashMap
  * - [status]：查询子 Agent 状态（RUNNING/COMPLETED/ERROR/STOPPED）。
  * - [stop]：取消子 Agent，返回部分结果。
  * - [wait]：带超时地等待子 Agent 完成，返回最终状态与结果。
+ * - [stopAllForSession]：abort 级联收割（TurnExecutor.abort/abortAndJoin 调用）。
+ *
+ * 生命周期事件（可选注入 [eventBus] 时发射，与 BROWSER_TASK_* 同模式）：
+ * SUBAGENT_STARTED（spawn 注册后，带 task/模型/推理档位全量元数据——UI 据此显示
+ * "主代理派了什么命令、用什么模型在跑"）→ COMPLETED / ERROR / STOPPED（终态）。
+ * sessionId = 父会话 ID；不注入 eventBus 时静默跳过（测试/无事件场景）。
  *
  * 所有复杂状态都收敛在 [agents] 表里，外部（工具/UI）只通过这里的方法交互。
  */
 class SubagentManager(
     private val subagentRunner: SubagentRunner,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val eventBus: MutableSharedFlow<MederiEvent>? = null
 ) {
 
     enum class SubagentStatus { RUNNING, COMPLETED, ERROR, STOPPED }
@@ -41,10 +51,18 @@ class SubagentManager(
     data class BackgroundAgent(
         val agentId: String,
         val role: SubagentRole,
+        /** 父会话 ID：abort 级联收割（stopAllForSession）的索引键。 */
+        val parentSessionId: String,
         @Volatile var job: kotlinx.coroutines.Job,
         @Volatile var status: SubagentStatus,
         @Volatile var result: String?,
         @Volatile var progress: String,
+        /** spawn 实际使用的模型/推理档位（动态读 session 后的值）——事件与 status() 的元数据来源。 */
+        val aiModel: AIModel? = null,
+        val reasoningLevel: ReasoningLevel? = null,
+        /** 主代理派发的命令（task）与补充说明（briefing）——SUBAGENT_STARTED payload。 */
+        val task: String = "",
+        val briefing: String? = null,
         /** 执行器子代理的 plan/subtask 归属（SpawnAgentTool 传入），用于丢失后恢复与 scope 检查。 */
         val executorPlanId: String? = null,
         val executorSubtaskIndex: Int? = null,
@@ -67,6 +85,25 @@ class SubagentManager(
     )
 
     private val retired = ConcurrentHashMap<String, AgentRecoveryInfo>()
+
+    /**
+     * 生命周期事件发射（eventBus 未注入时静默跳过）。
+     * NonCancellable：终态发射常处于协程取消路径（STOPPED / abort 级联收割），
+     * 裸 emit 会在挂起点抛 CancellationException 把事件吞掉。
+     */
+    private suspend fun emitEvent(sessionId: String, type: EventType, payload: Map<String, String>) {
+        val bus = eventBus ?: return
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            bus.emit(
+                MederiEvent(
+                    type = type,
+                    sessionId = sessionId,
+                    payload = payload,
+                    timestamp = java.time.Instant.now().toString()
+                )
+            )
+        }
+    }
 
     /**
      * 后台启动子 Agent，返回 agentId。
@@ -95,10 +132,15 @@ class SubagentManager(
         val bg = BackgroundAgent(
             agentId = agentId,
             role = role,
+            parentSessionId = parentSessionId,
             job = kotlinx.coroutines.Job(),
             status = SubagentStatus.RUNNING,
             result = null,
             progress = "starting",
+            aiModel = aiModel,
+            reasoningLevel = reasoningLevel,
+            task = task,
+            briefing = briefing,
             executorPlanId = executorPlanId,
             executorSubtaskIndex = executorSubtaskIndex,
             planStore = planStore
@@ -107,6 +149,14 @@ class SubagentManager(
 
         val job = scope.launch {
             bg.progress = "running"
+            emitEvent(parentSessionId, EventType.SUBAGENT_STARTED, mapOf(
+                "agentId" to agentId,
+                "role" to role.name,
+                "modelId" to aiModel.id,
+                "modelName" to aiModel.name,
+                "reasoningLevel" to reasoningLevel.name,
+                "task" to task
+            ) + (briefing?.takeIf { it.isNotBlank() }?.let { mapOf("briefing" to it) } ?: emptyMap()))
             try {
                 val result = subagentRunner.run(
                     task = task,
@@ -141,6 +191,12 @@ class SubagentManager(
                 bg.status = SubagentStatus.ERROR
                 bg.progress = "error"
             } finally {
+                // 终态事件（与状态机同分支：runner 报错文本也算 ERROR）
+                emitEvent(parentSessionId, when (bg.status) {
+                    SubagentStatus.COMPLETED -> EventType.SUBAGENT_COMPLETED
+                    SubagentStatus.STOPPED -> EventType.SUBAGENT_STOPPED
+                    else -> EventType.SUBAGENT_ERROR
+                }, mapOf("agentId" to agentId))
                 // 归档恢复记录：agent 丢失/归档后，agent_status 的 NOT_FOUND 也能返回部分认知
                 val touched = bg.executorPlanId?.let { pid ->
                     bg.planStore?.load(pid)?.subtasks
@@ -171,7 +227,10 @@ class SubagentManager(
                     agentId = agentId,
                     status = bg.status.name,
                     progress = bg.progress,
-                    result = if (bg.status == SubagentStatus.COMPLETED) bg.result else null
+                    result = if (bg.status == SubagentStatus.COMPLETED) bg.result else null,
+                    modelId = bg.aiModel?.id,
+                    modelName = bg.aiModel?.name,
+                    reasoningLevel = bg.reasoningLevel?.name
                 )
             )
         }
@@ -216,6 +275,28 @@ class SubagentManager(
     }
 
     /**
+     * 级联停止一个父会话的所有 RUNNING 子代理（abort / abortAndJoin 调用）。
+     *
+     * 子代理跑在本 Manager 的全局 scope 上，不随父 turn job 取消而亡——
+     * 用户点"停止"若只 cancel 父 turn，旧模型的后台子代理会成为孤儿：
+     * 继续写文件、与"继续"后重 spawn 的新代理并发写同一批 targetFiles。
+     * 调用方应先 cancel 父 turn job（阻断新 spawn），再调本方法收割存量。
+     * 已终态（COMPLETED/ERROR/STOPPED）的 agent 不受影响；方法幂等。
+     *
+     * @return 实际取消的 RUNNING 子代理数量
+     */
+    fun stopAllForSession(parentSessionId: String): Int {
+        var stopped = 0
+        for (bg in agents.values) {
+            if (bg.parentSessionId == parentSessionId && bg.status == SubagentStatus.RUNNING) {
+                bg.job.cancel()
+                stopped++
+            }
+        }
+        return stopped
+    }
+
+    /**
      * 带超时地等待子 Agent 完成。
      * 超时返回 TIMEOUT（子 Agent 继续在后台跑，可再 wait 或 stop）。
      */
@@ -233,7 +314,10 @@ class SubagentManager(
                     agentId = agentId,
                     status = bg.status.name,
                     progress = bg.progress,
-                    result = bg.result
+                    result = bg.result,
+                    modelId = bg.aiModel?.id,
+                    modelName = bg.aiModel?.name,
+                    reasoningLevel = bg.reasoningLevel?.name
                 )
             )
         } catch (e: TimeoutCancellationException) {
@@ -253,6 +337,10 @@ class SubagentManager(
         val status: String,
         val progress: String? = null,
         val result: String? = null,
+        /** spawn 实际使用的模型元数据（动态读 session 后的值）——父代理/用户可查"哪个模型在干活"。 */
+        val modelId: String? = null,
+        val modelName: String? = null,
+        val reasoningLevel: String? = null,
         /** agent 已从内存表移除（丢失/归档）时，携带可恢复的部分认知（touched files 等）。 */
         val recovery: String? = null
     )

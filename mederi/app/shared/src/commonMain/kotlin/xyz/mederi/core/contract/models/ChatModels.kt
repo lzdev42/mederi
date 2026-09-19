@@ -185,7 +185,17 @@ enum class CoreEventType {
     BROWSER_TASK_STEP,
     BROWSER_TASK_COMPLETED,
     BROWSER_TASK_ERROR,
-    BROWSER_TASK_STOPPED
+    BROWSER_TASK_STOPPED,
+
+    /**
+     * 子代理生命周期事件（与 core EventType 同名对齐）。sessionId = 父会话 ID。
+     * payload：STARTED = agentId/role/modelId/modelName/reasoningLevel/task/briefing?；
+     * COMPLETED/ERROR/STOPPED = agentId。UI 子代理面板消费。
+     */
+    SUBAGENT_STARTED,
+    SUBAGENT_COMPLETED,
+    SUBAGENT_ERROR,
+    SUBAGENT_STOPPED
 }
 
 /**

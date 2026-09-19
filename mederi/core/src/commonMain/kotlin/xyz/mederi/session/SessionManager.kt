@@ -45,7 +45,13 @@ interface SessionManager {
     suspend fun sendMessage(id: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(id: String, messageId: String)
     suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
-    suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean)
+    suspend fun resolvePlanApproval(
+        id: String,
+        planId: String,
+        approved: Boolean,
+        aiModel: xyz.mederi.domain.model.AIModel? = null,
+        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel? = null
+    )
     suspend fun compressHistory(id: String)
     suspend fun listMessages(id: String): List<Message>
     suspend fun getMessage(id: String, messageId: String): Message

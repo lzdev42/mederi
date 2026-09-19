@@ -28,7 +28,24 @@ interface SessionApi {
     suspend fun sendMessage(sessionId: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(sessionId: String, messageId: String)
     suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>)
-    suspend fun resolvePlanApproval(sessionId: String, planId: String, approved: Boolean)
+    /**
+     * 回复计划审批。
+     *
+     * @param sessionId 会话 ID。
+     * @param planId 计划 ID。
+     * @param approved true=批准。
+     * @param aiModel 批准时刻用户输入框选中的模型（批准手势携带的"最后一次选择"）：
+     *   非null 且批准时写入 session——同一 turn 后续 spawn_agent 动态读取，
+     *   子代理用批准时刻的模型执行（用户可能在 create_plan 挂起等批准期间切换了模型）。
+     * @param reasoningLevel 批准时刻的推理档位，与 [aiModel] 成对。
+     */
+    suspend fun resolvePlanApproval(
+        sessionId: String,
+        planId: String,
+        approved: Boolean,
+        aiModel: AIModel? = null,
+        reasoningLevel: ReasoningLevel? = null
+    )
     suspend fun compressHistory(sessionId: String)
     suspend fun listMessages(sessionId: String): List<Message>
     suspend fun getMessage(sessionId: String, messageId: String): Message

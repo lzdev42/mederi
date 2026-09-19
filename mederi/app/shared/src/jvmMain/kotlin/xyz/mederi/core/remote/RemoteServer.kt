@@ -302,7 +302,15 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     post("/v1/sessions/{id}/plans/{planId}/approve") {
         val input = call.receive<ResolvePlanApprovalInput>()
-        call.respondResult(aiCore.resolvePlanApproval(call.parameters["id"]!!, call.parameters["planId"]!!, input.approved))
+        call.respondResult(
+            aiCore.resolvePlanApproval(
+                call.parameters["id"]!!,
+                call.parameters["planId"]!!,
+                input.approved,
+                input.model,
+                input.thinkingLevel
+            )
+        )
     }
     post("/v1/sessions/{id}/compress") {
         call.respondResult(aiCore.compressHistory(call.parameters["id"]!!))

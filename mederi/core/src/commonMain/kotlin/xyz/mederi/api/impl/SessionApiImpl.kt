@@ -7,10 +7,12 @@ import xyz.mederi.api.RenameSessionRequest
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.api.SessionApi
 import xyz.mederi.api.exception.mederiCall
+import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.FileDiff
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.Session
+import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.session.SessionManager
 
 /**
@@ -59,8 +61,14 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.resolveQuestion(sessionId, questionId, answers)
     }
 
-    override suspend fun resolvePlanApproval(sessionId: String, planId: String, approved: Boolean) = mederiCall {
-        sessionManager.resolvePlanApproval(sessionId, planId, approved)
+    override suspend fun resolvePlanApproval(
+        sessionId: String,
+        planId: String,
+        approved: Boolean,
+        aiModel: AIModel?,
+        reasoningLevel: ReasoningLevel?
+    ) = mederiCall {
+        sessionManager.resolvePlanApproval(sessionId, planId, approved, aiModel, reasoningLevel)
     }
 
     override suspend fun compressHistory(sessionId: String) = mederiCall {

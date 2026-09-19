@@ -41,7 +41,20 @@ enum class EventType {
     BROWSER_TASK_STEP,
     BROWSER_TASK_COMPLETED,
     BROWSER_TASK_ERROR,
-    BROWSER_TASK_STOPPED
+    BROWSER_TASK_STOPPED,
+
+    /**
+     * 子代理生命周期事件（异步，spawn_agent / spawn_researcher 派发）。
+     * 与 BROWSER_TASK_* 同模式：UI 子代理面板消费，父代理只经 agent_status 查状态。
+     * sessionId = 父会话 ID；payload 约定（key 统一 camelCase）：
+     * - STARTED: agentId, role(EXECUTOR/RESEARCHER), modelId, modelName, reasoningLevel,
+     *   task(主代理派发的命令), briefing?(可选)
+     * - COMPLETED / ERROR / STOPPED: agentId
+     */
+    SUBAGENT_STARTED,
+    SUBAGENT_COMPLETED,
+    SUBAGENT_ERROR,
+    SUBAGENT_STOPPED
 }
 
 /**

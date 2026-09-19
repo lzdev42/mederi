@@ -88,7 +88,7 @@ flowchart TD
     T -- "是" --> IDLE["IDLE + MESSAGE_ERROR(分类 RATE_LIMIT)<br/>(RetryableLLMClient 已在流内重试过 STATUS/RETRYING)"]
     T -- "否" --> ERR["ERROR + MESSAGE_ERROR<br/>(ErrorCollector rich payload: 简报/errorId/完整诊断)"]
     DONE & IDLE & ERR --> STOP
-    ABORT["abort(id): cancel job + cancelAll requester<br/>IDLE + MESSAGE_ERROR(ErrorCollector CANCELLED/WARNING)"] --> STOP["结束"]
+    ABORT["abort(id): cancel job → stopAllForSession(级联收割本会话 RUNNING 子代理)<br/>+ cancelAll requester<br/>IDLE + MESSAGE_ERROR(ErrorCollector CANCELLED/WARNING)<br/>(abortAndJoin 同链路, cancelAndJoin 后收割)"] --> STOP["结束"]
 ```
 
 **事件流消费侧**：`eventBus` → 三路消费：① `MederiAiCore.events()`（进程内）/ `GET /v1/events`（SSE 遥控端）→ 客户端 `SnapshotReducer` 聚合快照；② `launchStreamConsumer` 把 StreamFrame 转 MESSAGE_DELTA；③ UI 层特性（SessionTitleService 等）订阅。
@@ -167,7 +167,10 @@ sequenceDiagram
     PAR->>EB: PLAN_APPROVAL_REQUESTED(payload 含 planContent)
     EB-->>UI: SnapshotReducer → pendingPlanApproval + planApprovals
     Note over M: CompletableDeferred.await() 挂起<br/>(turn 保持 RUNNING)
-    UI->>TE: resolvePlanApproval(convId, planId, approved)
+    UI->>TE: resolvePlanApproval(convId, planId, approved, model, thinkingLevel)
+    Note over UI: model/thinkingLevel = 批准时刻输入框选中值<br/>(与 send() 同源: selectedModel/effectiveThinkingLevel)
+    TE->>TE: 批准且 model≠null → sessionStore.updateAgentConfig<br/>写入 session.aiModel/reasoningLevel("最后一次选择"语义)
+    Note over TE: create_plan 挂起等批准期间用户可能切了模型——<br/>同 turn 后续 spawn_agent 动态读 session 拿到新模型
     TE->>PAR: resolve(planId, approved) → deferred.complete
     PAR->>EB: PLAN_APPROVAL_RESOLVED
     EB-->>UI: 清 pendingPlanApproval, 对应项 status=APPROVED/REJECTED
@@ -178,6 +181,36 @@ sequenceDiagram
         M->>M: 向用户说明, 不执行计划
     end
 ```
+
+### 4.1 子代理生命周期与事件流（spawn → 终态）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as 主代理(spawn_agent 工具)
+    participant SS as SessionStore
+    participant SM as SubagentManager
+    participant SR as SubagentRunnerImpl
+    participant EB as eventBus(主)
+
+    M->>SS: get(parentSession) — 动态读模型<br/>(session.aiModel ?: 构造捕获的 turn 模型)
+    M->>SM: spawn(task, briefing, spec, aiModel, reasoningLevel, ...)
+    SM->>SM: agents[agentId] 占位注册(RUNNING)
+    SM->>EB: SUBAGENT_STARTED(agentId, role, modelId, modelName, reasoningLevel, task, briefing?)
+    Note over EB: sessionId=父会话；UI SubagentTracker 聚合进<br/>SubagentState 缓存(每个子代理一个 MVVM 对象)
+    SM->>SR: 后台协程 run(内存 store + 独立 TurnExecutor)
+    alt 正常
+        SR-->>SM: 汇报全文
+        SM->>EB: SUBAGENT_COMPLETED(agentId)
+    else runner 抛错/结果带 [subagent error]
+        SM->>EB: SUBAGENT_ERROR(agentId)
+    else stop_agent / abort 级联收割
+        SM->>EB: SUBAGENT_STOPPED(agentId)(NonCancellable emit)
+    end
+    Note over M: 父代理 wait_agent(agentId) 拿汇报全文<br/>(tool result 落库; UI 经 SubagentReportMarkdown 转折叠卡片)
+```
+
+**abort 级联收割**：用户点"停止"（abort/abortAndJoin）→ cancel 父 turn job → `stopAllForSession(parentSessionId)` 杀本会话全部 RUNNING 子代理——子代理挂全局 scope 不随父 turn 取消而亡，不收割即孤儿（旧模型继续写文件，与"继续"后重 spawn 的新代理并发写同一批 targetFiles）。被杀子代理发 `SUBAGENT_STOPPED`，plan 子任务保持 IN_PROGRESS（"继续"后重 spawn 是干净路径）。
 
 ## 5. 上下文压缩流程（自动 + 手动）
 

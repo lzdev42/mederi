@@ -372,7 +372,13 @@ class MockAiCore(
         }
     }
 
-    override suspend fun resolvePlanApproval(conversationId: String, planId: String, approved: Boolean): Result<Unit> = runCatching {
+    override suspend fun resolvePlanApproval(
+        conversationId: String,
+        planId: String,
+        approved: Boolean,
+        model: xyz.mederi.core.contract.models.ModelOption?,
+        thinkingLevel: String?
+    ): Result<Unit> = runCatching {
         val sf = conversations[conversationId] ?: return@runCatching
         sf.value = sf.value.copy(
             conversation = sf.value.conversation.copy(status = ConversationStatus.Working),

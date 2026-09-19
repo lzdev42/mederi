@@ -171,7 +171,8 @@ object ToolFactory {
                         parentSessionId = sessionId,
                         planStore = planStore,
                         eventBus = eventBus,
-                        apiKeyId = apiKeyId
+                        apiKeyId = apiKeyId,
+                        sessionStore = sessionStore
                     )
                 },
                 "spawn_researcher" to {
@@ -182,7 +183,8 @@ object ToolFactory {
                         reasoningLevel = reasoningLevel!!,
                         projectId = projectId!!,
                         parentSessionId = sessionId,
-                        apiKeyId = apiKeyId
+                        apiKeyId = apiKeyId,
+                        sessionStore = sessionStore
                     )
                 }
             )

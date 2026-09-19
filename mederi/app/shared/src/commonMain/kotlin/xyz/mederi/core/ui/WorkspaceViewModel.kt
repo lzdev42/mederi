@@ -384,9 +384,14 @@ class WorkspaceViewModel(
         val convId = conversationId ?: return
         val currentPending = snapshot?.pendingPlanApproval
         DebugLog.event("UI", "approvePlan called: planId=$planId, approved=$approved, currentPendingId=${currentPending?.id}")
+        // 批准时刻输入框选中的模型/推理档位随批准手势传给 core（写入 session，
+        // 同一 turn 后续 spawn 的子代理按此模型执行）——与 send() 取值同源
+        // （selectedModel / effectiveThinkingLevel 唯一真理源）
+        val selectedModel = appState.selectedModel.value
+        val thinkingLevel = computeEffectiveThinkingLevel()
         viewModelScope.launch {
             if (currentPending != null && currentPending.id == planId) {
-                appState.aiCore.resolvePlanApproval(convId, planId, approved)
+                appState.aiCore.resolvePlanApproval(convId, planId, approved, selectedModel, thinkingLevel)
             } else if (approved) {
                 send("请批准并开始执行已制定的计划 $planId")
             }
@@ -791,6 +796,32 @@ class WorkspaceViewModel(
     val childConversations: List<Conversation> get() = snapshot?.childConversations ?: emptyList()
     val conversation: Conversation? get() = snapshot?.conversation
 
+    // ------------------------------------------------------------------
+    // 子代理 MVVM 缓存（P4）：SUBAGENT_* 事件 → SubagentTracker → SubagentState
+    // UI（未来）读 [subagents]（当前会话）渲染追踪器卡片/详情；读 [allSubagents] 渲染全局列表。
+    // 汇报正文不进这里——它在 wait_agent 的 tool result 里（数据库），
+    // UI 用 SubagentReportMarkdown.fromToolResult(toolName, resultJson) 转 markdown 展开渲染。
+    // ------------------------------------------------------------------
+
+    /** 全部会话的子代理（按启动时间排序）；compose state，事件驱动实时更新。 */
+    var allSubagents by mutableStateOf<List<xyz.mederi.core.contract.models.SubagentState>>(emptyList())
+        private set
+
+    /** 聚合中间态：agentId → SubagentState（SubagentTracker.apply 的累积表）。 */
+    private var subagentStates by mutableStateOf<Map<String, xyz.mederi.core.contract.models.SubagentState>>(emptyMap())
+
+    /** 当前会话的子代理列表（读取 allSubagents + conversationId 两个 state，天然响应式）。 */
+    val subagents: List<xyz.mederi.core.contract.models.SubagentState>
+        get() = allSubagents.filter { it.parentSessionId == conversationId }
+
+    /** 查询单个子代理详情数据（点开详情 UI 的只读数据源；不在缓存 = 已重启丢失，UI 降级只显示汇报）。 */
+    fun subagent(agentId: String): xyz.mederi.core.contract.models.SubagentState? =
+        subagentStates[agentId]
+
+    /** wait_agent / agent_status 工具结果 → 汇报 markdown（null = 非子代理汇报，普通工具卡片渲染）。 */
+    fun subagentReportMarkdown(toolName: String, resultJson: String): String? =
+        SubagentReportMarkdown.fromToolResult(toolName, resultJson)
+
     /**
      * 过程步骤全局展开状态：null=按数量/失败自动展开，true=全局强制展开，false=全局强制折叠。
      */
@@ -946,6 +977,14 @@ class WorkspaceViewModel(
     }
 
 val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
+
+/** 子代理生命周期事件集（init 订阅过滤用；SubagentTracker 消费）。 */
+private val SUBAGENT_EVENT_TYPES = setOf(
+    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STARTED,
+    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_COMPLETED,
+    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_ERROR,
+    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STOPPED
+)
 
     internal fun computeChatItems(msgs: List<ChatMessage>): List<ChatListItem> {
         val result = mutableListOf<ChatListItem>()
@@ -1568,6 +1607,19 @@ val SUBAGENT_TOOL_NAMES = setOf("spawn_agent", "spawn_researcher")
                     if (appState.canRenderJcef && activeDockPanel != RightDockPanel.BROWSER) {
                         openDockPanel(RightDockPanel.BROWSER)
                     }
+                }
+        }
+
+        // 子代理生命周期监听（app 级，不绑定会话）：SUBAGENT_* 事件 → SubagentTracker 聚合进
+        // MVVM 缓存（每个子代理一个 SubagentState）。UI（未来）读 [allSubagents] / [subagents]
+        // 渲染子代理追踪器与详情——"正在干活"的真实状态 + 主代理派发的命令 + 实际使用的模型。
+        viewModelScope.launch {
+            appState.aiCore.isReady.first { it }
+            appState.aiCore.events()
+                .filter { it.type in SUBAGENT_EVENT_TYPES }
+                .collect {
+                    subagentStates = xyz.mederi.core.contract.SubagentTracker.apply(subagentStates, it)
+                    allSubagents = subagentStates.values.sortedBy { s -> s.startedAt }
                 }
         }
     }

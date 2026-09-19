@@ -133,7 +133,9 @@ class TurnExecutor(
 
     private val subagentManager = SubagentManager(
         subagentRunner = subagentRunner,
-        scope = scope
+        scope = scope,
+        // 生命周期事件总线：SUBAGENT_STARTED/COMPLETED/ERROR/STOPPED（UI 子代理面板消费）
+        eventBus = eventBus
     )
 
     // 浏览器任务管理：持有 BrowserRegistry（UI 注册 JCEF、core 注册 Camoufox，启动装配时填充）。
@@ -451,6 +453,12 @@ class TurnExecutor(
         val job = activeJobs[sessionId] ?: return
         if (!job.isActive) return
         job.cancel()
+        // 级联收割本会话的后台子代理：它们挂在全局 scope 上，不随父 turn job 取消而亡，
+        // 不收割就成了继续写文件的孤儿（换模型"继续"后与重 spawn 的新代理并发写同一批文件）
+        val stoppedSubagents = subagentManager.stopAllForSession(sessionId)
+        if (stoppedSubagents > 0) {
+            DebugLog.event("TurnExec", "abort: cascade-stopped $stoppedSubagents subagent(s) of session $sessionId")
+        }
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         scope.launch {
@@ -478,6 +486,9 @@ class TurnExecutor(
      */
     suspend fun abortAndJoin(sessionId: String) {
         activeJobs[sessionId]?.cancelAndJoin()
+        // 与 abort 同语义：回滚 = 撤销到目标消息，其后发生的一切都不该继续——
+        // 后台子代理一并收割（幂等，abort 路径已收过的这里是 0）
+        subagentManager.stopAllForSession(sessionId)
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         // 正常取消路径 runTurn 收尾已写 IDLE；此处对陈旧 RUNNING（进程重启残留等）兜底复位，
@@ -494,7 +505,29 @@ class TurnExecutor(
         return requester.resolve(questionId, answers)
     }
 
-    suspend fun resolvePlanApproval(sessionId: String, planId: String, approved: Boolean): Boolean {
+    suspend fun resolvePlanApproval(
+        sessionId: String,
+        planId: String,
+        approved: Boolean,
+        aiModel: AIModel? = null,
+        reasoningLevel: ReasoningLevel? = null
+    ): Boolean {
+        // 批准模型 = 用户批准时刻输入框选中的模型：写入 session（"最后一次选择"语义，
+        // updateAgentConfig 的 null=不覆盖，agentMode/workType 保持原值）。
+        // 场景：create_plan（模型A）挂起等批准期间用户切到模型B再点批准——
+        // 同一 turn 后续 spawn_agent 动态读 session 拿到 B，子代理按 B 执行。
+        // 仅批准时写入；拒绝不动（拒绝后的修订走新 turn，sendMessage 自带模型）。
+        if (approved && aiModel != null) {
+            sessionStore.updateAgentConfig(
+                sessionId,
+                aiModel = aiModel,
+                reasoningLevel = reasoningLevel
+            )
+            DebugLog.data(
+                "TurnExec", "plan approval model override",
+                "sessionId=$sessionId, planId=$planId, model=${aiModel.id} (${aiModel.name}), reasoning=$reasoningLevel"
+            )
+        }
         val requester = planApprovalRequesters[sessionId] ?: return false
         return requester.resolve(planId, approved)
     }

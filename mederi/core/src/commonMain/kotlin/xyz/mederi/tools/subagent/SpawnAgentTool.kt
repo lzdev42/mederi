@@ -47,14 +47,19 @@ data class SpawnAgentArgs(
  * 门禁（代码强制）：spec 必须已由 generate_spec 写入 Subtask.spec（非空才放行），
  * 杜绝"未生成 spec 直接派活"绕过；brief（planDetail）随 briefing 一并带给子代理作意图上下文。
  *
+ * **模型动态读取**：spawn 用的模型/推理档位以 session 现值为准（构造时捕获的 turn 模型仅作
+ * session 缺失的 fallback）——计划批准时用户可能已切换模型（resolvePlanApproval 把批准时刻
+ * 的选择写入 session），同 turn 后续 spawn 必须用新模型，否则出现"批准了模型B、干活的还是A"。
+ *
  * @param subagentManager 子 Agent 生命周期管理器（异步）。
  * @param directories 项目目录列表，子 Agent 工具的作用域。
- * @param aiModel 使用的模型，子 Agent 继承父 Agent 的模型配置。
- * @param reasoningLevel 推理等级，子 Agent 继承父 Agent 的推理等级配置。
+ * @param aiModel turn 开始时的模型（fallback，正常路径读 session 现值）。
+ * @param reasoningLevel turn 开始时的推理等级（fallback）。
  * @param projectId 当前项目 ID，子 Agent 必须关联到已存在的 Project。
- * @param parentSessionId 父 Session ID，用于追踪。
+ * @param parentSessionId 父 Session ID，用于追踪与 session 模型动态读取。
  * @param planStore 计划存储，门禁查询活跃计划与读取 spec 用。
  * @param eventBus 事件总线（派工后发 PLAN_PROGRESS 携带子任务投影，驱动 UI todo 面板）。
+ * @param sessionStore 会话存储：spawn 时读 session 的最新模型/推理档位。
  */
 class SpawnAgentTool(
     private val subagentManager: SubagentManager,
@@ -65,7 +70,8 @@ class SpawnAgentTool(
     private val parentSessionId: String,
     private val planStore: PlanStore? = null,
     private val eventBus: MutableSharedFlow<MederiEvent>? = null,
-    private val apiKeyId: String? = null
+    private val apiKeyId: String? = null,
+    private val sessionStore: xyz.mederi.store.SessionStore? = null
 ) : SimpleTool<SpawnAgentArgs>(
     argsType = typeToken<SpawnAgentArgs>(),
     name = "spawn_agent",
@@ -80,7 +86,9 @@ class SpawnAgentTool(
     @Serializable
     data class SpawnResult(
         val agentId: String,
-        val status: String
+        val status: String,
+        /** spawn 实际使用的模型名（动态读 session 后的值）——派工返回即知"哪个模型在干活"。 */
+        val modelName: String? = null
     )
 
     override suspend fun execute(args: SpawnAgentArgs): String {
@@ -132,6 +140,11 @@ class SpawnAgentTool(
             timestamp = Instant.now().toString()
         ))
 
+        // 模型/推理档位动态读 session 现值（计划批准时用户可能已切换模型，见类注释）
+        val sessionNow = sessionStore?.get(parentSessionId)
+        val effectiveAiModel = sessionNow?.aiModel ?: aiModel
+        val effectiveReasoningLevel = sessionNow?.reasoningLevel ?: reasoningLevel
+
         val agentId = subagentManager.spawn(
             task = args.task,
             // brief（用户批准的意图）拼进 briefing 给子代理作上下文；spec 是主执行清单
@@ -143,17 +156,19 @@ class SpawnAgentTool(
             role = SubagentRole.EXECUTOR,
             workType = plan.workType,
             directories = directories,
-            aiModel = aiModel,
-            reasoningLevel = reasoningLevel,
+            aiModel = effectiveAiModel,
+            reasoningLevel = effectiveReasoningLevel,
             projectId = projectId,
             parentSessionId = parentSessionId,
             apiKeyId = apiKeyId,
-            // 执行器 touched-files 追踪：子代理完成后 flush 到 Subtask.executorTouchedFiles
             executorPlanId = args.planId,
             executorSubtaskIndex = args.subtaskIndex,
             planStore = planStore
         )
-        return Json.encodeToString(SpawnResult.serializer(), SpawnResult(agentId = agentId, status = "RUNNING"))
+        return Json.encodeToString(
+            SpawnResult.serializer(),
+            SpawnResult(agentId = agentId, status = "RUNNING", modelName = effectiveAiModel.name)
+        )
     }
 }
 
@@ -176,6 +191,8 @@ data class SpawnResearcherArgs(
  *
  * 不需要计划，不需要 spec——研究发生在计划之前（调研代码以支撑制定计划）。
  * 子代理的意识：自己是研究助手，不对用户发问，自主调研、汇总结果、返回给父 Agent。
+ *
+ * 模型动态读 session 现值（与 SpawnAgentTool 同策略），构造时捕获的 turn 模型仅作 fallback。
  */
 class SpawnResearcherTool(
     private val subagentManager: SubagentManager,
@@ -184,7 +201,8 @@ class SpawnResearcherTool(
     private val reasoningLevel: ReasoningLevel,
     private val projectId: String,
     private val parentSessionId: String,
-    private val apiKeyId: String? = null
+    private val apiKeyId: String? = null,
+    private val sessionStore: xyz.mederi.store.SessionStore? = null
 ) : SimpleTool<SpawnResearcherArgs>(
     argsType = typeToken<SpawnResearcherArgs>(),
     name = "spawn_researcher",
@@ -198,6 +216,10 @@ class SpawnResearcherTool(
         if (args.task.isBlank()) {
             return "Error: task must not be empty."
         }
+        // 模型/推理档位动态读 session 现值（与 SpawnAgentTool 同策略）
+        val sessionNow = sessionStore?.get(parentSessionId)
+        val effectiveAiModel = sessionNow?.aiModel ?: aiModel
+        val effectiveReasoningLevel = sessionNow?.reasoningLevel ?: reasoningLevel
         val agentId = subagentManager.spawn(
             task = args.task,
             briefing = args.briefing.takeIf { it.isNotBlank() },
@@ -205,12 +227,15 @@ class SpawnResearcherTool(
             role = SubagentRole.RESEARCHER,
             workType = WorkType.CODE,
             directories = directories,
-            aiModel = aiModel,
-            reasoningLevel = reasoningLevel,
+            aiModel = effectiveAiModel,
+            reasoningLevel = effectiveReasoningLevel,
             projectId = projectId,
             parentSessionId = parentSessionId,
             apiKeyId = apiKeyId
         )
-        return Json.encodeToString(SpawnAgentTool.SpawnResult.serializer(), SpawnAgentTool.SpawnResult(agentId = agentId, status = "RUNNING"))
+        return Json.encodeToString(
+            SpawnAgentTool.SpawnResult.serializer(),
+            SpawnAgentTool.SpawnResult(agentId = agentId, status = "RUNNING", modelName = effectiveAiModel.name)
+        )
     }
 }

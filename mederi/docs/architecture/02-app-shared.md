@@ -52,7 +52,9 @@ interface AiCore {
     suspend fun abort(conversationId: String): Result<Unit>
     suspend fun rollbackToMessage(conversationId: String, messageId: String): Result<Unit>
     suspend fun resolveQuestion(conversationId, questionId, answers: List<List<String>>): Result<Unit>
-    suspend fun resolvePlanApproval(conversationId, planId, approved: Boolean): Result<Unit>
+    suspend fun resolvePlanApproval(conversationId, planId, approved: Boolean, model: ModelOption? = null, thinkingLevel: String? = null): Result<Unit>
+    % 批准时刻输入框选中的模型/推理档位随批准手势传入（null=不改变，旧客户端兼容）——
+    % core 批准时写入 session，同 turn 后续 spawn 的子代理按此模型执行（见 01-core.md SessionManager）
     suspend fun compressHistory(conversationId: String): Result<Unit>
     suspend fun listMessages(conversationId): Result<List<ChatMessage>>
     suspend fun listMessagesPage(conversationId): Result<MessagesPage>   // 消息+token统计(快照对齐落库)
@@ -93,7 +95,7 @@ interface AiCore {
 - `sealed class ChatBlock(id)`（type 判别多态序列化）：`Text(id, text)` / `Reasoning(id, text)` / `ToolCall(id, name, state: ToolCallState)` / `File(id, name, url, mimeType?)` / `Diff(id, filePath, before, after)` / `Unknown(id, type)`
 - `sealed class ToolCallState`：`Pending` / `Running(input: Map<String,String>)` / `Completed(input, output)` / `Failed(input, error)`
 - `ToolCallUi(id, name, state, target?=null, isFailed=false)` —— VM 预计算展平展示模型；target = 命令原文 / 文件路径（会话目录内→相对路径，目录外→绝对路径）/ apply_patch 提取的文件清单；工具行展开区显示执行结果（Completed.output / Failed.error）
-- `enum CoreEventType`（与 core EventType 14 个一一对应）
+- `enum CoreEventType`（与 core EventType 同名一一对应，当前 23 个；`MederiModelMapper.toCoreEvent` 按 `valueOf(name)` 映射）
 - `CoreEvent(type, sessionId, messageId?=null, payload: Map<String,String>, timestamp="")`
 - `PastedTextAttachment(id, index, text, lineCount, charCount)`；`ImageAttachment(id, name, mimeType, bytes, base64DataUrl, width=0, height=0)`
 
@@ -118,7 +120,7 @@ interface AiCore {
 - `MessagesPage(messages, tokenUsage, contextUsedTokens)` —— MESSAGE_COMPLETED/ERROR 后对齐落库数据用
 - `RawMessageDto(seq, messageId?, role, payload(原始 JSON), createdAt)`
 - `CreateProjectInput(name, directory)`；`ReasoningConfigInput(levels: Map<String,String?>)`；`ProviderUpdateInput(name?, apiKey?, baseUrl?, enabled?, customModels?, reasoningParameter?)`；`CreateCustomProviderInput(name, baseUrl, apiKey?, customModels, type=DEFAULT, responseSanitization=false, reasoningParameter?)`
-- wire 请求 DTO：`CreateConversationInput(projectId, agent)`、`RenameConversationInput(title)`、`RenameProjectInput(name)`、`BuiltinProviderInput(name, apiKey)`、`AddModelInput/UpdateModelInput/SetModelEnabledInput`、`AddApiKeyInput(name, key, isDefault=false)`、`ResolveQuestionInput(answers)`、`ResolvePlanApprovalInput(approved)`、`ApiError(error)`、`ReadyInfo(ready, configDir)`、`PlanContent(content?)`
+- wire 请求 DTO：`CreateConversationInput(projectId, agent)`、`RenameConversationInput(title)`、`RenameProjectInput(name)`、`BuiltinProviderInput(name, apiKey)`、`AddModelInput/UpdateModelInput/SetModelEnabledInput`、`AddApiKeyInput(name, key, isDefault=false)`、`ResolveQuestionInput(answers)`、`ResolvePlanApprovalInput(approved, model: ModelOption?=null, thinkingLevel: String?=null)`（批准时刻选中模型随批准手势传 core，写入 session 供同 turn spawn 动态读）、`ApiError(error)`、`ReadyInfo(ready, configDir)`、`PlanContent(content?)`
 - Skill 组 DTO（`dto/SkillInput.kt`）：`SetSkillsRootInput(path)`、`InstallSkillInput(url)`、`SkillsRootResponse(path)`（String 直出 JSON 带引号，包一层类型安全）
 
 ## 3. SnapshotReducer（`…/contract/SnapshotReducer.kt`）
@@ -140,8 +142,19 @@ interface AiCore {
 | QUESTION_REQUESTED / RESOLVED | 写/清 pendingQuestion |
 | PLAN_APPROVAL_REQUESTED / RESOLVED | 写/清 pendingPlanApproval + planApprovals 去重列表 |
 | TODO_UPDATED / PLAN_PROGRESS | 解码 payload["todos"] 整体替换快照 todos；解码失败丢弃事件保留先前快照 |
+| SUBAGENT_*（STARTED/COMPLETED/ERROR/STOPPED） | **不改变会话快照**——子代理状态由独立的 `SubagentTracker` 聚合（VM 持缓存），会话快照只反映主代理视角 |
 
 入口：`applyWithRefresh(snapshot, event, refreshPage)`（MESSAGE_COMPLETED 先发"完成状态"快照再回查落库对齐发第二个；MESSAGE_ERROR 回查后只发最终一个）；及不含回查的 `apply(snapshot, event)`。
+
+### 3.1 SubagentTracker + 子代理 MVVM 缓存（`…/contract/SubagentTracker.kt` / `…/contract/models/SubagentModels.kt`）
+
+SUBAGENT_* 事件 → 子代理缓存表的纯逻辑（与 SnapshotReducer 同风格，跨平台，无状态；调用方持状态逐事件 apply）：
+
+- `SubagentTracker.apply(states: Map<agentId, SubagentState>, event): Map` —— STARTED 以 agentId 建条目（全量元数据来自 payload），终态覆盖 status；乱序终态（无 STARTED）安全跳过；非子代理事件原样返回
+- `SubagentState(agentId, parentSessionId, role, modelId, modelName, reasoningLevel?, task, briefing?, status, startedAt)` —— 每个子代理一个 UI 缓存对象（MVVM Model）；"工作中" = status==RUNNING（真实 job 状态，SSE 空闲 10 分钟超时兜底判死）
+- `SubagentToolResult` —— core `SubagentManager.StatusResult` JSON 的契约镜像（宽松解码），wait_agent 落库 tool result 的解析用
+
+**VM 接线**（WorkspaceViewModel）：`allSubagents`（compose state，事件驱动）+ `subagents`（按当前会话过滤的派生 getter）+ `subagent(agentId)`（详情只读数据源）+ `subagentReportMarkdown(toolName, resultJson)`（`core/ui/SubagentReport.kt` 纯转换：wait_agent/agent_status 的 COMPLETED 结果 → 汇报 markdown，null=非汇报普通卡片渲染；UI 折叠卡片点开用 InkCompose 渲染）——汇报全文不进事件/缓存，它在数据库的 tool result 里。
 
 ## 4. 三实现架构图
 
@@ -222,7 +235,7 @@ flowchart TB
 | POST `/v1/projects`；PATCH/DELETE `/v1/projects/{id}` | Project 组（单目录，无目录增删端点） |
 | POST `/v1/sessions`；DELETE/PATCH `/v1/sessions/{id}` | Conversation 组 |
 | GET `/v1/sessions/{id}/snapshot` \| `messages` \| `messages/raw` \| `messages/{messageId}` \| `diffs[?messageId=]` | 查询组 |
-| POST `/v1/sessions/{id}/messages` \| `abort` \| `rollback` \| `questions/{questionId}` \| `plans/{planId}/approve` \| `compress` | 动作组 |
+| POST `/v1/sessions/{id}/messages` \| `abort` \| `rollback` \| `questions/{questionId}` \| `plans/{planId}/approve`（body=`ResolvePlanApprovalInput(approved, model?, thinkingLevel?)`——批准时刻选中模型随批准传 core） \| `compress` | 动作组 |
 | SSE GET `/v1/events`（全局）；GET `/v1/sessions/{id}/events`（按 sessionId filter） | 事件流 |
 | POST `/v1/providers`；POST `/v1/providers/builtin`；PATCH/DELETE `/v1/providers/{id}` | Provider 组 |
 | POST `/v1/providers/{id}/models`；POST `.../models/refresh`；POST `.../models/auto-setup`；PATCH/DELETE `.../models/{modelId}`；POST `.../models/{modelId}/enabled` | Model 组 |

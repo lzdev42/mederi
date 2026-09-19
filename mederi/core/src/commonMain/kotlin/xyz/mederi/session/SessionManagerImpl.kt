@@ -164,8 +164,14 @@ class SessionManagerImpl(
         turnExecutor.resolveQuestion(id, questionId, answers)
     }
 
-    override suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean) {
-        turnExecutor.resolvePlanApproval(id, planId, approved)
+    override suspend fun resolvePlanApproval(
+        id: String,
+        planId: String,
+        approved: Boolean,
+        aiModel: xyz.mederi.domain.model.AIModel?,
+        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel?
+    ) {
+        turnExecutor.resolvePlanApproval(id, planId, approved, aiModel, reasoningLevel)
     }
 
     override suspend fun compressHistory(id: String) {

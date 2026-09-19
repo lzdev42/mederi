@@ -62,7 +62,23 @@ interface AiCore {
     suspend fun abort(conversationId: String): Result<Unit>
     suspend fun rollbackToMessage(conversationId: String, messageId: String): Result<Unit>
     suspend fun resolveQuestion(conversationId: String, questionId: String, answers: List<List<String>>): Result<Unit>
-    suspend fun resolvePlanApproval(conversationId: String, planId: String, approved: Boolean): Result<Unit>
+
+    /**
+     * 回复计划审批。
+     *
+     * @param model 批准时刻输入框选中的模型：非 null 且批准时，core 把它写入 session
+     * （"最后一次选择"语义）——create_plan 挂起等批准期间用户可能切了模型，
+     * 同一 turn 后续 spawn_agent 动态读 session，子代理按批准时刻的模型执行。
+     * null = 不改变（旧客户端兼容，行为同以往）。
+     * @param thinkingLevel 批准时刻的推理档位，与 [model] 成对（唯一真理源 effectiveThinkingLevel）。
+     */
+    suspend fun resolvePlanApproval(
+        conversationId: String,
+        planId: String,
+        approved: Boolean,
+        model: ModelOption? = null,
+        thinkingLevel: String? = null
+    ): Result<Unit>
     suspend fun compressHistory(conversationId: String): Result<Unit>
     suspend fun listMessages(conversationId: String): Result<List<ChatMessage>>
     /** 消息页：消息列表 + token 统计（快照流对齐落库数据用；wasmJs 无法从契约消息重算 token）。 */

@@ -250,6 +250,13 @@ object SnapshotReducer {
         CoreEventType.BROWSER_TASK_COMPLETED,
         CoreEventType.BROWSER_TASK_ERROR,
         CoreEventType.BROWSER_TASK_STOPPED -> snapshot
+
+        // 子代理生命周期事件不改变会话快照（子代理状态由独立的 SubagentTracker 聚合，
+        // ViewModel 持缓存；会话快照只反映主代理视角）
+        CoreEventType.SUBAGENT_STARTED,
+        CoreEventType.SUBAGENT_COMPLETED,
+        CoreEventType.SUBAGENT_ERROR,
+        CoreEventType.SUBAGENT_STOPPED -> snapshot
     }
 
     // ------------------------------------------------------------------
