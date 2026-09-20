@@ -61,7 +61,8 @@ fun main() = application {
 
                     // 注入内置 JCEF 浏览器宿主（tab = KBPage）+ 注册进 BrowserRegistry。
                     // 注册在 MederiAiCore 注册 camoufox 之后，且 BrowserRegistry 幂等覆盖——即使
-                    // 注册顺序变化，"jcef" 也能正确解析。AI 通过 run_browser_task(browser="jcef") 选择。
+                    // 注册顺序变化，"jcef" 也能正确解析；注册表默认策略也优先内置可见浏览器。
+                    // AI 通过 run_browser_task(browser="jcef") 选择。
                     val browserHost = JcefBrowserHost()
                     browserHostHolder = browserHost
                     appState.uiBrowserHost = browserHost

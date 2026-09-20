@@ -1,3 +1,3 @@
 package xyz.mederi.util
 
-actual suspend fun pickDirectory(): String? = null
+actual suspend fun pickDirectory(title: String): String? = null

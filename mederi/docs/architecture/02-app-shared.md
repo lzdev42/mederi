@@ -200,7 +200,7 @@ flowchart TB
 **错误水合机制**：store 重建快照（getSnapshot / observe 初始快照）从 `MederiAiCore` 的 `lastErrorBySessionId` 内存注册表水合 errorMessage/errorDiagnostic/errorId/errorIsStreamInterrupted（MESSAGE_ERROR 写入、MESSAGE_COMPLETED 带断流警告写入、新 turn SESSION_UPDATED 清除），使「切回 Error 会话」能看到失败原因——流式中的错误经事件流实时写入，但 store 重建初始快照时需从内存注册表补回（落库消息不含错误字段）。
 
 **BuiltinProviders**（object，`…/jvm/core/bridge/BuiltinProviders.kt`）：内置供应商预设唯一真理源（Google Gemini / Agnes SG+CN / Hetzner / Empero / OpenCode Zen / OpenRouter / 商汤 SenseNova），`allEntries()` 按端点展开、`isBuiltinName()` 判定；预设含 baseUrl/协议/响应清洗/推理参数(modelsDevKey)。
-**BuiltinAgents**（object，commonMain）：内置 Agent 唯一真理源 = AgentMode 双预设（autonomous 自主 / approval 审批），`byId(id)`；不再区分编程/通用工作用途。
+**BuiltinAgents**（object，commonMain）：内置 Agent 唯一真理源 = AgentMode 双预设（autonomous 自动审批 / approval 人工审批），`byId(id)`；不再区分编程/通用工作用途。
 
 ### 4.2 ServerAiCore（`…/commonMain/core/bridge/ServerAiCore.kt`）
 
@@ -318,6 +318,8 @@ classDiagram
         +addProjectDirectory/removeProjectDirectory
         +createConversation/deleteConversation/renameConversation
         +toggleProjectExpanded/selectProject/selectConversation/newSession
+    % createConversation = 本地占位不落库（展开+选中项目、清空会话选中，同 newSession）；
+    %  会话真实创建唯一入口 = WorkspaceViewModel.send 无会话自动 createConversation（convId==null 且项目已选）
     }
     class TerminalViewModel {
         % 依赖 AppState.terminalManager, 不依赖 AiCore
@@ -349,7 +351,7 @@ flowchart TD
     SB["Sidebar<br/>项目/会话树 + 主题切换 + 设置入口"]
     WS["Workspace<br/>中央聊天区"]
     HDR["Workspace Header（标题/模型）"]
-    LIST["LazyColumn 消息列表<br/>ChatCards: ThoughtAndActionsBlock/ReasoningBlock/ToolPill<br/>QuestionCard/PlanApprovalCard/SummaryCard/UserPastedTextCard<br/>AssistantMessageFooter（assistant 回复底部: 模型名·审批/自主·推理档·时长·完成时间）"]
+    LIST["LazyColumn 消息列表<br/>ChatCards: WorkTraceCard/ToolCallsBlock/ToolActionGroupRow/ReasoningBlock<br/>QuestionCard/PlanApprovalCard/SummaryCard/UserPastedTextCard<br/>AssistantMessageFooter（assistant 回复底部: 模型名·人工审批/自动审批·推理档·时长·完成时间）"]
     INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft<br/>顶部 ErrorBoard（错误/警告唯一出口）"]
     SBAR["StatusBar（原 TurnStatusBar）<br/>deriveTurnStatus(snapshot) 纯函数<br/>只显示 AI 运转状态（思考/生成/工具/重试），永不显示错误"]
     DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/SUB_AGENTS/ARTIFACTS/TERMINAL"]
@@ -369,7 +371,7 @@ flowchart TD
 - `ChatLayout.kt` 不是 Composable，是**布局常量对象**（contentMaxWidth=1000dp、userBubbleMaxWidth=680dp、sidebarWidth=260dp、rightPanelWidth=360dp、**conversationMinWidth=360dp（对话区最小宽度=手机宽度）**、**rightDockWidth=46dp**、headerHeight=40dp、turnSpacing=14dp 等）。
 - 三个职责分离的条栏：**StatusBar**（消息区，AI 运转状态，`deriveTurnStatus(snapshot)`，永不显示错误；计时锚定"发送请求时刻"`WorkspaceViewModel.turnStartedAt`（send 时记录、turn 结束清除），每秒 `now - turnStartedAt` 重算——切会话回来不重置；**与 footer durationMs 语义不同：StatusBar=从发请求起算，footer=API 有回应起算到回复结束**）、**ErrorBoard**（ChatInputCard 顶部，错误/警告唯一出口：单行简报 + "详细报告"展开 + 关闭；断流时（快照 errorIsStreamInterrupted）额外显示"继续"按钮 → `continueAfterInterruption()` 重发 Continue 续写半截回复，数据源=快照 errorMessage）、**SystemInfoBar**（最底部，纯 CPU/RSS/JVM 资源监控，不接错误）。
 - **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
-- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`SegmentedControl`（AgentMode 复用）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：uiBrowserHost 注入则渲染 JCEF 浏览器，未注入显示"当前端不支持内置浏览器"占位——遥控/wasm 端门禁）。
+- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`HelpCircleTooltip`（InfoTooltip.kt，hover/tap 信息气泡，AgentMode 开关旁）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：uiBrowserHost 注入则渲染 JCEF 浏览器，未注入显示"当前端不支持内置浏览器"占位——遥控/wasm 端门禁）。
 - 渲染 AI 回复使用 `:inkcompose` 的 `MarkdownView`（见 03-inkcompose.md）。
 
 ## 9. 平台入口与特性
@@ -423,7 +425,8 @@ flowchart TD
 - **GitUtils**：`expect fun getGitBranch(directoryPath): String?`。
 - **PlatformUtils**：`expect openUrl/openFile` + 纯函数 `formatContextWindow`(token→"x.x万/K")、`formatBytes`、`formatCpuUsage`。
 - **ClipboardHelper**：`expect object PlatformClipboard { getImage()/getText() }`（读系统剪贴板图片/文本）。
-- **DirectoryPicker**：`expect suspend fun pickDirectory(): String?`。
+- **DirectoryPicker**：`expect suspend fun pickDirectory(title: String): String?`（title 为原生对话框标题，UI 层 stringResource 后传入）。
+- **FilePickerUtils**：`expect suspend fun pickSaveFile(defaultName: String, extension: String, title: String, filterLabel: String): String?`（title/filterLabel 由 UI 层本地化后传入）；`expect suspend fun writeTextToFile(filePath: String, text: String): Boolean`。
 - **Mock 体系**（`…/core/mock/`）：`MockAiCore`（实现全部 AiCore；initialize 装 MockSeedData 后 500ms 就绪；sendMessage 起协程跑 MockScenarios 剧本；resolveQuestion 用 CompletableDeferred）+ `MockIdGenerator` + `MockScenarios`（三个可复现剧本：流式 reasoning、tool call Pending→Running→Completed、问询卡片等）+ `MockSeedData`（2 供应商/5 preset/3 项目/若干会话含子会话与错误会话）。用途：未接真实 core 的平台兜底 + UI 开发预览。
 
 ## 12. theme/Theme.kt

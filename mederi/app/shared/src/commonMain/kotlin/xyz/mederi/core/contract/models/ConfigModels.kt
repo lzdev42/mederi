@@ -47,8 +47,8 @@ data class ModelOption(
 
 /**
  * Agent 执行策略，与 core 的 AgentMode 枚举名称一一对应。
- * APPROVAL：审批模式，每次需求先列计划等用户批准。
- * AUTONOMOUS：自主模式，AI 自主判断直接执行。
+ * APPROVAL：人工审批，每次需求先列计划等用户批准。
+ * AUTONOMOUS：自动审批，AI 自动批准计划直接执行。
  */
 enum class AgentMode {
     APPROVAL,

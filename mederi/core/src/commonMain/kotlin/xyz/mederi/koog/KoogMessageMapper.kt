@@ -29,16 +29,19 @@ object KoogMessageMapper {
 
     /**
      * 将 Mederi 消息列表转换为 Koog Prompt 用的 Message 列表。
+     *
+     * @param includeImages 为 false 时剔除用户消息中的 Image part（AI 视图层按"当前模型
+     *   是否支持图片"过滤），历史存储不受影响；默认 true 时行为与原先完全一致。
      */
-    fun toKoogMessages(messages: List<MederiMessage>): List<KoogMessage> =
-        messages.map { toKoogMessage(it) }
+    fun toKoogMessages(messages: List<MederiMessage>, includeImages: Boolean = true): List<KoogMessage> =
+        messages.map { toKoogMessage(it, includeImages) }
 
     /**
      * 单条 Mederi Message -> Koog Message。
      */
-    fun toKoogMessage(message: MederiMessage): KoogMessage {
+    fun toKoogMessage(message: MederiMessage, includeImages: Boolean = true): KoogMessage {
         val metaInfo = RequestMetaInfo(timestamp = parseTimestamp(message.createdAt).toKoog())
-        val koogParts = message.parts.mapNotNull { toKoogPart(it) }
+        val koogParts = message.parts.mapNotNull { toKoogPart(it, includeImages) }
 
         return when (message.role) {
             MessageRole.SYSTEM -> KoogMessage.System(
@@ -158,15 +161,17 @@ object KoogMessageMapper {
         )
     }
 
-    private fun toKoogPart(part: MederiMessagePart): KoogMessagePart? = when (part) {
+    private fun toKoogPart(part: MederiMessagePart, includeImages: Boolean = true): KoogMessagePart? = when (part) {
         is MederiMessagePart.Text -> KoogMessagePart.Text(part.text)
-        is MederiMessagePart.Image -> KoogMessagePart.Attachment(
-            source = AttachmentSource.Image(
-                content = AttachmentContent.URL(part.url),
-                format = deriveImageFormat(part.url, part.mimeType),
-                mimeType = part.mimeType ?: "image/"
-            )
-        )
+        // includeImages=false 时（模型不支持图片）剔除 Image part，其余 part 行为不变
+        is MederiMessagePart.Image ->
+            if (includeImages) KoogMessagePart.Attachment(
+                source = AttachmentSource.Image(
+                    content = AttachmentContent.URL(part.url),
+                    format = deriveImageFormat(part.url, part.mimeType),
+                    mimeType = part.mimeType ?: "image/"
+                )
+            ) else null
         is MederiMessagePart.File -> null
         is MederiMessagePart.ToolCall -> KoogMessagePart.Tool.Call(
             id = part.id,

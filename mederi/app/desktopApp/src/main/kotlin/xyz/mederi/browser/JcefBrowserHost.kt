@@ -46,6 +46,16 @@ import xyz.kbrowser.webview.KBPage
 import xyz.kbrowser.webview.KBWebView
 import xyz.kbrowser.webview.LoadingState
 import xyz.kbrowser.webview.initializeKBrowser
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.browser_back
+import mederi.app.shared.generated.resources.browser_empty_hint
+import mederi.app.shared.generated.resources.browser_forward
+import mederi.app.shared.generated.resources.browser_go
+import mederi.app.shared.generated.resources.browser_new_tab
+import mederi.app.shared.generated.resources.browser_reload
+import mederi.app.shared.generated.resources.browser_stop
+import mederi.app.shared.generated.resources.browser_url_placeholder
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.ui.browser.UiBrowserHost
 import xyz.mederi.theme.MederiColors
 import java.io.File
@@ -312,7 +322,7 @@ private fun BrowserTabBar(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = tab.title.ifEmpty { "新标签页" },
+                    text = tab.title.ifEmpty { stringResource(Res.string.browser_new_tab) },
                     color = if (selected) colors.textPrimary else colors.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
@@ -350,7 +360,7 @@ private fun EmptyBrowserPlaceholder(colors: MederiColors) {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "内置浏览器：点右上角 + 开新标签页；AI 启动 JCEF 任务时自动新建标签",
+            text = stringResource(Res.string.browser_empty_hint),
             color = colors.textMuted,
             fontSize = 12.sp
         )
@@ -429,7 +439,7 @@ private fun BrowserToolbar(
             ) {
                 Icon(
                     imageVector = FeatherIcons.ArrowLeft,
-                    contentDescription = "后退",
+                    contentDescription = stringResource(Res.string.browser_back),
                     tint = if (canGoBack) colors.textPrimary else colors.textMuted.copy(alpha = 0.35f),
                     modifier = Modifier.size(15.dp)
                 )
@@ -451,7 +461,7 @@ private fun BrowserToolbar(
             ) {
                 Icon(
                     imageVector = FeatherIcons.ArrowRight,
-                    contentDescription = "前进",
+                    contentDescription = stringResource(Res.string.browser_forward),
                     tint = if (canGoForward) colors.textPrimary else colors.textMuted.copy(alpha = 0.35f),
                     modifier = Modifier.size(15.dp)
                 )
@@ -475,7 +485,7 @@ private fun BrowserToolbar(
             ) {
                 Icon(
                     imageVector = if (isLoading) FeatherIcons.X else FeatherIcons.RefreshCw,
-                    contentDescription = if (isLoading) "停止" else "刷新",
+                    contentDescription = if (isLoading) stringResource(Res.string.browser_stop) else stringResource(Res.string.browser_reload),
                     tint = colors.textSecondary,
                     modifier = Modifier.size(14.dp)
                 )
@@ -513,7 +523,7 @@ private fun BrowserToolbar(
                 ) {
                     if (textInput.isEmpty() && !isFocused) {
                         Text(
-                            text = "输入网址 (自动补全 http/https)",
+                            text = stringResource(Res.string.browser_url_placeholder),
                             color = colors.textMuted,
                             fontSize = 12.sp,
                             maxLines = 1
@@ -555,7 +565,7 @@ private fun BrowserToolbar(
                     ) {
                         Icon(
                             imageVector = FeatherIcons.ArrowRight,
-                            contentDescription = "前往",
+                            contentDescription = stringResource(Res.string.browser_go),
                             tint = colors.accentPrimary,
                             modifier = Modifier.size(13.dp)
                         )

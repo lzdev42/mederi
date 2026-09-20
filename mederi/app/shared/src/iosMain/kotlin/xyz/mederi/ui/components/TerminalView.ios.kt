@@ -12,6 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.termview_remote_title
+import mederi.app.shared.generated.resources.termview_remote_unavailable
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.TerminalSession
 
 /**
@@ -27,13 +31,13 @@ internal actual fun TerminalView(
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = "远程终端",
+                text = stringResource(Res.string.termview_remote_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "将随遥控 WS 通道（/v1/terminal/ws）一同提供",
+                text = stringResource(Res.string.termview_remote_unavailable),
                 fontSize = 11.sp,
             )
         }

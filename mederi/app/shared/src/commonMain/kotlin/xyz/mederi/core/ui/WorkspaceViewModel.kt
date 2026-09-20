@@ -85,10 +85,7 @@ sealed interface ChatListItem {
         val items: List<ChatListItem>,
         val totalToolsCount: Int,
         val totalDurationMs: Long,
-        val isRunning: Boolean,
-       val isStreaming: Boolean,
-       val hasFailedTool: Boolean,
-       val activeActivityText: String? = null,
+        val hasFailedTool: Boolean,
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
 
@@ -128,6 +125,8 @@ sealed interface ChatListItem {
     data class Footer(
         override val key: String,
         val footer: AssistantFooterInfo,
+        val lastMessageText: String = "",
+        val fullTurnText: String = "",
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
 
@@ -165,14 +164,14 @@ data class AssistantFooterInfo(
 /**
  * 右侧独立功能活动栏枚举。
  */
-enum class RightDockPanel(val title: String) {
-    OVERVIEW("概览"),
-    DIFF("审查"),
-    PLAN("计划"),
-    SUB_AGENTS("子 Agent 协同"),
-    ARTIFACTS("文档与媒体"),
-    TERMINAL("终端"),
-    BROWSER("浏览器")
+enum class RightDockPanel {
+    OVERVIEW,
+    DIFF,
+    PLAN,
+    SUB_AGENTS,
+    ARTIFACTS,
+    TERMINAL,
+    BROWSER
 }
 
 data class PlanItem(
@@ -281,13 +280,13 @@ class WorkspaceViewModel(
     // ==========================================
 
     /**
-     * 可选 Agent 列表（2 个预设：AUTONOMOUS 自主 / APPROVAL 审批）。
+     * 可选 Agent 列表（2 个预设：AUTONOMOUS 自动审批 / APPROVAL 人工审批）。
      *
      * UI 渲染 Agent 选择器（下拉/Chip）时观察此 StateFlow：
      * ```
      * val agents by viewModel.availableAgents.collectAsState()
      * ```
-     * 每项的 [AgentOption.mode] 是执行策略（APPROVAL=审批模式 / AUTONOMOUS=自主模式）、
+     * 每项的 [AgentOption.mode] 是执行策略（APPROVAL=人工审批 / AUTONOMOUS=自动审批）、
      * [AgentOption.name]/[AgentOption.description] 是现成的显示文案。
      */
     val availableAgents: StateFlow<List<AgentOption>> get() = appState.availableAgents
@@ -567,6 +566,11 @@ class WorkspaceViewModel(
     var error by mutableStateOf<String?>(null); private set
 
     /**
+     * 一次性轻提示：图片已从发送内容中剔除（值为模型名，null=不显示）。非错误，不走 error。
+     */
+    var imageStrippedNotice by mutableStateOf<String?>(null); private set
+
+    /**
      * 当前会话错误的完整诊断报告（纯文本，来自 [ConversationSnapshot.errorDiagnostic]）。
      * UI 点击错误简报时可展示此完整详情；null 表示无错误或旧路径。
      */
@@ -631,6 +635,7 @@ class WorkspaceViewModel(
     var inputDraft by mutableStateOf(TextFieldValue("")); private set
 
     fun updateInputDraft(value: TextFieldValue) {
+        imageStrippedNotice = null // 下次输入时清空"图片已剔除"轻提示
         inputDraft = value
     }
 
@@ -688,16 +693,16 @@ class WorkspaceViewModel(
 
     /**
      * 附加剪贴板图片的唯一 UI 入口（附件按钮与 Ctrl/Cmd+V 粘贴共用）。
-     * 内置图片门禁：当前模型不支持图片输入时拒绝入列并给出可见反馈。
+     * 剔除放行：当前模型不支持图片输入时**不拒绝附加**——图片照常入列，
+     * 发送时由 core 按模型能力在 AI 视图剔除（历史保留），这里只给一次性轻提示。
      *
-     * @return true = 已附加；false = 被门禁拦截（error 已写入展示位）。
+     * @return true = 已附加（始终 true，不再因模型图片能力拦截）。
      */
     fun tryAttachImage(name: String, mimeType: String, bytes: ByteArray, width: Int = 0, height: Int = 0): Boolean {
         val model = appState.selectedModel.value
         if (model != null && !model.supportsImages) {
-            DebugLog.event("UI", "attach blocked: model does not support image input (${model.providerModelId})")
-            error = "当前模型「${model.name}」不支持图片输入，请移除图片或切换到支持图片的模型"
-            return false
+            DebugLog.event("UI", "attach: model does not support image input (${model.providerModelId}); allowed, will be stripped on send")
+            imageStrippedNotice = model.name
         }
         addImage(name, mimeType, bytes, width, height)
         return true
@@ -813,19 +818,6 @@ class WorkspaceViewModel(
         SubagentReportMarkdown.fromToolResult(toolName, resultJson)
 
     /**
-     * 过程步骤全局展开状态：null=按数量/失败自动展开，true=全局强制展开，false=全局强制折叠。
-     */
-    var isAllStepsExpanded by mutableStateOf<Boolean?>(null)
-
-    fun toggleAllSteps() {
-        isAllStepsExpanded = when (isAllStepsExpanded) {
-            true -> false
-            false -> null
-            null -> true
-        }
-    }
-
-    /**
      * 展平后的聊天列表（派生缓存）。
      *
      * derivedStateOf：snapshot / optimisticUserMessage 任一变化时自动重算，
@@ -842,12 +834,13 @@ class WorkspaceViewModel(
     // ==========================================
 
     /** 顶部面包屑标题（项目名 + 会话名，含 fallback 规则） */
-    data class HeaderTitle(val projectName: String?, val conversationName: String)
+    data class HeaderTitle(val projectName: String?, val conversationName: String?, val conversationId: String?)
 
     /**
      * 顶部面包屑标题：完全由 AppState 三个 StateFlow combine 的**派生** StateFlow
      * （不是副本：源流任一发射即重算）。UI 用 collectAsState 订阅——此前是 getter
      * 直读 `StateFlow.value`（不建立订阅），项目/会话改名后面包屑会停留旧值。
+     * conversationName 为 null = 未选中会话或标题缺失，fallback 文案由 UI 层决定（i18n）。
      */
     val headerTitle: StateFlow<HeaderTitle> = combine(
         appState.projects,
@@ -857,10 +850,9 @@ class WorkspaceViewModel(
         val projectName = projects.find { it.id == selectedProjectId }?.name
         val convName = if (convId != null) {
             projects.flatMap { it.conversations }.find { it.id == convId }?.title
-                ?: "会话 ${convId.take(8)}"
         } else null
-        HeaderTitle(projectName, convName ?: "新对话")
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, HeaderTitle(null, "新对话"))
+        HeaderTitle(projectName, convName, convId)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, HeaderTitle(null, null, null))
 
     /** 环境态/过程提示（statusHint，如限流重试中），StatusBar 过程状态展示用。错误/警告不在此——走 ErrorBoard */
     val statusHint: String? get() = snapshot?.statusHint
@@ -1017,7 +1009,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     .joinToString("\n\n") { it.text }
                 result.add(
                     ChatListItem.SummaryCard(
-                        key = "${turnMessages.first().id}_summary",
+                        key = "${turnMessages.firstOrNull()?.id ?: ""}_summary",
                         text = summaryText
                     )
                 )
@@ -1094,6 +1086,28 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 suffixMsgHasText[i] = nextHasText || suffixMsgHasText[i + 1]
             }
 
+            // 最终消息定位：turn 内最后一个"其后无工具调用"的非空 Text block 视为最终总结。
+            // 有工具的轮次（会创建 WorkTraceBlock）中，除最终总结外的一切内容
+            // （所有推理、所有过渡文本、所有工具调用）都归入工作过程栏内。
+            // 注意：不能只看"最后一个文本"——若它后面还有工具调用（如 asst: [推理, 过渡语, 工具]），
+            // 它只是步骤叙述，必须跳过继续向前找真正收尾的总结文本。
+            var finalTextMsgIndex = -1
+            var finalTextBlockIndex = -1
+            findFinalText@ for (i in turnMessages.indices.reversed()) {
+                val msg = turnMessages[i]
+                for (b in msg.blocks.indices.reversed()) {
+                    val block = msg.blocks[b]
+                    if (block is ChatBlock.Text && block.text.isNotBlank()) {
+                        val hasLaterToolInMsg = msg.blocks.drop(b + 1).any { it is ChatBlock.ToolCall }
+                        if (!hasLaterToolInMsg) {
+                            finalTextMsgIndex = i
+                            finalTextBlockIndex = b
+                            break@findFinalText
+                        }
+                    }
+                }
+            }
+
             // 按真实时序遍历本轮的消息与块，交替收集 Reasoning、Text 与就地工具调用
             for ((msgIndex, msg) in turnMessages.withIndex()) {
                 val subsequentHasToolCall = suffixMsgHasToolCall[msgIndex]
@@ -1105,8 +1119,9 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 var imagesHandled = false
 
                 for ((blockIndex, block) in msg.blocks.withIndex()) {
-                    val hasSubsequentToolCall = msg.blocks.drop(blockIndex + 1).any { it is ChatBlock.ToolCall } || subsequentHasToolCall
-                    val isStepNarration = hasAnyToolCallInTurn && hasSubsequentToolCall
+                    val isFinalText = hasAnyToolCallInTurn && msgIndex == finalTextMsgIndex && blockIndex == finalTextBlockIndex
+                    // 有工具的轮次：除最终总结文本外，其余文本（过渡语/步骤叙述）都算工作过程
+                    val isStepNarration = hasAnyToolCallInTurn && !isFinalText
                     when (block) {
                         is ChatBlock.Reasoning -> {
                             if (block.text.isNotBlank()) {
@@ -1124,7 +1139,8 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                                     durationMs = durationMs,
                                     isReasoningActive = isReasoningActive,
                                 )
-                                if (hasAnyToolCallInTurn && hasSubsequentToolCall) {
+                                // 有工具的轮次：所有推理（含最后一个工具调用之后的总结前思考）都收进工作过程栏
+                                if (hasAnyToolCallInTurn) {
                                     workItems.add(item)
                                 } else {
                                     deliverableItems.add(item)
@@ -1275,65 +1291,57 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 }
             }
 
-            // 如果存在中间工作步骤，汇聚打包为一个统一的 Work 汇总折叠栏（WorkTraceBlock）
-            if (workItems.isNotEmpty()) {
+            // 过程步骤与工作轨迹生命周期：
+            // - Turn 执行中（isActiveAssistant = true）：所有步骤直接按时序平铺在聊天流中，实时展示各步骤行与命令输出；
+            // - Turn 完成后（isActiveAssistant = false）：轮次内所有中间过程（思考、工具调用、过渡语）折叠进顶部的 WorkTraceBlock，外部仅留最终答复正文。
+            if (isActiveAssistant) {
+                workItems.forEachIndexed { idx, item ->
+                    val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) {
+                        when (item) {
+                            is ChatListItem.Reasoning -> item.copy(isTurnStart = true)
+                            is ChatListItem.TextMessage -> item.copy(isTurnStart = true)
+                            is ChatListItem.ToolCalls -> item.copy(isTurnStart = true)
+                            is ChatListItem.SubagentCalls -> item.copy(isTurnStart = true)
+                            else -> item
+                        }
+                    } else item
+                    result.add(itemWithTurnStart)
+                    turnHasFirstItem = true
+                }
+            } else if (workItems.isNotEmpty()) {
                 var totalToolsCount = 0
                 var hasFailed = false
-                var anyToolRunning = false
                 for (it in workItems) {
                     when (it) {
                         is ChatListItem.ToolCalls -> {
                             totalToolsCount += it.toolCalls.size
                             if (it.hasFailedTool) hasFailed = true
-                            if (it.isRunning) anyToolRunning = true
                         }
                         is ChatListItem.SubagentCalls -> {
                             totalToolsCount += it.subagents.size
                             if (it.hasFailed) hasFailed = true
-                            if (it.isRunning) anyToolRunning = true
                         }
                         else -> {}
                     }
                 }
                 val totalDurationMs = turnMessages.mapNotNull { it.durationMs }.sum()
-                val isRunning = isActiveAssistant || isStreaming || anyToolRunning
-                val activeActivityText = if (isRunning) {
-                    when (val last = workItems.lastOrNull()) {
-                        is ChatListItem.TextMessage -> {
-                            val line = last.text.trim().lines().firstOrNull { it.isNotBlank() } ?: last.text.trim()
-                            line.take(80)
-                        }
-                        is ChatListItem.ToolCalls -> {
-                            val tool = last.toolCalls.find { it.state is ToolCallState.Running } ?: last.toolCalls.lastOrNull()
-                            if (tool != null) formatToolActivity(tool.name, tool.target) else "执行操作中…"
-                        }
-                        is ChatListItem.SubagentCalls -> {
-                            val sub = last.subagents.find { it.state is ToolCallState.Running } ?: last.subagents.lastOrNull()
-                            if (sub != null && !sub.target.isNullOrBlank()) "派发子任务: ${sub.target}" else "子代理执行中…"
-                        }
-                        is ChatListItem.Reasoning -> "思考中…"
-                        else -> "推理中…"
-                    }
-                } else null
-
-               result.add(
-                   ChatListItem.WorkTraceBlock(
-                       key = "${turnMessages.first().id}_worktrace",
-                       items = workItems,
-                       totalToolsCount = totalToolsCount,
-                       totalDurationMs = totalDurationMs,
-                       isRunning = isRunning,
-                       isStreaming = isStreaming,
-                       hasFailedTool = hasFailed,
-                       activeActivityText = activeActivityText,
-                       isTurnStart = !turnHasFirstItem,
-                   )
-               )
+                result.add(
+                    ChatListItem.WorkTraceBlock(
+                        key = "${turnMessages.firstOrNull()?.id ?: ""}_worktrace",
+                        items = workItems,
+                        totalToolsCount = totalToolsCount,
+                        totalDurationMs = totalDurationMs,
+                        hasFailedTool = hasFailed,
+                        isTurnStart = !turnHasFirstItem,
+                    )
+                )
                 turnHasFirstItem = true
             }
 
-            // 活跃 assistant 刚开始流式时，若尚无内容输出且无 workItems，放一个占位思考微条
-            if (isActiveAssistant && !turnHasFirstItem) {
+            // 活跃 assistant 刚开始流式时，若尚无内容输出、无 workItems 且无 deliverableItems，放一个占位思考微条。
+            // 注意：deliverableItems 在本轮前序块遍历中已填充完毕；若已有真实 Reasoning/文本，绝不插入空占位，
+            // 否则会与真实推理同时渲染出两个"思考中..."条（流式无工具轮次的历史 bug）。
+            if (isActiveAssistant && !turnHasFirstItem && deliverableItems.isEmpty()) {
                 val firstMsg = turnMessages.firstOrNull()
                 result.add(
                     ChatListItem.Reasoning(
@@ -1382,10 +1390,44 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             // 4. 轮次底部的诊断与状态栏（非流式结束状态输出）
             val lastMsg = turnMessages.lastOrNull { it.role == ChatRole.Assistant }
             if (lastMsg != null && !isStreaming) {
+                val lastMessageText = if (finalTextMsgIndex >= 0 && finalTextBlockIndex >= 0) {
+                    (turnMessages[finalTextMsgIndex].blocks.getOrNull(finalTextBlockIndex) as? ChatBlock.Text)?.text.orEmpty()
+                } else {
+                    turnMessages.flatMap { it.blocks }.filterIsInstance<ChatBlock.Text>().lastOrNull()?.text.orEmpty()
+                }
+
+                val fullTurnText = buildString {
+                    for (msg in turnMessages) {
+                        for (block in msg.blocks) {
+                            when (block) {
+                                is ChatBlock.Reasoning -> {
+                                    if (block.text.isNotBlank()) {
+                                        if (isNotEmpty()) append("\n\n")
+                                        append("> Thinking:\n").append(block.text.trim())
+                                    }
+                                }
+                                is ChatBlock.ToolCall -> {
+                                    if (isNotEmpty()) append("\n\n")
+                                    append("[Tool: ").append(block.name).append("]")
+                                }
+                                is ChatBlock.Text -> {
+                                    if (block.text.isNotBlank()) {
+                                        if (isNotEmpty()) append("\n\n")
+                                        append(block.text)
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                }.ifBlank { lastMessageText }
+
                 result.add(
                     ChatListItem.Footer(
-                        key = "${turnMessages.first().id}_footer",
+                        key = "${turnMessages.firstOrNull()?.id ?: ""}_footer",
                         footer = lastMsg.toAssistantFooter(),
+                        lastMessageText = lastMessageText,
+                        fullTurnText = fullTurnText,
                         isTurnStart = false,
                     )
                 )
@@ -1526,27 +1568,6 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             if (count > 1) "$name ×$count" else name
         }
     }
-
-    private fun formatToolActivity(name: String, target: String?): String {
-        val lower = name.lowercase()
-        val t = target?.trim()?.ifBlank { null }
-        return when {
-            lower.contains("command") || lower.contains("bash") || lower.contains("exec") || lower == "terminal" ->
-                if (t != null) "执行命令: $t" else "执行命令中…"
-            lower.contains("mcp") ->
-                if (t != null) "调用 MCP: $t" else "调用 MCP 中…"
-            lower.contains("skill") ->
-                if (t != null) "阅读 SKILL: $t" else "阅读 SKILL 中…"
-            lower.contains("read") || lower.contains("view") || lower.contains("cat") ->
-                if (t != null) "阅读代码: $t" else "阅读文件中…"
-            lower.contains("edit") || lower.contains("write") || lower.contains("patch") ->
-                if (t != null) "编辑文件: $t" else "编辑文件中…"
-            lower.contains("search") || lower.contains("grep") || lower.contains("find") ->
-                if (t != null) "检索代码: $t" else "检索代码中…"
-            else -> if (t != null) "调用工具: $t" else "调用工具: $name…"
-        }
-    }
-
 
     internal fun isImageBlock(block: ChatBlock.File): Boolean {
         val mime = block.mimeType?.lowercase()
@@ -1810,16 +1831,17 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     }
 
     /**
-     * 图片附件门禁（唯一守卫，send 与 rollbackMessage 共用）：
-     * 当前模型不支持图片输入时拒绝发送，不让请求到达供应商后报 400。
+     * 图片附件守卫（唯一守卫，send 与 rollbackMessage 共用）：
+     * 当前模型不支持图片输入时剔除放行——不拒绝发送，设置一次性轻提示 [imageStrippedNotice]；
+     * 图片剔除由 core 按模型能力在 AI 视图完成，历史仍保留图片块。
      *
-     * @return true = 放行；false = 已拦截并写入 [error]。
+     * @return 始终 true（剔除放行）。
      */
     private fun guardImageSupport(model: ModelOption): Boolean {
         if (model.supportsImages) return true
-        DebugLog.event("UI", "send blocked: model does not support image input (${model.providerModelId})")
-        error = "当前模型「${model.name}」不支持图片输入，请移除图片或切换到支持图片的模型"
-        return false
+        DebugLog.event("UI", "send: model does not support image input (${model.providerModelId}); stripping images, kept in history")
+        imageStrippedNotice = model.name
+        return true // 剔除放行：不拒绝发送；core 按模型能力在 AI 视图剔除图片，历史仍保留图片块
     }
 
     fun send(text: String) {
@@ -1834,6 +1856,9 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         DebugLog.data("UI", "trimmed text", "'$trimmed'")
         DebugLog.data("UI", "pastedCount", pendingPastedTexts.size)
         DebugLog.data("UI", "imagesCount", pendingImages.size)
+
+        // 图片剔除轻提示"下次发送时清空"：本次 guard 的赋值在 send 流程中途发生，本次提示仍会显示
+        imageStrippedNotice = null
 
         if (trimmed.isEmpty() && !hasPasted && !hasImages) {
             DebugLog.event("UI", "send blocked: text and attachments are all empty")
@@ -2037,6 +2062,11 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         errorId = null
         isStreamInterrupted = false
         isErrorDetailOpen = false
+    }
+
+    /** 关闭"图片已剔除"轻提示（右上角 × 按钮入口）。 */
+    fun dismissImageStrippedNotice() {
+        imageStrippedNotice = null
     }
 
     /**

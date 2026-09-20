@@ -177,6 +177,9 @@ inkcompose/
 - 结构化数据（事件 payload、持久化列、跨端 DTO）一律 `@Serializable` DTO + kotlinx.serialization 编解码；
   **禁止手拼/手解 JSON**（joinToString / 字符串模板 / buildString 拼 JSON、正则或字符串手术解析全禁止）；
   解码失败安全降级，不用字符串手术挽救
+- **i18n（2026-09 起）**：UI 用户可见文案一律走 composeResources（app/shared/src/commonMain/composeResources/），
+  默认 values/（中文）+ values-en/（英文），新增文案必须同时进两份，禁止在 Composable 硬编码用户可见文案
+  （内容性数据如 AgentOption.name 除外）；未来语言预留：拉丁化满语 values-mnc-Latn/（暂不启用；传统满文竖排不适合软件 UI，不做）
 
 ## 5.5 执行沙盒与审批模式（2026-09 定稿，详见 `docs/sandbox-plan.md`）
 
@@ -390,8 +393,11 @@ server 路由（`RemoteServer.remoteModule`），任何变动四处同步、缺�
   图片能力必须压过目录且在 refresh/回填中存活（真实事故：用户 UI 设的支持图片被目录 false 洗掉且只读改不回）
 - 用户可写字段只有 `isEnabled` 和图片覆盖（setModelEnabled / updateUserModel / setImageOverride）；
   `updateUserModel` 对 FETCHED 模型传入其他元数据修改会抛错
-- 图片能力消费端门禁：附件按钮显隐 + `tryAttachImage` 粘贴拦截 + `guardImageSupport` 发送守卫
-  （send 与 rollbackMessage 共用，唯一实现），禁止绕过直接组装带图 ChatPromptInput
+- 图片能力消费端门禁：附件按钮显隐 + `tryAttachImage` 粘贴附件（剔除放行：模型不支持图片时允许附加并给一次性轻提示，
+  不掉"不支持图片输入"错误）+ `guardImageSupport` 发送守卫（send 与 rollbackMessage 共用，唯一实现）。
+  **剔除放行语义**（2026-09）：模型不支持图片时不拒绝附加/发送，设置一次性轻提示 `imageStrippedNotice`（图片已剔除、
+  历史保留）；core 侧 `HistoryStoreChatHistoryProvider(includeImages = model.supportsImages)` 在 AI 视图层剔除
+  用户 Image part（历史存储仍带图，可切回支持图片的模型回退重发）。禁止绕过守卫直接组装带图 ChatPromptInput
 - **能力必须传导到执行引擎**：`KoogModelBuilder.buildCapabilities` 按 `supportsImages` /
   `supportsReasoning` 添加 `LLMCapability.Image` / `Thinking`——缺 Image 时 Koog 会在发送时
   直接拒绝图片消息（历史事故：设置链路全通、唯独引擎能力缺失，用户怎么设都报不支持图片）

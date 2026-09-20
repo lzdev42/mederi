@@ -1114,6 +1114,8 @@ class SharedLogicDesktopTest {
 
             val footerItem = items[3] as ChatListItem.Footer
             assertNotNull(footerItem.footer)
+            assertEquals("这是最终的清晰回答。", footerItem.lastMessageText)
+            assertTrue(footerItem.fullTurnText.contains("这是最终的清晰回答。"))
             Unit
         } finally {
             testScope.cancel()
@@ -1317,11 +1319,12 @@ class SharedLogicDesktopTest {
     }
 
     /**
-     * 最后一个工具调用之后的「最终综合推理」不应被收入折叠的 WorkTraceBlock，
-     * 而是作为顶层 ChatListItem.Reasoning 留在外部（与最终正文一致的分类规则）。
+     * 有工具调用的轮次（存在 WorkTraceCard）时，所有推理一律收进 WorkTraceBlock，
+     * 外部只保留最终回复正文（"只有最终 message 不在 WorkTraceCard 里"）。
+     * 最后一个工具调用之后的总结前推理同样进卡，不再作为顶层 deliverable。
      */
     @Test
-    fun testFinalReasoningStaysOutsideWorkTrace() = kotlinx.coroutines.runBlocking {
+    fun testAllReasoningInsideWorkTraceWhenToolsPresent() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {
             val mockAiCore = xyz.mederi.core.mock.MockAiCore()
@@ -1378,20 +1381,79 @@ class SharedLogicDesktopTest {
             val workTrace = items.filterIsInstance<ChatListItem.WorkTraceBlock>().firstOrNull()
             assertNotNull(workTrace, "应存在 WorkTraceBlock（轮次含工具调用 + 前置推理）")
 
-            // 第一个 Reasoning（"先分析"）在工具调用之前 → 有后续工具调用 → 归 workItems
+            // 第一个 Reasoning（"先分析"）在工具调用之前 → 归 workItems
             val firstReasoningInWork = workTrace.items.filterIsInstance<ChatListItem.Reasoning>()
                 .firstOrNull { it.text == "先分析" }
             assertNotNull(firstReasoningInWork, "第一个 Reasoning（工具调用之前）应在 WorkTraceBlock.items 内")
 
-            // 第二个 Reasoning（"综合结论"）在最后一个工具调用之后 → 无后续工具调用 → 归 deliverableItems
+            // 第二个 Reasoning（"综合结论"）在最后一个工具调用之后 → 同样归 workItems（有工具轮次所有推理都在卡内）
             val secondReasoningInWork = workTrace.items.filterIsInstance<ChatListItem.Reasoning>()
                 .firstOrNull { it.text == "综合结论：问题在 X" }
-            assertNull(secondReasoningInWork, "最后一个工具调用之后的 Reasoning 不应出现在 WorkTraceBlock.items 内")
+            assertNotNull(secondReasoningInWork, "最后一个工具调用之后的 Reasoning 也应归入 WorkTraceBlock.items")
 
-            // 第二个 Reasoning 应作为顶层 ChatListItem.Reasoning 出现在 items 列表
-            val topReasoning = items.filterIsInstance<ChatListItem.Reasoning>()
-                .firstOrNull { it.text == "综合结论：问题在 X" }
-            assertNotNull(topReasoning, "最后一个工具调用之后的 Reasoning 应作为顶层 deliverable 出现在 items 列表中")
+            // 顶层不应残留任何 Reasoning：外部只保留最终回复正文
+            val topReasonings = items.filterIsInstance<ChatListItem.Reasoning>()
+            assertTrue(topReasonings.isEmpty(), "有工具轮次顶层不应残留 Reasoning，推理全部在 WorkTraceBlock 内")
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    /**
+     * 回归测试：活跃 assistant 流式输出、轮次无工具调用、仅有真实 Reasoning 时，
+     * computeChatItems 不得同时产生"空文本占位思考条 + 真实推理条"两个 Reasoning。
+     * 历史 bug：占位思考条条件（isActiveAssistant && !turnHasFirstItem）未检查 deliverableItems，
+     * 导致占位条与真实推理重复渲染两个"思考中..."。
+     */
+    @Test
+    fun testStreamingReasoningWithoutToolsShowsSingleBlock() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_user_stream_reasoning",
+                conversationId = "conv_sr",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text(id = "u1", text = "分析一下")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+            // 流式中、无工具调用、仅一段真实推理
+            val asstMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_stream_reasoning",
+                conversationId = "conv_sr",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning(id = "r1", text = "用户想让我分析当前未提交代码的质量问题")
+                ),
+                createdAt = 2000L,
+                completedAt = null,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = true
+            )
+
+            val items = viewModel.computeChatItems(listOf(userMsg, asstMsg))
+
+            val reasoningItems = items.filterIsInstance<ChatListItem.Reasoning>()
+            assertEquals(1, reasoningItems.size, "流式无工具轮次只应有一个 Reasoning，不能占位与真实推理重复")
+            assertEquals("用户想让我分析当前未提交代码的质量问题", reasoningItems.first().text)
+            assertTrue(reasoningItems.first().text.isNotBlank(), "不允许存在空文本占位 Reasoning")
         } finally {
             testScope.cancel()
         }
@@ -1527,7 +1589,7 @@ class SharedLogicDesktopTest {
             appState.hydrate()
             val viewModel = WorkspaceViewModel(appState)
 
-            // 场景 1: 调用命令工具运行中
+            // 场景 1: 调用命令工具流式运行中 -> 步骤直接平铺在对话流中（不进折叠卡）
             val cmdMsg = xyz.mederi.core.contract.models.ChatMessage(
                 id = "m_cmd",
                 conversationId = "c1",
@@ -1543,44 +1605,32 @@ class SharedLogicDesktopTest {
                 agent = null,
                 isStreaming = true
             )
-            val items1 = viewModel.computeChatItems(listOf(cmdMsg))
-            val wt1 = items1.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
-            assertTrue(wt1.isRunning, "流式执行命令中 isRunning 必须为 true")
-            assertTrue(wt1.activeActivityText?.contains("执行命令") == true, "活动文案应识别为执行命令")
+            val activeItems = viewModel.computeChatItems(listOf(cmdMsg))
+            val activeReasoning = activeItems.filterIsInstance<ChatListItem.Reasoning>().firstOrNull()
+            assertNotNull(activeReasoning, "流式运行中推理应直接出现在对话时间线中")
+            val activeToolCall = activeItems.filterIsInstance<ChatListItem.ToolCalls>().firstOrNull()
+            assertNotNull(activeToolCall, "流式运行中工具调用应直接出现在对话时间线中")
+            assertTrue(activeToolCall.isRunning, "流式执行命令中 isRunning 必须为 true")
 
-            // 场景 2: 自言自语过渡语
-            // 构造一条正在流式输出过渡语（尚未有下一个 toolcall）的消息，但在一个包含后续工具调用的轮次中
-            val stepNarrationOnly = xyz.mederi.core.contract.models.ChatMessage(
-                id = "m_narr_only",
-                conversationId = "c1",
-                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+            // 场景 2: 轮次结束后（isStreaming = false） -> 步骤聚合折叠入 WorkTraceBlock
+            val completedCmdMsg = cmdMsg.copy(
+                isStreaming = false,
+                completedAt = 2000L,
                 blocks = listOf(
-                    xyz.mederi.core.contract.models.ChatBlock.Text("t_narr_only", "我要看看下一步应该干什么\n详细计划说明")
-                ),
-                createdAt = 3000L,
-                completedAt = null,
-                parentMessageId = null,
-                model = null,
-                agent = null,
-                isStreaming = true
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "分析完毕"),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc1", "execute_command", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git status"), "On branch main")),
+                    xyz.mederi.core.contract.models.ChatBlock.Text("t_done", "检查完成，当前分支为 main。")
+                )
             )
-            val futureToolMsg = xyz.mederi.core.contract.models.ChatMessage(
-                id = "m_future_tool",
-                conversationId = "c1",
-                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
-                blocks = listOf(
-                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc3", "call_mcp_tool", xyz.mederi.core.contract.models.ToolCallState.Completed(emptyMap(), ""))
-                ),
-                createdAt = 4000L,
-                completedAt = null,
-                parentMessageId = null,
-                model = null,
-                agent = null,
-                isStreaming = true
-            )
-            val items2 = viewModel.computeChatItems(listOf(stepNarrationOnly, futureToolMsg))
-            val wt2 = items2.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
-            assertTrue(wt2.isRunning, "流式自言自语中 isRunning 必须为 true")
+            val completedItems = viewModel.computeChatItems(listOf(completedCmdMsg))
+            val wt = completedItems.filterIsInstance<ChatListItem.WorkTraceBlock>().firstOrNull()
+            assertNotNull(wt, "轮次结束后过程步骤必须折叠打包入 WorkTraceBlock")
+            assertEquals(1, wt.totalToolsCount)
+            assertTrue(wt.items.any { it is ChatListItem.Reasoning })
+            assertTrue(wt.items.any { it is ChatListItem.ToolCalls })
+            val topText = completedItems.filterIsInstance<ChatListItem.TextMessage>().firstOrNull()
+            assertNotNull(topText, "轮次结束后外部应仅保留最终答复正文")
+            assertEquals("检查完成，当前分支为 main。", topText.text)
         } finally {
             testScope.cancel()
         }
@@ -1697,4 +1747,74 @@ class SharedLogicDesktopTest {
         // session IDLE（transient 可恢复，如限流重试耗尽）→ 蓝点
         assertEquals(ConversationStatus.Idle, mapMessageErrorToStatus(SessionStatus.IDLE))
     }
+
+    /**
+     * 验证时间线动作分类与同类连续工具聚合（ran command / readfile / edit_file 等）
+     */
+    @Test
+    fun testToolActionClassificationAndGrouping() {
+        val kindCmd = xyz.mederi.ui.components.classifyToolAction("run_command")
+        val kindRead = xyz.mederi.ui.components.classifyToolAction("read_file")
+        val kindEdit = xyz.mederi.ui.components.classifyToolAction("edit_file")
+        val kindSearch = xyz.mederi.ui.components.classifyToolAction("grep_search")
+        val kindList = xyz.mederi.ui.components.classifyToolAction("list_dir")
+
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.COMMAND, kindCmd)
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.READ, kindRead)
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.EDIT, kindEdit)
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.SEARCH, kindSearch)
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.LIST, kindList)
+
+        val calls = listOf(
+            xyz.mederi.core.contract.models.ToolCallUi(id = "c1", name = "run_command", target = "git status", state = xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git status"), "clean")),
+            xyz.mederi.core.contract.models.ToolCallUi(id = "c2", name = "run_command", target = "git diff", state = xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git diff"), "")),
+            xyz.mederi.core.contract.models.ToolCallUi(id = "c3", name = "read_file", target = "AGENTS.md", state = xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("path" to "AGENTS.md"), "# Agents")),
+            xyz.mederi.core.contract.models.ToolCallUi(id = "c4", name = "read_file", target = "Workspace.kt", state = xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("path" to "Workspace.kt"), "class Workspace")),
+            xyz.mederi.core.contract.models.ToolCallUi(id = "c5", name = "edit_file", target = "Theme.kt", state = xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("path" to "Theme.kt"), "ok")),
+        )
+
+        val groups = xyz.mederi.ui.components.groupToolCallsByAction(calls)
+        xyz.mederi.core.ui.DebugLog.info("TEST", "groupToolCallsByAction produced ${groups.size} groups: ${groups.map { "${it.kind}(${it.calls.size})" }}")
+
+        assertEquals(3, groups.size)
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.COMMAND, groups[0].kind)
+        assertEquals(2, groups[0].calls.size)
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.READ, groups[1].kind)
+        assertEquals(2, groups[1].calls.size)
+        assertEquals(xyz.mederi.ui.components.ToolActionKind.EDIT, groups[2].kind)
+        assertEquals(1, groups[2].calls.size)
+    }
+
+    /**
+     * 验证 ReasoningBlock 展开时滚动容器挂载逻辑：
+     * 当 isUnbounded=true 或 enforceMaxHeight=false 时，绝对不能挂载 verticalScroll，
+     * 否则在 LazyColumn 的无限最大高度 (Constraints.Infinity) 下会触发崩溃。
+     */
+    @Test
+    fun testReasoningScrollConstraintLogic() {
+        // 场景 1：顶层独立展示且未切换为全部展开 -> 启用限高与滚动
+        val scrollDefault = xyz.mederi.ui.components.shouldEnableReasoningScroll(
+            enforceMaxHeight = true,
+            isUnbounded = false
+        )
+        xyz.mederi.core.ui.DebugLog.info("TEST", "Default reasoning scroll: $scrollDefault (expected true)")
+        assertTrue(scrollDefault)
+
+        // 场景 2：用户点击底部\"展开\"，切换为无界全部展开 -> 禁用内部限高与滚动（由 LazyColumn 自然滚动）
+        val scrollUnbounded = xyz.mederi.ui.components.shouldEnableReasoningScroll(
+            enforceMaxHeight = true,
+            isUnbounded = true
+        )
+        xyz.mederi.core.ui.DebugLog.info("TEST", "Unbounded reasoning scroll: $scrollUnbounded (expected false, prevents infinity height crash)")
+        assertFalse(scrollUnbounded)
+
+        // 场景 3：处于 WorkTraceCard 内（enforceMaxHeight=false） -> 禁用子项自身限高与滚动
+        val scrollInTrace = xyz.mederi.ui.components.shouldEnableReasoningScroll(
+            enforceMaxHeight = false,
+            isUnbounded = false
+        )
+        xyz.mederi.core.ui.DebugLog.info("TEST", "In-trace reasoning scroll: $scrollInTrace (expected false)")
+        assertFalse(scrollInTrace)
+    }
 }
+

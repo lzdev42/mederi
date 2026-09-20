@@ -289,15 +289,18 @@ classDiagram
         -retryWrapped(client)
     }
     class HistoryStoreChatHistoryProvider {
-        +load(conversationId) List~KoogMessage~    % aiViewWindow 窗口
-        +store(conversationId, messages)           % 指纹 reconcile + SUMMARY 插入
+        +ctor(historyStore, diagnostics, toolTimings, includeImages=true)
+        % includeImages=false = AI 视图剔除用户图片（按模型图片能力过滤）
+        +load(conversationId) List~KoogMessage~    % aiViewWindow 窗口 → toKoogMessages(window, includeImages)
+        +store(conversationId, messages)           % 按 id 过滤回显 → 指纹 reconcile + SUMMARY 插入
         {static} +aiViewWindow(historyStore, sessionId)
         {static} +insertMarker(historyStore, sessionId, note)
         {static} TLDR_PREFIX = "TLDR:"
     }
     class KoogMessageMapper {
         <<object>>
-        +toKoogMessages/toKoogMessage(Mederi→Koog)
+        +toKoogMessages/toKoogMessage(Mederi→Koog, includeImages=true)
+        % includeImages=false 剔除用户 Image part（AI 视图层按模型图片能力过滤，历史存储不受影响）
         +fromKoogMessage/fromKoogUserMessage(Koog→Mederi)
         +createUserMessage(parts)
     }
@@ -373,8 +376,8 @@ classDiagram
 ### 6.3 HistoryStoreChatHistoryProvider 核心设计
 
 **对话历史只有一套（全量保存 UI 可见），AI 视图是它的窗口**：
-- `load` = `aiViewWindow(historyStore, sessionId)`（最后一条 SUMMARY 及其后的消息）→ `KoogMessageMapper.toKoogMessages`。
-- `store` = Koog 消息映射回 Mederi Message（withDiagnostics/withAssistantDuration/withToolTimings 补诊断）→ **reconcile 回写**：压缩场景（首条 TLDR 未落库）按内容指纹 `signature(message)` 对齐、**插入** SUMMARY 标记（不删已有消息）；常规场景对齐后只 append 新消息；对齐失败退回整体 `replace`。
+- `load` = `aiViewWindow(historyStore, sessionId)`（最后一条 SUMMARY 及其后的消息）→ `KoogMessageMapper.toKoogMessages(window, includeImages)`。`includeImages` 为构造参数（默认 true）；`false` 时剔除用户 Image part——AI 视图按当前模型图片能力过滤，历史存储不受影响。
+- `store` = Koog 消息映射回 Mederi Message（withDiagnostics/withAssistantDuration/withToolTimings 补诊断）→ **先按 id 过滤**：已在库中的消息（AI 视图回显）直接剔除——库是含图片等全量字段的真理源，无图 AI 视图回显不得覆盖带图历史；id 过滤后 freshIncoming 与 existing 无交集，兜底 replace 用 `existing + freshIncoming` 无重复 → **reconcile 回写**：压缩场景（首条 TLDR 未落库）按内容指纹 `signature(message)` 对齐、**插入** SUMMARY 标记（不删已有消息）；常规场景对齐后只 append 新消息；对齐失败退回整体 `replace(existing + freshIncoming)`。
 - `insertMarker(historyStore, sessionId, note)`：new_context 标记。
 
 ### 6.4 MederiAgentStrategies（graph 节点）
@@ -445,7 +448,7 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 | 层 | 位置 | 内容 |
 |---|---|---|
 | commonMain | `…/browser/BrowserControl.kt` | 浏览器控制抽象接口（navigate/click/type/scroll/press/snapshot/screenshot）+ `PageSnapshot(yaml, rawTree)`。**refid 定位**（KBrowser 与 BiDi 同为 refid，API 对齐）；start/close 语义：Camoufox 真拉起/关闭，JCEF 由 UI 拥有生命周期可为幂等空实现 |
-| commonMain | `…/browser/BrowserRegistry.kt` | **浏览器注册中心**：UI 注册 JCEF、core 注册 Camoufox；`BrowserKind(JCEF/CAMOUFOX)`（AI 可感知选择）；resolve/default/list/availableNames；**工厂 suspend**（JCEF 创建 KBPage 需 Main+suspend；Camoufox 工厂仅构造对象，进程启动在 start()） |
+| commonMain | `…/browser/BrowserRegistry.kt` | **浏览器注册中心**：UI 注册 JCEF、core 注册 Camoufox；`BrowserKind(JCEF/CAMOUFOX)`（AI 可感知选择）；resolve/default/list/availableNames；**默认策略：defaultName 优先 → 内置 JCEF 优先（与注册顺序无关）→ 第一个注册的（headless server 只有 camoufox 时）**；**工厂 suspend**（JCEF 创建 KBPage 需 Main+suspend；Camoufox 工厂仅构造对象，进程启动在 start()） |
 | commonMain | `…/browser/BrowserAgentRunner.kt` | BROWSER agent：4-phase 循环（perceive→decide→execute→postprocess），**不用 Koog ChatMemory**，每步重建 prompt，AI 自总结 memory + 紧凑 step history（10 条），页面快照用完即丢 |
 | commonMain | `…/browser/BrowserActions.kt` | action 模型（navigate/click/type/scroll/done）+ `BrowserDecisionParser`（容错解析 LLM JSON） |
 | commonMain | `…/browser/BrowserTaskManager.kt` | 浏览器任务管理（唯一入口）：异步派发/查状态/停止，**浏览器选择走 BrowserRegistry**（任务记 browserName，status 带 browser），状态收敛在 `tasks` 表，事件发全局 eventBus（BROWSER_TASK_*） |
@@ -466,7 +469,7 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 - **工具隔离**：浏览器操作不是 Koog Tool，是 BROWSER agent 内部的 action 类型（`BrowserAction`），不经过 ToolFactory，不污染主代理工具集。主代理只看到 `browser` 一个编排工具（RUN/STATUS/STOP/INFO）。
 - **LLM 调用**：直接 `KoogClientFactory.create(provider, apiKey)` + `client.execute(prompt, model)` 单次调用，每步重建 prompt。不用 ChatMemory / mederiSingleRunStrategy（tool-calling loop 会累积 page snapshot）。
 - **记忆**：`decision.memory` 是 AI 自总结（无独立总结 LLM 调用）；`StepHistory` 系统维护紧凑文本（最后 10 步）；snapshot 每步新鲜取，rawTree 仅供同批 refid 重映射，用完即丢。
-- **装配与浏览器选择**：全局 `BrowserRegistry`——MederiAiCore（jvmMain）启动注册 `camoufox`（BiDiBrowserControl，二进制 = browserHome 已下载的 > 手动 camoufoxPath）；desktop UI（desktopApp main.kt）注册 `jcef`（JcefBrowserHost.createAiTab → 新建 tab=KBPage，返回 JCEFBrowserControl）。TurnExecutor 直接引用注册中心创建 BrowserTaskManager（注册表为空时 run_browser_task 返回引导错误）。AI 通过 `run_browser_task(browser=name)` 选择，工具描述动态列出可用浏览器 + 选择指引（测自己网页→jcef，第三方自动化→camoufox）。工厂 suspend：JCEF 创建 KBPage 需挂 Main 线程。
+- **装配与浏览器选择**：全局 `BrowserRegistry`——MederiAiCore（jvmMain）启动注册 `camoufox`（BiDiBrowserControl，二进制 = browserHome 已下载的 > 手动 camoufoxPath）；desktop UI（desktopApp main.kt）注册 `jcef`（JcefBrowserHost.createAiTab → 新建 tab=KBPage，返回 JCEFBrowserControl）。**默认 = 内置 JCEF**（注册表策略：defaultName → JCEF 优先 → 第一个注册，2026-09 起——此前按注册顺序 falls to camoufox，未安装默认会报错）；headless server 无 JCEF 时默认 camoufox。TurnExecutor 直接引用注册中心创建 BrowserTaskManager（注册表为空时 run_browser_task 返回引导错误）。AI 通过 `run_browser_task(browser=name)` 选择，工具描述动态列出可用浏览器 + 选择指引（测自己网页→jcef，第三方自动化→camoufox）。工厂 suspend：JCEF 创建 KBPage 需挂 Main 线程。
 - **Camoufox 下载**：必须在设置里配置 `browserHome`（强制目录，浏览器体积大），`CamoufoxInstaller` 从 GitHub 官方拉取当前平台版本（跨平台不同步→往回找）；安装信息写 version.json；启动时 MederiAiCore 静默 `checkForUpdate` 比对最新。profile 目录用 `browserHome/profiles`（缓存/登录态归置受管目录）。
 
 ## 7.4 AGENTS.md 能力（读取/注入/懒发现/生成，2026-09-17 新增）

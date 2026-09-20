@@ -38,9 +38,112 @@ import xyz.mederi.core.contract.models.ModelOrigin
 import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.core.ui.appstate.LocalAppState
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.close
+import mederi.app.shared.generated.resources.input_default_tag
+import mederi.app.shared.generated.resources.settings_filter_all_count
+import mederi.app.shared.generated.resources.settings_filter_enabled_count
+import mederi.app.shared.generated.resources.settings_filter_free
+import mederi.app.shared.generated.resources.settings_filter_image
+import mederi.app.shared.generated.resources.settings_filter_reasoning
+import mederi.app.shared.generated.resources.settings_panel_add
+import mederi.app.shared.generated.resources.settings_panel_add_key
+import mederi.app.shared.generated.resources.settings_panel_add_key_title
+import mederi.app.shared.generated.resources.settings_panel_add_model
+import mederi.app.shared.generated.resources.settings_panel_add_model_title
+import mederi.app.shared.generated.resources.settings_panel_add_provider
+import mederi.app.shared.generated.resources.settings_panel_add_short
+import mederi.app.shared.generated.resources.settings_panel_api_key_plain
+import mederi.app.shared.generated.resources.settings_panel_api_key_secret_label
+import mederi.app.shared.generated.resources.settings_panel_auto_setup
+import mederi.app.shared.generated.resources.settings_panel_back_cd
+import mederi.app.shared.generated.resources.settings_panel_back_list
+import mederi.app.shared.generated.resources.settings_panel_badge_free
+import mederi.app.shared.generated.resources.settings_panel_base_url_label
+import mederi.app.shared.generated.resources.settings_panel_base_url_placeholder_local
+import mederi.app.shared.generated.resources.settings_panel_builtin_base_url_hint
+import mederi.app.shared.generated.resources.settings_panel_cancel
+import mederi.app.shared.generated.resources.settings_panel_capability_image
+import mederi.app.shared.generated.resources.settings_panel_capability_thinking
+import mederi.app.shared.generated.resources.settings_panel_capability_thinking_levels
+import mederi.app.shared.generated.resources.settings_panel_confirm_delete
+import mederi.app.shared.generated.resources.settings_panel_configure_keys
+import mederi.app.shared.generated.resources.settings_panel_connected
+import mederi.app.shared.generated.resources.settings_panel_connecting
+import mederi.app.shared.generated.resources.settings_panel_context_window
+import mederi.app.shared.generated.resources.settings_panel_create_custom_desc
+import mederi.app.shared.generated.resources.settings_panel_create_custom_title
+import mederi.app.shared.generated.resources.settings_panel_delete
+import mederi.app.shared.generated.resources.settings_panel_delete_provider_message
+import mederi.app.shared.generated.resources.settings_panel_delete_provider_title
+import mederi.app.shared.generated.resources.settings_panel_disconnect
+import mederi.app.shared.generated.resources.settings_panel_disconnected
+import mederi.app.shared.generated.resources.settings_panel_display_name
+import mederi.app.shared.generated.resources.settings_panel_display_name_placeholder
+import mederi.app.shared.generated.resources.settings_panel_done
+import mederi.app.shared.generated.resources.settings_panel_edit
+import mederi.app.shared.generated.resources.settings_panel_edit_model_title
+import mederi.app.shared.generated.resources.settings_panel_edit_reasoning
+import mederi.app.shared.generated.resources.settings_panel_empty_select_hint
+import mederi.app.shared.generated.resources.settings_panel_fetch_failed
+import mederi.app.shared.generated.resources.settings_panel_hide_all
+import mederi.app.shared.generated.resources.settings_panel_image_input
+import mederi.app.shared.generated.resources.settings_panel_key_alias
+import mederi.app.shared.generated.resources.settings_panel_key_alias_placeholder
+import mederi.app.shared.generated.resources.settings_panel_level_high_hint
+import mederi.app.shared.generated.resources.settings_panel_level_low_hint
+import mederi.app.shared.generated.resources.settings_panel_level_max_hint
+import mederi.app.shared.generated.resources.settings_panel_level_medium_hint
+import mederi.app.shared.generated.resources.settings_panel_level_none_hint
+import mederi.app.shared.generated.resources.settings_panel_level_none_placeholder
+import mederi.app.shared.generated.resources.settings_panel_manage_keys_count
+import mederi.app.shared.generated.resources.settings_panel_manage_keys_title
+import mederi.app.shared.generated.resources.settings_panel_max_output
+import mederi.app.shared.generated.resources.settings_panel_metadata_hint
+import mederi.app.shared.generated.resources.settings_panel_model_id_label
+import mederi.app.shared.generated.resources.settings_panel_model_id_placeholder
+import mederi.app.shared.generated.resources.settings_panel_model_info_title
+import mederi.app.shared.generated.resources.settings_panel_name_placeholder
+import mederi.app.shared.generated.resources.settings_panel_no_keys
+import mederi.app.shared.generated.resources.settings_panel_no_matching_models
+import mederi.app.shared.generated.resources.settings_panel_not_configured
+import mederi.app.shared.generated.resources.settings_panel_not_set
+import mederi.app.shared.generated.resources.settings_panel_override_badge
+import mederi.app.shared.generated.resources.settings_panel_protocol_type
+import mederi.app.shared.generated.resources.settings_panel_provider_name_label
+import mederi.app.shared.generated.resources.settings_panel_provider_name_placeholder
+import mederi.app.shared.generated.resources.settings_panel_providers_count
+import mederi.app.shared.generated.resources.settings_panel_reasoning_edit_hint
+import mederi.app.shared.generated.resources.settings_panel_reasoning_optional_hint
+import mederi.app.shared.generated.resources.settings_panel_reasoning_optional_title
+import mederi.app.shared.generated.resources.settings_panel_recommended_presets
+import mederi.app.shared.generated.resources.settings_panel_refresh_models
+import mederi.app.shared.generated.resources.settings_panel_refresh_short
+import mederi.app.shared.generated.resources.settings_panel_save_config
+import mederi.app.shared.generated.resources.settings_panel_save_connect
+import mederi.app.shared.generated.resources.settings_panel_save_key
+import mederi.app.shared.generated.resources.settings_panel_save_reconnect
+import mederi.app.shared.generated.resources.settings_panel_search_models
+import mederi.app.shared.generated.resources.settings_panel_set_default
+import mederi.app.shared.generated.resources.settings_panel_set_default_key
+import mederi.app.shared.generated.resources.settings_panel_show_all
+import mederi.app.shared.generated.resources.settings_panel_spec_context
+import mederi.app.shared.generated.resources.settings_panel_spec_output
+import mederi.app.shared.generated.resources.settings_panel_support_images
+import mederi.app.shared.generated.resources.settings_panel_support_thinking
+import mederi.app.shared.generated.resources.settings_panel_supported
+import mederi.app.shared.generated.resources.settings_panel_sync_empty
+import mederi.app.shared.generated.resources.settings_panel_sync_idle_hint
+import mederi.app.shared.generated.resources.settings_panel_sync_unsupported
+import mederi.app.shared.generated.resources.settings_panel_syncing
+import mederi.app.shared.generated.resources.settings_panel_thinking_label
+import mederi.app.shared.generated.resources.settings_panel_thinking_levels_title
+import mederi.app.shared.generated.resources.settings_panel_unknown
+import mederi.app.shared.generated.resources.settings_panel_unsupported
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.util.formatContextWindow
+import org.jetbrains.compose.resources.stringResource
 
 // ============================================================================
 // 1. 设计 Token 定义 (Design Tokens)
@@ -116,7 +219,7 @@ fun ProviderSettingsPanel() {
                     )
 
                     Text(
-                        text = "已配置 (${uiState.providers.size})",
+                        text = stringResource(Res.string.settings_panel_providers_count, uiState.providers.size),
                         color = colors.textMuted,
                         fontSize = ProviderTokens.FontLabel,
                         fontWeight = FontWeight.Medium,
@@ -151,8 +254,8 @@ fun ProviderSettingsPanel() {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
                     ) {
-                        Icon(FeatherIcons.ArrowLeft, "返回", tint = colors.textSecondary, modifier = Modifier.size(14.dp))
-                        Text("返回列表", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                        Icon(FeatherIcons.ArrowLeft, stringResource(Res.string.settings_panel_back_cd), tint = colors.textSecondary, modifier = Modifier.size(14.dp))
+                        Text(stringResource(Res.string.settings_panel_back_list), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     }
 
                     HorizontalDivider(color = colors.divider)
@@ -207,7 +310,7 @@ fun ProviderSettingsPanel() {
                     HorizontalDivider(color = colors.divider)
 
                     Text(
-                        text = "已配置 (${uiState.providers.size})",
+                        text = stringResource(Res.string.settings_panel_providers_count, uiState.providers.size),
                         color = colors.textMuted,
                         fontSize = ProviderTokens.FontLabel,
                         fontWeight = FontWeight.Medium,
@@ -264,7 +367,7 @@ fun ProviderSettingsPanel() {
 
                         else -> {
                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("选择左侧供应商查看详情", color = colors.textMuted, fontSize = ProviderTokens.FontValue)
+                                Text(stringResource(Res.string.settings_panel_empty_select_hint), color = colors.textMuted, fontSize = ProviderTokens.FontValue)
                             }
                         }
                     }
@@ -307,7 +410,7 @@ private fun BuiltinPresetsSection(
         verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
     ) {
         Text(
-            text = "推荐预设",
+            text = stringResource(Res.string.settings_panel_recommended_presets),
             color = colors.textMuted,
             fontSize = ProviderTokens.FontLabel,
             fontWeight = FontWeight.Medium,
@@ -332,7 +435,7 @@ private fun BuiltinPresetsSection(
                         fontSize = ProviderTokens.FontValue,
                         fontWeight = FontWeight.Medium
                     )
-                    Text("添加", color = colors.accentPrimary, fontSize = ProviderTokens.FontBadge)
+                    Text(stringResource(Res.string.settings_panel_add), color = colors.accentPrimary, fontSize = ProviderTokens.FontBadge)
                 }
             }
         }
@@ -355,7 +458,7 @@ private fun AddBuiltinProviderDialog(
             modifier = Modifier.width(380.dp).padding(ProviderTokens.SpacingLarge)
         ) {
             Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text("添加供应商", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(Res.string.settings_panel_add_provider), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 HorizontalDivider(color = colors.divider)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
                     Box(
@@ -366,7 +469,7 @@ private fun AddBuiltinProviderDialog(
                     }
                     Column {
                         Text(providerName, color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
-                        Text("Base URL 已预设，只需配置 API Key", color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
+                        Text(stringResource(Res.string.settings_panel_builtin_base_url_hint), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
                     }
                 }
                 LabeledTextField(
@@ -378,10 +481,10 @@ private fun AddBuiltinProviderDialog(
                     colors = colors
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text("取消", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
                     PrimaryActionBtn(
-                        text = "添加",
+                        text = stringResource(Res.string.settings_panel_add),
                         colors = colors,
                         enabled = apiKey.isNotBlank(),
                         onClick = { onAdd(apiKey.trim()) }
@@ -417,7 +520,7 @@ private fun AddProviderSidebarButton(
                 modifier = Modifier.size(13.dp)
             )
             Text(
-                text = "添加供应商",
+                text = stringResource(Res.string.settings_panel_add_provider),
                 color = if (isSelected) colors.accentPrimary else colors.textPrimary,
                 fontSize = ProviderTokens.FontValue,
                 fontWeight = FontWeight.Medium
@@ -503,17 +606,17 @@ private fun CreateCustomProviderForm(
         verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingLarge)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("新建自定义供应商", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
-            Text("配置自建 API 端点、Ollama、vLLM 或第三方中转代理", color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
+            Text(stringResource(Res.string.settings_panel_create_custom_title), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.settings_panel_create_custom_desc), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
         }
 
         HorizontalDivider(color = colors.divider)
 
         LabeledTextField(
-            label = "供应商名称",
+            label = stringResource(Res.string.settings_panel_provider_name_label),
             value = name,
             onValueChange = { name = it },
-            placeholder = "例如: Local Ollama / 自建 vLLM / MyGateway",
+            placeholder = stringResource(Res.string.settings_panel_provider_name_placeholder),
             colors = colors
         )
 
@@ -524,15 +627,19 @@ private fun CreateCustomProviderForm(
         )
 
         LabeledTextField(
-            label = "Base URL (端点地址)",
+            label = stringResource(Res.string.settings_panel_base_url_label),
             value = baseUrl,
             onValueChange = { baseUrl = it },
-            placeholder = if (protocolType == ProtocolType.GOOGLE) ProtocolType.GOOGLE.placeholderUrl else ProtocolType.OPENAI_CHAT.placeholderUrl + " 或 http://localhost:11434/v1",
+            placeholder = if (protocolType == ProtocolType.GOOGLE) {
+                ProtocolType.GOOGLE.placeholderUrl
+            } else {
+                stringResource(Res.string.settings_panel_base_url_placeholder_local, ProtocolType.OPENAI_CHAT.placeholderUrl)
+            },
             colors = colors
         )
 
         LabeledTextField(
-            label = "API Key 密钥 (本地无鉴权可留空)",
+            label = stringResource(Res.string.settings_panel_api_key_secret_label),
             value = apiKey,
             onValueChange = { apiKey = it },
             placeholder = "sk-...",
@@ -550,9 +657,9 @@ private fun CreateCustomProviderForm(
                 .padding(ProviderTokens.SpacingMedium),
             verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
         ) {
-            Text("推理参数 (可选)", color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.settings_panel_reasoning_optional_title), color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
             Text(
-                "每个思考级别对应一段请求体 JSON，请求时原样合并。全部留空 = 使用协议默认配置。",
+                stringResource(Res.string.settings_panel_reasoning_optional_hint),
                 color = colors.textMuted, fontSize = ProviderTokens.FontLabel
             )
             ReasoningLevelsEditor(
@@ -574,13 +681,13 @@ private fun CreateCustomProviderForm(
                     if (first != null) viewModel.selectProvider(first)
                 }
             ) {
-                Text("取消", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
             }
 
             Spacer(modifier = Modifier.width(ProviderTokens.SpacingSmall))
 
             PrimaryActionBtn(
-                text = if (isSaving) "正在连接..." else "保存并连接",
+                text = if (isSaving) stringResource(Res.string.settings_panel_connecting) else stringResource(Res.string.settings_panel_save_connect),
                 colors = colors,
                 enabled = name.isNotBlank() && baseUrl.isNotBlank() && !isSaving,
                 onClick = {
@@ -622,6 +729,7 @@ private fun ProviderDetailWorkspace(
     // 操作反馈条（刷新/保存等成功与失败提示），4 秒后自动清除
     val feedbackMessage = viewModel.uiState.errorMessage ?: viewModel.uiState.successMessage
     val isFeedbackError = viewModel.uiState.errorMessage != null
+    val feedbackText = feedbackMessage?.let { stringResource(it.key, *it.args.toTypedArray()) }
     LaunchedEffect(feedbackMessage) {
         if (feedbackMessage != null) {
             kotlinx.coroutines.delay(4000)
@@ -634,9 +742,9 @@ private fun ProviderDetailWorkspace(
         verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)
     ) {
         // 操作反馈（成功 / 失败）
-        if (feedbackMessage != null) {
+        if (feedbackText != null) {
             Text(
-                text = feedbackMessage,
+                text = feedbackText,
                 color = if (isFeedbackError) colors.accentDanger else colors.accentPrimary,
                 fontSize = ProviderTokens.FontLabel,
                 modifier = Modifier
@@ -679,7 +787,7 @@ private fun ProviderDetailWorkspace(
 
                 if (!provider.isBuiltin) {
                     Text(
-                        text = "删除",
+                        text = stringResource(Res.string.settings_panel_delete),
                         color = colors.accentDanger,
                         fontSize = ProviderTokens.FontLabel,
                         modifier = Modifier
@@ -709,14 +817,14 @@ private fun ProviderDetailWorkspace(
                 ) {
                     CredentialFieldItem(
                         label = "BASE URL",
-                        value = provider.baseUrl.ifBlank { "未设置" },
+                        value = provider.baseUrl.ifBlank { stringResource(Res.string.settings_panel_not_set) },
                         colors = colors,
                         modifier = Modifier.weight(1.4f)
                     )
 
                     CredentialFieldItem(
                         label = "API KEY",
-                        value = if (provider.apiKey.isNotBlank()) provider.maskedApiKey else "未配置",
+                        value = if (provider.apiKey.isNotBlank()) provider.maskedApiKey else stringResource(Res.string.settings_panel_not_configured),
                         colors = colors,
                         isWarn = provider.apiKey.isBlank(),
                         modifier = Modifier.weight(1f)
@@ -746,13 +854,17 @@ private fun ProviderDetailWorkspace(
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
                         GhostActionBtn(
-                            text = if (provider.apiKeys.isNotEmpty()) "管理 Keys (${provider.apiKeys.size})" else "配置 Keys",
+                            text = if (provider.apiKeys.isNotEmpty()) {
+                                stringResource(Res.string.settings_panel_manage_keys_count, provider.apiKeys.size)
+                            } else {
+                                stringResource(Res.string.settings_panel_configure_keys)
+                            },
                             colors = colors
                         ) { showManageKeysDialog = true }
 
                         // 推理参数编辑仅自定义供应商：内置参数按官方文档内置（启动同步会覆盖用户改动），不开放
                         if (!provider.isBuiltin) {
-                            GhostActionBtn(text = "编辑推理参数", colors = colors) {
+                            GhostActionBtn(text = stringResource(Res.string.settings_panel_edit_reasoning), colors = colors) {
                                 showEditCredentialsDialog = true
                             }
                         }
@@ -760,7 +872,7 @@ private fun ProviderDetailWorkspace(
 
                     if (provider.isConnected) {
                         Text(
-                            text = "断开连接",
+                            text = stringResource(Res.string.settings_panel_disconnect),
                             color = colors.textMuted,
                             fontSize = ProviderTokens.FontLabel,
                             modifier = Modifier
@@ -807,7 +919,7 @@ private fun ProviderDetailWorkspace(
                                 modifier = Modifier.fillMaxWidth(),
                                 decorationBox = { inner ->
                                     if (viewModel.uiState.searchQuery.isEmpty()) {
-                                        Text("搜索模型...", fontSize = ProviderTokens.FontLabel, color = colors.textMuted)
+                                        Text(stringResource(Res.string.settings_panel_search_models), fontSize = ProviderTokens.FontLabel, color = colors.textMuted)
                                     }
                                     inner()
                                 }
@@ -839,12 +951,12 @@ private fun ProviderDetailWorkspace(
                             } else {
                                 Icon(
                                     imageVector = FeatherIcons.RefreshCw,
-                                    contentDescription = "刷新模型",
+                                    contentDescription = stringResource(Res.string.settings_panel_refresh_models),
                                     tint = colors.textSecondary,
                                     modifier = Modifier.size(11.dp)
                                 )
                             }
-                            Text("刷新", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                            Text(stringResource(Res.string.settings_panel_refresh_short), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                         }
                     }
 
@@ -857,7 +969,7 @@ private fun ProviderDetailWorkspace(
                             .clickable { viewModel.autoSetupModels(provider.id) }
                             .padding(horizontal = 8.dp, vertical = 5.dp)
                     ) {
-                        Text("自动设置", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                        Text(stringResource(Res.string.settings_panel_auto_setup), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     }
 
                     Spacer(modifier = Modifier.width(ProviderTokens.SpacingXSmall))
@@ -871,7 +983,7 @@ private fun ProviderDetailWorkspace(
                             .clickable { showAddManualModelDialog = true }
                             .padding(horizontal = 8.dp, vertical = 5.dp)
                     ) {
-                        Text("+ 添加", color = colors.textPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
+                        Text(stringResource(Res.string.settings_panel_add_short), color = colors.textPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
                     }
                 }
 
@@ -882,7 +994,7 @@ private fun ProviderDetailWorkspace(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "全显",
+                        text = stringResource(Res.string.settings_panel_show_all),
                         color = colors.textMuted,
                         fontSize = ProviderTokens.FontLabel,
                         modifier = Modifier
@@ -890,7 +1002,7 @@ private fun ProviderDetailWorkspace(
                             .padding(horizontal = 4.dp, vertical = 2.dp)
                     )
                     Text(
-                        text = "全隐",
+                        text = stringResource(Res.string.settings_panel_hide_all),
                         color = colors.textMuted,
                         fontSize = ProviderTokens.FontLabel,
                         modifier = Modifier
@@ -900,11 +1012,11 @@ private fun ProviderDetailWorkspace(
                     CapabilityFilter.entries.forEach { filter ->
                         val isSel = viewModel.uiState.capabilityFilter == filter
                         val label = when (filter) {
-                            CapabilityFilter.ALL -> "全部 (${provider.models.size})"
-                            CapabilityFilter.ENABLED_ONLY -> "已启用 (${provider.enabledModelCount})"
-                            CapabilityFilter.REASONING -> "Reasoning"
-                            CapabilityFilter.IMAGE -> "Image"
-                            CapabilityFilter.FREE -> "免费"
+                            CapabilityFilter.ALL -> stringResource(Res.string.settings_filter_all_count, provider.models.size)
+                            CapabilityFilter.ENABLED_ONLY -> stringResource(Res.string.settings_filter_enabled_count, provider.enabledModelCount)
+                            CapabilityFilter.REASONING -> stringResource(Res.string.settings_filter_reasoning)
+                            CapabilityFilter.IMAGE -> stringResource(Res.string.settings_filter_image)
+                            CapabilityFilter.FREE -> stringResource(Res.string.settings_filter_free)
                         }
                         Box(
                             modifier = Modifier
@@ -955,7 +1067,7 @@ private fun ProviderDetailWorkspace(
                             modifier = Modifier.fillMaxWidth(),
                             decorationBox = { inner ->
                                 if (viewModel.uiState.searchQuery.isEmpty()) {
-                                    Text("搜索模型...", fontSize = ProviderTokens.FontLabel, color = colors.textMuted)
+                                    Text(stringResource(Res.string.settings_panel_search_models), fontSize = ProviderTokens.FontLabel, color = colors.textMuted)
                                 }
                                 inner()
                             }
@@ -975,11 +1087,11 @@ private fun ProviderDetailWorkspace(
                     CapabilityFilter.entries.forEach { filter ->
                         val isSel = viewModel.uiState.capabilityFilter == filter
                         val label = when (filter) {
-                            CapabilityFilter.ALL -> "全部 (${provider.models.size})"
-                            CapabilityFilter.ENABLED_ONLY -> "已启用 (${provider.enabledModelCount})"
-                            CapabilityFilter.REASONING -> "Reasoning"
-                            CapabilityFilter.IMAGE -> "Image"
-                            CapabilityFilter.FREE -> "免费"
+                            CapabilityFilter.ALL -> stringResource(Res.string.settings_filter_all_count, provider.models.size)
+                            CapabilityFilter.ENABLED_ONLY -> stringResource(Res.string.settings_filter_enabled_count, provider.enabledModelCount)
+                            CapabilityFilter.REASONING -> stringResource(Res.string.settings_filter_reasoning)
+                            CapabilityFilter.IMAGE -> stringResource(Res.string.settings_filter_image)
+                            CapabilityFilter.FREE -> stringResource(Res.string.settings_filter_free)
                         }
                         Box(
                             modifier = Modifier
@@ -1004,13 +1116,13 @@ private fun ProviderDetailWorkspace(
                     horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
                 ) {
                     Text(
-                        text = "全显",
+                        text = stringResource(Res.string.settings_panel_show_all),
                         color = colors.textMuted,
                         fontSize = ProviderTokens.FontLabel,
                         modifier = Modifier.clickable { viewModel.setAllModelsEnabled(provider.id, true) }
                     )
                     Text(
-                        text = "全隐",
+                        text = stringResource(Res.string.settings_panel_hide_all),
                         color = colors.textMuted,
                         fontSize = ProviderTokens.FontLabel,
                         modifier = Modifier.clickable { viewModel.setAllModelsEnabled(provider.id, false) }
@@ -1036,19 +1148,19 @@ private fun ProviderDetailWorkspace(
                                     color = colors.accentPrimary
                                 )
                                 Text(
-                                    text = "正在同步...",
+                                    text = stringResource(Res.string.settings_panel_syncing),
                                     color = colors.textSecondary,
                                     fontSize = ProviderTokens.FontLabel
                                 )
                             } else {
                                 Icon(
                                     imageVector = FeatherIcons.RefreshCw,
-                                    contentDescription = "刷新模型",
+                                    contentDescription = stringResource(Res.string.settings_panel_refresh_models),
                                     tint = colors.textSecondary,
                                     modifier = Modifier.size(11.dp)
                                 )
                                 Text(
-                                    text = "刷新模型",
+                                    text = stringResource(Res.string.settings_panel_refresh_models),
                                     color = colors.textSecondary,
                                     fontSize = ProviderTokens.FontLabel
                                 )
@@ -1065,7 +1177,7 @@ private fun ProviderDetailWorkspace(
                             .clickable { viewModel.autoSetupModels(provider.id) }
                             .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
                     ) {
-                        Text("自动设置", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                        Text(stringResource(Res.string.settings_panel_auto_setup), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     }
 
                     Box(
@@ -1076,7 +1188,7 @@ private fun ProviderDetailWorkspace(
                             .clickable { showAddManualModelDialog = true }
                             .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
                     ) {
-                        Text("+ 添加模型", color = colors.textPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
+                        Text(stringResource(Res.string.settings_panel_add_model), color = colors.textPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -1102,29 +1214,29 @@ private fun ProviderDetailWorkspace(
                     when (val status = provider.syncStatus) {
                         is ModelsSyncStatus.Error -> {
                             Text(
-                                text = "拉取失败: ${status.message}",
+                                text = stringResource(Res.string.settings_panel_fetch_failed, status.message),
                                 color = colors.accentDanger,
                                 fontSize = ProviderTokens.FontLabel
                             )
                         }
                         is ModelsSyncStatus.UnsupportedEndpoint -> {
                             Text(
-                                text = "端点未开放 /models 路由，可通过上方「+ 添加模型」手动配置",
+                                text = stringResource(Res.string.settings_panel_sync_unsupported),
                                 color = colors.textMuted,
                                 fontSize = ProviderTokens.FontLabel
                             )
                         }
                         is ModelsSyncStatus.Empty -> {
                             Text(
-                                text = "远端未返回任何模型，请通过上方「+ 添加模型」手动填写模型参数",
+                                text = stringResource(Res.string.settings_panel_sync_empty),
                                 color = colors.textMuted,
                                 fontSize = ProviderTokens.FontLabel
                             )
                         }
                         else -> {
-                            Text("暂无匹配的模型", color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
+                            Text(stringResource(Res.string.settings_panel_no_matching_models), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
                             if (provider.models.isEmpty()) {
-                                Text("可点击上方「刷新模型」或「+ 添加模型」导入", color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
+                                Text(stringResource(Res.string.settings_panel_sync_idle_hint), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
                             }
                         }
                     }
@@ -1222,8 +1334,8 @@ private fun ProviderDetailWorkspace(
     }
     if (showDeleteConfirm) {
         ConfirmDeleteDialog(
-            title = "删除供应商",
-            message = "确定要删除供应商 ${provider.name} 及其包含的全部模型吗？",
+            title = stringResource(Res.string.settings_panel_delete_provider_title),
+            message = stringResource(Res.string.settings_panel_delete_provider_message, provider.name),
             colors = colors,
             onDismiss = { showDeleteConfirm = false },
             onConfirm = {
@@ -1254,9 +1366,9 @@ private fun ModelItemRow(
     val contextStr = formatContextWindow(model.contextWindow)
     val maxOutStr = formatContextWindow(model.maxTokens)
     val specText = buildString {
-        if (contextStr != null) append("$contextStr 上下文")
+        if (contextStr != null) append(stringResource(Res.string.settings_panel_spec_context, contextStr))
         if (contextStr != null && maxOutStr != null) append(" · ")
-        if (maxOutStr != null) append("$maxOutStr 输出")
+        if (maxOutStr != null) append(stringResource(Res.string.settings_panel_spec_output, maxOutStr))
         if (isEmpty()) append(model.providerModelId)
     }
 
@@ -1280,7 +1392,7 @@ private fun ModelItemRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 if (model.isFree) {
-                    MetaBadge(text = "Free", colors = colors)
+                    MetaBadge(text = stringResource(Res.string.settings_panel_badge_free), colors = colors)
                 }
             }
             Text(text = specText, color = colors.textMuted.copy(alpha = textAlpha), fontSize = ProviderTokens.FontLabel)
@@ -1293,9 +1405,13 @@ private fun ModelItemRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)) {
-                if (model.supportsImages) UnifiedCapabilityTag("Image", FeatherIcons.Image, colors, textAlpha)
+                if (model.supportsImages) UnifiedCapabilityTag(stringResource(Res.string.settings_panel_capability_image), FeatherIcons.Image, colors, textAlpha)
                 if (model.supportsThinking) {
-                    val label = if (model.reasoningLevels.isNotEmpty()) "Thinking (${model.reasoningLevels.joinToString(",")})" else "Thinking"
+                    val label = if (model.reasoningLevels.isNotEmpty()) {
+                        stringResource(Res.string.settings_panel_capability_thinking_levels, model.reasoningLevels.joinToString(","))
+                    } else {
+                        stringResource(Res.string.settings_panel_capability_thinking)
+                    }
                     UnifiedCapabilityTag(label, FeatherIcons.Cpu, colors, textAlpha)
                 }
             }
@@ -1325,14 +1441,14 @@ private fun ModelItemRow(
 
             Icon(
                 imageVector = FeatherIcons.Edit2,
-                contentDescription = "编辑",
+                contentDescription = stringResource(Res.string.settings_panel_edit),
                 tint = colors.textMuted,
                 modifier = Modifier.size(13.dp).clickable { onEdit() }
             )
 
             Icon(
                 imageVector = FeatherIcons.Trash2,
-                contentDescription = "删除",
+                contentDescription = stringResource(Res.string.settings_panel_delete),
                 tint = colors.textMuted.copy(alpha = 0.6f),
                 modifier = Modifier.size(13.dp).clickable { onDelete() }
             )
@@ -1364,16 +1480,16 @@ private fun EditProviderCredentialsDialog(
             modifier = Modifier.width(480.dp).padding(ProviderTokens.SpacingLarge)
         ) {
             Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text("编辑推理参数", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(Res.string.settings_panel_edit_reasoning), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 HorizontalDivider(color = colors.divider)
 
-                LabeledTextField("供应商名称", name, { name = it }, "名称", colors)
+                LabeledTextField(stringResource(Res.string.settings_panel_provider_name_label), name, { name = it }, stringResource(Res.string.settings_panel_name_placeholder), colors)
                 LabeledTextField("Base URL", baseUrl, { baseUrl = it }, "https://...", colors)
                 LabeledTextField("API Key", apiKey, { apiKey = it }, "sk-...", isPassword = true, colors = colors)
 
                 HorizontalDivider(color = colors.divider.copy(alpha = 0.6f))
                 Text(
-                    "推理参数（每级别一段请求体 JSON，请求时原样合并；留空的级别不发参数）",
+                    stringResource(Res.string.settings_panel_reasoning_edit_hint),
                     color = colors.textMuted, fontSize = ProviderTokens.FontLabel
                 )
                 ReasoningLevelsEditor(
@@ -1383,9 +1499,9 @@ private fun EditProviderCredentialsDialog(
                 )
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text("取消", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
-                    PrimaryActionBtn("保存并重新连接", colors, enabled = baseUrl.isNotBlank()) {
+                    PrimaryActionBtn(stringResource(Res.string.settings_panel_save_reconnect), colors, enabled = baseUrl.isNotBlank()) {
                         onSave(name, baseUrl, apiKey, reasoningLevels)
                     }
                 }
@@ -1400,16 +1516,21 @@ private fun EditProviderCredentialsDialog(
  * - LOW~MAX：该级别的请求体 JSON 片段（如 {"reasoning":{"effort":"high"}}）
  * - NONE：一般留空（不发即关）；奇葩端点填显式关闭参数；常开型端点（Agnes）填常开开关
  */
-private val REASONING_LEVEL_ROWS = listOf(
-    "NONE" to "关闭 / 常开参数（一般留空）",
-    "LOW" to "低档",
-    "MEDIUM" to "中档",
-    "HIGH" to "高档",
-    "MAX" to "max 档"
-)
+private val REASONING_LEVEL_ORDER = listOf("NONE", "LOW", "MEDIUM", "HIGH", "MAX")
 
+@Composable
+private fun reasoningLevelHint(level: String): String = when (level) {
+    "NONE" -> stringResource(Res.string.settings_panel_level_none_hint)
+    "LOW" -> stringResource(Res.string.settings_panel_level_low_hint)
+    "MEDIUM" -> stringResource(Res.string.settings_panel_level_medium_hint)
+    "HIGH" -> stringResource(Res.string.settings_panel_level_high_hint)
+    "MAX" -> stringResource(Res.string.settings_panel_level_max_hint)
+    else -> level
+}
+
+@Composable
 private fun reasoningLevelPlaceholder(level: String): String = when (level) {
-    "NONE" -> """留空；显式关闭如 {"enable_thinking":false}"""
+    "NONE" -> stringResource(Res.string.settings_panel_level_none_placeholder)
     "LOW" -> """{"reasoning":{"effort":"low"}}"""
     "MEDIUM" -> """{"reasoning":{"effort":"medium"}}"""
     "HIGH" -> """{"reasoning":{"effort":"high","summary":"auto"}}"""
@@ -1424,9 +1545,9 @@ private fun ReasoningLevelsEditor(
     colors: MederiColors
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
-        REASONING_LEVEL_ROWS.forEach { (level, hint) ->
+        REASONING_LEVEL_ORDER.forEach { level ->
             LabeledTextField(
-                label = "$level · $hint",
+                label = "$level · ${reasoningLevelHint(level)}",
                 value = levels[level].orEmpty(),
                 onValueChange = { raw ->
                     val updated = levels.toMutableMap()
@@ -1462,27 +1583,27 @@ private fun AddManualModelDialog(
             modifier = Modifier.width(440.dp).padding(ProviderTokens.SpacingLarge)
         ) {
             Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text("手动添加模型", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(Res.string.settings_panel_add_model_title), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 HorizontalDivider(color = colors.divider)
 
-                LabeledTextField("模型 ID (Provider Model ID)", modelId, { modelId = it; if (name.isBlank()) name = it }, "例如: deepseek-chat", colors)
-                LabeledTextField("显示名称", name, { name = it }, "例如: DeepSeek V3", colors)
+                LabeledTextField(stringResource(Res.string.settings_panel_model_id_label), modelId, { modelId = it; if (name.isBlank()) name = it }, stringResource(Res.string.settings_panel_model_id_placeholder, "deepseek-chat"), colors)
+                LabeledTextField(stringResource(Res.string.settings_panel_display_name), name, { name = it }, stringResource(Res.string.settings_panel_display_name_placeholder, "DeepSeek V3"), colors)
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
                     Box(Modifier.weight(1f)) {
-                        LabeledTextField("上下文窗口", contextWindowText, { contextWindowText = it.filter { ch -> ch.isDigit() } }, "128000", colors)
+                        LabeledTextField(stringResource(Res.string.settings_panel_context_window), contextWindowText, { contextWindowText = it.filter { ch -> ch.isDigit() } }, "128000", colors)
                     }
                     Box(Modifier.weight(1f)) {
-                        LabeledTextField("最大输出", maxTokensText, { maxTokensText = it.filter { ch -> ch.isDigit() } }, "8192", colors)
+                        LabeledTextField(stringResource(Res.string.settings_panel_max_output), maxTokensText, { maxTokensText = it.filter { ch -> ch.isDigit() } }, "8192", colors)
                     }
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("支持图片输入 (Image)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                    Text(stringResource(Res.string.settings_panel_support_images), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     Switch(checked = supportsImages, onCheckedChange = { supportsImages = it }, colors = switchColors(colors))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("支持思考推理 (Thinking)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                    Text(stringResource(Res.string.settings_panel_support_thinking), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     Switch(checked = supportsThinking, onCheckedChange = { supportsThinking = it }, colors = switchColors(colors))
                 }
 
@@ -1495,9 +1616,9 @@ private fun AddManualModelDialog(
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text("取消", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
-                    PrimaryActionBtn("添加", colors, enabled = modelId.isNotBlank()) {
+                    PrimaryActionBtn(stringResource(Res.string.settings_panel_add), colors, enabled = modelId.isNotBlank()) {
                         val cw = contextWindowText.toIntOrNull()
                         val mt = maxTokensText.toIntOrNull()
                         onAdd(
@@ -1552,26 +1673,26 @@ private fun EditModelDialog(
             modifier = Modifier.width(440.dp).padding(ProviderTokens.SpacingLarge)
         ) {
             Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text("编辑模型参数: ${model.providerModelId}", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(Res.string.settings_panel_edit_model_title, model.providerModelId), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 HorizontalDivider(color = colors.divider)
 
-                LabeledTextField("显示名称", name, { name = it }, model.providerModelId, colors)
+                LabeledTextField(stringResource(Res.string.settings_panel_display_name), name, { name = it }, model.providerModelId, colors)
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
                     Box(Modifier.weight(1f)) {
-                        LabeledTextField("上下文窗口", contextWindowText, { contextWindowText = it.filter { ch -> ch.isDigit() } }, "128000", colors)
+                        LabeledTextField(stringResource(Res.string.settings_panel_context_window), contextWindowText, { contextWindowText = it.filter { ch -> ch.isDigit() } }, "128000", colors)
                     }
                     Box(Modifier.weight(1f)) {
-                        LabeledTextField("最大输出", maxTokensText, { maxTokensText = it.filter { ch -> ch.isDigit() } }, "8192", colors)
+                        LabeledTextField(stringResource(Res.string.settings_panel_max_output), maxTokensText, { maxTokensText = it.filter { ch -> ch.isDigit() } }, "8192", colors)
                     }
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("支持图片输入 (Image)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                    Text(stringResource(Res.string.settings_panel_support_images), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     Switch(checked = supportsImages, onCheckedChange = { supportsImages = it }, colors = switchColors(colors))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("支持思考推理 (Thinking)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                    Text(stringResource(Res.string.settings_panel_support_thinking), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                     Switch(checked = supportsThinking, onCheckedChange = { supportsThinking = it }, colors = switchColors(colors))
                 }
 
@@ -1584,9 +1705,9 @@ private fun EditModelDialog(
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text("取消", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
-                    PrimaryActionBtn("保存配置", colors) {
+                    PrimaryActionBtn(stringResource(Res.string.settings_panel_save_config), colors) {
                         val cw = contextWindowText.toIntOrNull()
                         val mt = maxTokensText.toIntOrNull()
                         onSave(
@@ -1623,17 +1744,17 @@ private fun ModelMetadataViewDialog(
             modifier = Modifier.width(440.dp).padding(ProviderTokens.SpacingLarge)
         ) {
             Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text("模型信息: ${model.providerModelId}", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(Res.string.settings_panel_model_info_title, model.providerModelId), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 HorizontalDivider(color = colors.divider)
 
-                ModelInfoRow("显示名称", model.name, colors)
-                ModelInfoRow("上下文窗口", model.contextWindow?.let { "${it / 1000}K tokens" } ?: "未知", colors)
-                ModelInfoRow("最大输出", model.maxTokens?.let { "${it / 1000}K tokens" } ?: "未设置", colors)
+                ModelInfoRow(stringResource(Res.string.settings_panel_display_name), model.name, colors)
+                ModelInfoRow(stringResource(Res.string.settings_panel_context_window), model.contextWindow?.let { "${it / 1000}K tokens" } ?: stringResource(Res.string.settings_panel_unknown), colors)
+                ModelInfoRow(stringResource(Res.string.settings_panel_max_output), model.maxTokens?.let { "${it / 1000}K tokens" } ?: stringResource(Res.string.settings_panel_not_set), colors)
 
                 // 图片能力：用户覆盖开关（唯一可编辑项）
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
-                        Text("图片输入 (Image)", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                        Text(stringResource(Res.string.settings_panel_image_input), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                         if (model.supportsImagesOverride != null) {
                             Box(
                                 modifier = Modifier
@@ -1641,7 +1762,7 @@ private fun ModelMetadataViewDialog(
                                     .background(colors.accentWarning.copy(alpha = 0.15f))
                                     .padding(horizontal = 4.dp, vertical = 1.dp)
                             ) {
-                                Text("已覆盖目录", color = colors.accentWarning, fontSize = 9.sp, fontWeight = FontWeight.Medium)
+                                Text(stringResource(Res.string.settings_panel_override_badge), color = colors.accentWarning, fontSize = 9.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
@@ -1652,20 +1773,23 @@ private fun ModelMetadataViewDialog(
                     )
                 }
                 ModelInfoRow(
-                    "思考推理 (Thinking)",
-                    if (model.supportsThinking) model.reasoningLevels.filter { it != "NONE" }.joinToString(" / ").ifEmpty { "支持" } else "不支持",
+                    stringResource(Res.string.settings_panel_thinking_label),
+                    if (model.supportsThinking) {
+                        model.reasoningLevels.filter { it != "NONE" }.joinToString(" / ").ifEmpty { stringResource(Res.string.settings_panel_supported) }
+                    } else {
+                        stringResource(Res.string.settings_panel_unsupported)
+                    },
                     colors
                 )
 
                 Text(
-                    "元数据来自模型目录（models.dev / 端点），自动同步维护；图片开关是你的用户覆盖，不会被同步覆盖。" +
-                        "如需自定义其他字段请删除后手动添加同名模型。",
+                    stringResource(Res.string.settings_panel_metadata_hint),
                     color = colors.textMuted,
                     fontSize = ProviderTokens.FontLabel
                 )
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text("关闭", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    TextButton(onDismiss) { Text(stringResource(Res.string.close), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
                 }
             }
         }
@@ -1702,7 +1826,7 @@ private fun ReasoningLevelsSelector(
             .padding(ProviderTokens.SpacingSmall),
         verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
     ) {
-        Text("思考级别（对话界面可选项）", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+        Text(stringResource(Res.string.settings_panel_thinking_levels_title), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
             ReasoningLevels.SELECTABLE.forEach { level ->
                 val checked = level in selected
@@ -1745,7 +1869,7 @@ private fun ConfirmDeleteDialog(
                 Text(title, color = colors.accentDanger, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 Text(message, color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text("取消", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
                     Box(
                         modifier = Modifier
@@ -1755,7 +1879,7 @@ private fun ConfirmDeleteDialog(
                             .padding(horizontal = ProviderTokens.SpacingMedium, vertical = 6.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("确认删除", color = colors.onAccentPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(Res.string.settings_panel_confirm_delete), color = colors.onAccentPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -1792,11 +1916,11 @@ private fun ApiKeyManagementDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("管理 API Keys", color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(Res.string.settings_panel_manage_keys_title), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                         Text(provider.name, color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
                     }
                     if (!showAddForm) {
-                        PrimaryActionBtn("+ 添加 Key", colors) { showAddForm = true }
+                        PrimaryActionBtn(stringResource(Res.string.settings_panel_add_key), colors) { showAddForm = true }
                     }
                 }
 
@@ -1804,7 +1928,7 @@ private fun ApiKeyManagementDialog(
 
                 if (provider.apiKeys.isEmpty()) {
                     Text(
-                        text = "暂无配置任何 API Key",
+                        text = stringResource(Res.string.settings_panel_no_keys),
                         color = colors.textMuted,
                         fontSize = ProviderTokens.FontLabel,
                         modifier = Modifier.padding(vertical = ProviderTokens.SpacingSmall)
@@ -1835,7 +1959,7 @@ private fun ApiKeyManagementDialog(
                                                 fontWeight = FontWeight.Medium
                                             )
                                             if (keyOpt.isDefault) {
-                                                MetaBadge("默认", colors)
+                                                MetaBadge(stringResource(Res.string.input_default_tag), colors)
                                             }
                                         }
                                         Text(
@@ -1852,7 +1976,7 @@ private fun ApiKeyManagementDialog(
                                     ) {
                                         if (!keyOpt.isDefault) {
                                             Text(
-                                                text = "设为默认",
+                                                text = stringResource(Res.string.settings_panel_set_default),
                                                 color = colors.accentPrimary,
                                                 fontSize = ProviderTokens.FontLabel,
                                                 fontWeight = FontWeight.Medium,
@@ -1863,7 +1987,7 @@ private fun ApiKeyManagementDialog(
                                         }
                                         Icon(
                                             imageVector = FeatherIcons.Trash2,
-                                            contentDescription = "删除",
+                                            contentDescription = stringResource(Res.string.settings_panel_delete),
                                             tint = colors.accentDanger.copy(alpha = 0.8f),
                                             modifier = Modifier
                                                 .size(13.dp)
@@ -1887,15 +2011,15 @@ private fun ApiKeyManagementDialog(
                             modifier = Modifier.padding(ProviderTokens.SpacingMedium),
                             verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
                         ) {
-                            Text("添加新 API Key", color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
-                            LabeledTextField("Key 别名", newKeyName, { newKeyName = it }, "例如: Primary", colors)
-                            LabeledTextField("API Key (明文)", newKeyValue, { newKeyValue = it }, "sk-...", isPassword = true, colors = colors)
+                            Text(stringResource(Res.string.settings_panel_add_key_title), color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
+                            LabeledTextField(stringResource(Res.string.settings_panel_key_alias), newKeyName, { newKeyName = it }, stringResource(Res.string.settings_panel_key_alias_placeholder), colors)
+                            LabeledTextField(stringResource(Res.string.settings_panel_api_key_plain), newKeyValue, { newKeyValue = it }, "sk-...", isPassword = true, colors = colors)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("设为默认 Key", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                                Text(stringResource(Res.string.settings_panel_set_default_key), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
                                 Switch(checked = isNewKeyDefault, onCheckedChange = { isNewKeyDefault = it }, colors = switchColors(colors))
                             }
                             Row(
@@ -1905,11 +2029,11 @@ private fun ApiKeyManagementDialog(
                             ) {
                                 if (provider.apiKeys.isNotEmpty()) {
                                     TextButton(onClick = { showAddForm = false }) {
-                                        Text("取消", color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
+                                        Text(stringResource(Res.string.settings_panel_cancel), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
                                     }
                                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
                                 }
-                                PrimaryActionBtn("保存 Key", colors, enabled = newKeyValue.isNotBlank()) {
+                                PrimaryActionBtn(stringResource(Res.string.settings_panel_save_key), colors, enabled = newKeyValue.isNotBlank()) {
                                     viewModel.addApiKey(
                                         providerId = provider.id,
                                         name = newKeyName.ifBlank { "API Key" }.trim(),
@@ -1930,7 +2054,7 @@ private fun ApiKeyManagementDialog(
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = onDismiss) {
-                        Text("完成", color = colors.accentPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
+                        Text(stringResource(Res.string.settings_panel_done), color = colors.accentPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -1973,7 +2097,7 @@ private fun StatusIndicator(isConnected: Boolean, colors: MederiColors) {
                 .background(if (isConnected) colors.accentSuccess else colors.textMuted)
         )
         Text(
-            text = if (isConnected) "已连接" else "未连接",
+            text = if (isConnected) stringResource(Res.string.settings_panel_connected) else stringResource(Res.string.settings_panel_disconnected),
             color = if (isConnected) colors.textPrimary else colors.textMuted,
             fontSize = ProviderTokens.FontLabel
         )
@@ -2098,7 +2222,7 @@ private fun ProtocolSelectorBar(
     colors: MederiColors
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("协议类型", color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+        Text(stringResource(Res.string.settings_panel_protocol_type), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
         Row(
             modifier = Modifier
                 .fillMaxWidth()

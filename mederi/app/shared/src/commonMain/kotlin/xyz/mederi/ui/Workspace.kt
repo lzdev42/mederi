@@ -30,14 +30,29 @@ import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Zap
-import compose.icons.feathericons.Activity
-import compose.icons.feathericons.X
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.ui.ChatListItem
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
 import compose.icons.feathericons.Sidebar
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.input_image_attachment
+import mederi.app.shared.generated.resources.input_image_n
+import mederi.app.shared.generated.resources.input_pasted_text_n
+import mederi.app.shared.generated.resources.mode_auto_approve
+import mederi.app.shared.generated.resources.mode_manual_approve
+import mederi.app.shared.generated.resources.ws_add_to_input
+import mederi.app.shared.generated.resources.ws_ai_image_n
+import mederi.app.shared.generated.resources.ws_conversation_id
+import mederi.app.shared.generated.resources.ws_generated_image_n
+import mederi.app.shared.generated.resources.ws_new_conversation
+import mederi.app.shared.generated.resources.ws_open_extension
+import mederi.app.shared.generated.resources.ws_open_menu
+import mederi.app.shared.generated.resources.ws_open_sidebar
+import mederi.app.shared.generated.resources.ws_summary_title
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.theme.rememberMederiMarkdownTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import xyz.emuci.inkcompose.LocalSessionKey
 import xyz.emuci.inkcompose.MarkdownView
@@ -51,7 +66,6 @@ import xyz.mederi.ui.components.QuestionCard
 import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
 import xyz.mederi.ui.components.StatusBar
-import xyz.mederi.ui.components.TurnStatus
 import xyz.mederi.ui.components.ErrorDetailDialog
 import xyz.mederi.ui.components.UserPastedTextCard
 import xyz.mederi.ui.components.UserMessageFooter
@@ -132,7 +146,7 @@ fun Workspace(
                                 ) {
                                     Icon(
                                         imageVector = FeatherIcons.Menu,
-                                        contentDescription = "打开菜单",
+                                        contentDescription = stringResource(Res.string.ws_open_menu),
                                         tint = colors.textSecondary,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -155,7 +169,7 @@ fun Workspace(
                                         ) {
                                             Icon(
                                                 imageVector = FeatherIcons.Sidebar,
-                                                contentDescription = "打开左侧边栏",
+                                                contentDescription = stringResource(Res.string.ws_open_sidebar),
                                                 tint = colors.textSecondary,
                                                 modifier = Modifier.size(15.dp)
                                             )
@@ -189,7 +203,9 @@ fun Workspace(
                                     )
                                 }
                                 Text(
-                                    text = header.conversationName,
+                                    text = header.conversationName
+                                        ?: (header.conversationId?.let { stringResource(Res.string.ws_conversation_id, it.take(8)) }
+                                            ?: stringResource(Res.string.ws_new_conversation)),
                                     color = colors.textPrimary,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Medium,
@@ -230,7 +246,7 @@ fun Workspace(
                                                     modifier = Modifier.size(12.dp)
                                                 )
                                                 Text(
-                                                    text = if (isAutonomous) "自主" else "审批",
+                                                    text = if (isAutonomous) stringResource(Res.string.mode_auto_approve) else stringResource(Res.string.mode_manual_approve),
                                                     color = if (isAutonomous) colors.accentPrimary else colors.accentWarning,
                                                     fontSize = 11.sp,
                                                     fontWeight = FontWeight.Medium
@@ -248,7 +264,7 @@ fun Workspace(
                                     ) {
                                         Icon(
                                             imageVector = FeatherIcons.Plus,
-                                            contentDescription = "新建会话",
+                                            contentDescription = stringResource(Res.string.ws_new_conversation),
                                             tint = colors.textSecondary,
                                             modifier = Modifier.size(15.dp)
                                         )
@@ -266,7 +282,7 @@ fun Workspace(
                                 ) {
                                     Icon(
                                         imageVector = FeatherIcons.Sidebar,
-                                        contentDescription = "打开扩展窗口",
+                                        contentDescription = stringResource(Res.string.ws_open_extension),
                                         tint = if (isRightPanelOpen) colors.accentPrimary else colors.textSecondary,
                                         modifier = Modifier.size(15.dp)
                                     )
@@ -424,24 +440,7 @@ private fun MessageList(
 ) {
     val colors = LocalMederiColors.current
     val lazyListState = rememberLazyListState()
-
-    val colorScheme = MaterialTheme.colorScheme
-    val appMarkdownTheme = remember(colorScheme) {
-        val base = MarkdownTheme.material3(colorScheme)
-        base.copy(
-            bodyStyle = base.bodyStyle.copy(fontSize = 14.5.sp, lineHeight = 23.sp),
-            headingStyles = listOf(
-                base.headingStyles.getOrElse(0) { TextStyle() }.copy(fontSize = 19.sp, lineHeight = 26.sp),
-                base.headingStyles.getOrElse(1) { TextStyle() }.copy(fontSize = 17.sp, lineHeight = 24.sp),
-                base.headingStyles.getOrElse(2) { TextStyle() }.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
-                base.headingStyles.getOrElse(3) { TextStyle() }.copy(fontSize = 14.5.sp, lineHeight = 21.sp),
-                base.headingStyles.getOrElse(4) { TextStyle() }.copy(fontSize = 14.sp, lineHeight = 20.sp),
-                base.headingStyles.getOrElse(5) { TextStyle() }.copy(fontSize = 13.5.sp, lineHeight = 19.sp),
-            ),
-            codeBlockStyle = base.codeBlockStyle.copy(fontSize = 13.sp, lineHeight = 19.sp),
-            inlineCodeStyle = base.inlineCodeStyle.copy(fontSize = 13.sp)
-        )
-    }
+    val appMarkdownTheme = rememberMederiMarkdownTheme()
 
     var stickToBottom by remember(viewModel.conversationId) { mutableStateOf(true) }
 
@@ -454,9 +453,11 @@ private fun MessageList(
     val chatItems = viewModel.chatItems
 
     // 选区菜单 actions——在 item 外部 remember，避免每个 item 都重建
-    val selectionMenuActions = remember(viewModel) {
+    // （stringResource 必须在组合上下文取值后传入：remember lambda 与操作用户回调都不是 @Composable）
+    val addToInputLabel = stringResource(Res.string.ws_add_to_input)
+    val selectionMenuActions = remember(viewModel, addToInputLabel) {
         listOf(
-            SelectionMenuAction("添加到对话框") { text ->
+            SelectionMenuAction(addToInputLabel) { text ->
                 viewModel.appendToInput(text)
             }
         )
@@ -566,7 +567,7 @@ private fun MessageList(
                                     .padding(horizontal = 14.dp, vertical = 10.dp)
                             ) {
                                 Text(
-                                    text = "压缩总结",
+                                    text = stringResource(Res.string.ws_summary_title),
                                     color = colors.textMuted,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium
@@ -642,8 +643,6 @@ private fun MessageList(
                     is ChatListItem.WorkTraceBlock -> {
                         WorkTraceCard(
                             workTrace = item,
-                            userExpanded = viewModel.isAllStepsExpanded,
-                            onToggleGlobalExpansion = { viewModel.toggleAllSteps() },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -658,7 +657,8 @@ private fun MessageList(
                                             isStreaming = stepItem.isStreaming,
                                             durationMs = stepItem.durationMs,
                                             isReasoningActive = stepItem.isReasoningActive,
-                                            userExpanded = viewModel.isAllStepsExpanded,
+                                            // WorkTraceCard 已整体限高 + 滚动 + 展开按钮，子项不再重复限制
+                                            enforceMaxHeight = false,
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
                                         )
                                     }
@@ -669,7 +669,6 @@ private fun MessageList(
                                             isRunning = stepItem.isRunning,
                                             hasFailedTool = stepItem.hasFailedTool,
                                             toolSummary = stepItem.toolSummary,
-                                            userExpanded = viewModel.isAllStepsExpanded,
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
                                         )
                                     }
@@ -679,7 +678,6 @@ private fun MessageList(
                                             isStreaming = stepItem.isStreaming,
                                             isRunning = stepItem.isRunning,
                                             hasFailed = stepItem.hasFailed,
-                                            userExpanded = viewModel.isAllStepsExpanded,
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
                                         )
                                     }
@@ -721,7 +719,8 @@ private fun MessageList(
                             isStreaming = item.isStreaming,
                             durationMs = item.durationMs,
                             isReasoningActive = item.isReasoningActive,
-                            userExpanded = viewModel.isAllStepsExpanded,
+                            // 用 item.key 作为展开状态锚点，避免 LazyColumn 复用导致展开状态串位
+                            contentKey = item.key,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -738,7 +737,6 @@ private fun MessageList(
                             isRunning = item.isRunning,
                             hasFailedTool = item.hasFailedTool,
                             toolSummary = item.toolSummary,
-                            userExpanded = viewModel.isAllStepsExpanded,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -754,7 +752,6 @@ private fun MessageList(
                             isStreaming = item.isStreaming,
                             isRunning = item.isRunning,
                             hasFailed = item.hasFailed,
-                            userExpanded = viewModel.isAllStepsExpanded,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -767,6 +764,8 @@ private fun MessageList(
                     is ChatListItem.Footer -> {
                         AssistantMessageFooter(
                             footer = item.footer,
+                            lastMessageText = item.lastMessageText,
+                            fullTurnText = item.fullTurnText,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 2.dp, bottom = 4.dp)
@@ -793,15 +792,16 @@ private fun MessageList(
                                     ) {
                                         if (item.images.isNotEmpty()) {
                                             item.images.forEachIndexed { imgIdx, imgUrl ->
+                                                val imageTitle = stringResource(Res.string.input_image_n, imgIdx + 1)
                                                 InkImage(
                                                     model = imgUrl,
-                                                    contentDescription = "图片附件",
+                                                    contentDescription = stringResource(Res.string.input_image_attachment),
                                                     modifier = Modifier
                                                         .widthIn(max = 260.dp)
                                                         .heightIn(max = 180.dp)
                                                         .clip(RoundedCornerShape(8.dp))
                                                         .clickable {
-                                                            viewModel.openImageInExtension("图片 #${imgIdx + 1}", imgUrl)
+                                                            viewModel.openImageInExtension(imageTitle, imgUrl)
                                                         }
                                                 )
                                             }
@@ -816,11 +816,12 @@ private fun MessageList(
                                         }
                                         if (parsed.pastedTexts.isNotEmpty()) {
                                             parsed.pastedTexts.forEach { pasted ->
+                                                val pastedTitle = stringResource(Res.string.input_pasted_text_n, pasted.index)
                                                 UserPastedTextCard(
                                                     attachment = pasted,
                                                     onOpenInExtension = {
                                                         viewModel.openTextInExtension(
-                                                            title = "粘贴文本 #${pasted.index}",
+                                                            title = pastedTitle,
                                                             content = pasted.text,
                                                             lineCount = pasted.lineCount,
                                                             charCount = pasted.charCount
@@ -878,6 +879,8 @@ private fun MessageList(
                                         item.assistantFooter?.let { footer ->
                                             AssistantMessageFooter(
                                                 footer = footer,
+                                                lastMessageText = item.text,
+                                                fullTurnText = item.text,
                                                 modifier = Modifier.fillMaxWidth()
                                             )
                                         }
@@ -975,42 +978,6 @@ private suspend fun LazyListState.snapToBottom() {
     }
 }
 
-@Composable
-fun PillButton(
-    label: String,
-    hasDropdown: Boolean,
-    isPrimary: Boolean
-) {
-    val colors = LocalMederiColors.current
-    val bgColor = if (isPrimary) colors.accentPrimary else colors.buttonSecondary
-    val textColor = if (isPrimary) colors.onAccentPrimary else colors.onButtonSecondary
-
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(bgColor)
-            .clickable { }
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = label,
-            color = textColor,
-            fontSize = 13.sp,
-            fontWeight = if (isPrimary) FontWeight.Bold else FontWeight.Normal
-        )
-        if (hasDropdown) {
-            Icon(
-                imageVector = FeatherIcons.ChevronDown,
-                contentDescription = null,
-                tint = textColor,
-                modifier = Modifier.size(14.dp).padding(start = 4.dp)
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AssistantImagesView(
@@ -1025,18 +992,20 @@ private fun AssistantImagesView(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         images.forEachIndexed { imgIdx, imgUrl ->
+            val generatedTitle = stringResource(Res.string.ws_generated_image_n, imgIdx + 1)
+            val generatedDescription = stringResource(Res.string.ws_ai_image_n, imgIdx + 1)
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .background(colors.surfaceCard)
                     .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
                     .clickable {
-                        viewModel.openImageInExtension("生成的图片 #${imgIdx + 1}", imgUrl)
+                        viewModel.openImageInExtension(generatedTitle, imgUrl)
                     }
             ) {
                 InkImage(
                     model = imgUrl,
-                    contentDescription = "AI生成的图片 #${imgIdx + 1}",
+                    contentDescription = generatedDescription,
                     contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                     modifier = Modifier
                         .widthIn(min = 100.dp, max = 360.dp)

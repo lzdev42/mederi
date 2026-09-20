@@ -26,6 +26,25 @@ import xyz.mederi.core.contract.models.McpServerStatus
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.McpStore
 import xyz.mederi.theme.MederiColors
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.cancel
+import mederi.app.shared.generated.resources.mcp_add
+import mederi.app.shared.generated.resources.mcp_add_dialog_title
+import mederi.app.shared.generated.resources.mcp_config_hint
+import mederi.app.shared.generated.resources.mcp_delete_server
+import mederi.app.shared.generated.resources.mcp_edit_config
+import mederi.app.shared.generated.resources.mcp_edit_dialog_title
+import mederi.app.shared.generated.resources.mcp_empty
+import mederi.app.shared.generated.resources.mcp_empty_hint
+import mederi.app.shared.generated.resources.mcp_more
+import mederi.app.shared.generated.resources.mcp_refresh
+import mederi.app.shared.generated.resources.mcp_reverify
+import mederi.app.shared.generated.resources.mcp_save
+import mederi.app.shared.generated.resources.mcp_save_failed
+import mederi.app.shared.generated.resources.mcp_saving
+import mederi.app.shared.generated.resources.mcp_status_failed
+import mederi.app.shared.generated.resources.mcp_title
+import org.jetbrains.compose.resources.stringResource
 
 /**
  * 概览面板内的 MCP 管理卡片：具备展示列表、启停开关、刷新、新增、修改与删除能力。
@@ -78,7 +97,7 @@ fun McpManagementCard(
                     modifier = Modifier.size(13.dp)
                 )
                 Text(
-                    text = "MCP 服务管理",
+                    text = stringResource(Res.string.mcp_title),
                     color = colors.textMuted,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -106,7 +125,7 @@ fun McpManagementCard(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.RefreshCw,
-                        contentDescription = "刷新 MCP",
+                        contentDescription = stringResource(Res.string.mcp_refresh),
                         tint = if (isRefreshing) colors.accentPrimary else colors.textMuted,
                         modifier = Modifier.size(12.dp)
                     )
@@ -122,7 +141,7 @@ fun McpManagementCard(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.Plus,
-                        contentDescription = "添加 MCP",
+                        contentDescription = stringResource(Res.string.mcp_add),
                         tint = colors.textSecondary,
                         modifier = Modifier.size(13.dp)
                     )
@@ -140,13 +159,13 @@ fun McpManagementCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "暂无配置的 MCP 服务",
+                    text = stringResource(Res.string.mcp_empty),
                     color = colors.textSecondary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "点击右上角 + 按钮添加标准配置",
+                    text = stringResource(Res.string.mcp_empty_hint),
                     color = colors.textMuted,
                     fontSize = 10.sp
                 )
@@ -168,7 +187,7 @@ fun McpManagementCard(
     // 添加 MCP 弹窗
     if (isAddDialogOpen) {
         McpConfigDialog(
-            title = "添加 MCP 服务",
+            title = stringResource(Res.string.mcp_add_dialog_title),
             initialJson = DEFAULT_MCP_TEMPLATE,
             onDismiss = { isAddDialogOpen = false },
             onConfirm = { json -> mcpStore.install(json) },
@@ -189,7 +208,7 @@ fun McpManagementCard(
 
         if (!isLoading && currentJson != null) {
             McpConfigDialog(
-                title = "编辑 MCP 服务 - $serverName",
+                title = stringResource(Res.string.mcp_edit_dialog_title, serverName),
                 initialJson = currentJson ?: "{}",
                 onDismiss = { editServerName = null },
                 onConfirm = { json -> mcpStore.update(serverName, json) },
@@ -271,7 +290,7 @@ private fun McpServerRow(
                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         ) {
                             Text(
-                                text = "失败",
+                                text = stringResource(Res.string.mcp_status_failed),
                                 color = colors.accentDanger,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -293,7 +312,16 @@ private fun McpServerRow(
                 }
             }
 
-            if (server.summary.isNotBlank()) {
+            if (server.status == McpServerStatus.FAILED && !server.lastError.isNullOrBlank()) {
+                // 失败时优先展示具体原因（verify/连接的真实错误），避免只看到"失败"两个字无从排查
+                Text(
+                    text = server.lastError,
+                    color = colors.accentDanger.copy(alpha = 0.85f),
+                    fontSize = 9.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else if (server.summary.isNotBlank()) {
                 Text(
                     text = server.summary,
                     color = colors.textMuted,
@@ -314,7 +342,7 @@ private fun McpServerRow(
         ) {
             Icon(
                 imageVector = FeatherIcons.MoreVertical,
-                contentDescription = "更多",
+                contentDescription = stringResource(Res.string.mcp_more),
                 tint = colors.textMuted,
                 modifier = Modifier.size(12.dp)
             )
@@ -327,7 +355,7 @@ private fun McpServerRow(
                 modifier = Modifier.border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
             ) {
                 DropdownMenuItem(
-                    text = { Text("重新检测", fontSize = 11.sp, color = colors.textPrimary) },
+                    text = { Text(stringResource(Res.string.mcp_reverify), fontSize = 11.sp, color = colors.textPrimary) },
                     leadingIcon = { Icon(FeatherIcons.CheckCircle, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp)) },
                     onClick = {
                         isMenuOpen = false
@@ -335,7 +363,7 @@ private fun McpServerRow(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("编辑配置", fontSize = 11.sp, color = colors.textPrimary) },
+                    text = { Text(stringResource(Res.string.mcp_edit_config), fontSize = 11.sp, color = colors.textPrimary) },
                     leadingIcon = { Icon(FeatherIcons.Edit2, null, tint = colors.textSecondary, modifier = Modifier.size(13.dp)) },
                     onClick = {
                         isMenuOpen = false
@@ -344,7 +372,7 @@ private fun McpServerRow(
                 )
                 HorizontalDivider(color = colors.divider)
                 DropdownMenuItem(
-                    text = { Text("删除服务", fontSize = 11.sp, color = colors.accentDanger) },
+                    text = { Text(stringResource(Res.string.mcp_delete_server), fontSize = 11.sp, color = colors.accentDanger) },
                     leadingIcon = { Icon(FeatherIcons.Trash2, null, tint = colors.accentDanger, modifier = Modifier.size(13.dp)) },
                     onClick = {
                         isMenuOpen = false
@@ -370,6 +398,8 @@ private fun McpConfigDialog(
     var jsonText by remember { mutableStateOf(initialJson) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
+    // 错误文案在组合上下文取值（scope.launch 不是 @Composable）
+    val saveFailedMsg = stringResource(Res.string.mcp_save_failed)
     val scope = rememberCoroutineScope()
 
     Dialog(onDismissRequest = onDismiss) {
@@ -393,7 +423,7 @@ private fun McpConfigDialog(
                 )
 
                 Text(
-                    text = "支持粘贴标准 mcpServers 格式的 JSON 配置：",
+                    text = stringResource(Res.string.mcp_config_hint),
                     color = colors.textMuted,
                     fontSize = 11.sp
                 )
@@ -434,7 +464,7 @@ private fun McpConfigDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = onDismiss, enabled = !isSaving) {
-                        Text("取消", color = colors.textMuted, fontSize = 11.sp)
+                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Button(
@@ -446,14 +476,14 @@ private fun McpConfigDialog(
                                 if (res.isSuccess) {
                                     onDismiss()
                                 } else {
-                                    errorMessage = res.exceptionOrNull()?.message ?: "保存失败"
+                                    errorMessage = res.exceptionOrNull()?.message ?: saveFailedMsg
                                 }
                             }
                         },
                         enabled = !isSaving && jsonText.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
                     ) {
-                        Text(if (isSaving) "保存中..." else "保存", fontSize = 11.sp)
+                        Text(if (isSaving) stringResource(Res.string.mcp_saving) else stringResource(Res.string.mcp_save), fontSize = 11.sp)
                     }
                 }
             }
@@ -462,7 +492,10 @@ private fun McpConfigDialog(
 }
 
 private const val DEFAULT_MCP_TEMPLATE = """{
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-everything"],
-  "env": {}
+  "mcpServers": {
+    "my-service": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"]
+    }
+  }
 }"""

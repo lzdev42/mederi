@@ -17,6 +17,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.initload_initializing
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 
 /**
@@ -26,7 +29,7 @@ import xyz.mederi.theme.LocalMederiColors
 @Composable
 fun InitLoadingOverlay(
     isVisible: Boolean,
-    statusText: String = "正在初始化..."
+    statusText: String = stringResource(Res.string.initload_initializing)
 ) {
     if (!isVisible) return
 

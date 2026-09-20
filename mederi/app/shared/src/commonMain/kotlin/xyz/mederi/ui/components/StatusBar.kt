@@ -26,8 +26,37 @@ import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.delay
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.status_aborted
+import mederi.app.shared.generated.resources.status_calling_tool
+import mederi.app.shared.generated.resources.status_elapsed
+import mederi.app.shared.generated.resources.status_generating
+import mederi.app.shared.generated.resources.status_idle
+import mederi.app.shared.generated.resources.status_preparing
+import mederi.app.shared.generated.resources.status_retry_in
+import mederi.app.shared.generated.resources.status_retrying
+import mederi.app.shared.generated.resources.status_retrying_progress
+import mederi.app.shared.generated.resources.status_sending
+import mederi.app.shared.generated.resources.status_slow_response
+import mederi.app.shared.generated.resources.status_thinking
+import mederi.app.shared.generated.resources.status_waiting_answer
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import kotlin.time.Duration.Companion.milliseconds
+
+/** TurnStatus 显示文案唯一映射点（枚举不持有表现层文案，i18n 约定）。 */
+@Composable
+private fun turnStatusLabel(status: TurnStatus): String = when (status) {
+    TurnStatus.Idle -> stringResource(Res.string.status_idle)
+    TurnStatus.Sending -> stringResource(Res.string.status_sending)
+    TurnStatus.Preparing -> stringResource(Res.string.status_preparing)
+    TurnStatus.Thinking -> stringResource(Res.string.status_thinking)
+    TurnStatus.CallingTool -> stringResource(Res.string.status_calling_tool)
+    TurnStatus.Generating -> stringResource(Res.string.status_generating)
+    TurnStatus.WaitingAnswer -> stringResource(Res.string.status_waiting_answer)
+    TurnStatus.Retrying -> stringResource(Res.string.status_retrying)
+    TurnStatus.Aborted -> stringResource(Res.string.status_aborted)
+}
 
 /**
  * 对话轮次状态栏。在用户消息与 AI 回复之间动态显示当前 AI 正在做什么。
@@ -79,17 +108,17 @@ fun StatusBar(
 
     // 主标签文案
     val labelText = when {
-        status == TurnStatus.Preparing && slowResponse -> "排队较长，仍在等待"
-        status == TurnStatus.Retrying -> "正在自动重试 (${retryHint?.attempt ?: "?"}/${retryHint?.max ?: "?"})"
-        else -> status.label
+        status == TurnStatus.Preparing && slowResponse -> stringResource(Res.string.status_slow_response)
+        status == TurnStatus.Retrying -> stringResource(Res.string.status_retrying_progress, retryHint?.attempt ?: "?", retryHint?.max ?: "?")
+        else -> turnStatusLabel(status)
     }
 
     val timerText = when {
         status == TurnStatus.Retrying -> {
-            if (retryCountdownSec != null && retryCountdownSec > 0) "(${retryCountdownSec}s 后重试)"
-            else "(${elapsedMs / 1000}s)"   // 无 retryAt（旧格式/缺 delayMs）回退已耗时
+            if (retryCountdownSec != null && retryCountdownSec > 0) stringResource(Res.string.status_retry_in, retryCountdownSec)
+            else stringResource(Res.string.status_elapsed, elapsedMs / 1000)   // 无 retryAt（旧格式/缺 delayMs）回退已耗时
         }
-        showElapsed -> "(${elapsedMs / 1000}s)"
+        showElapsed -> stringResource(Res.string.status_elapsed, elapsedMs / 1000)
         else -> ""
     }
 

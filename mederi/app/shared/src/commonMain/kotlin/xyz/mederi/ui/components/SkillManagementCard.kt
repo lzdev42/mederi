@@ -26,6 +26,36 @@ import xyz.mederi.core.ui.appstate.SkillStore
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.util.pickDirectory
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.cancel
+import mederi.app.shared.generated.resources.pick_directory_title
+import mederi.app.shared.generated.resources.skill_deleting
+import mederi.app.shared.generated.resources.skill_empty
+import mederi.app.shared.generated.resources.skill_empty_hint
+import mederi.app.shared.generated.resources.skill_install
+import mederi.app.shared.generated.resources.skill_install_action
+import mederi.app.shared.generated.resources.skill_install_failed
+import mederi.app.shared.generated.resources.skill_install_prompt
+import mederi.app.shared.generated.resources.skill_installing
+import mederi.app.shared.generated.resources.skill_path_required
+import mederi.app.shared.generated.resources.skill_pick_dir_native
+import mederi.app.shared.generated.resources.skill_refresh
+import mederi.app.shared.generated.resources.skill_root_dir
+import mederi.app.shared.generated.resources.skill_root_prompt
+import mederi.app.shared.generated.resources.skill_root_prompt_remote
+import mederi.app.shared.generated.resources.skill_save
+import mederi.app.shared.generated.resources.skill_save_dir_failed
+import mederi.app.shared.generated.resources.skill_saving
+import mederi.app.shared.generated.resources.skill_set_root_desc
+import mederi.app.shared.generated.resources.skill_set_root_title
+import mederi.app.shared.generated.resources.skill_set_root_title_remote
+import mederi.app.shared.generated.resources.skill_title
+import mederi.app.shared.generated.resources.skill_uninstall
+import mederi.app.shared.generated.resources.skill_uninstall_confirm
+import mederi.app.shared.generated.resources.skill_uninstall_confirm_action
+import mederi.app.shared.generated.resources.skill_uninstall_title
+import mederi.app.shared.generated.resources.skill_url_required
+import org.jetbrains.compose.resources.stringResource
 
 /**
  * 概览面板内的 Skill 管理卡片：具备展示列表、刷新、安装、设定根目录与卸载能力。
@@ -47,11 +77,12 @@ fun SkillManagementCard(
     val isRefreshing by skillStore.isRefreshing.collectAsState()
     val isOperating by skillStore.isOperating.collectAsState()
     val scope = rememberCoroutineScope()
+    val pickDirectoryTitle = stringResource(Res.string.pick_directory_title)
 
     val onSelectDirectory: () -> Unit = {
         scope.launch {
             if (isDesktopPlatform) {
-                val picked = pickDirectory()
+                val picked = pickDirectory(pickDirectoryTitle)
                 if (!picked.isNullOrBlank()) {
                     skillStore.setRootDirectory(picked)
                 }
@@ -87,7 +118,7 @@ fun SkillManagementCard(
                     modifier = Modifier.size(13.dp)
                 )
                 Text(
-                    text = "Skill 技能管理",
+                    text = stringResource(Res.string.skill_title),
                     color = colors.textMuted,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -115,7 +146,7 @@ fun SkillManagementCard(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.Folder,
-                        contentDescription = "设置 Skill 根目录",
+                        contentDescription = stringResource(Res.string.skill_set_root_desc),
                         tint = colors.textMuted,
                         modifier = Modifier.size(12.dp)
                     )
@@ -131,7 +162,7 @@ fun SkillManagementCard(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.RefreshCw,
-                        contentDescription = "刷新 Skill",
+                        contentDescription = stringResource(Res.string.skill_refresh),
                         tint = if (isRefreshing) colors.accentPrimary else colors.textMuted,
                         modifier = Modifier.size(12.dp)
                     )
@@ -147,7 +178,7 @@ fun SkillManagementCard(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.Plus,
-                        contentDescription = "安装 Skill",
+                        contentDescription = stringResource(Res.string.skill_install),
                         tint = colors.textSecondary,
                         modifier = Modifier.size(13.dp)
                     )
@@ -174,7 +205,7 @@ fun SkillManagementCard(
                     modifier = Modifier.size(10.dp)
                 )
                 Text(
-                    text = "目录: $skillsRoot",
+                    text = stringResource(Res.string.skill_root_dir, skillsRoot),
                     color = colors.textMuted,
                     fontSize = 10.sp,
                     maxLines = 1,
@@ -194,13 +225,13 @@ fun SkillManagementCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "暂无已安装的 Skill",
+                    text = stringResource(Res.string.skill_empty),
                     color = colors.textSecondary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "点击右上角 + 按钮下载安装，或通过文件夹图标修改根目录",
+                    text = stringResource(Res.string.skill_empty_hint),
                     color = colors.textMuted,
                     fontSize = 10.sp
                 )
@@ -326,7 +357,7 @@ private fun SkillItemRow(
         ) {
             Icon(
                 imageVector = FeatherIcons.Trash2,
-                contentDescription = "卸载 Skill",
+                contentDescription = stringResource(Res.string.skill_uninstall),
                 tint = colors.textMuted,
                 modifier = Modifier.size(12.dp)
             )
@@ -344,6 +375,9 @@ private fun InstallSkillDialog(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isInstalling by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // 错误文案在组合上下文取值（Button onClick / scope.launch 不是 @Composable）
+    val urlRequiredMsg = stringResource(Res.string.skill_url_required)
+    val installFailedMsg = stringResource(Res.string.skill_install_failed)
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -359,14 +393,14 @@ private fun InstallSkillDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "安装 Skill",
+                    text = stringResource(Res.string.skill_install),
                     color = colors.textPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
                 )
 
                 Text(
-                    text = "请输入包含 SKILL.md 的 zip 压缩包下载地址（http/https）：",
+                    text = stringResource(Res.string.skill_install_prompt),
                     color = colors.textMuted,
                     fontSize = 11.sp
                 )
@@ -413,14 +447,14 @@ private fun InstallSkillDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = onDismiss, enabled = !isInstalling) {
-                        Text("取消", color = colors.textMuted, fontSize = 11.sp)
+                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Button(
                         onClick = {
                             val trimmed = urlText.trim()
                             if (trimmed.isBlank()) {
-                                errorMessage = "下载地址不能为空"
+                                errorMessage = urlRequiredMsg
                                 return@Button
                             }
                             scope.launch {
@@ -430,7 +464,7 @@ private fun InstallSkillDialog(
                                 if (res.isSuccess) {
                                     onDismiss()
                                 } else {
-                                    errorMessage = res.exceptionOrNull()?.message ?: "安装失败"
+                                    errorMessage = res.exceptionOrNull()?.message ?: installFailedMsg
                                 }
                             }
                         },
@@ -444,9 +478,9 @@ private fun InstallSkillDialog(
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("正在下载与安装...", fontSize = 11.sp)
+                            Text(stringResource(Res.string.skill_installing), fontSize = 11.sp)
                         } else {
-                            Text("安装", fontSize = 11.sp)
+                            Text(stringResource(Res.string.skill_install_action), fontSize = 11.sp)
                         }
                     }
                 }
@@ -466,6 +500,10 @@ private fun SetSkillRootDialog(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // 错误文案在组合上下文取值（Button onClick / scope.launch 不是 @Composable）
+    val pathRequiredMsg = stringResource(Res.string.skill_path_required)
+    val saveDirFailedMsg = stringResource(Res.string.skill_save_dir_failed)
+    val pickDirectoryTitle = stringResource(Res.string.pick_directory_title)
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -481,18 +519,16 @@ private fun SetSkillRootDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = if (isDesktopPlatform) "设置 Skill 根目录" else "设置宿主 Skill 根目录",
+                    text = if (isDesktopPlatform) stringResource(Res.string.skill_set_root_title)
+                           else stringResource(Res.string.skill_set_root_title_remote),
                     color = colors.textPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
                 )
 
                 Text(
-                    text = if (isDesktopPlatform) {
-                        "存放 Skill 的扫描根目录（支持 ~ 缩写），修改后将自动创建并扫描该目录："
-                    } else {
-                        "当前端为遥控端，请输入远程宿主机器上的 Skill 目录路径（支持 ~ 缩写，默认 ~/.mederi/skills）："
-                    },
+                    text = if (isDesktopPlatform) stringResource(Res.string.skill_root_prompt)
+                           else stringResource(Res.string.skill_root_prompt_remote),
                     color = colors.textMuted,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
@@ -510,7 +546,7 @@ private fun SetSkillRootDialog(
                             IconButton(
                                 onClick = {
                                     scope.launch {
-                                        val picked = pickDirectory()
+                                        val picked = pickDirectory(pickDirectoryTitle)
                                         if (!picked.isNullOrBlank()) {
                                             pathText = picked
                                             errorMessage = null
@@ -520,7 +556,7 @@ private fun SetSkillRootDialog(
                             ) {
                                 Icon(
                                     imageVector = FeatherIcons.Folder,
-                                    contentDescription = "系统原生选择目录",
+                                    contentDescription = stringResource(Res.string.skill_pick_dir_native),
                                     tint = colors.accentPrimary,
                                     modifier = Modifier.size(16.dp)
                                 )
@@ -556,14 +592,14 @@ private fun SetSkillRootDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = onDismiss, enabled = !isSaving) {
-                        Text("取消", color = colors.textMuted, fontSize = 11.sp)
+                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Button(
                         onClick = {
                             val trimmed = pathText.trim()
                             if (trimmed.isBlank()) {
-                                errorMessage = "目录路径不能为空"
+                                errorMessage = pathRequiredMsg
                                 return@Button
                             }
                             scope.launch {
@@ -573,14 +609,14 @@ private fun SetSkillRootDialog(
                                 if (res.isSuccess) {
                                     onDismiss()
                                 } else {
-                                    errorMessage = res.exceptionOrNull()?.message ?: "保存目录失败"
+                                    errorMessage = res.exceptionOrNull()?.message ?: saveDirFailedMsg
                                 }
                             }
                         },
                         enabled = !isSaving && pathText.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
                     ) {
-                        Text(if (isSaving) "保存中..." else "保存", fontSize = 11.sp)
+                        Text(if (isSaving) stringResource(Res.string.skill_saving) else stringResource(Res.string.skill_save), fontSize = 11.sp)
                     }
                 }
             }
@@ -612,14 +648,14 @@ private fun UninstallSkillConfirmDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "卸载技能确认",
+                    text = stringResource(Res.string.skill_uninstall_title),
                     color = colors.textPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
                 )
 
                 Text(
-                    text = "确定要卸载技能「${skill.name}」吗？该技能的整个目录将被删除。",
+                    text = stringResource(Res.string.skill_uninstall_confirm, skill.name),
                     color = colors.textSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
@@ -631,7 +667,7 @@ private fun UninstallSkillConfirmDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = onDismiss, enabled = !isDeleting) {
-                        Text("取消", color = colors.textMuted, fontSize = 11.sp)
+                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Button(
@@ -643,7 +679,7 @@ private fun UninstallSkillConfirmDialog(
                         enabled = !isDeleting,
                         colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger)
                     ) {
-                        Text(if (isDeleting) "正在删除..." else "确认卸载", fontSize = 11.sp)
+                        Text(if (isDeleting) stringResource(Res.string.skill_deleting) else stringResource(Res.string.skill_uninstall_confirm_action), fontSize = 11.sp)
                     }
                 }
             }

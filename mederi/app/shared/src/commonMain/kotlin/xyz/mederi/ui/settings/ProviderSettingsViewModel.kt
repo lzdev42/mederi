@@ -15,7 +15,38 @@ import xyz.mederi.core.contract.models.ProviderType
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.ReasoningConfigInput
+import xyz.mederi.core.ui.UiMessage
 import xyz.mederi.core.ui.appstate.AppState
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.auto_setup_done
+import mederi.app.shared.generated.resources.auto_setup_failed
+import mederi.app.shared.generated.resources.image_override_disabled
+import mederi.app.shared.generated.resources.image_override_enabled
+import mederi.app.shared.generated.resources.key_add_failed
+import mederi.app.shared.generated.resources.key_added
+import mederi.app.shared.generated.resources.key_default_switched
+import mederi.app.shared.generated.resources.key_delete_failed
+import mederi.app.shared.generated.resources.key_deleted
+import mederi.app.shared.generated.resources.key_switch_failed
+import mederi.app.shared.generated.resources.model_add_failed
+import mederi.app.shared.generated.resources.model_added
+import mederi.app.shared.generated.resources.model_batch_update_failed
+import mederi.app.shared.generated.resources.model_config_updated
+import mederi.app.shared.generated.resources.model_delete_failed
+import mederi.app.shared.generated.resources.model_deleted
+import mederi.app.shared.generated.resources.model_metadata_locked
+import mederi.app.shared.generated.resources.model_setting_failed
+import mederi.app.shared.generated.resources.model_update_failed
+import mederi.app.shared.generated.resources.models_sync_none
+import mederi.app.shared.generated.resources.models_sync_success
+import mederi.app.shared.generated.resources.provider_add_failed
+import mederi.app.shared.generated.resources.provider_added_success
+import mederi.app.shared.generated.resources.provider_config_saved
+import mederi.app.shared.generated.resources.provider_created_success
+import mederi.app.shared.generated.resources.provider_delete_failed
+import mederi.app.shared.generated.resources.provider_deleted
+import mederi.app.shared.generated.resources.provider_disconnected
+import mederi.app.shared.generated.resources.provider_save_failed
 
 /**
  * 供应商模型同步状态。
@@ -125,12 +156,12 @@ data class ProviderItemUiState(
 /**
  * 能力过滤标签枚举。
  */
-enum class CapabilityFilter(val label: String) {
-    ALL("全部"),
-    ENABLED_ONLY("仅启用"),
-    REASONING("🧠 Reasoning"),
-    IMAGE("🖼️ Image"),
-    FREE("🆓 免费")
+enum class CapabilityFilter {
+    ALL,
+    ENABLED_ONLY,
+    REASONING,
+    IMAGE,
+    FREE
 }
 
 /**
@@ -152,8 +183,8 @@ data class ProviderSettingsUiState(
     val searchQuery: String = "",
     val capabilityFilter: CapabilityFilter = CapabilityFilter.ALL,
     val isSavingCredentials: Boolean = false,
-    val successMessage: String? = null,
-    val errorMessage: String? = null
+    val successMessage: UiMessage? = null,
+    val errorMessage: UiMessage? = null
 ) {
     /** 当前选中的供应商 */
     val selectedProvider: ProviderItemUiState?
@@ -256,7 +287,7 @@ class ProviderSettingsViewModel(
                         isSavingCredentials = false,
                         selectedProviderId = config.id,
                         isCreatingCustom = false,
-                        successMessage = "已成功添加供应商 ${config.name}"
+                        successMessage = UiMessage(Res.string.provider_added_success, listOf(config.name))
                     )
                     if (config.isConnected) {
                         autoFetchModels(config.id)
@@ -265,7 +296,7 @@ class ProviderSettingsViewModel(
                 onFailure = { e ->
                     uiState = uiState.copy(
                         isSavingCredentials = false,
-                        errorMessage = "添加供应商失败: ${e.message}"
+                        errorMessage = UiMessage(Res.string.provider_add_failed, listOf(e.message ?: "?"))
                     )
                 }
             )
@@ -416,7 +447,7 @@ class ProviderSettingsViewModel(
                             isSavingCredentials = false,
                             selectedProviderId = config.id,
                             isCreatingCustom = false,
-                            successMessage = "已成功创建自定义供应商"
+                            successMessage = UiMessage(Res.string.provider_created_success)
                         )
                         if (config.isConnected) {
                             autoFetchModels(config.id)
@@ -425,7 +456,7 @@ class ProviderSettingsViewModel(
                     onFailure = { e ->
                         uiState = uiState.copy(
                             isSavingCredentials = false,
-                            errorMessage = "保存失败: ${e.message}"
+                            errorMessage = UiMessage(Res.string.provider_save_failed, listOf(e.message ?: "?"))
                         )
                     }
                 )
@@ -444,7 +475,7 @@ class ProviderSettingsViewModel(
                         uiState = uiState.copy(
                             isSavingCredentials = false,
                             selectedProviderId = providerId,
-                            successMessage = "供应商配置已保存"
+                            successMessage = UiMessage(Res.string.provider_config_saved)
                         )
                         if (apiKey.isNotBlank()) {
                             autoFetchModels(providerId)
@@ -453,7 +484,7 @@ class ProviderSettingsViewModel(
                     onFailure = { e ->
                         uiState = uiState.copy(
                             isSavingCredentials = false,
-                            errorMessage = "保存失败: ${e.message}"
+                            errorMessage = UiMessage(Res.string.provider_save_failed, listOf(e.message ?: "?"))
                         )
                     }
                 )
@@ -476,7 +507,7 @@ class ProviderSettingsViewModel(
             for (key in keys) {
                 appState.aiCore.deleteProviderApiKey(providerId, key.id)
             }
-            uiState = uiState.copy(successMessage = "已断开连接")
+            uiState = uiState.copy(successMessage = UiMessage(Res.string.provider_disconnected))
         }
     }
 
@@ -503,8 +534,8 @@ class ProviderSettingsViewModel(
     fun addApiKey(providerId: String, name: String, key: String, isDefault: Boolean = false) {
         viewModelScope.launch {
             appState.aiCore.addProviderApiKey(providerId, name, key, isDefault)
-                .onSuccess { uiState = uiState.copy(successMessage = "已添加 API Key") }
-                .onFailure { uiState = uiState.copy(errorMessage = "添加 Key 失败: ${it.message}") }
+                .onSuccess { uiState = uiState.copy(successMessage = UiMessage(Res.string.key_added)) }
+                .onFailure { uiState = uiState.copy(errorMessage = UiMessage(Res.string.key_add_failed, listOf(it.message ?: "?"))) }
         }
     }
 
@@ -523,8 +554,8 @@ class ProviderSettingsViewModel(
     fun setDefaultApiKey(providerId: String, keyId: String) {
         viewModelScope.launch {
             appState.aiCore.setDefaultProviderApiKey(providerId, keyId)
-                .onSuccess { uiState = uiState.copy(successMessage = "已切换默认 Key") }
-                .onFailure { uiState = uiState.copy(errorMessage = "切换失败: ${it.message}") }
+                .onSuccess { uiState = uiState.copy(successMessage = UiMessage(Res.string.key_default_switched)) }
+                .onFailure { uiState = uiState.copy(errorMessage = UiMessage(Res.string.key_switch_failed, listOf(it.message ?: "?"))) }
         }
     }
 
@@ -539,8 +570,8 @@ class ProviderSettingsViewModel(
     fun deleteApiKey(providerId: String, keyId: String) {
         viewModelScope.launch {
             appState.aiCore.deleteProviderApiKey(providerId, keyId)
-                .onSuccess { uiState = uiState.copy(successMessage = "已删除 API Key") }
-                .onFailure { uiState = uiState.copy(errorMessage = "删除失败: ${it.message}") }
+                .onSuccess { uiState = uiState.copy(successMessage = UiMessage(Res.string.key_deleted)) }
+                .onFailure { uiState = uiState.copy(errorMessage = UiMessage(Res.string.key_delete_failed, listOf(it.message ?: "?"))) }
         }
     }
 
@@ -554,11 +585,11 @@ class ProviderSettingsViewModel(
                         providers = updated,
                         selectedProviderId = updated.firstOrNull()?.id,
                         isCreatingCustom = false,
-                        successMessage = "已删除供应商"
+                        successMessage = UiMessage(Res.string.provider_deleted)
                     )
                 },
                 onFailure = { e ->
-                    uiState = uiState.copy(errorMessage = "删除失败: ${e.message}")
+                    uiState = uiState.copy(errorMessage = UiMessage(Res.string.provider_delete_failed, listOf(e.message ?: "?")))
                 }
             )
         }
@@ -579,12 +610,12 @@ class ProviderSettingsViewModel(
                         // 远端没返回任何模型：明确提示，让用户手动填模型参数
                         updateProviderSyncStatus(providerId, ModelsSyncStatus.Empty)
                         uiState = uiState.copy(
-                            errorMessage = "远端未返回任何模型，请手动添加模型参数"
+                            errorMessage = UiMessage(Res.string.models_sync_none)
                         )
                     } else {
                         updateProviderSyncStatus(providerId, ModelsSyncStatus.Success(modelIds.size, "/models"))
                         uiState = uiState.copy(
-                            successMessage = "已通过 /models 自动同步 ${modelIds.size} 个模型"
+                            successMessage = UiMessage(Res.string.models_sync_success, listOf(modelIds.size))
                         )
                     }
                 },
@@ -593,7 +624,7 @@ class ProviderSettingsViewModel(
                     val status = if (msg.contains("404") || msg.contains("not found")) {
                         ModelsSyncStatus.UnsupportedEndpoint
                     } else {
-                        ModelsSyncStatus.Error("拉取失败: $msg")
+                        ModelsSyncStatus.Error(msg)
                     }
                     updateProviderSyncStatus(providerId, status)
                 }
@@ -627,7 +658,7 @@ class ProviderSettingsViewModel(
                 onFailure = { e ->
                     // 失败回滚
                     applyModelEnabledLocal(providerId, modelId, current.isEnabled)
-                    uiState = uiState.copy(errorMessage = "更新失败: ${e.message}")
+                    uiState = uiState.copy(errorMessage = UiMessage(Res.string.model_update_failed, listOf(e.message ?: "?")))
                 }
             )
         }
@@ -650,7 +681,7 @@ class ProviderSettingsViewModel(
             }
             if (failure != null) {
                 // 有失败：整体回滚到操作前快照
-                uiState = uiState.copy(providers = snapshot, errorMessage = "批量更新失败: $failure")
+                uiState = uiState.copy(providers = snapshot, errorMessage = UiMessage(Res.string.model_batch_update_failed, listOf(failure)))
             }
         }
     }
@@ -693,10 +724,10 @@ class ProviderSettingsViewModel(
             )
             result.fold(
                 onSuccess = {
-                    uiState = uiState.copy(successMessage = "已添加模型: ${name.ifBlank { cleanModelId }}")
+                    uiState = uiState.copy(successMessage = UiMessage(Res.string.model_added, listOf(name.ifBlank { cleanModelId })))
                 },
                 onFailure = { e ->
-                    uiState = uiState.copy(errorMessage = "添加失败: ${e.message}")
+                    uiState = uiState.copy(errorMessage = UiMessage(Res.string.model_add_failed, listOf(e.message ?: "?")))
                 }
             )
         }
@@ -716,7 +747,7 @@ class ProviderSettingsViewModel(
         // 这里兜底拦一次，防止调用方绕过对话框状态直接发起
         val target = uiState.providers.find { it.id == providerId }?.models?.find { it.id == modelId }
         if (target?.origin == ModelOrigin.FETCHED) {
-            uiState = uiState.copy(errorMessage = "该模型元数据来自模型目录，不可编辑（如需自定义请删除后手动添加）")
+            uiState = uiState.copy(errorMessage = UiMessage(Res.string.model_metadata_locked))
             return
         }
         viewModelScope.launch {
@@ -732,10 +763,10 @@ class ProviderSettingsViewModel(
             )
             result.fold(
                 onSuccess = {
-                    uiState = uiState.copy(successMessage = "模型配置已更新")
+                    uiState = uiState.copy(successMessage = UiMessage(Res.string.model_config_updated))
                 },
                 onFailure = { e ->
-                    uiState = uiState.copy(errorMessage = "更新失败: ${e.message}")
+                    uiState = uiState.copy(errorMessage = UiMessage(Res.string.model_update_failed, listOf(e.message ?: "?")))
                 }
             )
         }
@@ -754,10 +785,12 @@ class ProviderSettingsViewModel(
             )
             result.fold(
                 onSuccess = {
-                    uiState = uiState.copy(successMessage = if (supported) "已设置支持图片（用户覆盖，不会被目录同步覆盖）" else "已设置不支持图片（用户覆盖）")
+                    uiState = uiState.copy(
+                        successMessage = if (supported) UiMessage(Res.string.image_override_enabled) else UiMessage(Res.string.image_override_disabled)
+                    )
                 },
                 onFailure = { e ->
-                    uiState = uiState.copy(errorMessage = "设置失败: ${e.message}")
+                    uiState = uiState.copy(errorMessage = UiMessage(Res.string.model_setting_failed, listOf(e.message ?: "?")))
                 }
             )
         }
@@ -771,10 +804,10 @@ class ProviderSettingsViewModel(
         viewModelScope.launch {
             appState.aiCore.autoSetupProviderModels(providerId).fold(
                 onSuccess = { n ->
-                    uiState = uiState.copy(successMessage = "自动设置完成：更新 $n 个模型（用户覆盖不受影响）")
+                    uiState = uiState.copy(successMessage = UiMessage(Res.string.auto_setup_done, listOf(n)))
                 },
                 onFailure = { e ->
-                    uiState = uiState.copy(errorMessage = "自动设置失败: ${e.message}")
+                    uiState = uiState.copy(errorMessage = UiMessage(Res.string.auto_setup_failed, listOf(e.message ?: "?")))
                 }
             )
         }
@@ -785,10 +818,10 @@ class ProviderSettingsViewModel(
             val result = appState.aiCore.deleteProviderModel(providerId, modelId)
             result.fold(
                 onSuccess = {
-                    uiState = uiState.copy(successMessage = "已删除模型")
+                    uiState = uiState.copy(successMessage = UiMessage(Res.string.model_deleted))
                 },
                 onFailure = { e ->
-                    uiState = uiState.copy(errorMessage = "删除失败: ${e.message}")
+                    uiState = uiState.copy(errorMessage = UiMessage(Res.string.model_delete_failed, listOf(e.message ?: "?")))
                 }
             )
         }

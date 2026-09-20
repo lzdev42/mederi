@@ -17,7 +17,45 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.auto_approve_title
+import mederi.app.shared.generated.resources.auto_approve_tooltip_main
+import mederi.app.shared.generated.resources.auto_approve_tooltip_note
+import mederi.app.shared.generated.resources.close
+import mederi.app.shared.generated.resources.image_stripped_notice
+import mederi.app.shared.generated.resources.input_default_key
+import mederi.app.shared.generated.resources.input_default_tag
+import mederi.app.shared.generated.resources.input_image_n
+import mederi.app.shared.generated.resources.input_image_unsupported
+import mederi.app.shared.generated.resources.input_model_mode_settings
+import mederi.app.shared.generated.resources.input_no_project
+import mederi.app.shared.generated.resources.input_open_project
+import mederi.app.shared.generated.resources.input_over_budget
+import mederi.app.shared.generated.resources.input_pending_image_thumbnail
+import mederi.app.shared.generated.resources.input_pasted_text_n
+import mederi.app.shared.generated.resources.input_placeholder
+import mederi.app.shared.generated.resources.input_project_needed_create
+import mederi.app.shared.generated.resources.input_project_needed_select
+import mederi.app.shared.generated.resources.input_provider_default
+import mederi.app.shared.generated.resources.input_reasoning_level
+import mederi.app.shared.generated.resources.input_remove_image
+import mederi.app.shared.generated.resources.input_remove_text
+import mederi.app.shared.generated.resources.input_select_model
+import mederi.app.shared.generated.resources.input_select_project
+import mederi.app.shared.generated.resources.input_selected
+import mederi.app.shared.generated.resources.input_send
+import mederi.app.shared.generated.resources.input_stop
+import mederi.app.shared.generated.resources.input_text_meta
+import mederi.app.shared.generated.resources.input_text_n
+import mederi.app.shared.generated.resources.input_thinking_label
+import mederi.app.shared.generated.resources.reasoning_level_high
+import mederi.app.shared.generated.resources.reasoning_level_low
+import mederi.app.shared.generated.resources.reasoning_level_max
+import mederi.app.shared.generated.resources.reasoning_level_medium
+import mederi.app.shared.generated.resources.reasoning_level_none
+import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -38,11 +76,9 @@ import compose.icons.feathericons.Image
 import compose.icons.feathericons.Key
 import compose.icons.feathericons.Paperclip
 import compose.icons.feathericons.Plus
-import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.X
-import compose.icons.feathericons.Zap
 import xyz.emuci.inkcompose.InkImage
 import xyz.mederi.util.PlatformClipboard
 import xyz.mederi.util.PromptComposer
@@ -64,12 +100,14 @@ import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.util.formatContextWindow
 
+/** 推理档位显示名（唯一映射点，桌面下拉与移动端抽屉共用；未知档位回显原始值）。 */
+@Composable
 fun formatReasoningLevelLabel(level: String): String = when (level.uppercase()) {
-    "LOW" -> "低"
-    "MEDIUM" -> "中"
-    "HIGH" -> "高"
-    "MAX" -> "最大"
-    "NONE", "OFF" -> "关闭"
+    "LOW" -> stringResource(Res.string.reasoning_level_low)
+    "MEDIUM" -> stringResource(Res.string.reasoning_level_medium)
+    "HIGH" -> stringResource(Res.string.reasoning_level_high)
+    "MAX" -> stringResource(Res.string.reasoning_level_max)
+    "NONE", "OFF" -> stringResource(Res.string.reasoning_level_none)
     else -> level
 }
 
@@ -129,6 +167,8 @@ fun ChatInputCard(
     val isWaitingPlanApproval = viewModel.pendingPlanApproval != null
     val isStreaming = viewModel.isWorking && !isWaitingPlanApproval
     val errorMessage = viewModel.error
+    // 一次性轻提示：发送时图片被剔除放行（值为模型名，null=不显示），非错误走 error
+    val imageStrippedNotice = viewModel.imageStrippedNotice
     val hasContent = textValue.text.trim().isNotEmpty() || pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()
     val canSend = hasContent && !isStreaming && !isOverBudget
 
@@ -216,8 +256,8 @@ fun ChatInputCard(
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
-                    text = if (projects.isEmpty()) "还没有项目：点击创建一个项目后才能开始对话"
-                           else "先选择一个项目才能开始对话，点击此处选择",
+                    text = if (projects.isEmpty()) stringResource(Res.string.input_project_needed_create)
+                           else stringResource(Res.string.input_project_needed_select),
                     color = guideColor,
                     fontSize = 12.sp,
                     lineHeight = 16.sp,
@@ -266,6 +306,7 @@ fun ChatInputCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         pendingImages.forEachIndexed { i, img ->
+                            val imageTitle = stringResource(Res.string.input_image_n, i + 1)
                             Box(
                                 modifier = Modifier
                                     .size(56.dp)
@@ -273,12 +314,12 @@ fun ChatInputCard(
                                     .background(colors.surfaceInput)
                                     .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
                                     .clickable {
-                                        viewModel.openImageInExtension("图片 #${i + 1}", img.base64DataUrl)
+                                        viewModel.openImageInExtension(imageTitle, img.base64DataUrl)
                                     }
                             ) {
                                 InkImage(
                                     model = img.base64DataUrl,
-                                    contentDescription = "待发送图片缩略图",
+                                    contentDescription = stringResource(Res.string.input_pending_image_thumbnail),
                                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -296,7 +337,7 @@ fun ChatInputCard(
                                 ) {
                                     Icon(
                                         imageVector = FeatherIcons.X,
-                                        contentDescription = "移除图片",
+                                        contentDescription = stringResource(Res.string.input_remove_image),
                                         tint = Color.White,
                                         modifier = Modifier.size(10.dp)
                                     )
@@ -305,6 +346,7 @@ fun ChatInputCard(
                         }
 
                         pendingPastedTexts.forEach { item ->
+                            val pastedTitle = stringResource(Res.string.input_pasted_text_n, item.index)
                             Box(
                                 modifier = Modifier
                                     .height(56.dp)
@@ -314,7 +356,7 @@ fun ChatInputCard(
                                     .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
                                     .clickable {
                                         viewModel.openTextInExtension(
-                                            title = "粘贴文本 #${item.index}",
+                                            title = pastedTitle,
                                             content = item.text,
                                             lineCount = item.lineCount,
                                             charCount = item.charCount
@@ -339,7 +381,7 @@ fun ChatInputCard(
                                             modifier = Modifier.size(12.dp)
                                         )
                                         Text(
-                                            text = "文本 #${item.index}",
+                                            text = stringResource(Res.string.input_text_n, item.index),
                                             color = colors.textPrimary,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Medium,
@@ -348,7 +390,7 @@ fun ChatInputCard(
                                         )
                                     }
                                     Text(
-                                        text = "${item.lineCount}行 · ${item.charCount}字",
+                                        text = stringResource(Res.string.input_text_meta, item.lineCount, item.charCount),
                                         color = colors.textMuted,
                                         fontSize = 10.sp,
                                         maxLines = 1
@@ -368,7 +410,7 @@ fun ChatInputCard(
                                 ) {
                                     Icon(
                                         imageVector = FeatherIcons.X,
-                                        contentDescription = "移除文本",
+                                        contentDescription = stringResource(Res.string.input_remove_text),
                                         tint = Color.White,
                                         modifier = Modifier.size(10.dp)
                                     )
@@ -385,7 +427,7 @@ fun ChatInputCard(
                     // 图片门禁内联提示：挂了图片但当前模型不支持（如切换模型后），发送会被拦截
                     if (pendingImages.isNotEmpty() && !modelSupportsImages) {
                         Text(
-                            text = "当前模型不支持图片输入，发送前请移除图片或切换模型",
+                            text = stringResource(Res.string.input_image_unsupported),
                             color = colors.accentWarning,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
@@ -396,13 +438,46 @@ fun ChatInputCard(
 
                 if (isOverBudget) {
                     Text(
-                        text = "内容总计约 $totalInputChars 字符，超出单次安全预算（上限 $maxSafeChars 字符），请裁剪后发送",
+                        text = stringResource(Res.string.input_over_budget, totalInputChars, maxSafeChars),
                         color = colors.accentDanger,
                         fontSize = 11.sp,
                         lineHeight = 15.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
+                }
+
+                // 图片已剔除轻提示（非错误样式）：发送时模型不支持图片、图片被剔除放行后显示；
+                // 下次输入/发送或点右上角 × 后消失（VM imageStrippedNotice 一次性语义）
+                imageStrippedNotice?.let { modelName ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(colors.accentSecondary.copy(alpha = 0.15f))
+                            .padding(start = 10.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.image_stripped_notice, modelName),
+                            color = colors.accentSecondary,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = FeatherIcons.X,
+                            contentDescription = stringResource(Res.string.close),
+                            tint = colors.textSecondary,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .clickable { viewModel.dismissImageStrippedNotice() }
+                                .padding(2.dp)
+                        )
+                    }
                 }
 
                 // 第二层：输入文本区域（最小高度 44dp）
@@ -416,7 +491,7 @@ fun ChatInputCard(
                     ),
                     placeholder = {
                         Text(
-                            text = "输入消息...",
+                            text = stringResource(Res.string.input_placeholder),
                             color = colors.textMuted,
                             fontSize = 13.5.sp,
                             lineHeight = 21.sp
@@ -523,7 +598,7 @@ fun ChatInputCard(
                                 ApiKeySelectorMenu(viewModel = viewModel)
                                 ChipSelectorPill(
                                     icon = FeatherIcons.Cpu,
-                                    label = (selectedModel?.name ?: "选择模型").take(12),
+                                    label = (selectedModel?.name ?: stringResource(Res.string.input_select_model)).take(12),
                                     onClick = { isMobileSheetOpen = true },
                                     height = 40.dp
                                 )
@@ -610,7 +685,7 @@ private fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) {
 
     Box {
         ChipSelectorPill(
-            label = selectedModel?.name ?: "选择模型",
+            label = selectedModel?.name ?: stringResource(Res.string.input_select_model),
             onClick = { expanded = true }
         )
         DropdownMenu(
@@ -706,7 +781,7 @@ private fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) {
                                     if (isSelected) {
                                         Icon(
                                             imageVector = FeatherIcons.Check,
-                                            contentDescription = "已选择",
+                                            contentDescription = stringResource(Res.string.input_selected),
                                             tint = colors.accentPrimary,
                                             modifier = Modifier.size(14.dp)
                                         )
@@ -754,7 +829,7 @@ private fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
     Box {
         ChipSelectorPill(
             icon = FeatherIcons.Key,
-            label = selectedKey?.name ?: "默认 Key",
+            label = selectedKey?.name ?: stringResource(Res.string.input_default_key),
             onClick = { expanded = true }
         )
         DropdownMenu(
@@ -775,7 +850,7 @@ private fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "供应商默认",
+                            text = stringResource(Res.string.input_provider_default),
                             fontSize = 12.sp,
                             fontWeight = if (selectedId == null) FontWeight.SemiBold else FontWeight.Medium,
                             color = if (selectedId == null) colors.accentPrimary else colors.textPrimary
@@ -821,7 +896,7 @@ private fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
                                                 .background(colors.accentSecondary.copy(alpha = 0.15f))
                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                         ) {
-                                            Text("默认", fontSize = 9.sp, color = colors.accentSecondary, fontWeight = FontWeight.Medium, maxLines = 1)
+                                            Text(stringResource(Res.string.input_default_tag), fontSize = 9.sp, color = colors.accentSecondary, fontWeight = FontWeight.Medium, maxLines = 1)
                                         }
                                     }
                                 }
@@ -861,15 +936,15 @@ private fun ThinkingLevelMenu(viewModel: WorkspaceViewModel) {
 
     // 唯一真理源：订阅 effectiveThinkingLevel（ReasoningMenu.resolve 推导的派生流）。
     // 模型切换/档位记忆更新自动重算；null（推导链未就绪，正常不会发生）时不渲染，不做兜底回退
-    val currentLevel by viewModel.effectiveThinkingLevel.collectAsState()
-    if (currentLevel == null) return
+    val currentLevel = viewModel.effectiveThinkingLevel.collectAsState().value ?: return
+    if (currentLevel.isBlank()) return
 
     var expanded by remember { mutableStateOf(false) }
 
     Box {
         ChipSelectorPill(
             icon = FeatherIcons.Sliders,
-            label = "推理: ${formatReasoningLevelLabel(currentLevel!!)}",
+            label = stringResource(Res.string.input_thinking_label, formatReasoningLevelLabel(currentLevel)),
             onClick = { expanded = true }
         )
         DropdownMenu(
@@ -948,7 +1023,7 @@ private fun ProjectSelectorMenu(
         } else {
             ContextToolChip(
                 icon = FeatherIcons.Folder,
-                label = selectedProject?.name ?: "选择项目",
+                label = selectedProject?.name ?: stringResource(Res.string.input_select_project),
                 onClick = { expanded = true },
                 highlight = highlight
             )
@@ -962,7 +1037,7 @@ private fun ProjectSelectorMenu(
         ) {
             if (selectedProjectId != null) {
                 DropdownMenuItem(
-                    text = { Text("未选择项目", fontSize = 11.5.sp, color = colors.textSecondary) },
+                    text = { Text(stringResource(Res.string.input_no_project), fontSize = 11.5.sp, color = colors.textSecondary) },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     onClick = {
                         onSelect(null)
@@ -987,7 +1062,7 @@ private fun ProjectSelectorMenu(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(FeatherIcons.Plus, null, tint = colors.accentPrimary, modifier = Modifier.size(11.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("打开项目目录...", fontSize = 11.5.sp, color = colors.accentPrimary, fontWeight = FontWeight.Medium)
+                        Text(stringResource(Res.string.input_open_project), fontSize = 11.5.sp, color = colors.accentPrimary, fontWeight = FontWeight.Medium)
                     }
                 },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -1000,15 +1075,71 @@ private fun ProjectSelectorMenu(
     }
 }
 
-/** 执行策略分段选择器（自主 / 审批）。选中态订阅 AppState 派生流（唯一真理源）。 */
+/** 自动审批开关与说明气泡。选中态订阅 AppState 派生流（唯一真理源）。 */
 @Composable
 private fun AgentModeSelector(viewModel: WorkspaceViewModel) {
     val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
-    SegmentedControl(
-        items = AGENT_MODE_ITEMS,
-        selectedKey = selectedAgentMode,
-        onSelect = { mode -> viewModel.selectAgentMode(mode) },
-        height = 28.dp
+    val isAutoApprove = selectedAgentMode == AgentMode.AUTONOMOUS
+    val colors = LocalMederiColors.current
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable {
+                viewModel.selectAgentMode(if (isAutoApprove) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
+            }
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = stringResource(Res.string.auto_approve_title),
+            color = colors.textSecondary,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Medium
+        )
+        HelpCircleTooltip(
+            mainText = stringResource(Res.string.auto_approve_tooltip_main),
+            noteText = stringResource(Res.string.auto_approve_tooltip_note),
+            touchTargetSize = 20.dp,
+            iconSize = 13.dp
+        )
+        AutoApproveSwitch(
+            viewModel = viewModel,
+            scale = 0.65f,
+            switchWidth = 30.dp,
+            switchHeight = 20.dp
+        )
+    }
+}
+
+/**
+ * 自动审批开关（桌面输入条与移动端设置抽屉共用）。
+ * 唯一真理源 = viewModel.selectedAgentMode，写入走 selectAgentMode。
+ */
+@Composable
+private fun AutoApproveSwitch(
+    viewModel: WorkspaceViewModel,
+    scale: Float,
+    switchWidth: Dp,
+    switchHeight: Dp,
+) {
+    val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
+    val colors = LocalMederiColors.current
+    Switch(
+        checked = selectedAgentMode == AgentMode.AUTONOMOUS,
+        onCheckedChange = { checked ->
+            viewModel.selectAgentMode(if (checked) AgentMode.AUTONOMOUS else AgentMode.APPROVAL)
+        },
+        modifier = Modifier
+            .scale(scale)
+            .size(width = switchWidth, height = switchHeight),
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = Color.White,
+            checkedTrackColor = colors.accentPrimary,
+            uncheckedThumbColor = colors.textMuted,
+            uncheckedTrackColor = colors.buttonSecondary
+        )
     )
 }
 
@@ -1040,18 +1171,12 @@ private fun SendButton(
         contentAlignment = Alignment.Center
     ) {
         if (isStreaming) {
-            Icon(FeatherIcons.Square, "停止生成", tint = iconColor, modifier = Modifier.size(size * 0.37f))
+            Icon(FeatherIcons.Square, stringResource(Res.string.input_stop), tint = iconColor, modifier = Modifier.size(size * 0.37f))
         } else {
-            Icon(FeatherIcons.ArrowUp, "发送", tint = iconColor, modifier = Modifier.size(size * 0.48f))
+            Icon(FeatherIcons.ArrowUp, stringResource(Res.string.input_send), tint = iconColor, modifier = Modifier.size(size * 0.48f))
         }
     }
 }
-
-/** 执行策略分段选项（不可变常量，多处复用） */
-private val AGENT_MODE_ITEMS = listOf(
-    SegmentItem(AgentMode.AUTONOMOUS, "自主", FeatherIcons.Zap),
-    SegmentItem(AgentMode.APPROVAL, "审批", FeatherIcons.Shield)
-)
 
 @Composable
 private fun ChipSelectorPill(
@@ -1177,7 +1302,6 @@ private fun MobileModelBottomSheet(
     val models by appState.availableModels.collectAsState()
     val providers by appState.providers.collectAsState()
     val selectedModel by appState.selectedModel.collectAsState()
-    val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
     val currentLevel by viewModel.effectiveThinkingLevel.collectAsState()
     val providerNameMap = remember(providers) { providers.associate { it.id to it.name } }
     val groupedModels = remember(models) { models.groupBy { it.provider } }
@@ -1225,14 +1349,14 @@ private fun MobileModelBottomSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "模型与模式设置",
+                        text = stringResource(Res.string.input_model_mode_settings),
                         color = colors.textPrimary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Icon(
                         imageVector = FeatherIcons.X,
-                        contentDescription = "关闭",
+                        contentDescription = stringResource(Res.string.close),
                         tint = colors.textMuted,
                         modifier = Modifier
                             .size(20.dp)
@@ -1250,26 +1374,42 @@ private fun MobileModelBottomSheet(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // 1. 执行策略（自主 / 审批）
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "执行策略",
-                            color = colors.textSecondary,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        SegmentedControl(
-                            items = AGENT_MODE_ITEMS,
-                            selectedKey = selectedAgentMode,
-                            onSelect = { mode -> viewModel.selectAgentMode(mode) },
-                            height = 34.dp,
-                            equalWeight = true
+                    // 1. 自动审批开关
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = stringResource(Res.string.auto_approve_title),
+                                color = colors.textPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            HelpCircleTooltip(
+                                mainText = stringResource(Res.string.auto_approve_tooltip_main),
+                                noteText = stringResource(Res.string.auto_approve_tooltip_note),
+                                touchTargetSize = 24.dp,
+                                iconSize = 14.dp
+                            )
+                        }
+                        AutoApproveSwitch(
+                            viewModel = viewModel,
+                            scale = 0.8f,
+                            switchWidth = 36.dp,
+                            switchHeight = 22.dp
                         )
                     }
 
                     // 2. 推理等级选择（条件显示：仅当前模型支持推理且生效档位已推导出时展示）
-                    if (selectedModel?.supportsThinking == true && selectedModel?.reasoningLevels?.isNotEmpty() == true && currentLevel != null) {
-                        val levels = selectedModel!!.reasoningLevels
+                    val sheetModel = selectedModel
+                    val sheetCurrentLevel = currentLevel
+                    if (sheetModel?.supportsThinking == true && sheetModel.reasoningLevels.isNotEmpty() && sheetCurrentLevel != null) {
+                        val levels = sheetModel.reasoningLevels
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1282,7 +1422,7 @@ private fun MobileModelBottomSheet(
                                     modifier = Modifier.size(13.dp)
                                 )
                                 Text(
-                                    text = "推理等级 (Reasoning Level)",
+                                    text = stringResource(Res.string.input_reasoning_level),
                                     color = colors.textSecondary,
                                     fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Medium
@@ -1294,7 +1434,7 @@ private fun MobileModelBottomSheet(
                             ) {
                                 // NONE（关闭）为 levels 首项（ReasoningMenu 推导），统一渲染
                                 levels.forEach { lvl ->
-                                    val isSelected = currentLevel.equals(lvl, ignoreCase = true)
+                                val isSelected = sheetCurrentLevel.equals(lvl, ignoreCase = true)
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
@@ -1324,7 +1464,7 @@ private fun MobileModelBottomSheet(
                     // 3. 模型列表
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = "选择模型",
+                            text = stringResource(Res.string.input_select_model),
                             color = colors.textSecondary,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Medium
@@ -1427,7 +1567,7 @@ private fun MobileModelBottomSheet(
                                             if (isSelected) {
                                                 Icon(
                                                     imageVector = FeatherIcons.Check,
-                                                    contentDescription = "已选择",
+                                                    contentDescription = stringResource(Res.string.input_selected),
                                                     tint = colors.accentPrimary,
                                                     modifier = Modifier.size(15.dp)
                                                 )

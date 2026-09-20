@@ -25,6 +25,20 @@ import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Search
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.subagentui_agent_id
+import mederi.app.shared.generated.resources.subagentui_briefing
+import mederi.app.shared.generated.resources.subagentui_empty
+import mederi.app.shared.generated.resources.subagentui_role_executor
+import mederi.app.shared.generated.resources.subagentui_role_researcher
+import mederi.app.shared.generated.resources.subagentui_status_completed
+import mederi.app.shared.generated.resources.subagentui_status_error
+import mederi.app.shared.generated.resources.subagentui_status_running
+import mederi.app.shared.generated.resources.subagentui_status_stopped
+import mederi.app.shared.generated.resources.subagentui_tracker_title
+import mederi.app.shared.generated.resources.worktrace_collapse
+import mederi.app.shared.generated.resources.worktrace_expand
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
@@ -39,7 +53,7 @@ fun SubAgentCard(
     var isExpanded by remember { mutableStateOf(isExpandedDefault) }
 
     val roleIcon = if (subagent.role.equals("RESEARCHER", ignoreCase = true)) FeatherIcons.Search else FeatherIcons.Cpu
-    val roleLabel = if (subagent.role.equals("RESEARCHER", ignoreCase = true)) "Researcher" else "Executor"
+    val roleLabel = if (subagent.role.equals("RESEARCHER", ignoreCase = true)) stringResource(Res.string.subagentui_role_researcher) else stringResource(Res.string.subagentui_role_executor)
 
     val modelLabel = buildString {
         append(subagent.modelName.ifBlank { subagent.modelId })
@@ -49,10 +63,10 @@ fun SubAgentCard(
     }
 
     val (statusLabel, statusColor) = when (subagent.status.uppercase()) {
-        "RUNNING" -> "运行中" to colors.accentPrimary
-        "COMPLETED" -> "已完成" to colors.accentSuccess
-        "ERROR" -> "失败" to colors.accentDanger
-        "STOPPED" -> "已终止" to colors.textMuted
+        "RUNNING" -> stringResource(Res.string.subagentui_status_running) to colors.accentPrimary
+        "COMPLETED" -> stringResource(Res.string.subagentui_status_completed) to colors.accentSuccess
+        "ERROR" -> stringResource(Res.string.subagentui_status_error) to colors.accentDanger
+        "STOPPED" -> stringResource(Res.string.subagentui_status_stopped) to colors.textMuted
         else -> subagent.status to colors.textSecondary
     }
 
@@ -123,7 +137,7 @@ fun SubAgentCard(
 
                 Icon(
                     imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                    contentDescription = if (isExpanded) "收起" else "展开",
+                    contentDescription = if (isExpanded) stringResource(Res.string.worktrace_collapse) else stringResource(Res.string.worktrace_expand),
                     tint = colors.textMuted,
                     modifier = Modifier
                         .size(14.dp)
@@ -156,7 +170,7 @@ fun SubAgentCard(
 
                 if (!subagent.briefing.isNullOrBlank()) {
                     Text(
-                        text = "简报: ${subagent.briefing}",
+                        text = stringResource(Res.string.subagentui_briefing, subagent.briefing.orEmpty()),
                         color = colors.textSecondary,
                         fontSize = 10.5.sp,
                         lineHeight = 15.sp
@@ -169,7 +183,7 @@ fun SubAgentCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "ID: ${subagent.agentId}",
+                        text = stringResource(Res.string.subagentui_agent_id, subagent.agentId),
                         color = colors.textMuted,
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace
@@ -203,7 +217,7 @@ fun SubAgentTabContent(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
-            text = "子 AGENT 任务追踪器 (${subagents.size})",
+            text = stringResource(Res.string.subagentui_tracker_title, subagents.size),
             color = colors.textMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
@@ -218,7 +232,7 @@ fun SubAgentTabContent(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "当前会话暂无派生的子 Agent 任务",
+                    text = stringResource(Res.string.subagentui_empty),
                     color = colors.textMuted,
                     fontSize = 11.sp
                 )

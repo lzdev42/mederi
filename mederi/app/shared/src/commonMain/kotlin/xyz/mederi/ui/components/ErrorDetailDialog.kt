@@ -30,6 +30,24 @@ import kotlinx.coroutines.delay
 import xyz.mederi.AppInfo
 import xyz.mederi.getPlatform
 import xyz.mederi.theme.LocalMederiColors
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.close
+import mederi.app.shared.generated.resources.error_report_app_version
+import mederi.app.shared.generated.resources.error_report_client_platform
+import mederi.app.shared.generated.resources.error_report_copy_done
+import mederi.app.shared.generated.resources.error_report_copy_logs
+import mederi.app.shared.generated.resources.error_report_copied_github
+import mederi.app.shared.generated.resources.error_report_details_summary
+import mederi.app.shared.generated.resources.error_report_env_title
+import mederi.app.shared.generated.resources.error_report_fallback_summary
+import mederi.app.shared.generated.resources.error_report_footer
+import mederi.app.shared.generated.resources.error_report_logs_title
+import mederi.app.shared.generated.resources.error_report_no_logs
+import mederi.app.shared.generated.resources.error_report_no_summary
+import mederi.app.shared.generated.resources.error_report_submit_bug
+import mederi.app.shared.generated.resources.error_report_summary_title
+import mederi.app.shared.generated.resources.error_report_title
+import org.jetbrains.compose.resources.stringResource
 
 /**
  * 详细错误诊断报告对话框。
@@ -74,6 +92,9 @@ fun ErrorDetailDialog(
             errorSummary
         }
     }
+    // copyHint 文案在组合上下文取值（Button onClick 不是 @Composable）
+    val copyDoneHint = stringResource(Res.string.error_report_copy_done)
+    val copiedGithubHint = stringResource(Res.string.error_report_copied_github)
 
     // 从诊断报告中提取 Suggestion 恢复建议（如有）——兼容 `Suggestion:`（异常路径）与 `建议：`（collectWarning 断流路径）
     val suggestion = remember(errorDiagnostic) {
@@ -88,20 +109,27 @@ fun ErrorDetailDialog(
     }
 
     // 格式化为 Markdown Bug Report 模板（用于剪贴板复制和 GitHub Issue 内容填充）
-    val bugReportMarkdown = remember(errorSummary, errorDiagnostic) {
+    val envTitle = stringResource(Res.string.error_report_env_title)
+    val appVersionLabel = stringResource(Res.string.error_report_app_version)
+    val platformLabel = stringResource(Res.string.error_report_client_platform)
+    val summaryTitle = stringResource(Res.string.error_report_summary_title)
+    val noSummaryText = stringResource(Res.string.error_report_no_summary)
+    val logsTitle = stringResource(Res.string.error_report_logs_title)
+    val detailsSummary = stringResource(Res.string.error_report_details_summary)
+    val reportFooter = stringResource(Res.string.error_report_footer)
+    val bugReportMarkdown = remember(errorSummary, errorDiagnostic, envTitle, appVersionLabel, platformLabel, summaryTitle, noSummaryText, logsTitle, detailsSummary, reportFooter) {
         buildString {
-            appendLine("### 运行环境")
-            appendLine("- **应用版本**: ${AppInfo.VERSION}")
-            appendLine("- **客户端平台**: ${getPlatform().name}")
+            appendLine("### $envTitle")
+            appendLine("- **$appVersionLabel**: ${AppInfo.VERSION}")
+            appendLine("- **$platformLabel**: ${getPlatform().name}")
             appendLine()
-            appendLine("### 错误简述")
+            appendLine("### $summaryTitle")
             appendLine("```")
-            appendLine(errorSummary.ifBlank { "未指定具体错误" })
+            appendLine(errorSummary.ifBlank { noSummaryText })
             appendLine("```")
-            appendLine()
-            appendLine("### 详细诊断日志")
+            appendLine("### $logsTitle")
             appendLine("<details open>")
-            appendLine("<summary>展开查看诊断详情</summary>")
+            appendLine("<summary>$detailsSummary</summary>")
             appendLine()
             appendLine("```")
             appendLine(errorDiagnostic.ifBlank { errorSummary })
@@ -109,7 +137,7 @@ fun ErrorDetailDialog(
             appendLine("</details>")
             appendLine()
             appendLine("---")
-            appendLine("*由 Mederi 客户端错误诊断系统自动生成*")
+            appendLine("*$reportFooter*")
         }
     }
 
@@ -146,7 +174,7 @@ fun ErrorDetailDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "错误诊断报告",
+                            text = stringResource(Res.string.error_report_title),
                             color = colors.textPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
@@ -154,7 +182,7 @@ fun ErrorDetailDialog(
                     }
                     Icon(
                         imageVector = FeatherIcons.X,
-                        contentDescription = "关闭",
+                        contentDescription = stringResource(Res.string.close),
                         tint = colors.textSecondary,
                         modifier = Modifier
                             .size(18.dp)
@@ -191,7 +219,7 @@ fun ErrorDetailDialog(
                     }
                     SelectionContainer(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = cleanSummary.ifBlank { "执行异常" },
+                            text = cleanSummary.ifBlank { stringResource(Res.string.error_report_fallback_summary) },
                             color = colors.accentDanger,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
@@ -233,7 +261,7 @@ fun ErrorDetailDialog(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "详细诊断日志",
+                        text = stringResource(Res.string.error_report_logs_title),
                         color = colors.textSecondary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium
@@ -251,7 +279,7 @@ fun ErrorDetailDialog(
                     ) {
                         SelectionContainer {
                             Text(
-                                text = errorDiagnostic.ifBlank { errorSummary.ifBlank { "无更详细日志" } },
+                                text = errorDiagnostic.ifBlank { errorSummary.ifBlank { stringResource(Res.string.error_report_no_logs) } },
                                 color = colors.textPrimary,
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 11.sp,
@@ -287,7 +315,7 @@ fun ErrorDetailDialog(
                         OutlinedButton(
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(bugReportMarkdown))
-                                copyHint = "报告已复制到剪贴板"
+                                copyHint = copyDoneHint
                             },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                             shape = RoundedCornerShape(8.dp),
@@ -301,7 +329,7 @@ fun ErrorDetailDialog(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "复制日志",
+                                text = stringResource(Res.string.error_report_copy_logs),
                                 color = colors.textSecondary,
                                 fontSize = 12.sp
                             )
@@ -311,7 +339,7 @@ fun ErrorDetailDialog(
                         Button(
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(bugReportMarkdown))
-                                copyHint = "已复制报告并跳转 GitHub"
+                                copyHint = copiedGithubHint
                                 val issueTitle = "[Bug]: ${cleanSummary.take(80)}".encodeURLParameter()
                                 val issueBody = bugReportMarkdown.encodeURLParameter()
                                 val githubIssueUrl = "https://github.com/lzdev42/mederi/issues/new?title=$issueTitle&body=$issueBody"
@@ -331,7 +359,7 @@ fun ErrorDetailDialog(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "提交Bug",
+                                text = stringResource(Res.string.error_report_submit_bug),
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
@@ -344,7 +372,7 @@ fun ErrorDetailDialog(
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Text(
-                                text = "关闭",
+                                text = stringResource(Res.string.close),
                                 color = colors.textSecondary,
                                 fontSize = 12.sp
                             )

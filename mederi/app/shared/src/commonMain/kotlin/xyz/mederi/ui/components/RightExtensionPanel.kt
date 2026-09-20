@@ -34,8 +34,55 @@ import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.RightDockPanel
 import xyz.mederi.core.ui.ArtifactItem
 import xyz.mederi.core.ui.PlanItem
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.attachment_meta
+import mederi.app.shared.generated.resources.copy_done
+import mederi.app.shared.generated.resources.dock_artifact_empty
+import mederi.app.shared.generated.resources.dock_artifact_empty_hint
+import mederi.app.shared.generated.resources.dock_browser_desktop_only
+import mederi.app.shared.generated.resources.dock_browser_unsupported
+import mederi.app.shared.generated.resources.dock_close_panel
+import mederi.app.shared.generated.resources.dock_compact_context
+import mederi.app.shared.generated.resources.dock_context_metrics
+import mederi.app.shared.generated.resources.dock_context_max
+import mederi.app.shared.generated.resources.dock_context_unset
+import mederi.app.shared.generated.resources.dock_context_used
+import mederi.app.shared.generated.resources.dock_requests_count
+import mederi.app.shared.generated.resources.dock_copy_full
+import mederi.app.shared.generated.resources.dock_cost_title
+import mederi.app.shared.generated.resources.dock_diff_empty
+import mederi.app.shared.generated.resources.dock_diff_empty_hint
+import mederi.app.shared.generated.resources.dock_export_error
+import mederi.app.shared.generated.resources.dock_export_html
+import mederi.app.shared.generated.resources.dock_export_pdf
+import mederi.app.shared.generated.resources.dock_exported
+import mederi.app.shared.generated.resources.dock_exporting
+import mederi.app.shared.generated.resources.dock_fit_window
+import mederi.app.shared.generated.resources.dock_generating
+import mederi.app.shared.generated.resources.dock_html_export_failed
+import mederi.app.shared.generated.resources.dock_no_text_diff
+import mederi.app.shared.generated.resources.dock_original_ratio
+import mederi.app.shared.generated.resources.dock_pdf_export_failed
+import mederi.app.shared.generated.resources.dock_plan_approve
+import mederi.app.shared.generated.resources.pick_file_filter
+import mederi.app.shared.generated.resources.pick_save_file_title
+import mederi.app.shared.generated.resources.dock_plan_empty
+import mederi.app.shared.generated.resources.dock_plan_empty_hint
+import mederi.app.shared.generated.resources.dock_plan_modify
+import mederi.app.shared.generated.resources.dock_plan_pending
+import mederi.app.shared.generated.resources.dock_refresh_changes
+import mederi.app.shared.generated.resources.dock_requests_title
+import mederi.app.shared.generated.resources.rightdock_artifacts
+import mederi.app.shared.generated.resources.rightdock_browser
+import mederi.app.shared.generated.resources.rightdock_diff
+import mederi.app.shared.generated.resources.rightdock_overview
+import mederi.app.shared.generated.resources.rightdock_plan
+import mederi.app.shared.generated.resources.rightdock_sub_agents
+import mederi.app.shared.generated.resources.rightdock_terminal
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.rememberMederiMarkdownTheme
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -192,7 +239,7 @@ private fun RightExtensionPanelContent(
         ) {
             // 独立面板 Header
             SinglePanelHeader(
-                title = panel.title,
+                title = rightDockPanelTitle(panel),
                 icon = panelIcon,
                 onClose = onClose,
                 colors = colors
@@ -282,7 +329,7 @@ private fun SinglePanelHeader(
         ) {
             Icon(
                 FeatherIcons.X,
-                contentDescription = "关闭面板",
+                contentDescription = stringResource(Res.string.dock_close_panel),
                 tint = colors.textMuted,
                 modifier = Modifier.size(13.dp)
             )
@@ -314,14 +361,14 @@ private fun DiffPanelContent(
             )
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "暂无代码变更记录",
+                text = stringResource(Res.string.dock_diff_empty),
                 color = colors.textSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "AI 修改文件或应用 Patch 后，变更将在此呈现",
+                text = stringResource(Res.string.dock_diff_empty_hint),
                 color = colors.textMuted,
                 fontSize = 11.sp
             )
@@ -336,7 +383,7 @@ private fun DiffPanelContent(
             ) {
                 Icon(FeatherIcons.RefreshCw, contentDescription = null, modifier = Modifier.size(12.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("刷新变更", fontSize = 11.sp)
+                Text(stringResource(Res.string.dock_refresh_changes), fontSize = 11.sp)
             }
         }
     } else {
@@ -384,8 +431,9 @@ private fun DiffPanelContent(
             HorizontalDivider(color = colors.divider)
 
             val currentDiff = diffs.find { it.filePath == selectedFilePath } ?: diffs.first()
-            val diffMarkdown = remember(currentDiff) {
-                formatDiffMarkdown(currentDiff)
+            val noDiffText = stringResource(Res.string.dock_no_text_diff)
+            val diffMarkdown = remember(currentDiff, noDiffText) {
+                formatDiffMarkdown(currentDiff, noDiffText)
             }
             Box(
                 modifier = Modifier
@@ -396,14 +444,15 @@ private fun DiffPanelContent(
                 MarkdownView(
                     content = diffMarkdown,
                     modifier = Modifier.fillMaxSize(),
-                    enableScrollOverride = true
+                    enableScrollOverride = true,
+                    markdownTheme = rememberMederiMarkdownTheme()
                 )
             }
         }
     }
 }
 
-private fun formatDiffMarkdown(diff: FileDiff): String {
+private fun formatDiffMarkdown(diff: FileDiff, noDiffText: String): String {
     val sb = StringBuilder()
     sb.append("### `${diff.filePath}`\n\n")
     sb.append("```diff\n")
@@ -414,7 +463,7 @@ private fun formatDiffMarkdown(diff: FileDiff): String {
     } else if (diff.before.isNotEmpty() && diff.after.isEmpty()) {
         beforeLines.forEach { sb.append("- $it\n") }
     } else if (diff.before == diff.after) {
-        sb.append("// 无文本差异\n")
+        sb.append(noDiffText + "\n")
     } else {
         val afterSet = afterLines.toSet()
         val beforeSet = beforeLines.toSet()
@@ -477,14 +526,14 @@ private fun PlanPanelContent(
             )
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "当前会话暂无实施计划",
+                text = stringResource(Res.string.dock_plan_empty),
                 color = colors.textSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "当任务需要复杂规划或进入审批模式时，计划将在此呈现",
+                text = stringResource(Res.string.dock_plan_empty_hint),
                 color = colors.textMuted,
                 fontSize = 11.sp
             )
@@ -502,7 +551,7 @@ private fun PlanPanelContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "计划等待审批中",
+                        text = stringResource(Res.string.dock_plan_pending),
                         color = colors.accentWarning,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold
@@ -518,7 +567,7 @@ private fun PlanPanelContent(
                             modifier = Modifier.height(26.dp),
                             shape = RoundedCornerShape(4.dp)
                         ) {
-                            Text("修改", fontSize = 10.5.sp)
+                            Text(stringResource(Res.string.dock_plan_modify), fontSize = 10.5.sp)
                         }
                         Button(
                             onClick = { viewModel.approvePlan(pending.id, approved = true) },
@@ -530,7 +579,7 @@ private fun PlanPanelContent(
                             modifier = Modifier.height(26.dp),
                             shape = RoundedCornerShape(4.dp)
                         ) {
-                            Text("批准并执行", fontSize = 10.5.sp)
+                            Text(stringResource(Res.string.dock_plan_approve), fontSize = 10.5.sp)
                         }
                     }
                 }
@@ -545,7 +594,8 @@ private fun PlanPanelContent(
                 MarkdownView(
                     content = planContent,
                     modifier = Modifier.fillMaxSize(),
-                    enableScrollOverride = true
+                    enableScrollOverride = true,
+                    markdownTheme = rememberMederiMarkdownTheme()
                 )
             }
         }
@@ -576,14 +626,14 @@ private fun ArtifactsPanelContent(
             )
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "当前暂无打开的产物或附件",
+                text = stringResource(Res.string.dock_artifact_empty),
                 color = colors.textSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "点击聊天中的大图、长文本附件或查看生成产物时在此显示",
+                text = stringResource(Res.string.dock_artifact_empty_hint),
                 color = colors.textMuted,
                 fontSize = 11.sp
             )
@@ -773,14 +823,14 @@ private fun ContextMetricsCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "CONTEXT 指标",
+                text = stringResource(Res.string.dock_context_metrics),
                 color = colors.textMuted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
             Text(
-                text = "$percentText 已用",
+                text = stringResource(Res.string.dock_context_used, percentText),
                 color = colors.accentPrimary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium
@@ -810,7 +860,8 @@ private fun ContextMetricsCard(
                     fontSize = 10.sp
                 )
                 Text(
-                    text = if (hasWindow) "最大 $maxTokens" else "未设置 contextWindow",
+                    text = if (hasWindow) stringResource(Res.string.dock_context_max, maxTokens)
+                           else stringResource(Res.string.dock_context_unset),
                     color = colors.textMuted,
                     fontSize = 10.sp
                 )
@@ -831,9 +882,9 @@ private fun ContextMetricsCard(
                     .padding(vertical = 8.dp, horizontal = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(text = "请求次数", color = colors.textMuted, fontSize = 10.sp)
+                Text(text = stringResource(Res.string.dock_requests_title), color = colors.textMuted, fontSize = 10.sp)
                 Text(
-                    text = "$requestCount 次",
+                    text = stringResource(Res.string.dock_requests_count, requestCount),
                     color = colors.textPrimary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
@@ -849,7 +900,7 @@ private fun ContextMetricsCard(
                     .padding(vertical = 8.dp, horizontal = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(text = "预估成本(参考)", color = colors.textMuted, fontSize = 10.sp)
+                Text(text = stringResource(Res.string.dock_cost_title), color = colors.textMuted, fontSize = 10.sp)
                 Text(
                     text = "$${formatCost(costUsd)}",
                     color = colors.textPrimary,
@@ -882,7 +933,7 @@ private fun ContextMetricsCard(
                     modifier = Modifier.size(12.dp)
                 )
                 Text(
-                    text = "压缩 Context",
+                    text = stringResource(Res.string.dock_compact_context),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -1060,7 +1111,7 @@ private fun ImageViewerTabContent(
                     .padding(horizontal = 8.dp, vertical = 3.dp)
             ) {
                 Text(
-                    text = if (isOriginalScale) "适应窗口" else "原始比例",
+                    text = if (isOriginalScale) stringResource(Res.string.dock_fit_window) else stringResource(Res.string.dock_original_ratio),
                     color = colors.accentPrimary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium
@@ -1119,6 +1170,10 @@ private fun TextReaderTabContent(
     var exportedPdf by remember { mutableStateOf(false) }
 
     var exportError by remember { mutableStateOf<String?>(null) }
+    // 导出错误文案在组合上下文取值（coroutineScope.launch / 回调不是 @Composable）
+    val htmlSaveFailedMsg = stringResource(Res.string.dock_html_export_failed)
+    val pdfExportFailedMsg = stringResource(Res.string.dock_pdf_export_failed)
+    val exportErrorMsg = stringResource(Res.string.dock_export_error)
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -1152,6 +1207,10 @@ private fun TextReaderTabContent(
         val cleaned = title.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
         cleaned.ifBlank { "document" }
     }
+
+    val saveDialogTitle = stringResource(Res.string.pick_save_file_title)
+    val htmlFilterLabel = stringResource(Res.string.pick_file_filter, "HTML", "html")
+    val pdfFilterLabel = stringResource(Res.string.pick_file_filter, "PDF", "pdf")
 
     val infiniteTransition = rememberInfiniteTransition(label = "streamingIndicator")
     val streamGlowAlpha by infiniteTransition.animateFloat(
@@ -1197,7 +1256,7 @@ private fun TextReaderTabContent(
                 )
                 if (charCount > 0 || lineCount > 0) {
                     Text(
-                        text = "($lineCount 行 · $charCount 字符)",
+                        text = stringResource(Res.string.attachment_meta, lineCount, charCount),
                         color = colors.textMuted,
                         fontSize = 11.sp
                     )
@@ -1218,7 +1277,7 @@ private fun TextReaderTabContent(
                                 .background(colors.accentPrimary.copy(alpha = streamGlowAlpha))
                         )
                         Text(
-                            text = "生成中...",
+                            text = stringResource(Res.string.dock_generating),
                             color = colors.accentPrimary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium
@@ -1261,7 +1320,7 @@ private fun TextReaderTabContent(
                         modifier = Modifier.size(12.dp)
                     )
                     Text(
-                        text = if (copied) "已复制" else "复制全文",
+                        text = if (copied) stringResource(Res.string.copy_done) else stringResource(Res.string.dock_copy_full),
                         color = if (copied) colors.accentSuccess else colors.textPrimary,
                         fontSize = 11.sp
                     )
@@ -1282,7 +1341,7 @@ private fun TextReaderTabContent(
                         )
                         .clickable(enabled = !exportingHtml && !exportingPdf) {
                             coroutineScope.launch {
-                                val path = pickSaveFile(safeBaseName, "html") ?: return@launch
+                                val path = pickSaveFile(safeBaseName, "html", saveDialogTitle, htmlFilterLabel) ?: return@launch
                                 exportingHtml = true
                                 try {
                                     val html = MarkdownExporter.toHtml(content, HtmlExportOptions(title = title))
@@ -1291,10 +1350,10 @@ private fun TextReaderTabContent(
                                         exportedHtml = true
                                         openFile(path)
                                     } else {
-                                        exportError = "HTML 保存失败"
+                                        exportError = htmlSaveFailedMsg
                                     }
                                 } catch (e: Exception) {
-                                    exportError = e.message ?: "导出异常"
+                                    exportError = e.message ?: exportErrorMsg
                                 } finally {
                                     exportingHtml = false
                                 }
@@ -1314,9 +1373,9 @@ private fun TextReaderTabContent(
                     )
                     Text(
                         text = when {
-                            exportingHtml -> "导出中..."
-                            exportedHtml -> "已导出"
-                            else -> "导出 HTML"
+                            exportingHtml -> stringResource(Res.string.dock_exporting)
+                            exportedHtml -> stringResource(Res.string.dock_exported)
+                            else -> stringResource(Res.string.dock_export_html)
                         },
                         color = when {
                             exportedHtml -> colors.accentSuccess
@@ -1342,7 +1401,7 @@ private fun TextReaderTabContent(
                         )
                         .clickable(enabled = !exportingHtml && !exportingPdf) {
                             coroutineScope.launch {
-                                val path = pickSaveFile(safeBaseName, "pdf") ?: return@launch
+                                val path = pickSaveFile(safeBaseName, "pdf", saveDialogTitle, pdfFilterLabel) ?: return@launch
                                 exportingPdf = true
                                 try {
                                     val result = MarkdownExporter.toPdf(content, path, PdfExportOptions(title = title))
@@ -1350,10 +1409,10 @@ private fun TextReaderTabContent(
                                         exportedPdf = true
                                         openFile(path)
                                     } else {
-                                        exportError = result.exceptionOrNull()?.message ?: "PDF 导出失败"
+                                        exportError = result.exceptionOrNull()?.message ?: pdfExportFailedMsg
                                     }
                                 } catch (e: Exception) {
-                                    exportError = e.message ?: "导出异常"
+                                    exportError = e.message ?: exportErrorMsg
                                 } finally {
                                     exportingPdf = false
                                 }
@@ -1373,9 +1432,9 @@ private fun TextReaderTabContent(
                     )
                     Text(
                         text = when {
-                            exportingPdf -> "导出中..."
-                            exportedPdf -> "已导出"
-                            else -> "导出 PDF"
+                            exportingPdf -> stringResource(Res.string.dock_exporting)
+                            exportedPdf -> stringResource(Res.string.dock_exported)
+                            else -> stringResource(Res.string.dock_export_pdf)
                         },
                         color = when {
                             exportedPdf -> colors.accentSuccess
@@ -1399,7 +1458,8 @@ private fun TextReaderTabContent(
                 content = content,
                 modifier = Modifier.fillMaxSize(),
                 enableScrollOverride = true,
-                isStreaming = isStreaming
+                isStreaming = isStreaming,
+                markdownTheme = rememberMederiMarkdownTheme()
             )
         }
     }
@@ -1426,20 +1486,20 @@ private fun BrowserPanelContent(
             ) {
                 Icon(
                     imageVector = FeatherIcons.Globe,
-                    contentDescription = "内置浏览器",
+                    contentDescription = stringResource(Res.string.rightdock_browser),
                     tint = colors.textMuted,
                     modifier = Modifier.size(36.dp)
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "当前端不支持内置浏览器",
+                    text = stringResource(Res.string.dock_browser_unsupported),
                     color = colors.textSecondary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "仅桌面版可用；遥控端 / Web 端请使用浏览器自动化任务（camoufox 无头）",
+                    text = stringResource(Res.string.dock_browser_desktop_only),
                     color = colors.textMuted,
                     fontSize = 11.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1451,3 +1511,17 @@ private fun BrowserPanelContent(
 
     host.BrowserContent(colors = colors)
 }
+
+/** 右侧面板标题唯一映射点（枚举不持有表现层文案，i18n 约定）。 */
+@Composable
+private fun rightDockPanelTitle(panel: RightDockPanel): String = stringResource(
+    when (panel) {
+        RightDockPanel.OVERVIEW -> Res.string.rightdock_overview
+        RightDockPanel.DIFF -> Res.string.rightdock_diff
+        RightDockPanel.PLAN -> Res.string.rightdock_plan
+        RightDockPanel.SUB_AGENTS -> Res.string.rightdock_sub_agents
+        RightDockPanel.ARTIFACTS -> Res.string.rightdock_artifacts
+        RightDockPanel.TERMINAL -> Res.string.rightdock_terminal
+        RightDockPanel.BROWSER -> Res.string.rightdock_browser
+    }
+)

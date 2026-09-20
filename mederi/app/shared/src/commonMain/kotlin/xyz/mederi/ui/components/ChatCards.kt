@@ -28,67 +28,114 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import kotlinx.coroutines.delay
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.action_rollback
+import mederi.app.shared.generated.resources.attachment_chars_unit
+import mederi.app.shared.generated.resources.attachment_lines
+import mederi.app.shared.generated.resources.attachment_meta
+import mederi.app.shared.generated.resources.attachment_reader
+import mederi.app.shared.generated.resources.attachment_writing
+import mederi.app.shared.generated.resources.chat_copy_full_turn
+import mederi.app.shared.generated.resources.chat_copy_last_message
+import mederi.app.shared.generated.resources.copy
+import mederi.app.shared.generated.resources.copy_done
+import mederi.app.shared.generated.resources.footer_completed
+import mederi.app.shared.generated.resources.footer_reasoning
+import mederi.app.shared.generated.resources.input_pasted_text_n
+import mederi.app.shared.generated.resources.mode_auto_approve
+import mederi.app.shared.generated.resources.mode_manual_approve
+import mederi.app.shared.generated.resources.plan_approval_approved
+import mederi.app.shared.generated.resources.plan_approval_proceed
+import mederi.app.shared.generated.resources.plan_approval_title
+import mederi.app.shared.generated.resources.plan_approval_title_default
+import mederi.app.shared.generated.resources.question_cancel
+import mederi.app.shared.generated.resources.question_custom_placeholder
+import mederi.app.shared.generated.resources.question_free_input_tag
+import mederi.app.shared.generated.resources.question_input_placeholder
+import mederi.app.shared.generated.resources.question_multi_tag
+import mederi.app.shared.generated.resources.question_next
+import mederi.app.shared.generated.resources.question_prev
+import mederi.app.shared.generated.resources.question_single_tag
+import mederi.app.shared.generated.resources.question_submit
+import mederi.app.shared.generated.resources.question_title
+import mederi.app.shared.generated.resources.reasoning_thinking
+import mederi.app.shared.generated.resources.reasoning_thinking_for
+import mederi.app.shared.generated.resources.reasoning_thought
+import mederi.app.shared.generated.resources.reasoning_thought_for
+import mederi.app.shared.generated.resources.tool_detail_failed_output
+import mederi.app.shared.generated.resources.tool_detail_output
+import mederi.app.shared.generated.resources.tool_detail_report
+import mederi.app.shared.generated.resources.tool_action_ask_many
+import mederi.app.shared.generated.resources.tool_action_ask_one
+import mederi.app.shared.generated.resources.tool_action_ask_running
+import mederi.app.shared.generated.resources.tool_action_edit_many
+import mederi.app.shared.generated.resources.tool_action_edit_one
+import mederi.app.shared.generated.resources.tool_action_edit_running
+import mederi.app.shared.generated.resources.tool_action_edit_running_target
+import mederi.app.shared.generated.resources.tool_action_edit_target
+import mederi.app.shared.generated.resources.tool_action_failed_suffix
+import mederi.app.shared.generated.resources.tool_action_list_many
+import mederi.app.shared.generated.resources.tool_action_list_one
+import mederi.app.shared.generated.resources.tool_action_list_running
+import mederi.app.shared.generated.resources.tool_action_list_running_target
+import mederi.app.shared.generated.resources.tool_action_list_target
+import mederi.app.shared.generated.resources.tool_action_mcp_many
+import mederi.app.shared.generated.resources.tool_action_mcp_running_target
+import mederi.app.shared.generated.resources.tool_action_mcp_target
+import mederi.app.shared.generated.resources.tool_action_other_many
+import mederi.app.shared.generated.resources.tool_action_other_running
+import mederi.app.shared.generated.resources.tool_action_other_running_target
+import mederi.app.shared.generated.resources.tool_action_other_target
+import mederi.app.shared.generated.resources.tool_action_read_many
+import mederi.app.shared.generated.resources.tool_action_read_one
+import mederi.app.shared.generated.resources.tool_action_read_running
+import mederi.app.shared.generated.resources.tool_action_read_running_target
+import mederi.app.shared.generated.resources.tool_action_read_target
+import mederi.app.shared.generated.resources.tool_action_run_many
+import mederi.app.shared.generated.resources.tool_action_run_one
+import mederi.app.shared.generated.resources.tool_action_run_running
+import mederi.app.shared.generated.resources.tool_action_run_running_target
+import mederi.app.shared.generated.resources.tool_action_run_target
+import mederi.app.shared.generated.resources.tool_action_search_many
+import mederi.app.shared.generated.resources.tool_action_search_one
+import mederi.app.shared.generated.resources.tool_action_search_running
+import mederi.app.shared.generated.resources.tool_action_search_running_target
+import mederi.app.shared.generated.resources.tool_action_search_target
+import mederi.app.shared.generated.resources.tool_action_subagent_many
+import mederi.app.shared.generated.resources.tool_action_subagent_one
+import mederi.app.shared.generated.resources.tool_action_subagent_running
+import mederi.app.shared.generated.resources.tool_action_subagent_running_target
+import mederi.app.shared.generated.resources.tool_action_subagent_target
+import mederi.app.shared.generated.resources.worktrace_collapse
+import mederi.app.shared.generated.resources.worktrace_duration
+import mederi.app.shared.generated.resources.worktrace_expand
+import mederi.app.shared.generated.resources.worktrace_has_failure
+import mederi.app.shared.generated.resources.worktrace_steps_count
+import mederi.app.shared.generated.resources.worktrace_summary_title
+import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.MarkdownView
-import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.core.ui.AssistantFooterInfo
+import xyz.mederi.core.ui.DebugLog
 import xyz.mederi.core.ui.ChatListItem
-import xyz.mederi.core.contract.models.SubagentToolResult
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.core.contract.models.ToolCallUi
 import xyz.mederi.core.ui.SubagentReportMarkdown
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.theme.MederiColors
-
-/**
- * 严重级别枚举（用于分析结论中结构化标签展示）
- */
-enum class IssueSeverity {
-    CRITICAL, HIGH, MEDIUM, LOW
-}
-
-/**
- * 结构化严重度徽标组件 (SeverityBadge)
- */
-@Composable
-fun SeverityBadge(
-    severity: IssueSeverity,
-    modifier: Modifier = Modifier
-) {
-    val colors = LocalMederiColors.current
-    val (bgColor, textColor, label) = when (severity) {
-        IssueSeverity.CRITICAL -> Triple(colors.accentDanger.copy(alpha = 0.14f), colors.accentDanger, "CRITICAL")
-        IssueSeverity.HIGH -> Triple(colors.accentWarning.copy(alpha = 0.16f), colors.accentWarning, "HIGH")
-        IssueSeverity.MEDIUM -> Triple(colors.accentSecondary.copy(alpha = 0.14f), colors.accentSecondary, "MEDIUM")
-        IssueSeverity.LOW -> Triple(colors.surfaceCardBorder, colors.textMuted, "LOW")
-    }
-
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(3.dp))
-            .background(bgColor)
-            .padding(horizontal = 4.5.dp, vertical = 1.dp)
-    ) {
-        Text(
-            text = label,
-            color = textColor,
-            fontSize = 9.5.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 10.sp
-        )
-    }
-}
+import xyz.mederi.theme.rememberMederiMarkdownTheme
 
 /**
  * 极简大脑矢量图标（用于思维链/深度思考展示）
@@ -122,8 +169,65 @@ val BrainIcon: ImageVector by lazy {
 }
 
 /**
+ * 极简终端命令提示符矢量图标（>_）
+ */
+val TerminalPromptIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "TerminalPrompt",
+        defaultWidth = 16.dp,
+        defaultHeight = 16.dp,
+        viewportWidth = 16f,
+        viewportHeight = 16f
+    ).apply {
+        // > 提示符折线
+        val nodesChevron = PathParser().parsePathString("M 2.5 4 L 6.5 7.5 L 2.5 11").toNodes()
+        addPath(
+            pathData = nodesChevron,
+            stroke = SolidColor(Color(0xFF000000)),
+            strokeLineWidth = 1.6f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        )
+        // _ 下划线
+        val nodesUnderscore = PathParser().parsePathString("M 8 11.5 L 13 11.5").toNodes()
+        addPath(
+            pathData = nodesUnderscore,
+            stroke = SolidColor(Color(0xFF000000)),
+            strokeLineWidth = 1.6f,
+            strokeLineCap = StrokeCap.Round
+        )
+    }.build()
+}
+
+/**
+ * 工作过程（WorkTraceCard）展开内容的最大高度：超过后栏内上下滚动，
+ * 避免推理/工具步骤把整个聊天内容顶得过长（折叠条仍可点击收起/展开）。
+ */
+private val WorkTraceMaxContentHeight = 320.dp
+
+/**
+ * 顶层推理块（ReasoningBlock）展开内容的默认最大高度：超过后块内上下滚动，
+ * 内容末尾的「展开/收起」按钮可切换为无限高度（真实动态高度），再点缩回限高。
+ */
+private val ReasoningMaxContentHeight = 200.dp
+
+/**
+ * 判定 ReasoningBlock 是否应启用内部限高与垂直滚动容器：
+ * - 只有外层要求限高 (enforceMaxHeight=true) 且未切换为无界全部展开 (!isUnbounded) 时才启用滚动与限高。
+ * - 当 isUnbounded=true（用户点击底部展开按钮）或 enforceMaxHeight=false 时，必须禁用 verticalScroll，
+ *   避免在 LazyColumn (垂直无界 Constraints.Infinity) 内挂载 verticalScroll 触发 Compose 崩溃。
+ */
+fun shouldEnableReasoningScroll(enforceMaxHeight: Boolean, isUnbounded: Boolean): Boolean {
+    return enforceMaxHeight && !isUnbounded
+}
+
+/**
  * 单独思维链/思考过程折叠面板 (ReasoningBlock)
- * 严格还原极简设计：大脑图标胶囊 + 展开后轻量导轨线
+ * 严格还原极简设计：大脑图标胶囊 + 展开后轻量导轨线。
+ *
+ * 顶层独立显示（enforceMaxHeight=true）时：展开内容默认限高 [ReasoningMaxContentHeight] 并内部滚动，
+ * 内容末尾「展开/收起」按钮可切换为无限高度（真实动态高度）；限高状态下不点按钮也能滚动查看全部。
+ * 位于 WorkTraceCard 内（enforceMaxHeight=false）时保持无限高——卡整体已限高滚动，子项不再重复限制。
  */
 @Composable
 fun ReasoningBlock(
@@ -131,14 +235,30 @@ fun ReasoningBlock(
     durationMs: Long = 0,
     isStreaming: Boolean = false,
     isReasoningActive: Boolean = false,
-    userExpanded: Boolean? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enforceMaxHeight: Boolean = true,
+    contentKey: String? = null,
 ) {
     if (text.isBlank() && !isReasoningActive) return
 
     val colors = LocalMederiColors.current
     var localExpanded by remember { mutableStateOf(false) }
-    val isExpanded = userExpanded ?: localExpanded
+    val isExpanded = localExpanded
+    // 内容是否无限高：默认限高 + 块内滚动，点内容末尾按钮切换为全部摊开，再点缩回限高
+    var isUnbounded by remember(contentKey) { mutableStateOf(false) }
+    val shouldScroll = shouldEnableReasoningScroll(enforceMaxHeight, isUnbounded)
+    DebugLog.debug(
+        "UI",
+        "ReasoningBlock compose: contentKey=$contentKey, enforceMaxHeight=$enforceMaxHeight, isUnbounded=$isUnbounded, shouldScroll=$shouldScroll"
+    )
+
+    // 限高滚动容器 + 自动贴底（stick-to-bottom，与聊天列表同一套语义）：
+    // 默认自动滚动到底部（流式时跟随最新推理），用户手动滚开即停止；滚回底部恢复跟随。
+    val contentScroll = rememberScrollState()
+    var stickToBottom by remember(contentKey) { mutableStateOf(true) }
+    // 首次自动滚底完成前禁用位置跟踪：否则初始布局在顶部时跟踪 effect 会立刻把 stickToBottom
+    // 打成 false，与"打开即贴底"互相打架（与聊天列表 bottomTrackingEnabled 同源防抖）。
+    var bottomTrackingEnabled by remember(contentKey) { mutableStateOf(false) }
 
     val infiniteTransition = rememberInfiniteTransition()
     val pulseAlpha by infiniteTransition.animateFloat(
@@ -178,14 +298,14 @@ fun ReasoningBlock(
 
             val durationText = if (durationMs > 0) {
                 val sec = durationMs / 1000
-                val dec = (durationMs % 1000) / 100
-                " (${sec}.${dec}s)"
+                if (sec > 0) "${sec}s" else "${durationMs}ms"
             } else ""
 
             val label = when {
-                isReasoningActive -> "思考中..."
-                durationMs > 0 -> "深度思考$durationText"
-                else -> "思考过程"
+                isReasoningActive && durationText.isNotBlank() -> stringResource(Res.string.reasoning_thinking_for, durationText)
+                isReasoningActive -> stringResource(Res.string.reasoning_thinking)
+                durationText.isNotBlank() -> stringResource(Res.string.reasoning_thought_for, durationText)
+                else -> stringResource(Res.string.reasoning_thought)
             }
 
             Text(
@@ -208,16 +328,54 @@ fun ReasoningBlock(
             )
         }
 
-        // 展开后的思考旁白内容（左侧细垂直导轨线）
+        // 位置跟踪：滚动落定后按"是否仍在底部"更新贴底意图。
+        // 用户滚动离开底部 → !canScrollForward=false → stickToBottom=false（停止跟随）；
+        // 用户滚回底部 → canScrollForward=false → stickToBottom=true（恢复跟随）。
+        LaunchedEffect(contentKey, shouldScroll) {
+            if (!shouldScroll) return@LaunchedEffect
+            snapshotFlow { contentScroll.value }
+                .collect { _ ->
+                    if (!bottomTrackingEnabled) return@collect
+                    if (contentScroll.isScrollInProgress) return@collect
+                    stickToBottom = !contentScroll.canScrollForward
+                }
+        }
+
+        // 跟随滚动（tail -f）：贴底期间内容增长（流式推理持续变高 / maxValue 增大）自动吸附到底部。
+        // 首次滚底落地后启用位置跟踪。scrollTo 是同步瞬时操作，落定后的下一帧 maxValue 无变化即停。
+        LaunchedEffect(contentKey, shouldScroll) {
+            if (!shouldScroll) return@LaunchedEffect
+            snapshotFlow { contentScroll.maxValue }
+                .collect { max ->
+                    if (stickToBottom && !contentScroll.isScrollInProgress && contentScroll.canScrollForward) {
+                        contentScroll.scrollTo(max)
+                        stickToBottom = true
+                        bottomTrackingEnabled = true
+                    }
+                }
+        }
+
+        // 展开后的思考旁白内容（左侧细垂直导轨线）。
+        // enforceMaxHeight：默认限高 + 块内滚动，内容末尾「展开/收起」按钮切换无限高度（真实动态高度），
+        // 限高状态下不点按钮也能上下滚动查看全部；WorkTraceCard 内子项（enforceMaxHeight=false）保持无限高。
         AnimatedVisibility(
             visible = isExpanded && text.isNotBlank(),
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
             val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(
+                        if (shouldScroll) {
+                            Modifier
+                                .heightIn(max = ReasoningMaxContentHeight)
+                                .verticalScroll(contentScroll)
+                        } else {
+                            Modifier
+                        }
+                    )
                     .padding(vertical = 3.dp, horizontal = 4.dp)
                     .drawBehind {
                         val strokeWidth = 2.dp.toPx()
@@ -229,21 +387,119 @@ fun ReasoningBlock(
                             cap = StrokeCap.Round,
                         )
                     }
-                    .padding(start = 12.dp)
+                    .padding(start = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 MarkdownView(
                     content = text,
                     modifier = Modifier.fillMaxWidth(),
-                    enableScrollOverride = false
+                    enableScrollOverride = false,
+                    markdownTheme = rememberMederiMarkdownTheme(compact = true)
                 )
+
+                if (enforceMaxHeight) {
+                    // 底部切换按钮：位于内容末尾、随内容滚动，恒显示
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable {
+                                isUnbounded = !isUnbounded
+                                DebugLog.debug(
+                                    "UI",
+                                    "ReasoningBlock isUnbounded toggled to: $isUnbounded, contentKey=$contentKey"
+                                )
+                            }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                            contentDescription = null,
+                            tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textMuted,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = stringResource(
+                                if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
+                            ),
+                            color = if (colors.isDark) Color(0xFF94A3B8) else colors.textMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 /**
- * 结构化工具调用追踪微栏 (ToolCallsBlock)
- * 统一折叠条：不管1条还是N条都统一显示"工具调用 (N 项)"折叠条，展开后显示清单，去卡片化无框无背景。
+ * 工具动作大类枚举（用于时序行图标与聚合展示）
+ */
+enum class ToolActionKind {
+    COMMAND, READ, EDIT, SEARCH, LIST, SUBAGENT, MCP, ASK, OTHER
+}
+
+/**
+ * 依据工具名分类动作大类
+ */
+fun classifyToolAction(name: String): ToolActionKind {
+    val lower = name.lowercase()
+    return when {
+        lower.contains("command") || lower == "bash" || lower.contains("exec") || lower.contains("terminal") -> ToolActionKind.COMMAND
+        lower.contains("read") || lower.contains("view") || lower == "cat" -> ToolActionKind.READ
+        lower.contains("edit") || lower.contains("patch") || lower.contains("replace") || lower.contains("write") || lower.contains("create") -> ToolActionKind.EDIT
+        lower.contains("search") || lower.contains("grep") || lower.contains("find") -> ToolActionKind.SEARCH
+        lower.contains("list") || lower.contains("dir") || lower.contains("tree") -> ToolActionKind.LIST
+        lower == "subagent" || lower.contains("agent") -> ToolActionKind.SUBAGENT
+        lower.contains("mcp") -> ToolActionKind.MCP
+        lower.contains("ask") -> ToolActionKind.ASK
+        else -> ToolActionKind.OTHER
+    }
+}
+
+/**
+ * 连续同类工具动作聚合组
+ */
+data class ToolActionGroup(
+    val kind: ToolActionKind,
+    val calls: List<ToolCallUi>,
+)
+
+/**
+ * 将同批连续的同类工具调用聚合为动作组
+ */
+fun groupToolCallsByAction(calls: List<ToolCallUi>): List<ToolActionGroup> {
+    if (calls.isEmpty()) return emptyList()
+    val groups = mutableListOf<ToolActionGroup>()
+    var currentKind = classifyToolAction(calls.first().name)
+    var currentList = mutableListOf(calls.first())
+    for (i in 1 until calls.size) {
+        val call = calls[i]
+        val kind = classifyToolAction(call.name)
+        if (kind == currentKind) {
+            currentList.add(call)
+        } else {
+            groups.add(ToolActionGroup(currentKind, currentList))
+            currentKind = kind
+            currentList = mutableListOf(call)
+        }
+    }
+    if (currentList.isNotEmpty()) {
+        groups.add(ToolActionGroup(currentKind, currentList))
+    }
+    return groups
+}
+
+/**
+ * 工具调用时间线 (ToolCallsBlock)：按动作类别连续聚合为极简动作行。
+ *
+ * - 单条：`>_ Ran command <command>` / `Read file <file>`
+ * - 多条：`>_ Ran 2 commands` / `Read 2 files`
+ * - 展开：展示 `$ <command>` 命令行，`OUTPUT` 标题，及黑色终端风格执行输出框。
  */
 @Composable
 fun ToolCallsBlock(
@@ -252,36 +508,142 @@ fun ToolCallsBlock(
     isRunning: Boolean = false,
     hasFailedTool: Boolean = false,
     toolSummary: String = "",
-    userExpanded: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     if (toolCalls.isEmpty()) return
 
+    val groups = remember(toolCalls) { groupToolCallsByAction(toolCalls) }
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        groups.forEach { group ->
+            key(group.calls.firstOrNull()?.id ?: group.kind.name) {
+                ToolActionGroupRow(
+                    group = group,
+                    isStreaming = isStreaming,
+                    isRunning = isRunning,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 单个动作组的时间线行：折叠态单行图标+摘要，展开态展示命令原文及终端输出代码框。
+ */
+@Composable
+fun ToolActionGroupRow(
+    group: ToolActionGroup,
+    isStreaming: Boolean,
+    isRunning: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val colors = LocalMederiColors.current
-    var userChoice by remember { mutableStateOf<Boolean?>(null) }
-    val autoExpanded = hasFailedTool || toolCalls.size in 1..2
-    val isExpanded = userExpanded ?: userChoice ?: autoExpanded
+    val isFailed = group.calls.any { it.isFailed }
+    val isGroupRunning = (isRunning || isStreaming) && group.calls.any { it.state is ToolCallState.Running }
+
+    // 所有工具动作行严格默认不展开（即使执行失败也保持折叠，需要点击才展开）；用户点击后以用户状态为准
+    var userChoice by remember(group.calls.map { it.id }) { mutableStateOf(false) }
+    val isExpanded = userChoice
 
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
         animationSpec = tween(150)
     )
 
+    val count = group.calls.size
+    val firstCall = group.calls.first()
+    val singleTarget = firstCall.target?.trim()?.takeIf { it.isNotBlank() }
+
+    val defaultMutedColor = if (colors.isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    // 图标与颜色
+    val (iconVector, iconTint) = when {
+        isFailed -> Pair(FeatherIcons.AlertCircle, colors.accentDanger)
+        group.kind == ToolActionKind.COMMAND -> Pair(TerminalPromptIcon, defaultMutedColor)
+        group.kind == ToolActionKind.READ -> Pair(FeatherIcons.FileText, defaultMutedColor)
+        group.kind == ToolActionKind.EDIT -> Pair(FeatherIcons.Edit2, defaultMutedColor)
+        group.kind == ToolActionKind.SEARCH -> Pair(FeatherIcons.Search, defaultMutedColor)
+        group.kind == ToolActionKind.LIST -> Pair(FeatherIcons.Folder, defaultMutedColor)
+        group.kind == ToolActionKind.SUBAGENT -> Pair(FeatherIcons.Users, if (colors.isDark) Color(0xFFA78BFA) else Color(0xFF7C3AED))
+        group.kind == ToolActionKind.MCP -> Pair(FeatherIcons.Cpu, defaultMutedColor)
+        group.kind == ToolActionKind.ASK -> Pair(FeatherIcons.HelpCircle, defaultMutedColor)
+        else -> Pair(FeatherIcons.Zap, defaultMutedColor)
+    }
+
+    // 标题文本（全部走资源化，三类：执行中 / 单条 / 多条；带目标时用 _target/_running_target 格式化）
+    val titleText = run {
+        val base = when {
+            isGroupRunning -> when (group.kind) {
+                ToolActionKind.COMMAND -> singleTarget?.let { stringResource(Res.string.tool_action_run_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_run_running)
+                ToolActionKind.READ -> singleTarget?.let { stringResource(Res.string.tool_action_read_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_read_running)
+                ToolActionKind.EDIT -> singleTarget?.let { stringResource(Res.string.tool_action_edit_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_edit_running)
+                ToolActionKind.SEARCH -> singleTarget?.let { stringResource(Res.string.tool_action_search_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_search_running)
+                ToolActionKind.LIST -> singleTarget?.let { stringResource(Res.string.tool_action_list_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_list_running)
+                ToolActionKind.SUBAGENT -> singleTarget?.let { stringResource(Res.string.tool_action_subagent_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_subagent_running)
+                ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_running_target, singleTarget ?: firstCall.name)
+                ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_running)
+                else -> singleTarget?.let { stringResource(Res.string.tool_action_other_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_other_running)
+            }
+            count == 1 -> when (group.kind) {
+                ToolActionKind.COMMAND -> singleTarget?.let { stringResource(Res.string.tool_action_run_target, it) }
+                    ?: stringResource(Res.string.tool_action_run_one)
+                ToolActionKind.READ -> singleTarget?.let { stringResource(Res.string.tool_action_read_target, it) }
+                    ?: stringResource(Res.string.tool_action_read_one)
+                ToolActionKind.EDIT -> singleTarget?.let { stringResource(Res.string.tool_action_edit_target, it) }
+                    ?: stringResource(Res.string.tool_action_edit_one)
+                ToolActionKind.SEARCH -> singleTarget?.let { stringResource(Res.string.tool_action_search_target, it) }
+                    ?: stringResource(Res.string.tool_action_search_one)
+                ToolActionKind.LIST -> singleTarget?.let { stringResource(Res.string.tool_action_list_target, it) }
+                    ?: stringResource(Res.string.tool_action_list_one)
+                ToolActionKind.SUBAGENT -> singleTarget?.let { stringResource(Res.string.tool_action_subagent_target, it) }
+                    ?: stringResource(Res.string.tool_action_subagent_one)
+                ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_target, singleTarget ?: firstCall.name)
+                ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_one)
+                else -> stringResource(Res.string.tool_action_other_target, singleTarget ?: firstCall.name)
+            }
+            else -> when (group.kind) {
+                ToolActionKind.COMMAND -> stringResource(Res.string.tool_action_run_many, count)
+                ToolActionKind.READ -> stringResource(Res.string.tool_action_read_many, count)
+                ToolActionKind.EDIT -> stringResource(Res.string.tool_action_edit_many, count)
+                ToolActionKind.SEARCH -> stringResource(Res.string.tool_action_search_many, count)
+                ToolActionKind.LIST -> stringResource(Res.string.tool_action_list_many, count)
+                ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_many, count)
+                ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_many, count)
+                ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_many, count)
+                else -> stringResource(Res.string.tool_action_other_many, count)
+            }
+        }
+        if (isFailed) "$base ${stringResource(Res.string.tool_action_failed_suffix)}" else base
+    }
+
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        // 统一折叠微条（去卡片化：无背景无边框），整行可点击
+        // 折叠微条（无卡片背景与硬边框，整行可点击）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { userChoice = !isExpanded }
+                .clickable {
+                    userChoice = !isExpanded
+                    DebugLog.event("UI", "ToolActionGroupRow clicked: kind=${group.kind}, count=${group.calls.size}, isExpanded=$userChoice")
+                }
                 .padding(vertical = 2.dp, horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            if (isRunning) {
+            if (isGroupRunning) {
                 CircularProgressIndicator(
                     color = Color(0xFFF59E0B),
                     strokeWidth = 1.4.dp,
@@ -289,43 +651,36 @@ fun ToolCallsBlock(
                 )
             } else {
                 Icon(
-                    imageVector = FeatherIcons.Zap,
+                    imageVector = iconVector,
                     contentDescription = null,
-                    tint = if (hasFailedTool) colors.accentDanger else Color(0xFFF59E0B),
-                    modifier = Modifier.size(12.dp)
+                    tint = iconTint,
+                    modifier = Modifier.size(13.dp)
                 )
-            }
-
-            val titleText = when {
-                isRunning -> {
-                    val active = toolCalls.lastOrNull { it.state is ToolCallState.Running }?.name
-                    if (active != null) "工具调用 · 正在执行 $active..." else "工具调用 · 正在执行..."
-                }
-                hasFailedTool -> "工具调用 (${toolCalls.size} 项，存在失败)"
-                else -> "工具调用 (${toolCalls.size} 项)"
             }
 
             Text(
                 text = titleText,
-                color = if (hasFailedTool) colors.accentDanger else (if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary),
+                color = if (isFailed) colors.accentDanger else defaultMutedColor,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
             )
 
-            // 箭头紧跟文字，两格间距
             Spacer(modifier = Modifier.width(2.dp))
 
             Icon(
                 imageVector = FeatherIcons.ChevronRight,
                 contentDescription = null,
-                tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
+                tint = defaultMutedColor,
                 modifier = Modifier
                     .size(11.dp)
                     .graphicsLayer { rotationZ = arrowRotation }
             )
         }
 
-        // 展开后的具体工具调用清单
+        // 展开后的具体执行明细
         AnimatedVisibility(
             visible = isExpanded,
             enter = fadeIn() + expandVertically(),
@@ -334,17 +689,240 @@ fun ToolCallsBlock(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 10.dp, top = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
+                    .padding(start = 12.dp, top = 2.dp, bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                toolCalls.forEach { toolCall ->
-                    ToolCallItemRow(
-                        toolCall = toolCall,
-                        colors = colors,
-                        isStreaming = isStreaming,
-                        showLeadingIcon = false
+                group.calls.forEach { call ->
+                    val isCallFailed = call.isFailed
+                    val completedState = call.state as? ToolCallState.Completed
+                    val isReportTool = call.name in SubagentReportMarkdown.REPORT_TOOL_NAMES
+                    val reportMarkdown = if (isReportTool && completedState != null) {
+                        SubagentReportMarkdown.fromToolResult(call.name, completedState.output)
+                    } else null
+                    val output = when (val s = call.state) {
+                        is ToolCallState.Completed -> s.output
+                        is ToolCallState.Failed -> s.error
+                        else -> null
+                    }?.trim()
+
+                    if (reportMarkdown != null) {
+                        // 子代理任务报告 Markdown（默认不展开，点击 REPORT 展开）
+                        ToolCallReportBlock(
+                            callId = call.id,
+                            reportMarkdown = reportMarkdown,
+                            colors = colors,
+                        )
+                    } else if (group.kind == ToolActionKind.COMMAND) {
+                        // 命令行展开：命令行展示 + 输出点击展开（默认不展开）
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (!call.target.isNullOrBlank()) {
+                                Text(
+                                    text = "$ ${call.target}",
+                                    color = if (colors.isDark) Color(0xFFE2E8F0) else Color(0xFF1E293B),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+                                )
+                            }
+                            if (!output.isNullOrBlank()) {
+                                ToolCallOutputBlock(
+                                    callId = call.id,
+                                    output = output,
+                                    isFailed = isCallFailed,
+                                    colors = colors,
+                                    maxHeight = 280.dp,
+                                )
+                            }
+                        }
+                    } else {
+                        // 通用工具调用（读取/编辑/检索等）：目标显示 + 输出点击展开（默认不展开）
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (!call.target.isNullOrBlank()) {
+                                Text(
+                                    text = call.target,
+                                    color = if (colors.isDark) Color(0xFFCBD5E1) else colors.textPrimary,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+                                )
+                            }
+                            if (!output.isNullOrBlank()) {
+                                ToolCallOutputBlock(
+                                    callId = call.id,
+                                    output = output,
+                                    isFailed = isCallFailed,
+                                    colors = colors,
+                                    maxHeight = 240.dp,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 工具调用输出块：严格按要求默认不展开，用户点击 "OUTPUT" 或 "FAILED" 才展开，
+ * 内部带有终端/代码输出框，支持滚动与长输出保护。
+ */
+@Composable
+private fun ToolCallOutputBlock(
+    callId: String,
+    output: String,
+    isFailed: Boolean,
+    colors: xyz.mederi.theme.MederiColors,
+    maxHeight: Dp = 280.dp,
+) {
+    var isOutputExpanded by remember(callId) { mutableStateOf(false) }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isOutputExpanded) 90f else 0f,
+        animationSpec = tween(150)
+    )
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable {
+                    isOutputExpanded = !isOutputExpanded
+                    DebugLog.event("UI", "ToolCallOutputBlock clicked: callId=$callId, isExpanded=$isOutputExpanded, isFailed=$isFailed")
+                }
+                .padding(vertical = 2.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = stringResource(if (isFailed) Res.string.tool_detail_failed_output else Res.string.tool_detail_output),
+                color = if (isFailed) colors.accentDanger else (if (colors.isDark) Color(0xFF64748B) else Color(0xFF94A3B8)),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp,
+            )
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = if (isFailed) colors.accentDanger else (if (colors.isDark) Color(0xFF64748B) else Color(0xFF94A3B8)),
+                modifier = Modifier
+                    .size(10.dp)
+                    .graphicsLayer { rotationZ = arrowRotation }
+            )
+        }
+
+        AnimatedVisibility(
+            visible = isOutputExpanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (colors.isDark) Color(0xFF0D1117) else Color(0xFF161B22))
+                    .border(
+                        1.dp,
+                        if (isFailed) colors.accentDanger.copy(alpha = 0.4f) else Color(0xFF21262D),
+                        RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                SelectionContainer {
+                    Text(
+                        text = output,
+                        color = if (isFailed) Color(0xFFFFA198) else Color(0xFFC9D1D9),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = maxHeight)
+                            .verticalScroll(rememberScrollState())
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 子代理任务报告 Markdown 展开块：默认不展开，点击 "REPORT" 才展开展示富文本。
+ */
+@Composable
+private fun ToolCallReportBlock(
+    callId: String,
+    reportMarkdown: String,
+    colors: xyz.mederi.theme.MederiColors,
+) {
+    var isReportExpanded by remember(callId) { mutableStateOf(false) }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isReportExpanded) 90f else 0f,
+        animationSpec = tween(150)
+    )
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable {
+                    isReportExpanded = !isReportExpanded
+                    DebugLog.event("UI", "ToolCallReportBlock clicked: callId=$callId, isExpanded=$isReportExpanded")
+                }
+                .padding(vertical = 2.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = stringResource(Res.string.tool_detail_report),
+                color = if (colors.isDark) Color(0xFFA78BFA) else Color(0xFF7C3AED),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp,
+            )
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = if (colors.isDark) Color(0xFFA78BFA) else Color(0xFF7C3AED),
+                modifier = Modifier
+                    .size(10.dp)
+                    .graphicsLayer { rotationZ = arrowRotation }
+            )
+        }
+
+        AnimatedVisibility(
+            visible = isReportExpanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (colors.isDark) Color(0xFF161822) else Color(0xFFF8FAFC))
+                    .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
+                    .padding(10.dp)
+            ) {
+                MarkdownView(
+                    content = reportMarkdown,
+                    modifier = Modifier.fillMaxWidth(),
+                    enableScrollOverride = false,
+                    markdownTheme = rememberMederiMarkdownTheme()
+                )
             }
         }
     }
@@ -360,364 +938,16 @@ fun SubagentCallsBlock(
     isStreaming: Boolean = false,
     isRunning: Boolean = false,
     hasFailed: Boolean = false,
-    userExpanded: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     if (subagents.isEmpty()) return
-
-    val colors = LocalMederiColors.current
-    var userChoice by remember { mutableStateOf<Boolean?>(null) }
-    val autoExpanded = hasFailed || subagents.size in 1..2
-    val isExpanded = userExpanded ?: userChoice ?: autoExpanded
-
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (isExpanded) 90f else 0f,
-        animationSpec = tween(150)
+    ToolCallsBlock(
+        toolCalls = subagents,
+        isStreaming = isStreaming,
+        isRunning = isRunning,
+        hasFailedTool = hasFailed,
+        modifier = modifier,
     )
-
-    val subagentAccentColor = if (colors.isDark) Color(0xFFA78BFA) else Color(0xFF7C3AED)
-
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        // 统一折叠微条（去卡片化：无背景无边框），整行可点击
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(4.dp))
-                .clickable { userChoice = !isExpanded }
-                .padding(vertical = 2.dp, horizontal = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            if (isRunning) {
-                CircularProgressIndicator(
-                    color = subagentAccentColor,
-                    strokeWidth = 1.4.dp,
-                    modifier = Modifier.size(12.dp)
-                )
-            } else {
-                Icon(
-                    imageVector = FeatherIcons.Users,
-                    contentDescription = null,
-                    tint = if (hasFailed) colors.accentDanger else subagentAccentColor,
-                    modifier = Modifier.size(12.dp)
-                )
-            }
-
-            val titleText = when {
-                isRunning -> {
-                    val active = subagents.lastOrNull { it.state is ToolCallState.Running }
-                    val taskName = active?.target?.take(30)
-                    if (taskName != null) "子 Agent · 正在执行: $taskName..." else "子 Agent · 正在执行..."
-                }
-                hasFailed -> "子 Agent (${subagents.size} 项，存在失败)"
-                else -> "子 Agent (${subagents.size} 项)"
-            }
-
-            Text(
-                text = titleText,
-                color = if (hasFailed) colors.accentDanger else (if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
-
-            // 箭头紧跟文字，两格间距
-            Spacer(modifier = Modifier.width(2.dp))
-
-            Icon(
-                imageVector = FeatherIcons.ChevronRight,
-                contentDescription = null,
-                tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
-                modifier = Modifier
-                    .size(11.dp)
-                    .graphicsLayer { rotationZ = arrowRotation }
-            )
-        }
-
-        // 展开后的具体子 Agent 任务清单
-        AnimatedVisibility(
-            visible = isExpanded,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 10.dp, top = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                subagents.forEach { subagent ->
-                    ToolCallItemRow(
-                        toolCall = subagent,
-                        colors = colors,
-                        isStreaming = isStreaming,
-                        showLeadingIcon = false
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 将工具名称解析为简洁动词
- */
-private fun resolveActionVerb(toolName: String): String = when {
-    toolName == "spawn_agent" -> "agent"
-    toolName == "spawn_researcher" -> "research"
-    toolName == "wait_agent" || toolName == "agent_status" -> "wait"
-    toolName.contains("edit") || toolName.contains("patch") || toolName.contains("replace") -> "edit"
-    toolName.contains("write") || toolName.contains("create") -> "create"
-    toolName.contains("read") || toolName.contains("view") -> "read"
-    toolName.contains("run") || toolName.contains("bash") || toolName.contains("exec") || toolName.contains("terminal") -> "run"
-    toolName.contains("list") || toolName.contains("dir") || toolName.contains("tree") -> "list"
-    toolName.contains("search") || toolName.contains("grep") || toolName.contains("find") -> "search"
-    toolName.contains("ask") -> "ask"
-    else -> toolName
-}
-
-/**
- * 紧凑型子操作行：[✓] 动词 目标参数 + 可展开的紧凑结果微框
- */
-@Composable
-private fun ToolCallItemRow(
-    toolCall: ToolCallUi,
-    colors: MederiColors,
-    isStreaming: Boolean = false,
-    showLeadingIcon: Boolean = false
-) {
-    val isFailed = toolCall.isFailed
-    val isRunning = isStreaming && toolCall.state is ToolCallState.Running
-    val result = when (val s = toolCall.state) {
-        is ToolCallState.Completed -> s.output
-        is ToolCallState.Failed -> s.error
-        else -> null
-    }?.takeIf { it.isNotBlank() }
-    var resultExpanded by remember { mutableStateOf(false) }
-
-    val completedState = toolCall.state as? ToolCallState.Completed
-    val isReportTool = toolCall.name in SubagentReportMarkdown.REPORT_TOOL_NAMES
-    val reportMarkdown = if (isReportTool && completedState != null) {
-        SubagentReportMarkdown.fromToolResult(toolCall.name, completedState.output)
-    } else null
-    val isReport = reportMarkdown != null
-    val decodedReport = if (isReport && completedState != null) {
-        SubagentToolResult.decode(completedState.output)
-    } else null
-
-    val spawnModel = if ((toolCall.name == "spawn_agent" || toolCall.name == "spawn_researcher") && completedState != null) {
-        SubagentToolResult.decode(completedState.output)?.modelName
-    } else null
-
-    val verb = if (isReport) "report" else resolveActionVerb(toolCall.name)
-    val rawTarget = toolCall.target?.trim()
-    val targetText = when {
-        isReport && decodedReport != null -> {
-            val model = decodedReport.modelName ?: decodedReport.modelId
-            if (model != null) "${decodedReport.agentId} · $model" else decodedReport.agentId
-        }
-        spawnModel != null -> {
-            if (!rawTarget.isNullOrBlank() && rawTarget != "." && rawTarget != toolCall.name) {
-                "$rawTarget · $spawnModel"
-            } else {
-                spawnModel
-            }
-        }
-        !rawTarget.isNullOrBlank() && rawTarget != "." && rawTarget != toolCall.name -> rawTarget
-        verb == "list" -> "directory"
-        else -> toolCall.name.removePrefix(verb).removePrefix("_").ifBlank { "action" }
-    }
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(4.dp))
-                .clickable(enabled = result != null) { resultExpanded = !resultExpanded }
-                .padding(vertical = 3.dp, horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            if (showLeadingIcon) {
-                if (isRunning) {
-                    CircularProgressIndicator(
-                        color = Color(0xFFF59E0B),
-                        strokeWidth = 1.4.dp,
-                        modifier = Modifier.size(12.dp)
-                    )
-                } else {
-                    Icon(
-                        imageVector = FeatherIcons.Zap,
-                        contentDescription = null,
-                        tint = if (isFailed) colors.accentDanger else Color(0xFFF59E0B),
-                        modifier = Modifier.size(12.dp)
-                    )
-                }
-            }
-
-            // [✓] 或 [✕] 状态微标签
-            when {
-                isRunning && !showLeadingIcon -> {
-                    CircularProgressIndicator(
-                        color = Color(0xFFF59E0B),
-                        strokeWidth = 1.4.dp,
-                        modifier = Modifier.size(11.dp)
-                    )
-                }
-                isFailed -> {
-                    Text(
-                        text = "[✕]",
-                        color = colors.accentDanger,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                else -> {
-                    Text(
-                        text = "[✓]",
-                        color = if (colors.isDark) Color(0xFF10B981) else colors.accentSuccess,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            // 动词（如 edit, run, list, ask, read, report）
-            Text(
-                text = verb,
-                color = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium
-            )
-
-            // 目标参数（如 SnapshotReducer.kt, ./gradlew test, sub_xxx · gpt-4o）
-            Text(
-                text = targetText,
-                color = if (colors.isDark) Color(0xFFCBD5E1) else colors.textPrimary,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            // 若有执行结果，箭头紧跟文字（2dp 间距），动画旋转
-            if (result != null) {
-                Spacer(modifier = Modifier.width(2.dp))
-                val resultArrowRotation by animateFloatAsState(
-                    targetValue = if (resultExpanded) 90f else 0f,
-                    animationSpec = tween(150)
-                )
-                Icon(
-                    imageVector = FeatherIcons.ChevronRight,
-                    contentDescription = null,
-                    tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary,
-                    modifier = Modifier
-                        .size(10.dp)
-                        .graphicsLayer { rotationZ = resultArrowRotation }
-                )
-            }
-        }
-
-        // 子代理汇报 Markdown 展开卡片（InkCompose MarkdownView 富文本排版渲染）
-        if (reportMarkdown != null && resultExpanded) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (colors.isDark) Color(0xFF161822) else Color(0xFFF8FAFC))
-                    .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-            ) {
-                MarkdownView(
-                    content = reportMarkdown,
-                    modifier = Modifier.fillMaxWidth(),
-                    enableScrollOverride = false
-                )
-            }
-        } else if (result != null && resultExpanded) {
-            // 执行输出微框（严格限高 130dp，轻量暗色背景）
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (colors.isDark) Color(0xFF161822) else Color(0xFFF1F3F5))
-                    .border(1.dp, if (colors.isDark) Color(0xFF262936) else Color(0xFFE2E8F0), RoundedCornerShape(4.dp))
-                .clickable { resultExpanded = false }
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = result,
-                    color = if (isFailed) colors.accentDanger else (if (colors.isDark) Color(0xFF94A3B8) else colors.textSecondary),
-                    fontSize = 10.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 14.sp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 130.dp)
-                        .verticalScroll(rememberScrollState())
-                )
-            }
-        }
-    }
-}
-
-/**
- * 2. 工具调用胶囊 (ToolPill)
- */
-@Composable
-fun ToolPill(
-    toolName: String,
-    stateText: String = "Executing...",
-    isSuccess: Boolean = true,
-    modifier: Modifier = Modifier
-) {
-    val colors = LocalMederiColors.current
-
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp, vertical = 3.5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Icon(
-            imageVector = FeatherIcons.Terminal,
-            contentDescription = null,
-            tint = colors.accentSecondary,
-            modifier = Modifier.size(11.dp)
-        )
-        Text(
-            text = toolName,
-            color = colors.textPrimary,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-        )
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(if (isSuccess) colors.accentSuccess.copy(alpha = 0.15f) else colors.accentWarning.copy(alpha = 0.15f))
-                .padding(horizontal = 5.dp, vertical = 1.5.dp)
-        ) {
-            Text(
-                text = stateText,
-                color = if (isSuccess) colors.accentSuccess else colors.accentWarning,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-    }
 }
 
 /**
@@ -763,12 +993,12 @@ fun QuestionCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             val typeTag = when {
-                qInfo.options.isEmpty() -> " · 自由输入"
-                qInfo.multiSelect -> " · 多选"
-                else -> " · 单选"
+                qInfo.options.isEmpty() -> stringResource(Res.string.question_free_input_tag)
+                qInfo.multiSelect -> stringResource(Res.string.question_multi_tag)
+                else -> stringResource(Res.string.question_single_tag)
             }
             Text(
-                text = "交互提问 [${currentIndex + 1}/${qList.size}]$typeTag",
+                text = stringResource(Res.string.question_title, currentIndex + 1, qList.size) + " · $typeTag",
                 color = colors.accentPrimary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
@@ -788,7 +1018,7 @@ fun QuestionCard(
             OutlinedTextField(
                 value = freeText,
                 onValueChange = { onAnswer(if (it.isBlank()) emptyList() else listOf(it)) },
-                placeholder = { Text("请输入您的回答...", fontSize = 11.5.sp, color = colors.textMuted) },
+                placeholder = { Text(stringResource(Res.string.question_input_placeholder), fontSize = 11.5.sp, color = colors.textMuted) },
                 modifier = Modifier.fillMaxWidth(),
                 textStyle = TextStyle(fontSize = 11.5.sp, color = colors.textPrimary),
                 shape = RoundedCornerShape(6.dp),
@@ -854,7 +1084,7 @@ fun QuestionCard(
                             val next = if (newCustom.isBlank()) currentOptions else currentOptions + newCustom
                             onAnswer(next)
                         },
-                        placeholder = { Text("其他自定义输入...", fontSize = 11.sp, color = colors.textMuted) },
+                        placeholder = { Text(stringResource(Res.string.question_custom_placeholder), fontSize = 11.sp, color = colors.textMuted) },
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = TextStyle(fontSize = 11.sp, color = colors.textPrimary),
                         shape = RoundedCornerShape(6.dp),
@@ -884,7 +1114,7 @@ fun QuestionCard(
                 modifier = Modifier.height(30.dp),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
             ) {
-                Text("取消", color = colors.textMuted, fontSize = 11.5.sp)
+                Text(stringResource(Res.string.question_cancel), color = colors.textMuted, fontSize = 11.5.sp)
             }
 
             Row(
@@ -898,7 +1128,7 @@ fun QuestionCard(
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                         shape = RoundedCornerShape(6.dp)
                     ) {
-                        Text("上一步", fontSize = 11.5.sp, color = colors.textPrimary)
+                        Text(stringResource(Res.string.question_prev), fontSize = 11.5.sp, color = colors.textPrimary)
                     }
                 }
 
@@ -910,7 +1140,7 @@ fun QuestionCard(
                         shape = RoundedCornerShape(6.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = colors.buttonSecondary)
                     ) {
-                        Text("下一步", fontSize = 11.5.sp, color = colors.textPrimary)
+                        Text(stringResource(Res.string.question_next), fontSize = 11.5.sp, color = colors.textPrimary)
                     }
                 } else {
                     Button(
@@ -920,7 +1150,7 @@ fun QuestionCard(
                         shape = RoundedCornerShape(6.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
                     ) {
-                        Text("提交全部答案", fontSize = 11.5.sp, color = colors.onAccentPrimary)
+                        Text(stringResource(Res.string.question_submit), fontSize = 11.5.sp, color = colors.onAccentPrimary)
                     }
                 }
             }
@@ -981,7 +1211,11 @@ fun PlanApprovalCard(
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = if (request.title.isNotBlank()) "Implementation Plan: ${request.title}" else "Implementation Plan",
+                    text = if (request.title.isNotBlank()) {
+                        stringResource(Res.string.plan_approval_title, request.title)
+                    } else {
+                        stringResource(Res.string.plan_approval_title_default)
+                    },
                     color = colors.textPrimary,
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.SemiBold
@@ -1030,7 +1264,7 @@ fun PlanApprovalCard(
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     Text(
-                        text = if (isApproved) "已批准" else "Proceed",
+                        text = if (isApproved) stringResource(Res.string.plan_approval_approved) else stringResource(Res.string.plan_approval_proceed),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = if (isApproved) colors.textMuted else colors.onAccentPrimary
@@ -1100,13 +1334,13 @@ fun UserPastedTextCard(
                     modifier = Modifier.size(13.dp)
                 )
                 Text(
-                    text = "粘贴文本 #${attachment.index}",
+                    text = stringResource(Res.string.input_pasted_text_n, attachment.index),
                     color = colors.textPrimary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "(${attachment.lineCount} 行 · ${attachment.charCount} 字符)",
+                    text = stringResource(Res.string.attachment_meta, attachment.lineCount, attachment.charCount),
                     color = colors.textMuted,
                     fontSize = 11.sp
                 )
@@ -1118,7 +1352,7 @@ fun UserPastedTextCard(
             ) {
                 if (onOpenInExtension != null) {
                     Text(
-                        text = "阅读器",
+                        text = stringResource(Res.string.attachment_reader),
                         color = colors.accentSecondary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
@@ -1129,7 +1363,7 @@ fun UserPastedTextCard(
                     )
                 }
                 Text(
-                    text = if (isExpanded) "收起" else "展开",
+                    text = stringResource(if (isExpanded) Res.string.worktrace_collapse else Res.string.worktrace_expand),
                     color = colors.accentPrimary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
@@ -1227,7 +1461,7 @@ fun UserMessageFooter(
         ) {
             Icon(
                 imageVector = FeatherIcons.CornerUpLeft,
-                contentDescription = "退回并重新编辑",
+                contentDescription = stringResource(Res.string.action_rollback),
                 tint = colors.textMuted,
                 modifier = Modifier.size(12.dp)
             )
@@ -1246,7 +1480,7 @@ fun UserMessageFooter(
         ) {
             Icon(
                 imageVector = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
-                contentDescription = if (copied) "已复制" else "复制",
+                contentDescription = stringResource(if (copied) Res.string.copy_done else Res.string.copy),
                 tint = if (copied) colors.accentSuccess else colors.textMuted,
                 modifier = Modifier.size(12.dp)
             )
@@ -1255,57 +1489,146 @@ fun UserMessageFooter(
 }
 
 /**
- * assistant 消息底部 footer：模型名 · 审批/自主 · 推理档 · 消耗时长 · 回复结束时间。
- *
- * 全部元数据缺失（历史消息无诊断字段）时不渲染。
+ * assistant 消息底部 footer：模型名 · 审批/自主 · 推理档 · 消耗时长 · 回复结束时间，
+ * 以及本轮回复的复制操作按钮（只复制最后一条回复 / 复制本轮完整内容）。
  */
 @Composable
 fun AssistantMessageFooter(
     footer: AssistantFooterInfo,
+    lastMessageText: String = "",
+    fullTurnText: String = "",
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalMederiColors.current
+    val clipboardManager = LocalClipboardManager.current
+    var copiedLast by remember { mutableStateOf(false) }
+    var copiedFull by remember { mutableStateOf(false) }
+
+    LaunchedEffect(copiedLast) {
+        if (copiedLast) {
+            delay(1500)
+            copiedLast = false
+        }
+    }
+    LaunchedEffect(copiedFull) {
+        if (copiedFull) {
+            delay(1500)
+            copiedFull = false
+        }
+    }
+
     val segments = mutableListOf<String>()
 
+    val autoApproveStr = stringResource(Res.string.mode_auto_approve)
+    val manualApproveStr = stringResource(Res.string.mode_manual_approve)
     footer.modelName?.takeIf { it.isNotBlank() }?.let { segments.add(it) }
     footer.agentMode?.let {
         segments.add(
             when (it) {
-                "AUTONOMOUS" -> "自主"
-                "APPROVAL" -> "审批"
+                "AUTONOMOUS" -> autoApproveStr
+                "APPROVAL" -> manualApproveStr
                 else -> it
             }
         )
     }
-    footer.thinkingLevel?.takeIf { it.isNotBlank() && it != "NONE" }?.let { segments.add("推理 $it") }
+    footer.thinkingLevel?.takeIf { it.isNotBlank() && it != "NONE" }?.let { segments.add(stringResource(Res.string.footer_reasoning, it)) }
     footer.durationMs?.let { ms ->
         if (ms > 0) segments.add(formatSeconds(ms))
     }
     footer.completedAtMs?.let { ms ->
-        if (ms > 0) segments.add("完成 ${xyz.mederi.formatMessageTime(ms)}")
+        if (ms > 0) segments.add(stringResource(Res.string.footer_completed, xyz.mederi.formatMessageTime(ms)))
     }
 
-    if (segments.isEmpty()) return
+    if (segments.isEmpty() && lastMessageText.isBlank() && fullTurnText.isBlank()) return
 
     Row(
         modifier = modifier.padding(top = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = FeatherIcons.Info,
-            contentDescription = null,
-            tint = colors.textMuted.copy(alpha = 0.6f),
-            modifier = Modifier.size(11.dp)
-        )
-        Text(
-            text = segments.joinToString(" · "),
-            color = colors.textMuted.copy(alpha = 0.8f),
-            fontSize = 10.5.sp,
-            fontFamily = FontFamily.Monospace,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        // 左侧：模型元数据
+        Row(
+            modifier = Modifier.weight(1f, fill = false),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (segments.isNotEmpty()) {
+                Icon(
+                    imageVector = FeatherIcons.Info,
+                    contentDescription = null,
+                    tint = colors.textMuted.copy(alpha = 0.6f),
+                    modifier = Modifier.size(11.dp)
+                )
+                Text(
+                    text = segments.joinToString(" · "),
+                    color = colors.textMuted.copy(alpha = 0.8f),
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        // 右侧：复制按钮
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (lastMessageText.isNotBlank()) {
+                val textLast = if (copiedLast) stringResource(Res.string.copy_done) else stringResource(Res.string.chat_copy_last_message)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .clickable {
+                            clipboardManager.setText(AnnotatedString(lastMessageText))
+                            copiedLast = true
+                        }
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (copiedLast) FeatherIcons.Check else FeatherIcons.Copy,
+                        contentDescription = textLast,
+                        tint = if (copiedLast) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = textLast,
+                        color = if (copiedLast) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
+                        fontSize = 10.5.sp
+                    )
+                }
+            }
+
+            if (fullTurnText.isNotBlank()) {
+                val textFull = if (copiedFull) stringResource(Res.string.copy_done) else stringResource(Res.string.chat_copy_full_turn)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .clickable {
+                            clipboardManager.setText(AnnotatedString(fullTurnText))
+                            copiedFull = true
+                        }
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (copiedFull) FeatherIcons.Check else FeatherIcons.Copy,
+                        contentDescription = textFull,
+                        tint = if (copiedFull) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Text(
+                        text = textFull,
+                        color = if (copiedFull) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
+                        fontSize = 10.5.sp
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1433,7 +1756,9 @@ fun DocumentArtifactCard(
                                     modifier = Modifier.size(10.dp)
                                 )
                                 Text(
-                                    text = "正在写入 · $lineCount 行 · ${formatCharCount(charCount)}",
+                                    text = stringResource(Res.string.attachment_writing) + " · " +
+                                        stringResource(Res.string.attachment_lines, lineCount) + " · " +
+                                        formatCharCount(charCount),
                                     color = colors.textMuted,
                                     fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace
@@ -1442,7 +1767,7 @@ fun DocumentArtifactCard(
                                 val timeStr = if (createdAt > 0) xyz.mederi.formatMessageTime(createdAt) else ""
                                 val meta = listOfNotNull(
                                     timeStr.takeIf { it.isNotBlank() },
-                                    "$lineCount 行",
+                                    stringResource(Res.string.attachment_lines, lineCount),
                                     formatCharCount(charCount)
                                 ).joinToString(" · ")
                                 Text(
@@ -1472,7 +1797,7 @@ fun DocumentArtifactCard(
                         modifier = Modifier.size(12.dp)
                     )
                     Text(
-                        text = "阅读器",
+                        text = stringResource(Res.string.attachment_reader),
                         color = colors.textPrimary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium
@@ -1508,13 +1833,15 @@ fun DocumentArtifactCard(
     }
 }
 
+@Composable
 private fun formatCharCount(count: Int): String {
+    val unit = stringResource(Res.string.attachment_chars_unit)
     return if (count >= 1000) {
         val k = count / 1000
         val dec = (count % 1000) / 100
-        "${k}.${dec}k 字符"
+        "${k}.${dec}k $unit"
     } else {
-        "$count 字符"
+        "$count $unit"
     }
 }
 
@@ -1527,8 +1854,6 @@ private fun formatCharCount(count: Int): String {
 @Composable
 fun WorkTraceCard(
     workTrace: ChatListItem.WorkTraceBlock,
-    userExpanded: Boolean? = null,
-    onToggleGlobalExpansion: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     renderStepItem: @Composable (ChatListItem) -> Unit,
 ) {
@@ -1537,7 +1862,10 @@ fun WorkTraceCard(
     val colors = LocalMederiColors.current
     var userChoice by remember(workTrace.key) { mutableStateOf<Boolean?>(null) }
     val autoExpanded = false
-    val isExpanded = userExpanded ?: userChoice ?: autoExpanded
+    val isExpanded = userChoice ?: autoExpanded
+
+    // 内容是否无限高：默认限高 + 栏内滚动，点块底部按钮切换为全部摊开，再点缩回限高
+    var isUnbounded by remember(workTrace.key) { mutableStateOf(false) }
 
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
@@ -1558,17 +1886,18 @@ fun WorkTraceCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            if (workTrace.isRunning) {
-                CircularProgressIndicator(
-                    color = colors.accentPrimary,
-                    strokeWidth = 1.4.dp,
+            if (workTrace.hasFailedTool) {
+                Icon(
+                    imageVector = FeatherIcons.AlertCircle,
+                    contentDescription = null,
+                    tint = colors.accentDanger,
                     modifier = Modifier.size(13.dp)
                 )
             } else {
                 Icon(
                     imageVector = FeatherIcons.Activity,
                     contentDescription = null,
-                    tint = if (workTrace.hasFailedTool) colors.accentDanger else colors.accentPrimary,
+                    tint = colors.accentPrimary,
                     modifier = Modifier.size(13.dp)
                 )
             }
@@ -1578,21 +1907,19 @@ fun WorkTraceCard(
                 if (sec >= 60) "${sec / 60}m ${sec % 60}s" else "${sec}s"
             } else ""
 
-            val titleText = buildString {
-                append("工作过程")
+            val titleText = run {
+                val title = stringResource(Res.string.worktrace_summary_title)
                 val details = mutableListOf<String>()
                 if (workTrace.totalToolsCount > 0) {
-                    details.add("${workTrace.totalToolsCount} 项操作")
+                    details.add(stringResource(Res.string.worktrace_steps_count, workTrace.totalToolsCount))
                 }
                 if (durationStr.isNotBlank()) {
-                    details.add("耗时 $durationStr")
+                    details.add(stringResource(Res.string.worktrace_duration, durationStr))
                 }
                 if (workTrace.hasFailedTool) {
-                    details.add("存在失败")
+                    details.add(stringResource(Res.string.worktrace_has_failure))
                 }
-                if (details.isNotEmpty()) {
-                    append(" (${details.joinToString(" · ")})")
-                }
+                if (details.isNotEmpty()) "$title (${details.joinToString(" · ")})" else title
             }
 
             Text(
@@ -1613,49 +1940,31 @@ fun WorkTraceCard(
                     .graphicsLayer { rotationZ = arrowRotation }
             )
 
-            // 折叠态右侧单行实时信息流（图二位置：自言自语/具体工具类型/思考中）
-            if (!isExpanded && !workTrace.activeActivityText.isNullOrBlank()) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = workTrace.activeActivityText,
-                    color = if (colors.isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-            }
-
-            // 全局三态展开按钮（自动/全部展开/全部折叠），仅当有工具操作时显示
-            if (onToggleGlobalExpansion != null && workTrace.totalToolsCount > 0) {
-                Spacer(modifier = Modifier.width(6.dp))
-                val label = when (userExpanded) {
-                    true -> "折叠全部"
-                    false -> "展开全部"
-                    null -> "自动"
-                }
-                Text(
-                    text = label,
-                    color = if (colors.isDark) Color(0xFF94A3B8) else colors.textMuted,
-                    fontSize = 11.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { onToggleGlobalExpansion() }
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                )
-            }
         }
 
-        // 展开后的完整工作轨迹子项（左侧细微导轨线）
+        // 展开后的完整工作轨迹子项（左侧细微导轨线）。
+        // 默认最高高度限制：内容超高时栏内上下滚动，避免推理/工具步骤把整个聊天顶得过长；
+        // 内容末尾的「展开/收起」按钮随内容滚动、永远位于块的最底部：
+        // 点击切换为无限高度（全部摊开，不再限高），再点缩回限高。
         AnimatedVisibility(
             visible = isExpanded,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
             val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
+            val traceScrollState = rememberScrollState()
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(
+                        if (!isUnbounded) {
+                            Modifier
+                                .heightIn(max = WorkTraceMaxContentHeight)
+                                .verticalScroll(traceScrollState)
+                        } else {
+                            Modifier
+                        }
+                    )
                     .padding(vertical = 2.dp, horizontal = 4.dp)
                     .drawBehind {
                         val strokeWidth = 1.5.dp.toPx()
@@ -1672,6 +1981,36 @@ fun WorkTraceCard(
             ) {
                 workTrace.items.forEach { stepItem ->
                     renderStepItem(stepItem)
+                }
+
+                // 底部切换按钮：位于内容末尾、随内容滚动（永远在块的最底部），恒显示
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
+                            isUnbounded = !isUnbounded
+                            DebugLog.debug("UI", "WorkTraceCard isUnbounded toggled to: $isUnbounded")
+                        }
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                        contentDescription = null,
+                        tint = if (colors.isDark) Color(0xFF94A3B8) else colors.textMuted,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(
+                            if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
+                        ),
+                        color = if (colors.isDark) Color(0xFF94A3B8) else colors.textMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
         }

@@ -14,6 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.sysinfo_cores
+import mederi.app.shared.generated.resources.sysinfo_heap
+import mederi.app.shared.generated.resources.sysinfo_memory_rss
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.util.formatBytes
@@ -58,7 +63,7 @@ fun SystemInfoBar(
                     fontWeight = FontWeight.Normal
                 )
                 val cpuText = formatCpuUsage(stats?.cpuUsage)
-                val coresText = if (stats != null && stats.cpuCores > 0) " (${stats.cpuCores}核)" else ""
+                val coresText = if (stats != null && stats.cpuCores > 0) stringResource(Res.string.sysinfo_cores, stats.cpuCores) else ""
                 Text(
                     text = "$cpuText$coresText",
                     color = colors.textPrimary,
@@ -79,7 +84,7 @@ fun SystemInfoBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "内存(RSS)",
+                    text = stringResource(Res.string.sysinfo_memory_rss),
                     color = colors.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Normal
@@ -104,7 +109,7 @@ fun SystemInfoBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "JVM堆",
+                    text = stringResource(Res.string.sysinfo_heap),
                     color = colors.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Normal

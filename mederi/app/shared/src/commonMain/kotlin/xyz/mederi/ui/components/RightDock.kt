@@ -33,6 +33,16 @@ import androidx.compose.ui.window.PopupProperties
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.delay
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.rightdock_artifacts
+import mederi.app.shared.generated.resources.rightdock_browser
+import mederi.app.shared.generated.resources.rightdock_diff
+import mederi.app.shared.generated.resources.rightdock_overview
+import mederi.app.shared.generated.resources.rightdock_plan
+import mederi.app.shared.generated.resources.rightdock_settings
+import mederi.app.shared.generated.resources.rightdock_sub_agents
+import mederi.app.shared.generated.resources.rightdock_terminal
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.ui.DebugLog
 import xyz.mederi.core.ui.RightDockPanel
 import xyz.mederi.theme.LocalMederiColors
@@ -41,8 +51,7 @@ import xyz.mederi.ui.ChatLayout
 
 data class DockItemData(
     val panel: RightDockPanel,
-    val icon: ImageVector,
-    val label: String
+    val icon: ImageVector
 )
 
 @Composable
@@ -55,13 +64,13 @@ fun RightDock(
     val colors = LocalMederiColors.current
 
     val dockItems = listOf(
-        DockItemData(RightDockPanel.OVERVIEW, FeatherIcons.Activity, "概览与指标"),
-        DockItemData(RightDockPanel.DIFF, FeatherIcons.GitCommit, "代码差异审查"),
-        DockItemData(RightDockPanel.PLAN, FeatherIcons.FileText, "实施计划"),
-        DockItemData(RightDockPanel.SUB_AGENTS, FeatherIcons.Users, "子 Agent 协同"),
-        DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.File, "文档与媒体"),
-        DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal, "终端"),
-        DockItemData(RightDockPanel.BROWSER, FeatherIcons.Globe, "内置浏览器")
+        DockItemData(RightDockPanel.OVERVIEW, FeatherIcons.Activity),
+        DockItemData(RightDockPanel.DIFF, FeatherIcons.GitCommit),
+        DockItemData(RightDockPanel.PLAN, FeatherIcons.FileText),
+        DockItemData(RightDockPanel.SUB_AGENTS, FeatherIcons.Users),
+        DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.File),
+        DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal),
+        DockItemData(RightDockPanel.BROWSER, FeatherIcons.Globe)
     )
 
     Column(
@@ -76,9 +85,18 @@ fun RightDock(
         // 功能图标栏
         dockItems.forEach { item ->
             val isActive = activePanel == item.panel
+            val label = when (item.panel) {
+                RightDockPanel.OVERVIEW -> stringResource(Res.string.rightdock_overview)
+                RightDockPanel.DIFF -> stringResource(Res.string.rightdock_diff)
+                RightDockPanel.PLAN -> stringResource(Res.string.rightdock_plan)
+                RightDockPanel.SUB_AGENTS -> stringResource(Res.string.rightdock_sub_agents)
+                RightDockPanel.ARTIFACTS -> stringResource(Res.string.rightdock_artifacts)
+                RightDockPanel.TERMINAL -> stringResource(Res.string.rightdock_terminal)
+                RightDockPanel.BROWSER -> stringResource(Res.string.rightdock_browser)
+            }
             DockIconButton(
                 icon = item.icon,
-                label = item.label,
+                label = label,
                 isActive = isActive,
                 colors = colors,
                 onClick = { onSelectPanel(item.panel) }
@@ -91,7 +109,7 @@ fun RightDock(
         // 底部设置按钮
         DockIconButton(
             icon = FeatherIcons.Sliders,
-            label = "设置",
+            label = stringResource(Res.string.rightdock_settings),
             isActive = false,
             colors = colors,
             onClick = onOpenSettings

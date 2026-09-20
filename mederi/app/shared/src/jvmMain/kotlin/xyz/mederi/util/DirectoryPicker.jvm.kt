@@ -6,7 +6,7 @@ import java.awt.FileDialog
 import java.awt.Frame
 import javax.swing.JFileChooser
 
-actual suspend fun pickDirectory(): String? = withContext(Dispatchers.IO) {
+actual suspend fun pickDirectory(title: String): String? = withContext(Dispatchers.IO) {
     val osName = System.getProperty("os.name", "").lowercase()
     val isMac = osName.contains("mac")
 
@@ -15,7 +15,7 @@ actual suspend fun pickDirectory(): String? = withContext(Dispatchers.IO) {
     try {
         if (isMac) {
             System.setProperty("apple.awt.fileDialogForDirectories", "true")
-            val dialog = FileDialog(null as Frame?, "选择项目目录", FileDialog.LOAD)
+            val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD)
             dialog.isVisible = true
             System.setProperty("apple.awt.fileDialogForDirectories", "false")
 
@@ -39,7 +39,7 @@ actual suspend fun pickDirectory(): String? = withContext(Dispatchers.IO) {
         } else {
             val chooser = JFileChooser().apply {
                 fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
-                dialogTitle = "选择项目目录"
+                dialogTitle = title
                 isAcceptAllFileFilterUsed = false
             }
             val result = chooser.showOpenDialog(null)

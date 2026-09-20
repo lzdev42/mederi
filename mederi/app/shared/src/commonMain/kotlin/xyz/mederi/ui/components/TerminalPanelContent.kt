@@ -40,6 +40,19 @@ import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.terminalCwdOf
 import xyz.mederi.core.ui.terminalTabTitle
 import xyz.mederi.theme.MederiColors
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.term_all_closed
+import mederi.app.shared.generated.resources.term_all_closed_hint
+import mederi.app.shared.generated.resources.term_click_retry
+import mederi.app.shared.generated.resources.term_close_tab
+import mederi.app.shared.generated.resources.term_new_tab
+import mederi.app.shared.generated.resources.term_reopen
+import mederi.app.shared.generated.resources.term_session_ended
+import mederi.app.shared.generated.resources.term_starting
+import mederi.app.shared.generated.resources.term_title
+import mederi.app.shared.generated.resources.term_unavailable
+import mederi.app.shared.generated.resources.term_unavailable_hint
+import org.jetbrains.compose.resources.stringResource
 
 /**
  * 终端面板：多 tab 终端（每 tab 一个独立 shell 会话，数量不设限）。
@@ -118,7 +131,7 @@ internal fun TerminalPanelContent(
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = FeatherIcons.X,
-                        contentDescription = "关闭终端",
+                        contentDescription = stringResource(Res.string.term_close_tab),
                         tint = colors.textMuted,
                         modifier = Modifier
                             .size(12.dp)
@@ -129,7 +142,7 @@ internal fun TerminalPanelContent(
 
             Icon(
                 imageVector = FeatherIcons.Plus,
-                contentDescription = "新建终端",
+                contentDescription = stringResource(Res.string.term_new_tab),
                 tint = colors.textSecondary,
                 modifier = Modifier
                     .size(16.dp)
@@ -142,7 +155,7 @@ internal fun TerminalPanelContent(
         val currentKey = terminalVm.activeKey
         Box(modifier = Modifier.fillMaxSize()) {
             when {
-                currentKey.isEmpty() -> TerminalCenterHint("已关闭全部终端", "点击上方 + 新建终端", colors)
+                currentKey.isEmpty() -> TerminalCenterHint(stringResource(Res.string.term_all_closed), stringResource(Res.string.term_all_closed_hint), colors)
 
                 terminalVm.errorOf(currentKey) != null -> TerminalErrorView(
                     message = terminalVm.errorOf(currentKey)!!,
@@ -156,7 +169,7 @@ internal fun TerminalPanelContent(
                     onRestart = { terminalVm.restartTab(currentKey) }
                 )
 
-                else -> TerminalCenterHint("正在启动终端…", null, colors)
+                else -> TerminalCenterHint(stringResource(Res.string.term_starting), null, colors)
             }
         }
     }
@@ -185,14 +198,14 @@ private fun TerminalSessionView(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "终端会话已结束",
+                        text = stringResource(Res.string.term_session_ended),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = colors.textSecondary
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "重新打开",
+                        text = stringResource(Res.string.term_reopen),
                         fontSize = 12.sp,
                         color = colors.accentSecondary,
                         modifier = Modifier.clickable { onRestart() }
@@ -210,7 +223,7 @@ private fun TerminalErrorView(message: String, colors: MederiColors, onRetry: ()
             Text(text = message, fontSize = 12.sp, color = colors.textSecondary)
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "点击重试",
+                text = stringResource(Res.string.term_click_retry),
                 fontSize = 12.sp,
                 color = colors.accentSecondary,
                 modifier = Modifier.clickable { onRetry() }
@@ -246,20 +259,20 @@ private fun TerminalUnsupportedPlaceholder(colors: MederiColors, modifier: Modif
         ) {
             Icon(
                 imageVector = FeatherIcons.Terminal,
-                contentDescription = "终端",
+                contentDescription = stringResource(Res.string.term_title),
                 tint = colors.textMuted,
                 modifier = Modifier.size(36.dp)
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "本地终端不可用",
+                text = stringResource(Res.string.term_unavailable),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = colors.textSecondary
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "当前端为遥控端，远程终端将在后续版本接入",
+                text = stringResource(Res.string.term_unavailable_hint),
                 fontSize = 11.sp,
                 color = colors.textMuted
             )

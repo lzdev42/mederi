@@ -39,6 +39,15 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.browser.localStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.launch
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.remotegate_connecting
+import mederi.app.shared.generated.resources.remotegate_enter
+import mederi.app.shared.generated.resources.remotegate_hint
+import mederi.app.shared.generated.resources.remotegate_password_label
+import mederi.app.shared.generated.resources.remotegate_password_required
+import mederi.app.shared.generated.resources.remotegate_password_wrong
+import mederi.app.shared.generated.resources.remotegate_title
+import org.jetbrains.compose.resources.stringResource
 
 private const val STORAGE_KEY = "mederi.remote.password"
 
@@ -64,6 +73,9 @@ fun RemoteGate(content: @Composable () -> Unit) {
     var phase by remember { mutableStateOf(GatePhase.Checking) }
     var password by remember { mutableStateOf(readStoredPassword() ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
+    // 文案在组合上下文取值（Button onClick 不是 @Composable）
+    val passwordRequiredMsg = stringResource(Res.string.remotegate_password_required)
+    val passwordWrongMsg = stringResource(Res.string.remotegate_password_wrong)
     val client = remember { HttpClient { defaultRequest { header(HttpHeaders.UserAgent, AppInfo.userAgent) } } }
     val scope = rememberCoroutineScope()
 
@@ -76,7 +88,7 @@ fun RemoteGate(content: @Composable () -> Unit) {
         GatePhase.Checking -> Box(Modifier.fillMaxSize().background(Color(0xFF0D1117)), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(28.dp), color = Color(0xFF58A6FF))
-                Text("正在连接 Mederi…", color = Color(0xFF8B949E), fontSize = 13.sp)
+                Text(stringResource(Res.string.remotegate_connecting), color = Color(0xFF8B949E), fontSize = 13.sp)
             }
         }
 
@@ -89,14 +101,14 @@ fun RemoteGate(content: @Composable () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("Mederi 遥控", color = Color(0xFFE6EDF3), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("本机开启了密码保护，请输入遥控密码", color = Color(0xFF8B949E), fontSize = 12.sp)
+                Text(stringResource(Res.string.remotegate_title), color = Color(0xFFE6EDF3), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(stringResource(Res.string.remotegate_hint), color = Color(0xFF8B949E), fontSize = 12.sp)
 
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it; error = null },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("遥控密码") },
+                    label = { Text(stringResource(Res.string.remotegate_password_label)) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -114,7 +126,7 @@ fun RemoteGate(content: @Composable () -> Unit) {
 
                 Button(
                     onClick = {
-                        if (password.isBlank()) { error = "请输入密码"; return@Button }
+                        if (password.isBlank()) { error = passwordRequiredMsg; return@Button }
                         error = null
                         phase = GatePhase.Checking
                         scope.launch {
@@ -123,14 +135,14 @@ fun RemoteGate(content: @Composable () -> Unit) {
                                 writeStoredPassword(password)
                                 phase = GatePhase.Ready
                             } else {
-                                error = "密码错误"
+                                error = passwordWrongMsg
                                 phase = GatePhase.NeedPassword
                             }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF238636), contentColor = Color.White)
-                ) { Text("进入", fontSize = 14.sp) }
+                ) { Text(stringResource(Res.string.remotegate_enter), fontSize = 14.sp) }
             }
         }
 

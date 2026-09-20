@@ -617,7 +617,8 @@ class TurnExecutor(
             .serializer(mederiToolSerializer)
             .build()
 
-        val historyProvider = HistoryStoreChatHistoryProvider(historyStore)
+        // 压缩与实际发送一致：图片按当前模型能力剔除
+        val historyProvider = HistoryStoreChatHistoryProvider(historyStore, includeImages = model.supportsImages)
 
         val agent = AIAgent.builder()
             .promptExecutor(executor)
@@ -693,8 +694,9 @@ class TurnExecutor(
             projectId = session.projectId
         )
         val toolTimings = TurnToolTimings()
+        // 发送链路与实际一致：图片按当前模型能力剔除（与压缩/预检估算一致）
         val historyProvider = TrackingHistoryProvider(
-            HistoryStoreChatHistoryProvider(historyStore, diagnostics, toolTimings)
+            HistoryStoreChatHistoryProvider(historyStore, diagnostics, toolTimings, includeImages = model.supportsImages)
         )
 
         // MCP：连接已启用的 MCP server，把工具合并进 agent。是否开启由中心化
@@ -1015,7 +1017,8 @@ class TurnExecutor(
         val window = HistoryStoreChatHistoryProvider.aiViewWindow(historyStore, session.id)
         if (window.isEmpty()) return
 
-        val koogWindow = KoogMessageMapper.toKoogMessages(window)
+        // 估算与实际发送一致：图片按当前模型能力剔除
+        val koogWindow = KoogMessageMapper.toKoogMessages(window, includeImages = model.supportsImages)
         // 窗口以 SUMMARY 标记开头时，窗口内消息的 inputTokens 反映的是压缩前的
         // 大上下文，不能当基线，改用估算；正常窗口用 API 报告的真实值
         val usedTokens = if (window.first().role == MessageRole.SUMMARY) {

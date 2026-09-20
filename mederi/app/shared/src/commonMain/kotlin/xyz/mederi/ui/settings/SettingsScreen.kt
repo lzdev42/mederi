@@ -34,17 +34,93 @@ import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.ui.appstate.LocalAppState
 import xyz.mederi.core.ui.appstate.RemoteServerUiState
 import xyz.mederi.core.ui.appstate.TunnelUiState
+import xyz.mederi.theme.AppLanguage
 import xyz.mederi.theme.AppThemeMode
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.close
+import mederi.app.shared.generated.resources.language_system
+import mederi.app.shared.generated.resources.settings_add
+import mederi.app.shared.generated.resources.settings_agents_desc
+import mederi.app.shared.generated.resources.settings_agents_title
+import mederi.app.shared.generated.resources.settings_appearance_desc
+import mederi.app.shared.generated.resources.settings_appearance_title
+import mederi.app.shared.generated.resources.settings_language_desc
+import mederi.app.shared.generated.resources.settings_language_title
+import mederi.app.shared.generated.resources.settings_remote_desc
+import mederi.app.shared.generated.resources.settings_remote_lan_address
+import mederi.app.shared.generated.resources.settings_remote_no_lan
+import mederi.app.shared.generated.resources.settings_remote_password_label
+import mederi.app.shared.generated.resources.settings_remote_password_note
+import mederi.app.shared.generated.resources.settings_remote_password_placeholder
+import mederi.app.shared.generated.resources.settings_remote_port_fallback
+import mederi.app.shared.generated.resources.settings_remote_state_failed
+import mederi.app.shared.generated.resources.settings_remote_state_idle
+import mederi.app.shared.generated.resources.settings_remote_state_running
+import mederi.app.shared.generated.resources.settings_remote_state_starting
+import mederi.app.shared.generated.resources.settings_remote_title
+import mederi.app.shared.generated.resources.settings_retry
+import mederi.app.shared.generated.resources.settings_sandbox_desc
+import mederi.app.shared.generated.resources.settings_sandbox_enabled
+import mederi.app.shared.generated.resources.settings_sandbox_querying
+import mederi.app.shared.generated.resources.settings_sandbox_remote_hint
+import mederi.app.shared.generated.resources.settings_sandbox_status_unavailable
+import mederi.app.shared.generated.resources.settings_sandbox_title
+import mederi.app.shared.generated.resources.settings_sandbox_unknown
+import mederi.app.shared.generated.resources.settings_sandbox_unavailable
+import mederi.app.shared.generated.resources.settings_sandbox_whitelist_desc
+import mederi.app.shared.generated.resources.settings_sandbox_whitelist_empty
+import mederi.app.shared.generated.resources.settings_sandbox_whitelist_title
+import mederi.app.shared.generated.resources.settings_sandbox_write_scope
+import mederi.app.shared.generated.resources.settings_show
+import mederi.app.shared.generated.resources.settings_hide
+import mederi.app.shared.generated.resources.settings_subtitle
+import mederi.app.shared.generated.resources.settings_system_config_dir
+import mederi.app.shared.generated.resources.settings_system_prefs_file
+import mederi.app.shared.generated.resources.settings_system_title
+import mederi.app.shared.generated.resources.settings_system_version
+import mederi.app.shared.generated.resources.settings_tab_agents
+import mederi.app.shared.generated.resources.settings_tab_general
+import mederi.app.shared.generated.resources.settings_tab_providers
+import mederi.app.shared.generated.resources.settings_tab_remote
+import mederi.app.shared.generated.resources.settings_tab_sandbox
+import mederi.app.shared.generated.resources.settings_tab_system
+import mederi.app.shared.generated.resources.settings_title
+import mederi.app.shared.generated.resources.settings_tunnel_desc
+import mederi.app.shared.generated.resources.settings_tunnel_failed
+import mederi.app.shared.generated.resources.settings_tunnel_no_hostname
+import mederi.app.shared.generated.resources.settings_tunnel_not_installed
+import mederi.app.shared.generated.resources.settings_tunnel_public_url
+import mederi.app.shared.generated.resources.settings_tunnel_running
+import mederi.app.shared.generated.resources.settings_tunnel_start
+import mederi.app.shared.generated.resources.settings_tunnel_starting
+import mederi.app.shared.generated.resources.settings_tunnel_title
+import mederi.app.shared.generated.resources.settings_tunnel_stop
+import mederi.app.shared.generated.resources.settings_remove
+import mederi.app.shared.generated.resources.theme_dark
+import mederi.app.shared.generated.resources.theme_light
+import org.jetbrains.compose.resources.stringResource
 
-private enum class SettingsTab(val label: String, val icon: ImageVector) {
-    PROVIDERS("供应商管理", FeatherIcons.Cpu),
-    GENERAL("外观主题", FeatherIcons.Droplet),
-    SANDBOX("沙盒", FeatherIcons.Shield),
-    AGENTS("Agent 代理", FeatherIcons.Users),
-    REMOTE("远程遥控", FeatherIcons.Sliders),
-    SYSTEM("系统信息", FeatherIcons.Activity)
+/** 设置页标签（显示文案唯一映射点 = settingsTabLabel，枚举不持有表现层文案，i18n 约定）。 */
+private enum class SettingsTab(val icon: ImageVector) {
+    PROVIDERS(FeatherIcons.Cpu),
+    GENERAL(FeatherIcons.Droplet),
+    SANDBOX(FeatherIcons.Shield),
+    AGENTS(FeatherIcons.Users),
+    REMOTE(FeatherIcons.Sliders),
+    SYSTEM(FeatherIcons.Activity)
+}
+
+/** 设置页标签文案唯一映射点。 */
+@Composable
+private fun settingsTabLabel(tab: SettingsTab): String = when (tab) {
+    SettingsTab.PROVIDERS -> stringResource(Res.string.settings_tab_providers)
+    SettingsTab.GENERAL -> stringResource(Res.string.settings_tab_general)
+    SettingsTab.SANDBOX -> stringResource(Res.string.settings_tab_sandbox)
+    SettingsTab.AGENTS -> stringResource(Res.string.settings_tab_agents)
+    SettingsTab.REMOTE -> stringResource(Res.string.settings_tab_remote)
+    SettingsTab.SYSTEM -> stringResource(Res.string.settings_tab_system)
 }
 
 @Composable
@@ -92,9 +168,9 @@ fun SettingsDialog(
                             contentAlignment = Alignment.Center
                         ) { Icon(FeatherIcons.Sliders, null, tint = colors.accentPrimary, modifier = Modifier.size(15.dp)) }
                         Column {
-                            Text("设置", color = colors.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            Text(stringResource(Res.string.settings_title), color = colors.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                             if (!isCompact) {
-                                Text("管理软件偏好、模型供应商与系统配置", color = colors.textMuted, fontSize = 10.5.sp)
+                                Text(stringResource(Res.string.settings_subtitle), color = colors.textMuted, fontSize = 10.5.sp)
                             }
                         }
                     }
@@ -102,7 +178,7 @@ fun SettingsDialog(
                         modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp))
                             .background(colors.surfaceCard).border(1.dp, colors.divider, RoundedCornerShape(6.dp))
                             .clickable { onClose() }, contentAlignment = Alignment.Center
-                    ) { Icon(FeatherIcons.X, "关闭", tint = colors.textSecondary, modifier = Modifier.size(13.dp)) }
+                    ) { Icon(FeatherIcons.X, stringResource(Res.string.close), tint = colors.textSecondary, modifier = Modifier.size(13.dp)) }
                 }
 
                 // 2. 浏览器风格水平标签栏 (Browser Tabs Bar)
@@ -158,7 +234,7 @@ private fun BrowserTabsBar(
             val isSelected = selectedTab == tab
             BrowserTabItem(
                 icon = tab.icon,
-                label = tab.label,
+                label = settingsTabLabel(tab),
                 isSelected = isSelected,
                 colors = colors,
                 onClick = { onSelectTab(tab) }
@@ -214,6 +290,7 @@ private fun BrowserTabItem(
     val appState = LocalAppState.current
     val c = LocalMederiColors.current
     val currentTheme by appState.theme.collectAsState()
+    val currentLanguage by appState.language.collectAsState()
     val scroll = rememberScrollState()
 
     Column(
@@ -221,8 +298,8 @@ private fun BrowserTabItem(
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("外观与主题偏好", color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text("遵循人体工学高对比度与 WCAG AA 标准，提供精校深色与浅色双模式", color = c.textSecondary, fontSize = 12.sp)
+            Text(stringResource(Res.string.settings_appearance_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(Res.string.settings_appearance_desc), color = c.textSecondary, fontSize = 12.sp)
         }
 
         Row(
@@ -244,6 +321,61 @@ private fun BrowserTabItem(
                 onSelect = { appState.setTheme(AppThemeMode.LIGHT) }
             )
         }
+
+        // ─── 语言（Language）：唯一真理源 = AppState.language；切换即时生效（AppEnvironment → LocalAppLocale → 全树重组） ───
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(Res.string.settings_language_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(Res.string.settings_language_desc), color = c.textSecondary, fontSize = 12.sp)
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            AppLanguage.entries.forEach { language ->
+                LanguageCard(
+                    language = language,
+                    isSelected = currentLanguage == language,
+                    c = c,
+                    modifier = Modifier.weight(1f),
+                    onSelect = { appState.setLanguage(language) }
+                )
+            }
+        }
+    }
+}
+
+/** 语言选择卡。SYSTEM 用资源文案，其余显示语言原生名（专有名词不翻译）。 */
+@Composable
+private fun LanguageCard(
+    language: AppLanguage,
+    isSelected: Boolean,
+    c: MederiColors,
+    modifier: Modifier = Modifier,
+    onSelect: () -> Unit
+) {
+    val cardBorder = if (isSelected) c.accentPrimary else c.divider
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(c.surfaceCard)
+            .border(if (isSelected) 2.dp else 1.dp, cardBorder, RoundedCornerShape(12.dp))
+            .clickable { onSelect() }
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            imageVector = FeatherIcons.Globe,
+            contentDescription = null,
+            tint = if (isSelected) c.accentPrimary else c.textSecondary,
+            modifier = Modifier.size(16.dp)
+        )
+        Text(
+            text = if (language == AppLanguage.SYSTEM) stringResource(Res.string.language_system) else language.nativeName,
+            color = if (isSelected) c.accentPrimary else c.textPrimary,
+            fontSize = 13.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }
 
@@ -265,8 +397,8 @@ private fun BrowserTabItem(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("执行沙盒", color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text("永远开启：AI 只能写项目目录与下方白名单，其余位置只读；命令在 OS 级沙箱中执行", color = c.textSecondary, fontSize = 12.sp)
+            Text(stringResource(Res.string.settings_sandbox_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(Res.string.settings_sandbox_desc), color = c.textSecondary, fontSize = 12.sp)
         }
 
         // 1. 状态卡
@@ -277,7 +409,7 @@ private fun BrowserTabItem(
             SandboxWhitelistCard(appState, c)
         } else {
             Text(
-                "当前连接远程服务器或使用模拟数据，白名单由服务器环境决定，本机不可编辑。",
+                stringResource(Res.string.settings_sandbox_remote_hint),
                 color = c.textMuted, fontSize = 11.5.sp
             )
         }
@@ -317,10 +449,10 @@ private fun SandboxStatusCard(hooks: xyz.mederi.core.contract.SandboxHooks?) {
                 text = run {
                     val st = status
                     when {
-                        isQuerying -> "正在查询沙盒状态…"
-                        st == null -> "沙盒状态未知"
-                        st.available -> "命令沙箱已启用（${st.backend}）"
-                        else -> "命令沙箱不可用"
+                        isQuerying -> stringResource(Res.string.settings_sandbox_querying)
+                        st == null -> stringResource(Res.string.settings_sandbox_unknown)
+                        st.available -> stringResource(Res.string.settings_sandbox_enabled, st.backend)
+                        else -> stringResource(Res.string.settings_sandbox_unavailable)
                     }
                 },
                 color = c.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
@@ -330,11 +462,11 @@ private fun SandboxStatusCard(hooks: xyz.mederi.core.contract.SandboxHooks?) {
         }
         Text(
             text = status?.detail
-                ?: "当前连接无法查询沙盒状态（远程服务器或模拟数据）。",
+                ?: stringResource(Res.string.settings_sandbox_status_unavailable),
             color = c.textSecondary, fontSize = 11.5.sp
         )
         Text(
-            text = "写范围 = 项目目录 ∪ 系统临时目录 ∪ 构建缓存（~/.gradle ~/.m2 ~/.cache 等） ∪ 下方白名单；读全盘放行。",
+            text = stringResource(Res.string.settings_sandbox_write_scope),
             color = c.textMuted, fontSize = 11.sp
         )
     }
@@ -359,13 +491,13 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("全局写白名单", color = c.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text("允许 AI 写入项目目录之外的位置（如共享库目录）。修改立即生效，无需重启。", color = c.textMuted, fontSize = 11.sp)
+            Text(stringResource(Res.string.settings_sandbox_whitelist_title), color = c.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.settings_sandbox_whitelist_desc), color = c.textMuted, fontSize = 11.sp)
         }
 
         // 已添加路径列表
         if (paths.isEmpty()) {
-            Text("暂无额外白名单路径。", color = c.textMuted, fontSize = 11.5.sp)
+            Text(stringResource(Res.string.settings_sandbox_whitelist_empty), color = c.textMuted, fontSize = 11.5.sp)
         } else {
             paths.forEach { path ->
                 Row(
@@ -379,7 +511,7 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                         modifier = Modifier.weight(1f)
                     )
                     Text(
-                        text = "移除",
+                        text = stringResource(Res.string.settings_remove),
                         color = c.accentDanger, fontSize = 11.sp,
                         modifier = Modifier.clickable { appState.setSandboxExtraPaths(paths - path) }
                     )
@@ -414,7 +546,7 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = c.accentPrimary)
             ) {
-                Text("添加", fontSize = 11.5.sp, color = c.onAccentPrimary)
+                Text(stringResource(Res.string.settings_add), fontSize = 11.5.sp, color = c.onAccentPrimary)
             }
         }
     }
@@ -429,8 +561,8 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("远程遥控", color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text("开启后允许手机/浏览器经网络遥控本机（内嵌 server 托管 Web UI）", color = c.textSecondary, fontSize = 12.sp)
+            Text(stringResource(Res.string.settings_remote_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(Res.string.settings_remote_desc), color = c.textSecondary, fontSize = 12.sp)
         }
         RemoteControlCard(isCompact = isCompact)
     }
@@ -478,13 +610,13 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("远程遥控", color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(stringResource(Res.string.settings_remote_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Text(
                     when (serverState) {
-                        is RemoteServerUiState.Idle -> "开启后允许手机/浏览器遥控本机"
-                        is RemoteServerUiState.Starting -> "正在启动遥控服务…"
-                        is RemoteServerUiState.Running -> "已开启 · 手机/浏览器遥控本机"
-                        is RemoteServerUiState.Failed -> "启动失败"
+                        is RemoteServerUiState.Idle -> stringResource(Res.string.settings_remote_state_idle)
+                        is RemoteServerUiState.Starting -> stringResource(Res.string.settings_remote_state_starting)
+                        is RemoteServerUiState.Running -> stringResource(Res.string.settings_remote_state_running)
+                        is RemoteServerUiState.Failed -> stringResource(Res.string.settings_remote_state_failed)
                     },
                     color = c.textSecondary, fontSize = 12.sp
                 )
@@ -503,18 +635,18 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
             is RemoteServerUiState.Running -> {
                 if (ss.portFallback) {
                     Text(
-                        "上次使用的端口被占用，已自动改用 ${ss.port}",
+                        stringResource(Res.string.settings_remote_port_fallback, ss.port),
                         color = c.accentWarning, fontSize = 12.sp
                     )
                 }
                 // 局域网地址
                 if (localAddr != null) {
                     Text(
-                        "局域网地址：http://${localAddr}:${ss.port}",
+                        stringResource(Res.string.settings_remote_lan_address, localAddr, ss.port),
                         color = c.accentSuccess, fontSize = 13.sp, fontWeight = FontWeight.Medium
                     )
                 } else {
-                    Text("未检测到局域网地址", color = c.textMuted, fontSize = 12.sp)
+                    Text(stringResource(Res.string.settings_remote_no_lan), color = c.textMuted, fontSize = 12.sp)
                 }
             }
             is RemoteServerUiState.Failed -> {
@@ -529,13 +661,13 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                 value = password,
                 onValueChange = { password = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("遥控密码（可留空）") },
-                placeholder = { Text("留空则不鉴权，仅建议本机网络使用", fontSize = 11.sp) },
+                label = { Text(stringResource(Res.string.settings_remote_password_label)) },
+                placeholder = { Text(stringResource(Res.string.settings_remote_password_placeholder), fontSize = 11.sp) },
                 singleLine = true,
                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     Text(
-                        if (showPassword) "隐藏" else "显示",
+                        stringResource(if (showPassword) Res.string.settings_hide else Res.string.settings_show),
                         color = c.accentPrimary, fontSize = 12.sp,
                         modifier = Modifier.clickable { showPassword = !showPassword }.padding(horizontal = 10.dp)
                     )
@@ -543,7 +675,7 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                 colors = OutlinedTextFieldDefaults.colors()
             )
             Text(
-                "修改密码后需关闭再开启遥控生效。",
+                stringResource(Res.string.settings_remote_password_note),
                 color = c.textSecondary, fontSize = 11.sp
             )
         }
@@ -552,47 +684,47 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
         if (ss is RemoteServerUiState.Running) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.divider))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Cloudflare 隧道", color = c.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(stringResource(Res.string.settings_tunnel_title), color = c.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
 
                 val ts = tunnelState
                 when (ts) {
                     is TunnelUiState.Idle -> {
-                        Text("通过 Cloudflare 隧道可从公网访问本机（需先安装 cloudflared）", color = c.textSecondary, fontSize = 11.sp)
+                        Text(stringResource(Res.string.settings_tunnel_desc), color = c.textSecondary, fontSize = 11.sp)
                         Button(
                             onClick = { appState.startTunnel() },
                             enabled = true,
                             colors = ButtonDefaults.buttonColors(containerColor = c.accentPrimary, contentColor = c.onAccentPrimary)
-                        ) { Text("启动隧道", fontSize = 12.sp) }
+                        ) { Text(stringResource(Res.string.settings_tunnel_start), fontSize = 12.sp) }
                     }
                     is TunnelUiState.Starting -> {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = c.accentPrimary)
-                            Text("正在启动隧道…", color = c.textSecondary, fontSize = 12.sp)
+                            Text(stringResource(Res.string.settings_tunnel_starting), color = c.textSecondary, fontSize = 12.sp)
                         }
                     }
                     is TunnelUiState.Running -> {
-                        Text("隧道运行中", color = c.accentSuccess, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text(stringResource(Res.string.settings_tunnel_running), color = c.accentSuccess, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         val url = ts.url
                         if (url != null) {
-                            Text("公网地址：$url", color = c.accentPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text(stringResource(Res.string.settings_tunnel_public_url, url), color = c.accentPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         } else {
-                            Text("隧道域名未识别（请检查 ~/.cloudflared/config.yml 的 hostname 配置）", color = c.textMuted, fontSize = 12.sp)
+                            Text(stringResource(Res.string.settings_tunnel_no_hostname), color = c.textMuted, fontSize = 12.sp)
                         }
                         OutlinedButton(
                             onClick = { appState.stopTunnel() },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = c.accentDanger)
-                        ) { Text("停止隧道", fontSize = 12.sp) }
+                        ) { Text(stringResource(Res.string.settings_tunnel_stop), fontSize = 12.sp) }
                     }
                     is TunnelUiState.Failed -> {
                         if (ts.notInstalled) {
-                            Text("未检测到 cloudflared，请自行安装", color = c.accentDanger, fontSize = 12.sp)
+                            Text(stringResource(Res.string.settings_tunnel_not_installed), color = c.accentDanger, fontSize = 12.sp)
                         } else {
-                            Text("隧道启动失败：${ts.reason}", color = c.accentDanger, fontSize = 12.sp)
+                            Text(stringResource(Res.string.settings_tunnel_failed, ts.reason), color = c.accentDanger, fontSize = 12.sp)
                         }
                         Button(
                             onClick = { appState.startTunnel() },
                             colors = ButtonDefaults.buttonColors(containerColor = c.accentPrimary, contentColor = c.onAccentPrimary)
-                        ) { Text("重试", fontSize = 12.sp) }
+                        ) { Text(stringResource(Res.string.settings_retry), fontSize = 12.sp) }
                     }
                 }
             }
@@ -686,7 +818,7 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = theme.displayName,
+                    text = stringResource(if (theme.isDark) Res.string.theme_dark else Res.string.theme_light),
                     color = if (isSelected) c.accentPrimary else c.textPrimary,
                     fontSize = 13.sp,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
@@ -718,8 +850,8 @@ private fun AgentsPanel() {
     val c = LocalMederiColors.current
     val scroll = rememberScrollState()
     Column(Modifier.fillMaxSize().verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Agent 配置", color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Text("Agent 系统已重构，配置面板待重新实现。", color = c.textMuted, fontSize = 12.sp)
+        Text(stringResource(Res.string.settings_agents_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Text(stringResource(Res.string.settings_agents_desc), color = c.textMuted, fontSize = 12.sp)
     }
 }
 
@@ -728,11 +860,11 @@ private fun AgentsPanel() {
     val scroll = rememberScrollState()
     val columns = if (isCompact) 1 else 2
     Column(Modifier.fillMaxSize().verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("系统与运行环境信息", color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Text(stringResource(Res.string.settings_system_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         listOf(
-            Triple("Mederi 版本", AppInfo.VERSION, FeatherIcons.Info),
-            Triple("配置目录", "~/.mederi/", FeatherIcons.Folder),
-            Triple("偏好文件", "~/.mederi/preferences.json", FeatherIcons.FileText)
+            Triple(stringResource(Res.string.settings_system_version), AppInfo.VERSION, FeatherIcons.Info),
+            Triple(stringResource(Res.string.settings_system_config_dir), "~/.mederi/", FeatherIcons.Folder),
+            Triple(stringResource(Res.string.settings_system_prefs_file), "~/.mederi/preferences.json", FeatherIcons.FileText)
         ).chunked(columns).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEach { (l, v, i) -> Box(Modifier.weight(1f)) { InfoCard(l, v, i, c) } }

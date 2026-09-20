@@ -16,6 +16,18 @@
     </circle>
 </svg>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+    // 应用内语言切换（compose resources 的 wasm 环境只读 navigator.languages，
+    // 这里用可写覆盖代理接住 LocalAppLocale 广播的 __customLocale + languagechange 事件）
+    var currentLanguagesImplementation = Object.getOwnPropertyDescriptor(Navigator.prototype, "languages");
+    var newLanguagesImplementation = Object.assign({}, currentLanguagesImplementation, {
+        get: function () {
+            if (window.__customLocale) { return [window.__customLocale]; }
+            return currentLanguagesImplementation.get.apply(this);
+        }
+    });
+    Object.defineProperty(Navigator.prototype, "languages", newLanguagesImplementation);
+</script>
 <script type="application/javascript" src="webApp.js"></script>
 </body>
 </html>

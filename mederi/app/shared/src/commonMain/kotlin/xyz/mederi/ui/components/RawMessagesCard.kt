@@ -28,6 +28,13 @@ import xyz.mederi.core.ui.RawMessagesViewModel
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.rememberMederiMarkdownTheme
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.copy
+import mederi.app.shared.generated.resources.copy_done
+import mederi.app.shared.generated.resources.rawmsg_count
+import mederi.app.shared.generated.resources.rawmsg_title
+import org.jetbrains.compose.resources.stringResource
 
 private val jsonPretty = Json {
     prettyPrint = true
@@ -217,7 +224,7 @@ fun RawMessagesCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "原始消息",
+                text = stringResource(Res.string.rawmsg_title),
                 color = colors.textMuted,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -225,7 +232,7 @@ fun RawMessagesCard(
             )
             if (rawMessages.isNotEmpty()) {
                 Text(
-                    text = "${rawMessages.size} 条",
+                    text = stringResource(Res.string.rawmsg_count, rawMessages.size),
                     color = colors.textMuted,
                     fontSize = 10.sp
                 )
@@ -367,7 +374,8 @@ private fun RawMessageItemRow(
                 MarkdownView(
                     content = markdownContent,
                     modifier = Modifier.fillMaxWidth(),
-                    enableScrollOverride = false
+                    enableScrollOverride = false,
+                    markdownTheme = rememberMederiMarkdownTheme()
                 )
 
                 // 右上角浮动复制按钮
@@ -385,7 +393,7 @@ private fun RawMessageItemRow(
                 ) {
                     Icon(
                         imageVector = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
-                        contentDescription = if (copied) "已复制" else "复制",
+                        contentDescription = stringResource(if (copied) Res.string.copy_done else Res.string.copy),
                         tint = if (copied) colors.accentSuccess else colors.textMuted,
                         modifier = Modifier.size(13.dp)
                     )

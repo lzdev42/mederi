@@ -5,19 +5,20 @@ import xyz.mederi.core.contract.models.*
 
 /**
  * AI 一轮对话的实时状态。从 ConversationSnapshot 派生，UI 层无需自行判断。
+ * 显示文案唯一映射点 = StatusBar 的 turnStatusLabel()（枚举不持有表现层文案，i18n 约定）。
  */
-enum class TurnStatus(val label: String) {
-    Idle("空闲"),
+enum class TurnStatus {
+    Idle,
     /** 消息已提交，turn 尚未开始（等待 core 受理/新会话创建完成） */
-    Sending("正在发送"),
+    Sending,
     /** 请求已发出，等待模型返回首个 token（网络在途） */
-    Preparing("已送达，等待回应"),
-    Thinking("AI 思考中"),
-    CallingTool("调用工具中"),
-    Generating("正在生成回复"),
-    WaitingAnswer("等待回答"),
-    Retrying("正在自动重试"),
-    Aborted("已中断");
+    Preparing,
+    Thinking,
+    CallingTool,
+    Generating,
+    WaitingAnswer,
+    Retrying,
+    Aborted;
 
     /**
      * 该状态是否需要在状态栏（StatusBar）中展示。

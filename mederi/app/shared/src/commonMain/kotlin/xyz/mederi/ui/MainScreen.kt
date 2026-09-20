@@ -2,21 +2,34 @@ package xyz.mederi.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.main_initializing
+import mederi.app.shared.generated.resources.main_ready
+import mederi.app.shared.generated.resources.pick_directory_title
+import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.ui.DebugLog
 import xyz.mederi.core.ui.SidebarViewModel
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
@@ -39,6 +52,7 @@ fun MainScreen() {
     val filteredProjects by sidebarViewModel.filteredProjects.collectAsState()
     val selectedConversationId by appState.selectedConversationId.collectAsState()
     val isReady by appState.isReady.collectAsState()
+    val isPinned by appState.leftSidebarPinned.collectAsState()
 
     // 选中会话时自动展开其所属项目（覆盖程序化选择：自动创建会话、子代理跳转等，用户手点必在已展开项目内）
     LaunchedEffect(selectedConversationId, filteredProjects) {
@@ -47,43 +61,56 @@ fun MainScreen() {
     }
 
     val coroutineScope = rememberCoroutineScope()
+    val pickDirectoryTitle = stringResource(Res.string.pick_directory_title)
 
     // 目录选择 → 创建项目（平台 IO 胶水，单一定义点）
     val openProjectPicker: () -> Unit = {
         coroutineScope.launch {
-            pickDirectory()?.let { sidebarViewModel.createProjectFromDirectory(it) }
+            pickDirectory(pickDirectoryTitle)?.let { sidebarViewModel.createProjectFromDirectory(it) }
         }
     }
 
     val isInitializing = !isReady
-    val statusText = if (!isReady) "正在初始化..." else "已就绪"
+    val statusText = if (!isReady) stringResource(Res.string.main_initializing) else stringResource(Res.string.main_ready)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenWidth = maxWidth
         val isCompact = screenWidth < 768.dp
 
-        // 移动端抽屉默认关闭（false），桌面端侧边栏默认展开（true）
-        var isLeftSidebarOpen by remember(isCompact) { mutableStateOf(!isCompact) }
-
         if (isCompact) {
             // ==========================================
             // 移动端布局 (Mobile: Fullscreen Workspace + Overlay Drawer)
             // ==========================================
-            Box(modifier = Modifier.fillMaxSize()) {
+            var isMobileDrawerOpen by remember(isCompact) { mutableStateOf(false) }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(isMobileDrawerOpen) {
+                        if (!isMobileDrawerOpen) {
+                            // 边缘右滑手势：从屏幕左侧（<= 40dp）向右滑出抽屉
+                            detectHorizontalDragGestures { change, dragAmount ->
+                                if (change.position.x <= 40.dp.toPx() && dragAmount > 15) {
+                                    isMobileDrawerOpen = true
+                                }
+                            }
+                        }
+                    }
+            ) {
                 // 主工作区占满全屏
                 Workspace(
                     modifier = Modifier.fillMaxSize(),
                     viewModel = workspaceViewModel,
                     isCompact = true,
-                    isLeftSidebarOpen = isLeftSidebarOpen,
-                    onToggleLeftSidebar = { isLeftSidebarOpen = !isLeftSidebarOpen },
+                    isLeftSidebarOpen = isMobileDrawerOpen,
+                    onToggleLeftSidebar = { isMobileDrawerOpen = !isMobileDrawerOpen },
                     onOpenProjectPicker = openProjectPicker,
                     onOpenSettings = { isSettingsVisible = true }
                 )
 
                 // 侧边栏抽屉半透明背景遮罩
                 AnimatedVisibility(
-                    visible = isLeftSidebarOpen,
+                    visible = isMobileDrawerOpen,
                     enter = fadeIn(),
                     exit = fadeOut()
                 ) {
@@ -91,15 +118,19 @@ fun MainScreen() {
                         modifier = Modifier
                             .fillMaxSize()
                             .background(colors.surfaceOverlay)
-                            .clickable { isLeftSidebarOpen = false }
+                            .clickable { isMobileDrawerOpen = false }
                     )
                 }
 
                 // 左侧滑出抽屉
                 AnimatedVisibility(
-                    visible = isLeftSidebarOpen,
-                    enter = slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { -it } + fadeIn(),
-                    exit = slideOutHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { -it } + fadeOut()
+                    visible = isMobileDrawerOpen,
+                    enter = slideInHorizontally(
+                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
+                    ) { -it } + fadeIn(),
+                    exit = slideOutHorizontally(
+                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
+                    ) { -it } + fadeOut()
                 ) {
                     Sidebar(
                         modifier = Modifier
@@ -108,47 +139,169 @@ fun MainScreen() {
                         viewModel = sidebarViewModel,
                         isCompact = true,
                         isDrawer = true,
-                        onRequestClose = { isLeftSidebarOpen = false },
+                        onRequestClose = { isMobileDrawerOpen = false },
                         onOpenSettings = {
                             isSettingsVisible = true
-                            isLeftSidebarOpen = false
+                            isMobileDrawerOpen = false
                         },
                         onOpenProjectPicker = openProjectPicker
                     )
                 }
+
+                // 屏幕左边缘未展开时的轻量把手指示器（点击呼出抽屉）
+                SidebarEdgeIndicator(
+                    isVisible = !isMobileDrawerOpen,
+                    modifier = Modifier.align(Alignment.CenterStart),
+                    onClick = { isMobileDrawerOpen = true }
+                )
             }
         } else {
             // ==========================================
-            // 桌面端布局 (Desktop: Side-by-side)
+            // 桌面端布局 (Desktop: Side-by-side 常驻 OR 自动隐藏浮层)
             // ==========================================
-            // 容器底层必须上色（surfaceSidebar）：侧边栏开合动画期间透明底层会露出窗口白底
-            Row(modifier = Modifier.fillMaxSize().background(colors.surfaceSidebar)) {
-                AnimatedVisibility(
-                    visible = isLeftSidebarOpen,
-                    // 左侧边栏从左边缘展开/收缩（expandFrom=Start）：默认居中展开会在动画期间两侧露出底层白底
-                    enter = slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { -it } +
-                            expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), expandFrom = Alignment.Start) +
-                            fadeIn(),
-                    exit = slideOutHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { -it } +
-                            shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), shrinkTowards = Alignment.Start) +
-                            fadeOut()
-                ) {
+            var isHoverRevealed by remember { mutableStateOf(false) }
+            var isMouseInsideSidebar by remember { mutableStateOf(false) }
+            var isSidebarInteracting by remember { mutableStateOf(false) }
+            var hideJob by remember { mutableStateOf<Job?>(null) }
+
+            fun showHoverSidebar(source: String) {
+                DebugLog.info("SidebarHover", "showHoverSidebar ($source): cancelling hideJob, isHoverRevealed=$isHoverRevealed")
+                hideJob?.cancel()
+                isMouseInsideSidebar = true
+                isHoverRevealed = true
+            }
+
+            fun checkShouldRetract(source: String) {
+                DebugLog.info("SidebarHover", "checkShouldRetract ($source): isMouseInside=$isMouseInsideSidebar, isInteracting=$isSidebarInteracting")
+                hideJob?.cancel()
+                if (!isMouseInsideSidebar && !isSidebarInteracting) {
+                    hideJob = coroutineScope.launch {
+                        delay(350)
+                        if (!isMouseInsideSidebar && !isSidebarInteracting) {
+                            DebugLog.info("SidebarHover", "Retracting sidebar: both mouse and interaction are clear!")
+                            isHoverRevealed = false
+                        } else {
+                            DebugLog.info("SidebarHover", "Retract cancelled: isMouseInside=$isMouseInsideSidebar, isInteracting=$isSidebarInteracting")
+                        }
+                    }
+                }
+            }
+
+            LaunchedEffect(isSidebarInteracting) {
+                if (!isSidebarInteracting && isHoverRevealed) {
+                    checkShouldRetract("isSidebarInteractingBecameFalse")
+                }
+            }
+
+            if (isPinned) {
+                // 常驻分栏模式 (Pinned: Side-by-side)
+                Row(modifier = Modifier.fillMaxSize().background(colors.surfaceSidebar)) {
                     Sidebar(
                         viewModel = sidebarViewModel,
-                        onRequestClose = { isLeftSidebarOpen = false },
+                        isCompact = false,
+                        isDrawer = false,
+                        isPinned = true,
+                        onTogglePin = { appState.setLeftSidebarPinned(false) },
+                        onRequestClose = { appState.setLeftSidebarPinned(false) },
                         onOpenSettings = { isSettingsVisible = true },
                         onOpenProjectPicker = openProjectPicker
                     )
+                    Workspace(
+                        modifier = Modifier.weight(1f),
+                        viewModel = workspaceViewModel,
+                        isCompact = false,
+                        isLeftSidebarOpen = true,
+                        onToggleLeftSidebar = { appState.setLeftSidebarPinned(false) },
+                        onOpenProjectPicker = openProjectPicker,
+                        onOpenSettings = { isSettingsVisible = true }
+                    )
                 }
-                Workspace(
-                    modifier = Modifier.weight(1f),
-                    viewModel = workspaceViewModel,
-                    isCompact = false,
-                    isLeftSidebarOpen = isLeftSidebarOpen,
-                    onToggleLeftSidebar = { isLeftSidebarOpen = !isLeftSidebarOpen },
-                    onOpenProjectPicker = openProjectPicker,
-                    onOpenSettings = { isSettingsVisible = true }
-                )
+            } else {
+                // 自动隐藏模式 (Auto-hide overlay with hover reveal & edge indicator)
+                Box(modifier = Modifier.fillMaxSize().background(colors.surfaceWorkspace)) {
+                    Workspace(
+                        modifier = Modifier.fillMaxSize(),
+                        viewModel = workspaceViewModel,
+                        isCompact = false,
+                        isLeftSidebarOpen = false,
+                        onToggleLeftSidebar = { appState.setLeftSidebarPinned(true) },
+                        onOpenProjectPicker = openProjectPicker,
+                        onOpenSettings = { isSettingsVisible = true }
+                    )
+
+                    // 悬停滑出的浮层抽屉
+                    AnimatedVisibility(
+                        visible = isHoverRevealed,
+                        enter = slideInHorizontally(
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
+                        ) { -it } + fadeIn(),
+                        exit = slideOutHorizontally(
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
+                        ) { -it } + fadeOut()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(260.dp)
+                                .pointerInput(Unit) {
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            when (event.type) {
+                                                PointerEventType.Enter -> showHoverSidebar("SidebarBox:Enter")
+                                                PointerEventType.Move -> showHoverSidebar("SidebarBox:Move")
+                                                PointerEventType.Exit -> {
+                                                    isMouseInsideSidebar = false
+                                                    checkShouldRetract("SidebarBox:Exit")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                .background(colors.surfaceSidebar)
+                                .border(BorderStroke(1.dp, colors.divider))
+                        ) {
+                            Sidebar(
+                                viewModel = sidebarViewModel,
+                                isCompact = false,
+                                isDrawer = true,
+                                isPinned = false,
+                                onActiveInteractionChange = { interacting ->
+                                    isSidebarInteracting = interacting
+                                    if (interacting) {
+                                        hideJob?.cancel()
+                                    }
+                                },
+                                onTogglePin = {
+                                    appState.setLeftSidebarPinned(true)
+                                    isHoverRevealed = false
+                                },
+                                onRequestClose = { isHoverRevealed = false },
+                                onOpenSettings = {
+                                    isSettingsVisible = true
+                                    isHoverRevealed = false
+                                },
+                                onOpenProjectPicker = openProjectPicker
+                            )
+                        }
+                    }
+
+                    // 屏幕左边缘指示把手（鼠标移过去自动弹出来）
+                    SidebarEdgeIndicator(
+                        isVisible = !isHoverRevealed,
+                        isHovered = isHoverRevealed,
+                        modifier = Modifier.align(Alignment.CenterStart),
+                        onClick = { showHoverSidebar("EdgeIndicator:Click") },
+                        onHoverChange = { hovered ->
+                            if (hovered) {
+                                showHoverSidebar("EdgeIndicator:HoverEnter")
+                            } else {
+                                isMouseInsideSidebar = false
+                                checkShouldRetract("EdgeIndicator:HoverExit")
+                            }
+                        }
+                    )
+                }
             }
         }
 
@@ -160,6 +313,67 @@ fun MainScreen() {
         SettingsDialog(
             isVisible = isSettingsVisible,
             onClose = { isSettingsVisible = false }
+        )
+    }
+}
+
+/**
+ * 侧边栏隐藏时的屏幕边缘把手指示器。
+ * 视觉低侵入（4dp 微细竖线胶囊），悬浮高亮并微扩至 6dp，点击或鼠标悬浮可呼出侧边栏抽屉。
+ */
+@Composable
+private fun SidebarEdgeIndicator(
+    isVisible: Boolean,
+    modifier: Modifier = Modifier,
+    isHovered: Boolean = false,
+    onClick: () -> Unit = {},
+    onHoverChange: (Boolean) -> Unit = {}
+) {
+    if (!isVisible) return
+
+    val colors = LocalMederiColors.current
+    var isSelfHovered by remember { mutableStateOf(false) }
+    val active = isHovered || isSelfHovered
+    val animatedWidth by animateDpAsState(
+        targetValue = if (active) 6.dp else 4.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(20.dp)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        when (event.type) {
+                            PointerEventType.Enter, PointerEventType.Move -> {
+                                isSelfHovered = true
+                                onHoverChange(true)
+                            }
+                            PointerEventType.Exit -> {
+                                isSelfHovered = false
+                                onHoverChange(false)
+                            }
+                        }
+                    }
+                }
+            }
+            .clickable { onClick() },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        // Visual indicator pill
+        Box(
+            modifier = Modifier
+                .width(animatedWidth)
+                .height(48.dp)
+                .clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                .background(
+                    if (active) colors.accentPrimary
+                    else colors.divider.copy(alpha = 0.85f)
+                )
         )
     }
 }

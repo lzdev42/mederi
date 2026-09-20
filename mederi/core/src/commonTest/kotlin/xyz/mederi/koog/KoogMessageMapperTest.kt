@@ -55,4 +55,48 @@ class KoogMessageMapperTest {
         assertEquals(1, textParts.size)
         assertEquals("Here is the plan", textParts.first().text)
     }
+
+    @Test
+    fun testUserImageStrippedWhenIncludeImagesFalse() {
+        val coreMsg = MederiMessage(
+            id = "msg_user_img",
+            sessionId = "sess_1",
+            role = MessageRole.USER,
+            parts = listOf(
+                MederiMessagePart.Text("看图"),
+                MederiMessagePart.Image(url = "data:image/png;base64,AAAA")
+            ),
+            status = MessageStatus.COMPLETED,
+            createdAt = "2026-09-08T12:00:00Z"
+        )
+        val koogMsg = KoogMessageMapper.toKoogMessage(coreMsg, includeImages = false)
+        assertTrue(koogMsg is KoogMessage.User)
+        assertEquals(1, koogMsg.parts.size, "includeImages=false 时用户消息的 Image part 应被剔除")
+        val textPart = koogMsg.parts.single() as KoogMessagePart.Text
+        assertEquals("看图", textPart.text)
+    }
+
+    @Test
+    fun testUserImageKeptByDefault() {
+        val coreMsg = MederiMessage(
+            id = "msg_user_img2",
+            sessionId = "sess_1",
+            role = MessageRole.USER,
+            parts = listOf(
+                MederiMessagePart.Text("看图"),
+                MederiMessagePart.Image(url = "data:image/png;base64,AAAA")
+            ),
+            status = MessageStatus.COMPLETED,
+            createdAt = "2026-09-08T12:00:00Z"
+        )
+        val koogMsg = KoogMessageMapper.toKoogMessage(coreMsg)
+        assertTrue(koogMsg is KoogMessage.User)
+        assertEquals(2, koogMsg.parts.size, "默认 includeImages=true 时 Text + Attachment 都应保留")
+        val textPart = koogMsg.parts.filterIsInstance<KoogMessagePart.Text>().single()
+        assertEquals("看图", textPart.text)
+        assertTrue(
+            koogMsg.parts.filterIsInstance<KoogMessagePart.Attachment>().isNotEmpty(),
+            "默认行为下用户消息的 Image 应转为 Attachment"
+        )
+    }
 }

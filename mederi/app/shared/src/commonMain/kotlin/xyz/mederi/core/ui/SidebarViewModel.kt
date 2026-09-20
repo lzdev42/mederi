@@ -90,21 +90,12 @@ class SidebarViewModel(
     }
 
     fun createConversation(projectId: String) {
-        viewModelScope.launch {
-            uiState = uiState.copy(isBusy = true)
-            val agent = appState.availableAgents.value.find { it.id == appState.selectedAgentId.value }
-            val result = appState.aiCore.createConversation(projectId, agent)
-            uiState = uiState.copy(isBusy = false)
-            result.fold(
-                onSuccess = { conv ->
-                    // 自动展开项目，使新创建的对话在侧边栏可见
-                    uiState = uiState.copy(expandedProjectIds = uiState.expandedProjectIds + projectId)
-                    appState.selectProject(projectId)
-                    appState.selectConversation(conv.id)
-                },
-                onFailure = { uiState = uiState.copy(error = it.message) },
-            )
-        }
+        // 不落库：仅本地切换到「新对话」占位（展开并选中项目、清空会话选中），与 newSession() 一致。
+        // 会话真正创建发生在用户发送第一条消息时——WorkspaceViewModel.send 的
+        // 无会话自动 createConversation 路径（convId==null 且项目已选）。
+        uiState = uiState.copy(expandedProjectIds = uiState.expandedProjectIds + projectId)
+        appState.selectProject(projectId)
+        appState.selectConversation(null)
     }
 
     fun deleteConversation(conversationId: String) {

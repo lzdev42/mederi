@@ -16,7 +16,7 @@ sequenceDiagram
     participant LLM as LLM 供应商
     participant EB as eventBus (SharedFlow)
 
-    UI->>UI: guardImageSupport 图片门禁<br/>PromptComposer.compose(主指令+粘贴文本)<br/>乐观消息入 pendingUserMessages
+    UI->>UI: guardImageSupport 剔除放行(模型不支持图片 → 剔除本次图片<br/>+ 一次性轻提示 imageStrippedNotice; 历史保留)<br/>PromptComposer.compose(主指令+粘贴文本)<br/>乐观消息入 pendingUserMessages
     UI->>AC: sendMessage(conversationId, ChatPromptInput{text, model, agent, thinkingLevel=effectiveThinkingLevel, apiKeyId=getApiKeyId(model.provider)})
     AC->>AC: MederiInputMapper.toMessageParts / toAgentConfig；记录 lastApiKeyIdByProvider（自动命名跟随用）
     AC->>SM: SessionManager.sendMessage(id, SendMessageRequest{..., apiKeyId})
@@ -469,14 +469,15 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    P1["用户粘贴/选择图片<br/>ClipboardHelper.getImage / tryAttachImage"] --> G1{"guardImageSupport<br/>(唯一发送守卫 send 使用；rollbackMessage 恢复附件不经门禁，<br/>切到不支持图片的模型后真发送时由 send 拦截)"}
-    G1 -- "模型不支持(supportsImages=false)" --> X["拦截并提示(附件按钮显隐+粘贴拦截双门禁)"]
+    P1["用户粘贴/选择图片<br/>ClipboardHelper.getImage / tryAttachImage<br/>(剔除放行：模型不支持图片也允许附加，<br/>给一次性轻提示 imageStrippedNotice；附件按钮仍按模型能力显隐)"] --> G1{"guardImageSupport<br/>剔除放行(模型不支持图片时：发送不拒绝，<br/>一次性轻提示 imageStrippedNotice，图片保留在对话历史)"}
+    G1 -- "模型不支持(supportsImages=false)" --> N["放行：发送继续，图片从本次 AI 上下文剔除<br/>一次性轻提示：模型不支持图片，发送信息中已剔除（历史保留）"]
     G1 -- "支持" --> A1["ImageAttachment(base64DataUrl) 入 pendingImages"]
     A1 --> SEND["send(text)"]
     SEND --> M1["MederiInputMapper.toMessageParts<br/>图片 → MessagePart.Image(base64 dataUrl)"]
     M1 --> CORE["core SendMessageRequest"]
-    CORE --> K1["KoogMessageMapper.toKoogPart<br/>Image → Attachment"]
-    K1 --> CAP["KoogModelBuilder.buildCapabilities<br/>supportsImages → LLMCapability.Vision.Image<br/>(缺 Image 时 Koog 发送直接拒绝——历史事故)"]
+    CORE --> H1["HistoryStoreChatHistoryProvider(includeImages = model.supportsImages).load<br/>KoogMessageMapper.toKoogMessages(window, includeImages)<br/>用户 Image part → null（AI 上下文无图，历史存储仍带图）"]
+    H1 --> K1["KoogMessageMapper.toKoogPart<br/>Image → Attachment(includeImages=true 时图片仍映射为 Attachment)"]
+    K1 --> CAP["KoogModelBuilder.buildCapabilities<br/>supportsImages → LLMCapability.Vision.Image<br/>缺 Image 时 Koog 会拒绝图片消息——本方案在 AI 视图层剔除，请求体无图，天然不触发"]
     CAP --> LLM["LLM 供应商"]
 ```
 

@@ -171,7 +171,9 @@ class MederiAiCore(
                 configDir = this@MederiAiCore.configDir
                 // 出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带上 Mederi 身份头
                 userAgent = AppInfo.userAgent
-                // 浏览器自动化：注册 Camoufox（core 默认）。UI 层（desktop）再注册内置 JCEF。
+                // 浏览器自动化：注册 Camoufox（headless 可选能力；未安装/未配置时选择它会得到引导错误）。
+                // UI 层（desktop）再注册内置 JCEF——注册表默认策略优先内置可见浏览器（JCEF），
+                // headless server 无 JCEF 时默认才落到 Camoufox。
                 // AI 通过 run_browser_task(browser=...) 选择：测自己网页→jcef，第三方自动化→camoufox。
                 xyz.mederi.browser.BrowserRegistry.register(
                     name = "camoufox",

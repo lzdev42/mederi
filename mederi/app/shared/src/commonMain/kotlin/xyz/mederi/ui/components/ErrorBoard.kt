@@ -23,6 +23,11 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.X
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.errorboard_close
+import mederi.app.shared.generated.resources.errorboard_continue
+import mederi.app.shared.generated.resources.errorboard_detail_report
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 
 /**
@@ -83,7 +88,7 @@ fun ErrorBoard(
                     .padding(horizontal = 8.dp, vertical = 3.dp),
             ) {
                 Text(
-                    text = "继续",
+                    text = stringResource(Res.string.errorboard_continue),
                     color = colors.accentPrimary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -99,7 +104,7 @@ fun ErrorBoard(
                 .padding(horizontal = 4.dp, vertical = 2.dp),
         ) {
             Text(
-                text = "详细报告",
+                text = stringResource(Res.string.errorboard_detail_report),
                 color = colors.accentDanger,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -113,7 +118,7 @@ fun ErrorBoard(
         }
         Icon(
             imageVector = FeatherIcons.X,
-            contentDescription = "关闭",
+            contentDescription = stringResource(Res.string.errorboard_close),
             tint = colors.accentDanger.copy(alpha = 0.7f),
             modifier = Modifier
                 .size(15.dp)

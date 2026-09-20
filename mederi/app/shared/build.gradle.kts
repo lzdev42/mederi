@@ -117,6 +117,12 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
+// composeResources 生成的 Res 类默认 internal：desktopApp（宿主）需要访问
+// app:shared 的 Res 来调用 stringResource（如内置浏览器文案），故改为 public。
+compose.resources {
+    publicResClass = true
+}
+
 // 生成的 AppVersion.kt 挂到 commonMain（四个平台 + 对应 test 都可见）
 kotlin.sourceSets.commonMain {
     kotlin.srcDir(layout.buildDirectory.dir("generated/version/commonMain"))

@@ -8,14 +8,14 @@ import java.io.File
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 
-actual suspend fun pickSaveFile(defaultName: String, extension: String): String? = withContext(Dispatchers.IO) {
+actual suspend fun pickSaveFile(defaultName: String, extension: String, title: String, filterLabel: String): String? = withContext(Dispatchers.IO) {
     val osName = System.getProperty("os.name", "").lowercase()
     val isMac = osName.contains("mac")
     val defaultFileName = if (defaultName.endsWith(".$extension", ignoreCase = true)) defaultName else "$defaultName.$extension"
 
     try {
         if (isMac) {
-            val dialog = FileDialog(null as Frame?, "导出文件", FileDialog.SAVE).apply {
+            val dialog = FileDialog(null as Frame?, title, FileDialog.SAVE).apply {
                 file = defaultFileName
                 isVisible = true
             }
@@ -27,9 +27,9 @@ actual suspend fun pickSaveFile(defaultName: String, extension: String): String?
             } else null
         } else {
             val chooser = JFileChooser().apply {
-                dialogTitle = "导出文件"
+                dialogTitle = title
                 selectedFile = File(defaultFileName)
-                fileFilter = FileNameExtensionFilter("${extension.uppercase()} 文件 (*.$extension)", extension)
+                fileFilter = FileNameExtensionFilter(filterLabel, extension)
             }
             val result = chooser.showSaveDialog(null)
             if (result == JFileChooser.APPROVE_OPTION) {

@@ -25,15 +25,62 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.sidebar_automation
+import mederi.app.shared.generated.resources.sidebar_cancel
+import mederi.app.shared.generated.resources.sidebar_confirm_delete
+import mederi.app.shared.generated.resources.sidebar_confirm_rename
+import mederi.app.shared.generated.resources.sidebar_conversation_menu
+import mederi.app.shared.generated.resources.sidebar_delete_conversation
+import mederi.app.shared.generated.resources.sidebar_delete_conversation_message
+import mederi.app.shared.generated.resources.sidebar_delete_conversation_title
+import mederi.app.shared.generated.resources.sidebar_delete_project
+import mederi.app.shared.generated.resources.sidebar_delete_project_message
+import mederi.app.shared.generated.resources.sidebar_delete_project_title
+import mederi.app.shared.generated.resources.sidebar_new_conversation
+import mederi.app.shared.generated.resources.sidebar_new_task
+import mederi.app.shared.generated.resources.sidebar_open_project_directory
+import mederi.app.shared.generated.resources.sidebar_plugin_market
+import mederi.app.shared.generated.resources.sidebar_project_menu
+import mederi.app.shared.generated.resources.language_system
+import mederi.app.shared.generated.resources.sidebar_edge_handle
+import mederi.app.shared.generated.resources.sidebar_language
+import mederi.app.shared.generated.resources.sidebar_pin
+import mederi.app.shared.generated.resources.sidebar_projects
+import mederi.app.shared.generated.resources.sidebar_rename_conversation
+import mederi.app.shared.generated.resources.sidebar_rename_project
+import mederi.app.shared.generated.resources.sidebar_settings
+import mederi.app.shared.generated.resources.sidebar_toggle_theme
+import mederi.app.shared.generated.resources.sidebar_unpin
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.AppInfo
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.Project
+import xyz.mederi.core.ui.DebugLog
 import xyz.mederi.core.ui.SidebarViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.theme.AppLanguage
 import xyz.mederi.theme.AppThemeMode
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+
+class SidebarInteractionState {
+    var activeCount by mutableStateOf(0)
+        private set
+
+    fun onOpen() {
+        activeCount++
+    }
+
+    fun onClose() {
+        if (activeCount > 0) activeCount--
+    }
+
+    val isInteracting: Boolean get() = activeCount > 0
+}
+
+val LocalSidebarInteractionState = staticCompositionLocalOf { SidebarInteractionState() }
 
 /**
  * 侧边栏。状态与动作统一经 [SidebarViewModel]（内部转发 AppState 全局真理源），
@@ -45,6 +92,9 @@ fun Sidebar(
     viewModel: SidebarViewModel,
     isCompact: Boolean = false,
     isDrawer: Boolean = false,
+    isPinned: Boolean = false,
+    onTogglePin: (() -> Unit)? = null,
+    onActiveInteractionChange: (Boolean) -> Unit = {},
     onRequestClose: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenProjectPicker: () -> Unit = {},
@@ -56,16 +106,25 @@ fun Sidebar(
     val selectedConversationId by appState.selectedConversationId.collectAsState()
     val theme by appState.theme.collectAsState()
 
+    val interactionState = remember { SidebarInteractionState() }
+
+    LaunchedEffect(interactionState.activeCount) {
+        val interacting = interactionState.isInteracting
+        DebugLog.info("SidebarHover", "Sidebar interaction count: ${interactionState.activeCount}, isInteracting=$interacting")
+        onActiveInteractionChange(interacting)
+    }
+
     // 抽屉模式下，改变会话/项目选择的操作同时收起抽屉（桌面常驻侧栏不收起）
     val navigate: () -> Unit = { if (isDrawer) onRequestClose() }
 
-    Column(
-        modifier = modifier
-            .fillMaxHeight()
-            .then(if (isCompact) Modifier.fillMaxWidth() else Modifier.width(260.dp))
-            .background(colors.surfaceSidebar)
-            .padding(12.dp)
-    ) {
+    CompositionLocalProvider(LocalSidebarInteractionState provides interactionState) {
+        Column(
+            modifier = modifier
+                .fillMaxHeight()
+                .then(if (isCompact) Modifier.fillMaxWidth() else Modifier.width(260.dp))
+                .background(colors.surfaceSidebar)
+                .padding(12.dp)
+        ) {
         // Top Toolbar (40dp 高度对齐全屏顶栏线条)
         if (isCompact) {
             Row(
@@ -96,11 +155,34 @@ fun Sidebar(
                     .fillMaxWidth()
                     .height(40.dp)
                     .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SidebarIconButton(imageVector = FeatherIcons.Sidebar, colors = colors, onClick = onRequestClose)
-                SidebarIconButton(imageVector = FeatherIcons.Search, colors = colors)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SidebarIconButton(
+                        imageVector = FeatherIcons.Sidebar,
+                        contentDescription = stringResource(if (isPinned) Res.string.sidebar_unpin else Res.string.sidebar_pin),
+                        colors = colors,
+                        onClick = onRequestClose
+                    )
+                    SidebarIconButton(
+                        imageVector = FeatherIcons.Search,
+                        colors = colors
+                    )
+                }
+
+                if (onTogglePin != null) {
+                    SidebarIconButton(
+                        imageVector = if (isPinned) FeatherIcons.Columns else FeatherIcons.Sidebar,
+                        contentDescription = stringResource(if (isPinned) Res.string.sidebar_unpin else Res.string.sidebar_pin),
+                        colors = colors,
+                        active = isPinned,
+                        onClick = onTogglePin
+                    )
+                }
             }
         }
 
@@ -110,7 +192,7 @@ fun Sidebar(
         ) {
             SidebarMenuItem(
                 icon = FeatherIcons.MessageSquare,
-                title = "新建任务",
+                title = stringResource(Res.string.sidebar_new_task),
                 isSelected = false,
                 colors = colors,
                 onClick = {
@@ -120,13 +202,13 @@ fun Sidebar(
             )
             SidebarMenuItem(
                 icon = FeatherIcons.Grid,
-                title = "插件市场",
+                title = stringResource(Res.string.sidebar_plugin_market),
                 isSelected = false,
                 colors = colors
             )
             SidebarMenuItem(
                 icon = FeatherIcons.Clock,
-                title = "自动化",
+                title = stringResource(Res.string.sidebar_automation),
                 isSelected = false,
                 colors = colors
             )
@@ -143,7 +225,7 @@ fun Sidebar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "项目",
+                text = stringResource(Res.string.sidebar_projects),
                 color = colors.textSecondary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold
@@ -157,7 +239,7 @@ fun Sidebar(
             ) {
                 Icon(
                     imageVector = FeatherIcons.Plus,
-                    contentDescription = "打开项目目录",
+                    contentDescription = stringResource(Res.string.sidebar_open_project_directory),
                     tint = colors.textSecondary,
                     modifier = Modifier.size(13.dp)
                 )
@@ -202,46 +284,123 @@ fun Sidebar(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { onOpenSettings() }
-                            .padding(vertical = 4.dp, horizontal = 4.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Settings,
-                            contentDescription = "设置",
-                            tint = colors.textSecondary,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "设置",
-                            color = colors.textSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-
-                // Theme Switch Button（主题写操作唯一通道：AppState）
-                Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .background(colors.surfaceCard)
-                        .clickable {
-                            appState.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK)
-                        }
-                        .padding(5.dp)
+                        .clickable { onOpenSettings() }
+                        .padding(vertical = 4.dp, horizontal = 4.dp)
                 ) {
                     Icon(
-                        imageVector = if (colors.isDark) FeatherIcons.Moon else FeatherIcons.Sun,
-                        contentDescription = "切换主题",
-                        tint = colors.accentPrimary,
+                        imageVector = FeatherIcons.Settings,
+                        contentDescription = stringResource(Res.string.sidebar_settings),
+                        tint = colors.textSecondary,
                         modifier = Modifier.size(15.dp)
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(Res.string.sidebar_settings),
+                        color = colors.textSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+
+                // 右侧：多语言切换与主题切换（对应红框位置）
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // 多语言切换按钮与下拉菜单
+                    val interaction = LocalSidebarInteractionState.current
+                    var showLanguageMenu by remember { mutableStateOf(false) }
+                    val currentLanguage by appState.language.collectAsState()
+
+                    DisposableEffect(showLanguageMenu) {
+                        if (showLanguageMenu) {
+                            interaction.onOpen()
+                            onDispose { interaction.onClose() }
+                        } else onDispose {}
+                    }
+
+                    Box {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(colors.surfaceCard)
+                                .clickable {
+                                    DebugLog.info("SidebarHover", "Language menu opened: showLanguageMenu = true")
+                                    showLanguageMenu = true
+                                }
+                                .padding(5.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.Globe,
+                                contentDescription = stringResource(Res.string.sidebar_language),
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showLanguageMenu,
+                            onDismissRequest = {
+                                DebugLog.info("SidebarHover", "Language menu dismissed: showLanguageMenu = false")
+                                showLanguageMenu = false
+                            },
+                            modifier = Modifier.background(colors.surfaceCard)
+                        ) {
+                            AppLanguage.entries.forEach { lang ->
+                                val isSelected = currentLanguage == lang
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = if (lang == AppLanguage.SYSTEM) stringResource(Res.string.language_system) else lang.nativeName,
+                                                color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                fontSize = 13.sp
+                                            )
+                                            if (isSelected) {
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Icon(
+                                                    imageVector = FeatherIcons.Check,
+                                                    contentDescription = null,
+                                                    tint = colors.accentPrimary,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        appState.setLanguage(lang)
+                                        showLanguageMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Theme Switch Button（主题写操作唯一通道：AppState）
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(colors.surfaceCard)
+                            .clickable {
+                                appState.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK)
+                            }
+                            .padding(5.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (colors.isDark) FeatherIcons.Moon else FeatherIcons.Sun,
+                            contentDescription = stringResource(Res.string.sidebar_toggle_theme),
+                            tint = colors.accentPrimary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                 }
             }
 
@@ -264,6 +423,7 @@ fun Sidebar(
             }
         }
     }
+}
 }
 
 @Composable
@@ -303,19 +463,22 @@ private fun SidebarMenuItem(
 private fun SidebarIconButton(
     imageVector: ImageVector,
     colors: MederiColors,
+    contentDescription: String? = null,
+    active: Boolean = false,
     onClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
             .size(28.dp)
             .clip(RoundedCornerShape(6.dp))
+            .background(if (active) colors.accentPrimary.copy(alpha = 0.15f) else Color.Transparent)
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = imageVector,
-            contentDescription = null,
-            tint = colors.textSecondary,
+            contentDescription = contentDescription,
+            tint = if (active) colors.accentPrimary else colors.textSecondary,
             modifier = Modifier.size(15.dp)
         )
     }
@@ -331,9 +494,29 @@ private fun ProjectTreeRow(
     val appState = LocalAppState.current
     val selectedProjectId by appState.selectedProjectId.collectAsState()
     val isExpanded = project.id in viewModel.uiState.expandedProjectIds
+    val interaction = LocalSidebarInteractionState.current
     var isMenuExpanded by remember { mutableStateOf(false) }
     var isRenameOpen by remember { mutableStateOf(false) }
     var isDeleteOpen by remember { mutableStateOf(false) }
+
+    DisposableEffect(isMenuExpanded) {
+        if (isMenuExpanded) {
+            interaction.onOpen()
+            onDispose { interaction.onClose() }
+        } else onDispose {}
+    }
+    DisposableEffect(isRenameOpen) {
+        if (isRenameOpen) {
+            interaction.onOpen()
+            onDispose { interaction.onClose() }
+        } else onDispose {}
+    }
+    DisposableEffect(isDeleteOpen) {
+        if (isDeleteOpen) {
+            interaction.onOpen()
+            onDispose { interaction.onClose() }
+        } else onDispose {}
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         // 项目主行
@@ -388,7 +571,7 @@ private fun ProjectTreeRow(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.Plus,
-                        contentDescription = "新建对话",
+                        contentDescription = stringResource(Res.string.sidebar_new_conversation),
                         tint = colors.textSecondary,
                         modifier = Modifier.size(13.dp)
                     )
@@ -404,7 +587,7 @@ private fun ProjectTreeRow(
                 ) {
                     Icon(
                         imageVector = FeatherIcons.MoreVertical,
-                        contentDescription = "项目菜单",
+                        contentDescription = stringResource(Res.string.sidebar_project_menu),
                         tint = colors.textSecondary,
                         modifier = Modifier.size(13.dp)
                     )
@@ -417,7 +600,7 @@ private fun ProjectTreeRow(
                         modifier = Modifier.border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
                     ) {
                         DropdownMenuItem(
-                            text = { Text("新建对话", fontSize = 12.sp, color = colors.textPrimary) },
+                            text = { Text(stringResource(Res.string.sidebar_new_conversation), fontSize = 12.sp, color = colors.textPrimary) },
                             leadingIcon = { Icon(FeatherIcons.Plus, null, tint = colors.accentPrimary, modifier = Modifier.size(14.dp)) },
                             onClick = {
                                 isMenuExpanded = false
@@ -426,7 +609,7 @@ private fun ProjectTreeRow(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("重命名项目", fontSize = 12.sp, color = colors.textPrimary) },
+                            text = { Text(stringResource(Res.string.sidebar_rename_project), fontSize = 12.sp, color = colors.textPrimary) },
                             leadingIcon = { Icon(FeatherIcons.Edit2, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)) },
                             onClick = {
                                 isMenuExpanded = false
@@ -435,7 +618,7 @@ private fun ProjectTreeRow(
                         )
                         HorizontalDivider(color = colors.divider)
                         DropdownMenuItem(
-                            text = { Text("删除项目", fontSize = 12.sp, color = colors.accentDanger) },
+                            text = { Text(stringResource(Res.string.sidebar_delete_project), fontSize = 12.sp, color = colors.accentDanger) },
                             leadingIcon = { Icon(FeatherIcons.Trash2, null, tint = colors.accentDanger, modifier = Modifier.size(14.dp)) },
                             onClick = {
                                 isMenuExpanded = false
@@ -478,7 +661,7 @@ private fun ProjectTreeRow(
                 modifier = Modifier.width(320.dp).padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("重命名项目", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(Res.string.sidebar_rename_project), color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     OutlinedTextField(
                         value = newName,
                         onValueChange = { newName = it },
@@ -486,14 +669,14 @@ private fun ProjectTreeRow(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isRenameOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        TextButton(onClick = { isRenameOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(onClick = {
                             if (newName.isNotBlank()) {
                                 viewModel.renameProject(project.id, newName.trim())
                             }
                             isRenameOpen = false
-                        }) { Text("确认重命名") }
+                        }) { Text(stringResource(Res.string.sidebar_confirm_rename)) }
                     }
                 }
             }
@@ -510,10 +693,10 @@ private fun ProjectTreeRow(
                 modifier = Modifier.width(320.dp).padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("确认删除项目？", color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Text("删除后将移除项目 ${project.name} 及关联会话记录。", color = colors.textSecondary, fontSize = 12.sp)
+                    Text(stringResource(Res.string.sidebar_delete_project_title), color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(Res.string.sidebar_delete_project_message, project.name), color = colors.textSecondary, fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isDeleteOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        TextButton(onClick = { isDeleteOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger),
@@ -521,7 +704,7 @@ private fun ProjectTreeRow(
                                 viewModel.deleteProject(project.id)
                                 isDeleteOpen = false
                             }
-                        ) { Text("确认删除", color = colors.onAccentPrimary) }
+                        ) { Text(stringResource(Res.string.sidebar_confirm_delete), color = colors.onAccentPrimary) }
                     }
                 }
             }
@@ -539,9 +722,29 @@ private fun ConversationTreeRow(
     val appState = LocalAppState.current
     val selectedConversationId by appState.selectedConversationId.collectAsState()
     val isSelected = conversation.id == selectedConversationId
+    val interaction = LocalSidebarInteractionState.current
     var isMenuExpanded by remember { mutableStateOf(false) }
     var isRenameOpen by remember { mutableStateOf(false) }
     var isDeleteOpen by remember { mutableStateOf(false) }
+
+    DisposableEffect(isMenuExpanded) {
+        if (isMenuExpanded) {
+            interaction.onOpen()
+            onDispose { interaction.onClose() }
+        } else onDispose {}
+    }
+    DisposableEffect(isRenameOpen) {
+        if (isRenameOpen) {
+            interaction.onOpen()
+            onDispose { interaction.onClose() }
+        } else onDispose {}
+    }
+    DisposableEffect(isDeleteOpen) {
+        if (isDeleteOpen) {
+            interaction.onOpen()
+            onDispose { interaction.onClose() }
+        } else onDispose {}
+    }
 
     Row(
         modifier = Modifier
@@ -589,7 +792,7 @@ private fun ConversationTreeRow(
             ) {
                 Icon(
                     imageVector = FeatherIcons.MoreVertical,
-                    contentDescription = "会话菜单",
+                    contentDescription = stringResource(Res.string.sidebar_conversation_menu),
                     tint = if (isSelected) colors.textSecondary else colors.textMuted,
                     modifier = Modifier.size(12.dp)
                 )
@@ -602,7 +805,7 @@ private fun ConversationTreeRow(
                     modifier = Modifier.border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
                 ) {
                     DropdownMenuItem(
-                        text = { Text("重命名会话", fontSize = 12.sp, color = colors.textPrimary) },
+                        text = { Text(stringResource(Res.string.sidebar_rename_conversation), fontSize = 12.sp, color = colors.textPrimary) },
                         leadingIcon = { Icon(FeatherIcons.Edit2, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)) },
                         onClick = {
                             isMenuExpanded = false
@@ -611,7 +814,7 @@ private fun ConversationTreeRow(
                     )
                     HorizontalDivider(color = colors.divider)
                     DropdownMenuItem(
-                        text = { Text("删除会话", fontSize = 12.sp, color = colors.accentDanger) },
+                        text = { Text(stringResource(Res.string.sidebar_delete_conversation), fontSize = 12.sp, color = colors.accentDanger) },
                         leadingIcon = { Icon(FeatherIcons.Trash2, null, tint = colors.accentDanger, modifier = Modifier.size(14.dp)) },
                         onClick = {
                             isMenuExpanded = false
@@ -634,7 +837,7 @@ private fun ConversationTreeRow(
                 modifier = Modifier.width(320.dp).padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("重命名会话", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(Res.string.sidebar_rename_conversation), color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     OutlinedTextField(
                         value = newTitle,
                         onValueChange = { newTitle = it },
@@ -642,14 +845,14 @@ private fun ConversationTreeRow(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isRenameOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        TextButton(onClick = { isRenameOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(onClick = {
                             if (newTitle.isNotBlank()) {
                                 viewModel.renameConversation(conversation.id, newTitle.trim())
                             }
                             isRenameOpen = false
-                        }) { Text("确认重命名") }
+                        }) { Text(stringResource(Res.string.sidebar_confirm_rename)) }
                     }
                 }
             }
@@ -666,10 +869,10 @@ private fun ConversationTreeRow(
                 modifier = Modifier.width(320.dp).padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("确认删除会话？", color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Text("删除后将清除会话【${conversation.title}】的全部记录，操作无法恢复。", color = colors.textSecondary, fontSize = 12.sp)
+                    Text(stringResource(Res.string.sidebar_delete_conversation_title), color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(Res.string.sidebar_delete_conversation_message, conversation.title), color = colors.textSecondary, fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isDeleteOpen = false }) { Text("取消", color = colors.textSecondary) }
+                        TextButton(onClick = { isDeleteOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger),
@@ -677,7 +880,7 @@ private fun ConversationTreeRow(
                                 viewModel.deleteConversation(conversation.id)
                                 isDeleteOpen = false
                             }
-                        ) { Text("确认删除", color = colors.onAccentPrimary) }
+                        ) { Text(stringResource(Res.string.sidebar_confirm_delete), color = colors.onAccentPrimary) }
                     }
                 }
             }

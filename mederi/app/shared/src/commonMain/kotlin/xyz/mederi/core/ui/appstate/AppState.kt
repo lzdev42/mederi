@@ -23,6 +23,7 @@ import xyz.mederi.core.contract.TerminalManager
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.contract.preferences.PreferencesStore
 import xyz.mederi.core.ui.DebugLog
+import xyz.mederi.theme.AppLanguage
 import xyz.mederi.theme.AppThemeMode
 
 /** 内嵌遥控 server 启动结果。 */
@@ -126,6 +127,14 @@ class AppState(
     // ───── B. UI 全局偏好(MutableStateFlow 内部;StateFlow 对外) ─────
     private val _theme = MutableStateFlow(AppThemeMode.DARK)
     val theme: StateFlow<AppThemeMode> = _theme.asStateFlow()
+
+    /** 界面语言（唯一真理源）。App.kt 观察并喂给 LocalAppLocale / AppEnvironment 生效。 */
+    private val _language = MutableStateFlow(AppLanguage.SYSTEM)
+    val language: StateFlow<AppLanguage> = _language.asStateFlow()
+
+    /** 左侧边栏是否常驻固定（false = 自动隐藏，鼠标悬浮/把手呼出；true = 常驻分栏） */
+    private val _leftSidebarPinned = MutableStateFlow(false)
+    val leftSidebarPinned: StateFlow<Boolean> = _leftSidebarPinned.asStateFlow()
 
     /** 远程遥控开关状态（desktop 内嵌 server）；启停执行由 [remoteControl] hooks 完成 */
     private val _remoteControlEnabled = MutableStateFlow(false)
@@ -257,6 +266,18 @@ class AppState(
     fun setTheme(value: AppThemeMode) {
         _theme.value = value
         persist("app.theme", value) { it.name }
+    }
+
+    /** 切换界面语言（设置页-通用调用）。写状态 + 持久化；生效链路在 App.kt → AppEnvironment。 */
+    fun setLanguage(value: AppLanguage) {
+        _language.value = value
+        persist("app.language", value) { it.name }
+    }
+
+    /** 切换左侧边栏常驻固定状态（写状态 + 持久化） */
+    fun setLeftSidebarPinned(value: Boolean) {
+        _leftSidebarPinned.value = value
+        persist("ui.sidebar.pinned", value) { it.toString() }
     }
 
     /**
@@ -450,6 +471,8 @@ class AppState(
 
     suspend fun hydrate() {
         _theme.value = AppThemeMode.fromString(preferences.getString("app.theme"))
+        _language.value = AppLanguage.fromString(preferences.getString("app.language"))
+        _leftSidebarPinned.value = preferences.getBoolean("ui.sidebar.pinned", false)
 
         _remoteControlEnabled.value = preferences.getBoolean("remote.enabled")
         _remoteControlPassword.value = preferences.getString("remote.password")
