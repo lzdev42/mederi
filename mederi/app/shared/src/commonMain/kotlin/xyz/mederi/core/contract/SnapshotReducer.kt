@@ -111,10 +111,22 @@ object SnapshotReducer {
             // （输入框上方），statusHint 只保留给运转过程提示（限流重试），不再承载警告。
             // failureMode=PREMATURE_CLOSE 标记断流 → UI 显示"继续"按钮（重发 Continue 续写）。
             val streamInterrupted = event.payload["failureMode"] == "PREMATURE_CLOSE"
+            val turnDiffJson = event.payload["turnDiffSummary"]
+            val diffSummary = turnDiffJson?.let {
+                runCatching {
+                    kotlinx.serialization.json.Json.Default.decodeFromString<xyz.mederi.core.contract.models.TurnDiffSummaryUi>(it)
+                }.getOrNull()
+            }
+            val diffMessageId = event.payload["diffMessageId"]
+
             val completed = snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.Idle),
                 messages = snapshot.messages.map { msg ->
-                    if (msg.isStreaming) msg.copy(isStreaming = false, completedAt = now) else msg
+                    val isTarget = if (diffMessageId != null) msg.id == diffMessageId else msg.isStreaming
+                    val updatedDiff = if (isTarget && diffSummary != null) diffSummary else msg.turnDiffSummary
+                    if (msg.isStreaming) msg.copy(isStreaming = false, completedAt = now, turnDiffSummary = updatedDiff)
+                    else if (isTarget && diffSummary != null) msg.copy(turnDiffSummary = updatedDiff)
+                    else msg
                 },
                 errorMessage = event.payload["error"] ?: snapshot.errorMessage,
                 errorId = event.payload["errorId"] ?: snapshot.errorId,
@@ -427,15 +439,19 @@ object SnapshotReducer {
 
         val existing = updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
             .lastOrNull { it.state is ToolCallState.Running || it.state is ToolCallState.Pending }
+        // 防御：args 解析失败（ToolArgParser 返回空 map）时保留已有 block 的非空 input，
+        // 避免"坏数据覆盖好数据"——上游一旦再出序列化缺陷，已显示的路径/命令不丢。
+        val prevInput = (existing?.state as? ToolCallState.Running)?.input
+        val effectiveInput = if (input.isEmpty() && !prevInput.isNullOrEmpty()) prevInput else input
         if (existing != null) {
             updatedBlocks[updatedBlocks.lastIndexOf(existing)] = existing.copy(
                 name = name,
-                state = ToolCallState.Running(input = input)
+                state = ToolCallState.Running(input = effectiveInput)
             )
         } else {
             val blockId = "tool_${toolCallId.ifBlank { Uuid.random().toString() }}"
             updatedBlocks.add(
-                ChatBlock.ToolCall(id = blockId, name = name, state = ToolCallState.Running(input = input))
+                ChatBlock.ToolCall(id = blockId, name = name, state = ToolCallState.Running(input = effectiveInput))
             )
         }
 

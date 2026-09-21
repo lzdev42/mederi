@@ -69,7 +69,7 @@ classDiagram
     class Subtask {
         +index +name +status +planDetail(brief恒不变)
         +spec(generate_spec写入) +targetFiles +decisions
-        +verification +verificationResult? +dependsOn +parallelizable
+        +verification +verificationResult? +verificationChanges: List~VerificationChange~ +dependsOn +parallelizable
     }
     class TurnDiff { +sessionId +messageId? +changes: List~FileChange~ +unifiedDiff +createdAt }
     class MederiEvent { +type: EventType +sessionId +messageId? +payload +timestamp }
@@ -189,17 +189,22 @@ Impl 规则：写前 `validateReasoningParameter`（`{` 开头必须是合法 JS
 
 ### 3.4 SkillManager（`…/skills/SkillManager.kt` / `SkillManagerImpl.kt`）
 
-Skill 管理（UI 薄触发，文件操作全在 core）：
+Skill 管理（UI 薄触发，文件操作全在 core）。**发现/解析兼容层（2026-09）**：Koog `discoverSkills` 的 frontmatter 解析是简化行解析，不支持 YAML 块标量（`description: >` 解析成字面 ">"）与空值+缩进块（整个 skill 被忽略）——Mederi 侧自研超集解析器兼容，不改 Koog、不改第三方 skill：
+
+- `SkillFrontmatterParser`（`…/skills/SkillFrontmatterParser.kt`，纯 Kotlin）：状态机解析 `---` frontmatter，支持块标量 `>`/`|` 及 chomping（`>-`/`|+`）、空值+缩进块、引号、`metadata:` 子键、注释/空行；输出 `ParsedFrontmatter(name, description, license, compatibility, metadata, allowedTools, isValid)`
+- `SkillDiscovery`（`…/skills/SkillDiscovery.kt`）：BFS 扫描根目录找 SKILL.md（maxDepth=4、maxDirectories=2000、跳过 `.git`/`node_modules`、按 name LAST_FOUND 去重），`SkillFrontmatterParser.parse` 解析，仅 name+description 非空产出 `SkillInfo`
+- `SkillManagerImpl.list()`：`SkillDiscovery.discover(root)` 为主 + Koog `discoverSkills` union 兜底（`linkedMapOf` + `putIfAbsent`，Mederi 优先覆盖同名字段、保持发现顺序）
+- `SkillManagerImpl.install()`：zip 解压后同样用 `SkillDiscovery.discover(tempDir)` 验证内容
 
 ```kotlin
-suspend fun list(): List<SkillInfo>                    // discoverSkills 扫根目录 SKILL.md（发现即安装）
+suspend fun list(): List<SkillInfo>                    // SkillDiscovery 扫根目录 SKILL.md + Koog discoverSkills union 兜底（发现即安装）
 suspend fun getRootDirectory(): String                 // settings 表 key=`skills.root`，默认 paths.skillsDir（~/.mederi/skills）
 suspend fun setRootDirectory(path: String)             // 展开 ~ + mkdirs + 持久化
-suspend fun install(url: String): SkillInfo            // Ktor 下载 zip → ZipInputStream 解压到临时目录 → discoverSkills 验证 → 移入根目录（同名先删再装）
+suspend fun install(url: String): SkillInfo            // Ktor 下载 zip → ZipInputStream 解压到临时目录 → SkillDiscovery 验证 → 移入根目录（同名先删再装）
 suspend fun uninstall(name: String)                    // 删除根目录下对应目录（名称需匹配 ^[a-zA-Z0-9_-]+$）
 ```
 
-`SkillInfo`（`…/skills/domain/SkillInfo.kt`）：`name, description, location, license?, compatibility?, allowedTools?`——与 Koog `ai.koog.skills.model.Skill` 对齐（discoverSkills 解析 SKILL.md frontmatter 产出）。zip slip 防护：解压路径必须落在临时目录内。已存在同名 skill → 先删再装（install 幂等）。
+`SkillInfo`（`…/skills/domain/SkillInfo.kt`）：`name, description, location, license?, compatibility?, allowedTools?`——与 Koog `ai.koog.skills.model.Skill` 同构（SkillFrontmatterParser 解析 SKILL.md frontmatter 产出）。zip slip 防护：解压路径必须落在临时目录内。已存在同名 skill → 先删再装（install 幂等）。
 
 **统一异常（`…/api/exception/MederiException.kt`）**：抽象基类 `MederiException`，子类 `MederiNotFoundException / MederiValidationException / MederiStateException / MederiInternalException`；`mederiCall(block)` 映射 `NoSuchElementException→NotFound`、`IllegalArgumentException→Validation`、`IllegalStateException→State`、其他→Internal。
 
@@ -402,7 +407,7 @@ token 估算统一入口（真实值优先，估算兜底）：`estimateTokens/c
 ```text
 FS_TOOL_NAMES      = [read_file, write_file, edit_file, list_directory, execute_command]   # apply_patch 已注销（实现保留，2026-09：模型不用，单文件场景 edit_file+replace_all 覆盖）
 AGENT_TOOL_NAMES   = [update_todo, ask_user]          # get_context_remaining / new_context 已实现未开放
-PLAN_TOOL_NAMES    = [create_plan, generate_spec, write_log, converge_plan]
+PLAN_TOOL_NAMES    = [create_plan, generate_spec, write_log, converge_plan, update_verification]
 SUBAGENT_TOOL_NAMES= [subagent]   # 6→1 单一入口（2026-09），action 分流封装原 spawn_agent/spawn_researcher/agent_status/stop_agent/wait_agent，仅主代理
 BROWSER_TASK_TOOL_NAMES= [browser]   # 4→1 单一入口（2026-09），action 分流封装原 run_browser_task/browser_task_status/stop_browser_task/browser_info，仅主代理
 OFFICE_TOOL_NAMES      = [office_read, office_write]  # Office 文档读写，主代理 + EXECUTOR
@@ -423,7 +428,7 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 | `ShellTools.kt` | execute_command(command, cwd="", timeout_seconds=120) → `CommandResult(output, exitCode)` | `runCommand`：sandbox.wrap 包装、**cwd 可指定**（空=项目主目录，底层 runCommand 本就支持、2026-09 工具层补暴露）、**启动即注册 ProcessRegistry**（进程组回收）、超时 destroyForcibly **+ 整组 SIGKILL**、警告前缀 |
 | `ProcessTools.kt` | list_processes(filter?) / stop_process(pid, force=false) | **宿主侧进程回收**（沙箱外）：list 惰性剔除已死组、输出 pid/命令/工作目录/启动时间；stop 只按 ProcessRegistry 定向 kill -- -pgid（TERM→轮询→force 时 SIGKILL），**查不到 pid 即拒绝**，只杀 mederi 自己启动的进程 |
 | `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：**硬门禁**（APPROVED/IN_PROGRESS 计划存在即拒）；校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
-| `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：validatePlan 聚合校验 → PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（superseded/approved/rejected）→ notebook.append → emitPlanTodos（PLAN_PROGRESS + todos 投影）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）+ PLAN_PROGRESS("spec-generated")。converge_plan：append-only 追加补救子任务 |
+| `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：validatePlan 聚合校验 → PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（superseded/approved/rejected）→ notebook.append → emitPlanTodos（PLAN_PROGRESS + todos 投影）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）+ PLAN_PROGRESS("spec-generated")。converge_plan：append-only 追加补救子任务；update_verification：对非 COMPLETED 子任务原子改写 verification 命令（必填 reason）+ 追加 VerificationChange 到 Subtask.verificationChanges（旧命令→新命令→原因→时间，审计留痕）；发 PLAN_PROGRESS("verification-updated", oldCommand/newCommand/reason) |
 | `VerifyTools.kt` | verify_subtask(planId, subtaskIndex, status: PASS/PARTIAL/FAIL, evidence, gapType?, remediation?) | **自动执行** Subtask.verification（VerificationSpec.command）命令（shellTools.runCommand, 默认 30s, cwd 可配）；三态判定：exit0→PASS 存储 / 非零非超时→FAIL 拒 PASS 重判 / timedOut→TIMEOUT 不存 PASS 不硬拒（inconclusive 暖缓存重验）；同时读 Subtask.executorTouchedFiles vs targetFiles 报告 scope 越界（追加 evidence，非硬拒）；PASS→COMPLETED、PARTIAL/FAIL→FAILED；**updatePlan 原子写入**验证结果+状态；全部 COMPLETED → plan 置 COMPLETED + `planStore.archive`；发 PLAN_PROGRESS |
 | `subagent/SubagentTool.kt` | subagent(action, task?, briefing?, planId?, subtaskIndex?, agentId?, timeoutMs?) → JSON | **6→1 单一入口（2026-09）**，action 分流：SPAWN=委托 `SpawnAgentTool`（**硬校验** planId/subtaskIndex/spec 存在性→`updatePlan` 原子置 IN_PROGRESS→PLAN_PROGRESS("subtask-started")→spawn 返回 `{agentId,status,modelName}`；**模型/推理档位动态读 session**——批准时用户可能切了模型）；SPAWN_RESEARCHER=委托 `SpawnResearcherTool`（只读，无计划门禁）；STATUS/STOP/WAIT=委托 `SubagentManager.status/stop/wait`（agentId 空返回 Error 文本；WAIT 超时 TIMEOUT 子代理继续后台）。仅主代理注册（canSpawn） |
 | `subagent/SubagentManager.kt` | spawn/status/stop/wait + stopAllForSession | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态（含 parentSessionId/aiModel/reasoningLevel/task/briefing 元数据）；stop = cancel job（协程上下文级联取消内部 turn）；wait = withTimeout 轮询状态，超时 TIMEOUT；**stopAllForSession(parentSessionId)** = abort/abortAndJoin 级联收割本会话 RUNNING 子代理（幂等）——子代理挂在全局 scope 不随父 turn 取消而亡，不收割即孤儿；status/wait 返回 JSON 带 modelName/reasoningLevel；**生命周期事件**（可选注入 eventBus）：spawn 发 SUBAGENT_STARTED（全量元数据）→ 终态发 SUBAGENT_COMPLETED/ERROR/STOPPED（NonCancellable 包 emit，取消路径不吞事件） |
@@ -507,6 +512,7 @@ classDiagram
         +index +name +status +planDetail
         +spec: String? +targetFiles +decisions
         +verification +verificationResult: VerificationResult?
+        +verificationChanges: List~VerificationChange~  % update_verification 每次换命令追加一条（oldCommand/newCommand/reason/timestamp），审计留痕
         +dependsOn +parallelizable
     }
     class PlanStore {
@@ -538,7 +544,7 @@ classDiagram
 - **PlanStore 存储**（`…/plan/PlanStore.kt`）：项目主目录 `.mederi/plans/{planId}.json`（机器真理源）+ `{planId}.md`（人读 Markdown，`buildMarkdown` 渲染含 `#### Verification` 段——验证标准在批准时即对用户可见）；归档到 `.mederi/plans-done/`。模块级函数 `findMederiDir`（只读）/`ensureMederiDir`（自愈建 plans/plans-done/notebook.md）。
 - **分层规则**：create_plan = WHAT（中层技术方案，用户批准对象）；批准后 generate_spec 逐子任务派生 HOW（行级规范，写 Subtask.spec，**brief 恒不覆盖**）；spawn_agent 硬绑定执行存储的 spec；verify 三分支：PASS / 执行错→converge_plan / spec 错→重新 generate_spec 覆盖→重执行。
 - **并行与原子写（2026-09）**：工具执行节点 `parallel=true`——同消息多工具并行、无并发上限（信任 AI 调度）。约束：create_plan 单独发；禁止同消息混发 generate_spec 与 spawn_agent（并行无序）；独立子任务先全量生成 spec 再同消息并行 spawn。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写，进程级锁），裸 load→copy→save 在并行下会互相覆盖。
-- **Decision**：`question, choice, rationale, alternatives`；**PlannedChange**：`module, action(MODIFY/NEW/DELETE), filePath, description, rationale`；**VerificationResult**：`status, evidence, gapType?, remediation?`。
+- **Decision**：`question, choice, rationale, alternatives`；**PlannedChange**：`module, action(MODIFY/NEW/DELETE), filePath, description, rationale`；**VerificationResult**：`status, evidence, gapType?, remediation?`；**VerificationChange**：`oldCommand, newCommand, reason, timestamp`（验证命令变更记录，审计留痕，update_verification 每次换命令追加一条）。
 
 ## 9. Provider / Koog 适配（`…/provider/`）
 

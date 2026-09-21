@@ -51,6 +51,22 @@ class SkillManagerImplTest {
         return bytes.toByteArray()
     }
 
+    /** 写一个使用 YAML 折叠块（description: >）的 SKILL.md。 */
+    private fun writeSkillFolded(root: File, name: String, vararg lines: String) {
+        val dir = File(root, name)
+        dir.mkdirs()
+        val body = lines.joinToString("\n") { "  $it" }
+        File(dir, "SKILL.md").writeText("---\nname: $name\ndescription: >\n$body\n---\n\n# $name\n")
+    }
+
+    /** 写一个 description 为空值 + 缩进多行（Koog 会整体忽略）的 SKILL.md。 */
+    private fun writeSkillEmptyValueBlock(root: File, name: String, vararg lines: String) {
+        val dir = File(root, name)
+        dir.mkdirs()
+        val body = lines.joinToString("\n") { "  $it" }
+        File(dir, "SKILL.md").writeText("---\nname: $name\ndescription:\n$body\n---\n\n# $name\n")
+    }
+
     @Test
     fun listOnEmptyRootReturnsEmpty() = kotlinx.coroutines.runBlocking {
         val root = tempRoot()
@@ -172,5 +188,43 @@ class SkillManagerImplTest {
                 manager.install("file:///tmp/skill.zip")
             }
         }
+    }
+
+    @Test
+    fun listParsesFoldedBlockDescription() = kotlinx.coroutines.runBlocking {
+        val root = tempRoot()
+        writeSkillFolded(root, "compose-skill", "Jetpack Compose skill.", "Only use when asked.")
+        val manager = managerFor(root)
+        val skills = manager.list()
+        assertEquals(1, skills.size)
+        assertEquals("compose-skill", skills[0].name)
+        assertEquals("Jetpack Compose skill. Only use when asked.", skills[0].description)
+    }
+
+    @Test
+    fun listFindsSkillWithEmptyValueBlockDescription() = kotlinx.coroutines.runBlocking {
+        val root = tempRoot()
+        writeSkillEmptyValueBlock(root, "csv-analysis", "Parse CSV files.", "Handle edge cases.")
+        val manager = managerFor(root)
+        val skills = manager.list()
+        assertEquals(1, skills.size)
+        assertEquals("Parse CSV files. Handle edge cases.", skills[0].description)
+    }
+
+    @Test
+    fun installWithFoldedBlockWorks() = kotlinx.coroutines.runBlocking {
+        val root = tempRoot()
+        val zip = zipOf(
+            mapOf(
+                "compose-skill/SKILL.md" to "---\nname: compose-skill\ndescription: >\n  Jetpack Compose skill.\n  Only use when asked.\n---\n\n# Compose\n",
+            )
+        )
+        val manager = managerFor(root, downloader = { zip })
+        val installed = manager.install("https://example.com/skill.zip")
+        assertEquals("compose-skill", installed.name)
+        assertEquals("Jetpack Compose skill. Only use when asked.", installed.description)
+        val skills = manager.list()
+        assertEquals(1, skills.size)
+        assertEquals("Jetpack Compose skill. Only use when asked.", skills[0].description)
     }
 }

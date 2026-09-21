@@ -37,6 +37,8 @@ class TurnIncrementalPersister(
     private val historyStore: HistoryStore,
     private val diagnostics: MessageDiagnostics = MessageDiagnostics()
 ) {
+    val lastAssistantMessageId = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
     /**
      * assistant 消息到达即落库（含 token 用量/finishReason 诊断 + 模型/模式/推理档/耗时）。
      *
@@ -54,6 +56,7 @@ class TurnIncrementalPersister(
                 base.withAssistantDuration(response, Instant.now())
             }
             historyStore.append(sessionId, msg)
+            lastAssistantMessageId.set(msg.id)
             DebugLog.event("Persist", "assistant appended: id=${msg.id}, parts=${msg.parts.size}, " +
                 "modelName=${msg.modelName}, reasoningLevel=${msg.reasoningLevel}, durationMs=${msg.durationMs}")
         }.onFailure { e ->

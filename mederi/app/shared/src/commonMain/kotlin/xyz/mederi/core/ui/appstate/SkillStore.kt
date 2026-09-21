@@ -6,9 +6,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.err_generic
+import mederi.app.shared.generated.resources.skill_install_failed
+import mederi.app.shared.generated.resources.skill_refresh_failed
+import mederi.app.shared.generated.resources.skill_set_dir_failed
+import mederi.app.shared.generated.resources.skill_uninstall_failed
 import xyz.mederi.core.contract.AiCore
 import xyz.mederi.core.contract.models.SkillItem
 import xyz.mederi.core.ui.DebugLog
+import xyz.mederi.core.ui.UiMessage
 
 /**
  * Skill 唯一真理源（Single Source of Truth）。
@@ -33,8 +40,8 @@ class SkillStore(
     private val _isOperating = MutableStateFlow(false)
     val isOperating: StateFlow<Boolean> = _isOperating.asStateFlow()
 
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val _errorMessage = MutableStateFlow<UiMessage?>(null)
+    val errorMessage: StateFlow<UiMessage?> = _errorMessage.asStateFlow()
 
     init {
         // 内核就绪后立即触发首次加载
@@ -63,7 +70,8 @@ class SkillStore(
                 } else {
                     val err = listRes.exceptionOrNull()
                     DebugLog.error("SkillStore", "Refresh skills failed: ${err?.message}", err)
-                    _errorMessage.value = err?.message ?: "刷新 Skill 列表失败"
+                    _errorMessage.value = err?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.skill_refresh_failed)
                 }
             } finally {
                 _isRefreshing.value = false
@@ -80,7 +88,8 @@ class SkillStore(
                 _skillsRoot.value = path
                 refresh()
             } else {
-                _errorMessage.value = res.exceptionOrNull()?.message ?: "设置目录失败"
+                _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                    ?: UiMessage(Res.string.skill_set_dir_failed)
             }
             res
         } finally {
@@ -97,7 +106,8 @@ class SkillStore(
                 DebugLog.info("SkillStore", "Install skill success: ${res.getOrNull()?.name}")
                 refresh()
             } else {
-                _errorMessage.value = res.exceptionOrNull()?.message ?: "安装 Skill 失败"
+                _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                    ?: UiMessage(Res.string.skill_install_failed)
             }
             res
         } finally {
@@ -114,7 +124,8 @@ class SkillStore(
                 DebugLog.info("SkillStore", "Uninstall skill success: $name")
                 refresh()
             } else {
-                _errorMessage.value = res.exceptionOrNull()?.message ?: "卸载 Skill 失败"
+                _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                    ?: UiMessage(Res.string.skill_uninstall_failed)
             }
             res
         } finally {

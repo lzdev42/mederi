@@ -1,4 +1,4 @@
-package xyz.mederi.ui.components
+package xyz.mederi.core.ui
 
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.models.*
@@ -121,4 +121,3 @@ fun deriveTurnStatus(snapshot: ConversationSnapshot?): TurnStatus {
         }
     }
 }
-

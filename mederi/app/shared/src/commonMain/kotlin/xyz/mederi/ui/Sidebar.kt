@@ -1,13 +1,10 @@
 package xyz.mederi.ui
 
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -16,13 +13,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
@@ -45,22 +40,22 @@ import mederi.app.shared.generated.resources.sidebar_project_menu
 import mederi.app.shared.generated.resources.language_system
 import mederi.app.shared.generated.resources.sidebar_edge_handle
 import mederi.app.shared.generated.resources.sidebar_language
-import mederi.app.shared.generated.resources.sidebar_pin
 import mederi.app.shared.generated.resources.sidebar_projects
 import mederi.app.shared.generated.resources.sidebar_rename_conversation
 import mederi.app.shared.generated.resources.sidebar_rename_project
 import mederi.app.shared.generated.resources.sidebar_settings
 import mederi.app.shared.generated.resources.sidebar_toggle_theme
-import mederi.app.shared.generated.resources.sidebar_unpin
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.AppInfo
 import xyz.mederi.core.contract.models.Conversation
-import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.Project
 import xyz.mederi.core.ui.DebugLog
 import xyz.mederi.core.ui.SidebarViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
 import xyz.mederi.theme.AppLanguage
+import xyz.mederi.ui.components.ConversationStatusDot
+import xyz.mederi.ui.components.atoms.ConfirmDialog
+import xyz.mederi.ui.components.atoms.InputDialog
 import xyz.mederi.theme.AppThemeMode
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
@@ -104,7 +99,7 @@ fun Sidebar(
     val projects by viewModel.filteredProjects.collectAsState()
     val selectedProjectId by appState.selectedProjectId.collectAsState()
     val selectedConversationId by appState.selectedConversationId.collectAsState()
-    val theme by appState.theme.collectAsState()
+    val theme by viewModel.theme.collectAsState()
 
     val interactionState = remember { SidebarInteractionState() }
 
@@ -155,34 +150,12 @@ fun Sidebar(
                     .fillMaxWidth()
                     .height(40.dp)
                     .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SidebarIconButton(
-                        imageVector = FeatherIcons.Sidebar,
-                        contentDescription = stringResource(if (isPinned) Res.string.sidebar_unpin else Res.string.sidebar_pin),
-                        colors = colors,
-                        onClick = onRequestClose
-                    )
-                    SidebarIconButton(
-                        imageVector = FeatherIcons.Search,
-                        colors = colors
-                    )
-                }
-
-                if (onTogglePin != null) {
-                    SidebarIconButton(
-                        imageVector = if (isPinned) FeatherIcons.Columns else FeatherIcons.Sidebar,
-                        contentDescription = stringResource(if (isPinned) Res.string.sidebar_unpin else Res.string.sidebar_pin),
-                        colors = colors,
-                        active = isPinned,
-                        onClick = onTogglePin
-                    )
-                }
+                SidebarIconButton(
+                    imageVector = FeatherIcons.Search,
+                    colors = colors
+                )
             }
         }
 
@@ -311,7 +284,7 @@ fun Sidebar(
                     // 多语言切换按钮与下拉菜单
                     val interaction = LocalSidebarInteractionState.current
                     var showLanguageMenu by remember { mutableStateOf(false) }
-                    val currentLanguage by appState.language.collectAsState()
+                    val currentLanguage by viewModel.language.collectAsState()
 
                     DisposableEffect(showLanguageMenu) {
                         if (showLanguageMenu) {
@@ -375,7 +348,7 @@ fun Sidebar(
                                         }
                                     },
                                     onClick = {
-                                        appState.setLanguage(lang)
+                                        viewModel.setLanguage(lang)
                                         showLanguageMenu = false
                                     }
                                 )
@@ -389,7 +362,7 @@ fun Sidebar(
                             .clip(RoundedCornerShape(6.dp))
                             .background(colors.surfaceCard)
                             .clickable {
-                                appState.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK)
+                                viewModel.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK)
                             }
                             .padding(5.dp),
                         contentAlignment = Alignment.Center
@@ -652,63 +625,34 @@ private fun ProjectTreeRow(
 
     // 重命名项目弹窗
     if (isRenameOpen) {
-        var newName by remember { mutableStateOf(project.name) }
-        Dialog(onDismissRequest = { isRenameOpen = false }) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = colors.surfaceSidebar,
-                border = BorderStroke(1.dp, colors.surfaceCardBorder),
-                modifier = Modifier.width(320.dp).padding(16.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(Res.string.sidebar_rename_project), color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isRenameOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = {
-                            if (newName.isNotBlank()) {
-                                viewModel.renameProject(project.id, newName.trim())
-                            }
-                            isRenameOpen = false
-                        }) { Text(stringResource(Res.string.sidebar_confirm_rename)) }
-                    }
-                }
-            }
-        }
+        InputDialog(
+            title = stringResource(Res.string.sidebar_rename_project),
+            initialValue = project.name,
+            confirmLabel = stringResource(Res.string.sidebar_confirm_rename),
+            cancelLabel = stringResource(Res.string.sidebar_cancel),
+            onConfirm = {
+                viewModel.renameProject(project.id, it.trim())
+                isRenameOpen = false
+            },
+            onDismiss = { isRenameOpen = false },
+        )
     }
 
     // 删除确认弹窗
     if (isDeleteOpen) {
-        Dialog(onDismissRequest = { isDeleteOpen = false }) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = colors.surfaceSidebar,
-                border = BorderStroke(1.dp, colors.surfaceCardBorder),
-                modifier = Modifier.width(320.dp).padding(16.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(Res.string.sidebar_delete_project_title), color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Text(stringResource(Res.string.sidebar_delete_project_message, project.name), color = colors.textSecondary, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isDeleteOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger),
-                            onClick = {
-                                viewModel.deleteProject(project.id)
-                                isDeleteOpen = false
-                            }
-                        ) { Text(stringResource(Res.string.sidebar_confirm_delete), color = colors.onAccentPrimary) }
-                    }
-                }
-            }
-        }
+        ConfirmDialog(
+            title = stringResource(Res.string.sidebar_delete_project_title),
+            message = stringResource(Res.string.sidebar_delete_project_message, project.name),
+            confirmLabel = stringResource(Res.string.sidebar_confirm_delete),
+            cancelLabel = stringResource(Res.string.sidebar_cancel),
+            danger = true,
+            titleColor = colors.accentDanger,
+            onConfirm = {
+                viewModel.deleteProject(project.id)
+                isDeleteOpen = false
+            },
+            onDismiss = { isDeleteOpen = false },
+        )
     }
 }
 
@@ -828,177 +772,33 @@ private fun ConversationTreeRow(
 
     // 重命名会话弹窗
     if (isRenameOpen) {
-        var newTitle by remember { mutableStateOf(conversation.title) }
-        Dialog(onDismissRequest = { isRenameOpen = false }) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = colors.surfaceSidebar,
-                border = BorderStroke(1.dp, colors.surfaceCardBorder),
-                modifier = Modifier.width(320.dp).padding(16.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(Res.string.sidebar_rename_conversation), color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = newTitle,
-                        onValueChange = { newTitle = it },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isRenameOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = {
-                            if (newTitle.isNotBlank()) {
-                                viewModel.renameConversation(conversation.id, newTitle.trim())
-                            }
-                            isRenameOpen = false
-                        }) { Text(stringResource(Res.string.sidebar_confirm_rename)) }
-                    }
-                }
-            }
-        }
+        InputDialog(
+            title = stringResource(Res.string.sidebar_rename_conversation),
+            initialValue = conversation.title,
+            confirmLabel = stringResource(Res.string.sidebar_confirm_rename),
+            cancelLabel = stringResource(Res.string.sidebar_cancel),
+            onConfirm = {
+                viewModel.renameConversation(conversation.id, it.trim())
+                isRenameOpen = false
+            },
+            onDismiss = { isRenameOpen = false },
+        )
     }
 
     // 删除会话确认弹窗
     if (isDeleteOpen) {
-        Dialog(onDismissRequest = { isDeleteOpen = false }) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = colors.surfaceSidebar,
-                border = BorderStroke(1.dp, colors.surfaceCardBorder),
-                modifier = Modifier.width(320.dp).padding(16.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(Res.string.sidebar_delete_conversation_title), color = colors.accentDanger, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Text(stringResource(Res.string.sidebar_delete_conversation_message, conversation.title), color = colors.textSecondary, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { isDeleteOpen = false }) { Text(stringResource(Res.string.sidebar_cancel), color = colors.textSecondary) }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger),
-                            onClick = {
-                                viewModel.deleteConversation(conversation.id)
-                                isDeleteOpen = false
-                            }
-                        ) { Text(stringResource(Res.string.sidebar_confirm_delete), color = colors.onAccentPrimary) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 侧边栏会话状态指示灯组件。
- * - [ConversationStatus.Working]：琥珀橙呼吸光晕动效
- * - [ConversationStatus.WaitingUser]：翡翠绿微脉冲波纹 (Beacon Ping)
- * - [ConversationStatus.Idle]：晴空蓝低噪声静态微圆点
- * - [ConversationStatus.Error]：玫瑰红静态警示点
- */
-@Composable
-private fun ConversationStatusDot(
-    status: ConversationStatus,
-    colors: MederiColors,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier.size(16.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        when (status) {
-            ConversationStatus.Working -> {
-                val transition = rememberInfiniteTransition(label = "working_pulse")
-                val alpha by transition.animateFloat(
-                    initialValue = 0.4f,
-                    targetValue = 1f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(800, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "working_alpha"
-                )
-                val scale by transition.animateFloat(
-                    initialValue = 0.85f,
-                    targetValue = 1.15f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(800, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "working_scale"
-                )
-                val amberColor = Color(0xFFF59E0B)
-                // 外层柔光晕
-                Box(
-                    modifier = Modifier
-                        .size(11.dp)
-                        .graphicsLayer(scaleX = scale, scaleY = scale, alpha = alpha * 0.35f)
-                        .clip(CircleShape)
-                        .background(amberColor)
-                )
-                // 内核实心点
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .graphicsLayer(alpha = alpha)
-                        .clip(CircleShape)
-                        .background(amberColor)
-                )
-            }
-            ConversationStatus.WaitingUser -> {
-                val transition = rememberInfiniteTransition(label = "waiting_ping")
-                val pingScale by transition.animateFloat(
-                    initialValue = 0.9f,
-                    targetValue = 2.1f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1400, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "waiting_pingScale"
-                )
-                val pingAlpha by transition.animateFloat(
-                    initialValue = 0.7f,
-                    targetValue = 0f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1400, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "waiting_pingAlpha"
-                )
-                val emeraldColor = Color(0xFF10B981)
-                // 外层扩散波纹
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .graphicsLayer(scaleX = pingScale, scaleY = pingScale, alpha = pingAlpha)
-                        .clip(CircleShape)
-                        .background(emeraldColor)
-                )
-                // 内核实心点
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(emeraldColor)
-                )
-            }
-            ConversationStatus.Idle -> {
-                // 正常结束：晴空蓝静态低噪微圆点（5dp）
-                Box(
-                    modifier = Modifier
-                        .size(5.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF38BDF8).copy(alpha = 0.85f))
-                )
-            }
-            ConversationStatus.Error -> {
-                // 报错：玫瑰红静态警示点（6dp）
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFEF4444))
-                )
-            }
-        }
+        ConfirmDialog(
+            title = stringResource(Res.string.sidebar_delete_conversation_title),
+            message = stringResource(Res.string.sidebar_delete_conversation_message, conversation.title),
+            confirmLabel = stringResource(Res.string.sidebar_confirm_delete),
+            cancelLabel = stringResource(Res.string.sidebar_cancel),
+            danger = true,
+            titleColor = colors.accentDanger,
+            onConfirm = {
+                viewModel.deleteConversation(conversation.id)
+                isDeleteOpen = false
+            },
+            onDismiss = { isDeleteOpen = false },
+        )
     }
 }

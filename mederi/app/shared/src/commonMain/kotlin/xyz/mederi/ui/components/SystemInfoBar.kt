@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.sys_cpu
 import mederi.app.shared.generated.resources.sysinfo_cores
 import mederi.app.shared.generated.resources.sysinfo_heap
 import mederi.app.shared.generated.resources.sysinfo_memory_rss
@@ -57,7 +58,7 @@ fun SystemInfoBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "CPU",
+                    text = stringResource(Res.string.sys_cpu),
                     color = colors.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Normal

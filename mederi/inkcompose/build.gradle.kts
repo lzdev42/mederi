@@ -17,6 +17,7 @@ val inkModules = listOf(
     "diagram",
     "markdown-parser", "markdown-runtime", "markdown-renderer",
     "vtext",
+    "diff",
 )
 
 kotlin {

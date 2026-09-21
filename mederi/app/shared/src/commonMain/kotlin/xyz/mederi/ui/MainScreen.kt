@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.main_initializing
@@ -31,6 +32,7 @@ import mederi.app.shared.generated.resources.pick_directory_title
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.ui.DebugLog
 import xyz.mederi.core.ui.SidebarViewModel
+import xyz.mederi.core.ui.UiEffect
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
 import xyz.mederi.theme.LocalMederiColors
@@ -48,6 +50,18 @@ fun MainScreen() {
     val workspaceViewModel: WorkspaceViewModel = viewModel { WorkspaceViewModel(appState) }
 
     var isSettingsVisible by remember { mutableStateOf(false) }
+
+    // 一次性导航命令"打开设置"经 VM effects Channel 派发，这里 collect 后落为本地
+    // isSettingsVisible=true（effect → state 宿主）；关闭设置对话框的 onRequestClose 仍直接
+    // 置 false——关闭是纯本地 UI 动作，不走效果通道。
+    LaunchedEffect(workspaceViewModel) {
+        workspaceViewModel.effects.collect { effect ->
+            when (effect) {
+                is UiEffect.OpenSettings -> isSettingsVisible = true
+                else -> {}
+            }
+        }
+    }
 
     val filteredProjects by sidebarViewModel.filteredProjects.collectAsState()
     val selectedConversationId by appState.selectedConversationId.collectAsState()
@@ -105,7 +119,7 @@ fun MainScreen() {
                     isLeftSidebarOpen = isMobileDrawerOpen,
                     onToggleLeftSidebar = { isMobileDrawerOpen = !isMobileDrawerOpen },
                     onOpenProjectPicker = openProjectPicker,
-                    onOpenSettings = { isSettingsVisible = true }
+                    onOpenSettings = { workspaceViewModel.openSettings() }
                 )
 
                 // 侧边栏抽屉半透明背景遮罩
@@ -141,7 +155,7 @@ fun MainScreen() {
                         isDrawer = true,
                         onRequestClose = { isMobileDrawerOpen = false },
                         onOpenSettings = {
-                            isSettingsVisible = true
+                            workspaceViewModel.openSettings()
                             isMobileDrawerOpen = false
                         },
                         onOpenProjectPicker = openProjectPicker
@@ -203,7 +217,7 @@ fun MainScreen() {
                         isPinned = true,
                         onTogglePin = { appState.setLeftSidebarPinned(false) },
                         onRequestClose = { appState.setLeftSidebarPinned(false) },
-                        onOpenSettings = { isSettingsVisible = true },
+                        onOpenSettings = { workspaceViewModel.openSettings() },
                         onOpenProjectPicker = openProjectPicker
                     )
                     Workspace(
@@ -213,7 +227,7 @@ fun MainScreen() {
                         isLeftSidebarOpen = true,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(false) },
                         onOpenProjectPicker = openProjectPicker,
-                        onOpenSettings = { isSettingsVisible = true }
+                        onOpenSettings = { workspaceViewModel.openSettings() }
                     )
                 }
             } else {
@@ -226,7 +240,7 @@ fun MainScreen() {
                         isLeftSidebarOpen = false,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(true) },
                         onOpenProjectPicker = openProjectPicker,
-                        onOpenSettings = { isSettingsVisible = true }
+                        onOpenSettings = { workspaceViewModel.openSettings() }
                     )
 
                     // 悬停滑出的浮层抽屉
@@ -278,7 +292,7 @@ fun MainScreen() {
                                 },
                                 onRequestClose = { isHoverRevealed = false },
                                 onOpenSettings = {
-                                    isSettingsVisible = true
+                                    workspaceViewModel.openSettings()
                                     isHoverRevealed = false
                                 },
                                 onOpenProjectPicker = openProjectPicker
@@ -318,8 +332,12 @@ fun MainScreen() {
 }
 
 /**
- * 侧边栏隐藏时的屏幕边缘把手指示器。
- * 视觉低侵入（4dp 微细竖线胶囊），悬浮高亮并微扩至 6dp，点击或鼠标悬浮可呼出侧边栏抽屉。
+ * 侧边栏隐藏时的屏幕边缘微光指示把手（Micro Tactile Handle）。
+ * 参考 Linear / Zed 极简无感设计：
+ * - 纯净贴边，无笨重突兀的凸出卡片或箭头；
+ * - 平常（Idle）：3dp 宽、36dp 高的极简微胶囊细线，静若处子，零视觉噪音；
+ * - 悬停（Hover）：平滑伸展至 56dp 高、4.5dp 宽，点亮为主题 accentPrimary 呼吸光条；
+ * - 支持点击唤醒或贴边悬停唤醒。
  */
 @Composable
 private fun SidebarEdgeIndicator(
@@ -334,15 +352,24 @@ private fun SidebarEdgeIndicator(
     val colors = LocalMederiColors.current
     var isSelfHovered by remember { mutableStateOf(false) }
     val active = isHovered || isSelfHovered
+
     val animatedWidth by animateDpAsState(
-        targetValue = if (active) 6.dp else 4.dp,
+        targetValue = if (active) 8.dp else 5.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+    )
+    val animatedHeight by animateDpAsState(
+        targetValue = if (active) 100.dp else 72.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+    )
+    val indicatorColor by animateColorAsState(
+        targetValue = if (active) colors.accentPrimary else colors.textMuted.copy(alpha = 0.45f),
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
     )
 
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .width(20.dp)
+            .width(24.dp)
             .pointerHoverIcon(PointerIcon.Hand)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -364,16 +391,24 @@ private fun SidebarEdgeIndicator(
             .clickable { onClick() },
         contentAlignment = Alignment.CenterStart
     ) {
-        // Visual indicator pill
+        // 悬停呼吸微光晕
+        if (active) {
+            Box(
+                modifier = Modifier
+                    .width(animatedWidth + 6.dp)
+                    .height(animatedHeight + 12.dp)
+                    .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+                    .background(colors.accentPrimary.copy(alpha = 0.2f))
+            )
+        }
+
+        // 核心微胶囊指示条
         Box(
             modifier = Modifier
                 .width(animatedWidth)
-                .height(48.dp)
+                .height(animatedHeight)
                 .clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
-                .background(
-                    if (active) colors.accentPrimary
-                    else colors.divider.copy(alpha = 0.85f)
-                )
+                .background(indicatorColor)
         )
     }
 }

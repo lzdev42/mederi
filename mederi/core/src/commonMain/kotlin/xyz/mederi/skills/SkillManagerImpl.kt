@@ -17,7 +17,8 @@ import java.util.zip.ZipInputStream
 /**
  * [SkillManager] 默认实现。
  *
- * - 扫描/发现：Koog `discoverSkills()` 扫根目录下的 SKILL.md（目录里放了就是已安装，天然自动发现）
+ * - 扫描/发现：Mederi `SkillDiscovery` 为主（支持块标量/空值块）+ Koog `discoverSkills()` 兜底，
+ *   扫根目录下的 SKILL.md（目录里放了就是已安装，天然自动发现）
  * - 根目录：持久化在 [SettingsStore]，key=`skills.root`，默认 [defaultSkillsRoot]
  * - 安装：Ktor 下载 zip → ZipInputStream 解压到临时目录 → 扫描验证有 SKILL.md → 移入根目录
  * - 卸载：删除根目录下对应目录
@@ -45,7 +46,15 @@ class SkillManagerImpl(
     override suspend fun list(): List<SkillInfo> {
         val root = rootDirectory()
         if (!File(root).exists()) return emptyList()
-        return discoverSkills(JVMFileSystemProvider.ReadOnly, listOf(root)).map { it.toSkillInfo() }
+        // Mederi 解析为主：SkillFrontmatterParser 支持块标量（description: > / |）与空值+缩进块，
+        // 而 Koog discoverSkills 会把前者解析成字面 ">"、把后者整条忽略。
+        val mederiDiscovered = SkillDiscovery.discover(root)
+        // Koog 兜底：只补充 Mederi 未发现的同名 skill（Mederi 优先覆盖字段）。
+        val koogDiscovered = discoverSkills(JVMFileSystemProvider.ReadOnly, listOf(root)).map { it.toSkillInfo() }
+        val byName = linkedMapOf<String, SkillInfo>()
+        koogDiscovered.forEach { byName.putIfAbsent(it.name, it) }
+        mederiDiscovered.forEach { byName[it.name] = it }
+        return byName.values.toList()
     }
 
     override suspend fun getRootDirectory(): String = rootDirectory()
@@ -72,7 +81,7 @@ class SkillManagerImpl(
         val tempDir = createTempDirectory("mederi-skill-install")
         try {
             unzip(zipBytes, tempDir)
-            val discovered = discoverSkills(JVMFileSystemProvider.ReadOnly, listOf(tempDir.absolutePath))
+            val discovered = SkillDiscovery.discover(tempDir.absolutePath)
             if (discovered.isEmpty()) {
                 throw MederiValidationException("压缩包内未找到有效的 SKILL.md（缺少 name/description frontmatter）")
             }

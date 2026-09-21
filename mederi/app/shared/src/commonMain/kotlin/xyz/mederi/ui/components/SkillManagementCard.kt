@@ -1,8 +1,8 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +25,9 @@ import xyz.mederi.core.contract.models.SkillItem
 import xyz.mederi.core.ui.appstate.SkillStore
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.PanelCard
+import xyz.mederi.ui.components.atoms.PanelEmptyState
 import xyz.mederi.util.pickDirectory
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.cancel
@@ -71,16 +74,18 @@ fun SkillManagementCard(
     var isAddDialogOpen by remember { mutableStateOf(false) }
     var isRootDialogOpen by remember { mutableStateOf(false) }
     var uninstallTarget by remember { mutableStateOf<SkillItem?>(null) }
+    var isExpanded by remember { mutableStateOf(false) }
 
     val skills by skillStore.skills.collectAsState()
-    val skillsRoot by skillStore.skillsRoot.collectAsState()
     val isRefreshing by skillStore.isRefreshing.collectAsState()
+    val skillsRoot by skillStore.skillsRoot.collectAsState()
     val isOperating by skillStore.isOperating.collectAsState()
-    val scope = rememberCoroutineScope()
-    val pickDirectoryTitle = stringResource(Res.string.pick_directory_title)
 
-    val onSelectDirectory: () -> Unit = {
-        scope.launch {
+    val coroutineScope = rememberCoroutineScope()
+    val pickDirectoryTitle = stringResource(Res.string.skill_set_root_title)
+
+    val onSelectDirectory = {
+        coroutineScope.launch {
             if (isDesktopPlatform) {
                 val picked = pickDirectory(pickDirectoryTitle)
                 if (!picked.isNullOrBlank()) {
@@ -92,160 +97,153 @@ fun SkillManagementCard(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
+    PanelCard(modifier = modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // 卡片 Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { isExpanded = !isExpanded }
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Package,
-                    contentDescription = null,
-                    tint = colors.accentPrimary,
-                    modifier = Modifier.size(13.dp)
-                )
-                Text(
-                    text = stringResource(Res.string.skill_title),
-                    color = colors.textMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
-                )
-                Text(
-                    text = "${skills.size}",
-                    color = colors.accentPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 设定根目录按钮（优先调用系统原生选择器）
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { onSelectDirectory() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.Folder,
-                        contentDescription = stringResource(Res.string.skill_set_root_desc),
-                        tint = colors.textMuted,
-                        modifier = Modifier.size(12.dp)
+            CardHeader(
+                icon = FeatherIcons.Package,
+                title = stringResource(Res.string.skill_title),
+                count = {
+                    Text(
+                        text = "${skills.size}",
+                        color = colors.accentPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
                     )
-                }
+                },
+                actions = {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 设定根目录按钮（优先调用系统原生选择器）
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { onSelectDirectory() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.Folder,
+                                contentDescription = stringResource(Res.string.skill_set_root_desc),
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
 
-                // 刷新按钮
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { skillStore.refresh() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.RefreshCw,
-                        contentDescription = stringResource(Res.string.skill_refresh),
-                        tint = if (isRefreshing) colors.accentPrimary else colors.textMuted,
-                        modifier = Modifier.size(12.dp)
-                    )
-                }
+                        // 刷新按钮
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { skillStore.refresh() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.RefreshCw,
+                                contentDescription = stringResource(Res.string.skill_refresh),
+                                tint = if (isRefreshing) colors.accentPrimary else colors.textMuted,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
 
-                // 安装按钮
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { isAddDialogOpen = true },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.Plus,
-                        contentDescription = stringResource(Res.string.skill_install),
-                        tint = colors.textSecondary,
-                        modifier = Modifier.size(13.dp)
-                    )
+                        // 安装按钮
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { isAddDialogOpen = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.Plus,
+                                contentDescription = stringResource(Res.string.skill_install),
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+
+                        // 折叠/展开箭头
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                                contentDescription = null,
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
                 }
-            }
+            )
         }
 
-        // 当前目录提示小字
-        if (skillsRoot.isNotBlank()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(colors.surfaceWorkspace.copy(alpha = 0.5f))
-                    .clickable { onSelectDirectory() }
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Folder,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(10.dp)
-                )
-                Text(
-                    text = stringResource(Res.string.skill_root_dir, skillsRoot),
-                    color = colors.textMuted,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-
-        // 列表区
-        if (skills.isEmpty()) {
+        // 展开内容区域（支持平滑折叠）
+        AnimatedVisibility(visible = isExpanded) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = stringResource(Res.string.skill_empty),
-                    color = colors.textSecondary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = stringResource(Res.string.skill_empty_hint),
-                    color = colors.textMuted,
-                    fontSize = 10.sp
-                )
-            }
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                skills.forEach { skill ->
-                    SkillItemRow(
-                        skill = skill,
-                        colors = colors,
-                        onUninstall = { uninstallTarget = skill }
+                // 当前目录提示小字
+                if (skillsRoot.isNotBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(colors.surfaceWorkspace.copy(alpha = 0.5f))
+                            .clickable { onSelectDirectory() }
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Folder,
+                            contentDescription = null,
+                            tint = colors.textMuted,
+                            modifier = Modifier.size(10.dp)
+                        )
+                        Text(
+                            text = stringResource(Res.string.skill_root_dir, skillsRoot),
+                            color = colors.textMuted,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                // 列表区
+                if (skills.isEmpty()) {
+                    PanelEmptyState(
+                        icon = FeatherIcons.Package,
+                        title = stringResource(Res.string.skill_empty),
+                        hint = stringResource(Res.string.skill_empty_hint)
                     )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        skills.forEach { skill ->
+                            SkillItemRow(
+                                skill = skill,
+                                colors = colors,
+                                onUninstall = { uninstallTarget = skill }
+                            )
+                        }
+                    }
                 }
             }
+        }
         }
     }
 

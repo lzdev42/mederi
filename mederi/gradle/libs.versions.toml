@@ -14,6 +14,7 @@ junit = "4.13.2"
 kotlin = "2.4.20"
 kotlin-wrappers = "2026.9.1"
 kotlinx-coroutines = "1.11.0"
+kotlinx-datetime = "0.8.0"
 coil = "3.6.2"
 composeIcons = "1.1.1"
 koog = "1.2.0"
@@ -53,6 +54,7 @@ compose-uiToolingPreview = { module = "org.jetbrains.compose.ui:ui-tooling-previ
 kotlinx-coroutinesSwing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutinesTest = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }

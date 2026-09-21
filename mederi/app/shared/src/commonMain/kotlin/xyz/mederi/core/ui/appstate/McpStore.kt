@@ -6,9 +6,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.err_generic
+import mederi.app.shared.generated.resources.mcp_delete_failed
+import mederi.app.shared.generated.resources.mcp_install_failed
+import mederi.app.shared.generated.resources.mcp_refresh_failed
+import mederi.app.shared.generated.resources.mcp_toggle_failed
+import mederi.app.shared.generated.resources.mcp_update_failed
+import mederi.app.shared.generated.resources.mcp_validate_failed
 import xyz.mederi.core.contract.AiCore
 import xyz.mederi.core.contract.models.McpServerItem
 import xyz.mederi.core.ui.DebugLog
+import xyz.mederi.core.ui.UiMessage
 
 /**
  * MCP 服务唯一真理源（Single Source of Truth）。
@@ -30,8 +39,8 @@ class McpStore(
     private val _isOperating = MutableStateFlow(false)
     val isOperating: StateFlow<Boolean> = _isOperating.asStateFlow()
 
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val _errorMessage = MutableStateFlow<UiMessage?>(null)
+    val errorMessage: StateFlow<UiMessage?> = _errorMessage.asStateFlow()
 
     init {
         // 内核就绪后立即触发首次加载
@@ -55,7 +64,8 @@ class McpStore(
                 } else {
                     val err = res.exceptionOrNull()
                     DebugLog.error("McpStore", "refreshMcpServers failed: ${err?.message}", err)
-                    _errorMessage.value = err?.message ?: "刷新 MCP 服务列表失败"
+                    _errorMessage.value = err?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.mcp_refresh_failed)
                 }
             } finally {
                 _isRefreshing.value = false
@@ -69,7 +79,8 @@ class McpStore(
             _mcpServers.value = _mcpServers.value.map { if (it.name == name) it.copy(enabled = enabled) else it }
             val res = aiCore.setMcpServerEnabled(name, enabled)
             if (res.isFailure) {
-                _errorMessage.value = res.exceptionOrNull()?.message ?: "切换 MCP 状态失败"
+                _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                    ?: UiMessage(Res.string.mcp_toggle_failed)
             }
             refresh()
         }
@@ -83,7 +94,8 @@ class McpStore(
             if (res.isSuccess) {
                 refresh()
             } else {
-                _errorMessage.value = res.exceptionOrNull()?.message ?: "安装 MCP 服务失败"
+                _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                    ?: UiMessage(Res.string.mcp_install_failed)
             }
             res
         } finally {
@@ -99,7 +111,8 @@ class McpStore(
             if (res.isSuccess) {
                 refresh()
             } else {
-                _errorMessage.value = res.exceptionOrNull()?.message ?: "更新 MCP 服务失败"
+                _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                    ?: UiMessage(Res.string.mcp_update_failed)
             }
             res
         } finally {
@@ -116,7 +129,8 @@ class McpStore(
                 if (res.isSuccess) {
                     refresh()
                 } else {
-                    _errorMessage.value = res.exceptionOrNull()?.message ?: "删除 MCP 服务失败"
+                    _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.mcp_delete_failed)
                 }
             } finally {
                 _isOperating.value = false
@@ -133,7 +147,8 @@ class McpStore(
                 if (res.isSuccess) {
                     refresh()
                 } else {
-                    _errorMessage.value = res.exceptionOrNull()?.message ?: "验证 MCP 服务失败"
+                    _errorMessage.value = res.exceptionOrNull()?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.mcp_validate_failed)
                 }
             } finally {
                 _isOperating.value = false

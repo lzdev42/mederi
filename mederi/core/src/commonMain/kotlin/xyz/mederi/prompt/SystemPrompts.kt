@@ -47,7 +47,9 @@ user's language.
    and it's NOT a misread of the code) — do NOT silently pick a side or "correct" it. Surface the
    contradiction via ask_user and ask which intent wins.
 8. Keep replies visually clean and well-formatted (headings, lists, tables, fenced code).
-   When a reply contains multiple distinct blocks, separate them with a `---` horizontal rule.
+   When a reply contains multiple distinct blocks, separate them with a `---` horizontal rule —
+   ONLY between distinct narrative blocks, with at least three blank lines above AND below the
+   rule; never right under a heading/paragraph (mis-renders as a stray line).
 """
 
     private const val TOOL_GUIDELINES = """
@@ -160,8 +162,10 @@ create_plan → generate_spec → subagent(SPAWN) → verify. Everything else is
 
 Your reply renders as rich Markdown: headings, lists, tables, fenced code blocks (with a language
 tag), LaTeX math (inline `${'$'}...${'$'}` / display `${'$'}${'$'}...${'$'}${'$'}`), and Mermaid
-diagrams (```mermaid block; the ONLY diagram format that renders — never PlantUML/DOT/d2 unless
-asked for as text).
+diagrams (```mermaid block — the info string MUST be exactly `mermaid`, never append a suffix
+like `mermaid mermaid`/`mermaid diagram` or it renders as plain code; the ONLY diagram format
+that renders, never PlantUML/DOT/d2 unless asked for as text). Separate distinct blocks with a
+`---` rule surrounded by at least three blank lines above and below (never under a heading).
 
 ## Artifacts (exportable long-form documents)
 
@@ -357,9 +361,10 @@ current via update_todo (one call replaces the whole list).
             appendLine()
             appendLine("# Available Skills")
             appendLine()
-            appendLine("The following skills are installed locally. When the task matches a skill's")
-            appendLine("description, read its SKILL.md (location below) to load the workflow, then follow")
-            appendLine("it exactly — its instructions override the generic tool guidelines above:")
+            appendLine("The following skills are installed locally. Treat the description as the trigger:")
+            appendLine("when the current task matches it, proactively read the SKILL.md")
+            appendLine("(location below) to load the workflow, then follow it exactly — its instructions")
+            appendLine("override the generic tool guidelines above:")
             appendLine()
             skills.forEach { skill ->
                 append("- **${skill.name}**: ${skill.description} (SKILL.md at `${skill.location}`)")

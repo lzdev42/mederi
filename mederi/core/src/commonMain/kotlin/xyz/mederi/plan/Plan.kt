@@ -44,6 +44,18 @@ data class VerificationResult(
 )
 
 /**
+ * 验证命令变更记录（审计留痕）。每次 update_verification 换命令时追加一条。
+ * 人类可从归档 plan JSON 查证每次换命令的因果：旧命令→新命令→原因→时间。
+ */
+@Serializable
+data class VerificationChange(
+    val oldCommand: String,
+    val newCommand: String,
+    val reason: String,
+    val timestamp: String
+)
+
+/**
  * 子任务的验证规范：可执行命令 + 可选工作目录 + 可选超时秒数。
  * 替代旧 verification: String（无结构散文被当命令盲执行）。
  * 自定义 KSerializer 兼容旧 JSON：遇纯 String → VerificationSpec(command=string, cwd=null, timeout=null)。
@@ -121,6 +133,7 @@ data class PlannedChange(
  * [executorTouchedFiles] 由 executor 回写实际改动的文件列表（供 verify 对照 targetFiles）。
  * [executorProgress] 由 executor 回写进度摘要（供主代理轮询活跃子任务状态）。
  * [verificationResult] 由 verify_subtask 工具回写。
+ * [verificationChanges] 由 update_verification 工具回写——每次换命令追加一条变更记录（旧命令+新命令+原因+时间），人类可事后查证。
  */
 @Serializable
 data class Subtask(
@@ -133,6 +146,7 @@ data class Subtask(
     val decisions: List<Decision> = emptyList(),
     val verification: VerificationSpec,
     val verificationResult: VerificationResult? = null,
+    val verificationChanges: List<VerificationChange> = emptyList(),
     val executorTouchedFiles: List<String> = emptyList(),
     val executorProgress: String? = null,
     val dependsOn: List<Int> = emptyList(),

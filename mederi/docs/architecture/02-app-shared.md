@@ -152,9 +152,9 @@ SUBAGENT_* 事件 → 子代理缓存表的纯逻辑（与 SnapshotReducer 同�
 
 - `SubagentTracker.apply(states: Map<agentId, SubagentState>, event): Map` —— STARTED 以 agentId 建条目（全量元数据来自 payload），终态覆盖 status；乱序终态（无 STARTED）安全跳过；非子代理事件原样返回
 - `SubagentState(agentId, parentSessionId, role, modelId, modelName, reasoningLevel?, task, briefing?, status, startedAt)` —— 每个子代理一个 UI 缓存对象（MVVM Model）；"工作中" = status==RUNNING（真实 job 状态，SSE 空闲 10 分钟超时兜底判死）
-- `SubagentToolResult` —— core `SubagentManager.StatusResult` JSON 的契约镜像（宽松解码），wait_agent 落库 tool result 的解析用
+- `SubagentToolResult` —— core `SubagentManager.StatusResult` JSON 的契约镜像（宽松解码），subagent(WAIT) 落库 tool result 的解析用
 
-**VM 接线**（WorkspaceViewModel）：`allSubagents`（compose state，事件驱动）+ `subagents`（按当前会话过滤的派生 getter）+ `subagent(agentId)`（详情只读数据源）+ `subagentReportMarkdown(toolName, resultJson)`（`core/ui/SubagentReport.kt` 纯转换：wait_agent/agent_status 的 COMPLETED 结果 → 汇报 markdown，null=非汇报普通卡片渲染；UI 折叠卡片点开用 InkCompose 渲染）——汇报全文不进事件/缓存，它在数据库的 tool result 里。
+**VM 接线**（WorkspaceViewModel）：`allSubagents`（compose state，事件驱动）+ `subagents`（按当前会话过滤的派生 getter）+ `subagent(agentId)`（详情只读数据源）+ `subagentReportMarkdown(toolName, resultJson)`（`core/ui/SubagentReport.kt` 纯转换：subagent/wait_agent/agent_status 的 COMPLETED 结果 → 汇报 markdown，null=非汇报普通卡片渲染；UI 折叠卡片点开用 InkCompose 渲染）——汇报全文不进事件/缓存，它在数据库的 tool result 里。
 
 ## 4. 三实现架构图
 
@@ -297,13 +297,17 @@ classDiagram
     }
     class WorkspaceViewModel {
         +conversationId +snapshot: ConversationSnapshot?
-        -snapshotCache: Map~convId, ConversationSnapshot~  % 按会话缓存快照
-        -observeJobs: Map~convId, Job~  % 每会话常驻观察流(切走不取消)
-        -pendingUserMessages: Map~convId, ChatMessage~  % 乐观消息
+        -sessionCache: SessionUiCache  % 会话级缓存族(2026-09 收敛,替代散落 map): snapshotCache/observeJobs/pendingUserMessages/turnStartByConv 4 容器
+        -errorState: ErrorState  % 错误族分组状态: message/diagnostic/id/isStreamInterrupted/isDetailOpen(对外 getter: error/errorDiagnostic/errorId/isStreamInterrupted/isErrorDetailOpen 同名)
+        -diffState: DiffUiState  % diff 面板分组状态: items/selectedPath/showPanel(对外: diffItems/selectedDiffFilePath/showDiffPanel 同名)
+        % 错误族与 diff 族已收敛为分组状态(2026-09 UI 规范化)
         +inputDraft: TextFieldValue  % 输入草稿唯一真理源
-        -activeDockPanel: RightDockPanel?
+        -activeDockPanel: RightDockPanel?  % 保守保留平铺(同时服务全部 dock 面板)
+        +uiBrowserHost: UiBrowserHost?  % 窄访问器 get() = appState.uiBrowserHost; 组件不直操 AppState(2026-09)
         +chatItems: List~ChatListItem~  % derivedStateOf 展平
         +effectiveThinkingLevel: StateFlow  % 推理档位唯一真理源(ReasoningMenu.resolve)
+        +effects: Flow~UiEffect~  % 一次性导航命令通道(Channel 派发: openSettings/openProjectMenu)
+        +openSettings() / openProjectMenu()  % 一次性命令, UI collect 消费落本地状态
         +attach(id) / detach() / send(text) / abort()
         +rollbackMessage(convId, msgId, text)
         +approvePlan(planId, approved) / replyQuestion(...) 
@@ -314,6 +318,8 @@ classDiagram
     class SidebarViewModel {
         +uiState(expandedProjectIds, isBusy, error)
         +filteredProjects: StateFlow  % 全量项目树（不再按工作用途过滤）
+        +theme: StateFlow~AppThemeMode~ / +language: StateFlow~AppLanguage~  % 窄状态转发 AppState(2026-09 规范化, Sidebar 不直操全局单例)
+        +setTheme(mode) / setLanguage(lang)  % 转发 AppState.setTheme/setLanguage
         +createProject/renameProject/deleteProject
         +addProjectDirectory/removeProjectDirectory
         +createConversation/deleteConversation/renameConversation
@@ -323,13 +329,17 @@ classDiagram
     }
     class TerminalViewModel {
         % 依赖 AppState.terminalManager, 不依赖 AiCore
-        +tabKeys/activeKey/sessions/errors/unread/ended
+        +uiState: TerminalUiState(tabs: List~TerminalTab(key/error/unread/ended)~, activeKey)  % 对外唯一状态入口（2026-09 收敛，替代原 5 个平铺状态）
+        +projects: StateFlow~List~Project~~ / +selectedProjectId: StateFlow~String?~  % 窄状态转发 appState 同源流(2026-09)
+        -sessions: Map~key, TerminalSession~  % 会话对象容器（独立于 uiState，避免 data class 相等性噪声）
+        +sessionOf/sessionTitleOf
         +selectTab/closeTab/addTab/restartTab/retryTab
         +bootstrapIfNeeded(project)  % 幂等自动开首个 tab
     }
     class RawMessagesViewModel {
         +rawMessages +isLoading
         +bind(conversationId)  % 拉取+订阅 events 过滤刷新
+        +prettyPrintJson / +extractSummaryLabel / +extractTokens / +formatMessageTimestamp  % 解析/格式化自 RawMessagesCard 迁入,时间戳走 kotlinx-datetime(2026-09 UI 规范化)
     }
     AppState --> WorkspaceViewModel
     AppState --> SidebarViewModel
@@ -338,6 +348,7 @@ classDiagram
     AppState --> UiBrowserHost : uiBrowserHost（desktop 注入 JCEF）
 ```
 
+- **子 VM 生命周期（2026-09 规范化）**：`RawMessagesViewModel` 与 `TerminalViewModel` 由 `Workspace()`（Route/Screen 层）`viewModel {}` 创建，经 `RightExtensionPanel` → `OverviewTabContent`（rawVm）/ `TerminalPanelContent`（terminalVm）注入——组件不再自建 VM、不再经 `WorkspaceViewModel.appStateRef` 摸全局单例（该出口已删除，浏览器 host 改 `uiBrowserHost` 窄访问器）。
 - **WorkspaceViewModel 要点**：`attach(id)` = **按会话常驻观察流 + 缓存渲染**：每个被 attach 过的会话有一条 `observeConversation` 观察流持续把最新快照写入 `snapshotCache`（即使 UI 已切到别的会话也不取消），切换会话只改 `conversationId`、立即用缓存渲染（无缓存时先 `getSnapshot` 拉初始再交给观察流）；`send(text)` = 校验就绪/模型/图片门禁 guardImageSupport（send 与 rollbackMessage 共用唯一实现）→ PromptComposer.compose → 乐观更新 → 无会话自动 createConversation → 有待审批先 resolvePlanApproval(false) → sendMessage（thinkingLevel 只发 computeEffectiveThinkingLevel()）；`rollbackMessage` = 先验后切（restoreInputFromMessage 反解主指令/大段文本/图片 → 本地切片 → rollbackToMessage）→ **成功后才把内容粘贴回输入框重建待发态**（inputDraft + pendingPastedTexts + pendingImages，用户切模型/模式/改内容后自行发送），失败走 ErrorBoard；`restoreInputFromMessage(targetMsg?, fallbackText)` 为纯函数（PromptComposer.parse 拆主指令与大段文本、data: File block base64 还原图片）；`chatItems` 预计算 toolSummary/target/headerSummary/isReasoningActive。**会话切换不再闪烁（2026-09）**：历史上切换回 Working 会话时从 store 重建初始快照，而流式中的 assistant 消息尚未落库（`TurnIncrementalPersister.persistAssistant` 只在 LLM 响应结束后写入），导致快照缺 streaming 数据、StatusBar 短暂显示"排队较长"警告。现改为常驻观察流 + 缓存，切回即渲染最新缓存、流式增量不丢。
 - **TerminalViewModel key 约定**：`"project:<id>"`、`"project:<id>#<n>"`、`"tmp:<n>"`。
 
@@ -351,12 +362,12 @@ flowchart TD
     SB["Sidebar<br/>项目/会话树 + 主题切换 + 设置入口"]
     WS["Workspace<br/>中央聊天区"]
     HDR["Workspace Header（标题/模型）"]
-    LIST["LazyColumn 消息列表<br/>ChatCards: WorkTraceCard/ToolCallsBlock/ToolActionGroupRow/ReasoningBlock<br/>QuestionCard/PlanApprovalCard/SummaryCard/UserPastedTextCard<br/>AssistantMessageFooter（assistant 回复底部: 模型名·人工审批/自动审批·推理档·时长·完成时间）"]
-    INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft<br/>顶部 ErrorBoard（错误/警告唯一出口）"]
+    LIST["LazyColumn 消息列表<br/>聊天卡片已按领域拆分(2026-09):<br/>ReasoningBlock / ToolCallsBlock(含 ToolActionGroupRow) / QuestionCard / PlanApprovalCard<br/>UserMessageCards(含 UserPastedTextCard/UserMessageFooter/AssistantMessageFooter)<br/>DocumentArtifactCard / WorkTraceCard / DiffCards(含 TurnDiffSummaryCard) / ChatCards(类型与工具)"]
+    INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft<br/>选择器/控件已拆出(2026-09): ChatInputSelectors.kt / ChatInputControls.kt<br/>顶部 ErrorBoard（错误/警告唯一出口）<br/>/skill 命令(2026-09): 输入 /skill 时浮层在输入框顶部展开(SkillCommandPanel, AnimatedVisibility, 数据源 AppState.skillStore.skills), 选中插入 '/skill <name> ' 到草稿末尾且命令前缀经 SkillCommandTransformation(VisualTransformation 仅显示层)高亮, 模型按 description 触发器加载"]
     SBAR["StatusBar（原 TurnStatusBar）<br/>deriveTurnStatus(snapshot) 纯函数<br/>只显示 AI 运转状态（思考/生成/工具/重试），永不显示错误"]
     DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/SUB_AGENTS/ARTIFACTS/TERMINAL"]
-    REP["RightExtensionPanel(360dp，拖拽调宽)<br/>宽度无固定上限：上限 = 工作区宽 - 对话区最小宽(360dp) - Dock 宽<br/>展开动画 expandFrom=End 从右缘展开<br/>按 activePanel 分发面板内容<br/>含 RawMessagesCard/图片与大文本阅读器"]
-    SD["SettingsDialog<br/>6 Tab: PROVIDERS/GENERAL/SANDBOX/AGENTS/REMOTE/SYSTEM<br/>ProviderSettingsPanel+ProviderSettingsViewModel<br/>(Master-Detail/移动端下钻自适应)"]
+    REP["RightExtensionPanel(360dp，拖拽调宽)<br/>宽度无固定上限：上限 = 工作区宽 - 对话区最小宽(360dp) - Dock 宽<br/>展开动画 expandFrom=End 从右缘展开<br/>按 activePanel 分发面板内容<br/>面板按域拆分(2026-09): InfoPanels.kt / MetricsCards.kt / ViewerTabs.kt / BrowserPanel.kt<br/>含 RawMessagesCard/图片与大文本阅读器；导出 I/O 在 util/DocumentExporter.kt(Composable 层零 I/O)"]
+    SD["SettingsDialog<br/>6 Tab: PROVIDERS/GENERAL/SANDBOX/AGENTS/REMOTE/SYSTEM<br/>ProviderSettingsPanel+ProviderSettingsViewModel<br/>ProviderSettingsPanel 按 feature 拆分(2026-09): ui/settings/ 下多文件,主入口 ProviderSettingsPanel.kt 瘦身<br/>(Master-Detail/移动端下钻自适应)"]
     MA --> APP --> MS
     MS --> SB
     MS --> WS
@@ -372,6 +383,9 @@ flowchart TD
 - 三个职责分离的条栏：**StatusBar**（消息区，AI 运转状态，`deriveTurnStatus(snapshot)`，永不显示错误；计时锚定"发送请求时刻"`WorkspaceViewModel.turnStartedAt`（send 时记录、turn 结束清除），每秒 `now - turnStartedAt` 重算——切会话回来不重置；**与 footer durationMs 语义不同：StatusBar=从发请求起算，footer=API 有回应起算到回复结束**）、**ErrorBoard**（ChatInputCard 顶部，错误/警告唯一出口：单行简报 + "详细报告"展开 + 关闭；断流时（快照 errorIsStreamInterrupted）额外显示"继续"按钮 → `continueAfterInterruption()` 重发 Continue 续写半截回复，数据源=快照 errorMessage）、**SystemInfoBar**（最底部，纯 CPU/RSS/JVM 资源监控，不接错误）。
 - **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
 - 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`HelpCircleTooltip`（InfoTooltip.kt，hover/tap 信息气泡，AgentMode 开关旁）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：uiBrowserHost 注入则渲染 JCEF 浏览器，未注入显示"当前端不支持内置浏览器"占位——遥控/wasm 端门禁）。
+- **共享原子组件库 `ui/components/atoms/`（2026-09 新建）**：ExpandableRow.kt（`ExpandableContent`/`ExpandChevron`/`ExpandableRow` 折叠交互）、Dialogs.kt（`MederiDialog` 基底 + `ConfirmDialog` + `InputDialog`）、PanelCard.kt（`PanelCard`/`CardHeader`/`PanelEmptyState`）、MederiIconButton.kt、CopyButton.kt（`CopyFeedbackState`/`rememberCopyFeedback`/`CopyButton`）、MederiMarkdown.kt（MarkdownView 包裹样板）。回填了 Sidebar 4 对话框、InfoPanels/Skill/Mcp 空态、Skill/Mcp/Metrics/RawMessages 卡片外壳与 Header、ProviderKeyDialogs 确认框等 10+ 处重复；折叠交互统一（ToolCallsBlock/UserMessageCards/WorkTraceCard/ReasoningBlock 7 处）。
+- **层归位（2026-09）**：`TurnStatus`/`RetryHint`/`deriveTurnStatus`/`parseRetryHint` 从 ui/components 移入 `core/ui/TurnStatus.kt`（VM 不再反向依赖视图层）；`ToolActionKind`/`classifyToolAction`/`ToolActionGroup`/`groupToolCallsByAction` 从 ChatCards.kt 移入 `core/ui/chat/ToolActions.kt`（数据投影层单一来源）；新增 `core/ui/ErrorDetailFormatter.kt`（extractErrorCategory/cleanErrorSummary/extractErrorSuggestion/buildBugReportMarkdown 纯函数，ErrorDetailDialog 组合期解析下沉）；`RightDockPanel` 枚举从 ChatListItems.kt 移入 `core/ui/RightDockPanel.kt`。
+- **重文件拆分（2026-09）**：Sidebar.kt 拆出 `ConversationStatusDot.kt`；ChatInputCard.kt 拆出 `command/SlashCommandTransformation.kt` + `ChatInputAttachments.kt`（附件行）；ChatCards.kt 拆出 `icons.kt`（BrainIcon/TerminalPromptIcon）与 `scroll.kt`（shouldEnableReasoningScroll/ContainNestedScrollConnection/containScroll），ChatCards 只留 format 工具；ChatInputSelectors.kt 抽 `ModelPickerList`（ModelSelectorMenu 与 MobileModelBottomSheet 共用）；ViewerTabs.kt 新增 `ExportActionButton` 原子（导出 5 Boolean 状态机收敛为 Idle/Exporting/Done）。
 - 渲染 AI 回复使用 `:inkcompose` 的 `MarkdownView`（见 03-inkcompose.md）。
 
 ## 9. 平台入口与特性
@@ -427,8 +441,12 @@ flowchart TD
 - **ClipboardHelper**：`expect object PlatformClipboard { getImage()/getText() }`（读系统剪贴板图片/文本）。
 - **DirectoryPicker**：`expect suspend fun pickDirectory(title: String): String?`（title 为原生对话框标题，UI 层 stringResource 后传入）。
 - **FilePickerUtils**：`expect suspend fun pickSaveFile(defaultName: String, extension: String, title: String, filterLabel: String): String?`（title/filterLabel 由 UI 层本地化后传入）；`expect suspend fun writeTextToFile(filePath: String, text: String): Boolean`。
+- **DocumentExporter**（`util/DocumentExporter.kt`）：`suspend fun exportDocumentToHtml / exportDocumentToPdf`——内部 `pickSaveFile → MarkdownExporter.toHtml/toPdf → writeTextToFile → openFile`，返回 `ExportResult(status, error)`（`ExportStatus{EXPORTED, CANCELLED, WRITE_FAILED, EXPORT_FAILED}`；2026-09 自 TextReaderTabContent 移出，Composable 层零 I/O）。
 - **Mock 体系**（`…/core/mock/`）：`MockAiCore`（实现全部 AiCore；initialize 装 MockSeedData 后 500ms 就绪；sendMessage 起协程跑 MockScenarios 剧本；resolveQuestion 用 CompletableDeferred）+ `MockIdGenerator` + `MockScenarios`（三个可复现剧本：流式 reasoning、tool call Pending→Running→Completed、问询卡片等）+ `MockSeedData`（2 供应商/5 preset/3 项目/若干会话含子会话与错误会话）。用途：未接真实 core 的平台兜底 + UI 开发预览。
 
 ## 12. theme/Theme.kt
 
 主题机制：`AppThemeMode`（AppState 持久化 `app.theme`）→ `AppTheme(theme)` Composable 统一注入 Material3 ColorScheme；DiagramTheme/CodeTheme/LatexTheme 由 inkcompose 侧从 colorScheme 派生（`DiagramTheme.material3(colorScheme)`）。
+
+- **MederiColors 状态语义 token（2026-09 新增 4 枚）**：`statusWorking`（0xFFF59E0B 琥珀，工作中/流转指示）、`statusWaiting`（0xFF10B981 翠绿，等待用户/空闲）、`statusIdle`（0xFF38BDF8 晴空蓝，正常结束）、`statusError`（0xFFEF4444 玫瑰红，报错）——Dark/Light 双份同值，消费端 = Sidebar ConversationStatusDot、ToolCallsBlock 运行 spinner、DocumentArtifactCard 流式指示。
+- 颜色硬编码收口（2026-09）：ToolCallsBlock 淡灰三元→textSecondary/textMuted、EDIT/SUBAGENT 紫→thoughtAccent、终端输出块→surfaceCode/onSurfaceCode/surfaceCardBorder/accentDanger；SettingsScreen previewBg→surfaceWorkspace 等，ui/ 下断言 hex 零残留。

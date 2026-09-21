@@ -23,8 +23,13 @@ import xyz.mederi.core.contract.TerminalManager
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.contract.preferences.PreferencesStore
 import xyz.mederi.core.ui.DebugLog
+import xyz.mederi.core.ui.UiMessage
 import xyz.mederi.theme.AppLanguage
 import xyz.mederi.theme.AppThemeMode
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.err_generic
+import mederi.app.shared.generated.resources.remote_unsupported
+import mederi.app.shared.generated.resources.tunnel_not_installed_msg
 
 /** 内嵌遥控 server 启动结果。 */
 sealed interface RemoteStartResult {
@@ -43,7 +48,7 @@ sealed interface RemoteServerUiState {
     /** 运行中；[portFallback] 为 true 表示"上次用的端口被占用，已自动改用该端口" */
     data class Running(val port: Int, val portFallback: Boolean = false) : RemoteServerUiState
     /** 启动失败 */
-    data class Failed(val reason: String) : RemoteServerUiState
+    data class Failed(val reason: UiMessage) : RemoteServerUiState
 }
 
 /** Cloudflare 隧道启动结果。 */
@@ -65,7 +70,7 @@ sealed interface TunnelUiState {
     /** 运行中；[url] 为隧道公网地址（可为 null，解析不到时由 UI 提示看 cloudflared 日志） */
     data class Running(val url: String?) : TunnelUiState
     /** 失败；[notInstalled] 为 true 表示本机未装 cloudflared */
-    data class Failed(val reason: String, val notInstalled: Boolean = false) : TunnelUiState
+    data class Failed(val reason: UiMessage, val notInstalled: Boolean = false) : TunnelUiState
 }
 
 /**
@@ -97,7 +102,7 @@ class AppState(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** 宿主启动后注入；null = 当前端不支持遥控 */
+    /** 宿主启动后注入；null = 平台不支持遥控（UI 提示走 remote_unsupported 资源） */
     var remoteControl: RemoteControlHooks? = null
 
     /** 宿主启动后注入；null = 当前端无本地终端（wasm/移动端为遥控端，后续接远程 WS 客户端） */
@@ -294,7 +299,7 @@ class AppState(
 
     /** 启动遥控 server：用已保存端口起，占用则自动换端口；结果回写 [remoteServerState] 并保存实际端口。 */
     fun startRemoteControl() {
-        val hooks = remoteControl ?: run { _remoteServerState.value = RemoteServerUiState.Failed("当前端不支持遥控") ; return }
+        val hooks = remoteControl ?: run { _remoteServerState.value = RemoteServerUiState.Failed(UiMessage(Res.string.remote_unsupported)) ; return }
         val current = _remoteServerState.value
         if (current is RemoteServerUiState.Starting || current is RemoteServerUiState.Running) return
         _remoteServerState.value = RemoteServerUiState.Starting
@@ -310,7 +315,7 @@ class AppState(
                 }
                 is RemoteStartResult.Failed -> {
                     hooks.stop()
-                    RemoteServerUiState.Failed(result.reason)
+                    RemoteServerUiState.Failed(UiMessage(Res.string.err_generic, listOf(result.reason)))
                 }
             }
         }
@@ -330,8 +335,8 @@ class AppState(
         val result = hooks.startTunnel(_remotePort.value)
         _tunnelState.value = when (result) {
             is TunnelStartResult.Started -> TunnelUiState.Running(result.url)
-            is TunnelStartResult.NotInstalled -> TunnelUiState.Failed("请自行安装 cloudflared", notInstalled = true)
-            is TunnelStartResult.Failed -> TunnelUiState.Failed(result.reason)
+            is TunnelStartResult.NotInstalled -> TunnelUiState.Failed(UiMessage(Res.string.tunnel_not_installed_msg), notInstalled = true)
+            is TunnelStartResult.Failed -> TunnelUiState.Failed(UiMessage(Res.string.err_generic, listOf(result.reason)))
         }
     }
 

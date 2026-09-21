@@ -2,82 +2,63 @@ package xyz.mederi.ui.components
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.auto_approve_title
-import mederi.app.shared.generated.resources.auto_approve_tooltip_main
-import mederi.app.shared.generated.resources.auto_approve_tooltip_note
 import mederi.app.shared.generated.resources.close
 import mederi.app.shared.generated.resources.image_stripped_notice
-import mederi.app.shared.generated.resources.input_default_key
-import mederi.app.shared.generated.resources.input_default_tag
 import mederi.app.shared.generated.resources.input_image_n
 import mederi.app.shared.generated.resources.input_image_unsupported
-import mederi.app.shared.generated.resources.input_model_mode_settings
-import mederi.app.shared.generated.resources.input_no_project
-import mederi.app.shared.generated.resources.input_open_project
 import mederi.app.shared.generated.resources.input_over_budget
 import mederi.app.shared.generated.resources.input_pending_image_thumbnail
 import mederi.app.shared.generated.resources.input_pasted_text_n
 import mederi.app.shared.generated.resources.input_placeholder
 import mederi.app.shared.generated.resources.input_project_needed_create
 import mederi.app.shared.generated.resources.input_project_needed_select
-import mederi.app.shared.generated.resources.input_provider_default
-import mederi.app.shared.generated.resources.input_reasoning_level
 import mederi.app.shared.generated.resources.input_remove_image
 import mederi.app.shared.generated.resources.input_remove_text
 import mederi.app.shared.generated.resources.input_select_model
-import mederi.app.shared.generated.resources.input_select_project
-import mederi.app.shared.generated.resources.input_selected
-import mederi.app.shared.generated.resources.input_send
-import mederi.app.shared.generated.resources.input_stop
 import mederi.app.shared.generated.resources.input_text_meta
 import mederi.app.shared.generated.resources.input_text_n
-import mederi.app.shared.generated.resources.input_thinking_label
 import mederi.app.shared.generated.resources.reasoning_level_high
 import mederi.app.shared.generated.resources.reasoning_level_low
 import mederi.app.shared.generated.resources.reasoning_level_max
 import mederi.app.shared.generated.resources.reasoning_level_medium
 import mederi.app.shared.generated.resources.reasoning_level_none
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.ui.components.command.SlashCommandTransformation
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.flow.collect
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.ArrowUp
-import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.File
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.Image
-import compose.icons.feathericons.Key
 import compose.icons.feathericons.Paperclip
-import compose.icons.feathericons.Plus
-import compose.icons.feathericons.Sliders
-import compose.icons.feathericons.Square
 import compose.icons.feathericons.X
 import xyz.emuci.inkcompose.InkImage
 import xyz.mederi.util.PlatformClipboard
@@ -92,13 +73,17 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
-import xyz.mederi.core.contract.models.*
+import xyz.mederi.core.contract.models.SkillItem
+import xyz.mederi.ui.components.command.SlashCommandItem
+import xyz.mederi.ui.components.command.SlashCommandMenu
+import xyz.mederi.ui.components.command.SlashCommandRegistry
 import xyz.mederi.core.ui.DebugLog
+import xyz.mederi.core.ui.UiEffect
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.util.formatContextWindow
+
 
 /** 推理档位显示名（唯一映射点，桌面下拉与移动端抽屉共用；未知档位回显原始值）。 */
 @Composable
@@ -113,7 +98,7 @@ fun formatReasoningLevelLabel(level: String): String = when (level.uppercase()) 
 
 /** 模型能力小标签（Thinking / Image），桌面下拉与移动端抽屉共用。具有防折行与精致描边。 */
 @Composable
-private fun ModelCapabilityTag(text: String, tint: Color) {
+internal fun ModelCapabilityTag(text: String, tint: Color) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
@@ -153,6 +138,75 @@ fun ChatInputCard(
     val modelSupportsImages by viewModel.modelSupportsImages.collectAsState()
     val selectedProjectId by appState.selectedProjectId.collectAsState()
     val projects by appState.projects.collectAsState()
+    // /skill 命令数据源：已安装 skill 列表（AppState.skillStore 唯一真理源）
+    val skills by appState.skillStore.skills.collectAsState()
+
+    // —— 快捷命令与联想输入系统（2026-09）：
+    // 1. 输入 "/" 或输入单词首字母（如 "c"）激活联想菜单（类似输入法联想）；
+    // 2. 按 Enter/Tab 自动补全完整命令；
+    // 3. 按 Backspace 原子化删除整条命令 Token，避免逐字退格。
+    var slashMenuDismissed by remember { mutableStateOf(false) }
+    var slashSelectedIndex by remember { mutableStateOf(0) }
+
+    // 全量命令条目（内置命令 + 动态安装的 Skills 插件）
+    val allSlashCommands = remember(skills) {
+        SlashCommandRegistry.getAllCommands(skills)
+    }
+
+    // 提取当前光标处的命令检索上下文（支持文本开头、中间或末尾）
+    val cursorPosition = textValue.selection.start
+    val activeQuery = remember(textValue.text, cursorPosition) {
+        SlashCommandRegistry.findCommandQueryAtCursor(textValue.text, cursorPosition)
+    }
+
+    val slashQuery = activeQuery?.query ?: ""
+    val isSlashMode = activeQuery?.isSlashMode ?: false
+    val hasActiveQuery = activeQuery != null
+
+    // 过滤候选列表：未输入 "/" 时启用 prefixOnly，模拟输入法前缀联想，避免普通英文词汇误触
+    val filteredSlashCommands = remember(allSlashCommands, slashQuery, hasActiveQuery, isSlashMode) {
+        if (hasActiveQuery) {
+            SlashCommandRegistry.filter(allSlashCommands, slashQuery, prefixOnly = !isSlashMode)
+        } else {
+            emptyList()
+        }
+    }
+
+    // 菜单显隐控制：只有在匹配到候选且未被 Esc 显式关闭时展示
+    val slashMenuOpen = hasActiveQuery && filteredSlashCommands.isNotEmpty() && !slashMenuDismissed
+
+    LaunchedEffect(filteredSlashCommands.size) {
+        if (slashSelectedIndex >= filteredSlashCommands.size) {
+            slashSelectedIndex = 0
+        }
+    }
+
+    var lastInputText by remember { mutableStateOf(textValue.text) }
+    val onSlashCommandTextChange: (TextFieldValue) -> Unit = { newValue ->
+        if (newValue.text != lastInputText) {
+            slashMenuDismissed = false
+            lastInputText = newValue.text
+        }
+        viewModel.updateInputDraft(newValue)
+    }
+
+    val onSelectCommand: (SlashCommandItem) -> Unit = { item ->
+        slashMenuDismissed = true
+        if (item.customAction != null) {
+            item.customAction.invoke()
+        } else {
+            val insert = item.insertText
+            val queryRange = activeQuery?.range
+            val newText = if (queryRange != null) {
+                textValue.text.replaceRange(queryRange, insert)
+            } else {
+                insert
+            }
+            val newCursor = (queryRange?.first ?: 0) + insert.length
+            viewModel.updateInputDraft(TextFieldValue(newText, TextRange(newCursor)))
+        }
+        DebugLog.data("UI", "slash command auto-completed", "id=${item.id}, insertText='${item.insertText}'")
+    }
 
     val pendingPastedTexts = viewModel.pendingPastedTexts
     val pendingImages = viewModel.pendingImages
@@ -166,7 +220,7 @@ fun ChatInputCard(
 
     val isWaitingPlanApproval = viewModel.pendingPlanApproval != null
     val isStreaming = viewModel.isWorking && !isWaitingPlanApproval
-    val errorMessage = viewModel.error
+    val errorMessage = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }
     // 一次性轻提示：发送时图片被剔除放行（值为模型名，null=不显示），非错误走 error
     val imageStrippedNotice = viewModel.imageStrippedNotice
     val hasContent = textValue.text.trim().isNotEmpty() || pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()
@@ -174,7 +228,17 @@ fun ChatInputCard(
 
     // 未挂会话且未选项目：发送必被拦，提前把要求摆到明面上（醒目引导条 + 高亮项目选择器）
     val needProjectGuide = viewModel.conversationId == null && selectedProjectId == null
-    var projectMenuOpenRequest by remember { mutableStateOf(0) }
+    // 项目菜单打开计数（一次性命令"打开项目菜单"的本地落位）：打开请求经 VM effects
+    // Channel 派发，这里 collect 后递增计数（原 projectMenuOpenRequest 计数器语义），
+    // 触发 ProjectSelectorMenu 展开。两个 ChatInputCard 实例共享同一 VM/Channel，
+    // receiveAsFlow 是单消费者——多实例同时可见时存在广播竞争的理论风险，但实际 UI 中
+    // 同一时刻一般只有一个输入框可见，风险极低（原行为是各自 remember 独立计数）。
+    var projectMenuOpenCount by remember { mutableStateOf(0) }
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            if (effect is UiEffect.OpenProjectMenu) projectMenuOpenCount++
+        }
+    }
 
     // 状态变化日志
     val lastStreaming = remember { mutableStateOf(false) }
@@ -188,7 +252,9 @@ fun ChatInputCard(
         if (isStreaming) {
             viewModel.abort()
         } else if (canSend) {
-            val msg = textValue.text.trim()
+            val rawMsg = textValue.text.trim()
+            // 解转义 \/ -> /，支持用户通过 \/skill 明确输入字面量字符串而不触发冲突
+            val msg = rawMsg.replace("\\/", "/")
             DebugLog.data("UI", "ChatInputCard submit msg", "'$msg', pasted=${pendingPastedTexts.size}, images=${pendingImages.size}")
             viewModel.clearInputDraft()
             viewModel.send(msg)
@@ -245,7 +311,7 @@ fun ChatInputCard(
                     .background(guideColor.copy(alpha = 0.12f))
                     .border(1.dp, guideColor.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .clickable { projectMenuOpenRequest++ },
+                    .clickable { viewModel.openProjectMenu() },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -284,6 +350,20 @@ fun ChatInputCard(
             modifier = Modifier.fillMaxWidth(),
         )
 
+        // 快捷命令浮层（分体式独立卡片：位于输入框卡片上方，保持间隔）
+        AnimatedVisibility(
+            visible = slashMenuOpen,
+            enter = expandVertically(tween(160)) + fadeIn(tween(160)),
+            exit = shrinkVertically(tween(120)) + fadeOut(tween(120))
+        ) {
+            SlashCommandMenu(
+                items = filteredSlashCommands,
+                selectedIndex = slashSelectedIndex,
+                onSelect = onSelectCommand,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
         // 输入卡片
         Card(
             shape = RoundedCornerShape(12.dp),
@@ -297,143 +377,23 @@ fun ChatInputCard(
             ) {
                 // 第一层：输入框顶部附件缩略图/卡片区（对标设计图，置于 TextField 正上方）
                 if (pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        pendingImages.forEachIndexed { i, img ->
-                            val imageTitle = stringResource(Res.string.input_image_n, i + 1)
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(colors.surfaceInput)
-                                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        viewModel.openImageInExtension(imageTitle, img.base64DataUrl)
-                                    }
-                            ) {
-                                InkImage(
-                                    model = img.base64DataUrl,
-                                    contentDescription = stringResource(Res.string.input_pending_image_thumbnail),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-
-                                // 右上角浮动微型删除按钮
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(3.dp)
-                                        .size(16.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.Black.copy(alpha = 0.65f))
-                                        .clickable { viewModel.removeImage(img.id) },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = FeatherIcons.X,
-                                        contentDescription = stringResource(Res.string.input_remove_image),
-                                        tint = Color.White,
-                                        modifier = Modifier.size(10.dp)
-                                    )
-                                }
-                            }
+                    ChatInputAttachments(
+                        pendingImages = pendingImages,
+                        pendingPastedTexts = pendingPastedTexts,
+                        modelSupportsImages = modelSupportsImages,
+                        colors = colors,
+                        onRemoveImage = { viewModel.removeImage(it) },
+                        onRemovePastedText = { viewModel.removePastedText(it) },
+                        onOpenImage = { title, img -> viewModel.openImageInExtension(title, img.base64DataUrl) },
+                        onOpenPastedText = { title, item ->
+                            viewModel.openTextInExtension(
+                                title = title,
+                                content = item.text,
+                                lineCount = item.lineCount,
+                                charCount = item.charCount
+                            )
                         }
-
-                        pendingPastedTexts.forEach { item ->
-                            val pastedTitle = stringResource(Res.string.input_pasted_text_n, item.index)
-                            Box(
-                                modifier = Modifier
-                                    .height(56.dp)
-                                    .widthIn(min = 120.dp, max = 180.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(colors.surfaceInput)
-                                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        viewModel.openTextInExtension(
-                                            title = pastedTitle,
-                                            content = item.text,
-                                            lineCount = item.lineCount,
-                                            charCount = item.charCount
-                                        )
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(end = 14.dp),
-                                    verticalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = FeatherIcons.File,
-                                            contentDescription = null,
-                                            tint = colors.accentSecondary,
-                                            modifier = Modifier.size(12.dp)
-                                        )
-                                        Text(
-                                            text = stringResource(Res.string.input_text_n, item.index),
-                                            color = colors.textPrimary,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    Text(
-                                        text = stringResource(Res.string.input_text_meta, item.lineCount, item.charCount),
-                                        color = colors.textMuted,
-                                        fontSize = 10.sp,
-                                        maxLines = 1
-                                    )
-                                }
-
-                                // 右上角浮动微型删除按钮
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(3.dp)
-                                        .size(16.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.Black.copy(alpha = 0.5f))
-                                        .clickable { viewModel.removePastedText(item.id) },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = FeatherIcons.X,
-                                        contentDescription = stringResource(Res.string.input_remove_text),
-                                        tint = Color.White,
-                                        modifier = Modifier.size(10.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(
-                        color = colors.divider.copy(alpha = 0.4f),
-                        modifier = Modifier.padding(bottom = 6.dp)
                     )
-
-                    // 图片门禁内联提示：挂了图片但当前模型不支持（如切换模型后），发送会被拦截
-                    if (pendingImages.isNotEmpty() && !modelSupportsImages) {
-                        Text(
-                            text = stringResource(Res.string.input_image_unsupported),
-                            color = colors.accentWarning,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        )
-                    }
                 }
 
                 if (isOverBudget) {
@@ -483,7 +443,13 @@ fun ChatInputCard(
                 // 第二层：输入文本区域（最小高度 44dp）
                 TextField(
                     value = textValue,
-                    onValueChange = { viewModel.updateInputDraft(it) },
+                    onValueChange = onSlashCommandTextChange,
+                    visualTransformation = remember(colors) {
+                        SlashCommandTransformation(
+                            highlightColor = colors.accentPrimary,
+                            hintColor = colors.textMuted
+                        )
+                    },
                     textStyle = TextStyle(
                         color = colors.textPrimary,
                         fontSize = 13.5.sp,
@@ -512,6 +478,46 @@ fun ChatInputCard(
                         .onPreviewKeyEvent { keyEvent ->
                             // 在 KeyDown 阶段处理：此时修饰键状态可靠（KeyUp 时 macOS 的 isMetaPressed 不可靠）
                             if (keyEvent.type == KeyEventType.KeyDown) {
+                                // 1. 快捷命令联想弹窗打开时的键盘导航与自动完整补全
+                                if (slashMenuOpen && filteredSlashCommands.isNotEmpty()) {
+                                    when (keyEvent.key) {
+                                        Key.DirectionDown -> {
+                                            slashSelectedIndex = (slashSelectedIndex + 1) % filteredSlashCommands.size
+                                            return@onPreviewKeyEvent true
+                                        }
+                                        Key.DirectionUp -> {
+                                            slashSelectedIndex = if (slashSelectedIndex <= 0) filteredSlashCommands.size - 1 else slashSelectedIndex - 1
+                                            return@onPreviewKeyEvent true
+                                        }
+                                        Key.Enter, Key.Tab -> {
+                                            val target = filteredSlashCommands.getOrNull(slashSelectedIndex)
+                                            if (target != null) {
+                                                DebugLog.data("UI", "key confirm autocomplete", "target=${target.id}, query=$slashQuery")
+                                                onSelectCommand(target)
+                                                return@onPreviewKeyEvent true
+                                            }
+                                        }
+                                        Key.Escape -> {
+                                            slashMenuDismissed = true
+                                            return@onPreviewKeyEvent true
+                                        }
+                                    }
+                                }
+
+                                // 2. 退格键（Backspace）原子化删除整个命令 Token（支持开头与末尾），而非逐个字符删除
+                                if (keyEvent.key == Key.Backspace && textValue.selection.collapsed) {
+                                    val cursor = textValue.selection.start
+                                    val tokenRange = SlashCommandRegistry.findCommandTokenAtCursor(textValue.text, cursor, allSlashCommands)
+                                    if (tokenRange != null) {
+                                        val newText = textValue.text.removeRange(tokenRange.start, tokenRange.end)
+                                        val newCursor = tokenRange.start
+                                        DebugLog.data("UI", "Atomic command token deleted", "deletedToken='${tokenRange.token}', cursor=$cursor, newText='$newText'")
+                                        viewModel.updateInputDraft(TextFieldValue(newText, TextRange(newCursor)))
+                                        slashMenuDismissed = true
+                                        return@onPreviewKeyEvent true
+                                    }
+                                }
+
                                 if (keyEvent.key == Key.Enter) {
                                     when {
                                         keyEvent.isShiftPressed || keyEvent.isCtrlPressed || keyEvent.isMetaPressed -> {
@@ -579,7 +585,7 @@ fun ChatInputCard(
                                     onSelect = { viewModel.selectProject(it) },
                                     iconOnly = true,
                                     highlight = needProjectGuide,
-                                    openRequest = projectMenuOpenRequest
+                                    openRequest = projectMenuOpenCount
                                 )
                                 IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 40)
                                 // 图片门禁：仅支持图片输入的模型显示附件按钮（粘贴路径由 tryAttachImage 拦截）
@@ -626,7 +632,7 @@ fun ChatInputCard(
                                     onOpenProjectPicker = onOpenProjectPicker,
                                     onSelect = { viewModel.selectProject(it) },
                                     highlight = needProjectGuide,
-                                    openRequest = projectMenuOpenRequest
+                                    openRequest = projectMenuOpenCount
                                 )
                                 IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
                                 // 图片门禁：仅支持图片输入的模型显示附件按钮（粘贴路径由 tryAttachImage 拦截）
@@ -665,923 +671,3 @@ fun ChatInputCard(
     }
 }
 
-// ==========================================
-// 可复用子组件（每个只做一件事，菜单数据从 AppState / ViewModel 读取）
-// ==========================================
-
-/** 模型选择器（按供应商分组的下拉菜单）。业务数据来自 AppState，选择写入 ViewModel。 */
-@Composable
-private fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) {
-    val colors = LocalMederiColors.current
-    val appState = LocalAppState.current
-    val models by appState.availableModels.collectAsState()
-    val providers by appState.providers.collectAsState()
-    val selectedModel by appState.selectedModel.collectAsState()
-    if (models.isEmpty()) return
-
-    var expanded by remember { mutableStateOf(false) }
-    val providerNameMap = remember(providers) { providers.associate { it.id to it.name } }
-    val groupedModels = remember(models) { models.groupBy { it.provider } }
-
-    Box {
-        ChipSelectorPill(
-            label = selectedModel?.name ?: stringResource(Res.string.input_select_model),
-            onClick = { expanded = true }
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier
-                .widthIn(min = if (compact) 400.dp else 500.dp, max = if (compact) 480.dp else 560.dp)
-                .heightIn(max = 480.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
-        ) {
-            groupedModels.entries.forEachIndexed { groupIndex, (providerId, providerModels) ->
-                val providerDisplayName = (providerNameMap[providerId] ?: providerId).uppercase()
-                if (groupIndex > 0) {
-                    HorizontalDivider(color = colors.divider.copy(alpha = 0.6f), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        Icon(FeatherIcons.Cpu, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
-                        Text(
-                            text = providerDisplayName,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.textMuted,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Text(
-                        text = "${providerModels.size}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textMuted.copy(alpha = 0.6f)
-                    )
-                }
-                providerModels.forEach { model ->
-                    val isSelected = selectedModel?.id == model.id
-                    val contextSizeStr = formatContextWindow(model.contextWindow)
-                    DropdownMenuItem(
-                        modifier = Modifier
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent),
-                        text = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.weight(1f, fill = false)
-                                ) {
-                                    Text(
-                                        text = model.name,
-                                        fontSize = if (compact) 12.sp else 12.5.sp,
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                        color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false)
-                                    )
-                                    if (model.supportsThinking) ModelCapabilityTag("Thinking", colors.thoughtAccent)
-                                    if (model.supportsImages) ModelCapabilityTag("Image", colors.accentSecondary)
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    if (contextSizeStr != null) {
-                                        Text(
-                                            text = contextSizeStr,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            fontFamily = FontFamily.Monospace,
-                                            color = if (isSelected) colors.textPrimary else colors.textSecondary
-                                        )
-                                    }
-                                    if (isSelected) {
-                                        Icon(
-                                            imageVector = FeatherIcons.Check,
-                                            contentDescription = stringResource(Res.string.input_selected),
-                                            tint = colors.accentPrimary,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    } else {
-                                        Spacer(modifier = Modifier.size(14.dp))
-                                    }
-                                }
-                            }
-                        },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        onClick = {
-                            viewModel.selectModel(model)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * API Key 选择器（模型选择器左侧）。**派生自选中模型所在供应商**：读该 ProviderConfig 的 apiKeys，
- * 当前选中项 = AppState.selectedApiKeyIds[provider.id]（缺省 = 用默认 key）。
- * 选择写入 AppState（按供应商记忆，跨重启恢复）。
- */
-@Composable
-private fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
-    val colors = LocalMederiColors.current
-    val appState = LocalAppState.current
-    val providers by appState.providers.collectAsState()
-    val selectedModel by appState.selectedModel.collectAsState()
-    val selectedApiKeys by appState.selectedApiKeyIds.collectAsState()
-
-    // 关联：选中模型 → 其供应商 → 该供应商的 apiKeys。无供应商或无 key 时不显示选择器
-    val provider = selectedModel?.let { m -> providers.find { it.id == m.provider } }
-    val keys = provider?.apiKeys.orEmpty()
-    if (provider == null || keys.isEmpty()) return
-
-    val providerId = provider.id
-    val selectedId = selectedApiKeys[providerId]
-    val selectedKey = keys.find { it.id == selectedId }
-    var expanded by remember { mutableStateOf(false) }
-
-    Box {
-        ChipSelectorPill(
-            icon = FeatherIcons.Key,
-            label = selectedKey?.name ?: stringResource(Res.string.input_default_key),
-            onClick = { expanded = true }
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-                .widthIn(min = 220.dp, max = 280.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-        ) {
-            // 供应商默认 key（未选定）
-            DropdownMenuItem(
-                text = {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.input_provider_default),
-                            fontSize = 12.sp,
-                            fontWeight = if (selectedId == null) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (selectedId == null) colors.accentPrimary else colors.textPrimary
-                        )
-                        if (selectedId == null) {
-                            Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
-                        }
-                    }
-                },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                onClick = {
-                    viewModel.selectApiKey(providerId, null)
-                    expanded = false
-                }
-            )
-            if (keys.isNotEmpty()) HorizontalDivider(color = colors.divider.copy(alpha = 0.6f), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-            keys.forEach { key ->
-                val isSelected = selectedId == key.id
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.weight(1f, fill = false)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Text(
-                                        text = key.name,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                        color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    if (key.isDefault) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(colors.accentSecondary.copy(alpha = 0.15f))
-                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                        ) {
-                                            Text(stringResource(Res.string.input_default_tag), fontSize = 9.sp, color = colors.accentSecondary, fontWeight = FontWeight.Medium, maxLines = 1)
-                                        }
-                                    }
-                                }
-                                Text(
-                                    text = key.maskedValue,
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = colors.textMuted,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            if (isSelected) {
-                                Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
-                            }
-                        }
-                    },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    onClick = {
-                        viewModel.selectApiKey(providerId, key.id)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
-}
-
-/** 思考/推理等级选择器。选项由 ReasoningMenu 推导（NONE=关闭 恒为首项，其余为有值档位 ∩ 模型勾选）。 */
-@Composable
-private fun ThinkingLevelMenu(viewModel: WorkspaceViewModel) {
-    val colors = LocalMederiColors.current
-    val appState = LocalAppState.current
-    val selectedModel by appState.selectedModel.collectAsState()
-    val levels = selectedModel?.reasoningLevels ?: emptyList()
-    if (levels.isEmpty()) return
-
-    // 唯一真理源：订阅 effectiveThinkingLevel（ReasoningMenu.resolve 推导的派生流）。
-    // 模型切换/档位记忆更新自动重算；null（推导链未就绪，正常不会发生）时不渲染，不做兜底回退
-    val currentLevel = viewModel.effectiveThinkingLevel.collectAsState().value ?: return
-    if (currentLevel.isBlank()) return
-
-    var expanded by remember { mutableStateOf(false) }
-
-    Box {
-        ChipSelectorPill(
-            icon = FeatherIcons.Sliders,
-            label = stringResource(Res.string.input_thinking_label, formatReasoningLevelLabel(currentLevel)),
-            onClick = { expanded = true }
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-                .widthIn(min = 150.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-        ) {
-            // NONE（关闭）为 levels 首项（ReasoningMenu 推导），统一渲染
-            levels.forEach { lvl ->
-                val isSelected = currentLevel.equals(lvl, ignoreCase = true)
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = formatReasoningLevelLabel(lvl),
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isSelected) colors.accentPrimary else if (lvl == "NONE") colors.textSecondary else colors.textPrimary
-                            )
-                            if (isSelected) {
-                                Icon(
-                                    FeatherIcons.Check,
-                                    null,
-                                    tint = colors.accentPrimary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
-                        }
-                    },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    onClick = {
-                        viewModel.updateThinkingLevel(lvl)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
-}
-
-/** 项目选择器（下拉菜单，含清空选择与打开新项目目录入口）。选择写入 AppState。 */
-@Composable
-private fun ProjectSelectorMenu(
-    onOpenProjectPicker: () -> Unit,
-    onSelect: (String?) -> Unit,
-    iconOnly: Boolean = false,
-    highlight: Boolean = false,
-    openRequest: Int = 0
-) {
-    val colors = LocalMederiColors.current
-    val appState = LocalAppState.current
-    val projects by appState.projects.collectAsState()
-    val selectedProjectId by appState.selectedProjectId.collectAsState()
-    val selectedProject = projects.find { it.id == selectedProjectId }
-
-    var expanded by remember { mutableStateOf(false) }
-    // 引导条点击：外部请求打开菜单（openRequest 递增即打开一次）
-    LaunchedEffect(openRequest) {
-        if (openRequest > 0) expanded = true
-    }
-    Box {
-        if (iconOnly) {
-            IconToolButton(
-                icon = FeatherIcons.Folder,
-                onClick = { expanded = true },
-                size = 40
-            )
-        } else {
-            ContextToolChip(
-                icon = FeatherIcons.Folder,
-                label = selectedProject?.name ?: stringResource(Res.string.input_select_project),
-                onClick = { expanded = true },
-                highlight = highlight
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceSidebar,
-            shape = RoundedCornerShape(6.dp),
-            modifier = Modifier.border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(6.dp))
-        ) {
-            if (selectedProjectId != null) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(Res.string.input_no_project), fontSize = 11.5.sp, color = colors.textSecondary) },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    onClick = {
-                        onSelect(null)
-                        expanded = false
-                    }
-                )
-                if (projects.isNotEmpty()) HorizontalDivider(color = colors.divider)
-            }
-            projects.forEach { proj ->
-                DropdownMenuItem(
-                    text = { Text(proj.name, fontSize = 11.5.sp, color = colors.textPrimary) },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    onClick = {
-                        onSelect(proj.id)
-                        expanded = false
-                    }
-                )
-            }
-            if (projects.isNotEmpty()) HorizontalDivider(color = colors.divider)
-            DropdownMenuItem(
-                text = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(FeatherIcons.Plus, null, tint = colors.accentPrimary, modifier = Modifier.size(11.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(Res.string.input_open_project), fontSize = 11.5.sp, color = colors.accentPrimary, fontWeight = FontWeight.Medium)
-                    }
-                },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                onClick = {
-                    expanded = false
-                    onOpenProjectPicker()
-                }
-            )
-        }
-    }
-}
-
-/** 自动审批开关与说明气泡。选中态订阅 AppState 派生流（唯一真理源）。 */
-@Composable
-private fun AgentModeSelector(viewModel: WorkspaceViewModel) {
-    val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
-    val isAutoApprove = selectedAgentMode == AgentMode.AUTONOMOUS
-    val colors = LocalMederiColors.current
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .clickable {
-                viewModel.selectAgentMode(if (isAutoApprove) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
-            }
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-    ) {
-        Text(
-            text = stringResource(Res.string.auto_approve_title),
-            color = colors.textSecondary,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Medium
-        )
-        HelpCircleTooltip(
-            mainText = stringResource(Res.string.auto_approve_tooltip_main),
-            noteText = stringResource(Res.string.auto_approve_tooltip_note),
-            touchTargetSize = 20.dp,
-            iconSize = 13.dp
-        )
-        AutoApproveSwitch(
-            viewModel = viewModel,
-            scale = 0.65f,
-            switchWidth = 30.dp,
-            switchHeight = 20.dp
-        )
-    }
-}
-
-/**
- * 自动审批开关（桌面输入条与移动端设置抽屉共用）。
- * 唯一真理源 = viewModel.selectedAgentMode，写入走 selectAgentMode。
- */
-@Composable
-private fun AutoApproveSwitch(
-    viewModel: WorkspaceViewModel,
-    scale: Float,
-    switchWidth: Dp,
-    switchHeight: Dp,
-) {
-    val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
-    val colors = LocalMederiColors.current
-    Switch(
-        checked = selectedAgentMode == AgentMode.AUTONOMOUS,
-        onCheckedChange = { checked ->
-            viewModel.selectAgentMode(if (checked) AgentMode.AUTONOMOUS else AgentMode.APPROVAL)
-        },
-        modifier = Modifier
-            .scale(scale)
-            .size(width = switchWidth, height = switchHeight),
-        colors = SwitchDefaults.colors(
-            checkedThumbColor = Color.White,
-            checkedTrackColor = colors.accentPrimary,
-            uncheckedThumbColor = colors.textMuted,
-            uncheckedTrackColor = colors.buttonSecondary
-        )
-    )
-}
-
-/** 发送 / 停止按钮。 */
-@Composable
-private fun SendButton(
-    size: Dp,
-    isStreaming: Boolean,
-    canSend: Boolean,
-    onSubmit: () -> Unit
-) {
-    val colors = LocalMederiColors.current
-    val bgColor = when {
-        isStreaming -> colors.accentDanger
-        canSend -> colors.accentPrimary
-        else -> colors.buttonSecondary
-    }
-    val iconColor = when {
-        isStreaming || canSend -> colors.onAccentPrimary
-        else -> colors.textMuted
-    }
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(bgColor)
-            .border(1.dp, if (canSend) colors.accentPrimary else colors.surfaceCardBorder, CircleShape)
-            .clickable(enabled = isStreaming || canSend, onClick = onSubmit),
-        contentAlignment = Alignment.Center
-    ) {
-        if (isStreaming) {
-            Icon(FeatherIcons.Square, stringResource(Res.string.input_stop), tint = iconColor, modifier = Modifier.size(size * 0.37f))
-        } else {
-            Icon(FeatherIcons.ArrowUp, stringResource(Res.string.input_send), tint = iconColor, modifier = Modifier.size(size * 0.48f))
-        }
-    }
-}
-
-@Composable
-private fun ChipSelectorPill(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    height: Dp = 28.dp,
-    onClick: () -> Unit = {}
-) {
-    val colors = LocalMederiColors.current
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = colors.surfaceInput,
-        border = androidx.compose.foundation.BorderStroke(1.dp, colors.surfaceCardBorder)
-    ) {
-        Row(
-            modifier = Modifier
-                .height(height)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            if (icon != null) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = colors.textSecondary,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-            Text(
-                text = label,
-                color = colors.textPrimary,
-                fontSize = 11.5.sp,
-                lineHeight = 11.5.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Icon(
-                imageVector = FeatherIcons.ChevronDown,
-                contentDescription = null,
-                tint = colors.textMuted,
-                modifier = Modifier.size(10.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun IconToolButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
-    size: Int = 28
-) {
-    val colors = LocalMederiColors.current
-    Box(
-        modifier = Modifier
-            .size(size.dp)
-            .clip(CircleShape)
-            .background(colors.buttonSecondary)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = colors.textSecondary,
-            modifier = Modifier.size(if (size >= 36) 18.dp else (size * 0.5f).dp)
-        )
-    }
-}
-
-@Composable
-private fun ContextToolChip(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    highlight: Boolean = false
-) {
-    val colors = LocalMederiColors.current
-    val contentColor = if (highlight) colors.accentWarning else colors.textSecondary
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = if (highlight) colors.accentWarning.copy(alpha = 0.10f) else Color.Transparent,
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (highlight) colors.accentWarning.copy(alpha = 0.5f) else colors.surfaceCardBorder)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(12.dp)
-            )
-            Text(
-                text = label,
-                color = contentColor,
-                fontSize = 11.sp,
-                lineHeight = 11.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Icon(
-                imageVector = FeatherIcons.ChevronDown,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(10.dp)
-            )
-        }
-    }
-}
-
-/** 移动端底部抽屉（Modal Bottom Sheet）：选择模型、推理等级、执行策略 */
-@Composable
-private fun MobileModelBottomSheet(
-    viewModel: WorkspaceViewModel,
-    onDismiss: () -> Unit
-) {
-    val colors = LocalMederiColors.current
-    val appState = LocalAppState.current
-    val models by appState.availableModels.collectAsState()
-    val providers by appState.providers.collectAsState()
-    val selectedModel by appState.selectedModel.collectAsState()
-    val currentLevel by viewModel.effectiveThinkingLevel.collectAsState()
-    val providerNameMap = remember(providers) { providers.associate { it.id to it.name } }
-    val groupedModels = remember(models) { models.groupBy { it.provider } }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.surfaceOverlay)
-                .clickable(onClick = onDismiss),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 580.dp)
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .background(colors.surfaceCard)
-                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { /* 拦截点击，防止点击面板内部关闭抽屉 */ }
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            ) {
-                // 顶部拖拽条
-                Box(
-                    modifier = Modifier
-                        .width(36.dp)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(colors.divider)
-                        .align(Alignment.CenterHorizontally)
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // 标题栏
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(Res.string.input_model_mode_settings),
-                        color = colors.textPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(Res.string.close),
-                        tint = colors.textMuted,
-                        modifier = Modifier
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .clickable(onClick = onDismiss)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // 1. 自动审批开关
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.auto_approve_title),
-                                color = colors.textPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            HelpCircleTooltip(
-                                mainText = stringResource(Res.string.auto_approve_tooltip_main),
-                                noteText = stringResource(Res.string.auto_approve_tooltip_note),
-                                touchTargetSize = 24.dp,
-                                iconSize = 14.dp
-                            )
-                        }
-                        AutoApproveSwitch(
-                            viewModel = viewModel,
-                            scale = 0.8f,
-                            switchWidth = 36.dp,
-                            switchHeight = 22.dp
-                        )
-                    }
-
-                    // 2. 推理等级选择（条件显示：仅当前模型支持推理且生效档位已推导出时展示）
-                    val sheetModel = selectedModel
-                    val sheetCurrentLevel = currentLevel
-                    if (sheetModel?.supportsThinking == true && sheetModel.reasoningLevels.isNotEmpty() && sheetCurrentLevel != null) {
-                        val levels = sheetModel.reasoningLevels
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = FeatherIcons.Sliders,
-                                    contentDescription = null,
-                                    tint = colors.thoughtAccent,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Text(
-                                    text = stringResource(Res.string.input_reasoning_level),
-                                    color = colors.textSecondary,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                // NONE（关闭）为 levels 首项（ReasoningMenu 推导），统一渲染
-                                levels.forEach { lvl ->
-                                val isSelected = sheetCurrentLevel.equals(lvl, ignoreCase = true)
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.15f) else colors.surfaceInput)
-                                            .border(
-                                                1.dp,
-                                                if (isSelected) colors.accentPrimary else colors.surfaceCardBorder,
-                                                RoundedCornerShape(8.dp)
-                                            )
-                                            .clickable { viewModel.updateThinkingLevel(lvl) }
-                                            .padding(vertical = 8.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = formatReasoningLevelLabel(lvl),
-                                            color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. 模型列表
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = stringResource(Res.string.input_select_model),
-                            color = colors.textSecondary,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-
-                        groupedModels.entries.forEach { (providerId, providerModels) ->
-                            val providerDisplayName = (providerNameMap[providerId] ?: providerId).uppercase()
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(colors.surfaceInput)
-                                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        modifier = Modifier.weight(1f, fill = false)
-                                    ) {
-                                        Icon(FeatherIcons.Cpu, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
-                                        Text(
-                                            text = providerDisplayName,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = colors.textMuted,
-                                            letterSpacing = 0.5.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    Text(
-                                        text = "${providerModels.size}",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = colors.textMuted.copy(alpha = 0.6f)
-                                    )
-                                }
-                                providerModels.forEach { model ->
-                                    val isSelected = selectedModel?.id == model.id
-                                    val contextSizeStr = formatContextWindow(model.contextWindow)
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent)
-                                            .clickable {
-                                                viewModel.selectModel(model)
-                                                onDismiss()
-                                            }
-                                            .padding(horizontal = 8.dp, vertical = 7.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.weight(1f, fill = false)
-                                        ) {
-                                            Text(
-                                                text = model.name,
-                                                fontSize = 13.sp,
-                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                                color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f, fill = false)
-                                            )
-                                            if (model.supportsThinking) {
-                                                ModelCapabilityTag("Thinking", colors.thoughtAccent)
-                                            }
-                                            if (model.supportsImages) {
-                                                ModelCapabilityTag("Image", colors.accentSecondary)
-                                            }
-                                        }
-
-                                        Spacer(modifier = Modifier.width(8.dp))
-
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            if (contextSizeStr != null) {
-                                                Text(
-                                                    text = contextSizeStr,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    fontFamily = FontFamily.Monospace,
-                                                    color = if (isSelected) colors.textPrimary else colors.textMuted
-                                                )
-                                            }
-                                            if (isSelected) {
-                                                Icon(
-                                                    imageVector = FeatherIcons.Check,
-                                                    contentDescription = stringResource(Res.string.input_selected),
-                                                    tint = colors.accentPrimary,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            } else {
-                                                Spacer(modifier = Modifier.size(15.dp))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}

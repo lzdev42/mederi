@@ -57,6 +57,11 @@ data class MederiColors(
     val accentDanger: Color,
     val accentWarning: Color,
     val accentSuccess: Color,
+    // 状态语义 token：会话状态指示灯与流转标识专用（工作 / 等待用户 / 正常结束空闲 / 报错）
+    val statusWorking: Color,
+    val statusWaiting: Color,
+    val statusIdle: Color,
+    val statusError: Color,
     val buttonSecondary: Color,
     val onButtonSecondary: Color,
     val iconMuted: Color,
@@ -98,6 +103,10 @@ val DarkColors = MederiColors(
     accentDanger = Color(0xFFE5534B),    // Desaturated Soft Red
     accentWarning = Color(0xFFE69F00),   // Okabe-Ito Amber/Orange
     accentSuccess = Color(0xFF009E73),   // Okabe-Ito Bluish Green
+    statusWorking = Color(0xFFF59E0B),   // 状态-工作中（琥珀）
+    statusWaiting = Color(0xFF10B981),   // 状态-等待用户（翠绿）
+    statusIdle = Color(0xFF38BDF8),      // 状态-正常结束（晴空蓝）
+    statusError = Color(0xFFEF4444),     // 状态-报错（玫瑰红）
     buttonSecondary = Color(0xFF21262D),
     onButtonSecondary = Color(0xFFC9D1D9),
     iconMuted = Color(0xFF7D8590),
@@ -138,6 +147,10 @@ val LightColors = MederiColors(
     accentDanger = Color(0xFFCF222E),
     accentWarning = Color(0xFF9A6700),
     accentSuccess = Color(0xFF1A7F37),
+    statusWorking = Color(0xFFF59E0B),   // 状态-工作中（琥珀）
+    statusWaiting = Color(0xFF10B981),   // 状态-等待用户（翠绿）
+    statusIdle = Color(0xFF38BDF8),      // 状态-正常结束（晴空蓝）
+    statusError = Color(0xFFEF4444),     // 状态-报错（玫瑰红）
     buttonSecondary = Color(0xFFEAECEF),
     onButtonSecondary = Color(0xFF24292F),
     iconMuted = Color(0xFF8C959F),

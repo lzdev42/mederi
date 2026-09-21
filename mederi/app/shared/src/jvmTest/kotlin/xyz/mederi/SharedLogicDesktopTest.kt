@@ -10,6 +10,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import okio.ByteString.Companion.toByteString
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.unit.Velocity
+import xyz.mederi.ui.components.ContainNestedScrollConnection
 import xyz.mederi.core.bridge.BuiltinProviders
 import xyz.mederi.core.bridge.MederiModelMapper
 import xyz.mederi.core.bridge.mapMessageErrorToStatus
@@ -38,6 +43,28 @@ class SharedLogicDesktopTest {
         // 非对象结构 / 畸形输入 → 空 map，不崩
         assertTrue(ToolArgParser.parse("""[1,2,3]""").isEmpty())
         assertTrue(ToolArgParser.parse("not-json").isEmpty())
+    }
+
+    @Test
+    fun testExactSeq385CommandHandling() {
+        val rawArgs = """{"command":"grep -n \"SUMMARY\\|Summary\\|ChatMessage(\" mederi/app/shared/src/jvmMain/kotlin/xyz/mederi/core/bridge/MederiModelMapper.kt | head -30"}"""
+        val parsed = ToolArgParser.parse(rawArgs)
+        println("TEST_DEBUG_PARSED: $parsed")
+        assertEquals(1, parsed.size)
+        assertTrue(parsed.containsKey("command"))
+    }
+
+    @Test
+    fun testExactSeq385MederiModelMapper() {
+        val json = Json { ignoreUnknownKeys = true }
+        val asstStr = """{"id":"msg_5179b7f3","sessionId":"sess_e87fb0d8","role":"ASSISTANT","parts":[{"type":"xyz.mederi.domain.model.MessagePart.Reasoning","content":["test"],"summary":null,"encrypted":null,"id":null},{"type":"xyz.mederi.domain.model.MessagePart.ToolCall","id":"call_s6jt43g1ewfzzdt8f7gnh72k","tool":"execute_command","args":"{\"command\":\"grep -n \\\"SUMMARY\\\\|Summary\\\\|ChatMessage(\\\" mederi/app/shared/src/jvmMain/kotlin/xyz/mederi/core/bridge/MederiModelMapper.kt | head -30\"}"}],"status":"COMPLETED","createdAt":"2026-09-20T08:50:20.029062Z"}"""
+        val userStr = """{"id":"msg_df9c3231","sessionId":"sess_e87fb0d8","role":"USER","parts":[{"type":"xyz.mederi.domain.model.MessagePart.ToolResult","id":"call_s6jt43g1ewfzzdt8f7gnh72k","tool":"execute_command","output":"12:import ...","isError":false,"status":null,"durationMs":null,"error":null}],"status":"COMPLETED","createdAt":"2026-09-20T08:50:20.077755Z"}"""
+        val asstMsg = json.decodeFromString<CoreMessage>(asstStr)
+        val userMsg = json.decodeFromString<CoreMessage>(userStr)
+        val toolResults = xyz.mederi.core.bridge.MederiModelMapper.buildToolResultsById(listOf(asstMsg, userMsg))
+        val chatMsg = xyz.mederi.core.bridge.MederiModelMapper.toChatMessage(asstMsg, toolResults)
+        val toolBlock = chatMsg.blocks.filterIsInstance<xyz.mederi.core.contract.models.ChatBlock.ToolCall>().first()
+        println("TEST_DEBUG_TOOL_BLOCK: name=${toolBlock.name}, state=${toolBlock.state}")
     }
 
     /** 落库重放路径：ToolCall 在 assistant 消息、ToolResult 在紧随的 user 消息，必须跨消息聚合还原子工具状态 */
@@ -566,10 +593,11 @@ class SharedLogicDesktopTest {
                 while (viewModel.modelSupportsImages.value) kotlinx.coroutines.delay(20)
             }
             assertEquals(false, viewModel.modelSupportsImages.value)
-            val blocked = viewModel.tryAttachImage("a.png", "image/png", byteArrayOf(1, 2, 3))
-            assertEquals(false, blocked, "不支持图片的模型必须拦截附加")
-            assertTrue(viewModel.error?.contains("不支持图片") == true, "拦截必须给出可见反馈")
-            assertEquals(0, viewModel.pendingImages.size, "被拦图片不得入列")
+            val attached = viewModel.tryAttachImage("a.png", "image/png", byteArrayOf(1, 2, 3))
+            assertEquals(true, attached, "不支持图片的模型也允许附加（在发送时由 core 剔除）")
+            assertEquals("Claude Sonnet 4", viewModel.imageStrippedNotice, "应提示该模型不支持图片并将被剔除")
+            assertEquals(1, viewModel.pendingImages.size, "图片应正常入列")
+            viewModel.pendingImages.clear()
 
             // 2. 纯文本发送不受门禁影响
             viewModel.send("text only")
@@ -622,7 +650,7 @@ class SharedLogicDesktopTest {
         val waitingSnap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, questionEvent)
         assertEquals(xyz.mederi.core.contract.models.ConversationStatus.WaitingUser, waitingSnap.conversation.status)
         assertNotNull(waitingSnap.pendingQuestion)
-        assertEquals(xyz.mederi.ui.components.TurnStatus.WaitingAnswer, xyz.mederi.ui.components.deriveTurnStatus(waitingSnap))
+        assertEquals(xyz.mederi.core.ui.TurnStatus.WaitingAnswer, xyz.mederi.core.ui.deriveTurnStatus(waitingSnap))
 
         // 2. QUESTION_RESOLVED -> status 恢复为 Working
         val resolveEvent = xyz.mederi.core.contract.models.CoreEvent(
@@ -871,7 +899,7 @@ class SharedLogicDesktopTest {
         val waitingSnap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, planEvent)
         assertEquals(xyz.mederi.core.contract.models.ConversationStatus.WaitingUser, waitingSnap.conversation.status)
         assertNotNull(waitingSnap.pendingPlanApproval)
-        assertEquals(xyz.mederi.ui.components.TurnStatus.WaitingAnswer, xyz.mederi.ui.components.deriveTurnStatus(waitingSnap))
+        assertEquals(xyz.mederi.core.ui.TurnStatus.WaitingAnswer, xyz.mederi.core.ui.deriveTurnStatus(waitingSnap))
 
         // 2. PLAN_APPROVAL_RESOLVED -> status 恢复为 Working
         val resolvePlanEvent = xyz.mederi.core.contract.models.CoreEvent(
@@ -922,7 +950,7 @@ class SharedLogicDesktopTest {
         assertEquals("err_12345", errorSnap.errorId)
         assertEquals("[FATAL] API: KoogHttpClientException\nHTTP Status: 404\nSuggestion: 请检查模型参数", errorSnap.errorDiagnostic)
         // 报错后轮次结束，StatusBar 只显示运转状态（错误走 ErrorBoard），故此处 deriveTurnStatus 保持 Idle
-        assertEquals(xyz.mederi.ui.components.TurnStatus.Idle, xyz.mederi.ui.components.deriveTurnStatus(errorSnap))
+        assertEquals(xyz.mederi.core.ui.TurnStatus.Idle, xyz.mederi.core.ui.deriveTurnStatus(errorSnap))
     }
 
     @Test
@@ -964,7 +992,7 @@ class SharedLogicDesktopTest {
         assertTrue(warnSnap.errorDiagnostic.orEmpty().contains("WARNING（无异常，静默失败）"))
         assertNull(warnSnap.statusHint, "stream warning must not land in statusHint (the old invisible dead-end)")
         // StatusBar 只显示运转状态：Idle 状态下即使有 errorMessage 也保持 Idle（错误由 ErrorBoard 呈现）
-        assertEquals(xyz.mederi.ui.components.TurnStatus.Idle, xyz.mederi.ui.components.deriveTurnStatus(warnSnap))
+        assertEquals(xyz.mederi.core.ui.TurnStatus.Idle, xyz.mederi.core.ui.deriveTurnStatus(warnSnap))
     }
 
     @Test
@@ -1540,7 +1568,7 @@ class SharedLogicDesktopTest {
         val now = 1000000L
         val retryAt = now + 4000L
         val hintStr = "2/11|Inference exceeds tpm/rpm limit|$retryAt"
-        val parsed = xyz.mederi.ui.components.parseRetryHint(hintStr)
+        val parsed = xyz.mederi.core.ui.parseRetryHint(hintStr)
         assertNotNull(parsed)
         val remainingSec = ((parsed.retryAtMillis!! - now + 999) / 1000).coerceAtLeast(0L)
         assertEquals("2", parsed.attempt)
@@ -1554,7 +1582,7 @@ class SharedLogicDesktopTest {
     fun testParseRetryHintNoThirdSegment() {
         // 无第三段（delayMs 缺失，SnapshotReducer 不拼 retryAt）→ retryAtMillis == null
         val hintStr = "2/11|限流"
-        val parsed = xyz.mederi.ui.components.parseRetryHint(hintStr)
+        val parsed = xyz.mederi.core.ui.parseRetryHint(hintStr)
         assertNotNull(parsed, "hint 应成功解析")
         assertEquals("2", parsed.attempt)
         assertEquals("11", parsed.max)
@@ -1566,7 +1594,7 @@ class SharedLogicDesktopTest {
     fun testParseRetryHintServerMsgWithPipe() {
         // 右向左解析：末段是数字 → retryAt，中间是 serverMsg（可含 |）
         val hintStr = "1/3|msg with | pipe|1700000000000"
-        val parsed = xyz.mederi.ui.components.parseRetryHint(hintStr)
+        val parsed = xyz.mederi.core.ui.parseRetryHint(hintStr)
         assertNotNull(parsed)
         assertEquals("1", parsed.attempt)
         assertEquals("3", parsed.max)
@@ -1753,17 +1781,17 @@ class SharedLogicDesktopTest {
      */
     @Test
     fun testToolActionClassificationAndGrouping() {
-        val kindCmd = xyz.mederi.ui.components.classifyToolAction("run_command")
-        val kindRead = xyz.mederi.ui.components.classifyToolAction("read_file")
-        val kindEdit = xyz.mederi.ui.components.classifyToolAction("edit_file")
-        val kindSearch = xyz.mederi.ui.components.classifyToolAction("grep_search")
-        val kindList = xyz.mederi.ui.components.classifyToolAction("list_dir")
+        val kindCmd = xyz.mederi.core.ui.chat.classifyToolAction("run_command")
+        val kindRead = xyz.mederi.core.ui.chat.classifyToolAction("read_file")
+        val kindEdit = xyz.mederi.core.ui.chat.classifyToolAction("edit_file")
+        val kindSearch = xyz.mederi.core.ui.chat.classifyToolAction("grep_search")
+        val kindList = xyz.mederi.core.ui.chat.classifyToolAction("list_dir")
 
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.COMMAND, kindCmd)
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.READ, kindRead)
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.EDIT, kindEdit)
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.SEARCH, kindSearch)
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.LIST, kindList)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.COMMAND, kindCmd)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.READ, kindRead)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.EDIT, kindEdit)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.SEARCH, kindSearch)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.LIST, kindList)
 
         val calls = listOf(
             xyz.mederi.core.contract.models.ToolCallUi(id = "c1", name = "run_command", target = "git status", state = xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git status"), "clean")),
@@ -1773,15 +1801,15 @@ class SharedLogicDesktopTest {
             xyz.mederi.core.contract.models.ToolCallUi(id = "c5", name = "edit_file", target = "Theme.kt", state = xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("path" to "Theme.kt"), "ok")),
         )
 
-        val groups = xyz.mederi.ui.components.groupToolCallsByAction(calls)
+        val groups = xyz.mederi.core.ui.chat.groupToolCallsByAction(calls)
         xyz.mederi.core.ui.DebugLog.info("TEST", "groupToolCallsByAction produced ${groups.size} groups: ${groups.map { "${it.kind}(${it.calls.size})" }}")
 
         assertEquals(3, groups.size)
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.COMMAND, groups[0].kind)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.COMMAND, groups[0].kind)
         assertEquals(2, groups[0].calls.size)
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.READ, groups[1].kind)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.READ, groups[1].kind)
         assertEquals(2, groups[1].calls.size)
-        assertEquals(xyz.mederi.ui.components.ToolActionKind.EDIT, groups[2].kind)
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.EDIT, groups[2].kind)
         assertEquals(1, groups[2].calls.size)
     }
 
@@ -1816,5 +1844,290 @@ class SharedLogicDesktopTest {
         xyz.mederi.core.ui.DebugLog.info("TEST", "In-trace reasoning scroll: $scrollInTrace (expected false)")
         assertFalse(scrollInTrace)
     }
+
+    @Test
+    fun testToolActionKindTodoAndClassification() {
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.TODO, xyz.mederi.core.ui.chat.classifyToolAction("update_todo"))
+        assertEquals(xyz.mederi.core.ui.chat.ToolActionKind.TODO, xyz.mederi.core.ui.chat.classifyToolAction("session_todo"))
+    }
+
+    @Test
+    fun testProbeToolTargetReadFileLineRange() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore(),
+                scope = testScope
+            )
+            val vm = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            // 1. 指定 0-based offset=1140, max_lines=120 -> 换算 1-based 为 #L1141-1260
+            val t1 = vm.probeToolTarget("read_file", mapOf("path" to "TurnExecutor.kt", "offset" to "1140", "max_lines" to "120"))
+            assertEquals("TurnExecutor.kt#L1141-1260", t1)
+
+            // 2. 指定 offset=0, max_lines=50 -> #L1-50
+            val t2 = vm.probeToolTarget("read_file", mapOf("path" to "TurnExecutor.kt", "offset" to "0", "max_lines" to "50"))
+            assertEquals("TurnExecutor.kt#L1-50", t2)
+
+            // 3. 全量读取（无 offset 且无小 max_lines）-> 不带行号后缀
+            val t3 = vm.probeToolTarget("read_file", mapOf("path" to "TurnExecutor.kt"))
+            assertEquals("TurnExecutor.kt", t3)
+
+            // 4. 显式 startLine/endLine
+            val t4 = vm.probeToolTarget("view_file", mapOf("path" to "TurnExecutor.kt", "startLine" to "10", "endLine" to "25"))
+            assertEquals("TurnExecutor.kt#L10-25", t4)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testProbeToolTargetTodoSuppressedAndJsonDefense() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore(),
+                scope = testScope
+            )
+            val vm = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            // update_todo 必须返回 null，不给标题填充参数
+            val todoTarget = vm.probeToolTarget("update_todo", mapOf("todos" to "[{\"content\":\"task 1\"}]"))
+            assertNull(todoTarget)
+
+            // 任何兜底命中原始 JSON 结构（以 [ 或 { 开头）必须被防御过滤返回 null
+            val jsonArrayTarget = vm.probeToolTarget("mcp_arbitrary", mapOf("items" to "[{\"id\":123}]"))
+            assertNull(jsonArrayTarget)
+
+            val jsonObjectTarget = vm.probeToolTarget("mcp_complex", mapOf("data" to "{\"foo\":\"bar\"}"))
+            assertNull(jsonObjectTarget)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testNestedScrollContainmentLogic() = kotlinx.coroutines.runBlocking {
+        // 模拟外部 LazyColumn 的 NestedScrollConnection
+        var parentReceivedScroll = Offset.Zero
+        var parentReceivedFling = Velocity.Zero
+
+        val mockParentConnection = object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                parentReceivedScroll += available
+                return available
+            }
+
+            override suspend fun onPostFling(
+                consumed: Velocity,
+                available: Velocity
+            ): Velocity {
+                parentReceivedFling += available
+                return available
+            }
+        }
+
+        // 场景 1：未加隔离（未展开或普通区域），内部容器到达边界，剩余滚动差量向上冒泡
+        val incomingScroll = Offset(0f, 120f)
+        val incomingFling = Velocity(0f, 800f)
+
+        // 未隔离时：直接传递给父级 LazyColumn
+        mockParentConnection.onPostScroll(Offset.Zero, incomingScroll, NestedScrollSource.UserInput)
+        mockParentConnection.onPostFling(Velocity.Zero, incomingFling)
+
+        xyz.mederi.core.ui.DebugLog.info(
+            "TEST_SCROLL",
+            "【未隔离场景】子容器越界量: scroll=$incomingScroll, fling=$incomingFling -> 父级接收到: scroll=$parentReceivedScroll, fling=$parentReceivedFling (导致整个页面被牵引滚动)"
+        )
+        assertEquals(120f, parentReceivedScroll.y)
+        assertEquals(800f, parentReceivedFling.y)
+
+        // 重置父级接收计数
+        parentReceivedScroll = Offset.Zero
+        parentReceivedFling = Velocity.Zero
+
+        // 场景 2：已加隔离（展开且限高），ContainNestedScrollConnection 先拦截处理
+        val containConsumedScroll = ContainNestedScrollConnection.onPostScroll(
+            consumed = Offset.Zero,
+            available = incomingScroll,
+            source = NestedScrollSource.UserInput
+        )
+        val scrollLeftForParent = incomingScroll - containConsumedScroll
+        mockParentConnection.onPostScroll(
+            consumed = containConsumedScroll,
+            available = scrollLeftForParent,
+            source = NestedScrollSource.UserInput
+        )
+
+        val containConsumedFling = ContainNestedScrollConnection.onPostFling(
+            consumed = Velocity.Zero,
+            available = incomingFling
+        )
+        val flingLeftForParent = incomingFling - containConsumedFling
+        mockParentConnection.onPostFling(
+            consumed = containConsumedFling,
+            available = flingLeftForParent
+        )
+
+        xyz.mederi.core.ui.DebugLog.info(
+            "TEST_SCROLL",
+            "【隔离生效场景】内部越界量: scroll=$incomingScroll, fling=$incomingFling | " +
+            "ContainConnection消费: scroll=$containConsumedScroll, fling=$containConsumedFling | " +
+            "父级最终接收: scroll=$parentReceivedScroll, fling=$parentReceivedFling (成功阻断穿透！)"
+        )
+
+        assertEquals(120f, containConsumedScroll.y)
+        assertEquals(800f, containConsumedFling.y)
+        assertEquals(0f, parentReceivedScroll.y, "启用 containScroll 后，父级 LazyColumn 接收到的垂直滚动差量必须为 0")
+        assertEquals(0f, parentReceivedFling.y, "启用 containScroll 后，父级 LazyColumn 接收到的垂直滑动速度必须为 0")
+    }
+
+    @Test
+    fun testTurnDiffCardGeneration() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.core.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.core.ui.WorkspaceViewModel(appState)
+
+            val turnDiffSummary = xyz.mederi.core.contract.models.TurnDiffSummaryUi(
+                files = listOf(
+                    xyz.mederi.core.contract.models.FileDiffSummaryUi(
+                        path = "src/main/App.kt",
+                        status = "MODIFIED",
+                        additions = 16,
+                        deletions = 65
+                    ),
+                    xyz.mederi.core.contract.models.FileDiffSummaryUi(
+                        path = "build.gradle.kts",
+                        status = "ADDED",
+                        additions = 5,
+                        deletions = 0
+                    )
+                ),
+                totalAdditions = 21,
+                totalDeletions = 65
+            )
+
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_u1",
+                conversationId = "conv_1",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text("t1", "请修改文件")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null
+            )
+
+            val asstMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_a1",
+                conversationId = "conv_1",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text("t2", "已完成修改")),
+                createdAt = 2000L,
+                completedAt = 3000L,
+                parentMessageId = "msg_u1",
+                model = "test-model",
+                agent = "AUTONOMOUS",
+                isStreaming = false,
+                turnDiffSummary = turnDiffSummary
+            )
+
+            val items = viewModel.computeChatItems(listOf(userMsg, asstMsg))
+            val diffCard = items.filterIsInstance<xyz.mederi.core.ui.ChatListItem.TurnDiffCard>().firstOrNull()
+            assertNotNull(diffCard, "必须生成 TurnDiffCard")
+            assertEquals("msg_a1", diffCard.messageId)
+            assertEquals(2, diffCard.summary.files.size)
+            assertEquals(21, diffCard.summary.totalAdditions)
+            assertEquals(65, diffCard.summary.totalDeletions)
+
+            val textIdx = items.indexOfFirst { it is xyz.mederi.core.ui.ChatListItem.TextMessage && !it.isUser }
+            val cardIdx = items.indexOfFirst { it is xyz.mederi.core.ui.ChatListItem.TurnDiffCard }
+            val footerIdx = items.indexOfFirst { it is xyz.mederi.core.ui.ChatListItem.Footer }
+            assertTrue(textIdx < cardIdx, "TurnDiffCard 应在正文之后")
+            assertTrue(cardIdx < footerIdx, "TurnDiffCard 应在 Footer 之前")
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testSnapshotReducerTurnDiffSummary() {
+        val initialSnapshot = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = xyz.mederi.core.contract.models.Conversation(
+                id = "conv_1",
+                projectId = "p1",
+                title = "Test",
+                status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+                createdAt = 1000L,
+                updatedAt = 1000L
+            ),
+            messages = listOf(
+                xyz.mederi.core.contract.models.ChatMessage(
+                    id = "msg_a1",
+                    conversationId = "conv_1",
+                    role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                    blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text("b1", "正在编辑")),
+                    createdAt = 1000L,
+                    completedAt = null,
+                    parentMessageId = null,
+                    model = null,
+                    agent = null,
+                    isStreaming = true
+                )
+            ),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+
+        val summary = xyz.mederi.core.contract.models.TurnDiffSummaryUi(
+            files = listOf(
+                xyz.mederi.core.contract.models.FileDiffSummaryUi("file.kt", "MODIFIED", 10, 2)
+            ),
+            totalAdditions = 10,
+            totalDeletions = 2
+        )
+        val summaryJson = kotlinx.serialization.json.Json.Default.encodeToString(
+            xyz.mederi.core.contract.models.TurnDiffSummaryUi.serializer(),
+            summary
+        )
+
+        val event = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_COMPLETED,
+            sessionId = "conv_1",
+            payload = mapOf(
+                "turnDiffSummary" to summaryJson,
+                "diffMessageId" to "msg_a1"
+            )
+        )
+
+        val updatedSnapshot = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnapshot, event)
+        val msg = updatedSnapshot.messages.first()
+        assertFalse(msg.isStreaming)
+        assertNotNull(msg.turnDiffSummary)
+        assertEquals(1, msg.turnDiffSummary?.files?.size)
+        assertEquals(10, msg.turnDiffSummary?.totalAdditions)
+        assertEquals(2, msg.turnDiffSummary?.totalDeletions)
+    }
 }
+
 

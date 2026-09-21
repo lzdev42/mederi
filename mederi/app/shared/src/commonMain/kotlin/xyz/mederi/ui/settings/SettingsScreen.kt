@@ -426,8 +426,8 @@ private fun SandboxStatusCard(hooks: xyz.mederi.core.contract.SandboxHooks?) {
     LaunchedEffect(hooks) { status = hooks?.sandboxStatus() }
     val isQuerying = hooks != null && status == null
 
-    val cardBg = if (c.isDark) Color(0xFF161B22) else Color(0xFFFFFFFF)
-    val cardBorder = if (c.isDark) Color(0xFF21262D) else Color(0xFFE5E7EB)
+    val cardBg = c.surfaceCard
+    val cardBorder = c.surfaceCardBorder
 
     Column(
         modifier = Modifier
@@ -478,8 +478,8 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
     val paths by appState.sandboxExtraPaths.collectAsState()
     var input by remember { mutableStateOf("") }
 
-    val cardBg = if (c.isDark) Color(0xFF161B22) else Color(0xFFFFFFFF)
-    val cardBorder = if (c.isDark) Color(0xFF21262D) else Color(0xFFE5E7EB)
+    val cardBg = c.surfaceCard
+    val cardBorder = c.surfaceCardBorder
 
     Column(
         modifier = Modifier
@@ -586,8 +586,8 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
     var password by remember { mutableStateOf(savedPassword ?: "") }
     var showPassword by remember { mutableStateOf(false) }
 
-    val cardBg = if (c.isDark) Color(0xFF161B22) else Color(0xFFFFFFFF)
-    val cardBorder = if (c.isDark) Color(0xFF21262D) else Color(0xFFE5E7EB)
+    val cardBg = c.surfaceCard
+    val cardBorder = c.surfaceCardBorder
 
     val port = when (val s = serverState) {
         is RemoteServerUiState.Running -> s.port
@@ -650,7 +650,8 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                 }
             }
             is RemoteServerUiState.Failed -> {
-                Text(ss.reason, color = c.accentDanger, fontSize = 12.sp)
+                val reasonText = stringResource(ss.reason.key, *ss.reason.args.toTypedArray())
+                Text(reasonText, color = c.accentDanger, fontSize = 12.sp)
             }
             else -> {}
         }
@@ -719,7 +720,8 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                         if (ts.notInstalled) {
                             Text(stringResource(Res.string.settings_tunnel_not_installed), color = c.accentDanger, fontSize = 12.sp)
                         } else {
-                            Text(stringResource(Res.string.settings_tunnel_failed, ts.reason), color = c.accentDanger, fontSize = 12.sp)
+                            val tunnelReason = stringResource(ts.reason.key, *ts.reason.args.toTypedArray())
+                            Text(stringResource(Res.string.settings_tunnel_failed, tunnelReason), color = c.accentDanger, fontSize = 12.sp)
                         }
                         Button(
                             onClick = { appState.startTunnel() },
@@ -740,9 +742,9 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
     onSelect: () -> Unit
 ) {
     val isDark = theme.isDark
-    val cardBg = if (isDark) Color(0xFF161B22) else Color(0xFFFFFFFF)
-    val cardBorder = if (isSelected) c.accentPrimary else if (isDark) Color(0xFF21262D) else Color(0xFFE5E7EB)
-    val previewBg = if (isDark) Color(0xFF0D1117) else Color(0xFFFAFAFA)
+    val cardBg = c.surfaceCard
+    val cardBorder = if (isSelected) c.accentPrimary else c.surfaceCardBorder
+    val previewBg = c.surfaceWorkspace
     val previewText = if (isDark) Color(0xFFE6EDF3) else Color(0xFF1F2328)
     val previewSub = if (isDark) Color(0xFF8B949E) else Color(0xFF656D76)
 
@@ -762,7 +764,7 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState,
                 .height(80.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(previewBg)
-                .border(1.dp, if (isDark) Color(0xFF21262D) else Color(0xFFE5E7EB), RoundedCornerShape(8.dp))
+                .border(1.dp, c.surfaceCardBorder, RoundedCornerShape(8.dp))
                 .padding(10.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

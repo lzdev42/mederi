@@ -30,7 +30,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Terminal
@@ -62,18 +61,19 @@ import org.jetbrains.compose.resources.stringResource
 @Composable
 internal fun TerminalPanelContent(
     viewModel: WorkspaceViewModel,
+    terminalVm: TerminalViewModel,
     colors: MederiColors,
     modifier: Modifier = Modifier
 ) {
-    val appState = viewModel.appStateRef
-    if (appState.terminalManager == null) {
+    // 状态机在 TerminalViewModel（Route 层创建，ViewModelStore 管理生命周期），本组件只渲染与事件转发
+    if (terminalVm.manager == null) {
         TerminalUnsupportedPlaceholder(colors, modifier)
         return
     }
 
-    val terminalVm: TerminalViewModel = viewModel { TerminalViewModel(appState) }
-    val projects by appState.projects.collectAsState()
-    val selectedProjectId by appState.selectedProjectId.collectAsState()
+    val terminalUiState = terminalVm.uiState
+    val projects by terminalVm.projects.collectAsState()
+    val selectedProjectId by terminalVm.selectedProjectId.collectAsState()
 
     // 首次打开面板且零 tab → 自动开一个（点开即是终端）；项目 cwd 优先，无项目 → home
     LaunchedEffect(selectedProjectId, projects) {
@@ -81,8 +81,8 @@ internal fun TerminalPanelContent(
     }
 
     // 兜底：激活 tab 无会话且无错误（如初始 local tab、重试清空后）→ 拉起
-    LaunchedEffect(terminalVm.activeKey) {
-        terminalVm.ensureSession(terminalVm.activeKey)
+    LaunchedEffect(terminalUiState.activeKey) {
+        terminalVm.ensureSession(terminalUiState.activeKey)
     }
 
     Column(modifier = modifier.fillMaxSize().background(colors.surfaceWorkspace)) {
@@ -96,9 +96,10 @@ internal fun TerminalPanelContent(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            terminalVm.tabKeys.toList().forEach { key ->
-                val isActive = key == terminalVm.activeKey
-                val isEnded = terminalVm.isEnded(key)
+            terminalUiState.tabs.forEach { tab ->
+                val key = tab.key
+                val isActive = key == terminalUiState.activeKey
+                val isEnded = tab.ended
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
@@ -107,7 +108,7 @@ internal fun TerminalPanelContent(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (!isActive && terminalVm.isUnread(key) && !isEnded) {
+                    if (!isActive && tab.unread && !isEnded) {
                         Box(
                             modifier = Modifier
                                 .padding(end = 4.dp)
@@ -116,8 +117,9 @@ internal fun TerminalPanelContent(
                                 .background(colors.accentSecondary)
                         )
                     }
+                    val tabTitle = terminalTabTitle(key, terminalVm.sessionTitleOf(key), projects)
                     Text(
-                        text = terminalTabTitle(key, terminalVm.sessionTitleOf(key), projects),
+                        text = stringResource(tabTitle.key, *tabTitle.args.toTypedArray()),
                         fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -152,13 +154,14 @@ internal fun TerminalPanelContent(
         }
 
         // ---- 当前 tab 内容 ----
-        val currentKey = terminalVm.activeKey
+        val currentKey = terminalUiState.activeKey
+        val currentError = terminalUiState.tabs.firstOrNull { it.key == currentKey }?.error
         Box(modifier = Modifier.fillMaxSize()) {
             when {
                 currentKey.isEmpty() -> TerminalCenterHint(stringResource(Res.string.term_all_closed), stringResource(Res.string.term_all_closed_hint), colors)
 
-                terminalVm.errorOf(currentKey) != null -> TerminalErrorView(
-                    message = terminalVm.errorOf(currentKey)!!,
+                currentError != null -> TerminalErrorView(
+                    message = stringResource(currentError.key, *currentError.args.toTypedArray()),
                     colors = colors,
                     onRetry = { terminalVm.retryTab(currentKey) }
                 )

@@ -85,6 +85,14 @@ changes unless the user says otherwise.
 - `${'$'}` opens inline math: write a literal dollar as `\${'$'}` or backticks. Two unescaped
   `${'$'}` in one paragraph turn everything between them into math (bites prices, `${'$'}HOME`, awk `${'$'}1`).
 
+## Horizontal Rules (`---`)
+- `---` separates DISTINCT narrative blocks only (e.g. between two unrelated large sections of a
+  reply) — it is NOT decoration. Do not use it between a heading and its own content, and never
+  jam it right after a paragraph line.
+- Keep at least THREE blank lines above AND below the `---` line. A `---` placed directly under a
+  heading or paragraph mis-renders (setext underline / stray visual line) and looks like noise.
+- Prefer headings + spacing over `---`; the bar is the exception for breaking up long replies.
+
 ## Alerts
 GitHub-style alerts for critical information; text inside must be in the user's input language;
 don't place consecutively or nest: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]` `[!CAUTION]`.
@@ -99,6 +107,10 @@ don't place consecutively or nest: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]
 - Mermaid is the ONLY diagram format we render: every diagram must be a ```mermaid block.
   PlantUML / Graphviz DOT / d2 have no renderer and show as plain source — never emit them
   unless the user explicitly asks for that format as text.
+- **Fence info string MUST be exactly `mermaid` and nothing else.** Never append extra words
+  after "mermaid" — ```` ```mermaid mermaid ````, ```` ```mermaid diagram ````,
+  ```` ```mermaid flowchart ```` etc. are INVALID: InkCompose matches the exact info string,
+  any suffix falls back to a plain code block and the diagram does not render.
 - Quote labels with special characters: `id["Label (v2)"]`. No raw HTML inside labels.
 - One concern per diagram. Split a complex system into an overview plus one diagram per
   module/layer; no subgraphs nested deeper than one level.

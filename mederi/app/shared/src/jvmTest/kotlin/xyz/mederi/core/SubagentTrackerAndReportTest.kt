@@ -13,8 +13,8 @@ import kotlin.test.assertTrue
 /**
  * P4 ViewModel 层纯逻辑锁定：
  * - SubagentTracker：STARTED 建缓存对象（全量元数据）→ 终态覆盖 status；乱序终态安全跳过
- * - SubagentReportMarkdown：wait_agent/agent_status 的 COMPLETED 结果 → markdown；
- *   其他工具 / 未完成 / 坏 JSON → null
+ * - SubagentReportMarkdown：subagent（统一工具名） / wait_agent / agent_status（旧名兼容）
+ *   的 COMPLETED 结果 → markdown；其他工具 / 未完成 / 坏 JSON → null
  */
 class SubagentTrackerAndReportTest {
 
@@ -87,5 +87,27 @@ class SubagentTrackerAndReportTest {
             """{"agentId":"sub_1","status":"COMPLETED","result":""}"""))
         // 坏 JSON
         assertNull(SubagentReportMarkdown.fromToolResult("wait_agent", "not json at all"))
+    }
+
+    @Test
+    fun `report markdown works with unified subagent tool name`() {
+        // subagent(WAIT) 返回 COMPLETED + result → 应产出 markdown
+        val waitJson = """
+            {"agentId":"sub_2","status":"COMPLETED","progress":"completed",
+             "result":"Refactored 5 files, all tests green.","modelName":"Gemini","reasoningLevel":"MEDIUM"}
+        """.trimIndent()
+        val md = SubagentReportMarkdown.fromToolResult("subagent", waitJson)
+        assertTrue(md != null, "统一工具名 subagent 的 COMPLETED 结果应产出 markdown")
+        assertTrue(md!!.contains("### Subagent Report"))
+        assertTrue(md.contains("`sub_2`"))
+        assertTrue(md.contains("Refactored 5 files, all tests green."))
+
+        // subagent(SPAWN) 返回 RUNNING（无 result）→ 应返回 null
+        assertNull(SubagentReportMarkdown.fromToolResult("subagent",
+            """{"agentId":"sub_3","status":"RUNNING","progress":"starting"}"""))
+
+        // subagent(STATUS) 返回 NOT_FOUND → 应返回 null
+        assertNull(SubagentReportMarkdown.fromToolResult("subagent",
+            """{"agentId":"sub_4","status":"NOT_FOUND"}"""))
     }
 }

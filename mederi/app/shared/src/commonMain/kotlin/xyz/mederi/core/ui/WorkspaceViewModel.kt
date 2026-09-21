@@ -12,6 +12,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,8 +20,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
-import okio.ByteString.Companion.decodeBase64
 import okio.ByteString.Companion.toByteString
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
@@ -30,175 +31,18 @@ import xyz.mederi.core.ui.appstate.AppState
 import xyz.mederi.core.ui.appstate.McpStore
 import xyz.mederi.core.ui.appstate.SkillStore
 
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.err_create_conversation_failed
+import mederi.app.shared.generated.resources.err_engine_not_ready
+import mederi.app.shared.generated.resources.err_generic
+import mederi.app.shared.generated.resources.err_rollback_failed
+import mederi.app.shared.generated.resources.err_select_model_first
+import mederi.app.shared.generated.resources.err_select_project_or_conversation
+import mederi.app.shared.generated.resources.err_send_failed
+
 import xyz.mederi.isDesktopPlatform
 import xyz.emuci.inkcompose.MermaidCacheConfig
-import xyz.mederi.ui.components.TurnStatus
-import xyz.mederi.ui.components.deriveTurnStatus
 import xyz.mederi.util.PromptComposer
-import xyz.mederi.util.ArtifactParser
-import xyz.mederi.util.ParsedArtifact
-
-/**
- * 展平后的聊天列表 item — 每个文本块/思考面板都是独立 LazyColumn item。
- * 所有展示所需的派生数据（聚合文案、目标参数、轮次标记）在此预计算，View 零逻辑。
- */
-sealed interface ChatListItem {
-    val key: String
-
-    /** 是否为对话轮次的第一个 item（UI 据此加大与上一轮次的间距） */
-    val isTurnStart: Boolean
-
-    data class Reasoning(
-        override val key: String,
-        val text: String,
-        val isStreaming: Boolean,
-        override val isTurnStart: Boolean = false,
-        val durationMs: Long = 0L,
-        val isReasoningActive: Boolean = false,
-    ) : ChatListItem
-
-    data class ToolCalls(
-        override val key: String,
-        val toolCalls: List<ToolCallUi>,
-        val isStreaming: Boolean,
-        override val isTurnStart: Boolean = false,
-       val toolSummary: String = "",
-       val hasFailedTool: Boolean = false,
-       val isRunning: Boolean = false,
-   ) : ChatListItem
-
-    data class SubagentCalls(
-        override val key: String,
-        val subagents: List<ToolCallUi>,
-        val isStreaming: Boolean,
-        override val isTurnStart: Boolean = false,
-       val isRunning: Boolean = false,
-       val hasFailed: Boolean = false,
-   ) : ChatListItem
-
-    /**
-     * 多步任务的工作过程聚合栏（Work 栏）。
-     * 将轮次内的所有推理、自说自话过渡语与工具调用折叠聚合为单行汇总条，默认折叠突出最终正文。
-     */
-    data class WorkTraceBlock(
-        override val key: String,
-        val items: List<ChatListItem>,
-        val totalToolsCount: Int,
-        val totalDurationMs: Long,
-        val hasFailedTool: Boolean,
-        override val isTurnStart: Boolean = false,
-    ) : ChatListItem
-
-    data class TextMessage(
-        override val key: String,
-        val isUser: Boolean,
-        val isStreaming: Boolean,
-        val isActiveAssistant: Boolean,
-        val text: String,
-        val partId: String,
-        val conversationId: String,
-        val images: List<String> = emptyList(),
-        override val isTurnStart: Boolean = false,
-        val messageId: String = "",
-        val createdAt: Long = 0L,
-        /** assistant 消息的 footer 元数据——只挂在该轮次最后一个文本块上，其余为 null */
-        val assistantFooter: AssistantFooterInfo? = null,
-        /** 是否为伴随工具调用的步骤过渡语（自说自话，弱化展示与最终主交付区分） */
-        val isStepNarration: Boolean = false,
-    ) : ChatListItem
-
-    /** 独立长文 Markdown 产物卡片（点击在右侧扩展窗口打开） */
-    data class DocumentCard(
-        override val key: String,
-        val artifactId: String,
-        val title: String,
-        val content: String,
-        val lineCount: Int,
-        val charCount: Int,
-        val isCompleted: Boolean,
-        val isStreaming: Boolean,
-        val createdAt: Long = 0L,
-        override val isTurnStart: Boolean = false,
-    ) : ChatListItem
-
-    /** assistant 轮次底部的诊断与状态栏（沉底挂载） */
-    data class Footer(
-        override val key: String,
-        val footer: AssistantFooterInfo,
-        val lastMessageText: String = "",
-        val fullTurnText: String = "",
-        override val isTurnStart: Boolean = false,
-    ) : ChatListItem
-
-    /** 压缩标记消息（SUMMARY）：既是历史的一部分，也是 AI 视图的分界点 */
-    data class SummaryCard(
-        override val key: String,
-        val text: String,
-        override val isTurnStart: Boolean = true,
-    ) : ChatListItem
-
-    /** 计划审批卡片（作为持久历史消息留在对话流中，无论后续聊多久均可翻回点击 Proceed） */
-    data class PlanApproval(
-        override val key: String,
-        val request: PlanApprovalRequest,
-        override val isTurnStart: Boolean = false,
-    ) : ChatListItem
-}
-
-/**
- * assistant 消息底部 footer 的元数据（预计算，View 零逻辑）。
- * 数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs），
- * 经契约 ChatMessage 透传到 UI。
- */
-data class AssistantFooterInfo(
-    val modelName: String? = null,
-    /** APPROVAL / AUTONOMOUS */
-    val agentMode: String? = null,
-    /** 推理档位名称（如 HIGH） */
-    val thinkingLevel: String? = null,
-    val durationMs: Long? = null,
-    /** 回复结束时刻（epoch millis）≈ createdAt + durationMs */
-    val completedAtMs: Long? = null,
-)
-
-/**
- * 右侧独立功能活动栏枚举。
- */
-enum class RightDockPanel {
-    OVERVIEW,
-    DIFF,
-    PLAN,
-    SUB_AGENTS,
-    ARTIFACTS,
-    TERMINAL,
-    BROWSER
-}
-
-data class PlanItem(
-    val id: String,
-    val title: String,
-    val content: String
-)
-
-sealed interface ArtifactItem {
-    val id: String
-    val title: String
-
-    data class Text(
-        override val id: String,
-        override val title: String,
-        val content: String,
-        val lineCount: Int = 0,
-        val charCount: Int = 0,
-        val isStreaming: Boolean = false,
-    ) : ArtifactItem
-
-    data class Image(
-        override val id: String,
-        override val title: String,
-        val imageUrl: String
-    ) : ArtifactItem
-}
 
 /**
  * 聊天工作区 ViewModel（首页主会话区的数据层）。
@@ -234,8 +78,8 @@ class WorkspaceViewModel(
     private val appState: AppState,
 ) : ViewModel() {
 
-    /** 终端面板等 dock 组件需要直接读全局状态（项目选择等） */
-    val appStateRef: AppState get() = appState
+    /** 内置浏览器宿主（桌面端注入 UiBrowserHost；遥控端/wasm 为 null，UI 渲染占位） */
+    val uiBrowserHost get() = appState.uiBrowserHost
 
     init {
         // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到项目目录下的 .mederi。
@@ -392,22 +236,32 @@ class WorkspaceViewModel(
     var isAttached by mutableStateOf(false); private set
 
     /**
-     * 按会话缓存的快照（conversationId → 最后一次的 ConversationSnapshot）。
+     * 会话级缓存族（乐观消息 / 计时锚点 / 快照缓存 / 观察 Job）——内部存储收敛为
+     * 单一 [SessionUiCache] 实例（字段不对外暴露，对外读取仍走原属性）。
      *
-     * **解决会话切换闪烁问题（Bug 1 根因）**：
-     * 切换会话时不再 `snapshot = null` 再从 store 重建——而是缓存当前快照，
-     * 切回来时立即渲染缓存（含正在流式的推理/消息），再由事件流持续更新。
-     *
-     * 之前切回 Working 会话时，store 里的 listMessages 不含未持久化的 streaming 消息
-     * （TurnIncrementalPersister 只在 LLM 响应结束后落库），导致初始快照缺失 streaming 数据，
-     * StatusBar 闪烁"排队较长"黄色警告后才被新事件修正。
-     *
-     * 缓存仅在会话离开 Working 后清理（turn 结束/出错/删除）。
+     * 快照缓存解决会话切换闪烁问题（Bug 1 根因）：切换会话时不再 `snapshot = null`
+     * 再从 store 重建——而是缓存当前快照，切回来时立即渲染缓存（含正在流式的推理/消息），
+     * 再由事件流持续更新。缓存仅在会话离开 Working 后清理（turn 结束/出错/删除）。
      */
-    private val snapshotCache = mutableStateMapOf<String, ConversationSnapshot>()
+    private val sessionCache = SessionUiCache()
     var reasoningExpanded by mutableStateOf<Map<String, Boolean>>(emptyMap()); private set
-    var diffItems by mutableStateOf<List<FileDiff>>(emptyList()); private set
-    var showDiffPanel by mutableStateOf(false); private set
+
+    // ------------------------------------------------------------------
+    // diff 面板状态（内部收敛为单一 diffState；对外属性名/类型不变。
+    // activeDockPanel 同时服务全部 dock 面板且多处逻辑依赖，保守保留独立状态）
+    // ------------------------------------------------------------------
+
+    /** diff 面板内部存储（items/selectedPath/showPanel 单点状态） */
+    private var diffState by mutableStateOf(DiffUiState())
+
+    /** 当前会话的文件 diff 列表 */
+    val diffItems: List<FileDiff> get() = diffState.items
+
+    /** 当前选中的 diff 文件路径 */
+    val selectedDiffFilePath: String? get() = diffState.selectedPath
+
+    /** diff 面板是否展开 */
+    val showDiffPanel: Boolean get() = diffState.showPanel
 
     /** 右侧独立功能活动栏当前激活的面板（null 表示收起关闭）。写操作只经下方动作方法（单向数据流） */
     var activeDockPanel by mutableStateOf<RightDockPanel?>(null); private set
@@ -563,7 +417,41 @@ class WorkspaceViewModel(
             activeDockPanel = RightDockPanel.OVERVIEW
         }
     }
-    var error by mutableStateOf<String?>(null); private set
+    // ------------------------------------------------------------------
+    // 一次性 UI 效果通道（Channel<UiEffect>）
+    // ------------------------------------------------------------------
+    // 真正的一次性导航/打开类命令（打开设置对话框、打开项目选择菜单）经效果通道派发，
+    // UI 层 collect 消费后落为本地 UI 状态；持续性展示状态（error 家族/ErrorBoard、
+    // imageStrippedNotice 轻提示）仍保留为 VM state（见 UiEffect KDoc 的迁移边界说明）——
+    // 它们由 UI 常驻展示并在合适时机清空，不是"触发一次的导航命令"。
+    //
+    // receiveAsFlow 是单消费者语义：同一时刻通常只有一个 UI 实例在收集
+    // （两个 ChatInputCard 共享同一 VM，但实际可见的输入框一般只有一个）；
+    // 多实例同时可见时的广播竞争是已知边缘情况，可接受（见 ChatInputCard 收集处注释）。
+    private val _effects = Channel<UiEffect>(Channel.BUFFERED)
+    val effects: kotlinx.coroutines.flow.Flow<UiEffect> = _effects.receiveAsFlow()
+
+    /** 打开设置对话框（一次性导航命令，UI 收集后置 isSettingsVisible = true） */
+    fun openSettings() {
+        _effects.trySend(UiEffect.OpenSettings)
+    }
+
+    /** 打开项目选择菜单（一次性命令，UI 收集后递增计数触发 ProjectSelectorMenu） */
+    fun openProjectMenu() {
+        _effects.trySend(UiEffect.OpenProjectMenu)
+    }
+
+    // ------------------------------------------------------------------
+    // 错误族状态（内部存储收敛为单一 errorState；对外属性名/类型不变）
+    // ------------------------------------------------------------------
+
+    /** 错误族内部存储（message/diagnostic/id/断流标记/详情弹窗单点状态） */
+    private var errorState by mutableStateOf(ErrorState())
+
+    /**
+     * 当前会话的头条错误简报（null = 无错误）。
+     */
+    val error: UiMessage? get() = errorState.message
 
     /**
      * 一次性轻提示：图片已从发送内容中剔除（值为模型名，null=不显示）。非错误，不走 error。
@@ -574,56 +462,40 @@ class WorkspaceViewModel(
      * 当前会话错误的完整诊断报告（纯文本，来自 [ConversationSnapshot.errorDiagnostic]）。
      * UI 点击错误简报时可展示此完整详情；null 表示无错误或旧路径。
      */
-    var errorDiagnostic by mutableStateOf<String?>(null); private set
+    val errorDiagnostic: String? get() = errorState.diagnostic
 
     /**
      * 当前会话错误的 ID（来自 [ConversationSnapshot.errorId]）。
      * JVM 端 UI 可经 `ErrorCollector.get(errorId)` 取回完整结构化的 [ErrorRecord]。
      */
-    var errorId by mutableStateOf<String?>(null); private set
+    val errorId: String? get() = errorState.id
 
     /**
      * 当前错误是否为断流（流式连接提前中断）。为 true 时 ErrorBoard 显示"继续"按钮，
      * 点击经 [continueAfterInterruption] 重发 Continue 续写半截回复。
      */
-    var isStreamInterrupted by mutableStateOf(false); private set
+    val isStreamInterrupted: Boolean get() = errorState.isStreamInterrupted
 
     /**
      * 是否正在展示详细错误报告弹窗。
      */
-    var isErrorDetailOpen by mutableStateOf(false); private set
+    val isErrorDetailOpen: Boolean get() = errorState.isDetailOpen
 
     fun showErrorDetail() {
-        if (!errorDiagnostic.isNullOrBlank() || !error.isNullOrBlank()) {
-            isErrorDetailOpen = true
+        if (!errorDiagnostic.isNullOrBlank() || error != null) {
+            errorState = errorState.copy(isDetailOpen = true)
         }
     }
 
     fun dismissErrorDetail() {
-        isErrorDetailOpen = false
+        errorState = errorState.copy(isDetailOpen = false)
     }
 
-    /**
-     * 乐观用户消息（按会话归档）。
-     *
-     * core 在 turn 结束时才把用户消息落库（ChatMemory store / 失败兜底），turn 进行中
-     * 快照里没有它——乐观消息是唯一的显示来源。因此切换会话**不能清除**：
-     * 切走再切回，消息仍在；等 observe 到的快照里出现匹配的真实消息后才移除。
-     * key = conversationId（新会话创建成功后从 pending_xxx re-key 到真实 id）。
-     */
-    private val pendingUserMessages = mutableStateMapOf<String, ChatMessage>()
-
-    /**
-     * StatusBar 计时锚点：每次发送（send）记录"请求发出时刻"（epoch ms），按会话归档。
-     * 计时 = now - turnStartAt（每秒重算），切换会话回来不重置。
-     * 与 footer 的 durationMs 语义不同——durationMs 是"API 有回应开始算到回复结束"（core 侧），
-     * 本字段是"从用户发出请求开始算"，二者不是同一数据源。
-     * turn 结束（快照 status 离开 Working）时清除。
-     */
-    private val turnStartByConv = mutableMapOf<String, Long>()
+    // 乐观用户消息（sessionCache.pendingUserMessages）与 StatusBar 计时锚点（sessionCache.turnStartByConv）
+    // 已收敛进 [sessionCache]（SessionUiCache，见文件底部），语义与文档随成员迁移。
 
     /** 当前会话的乐观消息（兼容旧引用/测试） */
-    val optimisticUserMessage: ChatMessage? get() = conversationId?.let { pendingUserMessages[it] }
+    val optimisticUserMessage: ChatMessage? get() = conversationId?.let { sessionCache.pendingUserMessages[it] }
 
     /**
      * 输入框草稿（会话级业务状态，唯一真理源在此）。
@@ -735,7 +607,7 @@ class WorkspaceViewModel(
     val isWorking: Boolean get() = snapshot?.conversation?.status == ConversationStatus.Working
     val messages: List<ChatMessage> get() {
         val base = snapshot?.messages ?: emptyList()
-        val opt = conversationId?.let { pendingUserMessages[it] } ?: return base
+        val opt = conversationId?.let { sessionCache.pendingUserMessages[it] } ?: return base
         // 因果时序防护：只有在 base 中存在"时间戳在 opt 之后且正在流式中"的回复（即确由 opt 触发的流式响应），
         // 才能把 opt 插在它前面；早于 opt 的历史消息（无论是否残留流式标记）绝对不可被 opt 抢占前面。
         val streamingIndex = base.indexOfFirst { it.isStreaming && it.createdAt >= opt.createdAt }
@@ -753,11 +625,11 @@ class WorkspaceViewModel(
 
     /**
      * 当前会话的"发送请求时刻"（epoch ms）——StatusBar 计时锚点。
-     * 来自 [turnStartByConv]（send 时记录，turn 结束清除），切换会话回来不重置。
+     * 来自 [sessionCache.turnStartByConv]（send 时记录，turn 结束清除），切换会话回来不重置。
      * null = 当前会话没有进行中的发送（StatusBar 不显示计时）。
      */
     val turnStartedAt: Long?
-        get() = conversationId?.let { turnStartByConv[it] }
+        get() = conversationId?.let { sessionCache.turnStartByConv[it] }
 
     /**
      * 上下文窗口（token）：唯一真理源 = AppState.selectedModel 的派生 StateFlow。
@@ -793,8 +665,8 @@ class WorkspaceViewModel(
 
     // ------------------------------------------------------------------
     // 子代理 MVVM 缓存（P4）：SUBAGENT_* 事件 → SubagentTracker → SubagentState
-    // UI（未来）读 [subagents]（当前会话）渲染追踪器卡片/详情；读 [allSubagents] 渲染全局列表。
-    // 汇报正文不进这里——它在 wait_agent 的 tool result 里（数据库），
+    // UI 读 [subagents]（当前会话）渲染追踪器卡片/详情；读 [allSubagents] 渲染全局列表。
+    // 汇报正文不进这里——它在 subagent(WAIT) 的 tool result 里（数据库），
     // UI 用 SubagentReportMarkdown.fromToolResult(toolName, resultJson) 转 markdown 展开渲染。
     // ------------------------------------------------------------------
 
@@ -813,7 +685,7 @@ class WorkspaceViewModel(
     fun subagent(agentId: String): xyz.mederi.core.contract.models.SubagentState? =
         subagentStates[agentId]
 
-    /** wait_agent / agent_status 工具结果 → 汇报 markdown（null = 非子代理汇报，普通工具卡片渲染）。 */
+    /** subagent / wait_agent / agent_status 工具结果 → 汇报 markdown（null = 非子代理汇报，普通工具卡片渲染）。 */
     fun subagentReportMarkdown(toolName: String, resultJson: String): String? =
         SubagentReportMarkdown.fromToolResult(toolName, resultJson)
 
@@ -861,7 +733,7 @@ class WorkspaceViewModel(
     val turnStatus: TurnStatus
         get() {
             val convId = conversationId
-            val hasPendingSend = convId != null && pendingUserMessages.containsKey(convId)
+            val hasPendingSend = convId != null && sessionCache.pendingUserMessages.containsKey(convId)
             val snap = snapshot
             // 快照未就绪（刚 attach / 新会话创建中）：有待发送消息 = 正在发送
             if (snap == null) {
@@ -958,8 +830,6 @@ class WorkspaceViewModel(
         questionPage = 0
     }
 
-val SUBAGENT_TOOL_NAMES = setOf("subagent")
-
 /** 子代理生命周期事件集（init 订阅过滤用；SubagentTracker 消费）。 */
 private val SUBAGENT_EVENT_TYPES = setOf(
     xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STARTED,
@@ -968,632 +838,25 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STOPPED
 )
 
-    internal fun computeChatItems(msgs: List<ChatMessage>): List<ChatListItem> {
-        val result = mutableListOf<ChatListItem>()
-
-        // role 为 null 的段是压缩标记（SUMMARY），独立成卡片
-        val turns = mutableListOf<Pair<ChatRole?, List<ChatMessage>>>()
-        var currentAssistant = mutableListOf<ChatMessage>()
-        for (msg in msgs) {
-            if (msg.role == ChatRole.Summary) {
-                if (currentAssistant.isNotEmpty()) {
-                    turns.add(ChatRole.Assistant to currentAssistant.toList())
-                    currentAssistant = mutableListOf()
-                }
-                turns.add(null to listOf(msg))
-                continue
-            }
-            // 真实用户消息（含有用户文本或文件）：纯中间工具结果消息（blocks 为空）绝不切断 Assistant 轮次
-            val isRealUser = msg.role == ChatRole.User && msg.blocks.any {
-                it is ChatBlock.Text || it is ChatBlock.File
-            }
-            if (isRealUser) {
-                if (currentAssistant.isNotEmpty()) {
-                    turns.add(ChatRole.Assistant to currentAssistant.toList())
-                    currentAssistant = mutableListOf()
-                }
-                turns.add(ChatRole.User to listOf(msg))
-            } else if (msg.role == ChatRole.Assistant) {
-                currentAssistant.add(msg)
-            }
-        }
-        if (currentAssistant.isNotEmpty()) {
-            turns.add(ChatRole.Assistant to currentAssistant.toList())
-        }
-
-        val lastAssistantTurn = turns.lastOrNull { it.first == ChatRole.Assistant }?.second
-        for ((role, turnMessages) in turns) {
-            if (role == null) {
-                val summaryText = turnMessages
-                    .flatMap { it.blocks.filterIsInstance<ChatBlock.Text>() }
-                    .joinToString("\n\n") { it.text }
-                result.add(
-                    ChatListItem.SummaryCard(
-                        key = "${turnMessages.firstOrNull()?.id ?: ""}_summary",
-                        text = summaryText
-                    )
-                )
-                continue
-            }
-
-            val isUser = role == ChatRole.User
-            if (isUser) {
-                for (msg in turnMessages) {
-                    val messageImages = msg.blocks.filterIsInstance<ChatBlock.File>()
-                        .filter { isImageBlock(it) }
-                        .map { it.url }
-                    val textBlocks = msg.blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() }
-                    if (textBlocks.isNotEmpty()) {
-                        textBlocks.forEachIndexed { blockIndex, block ->
-                            result.add(
-                                ChatListItem.TextMessage(
-                                    key = "${msg.id}_${block.id}",
-                                    isUser = true,
-                                    isStreaming = false,
-                                    isActiveAssistant = false,
-                                    text = block.text,
-                                    partId = block.id,
-                                    conversationId = msg.conversationId,
-                                    images = if (blockIndex == 0) messageImages else emptyList(),
-                                    isTurnStart = true,
-                                    messageId = msg.id,
-                                    createdAt = msg.createdAt,
-                                )
-                            )
-                        }
-                    } else if (messageImages.isNotEmpty()) {
-                        result.add(
-                            ChatListItem.TextMessage(
-                                key = "${msg.id}_img",
-                                isUser = true,
-                                isStreaming = false,
-                                isActiveAssistant = false,
-                                text = "",
-                                partId = "img",
-                                conversationId = msg.conversationId,
-                                images = messageImages,
-                                isTurnStart = true,
-                                messageId = msg.id,
-                                createdAt = msg.createdAt,
-                            )
-                        )
-                    }
-                }
-                continue
-            }
-
-            // Assistant 轮次
-            val isStreaming = turnMessages.any { it.isStreaming }
-            val isActiveAssistant = isStreaming || (isWorking && turnMessages == lastAssistantTurn)
-
-            val hasAnyToolCallInTurn = turnMessages.any { m -> m.blocks.any { it is ChatBlock.ToolCall } }
-            var turnHasFirstItem = false
-
-            val workItems = mutableListOf<ChatListItem>()
-            val deliverableItems = mutableListOf<ChatListItem>()
-
-            // 后缀扫描（O(n) 一次倒序遍历）：预计算每条消息"之后"是否还有工具调用/非空文本，
-            // 替代循环内原先对后续消息的 O(n) 线性扫描（整轮 O(n²)），改为 O(1) 查表。
-            val n = turnMessages.size
-            val suffixMsgHasToolCall = BooleanArray(n)
-            for (i in n - 2 downTo 0) {
-                val nextHasTool = turnMessages[i + 1].blocks.any { it is ChatBlock.ToolCall }
-                suffixMsgHasToolCall[i] = nextHasTool || suffixMsgHasToolCall[i + 1]
-            }
-            val suffixMsgHasText = BooleanArray(n)
-            for (i in n - 2 downTo 0) {
-                val nextHasText = turnMessages[i + 1].blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
-                suffixMsgHasText[i] = nextHasText || suffixMsgHasText[i + 1]
-            }
-
-            // 最终消息定位：turn 内最后一个"其后无工具调用"的非空 Text block 视为最终总结。
-            // 有工具的轮次（会创建 WorkTraceBlock）中，除最终总结外的一切内容
-            // （所有推理、所有过渡文本、所有工具调用）都归入工作过程栏内。
-            // 注意：不能只看"最后一个文本"——若它后面还有工具调用（如 asst: [推理, 过渡语, 工具]），
-            // 它只是步骤叙述，必须跳过继续向前找真正收尾的总结文本。
-            var finalTextMsgIndex = -1
-            var finalTextBlockIndex = -1
-            findFinalText@ for (i in turnMessages.indices.reversed()) {
-                val msg = turnMessages[i]
-                for (b in msg.blocks.indices.reversed()) {
-                    val block = msg.blocks[b]
-                    if (block is ChatBlock.Text && block.text.isNotBlank()) {
-                        val hasLaterToolInMsg = msg.blocks.drop(b + 1).any { it is ChatBlock.ToolCall }
-                        if (!hasLaterToolInMsg) {
-                            finalTextMsgIndex = i
-                            finalTextBlockIndex = b
-                            break@findFinalText
-                        }
-                    }
-                }
-            }
-
-            // 按真实时序遍历本轮的消息与块，交替收集 Reasoning、Text 与就地工具调用
-            for ((msgIndex, msg) in turnMessages.withIndex()) {
-                val subsequentHasToolCall = suffixMsgHasToolCall[msgIndex]
-                val isMsgStepNarration = hasAnyToolCallInTurn && (msg.blocks.any { it is ChatBlock.ToolCall } || subsequentHasToolCall)
-
-                val messageImages = msg.blocks.filterIsInstance<ChatBlock.File>()
-                    .filter { isImageBlock(it) }
-                    .map { it.url }
-                var imagesHandled = false
-
-                for ((blockIndex, block) in msg.blocks.withIndex()) {
-                    val isFinalText = hasAnyToolCallInTurn && msgIndex == finalTextMsgIndex && blockIndex == finalTextBlockIndex
-                    // 有工具的轮次：除最终总结文本外，其余文本（过渡语/步骤叙述）都算工作过程
-                    val isStepNarration = hasAnyToolCallInTurn && !isFinalText
-                    when (block) {
-                        is ChatBlock.Reasoning -> {
-                            if (block.text.isNotBlank()) {
-                                val durationMs = if (msg.completedAt != null && msg.completedAt > msg.createdAt) {
-                                    msg.completedAt - msg.createdAt
-                                } else (msg.durationMs ?: 0L)
-                                val hasSubsequentText = msg.blocks.drop(blockIndex + 1).any { it is ChatBlock.Text && it.text.isNotBlank() } || suffixMsgHasText[msgIndex]
-                                val isReasoningActive = isStreaming && !hasSubsequentText
-
-                                val item = ChatListItem.Reasoning(
-                                    key = "${msg.id}_${block.id}",
-                                    text = block.text,
-                                    isStreaming = isStreaming,
-                                    isTurnStart = !turnHasFirstItem && workItems.isEmpty(),
-                                    durationMs = durationMs,
-                                    isReasoningActive = isReasoningActive,
-                                )
-                                // 有工具的轮次：所有推理（含最后一个工具调用之后的总结前思考）都收进工作过程栏
-                                if (hasAnyToolCallInTurn) {
-                                    workItems.add(item)
-                                } else {
-                                    deliverableItems.add(item)
-                                }
-                            }
-                        }
-
-                        is ChatBlock.Text -> {
-                            if (block.text.isNotBlank()) {
-                                val parseResult = ArtifactParser.parse(block.text, isStreaming = isStreaming)
-                                val artifact = parseResult.artifact
-                                if (artifact != null) {
-                                    if (parseResult.preamble.isNotBlank()) {
-                                        val preItem = ChatListItem.TextMessage(
-                                            key = "${msg.id}_${block.id}_pre",
-                                            isUser = false,
-                                            isStreaming = false,
-                                            isActiveAssistant = false,
-                                            text = parseResult.preamble,
-                                            partId = "${block.id}_pre",
-                                            conversationId = msg.conversationId,
-                                            images = if (!imagesHandled) messageImages else emptyList(),
-                                            isTurnStart = false,
-                                            messageId = msg.id,
-                                            createdAt = msg.createdAt,
-                                            assistantFooter = null,
-                                            isStepNarration = isStepNarration,
-                                        )
-                                        if (isStepNarration) workItems.add(preItem) else deliverableItems.add(preItem)
-                                        imagesHandled = true
-                                    }
-
-                                    deliverableItems.add(
-                                        ChatListItem.DocumentCard(
-                                            key = "${msg.id}_${block.id}_art_${artifact.identifier}",
-                                            artifactId = artifact.identifier,
-                                            title = artifact.title,
-                                            content = artifact.content,
-                                            lineCount = artifact.lineCount,
-                                            charCount = artifact.charCount,
-                                            isCompleted = artifact.isCompleted,
-                                            isStreaming = isStreaming && !artifact.isCompleted,
-                                            createdAt = msg.createdAt,
-                                            isTurnStart = false,
-                                        )
-                                    )
-
-                                    if (parseResult.postscript.isNotBlank()) {
-                                        val postItem = ChatListItem.TextMessage(
-                                            key = "${msg.id}_${block.id}_post",
-                                            isUser = false,
-                                            isStreaming = isStreaming,
-                                            isActiveAssistant = isActiveAssistant,
-                                            text = parseResult.postscript,
-                                            partId = "${block.id}_post",
-                                            conversationId = msg.conversationId,
-                                            images = emptyList(),
-                                            isTurnStart = false,
-                                            messageId = msg.id,
-                                            createdAt = msg.createdAt,
-                                            assistantFooter = null,
-                                            isStepNarration = isStepNarration,
-                                        )
-                                        if (isStepNarration) workItems.add(postItem) else deliverableItems.add(postItem)
-                                    }
-                                } else {
-                                    val textItem = ChatListItem.TextMessage(
-                                        key = "${msg.id}_${block.id}",
-                                        isUser = false,
-                                        isStreaming = isStreaming,
-                                        isActiveAssistant = isActiveAssistant,
-                                        text = block.text,
-                                        partId = block.id,
-                                        conversationId = msg.conversationId,
-                                        images = if (!imagesHandled) messageImages else emptyList(),
-                                        isTurnStart = false,
-                                        messageId = msg.id,
-                                        createdAt = msg.createdAt,
-                                        assistantFooter = null,
-                                        isStepNarration = isStepNarration,
-                                    )
-                                    if (isStepNarration) {
-                                        workItems.add(textItem)
-                                    } else {
-                                        deliverableItems.add(textItem)
-                                    }
-                                    imagesHandled = true
-                                }
-                            }
-                        }
-
-                        else -> {}
-                    }
-                }
-
-                if (!imagesHandled && messageImages.isNotEmpty()) {
-                    val imgItem = ChatListItem.TextMessage(
-                        key = "${msg.id}_img",
-                        isUser = false,
-                        isStreaming = isStreaming,
-                        isActiveAssistant = isActiveAssistant,
-                        text = "",
-                        partId = "img",
-                        conversationId = msg.conversationId,
-                        images = messageImages,
-                        isTurnStart = false,
-                        messageId = msg.id,
-                        createdAt = msg.createdAt,
-                        isStepNarration = isMsgStepNarration,
-                    )
-                    if (isMsgStepNarration) workItems.add(imgItem) else deliverableItems.add(imgItem)
-                }
-
-                // 就地收集属于当前 msg 的工具调用
-                val msgToolCalls = msg.blocks.filterIsInstance<ChatBlock.ToolCall>().map { toToolCallUi(it) }
-                if (msgToolCalls.isNotEmpty()) {
-                    val regular = msgToolCalls.filter { it.name !in SUBAGENT_TOOL_NAMES }
-                    val subagents = msgToolCalls.filter { it.name in SUBAGENT_TOOL_NAMES }
-
-                   if (regular.isNotEmpty()) {
-                       val hasFailed = regular.any { it.isFailed }
-                       workItems.add(
-                           ChatListItem.ToolCalls(
-                               key = "${msg.id}_toolcalls",
-                               toolCalls = regular,
-                               isStreaming = isStreaming,
-                               isTurnStart = false,
-                               toolSummary = buildToolSummary(regular),
-                               hasFailedTool = hasFailed,
-                               isRunning = isStreaming && regular.any { it.state is ToolCallState.Running },
-                           )
-                       )
-                   }
-
-                   if (subagents.isNotEmpty()) {
-                       val hasFailed = subagents.any { it.isFailed }
-                       workItems.add(
-                           ChatListItem.SubagentCalls(
-                               key = "${msg.id}_subagents",
-                               subagents = subagents,
-                               isStreaming = isStreaming,
-                               isTurnStart = false,
-                               isRunning = isStreaming && subagents.any { it.state is ToolCallState.Running },
-                               hasFailed = hasFailed,
-                           )
-                       )
-                   }
-                }
-            }
-
-            // 过程步骤与工作轨迹生命周期：
-            // - Turn 执行中（isActiveAssistant = true）：所有步骤直接按时序平铺在聊天流中，实时展示各步骤行与命令输出；
-            // - Turn 完成后（isActiveAssistant = false）：轮次内所有中间过程（思考、工具调用、过渡语）折叠进顶部的 WorkTraceBlock，外部仅留最终答复正文。
-            if (isActiveAssistant) {
-                workItems.forEachIndexed { idx, item ->
-                    val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) {
-                        when (item) {
-                            is ChatListItem.Reasoning -> item.copy(isTurnStart = true)
-                            is ChatListItem.TextMessage -> item.copy(isTurnStart = true)
-                            is ChatListItem.ToolCalls -> item.copy(isTurnStart = true)
-                            is ChatListItem.SubagentCalls -> item.copy(isTurnStart = true)
-                            else -> item
-                        }
-                    } else item
-                    result.add(itemWithTurnStart)
-                    turnHasFirstItem = true
-                }
-            } else if (workItems.isNotEmpty()) {
-                var totalToolsCount = 0
-                var hasFailed = false
-                for (it in workItems) {
-                    when (it) {
-                        is ChatListItem.ToolCalls -> {
-                            totalToolsCount += it.toolCalls.size
-                            if (it.hasFailedTool) hasFailed = true
-                        }
-                        is ChatListItem.SubagentCalls -> {
-                            totalToolsCount += it.subagents.size
-                            if (it.hasFailed) hasFailed = true
-                        }
-                        else -> {}
-                    }
-                }
-                val totalDurationMs = turnMessages.mapNotNull { it.durationMs }.sum()
-                result.add(
-                    ChatListItem.WorkTraceBlock(
-                        key = "${turnMessages.firstOrNull()?.id ?: ""}_worktrace",
-                        items = workItems,
-                        totalToolsCount = totalToolsCount,
-                        totalDurationMs = totalDurationMs,
-                        hasFailedTool = hasFailed,
-                        isTurnStart = !turnHasFirstItem,
-                    )
-                )
-                turnHasFirstItem = true
-            }
-
-            // 活跃 assistant 刚开始流式时，若尚无内容输出、无 workItems 且无 deliverableItems，放一个占位思考微条。
-            // 注意：deliverableItems 在本轮前序块遍历中已填充完毕；若已有真实 Reasoning/文本，绝不插入空占位，
-            // 否则会与真实推理同时渲染出两个"思考中..."条（流式无工具轮次的历史 bug）。
-            if (isActiveAssistant && !turnHasFirstItem && deliverableItems.isEmpty()) {
-                val firstMsg = turnMessages.firstOrNull()
-                result.add(
-                    ChatListItem.Reasoning(
-                        key = "${firstMsg?.id ?: "active"}_reasoning",
-                        text = "",
-                        isStreaming = true,
-                        isTurnStart = true,
-                        durationMs = 0L,
-                        isReasoningActive = true,
-                    )
-                )
-                turnHasFirstItem = true
-            }
-
-            // 交付内容（最终答复正文、产物卡片等，露在外面作为视觉焦点）
-            deliverableItems.forEach { item ->
-                result.add(item)
-                turnHasFirstItem = true
-            }
-
-            // 沉底汇总区：
-            val allToolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
-                .map { toToolCallUi(it) }
-
-            // 3. 计划审批卡片
-            val createPlanCall = allToolCalls.find { it.name == "create_plan" }
-            val planIdFromTool = when (val s = createPlanCall?.state) {
-                is ToolCallState.Completed -> s.input["planId"]
-                is ToolCallState.Running -> s.input["planId"]
-                else -> null
-            }
-            val matchedPlan = snapshot?.planApprovals?.find { planIdFromTool != null && it.id == planIdFromTool }
-                ?: if (turnMessages == lastAssistantTurn) snapshot?.pendingPlanApproval else null
-
-            if (matchedPlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }) {
-                result.add(
-                    ChatListItem.PlanApproval(
-                        key = "plan_${matchedPlan.id}",
-                        request = matchedPlan,
-                        isTurnStart = !turnHasFirstItem
-                    )
-                )
-                turnHasFirstItem = true
-            }
-
-            // 4. 轮次底部的诊断与状态栏（非流式结束状态输出）
-            val lastMsg = turnMessages.lastOrNull { it.role == ChatRole.Assistant }
-            if (lastMsg != null && !isStreaming) {
-                val lastMessageText = if (finalTextMsgIndex >= 0 && finalTextBlockIndex >= 0) {
-                    (turnMessages[finalTextMsgIndex].blocks.getOrNull(finalTextBlockIndex) as? ChatBlock.Text)?.text.orEmpty()
-                } else {
-                    turnMessages.flatMap { it.blocks }.filterIsInstance<ChatBlock.Text>().lastOrNull()?.text.orEmpty()
-                }
-
-                val fullTurnText = buildString {
-                    for (msg in turnMessages) {
-                        for (block in msg.blocks) {
-                            when (block) {
-                                is ChatBlock.Reasoning -> {
-                                    if (block.text.isNotBlank()) {
-                                        if (isNotEmpty()) append("\n\n")
-                                        append("> Thinking:\n").append(block.text.trim())
-                                    }
-                                }
-                                is ChatBlock.ToolCall -> {
-                                    if (isNotEmpty()) append("\n\n")
-                                    append("[Tool: ").append(block.name).append("]")
-                                }
-                                is ChatBlock.Text -> {
-                                    if (block.text.isNotBlank()) {
-                                        if (isNotEmpty()) append("\n\n")
-                                        append(block.text)
-                                    }
-                                }
-                                else -> {}
-                            }
-                        }
-                    }
-                }.ifBlank { lastMessageText }
-
-                result.add(
-                    ChatListItem.Footer(
-                        key = "${turnMessages.firstOrNull()?.id ?: ""}_footer",
-                        footer = lastMsg.toAssistantFooter(),
-                        lastMessageText = lastMessageText,
-                        fullTurnText = fullTurnText,
-                        isTurnStart = false,
-                    )
-                )
-            }
-        }
-
-        val pending = snapshot?.pendingPlanApproval
-        if (pending != null && result.none { it is ChatListItem.PlanApproval && it.request.id == pending.id }) {
-            result.add(
-                ChatListItem.PlanApproval(
-                    key = "plan_${pending.id}",
-                    request = pending,
-                    isTurnStart = true
-                )
-            )
-        }
-
-        return result
-    }
-
-    /** assistant 消息 → footer 元数据（诊断字段来自 core Message） */
-    private fun ChatMessage.toAssistantFooter(): AssistantFooterInfo {
-        val modelId = model
-        return AssistantFooterInfo(
-            modelName = modelName ?: modelId,
-            agentMode = agentMode,
-            thinkingLevel = thinkingLevel,
-            durationMs = durationMs,
-            completedAtMs = completedAt?.takeIf { it > 0 } ?: (createdAt + (durationMs ?: 0)),
-        )
-    }
-
-    /** 从工具参数中探测"核心目标"单行摘要（文件路径 / 命令等），供 ToolCallUi.target 使用。 */
-    private fun toToolCallUi(toolCall: ChatBlock.ToolCall): ToolCallUi {
-        val input = when (val s = toolCall.state) {
-            is ToolCallState.Running -> s.input
-            is ToolCallState.Completed -> s.input
-            is ToolCallState.Failed -> s.input
-            ToolCallState.Pending -> emptyMap()
-        }
-        return ToolCallUi(
-            id = toolCall.id,
-            name = toolCall.name,
-            state = toolCall.state,
-            target = probeToolTarget(toolCall.name, input),
-            isFailed = toolCall.state is ToolCallState.Failed,
-        )
-    }
-
     /**
-     * 按工具名探测目标摘要：
-     * - 文件工具（read/write/edit/list）→ 路径（会话目录内显示相对路径，目录外保留绝对路径）；
-     * - 命令工具（execute_command/bash）→ 命令原文；
-     * - apply_patch → 补丁内涉及的文件清单（Add/Update/Delete/Move 去重取前 3）；
-     * - 其余 → 回退到 path/file/command 等常见键，最后兜底第一个参数值。
+     * 展平后的聊天列表（实现已抽至 core/ui/chat/ChatItemsBuilder.kt 顶层 computeChatItems，
+     * 此处保留同名成员薄转发，供既有调用点——chatItems 派生缓存与测试——使用）。
      */
-    private fun probeToolTarget(name: String, input: Map<String, String>): String? {
-        val baseDir = snapshot?.conversation?.directory?.takeIf { it.isNotBlank() }
-        val fileOrDirKeys = listOf(
-            "path", "file", "targetFile", "filePath", "file_path",
-            "dir", "directory", "dir_path", "directory_path", "DirectoryPath", "SearchDirectory"
-        )
-        val firstFileValue = fileOrDirKeys.firstNotNullOfOrNull { input[it]?.takeIf { v -> v.isNotBlank() } }
-        val isDirTool = name.contains("list") || name.contains("dir") || name.contains("tree")
-        val isSearchTool = name.contains("search") || name.contains("grep") || name.contains("find")
-        val searchQuery = if (isSearchTool) {
-            input["query"] ?: input["pattern"] ?: input["regex"] ?: input["Query"] ?: input["Pattern"]
-        } else null
+    internal fun computeChatItems(msgs: List<ChatMessage>): List<ChatListItem> =
+        computeChatItems(msgs, isWorking = isWorking, snapshot = snapshot)
 
-        return when {
-            name in SUBAGENT_TOOL_NAMES ->
-                input["task"]?.lines()?.firstOrNull { it.isNotBlank() } ?: input["briefing"]?.lines()?.firstOrNull { it.isNotBlank() }
-            name == "apply_patch" ->
-                input["patch"]?.let { extractPatchFiles(it) }?.takeIf { it.isNotBlank() }
-            name == "execute_command" || name == "bash" ->
-                input["command"]?.takeIf { it.isNotBlank() } ?: input["cmd"]?.takeIf { it.isNotBlank() }
-            name == "ask_user" ->
-                extractAskUserSummary(input)
-            searchQuery != null ->
-                searchQuery
-            firstFileValue != null -> {
-                val display = toDisplayPath(firstFileValue, baseDir)
-                if (display == "." || display.isBlank()) "directory" else display
-            }
-            isDirTool ->
-                "directory"
-            else ->
-                input["command"]?.takeIf { it.isNotBlank() }
-                    ?: input["cmd"]?.takeIf { it.isNotBlank() }
-                    ?: input["patch"]?.let { extractPatchFiles(it) }?.takeIf { it.isNotBlank() }
-                    ?: input.values.firstOrNull { it.isNotBlank() }
-        }
-    }
+    /** 工具目标探测（实现已抽至 core/ui/chat/ToolTargetResolver.kt 顶层 probeToolTarget，此处薄转发）。 */
+    internal fun probeToolTarget(name: String, input: Map<String, String>): String? =
+        probeToolTarget(name, input, snapshot)
 
-    private fun extractAskUserSummary(input: Map<String, String>): String? {
-        input["prompt"]?.takeIf { it.isNotBlank() }?.let { return it }
-        val rawQuestions = input["questions"] ?: return null
-        val match = Regex("\"prompt\"\\s*:\\s*\"([^\"]+)\"").find(rawQuestions)
-        return match?.groupValues?.get(1) ?: rawQuestions.take(50)
-    }
-
-    /**
-     * 路径显示规则：会话所属目录内 → 相对路径；目录外 → 保留绝对路径（用户能看出 AI 动了哪个位置）。
-     */
-    private fun toDisplayPath(raw: String, baseDir: String?): String {
-        val path = raw.trim()
-        if (path.isBlank()) return path
-        val base = baseDir?.trim()?.trimEnd('/')
-        if (base != null && isAbsolutePath(path)) {
-            if (path.startsWith("$base/")) return path.removePrefix("$base/")
-            if (path == base) return path
-        }
-        return path
-    }
-
-    private fun isAbsolutePath(path: String): Boolean =
-        path.startsWith("/") || Regex("^[A-Za-z]:[/\\\\]").containsMatchIn(path)
-
-    /** 从 apply_patch 补丁文本中提取涉及的文件路径（Add/Update/Delete/Move，去重后取前 3）。 */
-    private fun extractPatchFiles(patch: String): String? {
-        if (patch.isBlank()) return null
-        val baseDir = snapshot?.conversation?.directory?.takeIf { it.isNotBlank() }
-        val paths = patch.lineSequence()
-            .mapNotNull { line ->
-                Regex("^\\*\\*\\* (?:Add File|Update File|Delete File|Move to): (.+)$")
-                    .find(line.trim())?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
-            }
-            .distinct()
-            .toList()
-        if (paths.isEmpty()) return null
-        return paths.take(3).joinToString(", ") { toDisplayPath(it, baseDir) } +
-            if (paths.size > 3) ", …" else ""
-    }
-
-    private fun buildToolSummary(toolCalls: List<ToolCallUi>): String {
-        if (toolCalls.isEmpty()) return ""
-        return toolCalls.groupingBy { it.name }.eachCount().entries.joinToString(", ") { (name, count) ->
-            if (count > 1) "$name ×$count" else name
-        }
-    }
-
-    internal fun isImageBlock(block: ChatBlock.File): Boolean {
-        val mime = block.mimeType?.lowercase()
-        if (mime?.startsWith("image/") == true) return true
-        val url = block.url.lowercase()
-        if (url.startsWith("data:image/")) return true
-        val cleanUrl = url.substringBefore('?').substringBefore('#')
-        return cleanUrl.endsWith(".png") || cleanUrl.endsWith(".jpg") ||
-            cleanUrl.endsWith(".jpeg") || cleanUrl.endsWith(".webp") ||
-            cleanUrl.endsWith(".gif") || cleanUrl.endsWith(".svg") ||
-            cleanUrl.endsWith(".bmp") || cleanUrl.endsWith(".ico")
-    }
-
-    /**
-     * 各会话的后台观察 Job（conversationId → Job）。
-     *
-     * **核心机制：会话一旦被 attach 过，就常驻一条观察流持续更新 [snapshotCache]，
-     * 切走不 cancel、切回不重建。** SSE 事件来了 → observeConversation 流 emit →
-     * applySnapshot 写入缓存 → 当前会话时同步渲染。切换会话只是把 [conversationId]
-     * 指向另一个缓存的键，UI 立即渲染最新缓存（零闪烁、不丢 streaming 增量）。
-     *
-     * 生命周期：随 viewModelScope 销毁；会话观察抛异常（如会话被删除）时移除并清缓存。
-     * 会话离开 Working（turn 结束/出错）后缓存清除（数据已完整落库，下次切回从 store 重建即可），
-     * 但观察流保留——新 turn 的事件仍持续聚合。
-     */
-    private val observeJobs = mutableMapOf<String, Job>()
+    // 会话后台观察 Job（sessionCache.observeJobs）已收敛进 [sessionCache]（SessionUiCache，见文件底部）：
+    // **核心机制：会话一旦被 attach 过，就常驻一条观察流持续更新快照缓存，
+    // 切走不 cancel、切回不重建。** SSE 事件来了 → observeConversation 流 emit →
+    // applySnapshot 写入缓存 → 当前会话时同步渲染。切换会话只是把 [conversationId]
+    // 指向另一个缓存的键，UI 立即渲染最新缓存（零闪烁、不丢 streaming 增量）。
+    // 生命周期：随 viewModelScope 销毁；会话观察抛异常（如会话被删除）时移除并清缓存。
+    // 会话离开 Working（turn 结束/出错）后缓存清除（数据已完整落库，下次切回从 store 重建即可），
+    // 但观察流保留——新 turn 的事件仍持续聚合。
     // 乐观消息对账日志去重：同一会话的 matched/unmatched 结论只打一次（状态翻转时重置）
     private val pendingOptReconciled = mutableSetOf<String>()
     private var selectionHydrated = false
@@ -1644,30 +907,28 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             snapshot = null
             isAttached = false
             pendingOptReconciled.clear()
-            error = null
-            errorDiagnostic = null
-            errorId = null
-            isErrorDetailOpen = false
+            // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted）
+            errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
             return
         }
         conversationId = id
         pendingOptReconciled.clear()
-        error = null
-        errorDiagnostic = null
-        errorId = null
-        isErrorDetailOpen = false
+        // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted，由后续 applySnapshot 覆盖）
+        errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
 
         // 切换只换渲染源：立即用该会话的缓存快照渲染（后台观察流一直在持续更新它），
         // 不再 snapshot = null 再从 store 重建，也绝不 cancel 该会话的观察 Job——
         // 这样切回正在流式的会话时 UI 零闪烁、流式增量一个不丢。
-        val cached = snapshotCache[id]
+        val cached = sessionCache.snapshotCache[id]
         if (cached != null) {
             snapshot = cached
             isAttached = true
-            error = cached.errorMessage
-            errorDiagnostic = cached.errorDiagnostic
-            errorId = cached.errorId
-            isStreamInterrupted = cached.errorIsStreamInterrupted
+            errorState = errorState.copy(
+                message = cached.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
+                diagnostic = cached.errorDiagnostic,
+                id = cached.errorId,
+                isStreamInterrupted = cached.errorIsStreamInterrupted,
+            )
             DebugLog.event("UI", "attach: rendered from cache (status=${cached.conversation.status}, messages=${cached.messages.size})")
         } else {
             // 无缓存（首次打开 / 已 Idle 清理）：异步拉一次初始快照渲染，再交给观察流持续更新
@@ -1677,7 +938,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 val snap = appState.aiCore.getSnapshot(id).getOrNull()
                 if (snap == null) {
                     DebugLog.event("UI", "attach: conversation $id not found, clearing stale selection")
-                    snapshotCache.remove(id)
+                    sessionCache.snapshotCache.remove(id)
                     if (conversationId == id) {
                         conversationId = null
                         snapshot = null
@@ -1696,12 +957,12 @@ private val SUBAGENT_EVENT_TYPES = setOf(
      * 确保该会话有一条常驻观察流（幂等：已有活跃 Job 则不动）。
      *
      * 观察流 = [AiCore.observeConversation]（从 store 构建初始快照 + 订阅该会话事件聚合）。
-     * 它持续把最新快照写入 [snapshotCache]（及当前会话的渲染状态）——即使 UI 已切到别的会话，
+     * 它持续把最新快照写入 [sessionCache.snapshotCache]（及当前会话的渲染状态）——即使 UI 已切到别的会话，
      * 这条流也不会被取消，所以该会话的流式增量（推理/正文/tool delta）始终完整、始终最新。
      */
     private fun ensureObserving(id: String) {
-        if (observeJobs[id]?.isActive == true) return
-        observeJobs[id] = viewModelScope.launch {
+        if (sessionCache.observeJobs[id]?.isActive == true) return
+        sessionCache.observeJobs[id] = viewModelScope.launch {
             try {
                 appState.aiCore.observeConversation(id).collect { snap ->
                     applySnapshot(id, snap)
@@ -1710,8 +971,8 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 throw e
             } catch (e: Exception) {
                 DebugLog.error("UI", "observe conversation $id failed: ${e.message}", e)
-                observeJobs.remove(id)
-                snapshotCache.remove(id)
+                sessionCache.observeJobs.remove(id)
+                sessionCache.snapshotCache.remove(id)
             }
         }
     }
@@ -1728,7 +989,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             )
         }
         // 乐观消息与快照对账：真实消息已落库（turn 结束/出错兜底时 core 写入）→ 移除乐观消息
-        val pendingOpt = pendingUserMessages[id]
+        val pendingOpt = sessionCache.pendingUserMessages[id]
         if (pendingOpt != null) {
             val optText = pendingOpt.blocks
                 .filterIsInstance<ChatBlock.Text>()
@@ -1745,28 +1006,30 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     pendingOptReconciled.add(id)
                     DebugLog.info("UI", "optimistic user message matched real message in snapshot, clearing optimistic message (id=${pendingOpt.id})")
                 }
-                pendingUserMessages.remove(id)
+                sessionCache.pendingUserMessages.remove(id)
                 pendingOptReconciled.remove(id)
             } else if (!pendingOptReconciled.contains(id)) {
                 pendingOptReconciled.add(id)
                 DebugLog.debug("UI", "optimistic user message NOT matched in snapshot, keeping optimistic (id=${pendingOpt.id}, optText='$optText')")
             }
         }
-        snapshotCache[id] = snap
+        sessionCache.snapshotCache[id] = snap
         if (conversationId == id) {
             snapshot = snap
             isAttached = true
-            error = snap.errorMessage
-            errorDiagnostic = snap.errorDiagnostic
-            errorId = snap.errorId
-            isStreamInterrupted = snap.errorIsStreamInterrupted
+            errorState = errorState.copy(
+                message = snap.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
+                diagnostic = snap.errorDiagnostic,
+                id = snap.errorId,
+                isStreamInterrupted = snap.errorIsStreamInterrupted,
+            )
         }
         // turn 结束（离开 Working）清除 StatusBar 计时锚点 + 快照缓存
         if (snap.conversation.status != ConversationStatus.Working) {
-            turnStartByConv.remove(id)
+            sessionCache.turnStartByConv.remove(id)
             // turn 已结束：store 已有完整数据，缓存不再需要（下次切回走 getSnapshot 即可）。
             // 观察流保留——后续新 turn 的事件仍持续聚合进缓存。
-            snapshotCache.remove(id)
+            sessionCache.snapshotCache.remove(id)
         }
         if (conversationId == id && !selectionHydrated) {
             selectionHydrated = true
@@ -1869,25 +1132,23 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         val projectId = if (convId == null) appState.selectedProjectId.value else null
         if (convId == null && projectId == null) {
             DebugLog.event("UI", "send blocked: no conversation and no project")
-            error = "请先选择项目以创建会话，或选择一个已有会话"
+            errorState = errorState.copy(message = UiMessage(Res.string.err_select_project_or_conversation))
             return
         }
         if (!appState.isReady.value) {
             DebugLog.event("UI", "send blocked: engine not ready")
-            error = "Engine 尚未就绪,请稍后"
+            errorState = errorState.copy(message = UiMessage(Res.string.err_engine_not_ready))
             return
         }
         val model = appState.selectedModel.value
         if (model == null) {
             DebugLog.event("UI", "send blocked: no model selected")
-            error = "请先在输入框选择模型"
+            errorState = errorState.copy(message = UiMessage(Res.string.err_select_model_first))
             return
         }
         if (hasImages && !guardImageSupport(model)) return
-        error = null
-        errorDiagnostic = null
-        errorId = null
-        isErrorDetailOpen = false
+        // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted，由 applySnapshot 覆盖）
+        errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
 
         // 组装最终提示词：用户主指令在前，粘贴大文本在后；Core 的 TurnExecutor 会追加 metaNote 保证 metaNote 恒在最底部
         val finalPrompt = PromptComposer.compose(trimmed, pendingPastedTexts)
@@ -1923,7 +1184,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             isStreaming = false,
             error = null
         )
-        pendingUserMessages[pendingKey] = optMsg
+        sessionCache.pendingUserMessages[pendingKey] = optMsg
         clearPendingAttachments()
         DebugLog.info("UI", "set optimistic user message: key=$pendingKey, id=${optMsg.id}, text='$finalPrompt', images=${imageAttachments.size}")
 
@@ -1963,14 +1224,17 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 if (created.isFailure) {
                     val ex = created.exceptionOrNull()
                     DebugLog.error("UI", "auto create conversation failed: ${ex?.message}", ex)
-                    error = ex?.message ?: "创建会话失败"
-                    pendingUserMessages.remove(pendingKey)
+                    errorState = errorState.copy(
+                        message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                            ?: UiMessage(Res.string.err_create_conversation_failed)
+                    )
+                    sessionCache.pendingUserMessages.remove(pendingKey)
                     return@launch
                 }
                 val conv = created.getOrThrow()
                 // 乐观消息归属从 pending_xxx re-key 到真实会话 id
-                pendingUserMessages.remove(pendingKey)
-                pendingUserMessages[conv.id] = optMsg.copy(conversationId = conv.id)
+                sessionCache.pendingUserMessages.remove(pendingKey)
+                sessionCache.pendingUserMessages[conv.id] = optMsg.copy(conversationId = conv.id)
                 appState.selectProject(pid)
                 appState.selectConversation(conv.id)
                 conv.id
@@ -1983,16 +1247,18 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             }
 
             // StatusBar 计时锚点：从"发送请求时刻"起算（切会话回来不重置）
-            turnStartByConv[targetConvId] = xyz.mederi.currentTimeMillis()
+            sessionCache.turnStartByConv[targetConvId] = xyz.mederi.currentTimeMillis()
 
             val r = appState.aiCore.sendMessage(targetConvId, input)
             DebugLog.event("UI", "sendMessage result: isSuccess=${r.isSuccess}")
             if (r.isFailure) {
                 val ex = r.exceptionOrNull()
                 DebugLog.error("UI", "sendMessage failed: ${ex?.let { it::class.simpleName }}: ${ex?.message}", ex)
-                val msg = ex?.message ?: "发送失败，服务器无响应或用量受限"
-                error = msg
-                pendingUserMessages.remove(targetConvId)
+                errorState = errorState.copy(
+                    message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.err_send_failed)
+                )
+                sessionCache.pendingUserMessages.remove(targetConvId)
             }
         }
     }
@@ -2029,19 +1295,31 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     fun refreshFiles() {
     }
 
-    fun openDiff(messageId: String? = null) {
+    fun openDiff(messageId: String? = null, initialFilePath: String? = null) {
         val id = conversationId ?: return
         viewModelScope.launch {
             val r = appState.aiCore.getFileDiffs(id, messageId)
             if (r.isSuccess) {
-                diffItems = r.getOrDefault(emptyList())
-                showDiffPanel = true
+                val items = r.getOrDefault(emptyList())
+                diffState = DiffUiState(
+                    items = items,
+                    selectedPath = initialFilePath ?: items.firstOrNull()?.filePath,
+                    showPanel = true,
+                )
+                activeDockPanel = RightDockPanel.DIFF
             }
         }
     }
 
+    fun selectDiffFile(path: String) {
+        diffState = diffState.copy(selectedPath = path)
+    }
+
     fun closeDiff() {
-        showDiffPanel = false
+        diffState = diffState.copy(showPanel = false)
+        if (activeDockPanel == RightDockPanel.DIFF) {
+            activeDockPanel = null
+        }
     }
 
     fun toggleReasoning(blockId: String) {
@@ -2051,17 +1329,19 @@ private val SUBAGENT_EVENT_TYPES = setOf(
 
     fun requestCompaction() {
         val id = conversationId ?: return
+        // StatusBar 计时锚点：压缩也是运转过程（core 发 SESSION_UPDATED → Working），
+        // 但不经 sendMessage，需手动记录起始时刻——否则重试/等待时 StatusBar 的
+        // 已耗时恒为 0（看起来"一直是 0，不动"，分不清是否卡住）。
+        // 压缩结束 status 离开 Working 时由 onSnapshot 自动清除锚点。
+        sessionCache.turnStartByConv[id] = xyz.mederi.currentTimeMillis()
         viewModelScope.launch {
             appState.aiCore.compressHistory(id)
         }
     }
 
     fun clearError() {
-        error = null
-        errorDiagnostic = null
-        errorId = null
-        isStreamInterrupted = false
-        isErrorDetailOpen = false
+        // 错误族全量重置（含断流标记与详情弹窗）
+        errorState = ErrorState()
     }
 
     /** 关闭"图片已剔除"轻提示（右上角 × 按钮入口）。 */
@@ -2116,7 +1396,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             if (rollbackResult.isFailure) {
                 val ex = rollbackResult.exceptionOrNull()
                 DebugLog.error("UI", "rollbackMessage rollbackToMessage failed: ${ex?.message}", ex)
-                error = "回退失败: ${ex?.message ?: "无法回滚消息"}"
+                errorState = errorState.copy(message = UiMessage(Res.string.err_rollback_failed, listOf(ex?.message ?: "?")))
                 return@launch
             }
 
@@ -2137,58 +1417,40 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     }
 
     override fun onCleared() {
-        observeJobs.values.forEach { it.cancel() }
-        observeJobs.clear()
+        sessionCache.observeJobs.values.forEach { it.cancel() }
+        sessionCache.observeJobs.clear()
         super.onCleared()
     }
 }
 
-/** 回退消息后放回输入框的内容：主指令 + 大段文本附件 + 图片附件（原样恢复，非脱壳简化） */
-data class RestoredInput(
-    val instruction: String,
-    val pastedTexts: List<PastedTextAttachment>,
-    val images: List<ImageAttachment>,
-) {
-    val isEmpty: Boolean get() = instruction.isBlank() && pastedTexts.isEmpty() && images.isEmpty()
+/**
+ * 会话级缓存族（内部收敛 holder：VM 顶层 4 个散落 map 归入单一实例，字段不对外暴露）。
+ *
+ * 各成员的语义与原 VM 顶层散落声明完全一致（本次改动只改内部存储结构，不改行为）：
+ * - [pendingUserMessages]：乐观用户消息（按会话归档）。core 在 turn 结束时才把用户消息落库
+ *   （ChatMemory store / 失败兜底），turn 进行中快照里没有它——乐观消息是唯一的显示来源。
+ *   因此切换会话**不能清除**：切走再切回，消息仍在；等 observe 到的快照里出现匹配的真实
+ *   消息后才移除。key = conversationId（新会话创建成功后从 pending_xxx re-key 到真实 id）。
+ * - [turnStartByConv]：StatusBar 计时锚点：每次发送（send）记录"请求发出时刻"（epoch ms），
+ *   按会话归档。计时 = now - turnStartAt（每秒重算），切换会话回来不重置；
+ *   turn 结束（快照 status 离开 Working）时清除。
+ * - [snapshotCache]：按会话缓存的最后一次快照（conversationId → ConversationSnapshot），
+ *   解决会话切换闪烁问题（Bug 1 根因，详见 [WorkspaceViewModel] 顶部说明）。
+ * - [observeJobs]：各会话的后台观察 Job（conversationId → Job）。会话一旦被 attach 过就
+ *   常驻一条观察流持续更新 [snapshotCache]，切走不 cancel、切回不重建；随 viewModelScope
+ *   销毁，观察流抛异常时移除并清缓存。
+ */
+private class SessionUiCache {
+    /** 乐观用户消息（按会话归档） */
+    val pendingUserMessages = mutableStateMapOf<String, ChatMessage>()
+
+    /** StatusBar 计时锚点：conversationId → 发送请求时刻（epoch ms） */
+    val turnStartByConv = mutableMapOf<String, Long>()
+
+    /** 按会话缓存的快照（conversationId → 最后一次的 ConversationSnapshot） */
+    val snapshotCache = mutableStateMapOf<String, ConversationSnapshot>()
+
+    /** 各会话的后台观察 Job（conversationId → Job） */
+    val observeJobs = mutableMapOf<String, Job>()
 }
 
-/**
- * 从一条已发送的用户消息反解出可放回输入框的内容（纯函数，单测直接覆盖）：
- * - 主指令 = `PromptComposer.parse` 剥离大段文本 XML 标签后的主指令部分
- * - `pastedTexts` = parse 拆出的大段文本附件，index 重新编号、id 改为当前时间戳前缀
- * - `images` = 消息中 `data:` URL 的 `ChatBlock.File` → base64 解码还原 `ImageAttachment`
- *   （回退是"恢复已发内容"，不做模型图片能力门禁；真发送时 send() 的 guardImageSupport 会拦）
- */
-fun restoreInputFromMessage(targetMsg: ChatMessage?, fallbackText: String): RestoredInput {
-    val fullText = targetMsg?.blocks
-        ?.filterIsInstance<ChatBlock.Text>()
-        ?.joinToString("") { it.text }
-        ?.ifBlank { fallbackText } ?: fallbackText
-    val parsed = PromptComposer.parse(fullText)
-    val images = targetMsg?.blocks
-        ?.filterIsInstance<ChatBlock.File>()
-        ?.filter { it.url.startsWith("data:") && it.url.contains("base64,") }
-        ?.mapIndexedNotNull { i, block ->
-            val bytes = block.url.substringAfter("base64,", "").decodeBase64()?.toByteArray()
-            if (bytes != null) {
-                ImageAttachment(
-                    id = "img_${targetMsg.id}_$i",
-                    name = block.name.ifBlank { "image_${i + 1}" },
-                    mimeType = block.mimeType ?: "image/png",
-                    bytes = bytes,
-                    base64DataUrl = block.url,
-                )
-            } else null
-        } ?: emptyList()
-    val pastedTexts = parsed.pastedTexts.mapIndexed { i, item ->
-        item.copy(
-            id = "pasted_${targetMsg?.id ?: "rollback"}_${i + 1}",
-            index = i + 1
-        )
-    }
-    return RestoredInput(
-        instruction = parsed.instruction,
-        pastedTexts = pastedTexts,
-        images = images
-    )
-}

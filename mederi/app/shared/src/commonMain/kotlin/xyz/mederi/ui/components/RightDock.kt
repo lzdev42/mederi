@@ -40,7 +40,6 @@ import mederi.app.shared.generated.resources.rightdock_diff
 import mederi.app.shared.generated.resources.rightdock_overview
 import mederi.app.shared.generated.resources.rightdock_plan
 import mederi.app.shared.generated.resources.rightdock_settings
-import mederi.app.shared.generated.resources.rightdock_sub_agents
 import mederi.app.shared.generated.resources.rightdock_terminal
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.ui.DebugLog
@@ -67,7 +66,6 @@ fun RightDock(
         DockItemData(RightDockPanel.OVERVIEW, FeatherIcons.Activity),
         DockItemData(RightDockPanel.DIFF, FeatherIcons.GitCommit),
         DockItemData(RightDockPanel.PLAN, FeatherIcons.FileText),
-        DockItemData(RightDockPanel.SUB_AGENTS, FeatherIcons.Users),
         DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.File),
         DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal),
         DockItemData(RightDockPanel.BROWSER, FeatherIcons.Globe)
@@ -89,7 +87,6 @@ fun RightDock(
                 RightDockPanel.OVERVIEW -> stringResource(Res.string.rightdock_overview)
                 RightDockPanel.DIFF -> stringResource(Res.string.rightdock_diff)
                 RightDockPanel.PLAN -> stringResource(Res.string.rightdock_plan)
-                RightDockPanel.SUB_AGENTS -> stringResource(Res.string.rightdock_sub_agents)
                 RightDockPanel.ARTIFACTS -> stringResource(Res.string.rightdock_artifacts)
                 RightDockPanel.TERMINAL -> stringResource(Res.string.rightdock_terminal)
                 RightDockPanel.BROWSER -> stringResource(Res.string.rightdock_browser)

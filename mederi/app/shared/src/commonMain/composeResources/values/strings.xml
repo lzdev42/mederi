@@ -31,6 +31,8 @@
     <string name="tool_action_mcp_many">调用 %1$d 个 MCP 工具</string>
     <string name="tool_action_ask_one">发起提问</string>
     <string name="tool_action_ask_many">发起 %1$d 次提问</string>
+    <string name="tool_action_todo_one">更新待办清单</string>
+    <string name="tool_action_todo_many">更新 %1$d 次待办清单</string>
     <string name="tool_action_subagent_one">派发子任务</string>
     <string name="tool_action_subagent_many">派发 %1$d 个子任务</string>
     <string name="tool_action_other_one">调用工具</string>
@@ -58,6 +60,7 @@
     <string name="tool_action_mcp_target">调用 MCP 工具 %1$s</string>
     <string name="tool_action_mcp_running_target">正在调用 MCP 工具 %1$s…</string>
     <string name="tool_action_ask_running">等待用户回答…</string>
+    <string name="tool_action_todo_running">正在更新待办清单…</string>
     <string name="tool_action_other_target">调用 %1$s</string>
     <string name="tool_action_other_running">正在调用工具…</string>
     <string name="tool_action_other_running_target">正在调用 %1$s…</string>
@@ -204,6 +207,9 @@
     <string name="settings_tunnel_not_installed">未检测到 cloudflared，请自行安装</string>
     <string name="settings_tunnel_failed">隧道启动失败：%1$s</string>
     <string name="settings_retry">重试</string>
+    <!-- 遥控/隧道启动失败原因（AppState.kt，UiMessage） -->
+    <string name="remote_unsupported">当前端不支持遥控</string>
+    <string name="tunnel_not_installed_msg">请自行安装 cloudflared</string>
     <!-- 供应商管理面板（ProviderSettingsPanel.kt） -->
     <string name="settings_panel_providers_count">已配置 (%1$d)</string>
     <string name="settings_panel_back_cd">返回</string>
@@ -520,4 +526,46 @@
     <string name="term_title">终端</string>
     <string name="term_unavailable">本地终端不可用</string>
     <string name="term_unavailable_hint">当前端为遥控端，远程终端将在后续版本接入</string>
+    <!-- 工作区错误消息（WorkspaceViewModel，UiMessage） -->
+    <string name="err_select_project_or_conversation">请先选择项目以创建会话，或选择一个已有会话</string>
+    <string name="err_engine_not_ready">Engine 尚未就绪,请稍后</string>
+    <string name="err_select_model_first">请先在输入框选择模型</string>
+    <string name="err_create_conversation_failed">创建会话失败</string>
+    <string name="err_send_failed">发送失败，服务器无响应或用量受限</string>
+    <string name="err_rollback_failed">回退失败: %1$s</string>
+    <string name="err_generic">%1$s</string>
+    <!-- 终端（TerminalViewModel） -->
+    <string name="term_local_terminal">本地终端</string>
+    <string name="term_start_failed">终端启动失败</string>
+    <string name="term_session_title">%1$s</string>
+    <string name="term_tab_title">终端</string>
+    <!-- MCP / Skill Store 兜底错误 -->
+    <string name="mcp_refresh_failed">刷新 MCP 服务列表失败</string>
+    <string name="mcp_toggle_failed">切换 MCP 状态失败</string>
+    <string name="mcp_install_failed">安装 MCP 服务失败</string>
+    <string name="mcp_update_failed">更新 MCP 服务失败</string>
+    <string name="mcp_delete_failed">删除 MCP 服务失败</string>
+    <string name="mcp_validate_failed">验证 MCP 服务失败</string>
+    <string name="skill_refresh_failed">刷新 Skill 列表失败</string>
+    <string name="skill_set_dir_failed">设置目录失败</string>
+    <string name="skill_uninstall_failed">卸载 Skill 失败</string>
+    <!-- 变更摘要卡片（ChatCards.kt） -->
+    <string name="diff_files_changed">%1$d 个文件变更 +%2$d -%3$d</string>
+    <string name="diff_review">Review</string>
+    <!-- 右侧扩展面板（RightExtensionPanel.kt） -->
+    <string name="rp_todo_list_title">TODO-LIST</string>
+    <string name="rp_tokens_used">%1$d Tokens</string>
+    <!-- 系统信息栏（SystemInfoBar.kt） -->
+    <string name="sys_cpu">CPU</string>
+    <!-- 供应商设置面板（ProviderSettingsPanel.kt） -->
+    <string name="provider_api_key">API Key</string>
+    <string name="provider_base_url">Base URL</string>
+    <string name="provider_base_url_label">BASE URL</string>
+    <string name="provider_api_key_label">API KEY</string>
+    <string name="provider_reasoning_label">REASONING</string>
+    <string name="provider_api_key_placeholder">sk-...</string>
+    <string name="provider_base_url_placeholder">https://...</string>
+    <!-- 模型能力小标签（ChatInputCard.kt ModelCapabilityTag） -->
+    <string name="cap_thinking">Thinking</string>
+    <string name="cap_image">Image</string>
 </resources>

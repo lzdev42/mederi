@@ -32,8 +32,11 @@ import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Zap
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.ui.ChatListItem
+import xyz.mederi.core.ui.RawMessagesViewModel
+import xyz.mederi.core.ui.TerminalViewModel
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.LocalAppState
+import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.feathericons.Sidebar
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.input_image_attachment
@@ -49,7 +52,6 @@ import mederi.app.shared.generated.resources.ws_new_conversation
 import mederi.app.shared.generated.resources.ws_open_extension
 import mederi.app.shared.generated.resources.ws_open_menu
 import mederi.app.shared.generated.resources.ws_open_sidebar
-import mederi.app.shared.generated.resources.ws_summary_title
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
@@ -71,6 +73,7 @@ import xyz.mederi.ui.components.UserPastedTextCard
 import xyz.mederi.ui.components.UserMessageFooter
 import xyz.mederi.ui.components.AssistantMessageFooter
 import xyz.mederi.ui.components.DocumentArtifactCard
+import xyz.mederi.ui.components.TurnDiffSummaryCard
 import xyz.mederi.ui.components.WorkTraceCard
 import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
@@ -93,6 +96,9 @@ fun Workspace(
 ) {
     val colors = LocalMederiColors.current
     val appState = LocalAppState.current
+    // 子面板 VM 在 Route 层统一创建（ViewModelStore 管理生命周期），组件只接收实例渲染
+    val rawMessagesViewModel: RawMessagesViewModel = viewModel { RawMessagesViewModel(appState) }
+    val terminalViewModel: TerminalViewModel = viewModel { TerminalViewModel(appState) }
     val isRightPanelOpen = viewModel.isRightPanelOpen
 
     Column(
@@ -152,31 +158,6 @@ fun Workspace(
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(6.dp))
-                            } else {
-                                // 桌面端：当左侧边栏关闭时，在此呈现左侧边栏开关键
-                                AnimatedVisibility(
-                                    visible = !isLeftSidebarOpen,
-                                    enter = fadeIn() + expandHorizontally(),
-                                    exit = fadeOut() + shrinkHorizontally()
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .clickable { onToggleLeftSidebar() },
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = FeatherIcons.Sidebar,
-                                                contentDescription = stringResource(Res.string.ws_open_sidebar),
-                                                tint = colors.textSecondary,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                    }
-                                }
                             }
 
                             // 顶部面包屑：项目名 / 对话名（派生 StateFlow，UI collectAsState 订阅）
@@ -323,7 +304,7 @@ fun Workspace(
                                     ChatInputCard(
                                         viewModel = viewModel,
                                         modifier = Modifier
-                                            .widthIn(max = if (isCompact) Dp.Unspecified else 620.dp)
+                                            .widthIn(max = if (isCompact) Dp.Unspecified else 700.dp)
                                             .fillMaxWidth(),
                                         onOpenProjectPicker = onOpenProjectPicker
                                     )
@@ -365,6 +346,8 @@ fun Workspace(
                         isOpen = isRightPanelOpen,
                         onClose = { viewModel.closeDockPanel() },
                         viewModel = viewModel,
+                        rawMessagesViewModel = rawMessagesViewModel,
+                        terminalViewModel = terminalViewModel,
                         isCompact = false,
                         maxPanelWidth = maxPanelWidth
                     )
@@ -404,6 +387,8 @@ fun Workspace(
                         isOpen = isRightPanelOpen,
                         onClose = { viewModel.closeDockPanel() },
                         viewModel = viewModel,
+                        rawMessagesViewModel = rawMessagesViewModel,
+                        terminalViewModel = terminalViewModel,
                         isCompact = true,
                         modifier = Modifier
                             .fillMaxHeight()
@@ -423,7 +408,7 @@ fun Workspace(
         // 详细错误报告弹窗
         if (viewModel.isErrorDetailOpen) {
             ErrorDetailDialog(
-                errorSummary = viewModel.error.orEmpty(),
+                errorSummary = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }.orEmpty(),
                 errorDiagnostic = viewModel.errorDiagnostic.orEmpty(),
                 onDismiss = viewModel::dismissErrorDetail
             )
@@ -552,39 +537,6 @@ private fun MessageList(
                     .padding(top = if (index > 0 && item.isTurnStart) ChatLayout.turnSpacing else 0.dp)
             ) {
                 when (item) {
-                    is ChatListItem.SummaryCard -> {
-                        // 压缩总结卡片：居中、弱化样式，标记 AI 视图的分界点
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .widthIn(max = contentMaxWidth * 0.85f)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(colors.surfaceCard)
-                                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(Res.string.ws_summary_title),
-                                    color = colors.textMuted,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                SelectionContainer {
-                                    Text(
-                                        text = item.text,
-                                        color = colors.textSecondary,
-                                        fontSize = 12.5.sp,
-                                        lineHeight = 19.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     is ChatListItem.PlanApproval -> {
                         Box(
                             modifier = Modifier
@@ -685,7 +637,7 @@ private fun MessageList(
                                         if (stepItem.text.isNotBlank()) {
                                             Text(
                                                 text = stepItem.text.trim(),
-                                                color = if (colors.isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                                color = colors.textSecondary,
                                                 fontSize = 13.sp,
                                                 lineHeight = 19.sp,
                                                 modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
@@ -705,8 +657,8 @@ private fun MessageList(
                                     // 以下分支为不可达的穷尽性占位。
                                     is ChatListItem.DocumentCard -> {}
                                     is ChatListItem.Footer -> {}
-                                    is ChatListItem.SummaryCard -> {}
                                     is ChatListItem.PlanApproval -> {}
+                                    is ChatListItem.TurnDiffCard -> {}
                                     is ChatListItem.WorkTraceBlock -> {}
                                 }
                             }
@@ -757,6 +709,24 @@ private fun MessageList(
                                 .padding(
                                     top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
                                     bottom = ChatLayout.thoughtBottomSpacing
+                                )
+                        )
+                    }
+
+                    is ChatListItem.TurnDiffCard -> {
+                        TurnDiffSummaryCard(
+                            summary = item.summary,
+                            onReviewClick = {
+                                viewModel.openDiff(item.messageId, null)
+                            },
+                            onFileClick = { filePath ->
+                                viewModel.openDiff(item.messageId, filePath)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 4.dp,
+                                    bottom = 4.dp
                                 )
                         )
                     }

@@ -132,7 +132,9 @@ data class Message(
     val reasoningLevel: String? = null,
     val agentMode: String? = null,
     val projectId: String? = null,
-    val durationMs: Long? = null
+    val durationMs: Long? = null,
+    /** 本轮 Turn 产生的文件变更摘要（仅本轮最后一条 Assistant 消息持有） */
+    val turnDiffSummary: xyz.mederi.tools.diff.TurnDiffSummary? = null
 )
 
 /**

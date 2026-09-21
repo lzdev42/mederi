@@ -73,6 +73,7 @@ kotlin {
             implementation(libs.ktor.clientContentNegotiation)
             implementation(libs.ktor.clientSerializationJson)
             implementation(libs.kotlinx.serializationJson)
+            implementation(libs.kotlinx.datetime)
             implementation(libs.composeIcons.feather)
             implementation(libs.coil.compose)
             // FilePreferencesStore：commonMain 统一文件偏好存储（okio = KMP 文件系统抽象）

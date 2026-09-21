@@ -232,7 +232,21 @@ object MederiModelMapper {
             modelName = message.modelName,
             agentMode = message.agentMode,
             thinkingLevel = message.reasoningLevel,
-            durationMs = message.durationMs
+            durationMs = message.durationMs,
+            turnDiffSummary = message.turnDiffSummary?.let { summary ->
+                xyz.mederi.core.contract.models.TurnDiffSummaryUi(
+                    files = summary.files.map { f ->
+                        xyz.mederi.core.contract.models.FileDiffSummaryUi(
+                            path = f.path,
+                            status = f.status.name,
+                            additions = f.additions,
+                            deletions = f.deletions
+                        )
+                    },
+                    totalAdditions = summary.totalAdditions,
+                    totalDeletions = summary.totalDeletions
+                )
+            }
         )
     }
 

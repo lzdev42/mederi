@@ -56,6 +56,29 @@ data class ChatMessage(
     val thinkingLevel: String? = null,
     /** LLM 请求耗时毫秒（assistant 消息）——footer 展示 */
     val durationMs: Long? = null,
+    /** 本轮 Turn 产生的文件变更摘要（assistant 消息底部展示） */
+    val turnDiffSummary: TurnDiffSummaryUi? = null,
+)
+
+/**
+ * 单个文件的变更统计摘要（UI 契约模型）。
+ */
+@Serializable
+data class FileDiffSummaryUi(
+    val path: String,
+    val status: String,
+    val additions: Int,
+    val deletions: Int
+)
+
+/**
+ * 单次 Turn 的全部文件变更聚合摘要（UI 契约模型）。
+ */
+@Serializable
+data class TurnDiffSummaryUi(
+    val files: List<FileDiffSummaryUi> = emptyList(),
+    val totalAdditions: Int = 0,
+    val totalDeletions: Int = 0
 )
 
 /**

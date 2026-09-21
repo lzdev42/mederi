@@ -39,7 +39,7 @@ object ToolFactory {
         // "new_context",
         "ask_user"
     )
-    val PLAN_TOOL_NAMES = listOf("create_plan", "generate_spec", "write_log", "converge_plan")
+    val PLAN_TOOL_NAMES = listOf("create_plan", "generate_spec", "write_log", "converge_plan", "update_verification")
     // subagent 单一入口：封装原 spawn_agent/spawn_researcher/agent_status/stop_agent/wait_agent（action 分流）
     val SUBAGENT_TOOL_NAMES = listOf("subagent")
     // browser 单一入口：封装原 run_browser_task/browser_task_status/stop_browser_task/browser_info（action 分流）

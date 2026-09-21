@@ -26,6 +26,7 @@ import xyz.mederi.plan.PlannedChange
 import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.plan.SubtaskStatus
+import xyz.mederi.plan.VerificationChange
 import xyz.mederi.plan.toTodoProjection
 import java.time.Instant
 import java.time.ZoneOffset
@@ -605,7 +606,9 @@ class PlanTools(
         @LLMDescription("Optional: working directory for the verification command (relative to project root).")
         val cwd: String? = null,
         @LLMDescription("Optional: timeout seconds. Default 30.")
-        val timeoutSeconds: Int? = null
+        val timeoutSeconds: Int? = null,
+        @LLMDescription("Required: why the verification command is being changed (e.g. 'old command counted comments as false-positives'). Human-readable reason for audit trail.")
+        val reason: String = "",
     )
 
     inner class UpdateVerificationTool : SimpleTool<UpdateVerificationArgs>(
@@ -619,26 +622,47 @@ class PlanTools(
             if (args.command.isBlank()) return "Error: command must not be blank."
             val hasCJK = args.command.any { it.code in 0x4E00..0x9FFF }
             if (hasCJK) return "Error: command 必须是单条可执行命令（ASCII），不能是散文描述。"
+            if (args.reason.isBlank()) return "Error: reason must not be blank — the audit trail requires a human-readable explanation of why the command is being changed."
+            var oldCommand = ""
             val updated = planStore.updatePlan(args.planId) { p ->
                 val st = p.subtasks.getOrNull(args.subtaskIndex) ?: return@updatePlan null
                 if (st.status == SubtaskStatus.COMPLETED) return@updatePlan null
+                oldCommand = st.verification.command
+                val change = VerificationChange(
+                    oldCommand = oldCommand,
+                    newCommand = args.command,
+                    reason = args.reason,
+                    timestamp = java.time.Instant.now().toString()
+                )
                 p.copy(subtasks = p.subtasks.map { s ->
                     if (s.index == args.subtaskIndex) s.copy(
                         verification = VerificationSpec(
                             command = args.command,
                             cwd = args.cwd,
                             timeoutSeconds = args.timeoutSeconds,
-                        )
+                        ),
+                        verificationChanges = s.verificationChanges + change
                     ) else s
                 })
             } ?: return "Error: Plan not found, or subtask ${args.subtaskIndex} missing/COMPLETED (cannot amend)."
             eventBus.emit(MederiEvent(
                 type = EventType.PLAN_PROGRESS,
                 sessionId = sessionId,
-                payload = mapOf("planId" to args.planId, "action" to "verification-updated", "subtaskIndex" to args.subtaskIndex.toString()),
+                payload = mapOf(
+                    "planId" to args.planId,
+                    "action" to "verification-updated",
+                    "subtaskIndex" to args.subtaskIndex.toString(),
+                    "oldCommand" to oldCommand,
+                    "newCommand" to args.command,
+                    "reason" to args.reason
+                ),
                 timestamp = java.time.Instant.now().toString()
             ))
-            return "Updated verification for subtask ${args.subtaskIndex}."
+            return "Updated verification for subtask ${args.subtaskIndex}.\n" +
+                "Old command: $oldCommand\n" +
+                "New command: ${args.command}\n" +
+                "Reason: ${args.reason}\n" +
+                "Change #${updated.subtasks[args.subtaskIndex].verificationChanges.size} recorded in plan audit trail."
         }
     }
 

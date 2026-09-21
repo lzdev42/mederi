@@ -44,3 +44,25 @@ data class TurnDiff(
     val unifiedDiff: String,
     val createdAt: String
 )
+
+/**
+ * 单个文件的变更统计摘要。
+ */
+@Serializable
+data class FileDiffSummary(
+    val path: String,
+    val status: FileChangeStatus,
+    val additions: Int,
+    val deletions: Int
+)
+
+/**
+ * 单次 Turn 的全部文件变更聚合摘要。
+ */
+@Serializable
+data class TurnDiffSummary(
+    val files: List<FileDiffSummary> = emptyList(),
+    val totalAdditions: Int = 0,
+    val totalDeletions: Int = 0
+)
+

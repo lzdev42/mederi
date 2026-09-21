@@ -27,8 +27,10 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.delay
-import xyz.mederi.AppInfo
-import xyz.mederi.getPlatform
+import xyz.mederi.core.ui.buildBugReportMarkdown
+import xyz.mederi.core.ui.cleanErrorSummary
+import xyz.mederi.core.ui.extractErrorCategory
+import xyz.mederi.core.ui.extractErrorSuggestion
 import xyz.mederi.theme.LocalMederiColors
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
@@ -77,36 +79,15 @@ fun ErrorDetailDialog(
         }
     }
 
-    // 从 errorSummary 中提取分类 Badge，例如 "[API] KoogHttpClientException..."
-    val categoryBadge = remember(errorSummary) {
-        if (errorSummary.startsWith("[") && errorSummary.contains("]")) {
-            errorSummary.substringAfter("[").substringBefore("]")
-        } else {
-            null
-        }
-    }
-    val cleanSummary = remember(errorSummary, categoryBadge) {
-        if (categoryBadge != null) {
-            errorSummary.substringAfter("]").trim()
-        } else {
-            errorSummary
-        }
-    }
+    // 从 errorSummary 中提取分类 Badge，例如 "[API] KoogHttpClientException..."（解析下沉 core/ui/ErrorDetailFormatter.kt）
+    val categoryBadge = remember(errorSummary) { extractErrorCategory(errorSummary) }
+    val cleanSummary = remember(errorSummary, categoryBadge) { cleanErrorSummary(errorSummary, categoryBadge) }
     // copyHint 文案在组合上下文取值（Button onClick 不是 @Composable）
     val copyDoneHint = stringResource(Res.string.error_report_copy_done)
     val copiedGithubHint = stringResource(Res.string.error_report_copied_github)
 
     // 从诊断报告中提取 Suggestion 恢复建议（如有）——兼容 `Suggestion:`（异常路径）与 `建议：`（collectWarning 断流路径）
-    val suggestion = remember(errorDiagnostic) {
-        val line = errorDiagnostic.lineSequence().find { it.startsWith("Suggestion:") || it.startsWith("建议：") }
-        line?.let {
-            when {
-                it.startsWith("Suggestion:") -> it.removePrefix("Suggestion:").trim()
-                it.startsWith("建议：") -> it.removePrefix("建议：").trim()
-                else -> null
-            }
-        }
-    }
+    val suggestion = remember(errorDiagnostic) { extractErrorSuggestion(errorDiagnostic) }
 
     // 格式化为 Markdown Bug Report 模板（用于剪贴板复制和 GitHub Issue 内容填充）
     val envTitle = stringResource(Res.string.error_report_env_title)
@@ -117,28 +98,20 @@ fun ErrorDetailDialog(
     val logsTitle = stringResource(Res.string.error_report_logs_title)
     val detailsSummary = stringResource(Res.string.error_report_details_summary)
     val reportFooter = stringResource(Res.string.error_report_footer)
+    // 模板拼装下沉 core/ui/ErrorDetailFormatter.kt（内部取 AppInfo.VERSION / getPlatform()）
     val bugReportMarkdown = remember(errorSummary, errorDiagnostic, envTitle, appVersionLabel, platformLabel, summaryTitle, noSummaryText, logsTitle, detailsSummary, reportFooter) {
-        buildString {
-            appendLine("### $envTitle")
-            appendLine("- **$appVersionLabel**: ${AppInfo.VERSION}")
-            appendLine("- **$platformLabel**: ${getPlatform().name}")
-            appendLine()
-            appendLine("### $summaryTitle")
-            appendLine("```")
-            appendLine(errorSummary.ifBlank { noSummaryText })
-            appendLine("```")
-            appendLine("### $logsTitle")
-            appendLine("<details open>")
-            appendLine("<summary>$detailsSummary</summary>")
-            appendLine()
-            appendLine("```")
-            appendLine(errorDiagnostic.ifBlank { errorSummary })
-            appendLine("```")
-            appendLine("</details>")
-            appendLine()
-            appendLine("---")
-            appendLine("*$reportFooter*")
-        }
+        buildBugReportMarkdown(
+            envTitle = envTitle,
+            appVersionLabel = appVersionLabel,
+            platformLabel = platformLabel,
+            summaryTitle = summaryTitle,
+            noSummaryText = noSummaryText,
+            logsTitle = logsTitle,
+            detailsSummary = detailsSummary,
+            reportFooter = reportFooter,
+            errorSummary = errorSummary,
+            errorDiagnostic = errorDiagnostic,
+        )
     }
 
     Dialog(onDismissRequest = onDismiss) {

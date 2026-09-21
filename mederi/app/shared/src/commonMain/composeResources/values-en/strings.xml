@@ -23,6 +23,8 @@
     <string name="tool_action_mcp_many">Called %1$d MCP tools</string>
     <string name="tool_action_ask_one">Asked a question</string>
     <string name="tool_action_ask_many">Asked %1$d questions</string>
+    <string name="tool_action_todo_one">Update todo list</string>
+    <string name="tool_action_todo_many">Update todo list %1$d times</string>
     <string name="tool_action_subagent_one">Ran subagent</string>
     <string name="tool_action_subagent_many">Ran %1$d subagents</string>
     <string name="tool_action_other_one">Called a tool</string>
@@ -49,6 +51,7 @@
     <string name="tool_action_mcp_target">Called MCP tool %1$s</string>
     <string name="tool_action_mcp_running_target">Calling MCP tool %1$s…</string>
     <string name="tool_action_ask_running">Waiting for answer…</string>
+    <string name="tool_action_todo_running">Updating todo list…</string>
     <string name="tool_action_other_target">Called %1$s</string>
     <string name="tool_action_other_running">Running tools…</string>
     <string name="tool_action_other_running_target">Running %1$s…</string>
@@ -195,6 +198,9 @@
     <string name="settings_tunnel_not_installed">cloudflared not detected; please install it yourself</string>
     <string name="settings_tunnel_failed">Tunnel failed to start: %1$s</string>
     <string name="settings_retry">Retry</string>
+    <!-- Remote/tunnel failure reasons (AppState.kt, UiMessage) -->
+    <string name="remote_unsupported">Remote control is not supported on this platform</string>
+    <string name="tunnel_not_installed_msg">Please install cloudflared</string>
     <!-- Provider settings panel (ProviderSettingsPanel.kt) -->
     <string name="settings_panel_providers_count">Configured (%1$d)</string>
     <string name="settings_panel_back_cd">Back</string>
@@ -511,5 +517,47 @@
     <string name="term_title">Terminal</string>
     <string name="term_unavailable">Local terminal unavailable</string>
     <string name="term_unavailable_hint">This frontend is remote; remote terminal support is coming in a later version</string>
+    <!-- Workspace error messages (WorkspaceViewModel, UiMessage) -->
+    <string name="err_select_project_or_conversation">Select a project or conversation first</string>
+    <string name="err_engine_not_ready">Engine is not ready yet</string>
+    <string name="err_select_model_first">Select a model in the input first</string>
+    <string name="err_create_conversation_failed">Failed to create conversation</string>
+    <string name="err_send_failed">Send failed — no response or rate limited</string>
+    <string name="err_rollback_failed">Rollback failed: %1$s</string>
+    <string name="err_generic">%1$s</string>
+    <!-- Terminal (TerminalViewModel) -->
+    <string name="term_local_terminal">Local terminal</string>
+    <string name="term_start_failed">Terminal failed to start</string>
+    <string name="term_session_title">%1$s</string>
+    <string name="term_tab_title">Terminal</string>
+    <!-- MCP / Skill store fallback errors -->
+    <string name="mcp_refresh_failed">Failed to refresh MCP servers</string>
+    <string name="mcp_toggle_failed">Failed to toggle MCP server</string>
+    <string name="mcp_install_failed">Failed to install MCP server</string>
+    <string name="mcp_update_failed">Failed to update MCP server</string>
+    <string name="mcp_delete_failed">Failed to delete MCP server</string>
+    <string name="mcp_validate_failed">Failed to validate MCP server</string>
+    <string name="skill_refresh_failed">Failed to refresh skills</string>
+    <string name="skill_set_dir_failed">Failed to set directory</string>
+    <string name="skill_uninstall_failed">Failed to uninstall skill</string>
+    <!-- Diff summary card (ChatCards.kt) -->
+    <string name="diff_files_changed">%1$d file(s) changed +%2$d -%3$d</string>
+    <string name="diff_review">Review</string>
+    <!-- Right extension panel (RightExtensionPanel.kt) -->
+    <string name="rp_todo_list_title">TODO-LIST</string>
+    <string name="rp_tokens_used">%1$d Tokens</string>
+    <!-- System info bar (SystemInfoBar.kt) -->
+    <string name="sys_cpu">CPU</string>
+    <!-- Provider settings panel (ProviderSettingsPanel.kt) -->
+    <string name="provider_api_key">API Key</string>
+    <string name="provider_base_url">Base URL</string>
+    <string name="provider_base_url_label">BASE URL</string>
+    <string name="provider_api_key_label">API KEY</string>
+    <string name="provider_reasoning_label">REASONING</string>
+    <string name="provider_api_key_placeholder">sk-...</string>
+    <string name="provider_base_url_placeholder">https://...</string>
+    <!-- Model capability tags (ChatInputCard.kt ModelCapabilityTag) -->
+    <string name="cap_thinking">Thinking</string>
+    <string name="cap_image">Image</string>
 </resources>
 

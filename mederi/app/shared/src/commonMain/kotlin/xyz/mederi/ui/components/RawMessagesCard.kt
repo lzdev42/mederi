@@ -19,169 +19,21 @@ import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Copy
-import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.*
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.core.ui.RawMessagesViewModel
 import xyz.mederi.core.ui.WorkspaceViewModel
-import xyz.mederi.core.ui.appstate.LocalAppState
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
+import xyz.mederi.ui.components.atoms.CardHeader
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.copy_done
 import mederi.app.shared.generated.resources.rawmsg_count
 import mederi.app.shared.generated.resources.rawmsg_title
 import org.jetbrains.compose.resources.stringResource
-
-private val jsonPretty = Json {
-    prettyPrint = true
-    prettyPrintIndent = "  "
-    ignoreUnknownKeys = true
-    isLenient = true
-}
-
-/**
- * 格式化并美化 JSON 字符串。
- */
-private fun prettyPrintJson(raw: String): String {
-    return try {
-        val element = Json.parseToJsonElement(raw)
-        jsonPretty.encodeToString(JsonElement.serializer(), element)
-    } catch (_: Throwable) {
-        raw
-    }
-}
-
-/**
- * 纯 Kotlin 格式化数字加千分位逗号（跨平台无依赖）。
- */
-private fun formatNumber(n: Int): String {
-    val s = n.toString()
-    val len = s.length
-    if (len <= 3) return s
-    val sb = StringBuilder()
-    val rem = len % 3
-    if (rem > 0) {
-        sb.append(s.substring(0, rem))
-        if (rem < len) sb.append(',')
-    }
-    for (i in rem until len step 3) {
-        sb.append(s.substring(i, i + 3))
-        if (i + 3 < len) sb.append(',')
-    }
-    return sb.toString()
-}
-
-/**
- * 格式化 ISO-8601 时间戳为 "M/d HH:mm"。
- */
-private fun formatMessageTimestamp(rawIso: String): String {
-    if (rawIso.isBlank()) return ""
-    return try {
-        val tIndex = rawIso.indexOf('T').let { if (it == -1) rawIso.indexOf(' ') else it }
-        if (tIndex >= 10) {
-            val datePart = rawIso.substring(0, tIndex)
-            val timePart = rawIso.substring(tIndex + 1)
-            val dateTokens = datePart.split("-")
-            val month = dateTokens.getOrNull(1)?.toIntOrNull()?.toString() ?: ""
-            val day = dateTokens.getOrNull(2)?.toIntOrNull()?.toString() ?: ""
-            val timeTokens = timePart.split(":")
-            val hour = timeTokens.getOrNull(0) ?: ""
-            val min = timeTokens.getOrNull(1) ?: ""
-            if (month.isNotEmpty() && day.isNotEmpty() && hour.isNotEmpty() && min.isNotEmpty()) {
-                "$month/$day $hour:$min"
-            } else {
-                rawIso.take(16)
-            }
-        } else {
-            rawIso.take(16)
-        }
-    } catch (_: Throwable) {
-        rawIso.take(16)
-    }
-}
-
-/**
- * 提取摘要标签（如 "text"、"bash"、"compose-hot-reload_*"、"reasoning + text + bash" 或 "user: ..."）。
- */
-private fun extractSummaryLabel(item: RawMessageDto, jsonObj: JsonObject?): String {
-    if (jsonObj == null) {
-        return item.role.lowercase()
-    }
-    val role = jsonObj["role"]?.jsonPrimitive?.contentOrNull ?: item.role
-    val parts = jsonObj["parts"]?.jsonArray
-
-    if (role.equals("user", ignoreCase = true)) {
-        val textPart = parts?.mapNotNull { it.jsonObject }?.firstOrNull {
-            it["text"] != null || it["type"]?.jsonPrimitive?.contentOrNull?.contains("Text", ignoreCase = true) == true
-        }
-        val text = textPart?.get("text")?.jsonPrimitive?.contentOrNull
-        if (!text.isNullOrBlank()) {
-            val clean = text.substringBefore("<<<NOT_FOR_UI>>>").trim()
-            val firstLine = clean.lines().firstOrNull()?.trim().orEmpty()
-            return "user: " + (if (firstLine.length > 50) firstLine.take(50) + "..." else firstLine)
-        }
-        val toolResultPart = parts?.mapNotNull { it.jsonObject }?.firstOrNull {
-            it["tool"] != null && it["output"] != null
-        }
-        if (toolResultPart != null) {
-            val toolName = toolResultPart["tool"]?.jsonPrimitive?.contentOrNull ?: "tool"
-            return "$toolName result"
-        }
-        return "user"
-    }
-
-    if (parts != null && parts.isNotEmpty()) {
-        val partLabels = mutableListOf<String>()
-        for (partElement in parts) {
-            val partObj = partElement.jsonObject
-            val tool = partObj["tool"]?.jsonPrimitive?.contentOrNull
-            if (!tool.isNullOrBlank()) {
-                partLabels.add(tool)
-            } else if (partObj["content"] != null || partObj["summary"] != null ||
-                partObj["type"]?.jsonPrimitive?.contentOrNull?.contains("Reasoning", ignoreCase = true) == true
-            ) {
-                partLabels.add("reasoning")
-            } else if (partObj["text"] != null ||
-                partObj["type"]?.jsonPrimitive?.contentOrNull?.contains("Text", ignoreCase = true) == true
-            ) {
-                partLabels.add("text")
-            }
-        }
-        if (partLabels.isNotEmpty()) {
-            val distinctLabels = mutableListOf<String>()
-            for (lbl in partLabels) {
-                if (distinctLabels.isEmpty() || distinctLabels.last() != lbl) {
-                    distinctLabels.add(lbl)
-                }
-            }
-            return distinctLabels.joinToString(" + ")
-        }
-    }
-
-    return role.lowercase()
-}
-
-/**
- * 提取 Token 消耗（input / output）。
- */
-private fun extractTokens(jsonObj: JsonObject?): String? {
-    if (jsonObj == null) return null
-    val input = jsonObj["inputTokens"]?.jsonPrimitive?.intOrNull
-        ?: jsonObj["tokens"]?.jsonObject?.get("input")?.jsonPrimitive?.intOrNull
-    val output = jsonObj["outputTokens"]?.jsonPrimitive?.intOrNull
-        ?: jsonObj["tokens"]?.jsonObject?.get("output")?.jsonPrimitive?.intOrNull
-
-    if (input != null || output != null) {
-        val inStr = formatNumber(input ?: 0)
-        val outStr = formatNumber(output ?: 0)
-        return "$inStr / $outStr"
-    }
-    return null
-}
 
 /**
  * 概览下方的原始消息卡片。
@@ -192,12 +44,11 @@ private fun extractTokens(jsonObj: JsonObject?): String? {
 @Composable
 fun RawMessagesCard(
     viewModel: WorkspaceViewModel,
+    rawVm: RawMessagesViewModel,
     colors: MederiColors,
     modifier: Modifier = Modifier
 ) {
-    val appState = viewModel.appStateRef
-    // 数据拉取与事件订阅在 RawMessagesViewModel（经 ViewModelStore 管理），卡片只渲染
-    val rawVm: RawMessagesViewModel = viewModel { RawMessagesViewModel(appState) }
+    // 数据拉取与事件订阅在 RawMessagesViewModel（Route 层创建，ViewModelStore 管理生命周期），卡片只渲染
     val convId = viewModel.conversationId
 
     LaunchedEffect(convId) {
@@ -218,26 +69,17 @@ fun RawMessagesCard(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // 卡片标题
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(Res.string.rawmsg_title),
-                color = colors.textMuted,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.5.sp
-            )
-            if (rawMessages.isNotEmpty()) {
+        CardHeader(
+            icon = null,
+            title = stringResource(Res.string.rawmsg_title),
+            count = {
                 Text(
                     text = stringResource(Res.string.rawmsg_count, rawMessages.size),
                     color = colors.textMuted,
                     fontSize = 10.sp
                 )
             }
-        }
+        )
 
         if (isLoading && rawMessages.isEmpty()) {
             Box(
@@ -258,6 +100,7 @@ fun RawMessagesCard(
                 for (item in displayList) {
                     val isExpanded = item.seq in expandedSeqs
                     RawMessageItemRow(
+                        rawVm = rawVm,
                         item = item,
                         isExpanded = isExpanded,
                         onToggleExpand = {
@@ -277,6 +120,7 @@ fun RawMessagesCard(
 
 @Composable
 private fun RawMessageItemRow(
+    rawVm: RawMessagesViewModel,
     item: RawMessageDto,
     isExpanded: Boolean,
     onToggleExpand: () -> Unit,
@@ -285,9 +129,9 @@ private fun RawMessageItemRow(
     val jsonObj = remember(item.payload) {
         runCatching { Json.parseToJsonElement(item.payload).jsonObject }.getOrNull()
     }
-    val label = remember(item, jsonObj) { extractSummaryLabel(item, jsonObj) }
-    val tokensText = remember(jsonObj) { extractTokens(jsonObj) }
-    val timeText = remember(item.createdAt) { formatMessageTimestamp(item.createdAt) }
+    val label = remember(item, jsonObj) { rawVm.extractSummaryLabel(item, jsonObj) }
+    val tokensText = remember(jsonObj) { rawVm.extractTokens(jsonObj) }
+    val timeText = remember(item.createdAt) { rawVm.formatMessageTimestamp(item.createdAt) }
 
     Column(
         modifier = Modifier
@@ -350,7 +194,7 @@ private fun RawMessageItemRow(
             )
 
             val prettyJson = remember(item.payload) {
-                prettyPrintJson(item.payload)
+                rawVm.prettyPrintJson(item.payload)
             }
             val markdownContent = remember(prettyJson) {
                 "```json\n$prettyJson\n```"

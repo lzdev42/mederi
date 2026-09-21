@@ -207,7 +207,7 @@ sequenceDiagram
     else stop_agent / abort 级联收割
         SM->>EB: SUBAGENT_STOPPED(agentId)(NonCancellable emit)
     end
-    Note over M: 父代理 wait_agent(agentId) 拿汇报全文<br/>(tool result 落库; UI 经 SubagentReportMarkdown 转折叠卡片)
+    Note over M: 父代理 subagent(WAIT, agentId) 拿汇报全文<br/>(tool result 落库; UI 经 SubagentReportMarkdown 转折叠卡片)
 ```
 
 **abort 级联收割**：用户点"停止"（abort/abortAndJoin）→ cancel 父 turn job → `stopAllForSession(parentSessionId)` 杀本会话全部 RUNNING 子代理——子代理挂全局 scope 不随父 turn 取消而亡，不收割即孤儿（旧模型继续写文件，与"继续"后重 spawn 的新代理并发写同一批 targetFiles）。被杀子代理发 `SUBAGENT_STOPPED`，plan 子任务保持 IN_PROGRESS（"继续"后重 spawn 是干净路径）。

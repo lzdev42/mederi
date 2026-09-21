@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.dto.CreateProjectInput
 import xyz.mederi.core.contract.models.Project
 import xyz.mederi.core.ui.appstate.AppState
+import xyz.mederi.theme.AppLanguage
+import xyz.mederi.theme.AppThemeMode
 
 data class SidebarUiState(
     val expandedProjectIds: Set<String> = emptySet(),
@@ -33,6 +35,20 @@ class SidebarViewModel(
         appState.projects.map { projects ->
             projects.sortedByDescending { it.createdAt }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 主题模式窄状态（转发 AppState 全局真理源，组件不直操全局单例） */
+    val theme: StateFlow<AppThemeMode> = appState.theme
+
+    /** 语言窄状态（转发 AppState 全局真理源，组件不直操全局单例） */
+    val language: StateFlow<AppLanguage> = appState.language
+
+    fun setTheme(mode: AppThemeMode) {
+        appState.setTheme(mode)
+    }
+
+    fun setLanguage(lang: AppLanguage) {
+        appState.setLanguage(lang)
+    }
 
     /** 确保会话所属的项目在侧边栏展开（覆盖程序化选择：自动创建会话、子代理跳转等） */
     fun ensureConversationVisible(conversationId: String) {

@@ -14,6 +14,7 @@ import ai.koog.prompt.dsl.prompt
 import ai.koog.prompt.executor.model.PromptExecutor
 import ai.koog.prompt.executor.model.PromptExecutorBuilder
 import ai.koog.prompt.streaming.StreamFrame
+import ai.koog.serialization.kotlinx.toKotlinxJsonElement
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.debug.ErrorCollector
@@ -56,6 +58,9 @@ import xyz.mederi.provider.infrastructure.koog.KoogClientFactory
 import xyz.mederi.provider.infrastructure.koog.KoogModelBuilder
 import xyz.mederi.provider.infrastructure.koog.KoogParamsBuilder
 import xyz.mederi.store.DiffStore
+import xyz.mederi.tools.diff.FileDiffSummary
+import xyz.mederi.tools.diff.TurnDiffSummary
+import xyz.mederi.tools.diff.countChanges
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
 import xyz.mederi.skills.SkillManager
@@ -766,6 +771,8 @@ class TurnExecutor(
                 apiKeyId = apiKeyId
             )
 
+            val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics)
+
             val agent = buildTurnAgent(
                 sessionId = sessionId,
                 provider = provider,
@@ -778,6 +785,7 @@ class TurnExecutor(
                 toolTimings = toolTimings,
                 frameChannel = frameChannel,
                 streamWarning = streamWarning,
+                incrementalPersister = incrementalPersister,
                 clientRef = clientRef,
                 diagnostics = diagnostics
             )
@@ -799,35 +807,70 @@ class TurnExecutor(
                 emit(sessionId, EventType.SESSION_UPDATED)
             }
 
-            // 先通知 UI 完成，再做后续清理（diff 追踪等）
-            // 这样按钮立即从"停止"变回"发送"，不需要等 diff/history I/O
+            // 计算本轮 diff 追踪与变更摘要（严格针对本轮 Turn）
+            diffTracker.captureSnapshot()
+            DebugLog.event("TurnExec", "diffTracker snapshot captured")
+            val lastMsgId = incrementalPersister.lastAssistantMessageId.get()
+                ?: historyStore.load(sessionId).lastOrNull { it.role == MessageRole.ASSISTANT }?.id
+            val turnDiff = diffTracker.buildDiff(lastMsgId, Instant.now().toString())
+            diffStore?.save(turnDiff)
+            DebugLog.event("TurnExec", "diffStore saved with messageId=$lastMsgId, changes=${turnDiff.changes.size}")
+
+            val turnDiffSummary: TurnDiffSummary? = if (turnDiff.changes.isNotEmpty()) {
+                val fileSummaries = turnDiff.changes.map { change ->
+                    val (add, del) = countChanges(change.before, change.after)
+                    FileDiffSummary(
+                        path = change.path,
+                        status = change.status,
+                        additions = add,
+                        deletions = del
+                    )
+                }
+                TurnDiffSummary(
+                    files = fileSummaries,
+                    totalAdditions = fileSummaries.sumOf { it.additions },
+                    totalDeletions = fileSummaries.sumOf { it.deletions }
+                )
+            } else null
+
+            if (turnDiffSummary != null && lastMsgId != null) {
+                runCatching {
+                    val history = historyStore.load(sessionId)
+                    val updated = history.map { msg ->
+                        if (msg.id == lastMsgId) msg.copy(turnDiffSummary = turnDiffSummary) else msg
+                    }
+                    historyStore.replace(sessionId, updated)
+                    DebugLog.event("TurnExec", "updated last assistant message with turnDiffSummary: ${turnDiffSummary.files.size} files")
+                }.onFailure { e ->
+                    DebugLog.error("TurnExec", "failed to update last assistant message with turnDiffSummary: ${e.message}", e)
+                }
+            }
+
             sessionStore.update(sessionId, SessionStatus.IDLE)
             DebugLog.event("TurnExec", "runTurn success, session status = IDLE (streamWarning=${streamWarning.get() != null}, record=${streamWarningRecord.get()?.id})")
-            // 流式期间有传输异常（静默断流/消费错误）→ 随完成事件带给 UI：
-            // 内容不回滚（半截文本已落库，用户能看到已生成部分），只提示不完整。
-            // 有结构化警告记录时合并其 payload（error/errorId/fullDiagnostic）→ ErrorBoard 展示 + 可展开详细报告；
-            // 只留文本时退化为 warning key（兼容旧消费方）。
+
             val warning = streamWarning.get()
             val warningRecord = streamWarningRecord.get()
-            val payload = when {
-                warningRecord != null -> {
-                    val record = warningRecord as xyz.mederi.debug.ErrorRecord
-                    record.toPayload() + mapOf("warning" to (warning ?: ""))
-                }
-                warning != null -> mapOf("warning" to warning as String)
-                else -> null
+            val payload = mutableMapOf<String, String>()
+            if (warningRecord != null) {
+                val record = warningRecord as xyz.mederi.debug.ErrorRecord
+                payload.putAll(record.toPayload())
+                payload["warning"] = warning ?: ""
+            } else if (warning != null) {
+                payload["warning"] = warning
             }
+            if (turnDiffSummary != null) {
+                payload["turnDiffSummary"] = Json.Default.encodeToString(TurnDiffSummary.serializer(), turnDiffSummary)
+                if (lastMsgId != null) {
+                    payload["diffMessageId"] = lastMsgId
+                }
+            }
+
             emit(
                 sessionId,
                 EventType.MESSAGE_COMPLETED,
-                payload = payload ?: emptyMap()
+                payload = payload
             )
-
-            // 后续清理：diff 追踪 + 保存（不影响 UI 响应）
-            diffTracker.captureSnapshot()
-            DebugLog.event("TurnExec", "diffTracker snapshot captured")
-            diffStore?.save(diffTracker.buildDiff(null, Instant.now().toString()))
-            DebugLog.event("TurnExec", "diffStore saved")
 
         } catch (e: kotlinx.coroutines.CancellationException) {
             DebugLog.event("TurnExec", "runTurn cancelled: ${e.message}")
@@ -1070,16 +1113,13 @@ class TurnExecutor(
         toolTimings: TurnToolTimings,
         frameChannel: Channel<StreamFrame>,
         streamWarning: AtomicReference<String?>,
+        incrementalPersister: TurnIncrementalPersister,
         clientRef: AtomicReference<ai.koog.prompt.executor.clients.LLMClient?> = AtomicReference(null),
         diagnostics: MessageDiagnostics = MessageDiagnostics()
     ): AIAgent<String, String> {
         val client = retryWrapped(KoogClientFactory.create(provider, apiKey), sessionId)
         clientRef.set(client)
         DebugLog.data("TurnExec", "client", client::class.simpleName)
-        // 增量持久化器：LLM 响应/tool results 到达即落库，turn 中途崩溃不丢历史
-        // 带 diagnostics：增量落库即打模型/模式/推理档/耗时元数据——否则 reconcile 时
-        // assistant 消息被"已存在"识别、诊断字段永不补上，UI footer 只剩完成时间
-        val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics)
 
         val executor: PromptExecutor = PromptExecutorBuilder()
             .addClient(client)
@@ -1184,7 +1224,10 @@ class TurnExecutor(
                         emit(sessionId, EventType.TOOL_CALLED, payload = mapOf(
                             "tool" to eventContext.toolName,
                             "toolCallId" to (eventContext.toolCallId ?: ""),
-                            "args" to eventContext.toolArgs.toString()
+                            // 必须走标准 JSON 序列化：Koog JSONObject.toString() 是手拼的
+                            // （字符串值原样包引号、不转义内部引号/反斜杠），命令里带 " 或 \ 会产出
+                            // 非法 JSON，导致 UI 端 ToolArgParser 解析失败、工具目标显示丢失。
+                            "args" to Json.Default.encodeToString(eventContext.toolArgs.toKotlinxJsonElement())
                         ))
                     }
                 }

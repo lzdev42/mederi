@@ -1,5 +1,6 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +27,9 @@ import xyz.mederi.core.contract.models.McpServerStatus
 import xyz.mederi.core.ui.WorkspaceViewModel
 import xyz.mederi.core.ui.appstate.McpStore
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.PanelCard
+import xyz.mederi.ui.components.atoms.PanelEmptyState
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.cancel
 import mederi.app.shared.generated.resources.mcp_add
@@ -59,6 +63,7 @@ fun McpManagementCard(
 ) {
     var isAddDialogOpen by remember { mutableStateOf(false) }
     var editServerName by remember { mutableStateOf<String?>(null) }
+    var isExpanded by remember { mutableStateOf(false) }
 
     val mcpServers by mcpStore.mcpServers.collectAsState()
     val isRefreshing by mcpStore.isRefreshing.collectAsState()
@@ -71,116 +76,106 @@ fun McpManagementCard(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
+    PanelCard(modifier = modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // 卡片 Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { isExpanded = !isExpanded }
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Cpu,
-                    contentDescription = null,
-                    tint = colors.accentPrimary,
-                    modifier = Modifier.size(13.dp)
-                )
-                Text(
-                    text = stringResource(Res.string.mcp_title),
-                    color = colors.textMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
-                )
-                Text(
-                    text = "$enabledCount/${mcpServers.size}",
-                    color = colors.accentPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 刷新按钮
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { mcpStore.refresh() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.RefreshCw,
-                        contentDescription = stringResource(Res.string.mcp_refresh),
-                        tint = if (isRefreshing) colors.accentPrimary else colors.textMuted,
-                        modifier = Modifier.size(12.dp)
+            CardHeader(
+                icon = FeatherIcons.Cpu,
+                title = stringResource(Res.string.mcp_title),
+                count = {
+                    Text(
+                        text = "$enabledCount/${mcpServers.size}",
+                        color = colors.accentPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
                     )
+                },
+                actions = {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 刷新按钮
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { mcpStore.refresh() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.RefreshCw,
+                                contentDescription = stringResource(Res.string.mcp_refresh),
+                                tint = if (isRefreshing) colors.accentPrimary else colors.textMuted,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+
+                        // 添加按钮
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { isAddDialogOpen = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = FeatherIcons.Plus,
+                                contentDescription = stringResource(Res.string.mcp_add),
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+
+                        // 折叠/展开箭头
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                                contentDescription = null,
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
                 }
+            )
+        }
 
-                // 添加按钮
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { isAddDialogOpen = true },
-                    contentAlignment = Alignment.Center
+        // 列表区（支持平滑折叠）
+        AnimatedVisibility(visible = isExpanded) {
+            if (mcpServers.isEmpty()) {
+                PanelEmptyState(
+                    icon = FeatherIcons.Cpu,
+                    title = stringResource(Res.string.mcp_empty),
+                    hint = stringResource(Res.string.mcp_empty_hint)
+                )
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    Icon(
-                        imageVector = FeatherIcons.Plus,
-                        contentDescription = stringResource(Res.string.mcp_add),
-                        tint = colors.textSecondary,
-                        modifier = Modifier.size(13.dp)
-                    )
+                    mcpServers.forEach { server ->
+                        McpServerRow(
+                            server = server,
+                            mcpStore = mcpStore,
+                            colors = colors,
+                            onEdit = { editServerName = server.name }
+                        )
+                    }
                 }
             }
         }
-
-        // 列表区
-        if (mcpServers.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = stringResource(Res.string.mcp_empty),
-                    color = colors.textSecondary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = stringResource(Res.string.mcp_empty_hint),
-                    color = colors.textMuted,
-                    fontSize = 10.sp
-                )
-            }
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                mcpServers.forEach { server ->
-                    McpServerRow(
-                        server = server,
-                        mcpStore = mcpStore,
-                        colors = colors,
-                        onEdit = { editServerName = server.name }
-                    )
-                }
-            }
         }
     }
 
