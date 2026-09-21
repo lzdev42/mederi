@@ -28,7 +28,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │   │   │   ├── core/contract/           ← AiCore 接口 + models/ dto/ + SnapshotReducer + preferences/
 │   │   │   ├── core/bridge/             ← ServerAiCore（REST/SSE 遥控端实现）+ BuiltinAgents
 │   │   │   ├── core/mock/               ← MockAiCore（UI 开发/预览）
-│   │   │   ├── core/ui/                 ← AppState + 4 个 ViewModel（commonMain）
+│   │   │   ├── ui/                 ← AppState + 4 个 ViewModel（commonMain）
 │   │   │   ├── ui/                      ← Compose UI（MainScreen/Workspace/Sidebar/components/settings）
 │   │   │   ├── App.kt MederiApp.kt      ← 全平台唯一 App 入口组合链
 │   │   │   └── theme/ util/             ← 主题；平台工具 expect/actual

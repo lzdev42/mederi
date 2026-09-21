@@ -114,7 +114,8 @@ object MyersDiffAlgorithm {
 
         var foundD = -1
         for (d in 0..max) {
-            trace.add(v.clone())
+            // KMP 兼容：IntArray.clone() 仅 JVM 可用（wasmJs 无此方法），用 copyOf()
+            trace.add(v.copyOf())
             var k = -d
             while (k <= d) {
                 val kIdx = k + max

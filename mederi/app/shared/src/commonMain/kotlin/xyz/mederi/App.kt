@@ -5,7 +5,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import xyz.mederi.core.i18n.AppEnvironment
 import xyz.mederi.core.i18n.customAppLocale
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.AppTheme
 import xyz.mederi.ui.MainScreen
 

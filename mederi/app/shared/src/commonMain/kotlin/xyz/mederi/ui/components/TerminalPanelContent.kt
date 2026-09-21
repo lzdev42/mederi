@@ -34,10 +34,10 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.X
-import xyz.mederi.core.ui.TerminalViewModel
-import xyz.mederi.core.ui.WorkspaceViewModel
-import xyz.mederi.core.ui.terminalCwdOf
-import xyz.mederi.core.ui.terminalTabTitle
+import xyz.mederi.ui.TerminalViewModel
+import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.terminalCwdOf
+import xyz.mederi.ui.terminalTabTitle
 import xyz.mederi.theme.MederiColors
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.term_all_closed

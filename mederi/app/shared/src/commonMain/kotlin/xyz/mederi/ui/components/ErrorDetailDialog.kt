@@ -27,10 +27,10 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.delay
-import xyz.mederi.core.ui.buildBugReportMarkdown
-import xyz.mederi.core.ui.cleanErrorSummary
-import xyz.mederi.core.ui.extractErrorCategory
-import xyz.mederi.core.ui.extractErrorSuggestion
+import xyz.mederi.ui.buildBugReportMarkdown
+import xyz.mederi.ui.cleanErrorSummary
+import xyz.mederi.ui.extractErrorCategory
+import xyz.mederi.ui.extractErrorSuggestion
 import xyz.mederi.theme.LocalMederiColors
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close

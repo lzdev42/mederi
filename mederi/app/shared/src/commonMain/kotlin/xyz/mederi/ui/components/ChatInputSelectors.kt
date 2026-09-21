@@ -53,8 +53,8 @@ import mederi.app.shared.generated.resources.input_select_project
 import mederi.app.shared.generated.resources.input_selected
 import mederi.app.shared.generated.resources.input_thinking_label
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.WorkspaceViewModel
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.util.formatContextWindow
 

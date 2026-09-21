@@ -15,8 +15,8 @@ import xyz.mederi.core.contract.models.ProviderType
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.ReasoningConfigInput
-import xyz.mederi.core.ui.UiMessage
-import xyz.mederi.core.ui.appstate.AppState
+import xyz.mederi.ui.UiMessage
+import xyz.mederi.ui.appstate.AppState
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.auto_setup_done
 import mederi.app.shared.generated.resources.auto_setup_failed

@@ -27,8 +27,8 @@ import mederi.app.shared.generated.resources.worktrace_has_failure
 import mederi.app.shared.generated.resources.worktrace_steps_count
 import mederi.app.shared.generated.resources.worktrace_summary_title
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.DebugLog
-import xyz.mederi.core.ui.ChatListItem
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.ui.ChatListItem
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent

@@ -31,11 +31,11 @@ import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Zap
 import xyz.mederi.core.contract.models.*
-import xyz.mederi.core.ui.ChatListItem
-import xyz.mederi.core.ui.RawMessagesViewModel
-import xyz.mederi.core.ui.TerminalViewModel
-import xyz.mederi.core.ui.WorkspaceViewModel
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.ChatListItem
+import xyz.mederi.ui.RawMessagesViewModel
+import xyz.mederi.ui.TerminalViewModel
+import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.appstate.LocalAppState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.feathericons.Sidebar
 import mederi.app.shared.generated.resources.Res

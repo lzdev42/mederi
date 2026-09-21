@@ -22,8 +22,8 @@ import mederi.app.shared.generated.resources.rightdock_overview
 import mederi.app.shared.generated.resources.rightdock_plan
 import mederi.app.shared.generated.resources.rightdock_terminal
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.RightDockPanel
-import xyz.mederi.core.ui.WorkspaceViewModel
+import xyz.mederi.ui.RightDockPanel
+import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.MederiColors
 
 /**

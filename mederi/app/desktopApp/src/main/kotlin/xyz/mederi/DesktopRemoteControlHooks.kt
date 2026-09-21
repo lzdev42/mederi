@@ -3,10 +3,10 @@ package xyz.mederi
 import com.pty4j.PtyProcess
 import com.pty4j.PtyProcessBuilder
 import xyz.mederi.core.bridge.MederiAiCore
-import xyz.mederi.core.remote.RemoteServer
-import xyz.mederi.core.ui.appstate.RemoteControlHooks
-import xyz.mederi.core.ui.appstate.RemoteStartResult
-import xyz.mederi.core.ui.appstate.TunnelStartResult
+import xyz.mederi.server.RemoteServer
+import xyz.mederi.ui.appstate.RemoteControlHooks
+import xyz.mederi.ui.appstate.RemoteStartResult
+import xyz.mederi.ui.appstate.TunnelStartResult
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface

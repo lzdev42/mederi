@@ -49,9 +49,9 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.AppInfo
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.Project
-import xyz.mederi.core.ui.DebugLog
-import xyz.mederi.core.ui.SidebarViewModel
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.ui.SidebarViewModel
+import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.AppLanguage
 import xyz.mederi.ui.components.ConversationStatusDot
 import xyz.mederi.ui.components.atoms.ConfirmDialog

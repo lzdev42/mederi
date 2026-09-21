@@ -41,8 +41,8 @@ import mederi.app.shared.generated.resources.status_slow_response
 import mederi.app.shared.generated.resources.status_thinking
 import mederi.app.shared.generated.resources.status_waiting_answer
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.TurnStatus
-import xyz.mederi.core.ui.parseRetryHint
+import xyz.mederi.ui.TurnStatus
+import xyz.mederi.ui.parseRetryHint
 import xyz.mederi.theme.LocalMederiColors
 import kotlin.time.Duration.Companion.milliseconds
 

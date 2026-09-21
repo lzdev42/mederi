@@ -56,7 +56,7 @@ import mederi.app.shared.generated.resources.browser_reload
 import mederi.app.shared.generated.resources.browser_stop
 import mederi.app.shared.generated.resources.browser_url_placeholder
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.browser.UiBrowserHost
+import xyz.mederi.ui.browser.UiBrowserHost
 import xyz.mederi.theme.MederiColors
 import java.io.File
 

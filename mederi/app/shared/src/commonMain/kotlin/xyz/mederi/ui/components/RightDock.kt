@@ -42,8 +42,8 @@ import mederi.app.shared.generated.resources.rightdock_plan
 import mederi.app.shared.generated.resources.rightdock_settings
 import mederi.app.shared.generated.resources.rightdock_terminal
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.DebugLog
-import xyz.mederi.core.ui.RightDockPanel
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.ui.RightDockPanel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.ChatLayout

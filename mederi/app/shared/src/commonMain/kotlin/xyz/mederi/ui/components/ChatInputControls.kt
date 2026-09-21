@@ -31,7 +31,7 @@ import mederi.app.shared.generated.resources.input_send
 import mederi.app.shared.generated.resources.input_stop
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.*
-import xyz.mederi.core.ui.WorkspaceViewModel
+import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
 
 /** 自动审批开关与说明气泡。选中态订阅 AppState 派生流（唯一真理源）。 */

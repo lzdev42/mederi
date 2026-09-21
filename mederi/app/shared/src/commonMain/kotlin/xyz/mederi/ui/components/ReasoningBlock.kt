@@ -30,7 +30,7 @@ import mederi.app.shared.generated.resources.worktrace_collapse
 import mederi.app.shared.generated.resources.worktrace_expand
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.MarkdownView
-import xyz.mederi.core.ui.DebugLog
+import xyz.mederi.ui.DebugLog
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.ExpandChevron

@@ -23,8 +23,8 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.*
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.core.contract.dto.RawMessageDto
-import xyz.mederi.core.ui.RawMessagesViewModel
-import xyz.mederi.core.ui.WorkspaceViewModel
+import xyz.mederi.ui.RawMessagesViewModel
+import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.CardHeader

@@ -26,7 +26,7 @@ import mederi.app.shared.generated.resources.settings_panel_back_list
 import mederi.app.shared.generated.resources.settings_panel_empty_select_hint
 import mederi.app.shared.generated.resources.settings_panel_providers_count
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.LocalMederiColors
 
 /**

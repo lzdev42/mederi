@@ -39,7 +39,7 @@ import mederi.app.shared.generated.resources.mode_manual_approve
 import mederi.app.shared.generated.resources.worktrace_collapse
 import mederi.app.shared.generated.resources.worktrace_expand
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.AssistantFooterInfo
+import xyz.mederi.ui.AssistantFooterInfo
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent

@@ -50,8 +50,8 @@ import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.core.contract.models.SubagentToolResult
 import xyz.mederi.core.contract.models.ToolCallState
-import xyz.mederi.core.ui.SubagentReportMarkdown
-import xyz.mederi.core.ui.WorkspaceViewModel
+import xyz.mederi.ui.SubagentReportMarkdown
+import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 

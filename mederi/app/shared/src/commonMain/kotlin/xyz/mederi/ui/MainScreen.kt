@@ -30,11 +30,11 @@ import mederi.app.shared.generated.resources.main_initializing
 import mederi.app.shared.generated.resources.main_ready
 import mederi.app.shared.generated.resources.pick_directory_title
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.DebugLog
-import xyz.mederi.core.ui.SidebarViewModel
-import xyz.mederi.core.ui.UiEffect
-import xyz.mederi.core.ui.WorkspaceViewModel
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.ui.SidebarViewModel
+import xyz.mederi.ui.UiEffect
+import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.InitLoadingOverlay
 import xyz.mederi.ui.settings.SettingsDialog

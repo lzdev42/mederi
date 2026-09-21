@@ -33,9 +33,9 @@ import mederi.app.shared.generated.resources.dock_refresh_changes
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.DiffView
 import xyz.emuci.inkcompose.MarkdownView
-import xyz.mederi.core.ui.ArtifactItem
-import xyz.mederi.core.ui.RawMessagesViewModel
-import xyz.mederi.core.ui.WorkspaceViewModel
+import xyz.mederi.ui.ArtifactItem
+import xyz.mederi.ui.RawMessagesViewModel
+import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.PanelEmptyState

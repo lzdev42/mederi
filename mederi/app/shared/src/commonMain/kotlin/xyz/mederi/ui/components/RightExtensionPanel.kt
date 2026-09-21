@@ -24,11 +24,11 @@ import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.dock_close_panel
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.ui.DebugLog
-import xyz.mederi.core.ui.RawMessagesViewModel
-import xyz.mederi.core.ui.RightDockPanel
-import xyz.mederi.core.ui.TerminalViewModel
-import xyz.mederi.core.ui.WorkspaceViewModel
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.ui.RawMessagesViewModel
+import xyz.mederi.ui.RightDockPanel
+import xyz.mederi.ui.TerminalViewModel
+import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 

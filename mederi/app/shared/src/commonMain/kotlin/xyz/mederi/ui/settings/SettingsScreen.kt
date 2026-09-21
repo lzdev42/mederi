@@ -31,9 +31,9 @@ import xyz.mederi.AppInfo
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.models.*
-import xyz.mederi.core.ui.appstate.LocalAppState
-import xyz.mederi.core.ui.appstate.RemoteServerUiState
-import xyz.mederi.core.ui.appstate.TunnelUiState
+import xyz.mederi.ui.appstate.LocalAppState
+import xyz.mederi.ui.appstate.RemoteServerUiState
+import xyz.mederi.ui.appstate.TunnelUiState
 import xyz.mederi.theme.AppLanguage
 import xyz.mederi.theme.AppThemeMode
 import xyz.mederi.theme.LocalMederiColors
@@ -474,7 +474,7 @@ private fun SandboxStatusCard(hooks: xyz.mederi.core.contract.SandboxHooks?) {
 
 /** 全局白名单编辑卡：路径列表增删，实时写穿生效。 */
 @Composable
-private fun SandboxWhitelistCard(appState: xyz.mederi.core.ui.appstate.AppState, c: MederiColors) {
+private fun SandboxWhitelistCard(appState: xyz.mederi.ui.appstate.AppState, c: MederiColors) {
     val paths by appState.sandboxExtraPaths.collectAsState()
     var input by remember { mutableStateOf("") }
 

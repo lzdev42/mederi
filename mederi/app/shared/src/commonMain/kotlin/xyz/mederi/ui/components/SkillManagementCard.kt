@@ -22,7 +22,7 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.models.SkillItem
-import xyz.mederi.core.ui.appstate.SkillStore
+import xyz.mederi.ui.appstate.SkillStore
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.CardHeader

@@ -77,10 +77,10 @@ import xyz.mederi.core.contract.models.SkillItem
 import xyz.mederi.ui.components.command.SlashCommandItem
 import xyz.mederi.ui.components.command.SlashCommandMenu
 import xyz.mederi.ui.components.command.SlashCommandRegistry
-import xyz.mederi.core.ui.DebugLog
-import xyz.mederi.core.ui.UiEffect
-import xyz.mederi.core.ui.WorkspaceViewModel
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.ui.UiEffect
+import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.LocalMederiColors
 

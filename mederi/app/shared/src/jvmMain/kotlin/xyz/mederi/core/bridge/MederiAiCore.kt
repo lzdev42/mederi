@@ -951,11 +951,11 @@ class MederiAiCore(
 
     override suspend fun listMcpServers(): Result<List<McpServerItem>> = runCatching {
         if (!::mederi.isInitialized) {
-            xyz.mederi.core.ui.DebugLog.info("MCP", "listMcpServers: mederi not initialized yet, waiting for isReady...")
+            xyz.mederi.ui.DebugLog.info("MCP", "listMcpServers: mederi not initialized yet, waiting for isReady...")
             _isReady.first { it }
         }
         val rawList = mederi.mcpServers.list()
-        xyz.mederi.core.ui.DebugLog.info("MCP", "listMcpServers: fetched ${rawList.size} servers from mederi.mcpServers")
+        xyz.mederi.ui.DebugLog.info("MCP", "listMcpServers: fetched ${rawList.size} servers from mederi.mcpServers")
         rawList.map {
             McpServerItem(
                 name = it.name,

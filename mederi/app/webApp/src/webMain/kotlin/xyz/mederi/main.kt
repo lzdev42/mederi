@@ -2,7 +2,7 @@ package xyz.mederi
 
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
-import xyz.mederi.core.remote.RemoteGate
+import xyz.mederi.server.RemoteGate
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {

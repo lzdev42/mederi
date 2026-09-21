@@ -450,7 +450,7 @@ class MockAiCore(
     override suspend fun getFileDiffs(conversationId: String, messageId: String?): Result<List<FileDiff>> = runCatching {
         val sf = conversations[conversationId] ?: throw Exception("Not found")
         listOf(FileDiff(
-            filePath = "ui/src/commonMain/kotlin/xyz/mederi/core/ui/WorkspaceViewModel.kt",
+            filePath = "ui/src/commonMain/kotlin/xyz/mederi/ui/WorkspaceViewModel.kt",
             before = "// old code", after = "// new code", additions = 10, deletions = 3
         ))
     }

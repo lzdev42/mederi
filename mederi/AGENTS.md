@@ -329,7 +329,7 @@ server 路由（`RemoteServer.remoteModule`），任何变动四处同步、缺�
 
 ### 嵌入式遥控 Server（app/shared/jvmMain）
 
-`RemoteServer`（`app/shared/src/jvmMain/kotlin/xyz/mederi/core/remote/RemoteServer.kt`）：
+`RemoteServer`（`app/shared/src/jvmMain/kotlin/xyz/mederi/server/RemoteServer.kt`）：
 
 - **启动**：`RemoteServer.start(aiCore, port, password, webappDir)`，幂等；`stop()` 幂等
   - `host = "0.0.0.0"` 监听所有网卡，局域网内手机/浏览器可直接访问

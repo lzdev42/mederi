@@ -188,7 +188,7 @@ object SnapshotReducer {
             val questions = runCatching {
                 questionWireJson.decodeFromString(questionListSerializer, rawQuestions)
             }.getOrElse { ex ->
-                xyz.mederi.core.ui.DebugLog.error("SnapshotReducer", "Failed to decode questions: ${ex.message}", ex)
+                xyz.mederi.ui.DebugLog.error("SnapshotReducer", "Failed to decode questions: ${ex.message}", ex)
                 emptyList()
             }
             snapshot.copy(
@@ -402,7 +402,7 @@ object SnapshotReducer {
     @OptIn(ExperimentalUuidApi::class)
     private fun ConversationSnapshot.ensureStreamingPlaceholder(currentMessages: MutableList<ChatMessage>): ChatMessage {
         val last = currentMessages.lastOrNull()
-        if (last != null && last.role == ChatRole.Assistant && last.isStreaming) {
+        if (last != null && last.role == ChatRole.Assistant && (last.isStreaming || this.conversation.status == ConversationStatus.WaitingUser)) {
             currentMessages.removeLast()
             return last
         }
@@ -437,14 +437,23 @@ object SnapshotReducer {
         val placeholder = ensureStreamingPlaceholder(currentMessages)
         val updatedBlocks = placeholder.blocks.toMutableList()
 
-        val existing = updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
-            .lastOrNull { it.state is ToolCallState.Running || it.state is ToolCallState.Pending }
+        val existing = (if (toolCallId.isNotBlank()) {
+            updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
+                .firstOrNull { it.id == "tool_$toolCallId" }
+        } else null)
+            ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
+                .lastOrNull { it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
+            ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
+                .lastOrNull { it.state is ToolCallState.Running || it.state is ToolCallState.Pending }
+
         // 防御：args 解析失败（ToolArgParser 返回空 map）时保留已有 block 的非空 input，
         // 避免"坏数据覆盖好数据"——上游一旦再出序列化缺陷，已显示的路径/命令不丢。
         val prevInput = (existing?.state as? ToolCallState.Running)?.input
         val effectiveInput = if (input.isEmpty() && !prevInput.isNullOrEmpty()) prevInput else input
         if (existing != null) {
+            val blockId = if (toolCallId.isNotBlank()) "tool_$toolCallId" else existing.id
             updatedBlocks[updatedBlocks.lastIndexOf(existing)] = existing.copy(
+                id = blockId,
                 name = name,
                 state = ToolCallState.Running(input = effectiveInput)
             )
@@ -456,8 +465,13 @@ object SnapshotReducer {
         }
 
         currentMessages.add(placeholder.copy(blocks = updatedBlocks))
+        val targetStatus = if (this.conversation.status == ConversationStatus.WaitingUser) {
+            ConversationStatus.WaitingUser
+        } else {
+            ConversationStatus.Working
+        }
         return this.copy(
-            conversation = this.conversation.copy(status = ConversationStatus.Working),
+            conversation = this.conversation.copy(status = targetStatus),
             messages = currentMessages
         )
     }
@@ -502,8 +516,13 @@ object SnapshotReducer {
         }
 
         currentMessages.add(placeholder.copy(blocks = updatedBlocks))
+        val targetStatus = if (this.conversation.status == ConversationStatus.WaitingUser) {
+            ConversationStatus.WaitingUser
+        } else {
+            ConversationStatus.Working
+        }
         return this.copy(
-            conversation = this.conversation.copy(status = ConversationStatus.Working),
+            conversation = this.conversation.copy(status = targetStatus),
             messages = currentMessages
         )
     }

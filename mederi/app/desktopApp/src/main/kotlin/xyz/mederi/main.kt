@@ -8,9 +8,9 @@ import androidx.compose.ui.window.application
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.core.bridge.MederiAiCore
-import xyz.mederi.core.remote.RemoteServer
-import xyz.mederi.core.remote.terminal.PtyTerminalHub
-import xyz.mederi.core.ui.appstate.AppState
+import xyz.mederi.server.RemoteServer
+import xyz.mederi.server.terminal.PtyTerminalHub
+import xyz.mederi.ui.appstate.AppState
 import java.io.File
 
 /** 终端会话注册表（desktop 全局单例，随进程生命周期）。 */

@@ -24,8 +24,8 @@ import compose.icons.feathericons.*
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.models.McpServerItem
 import xyz.mederi.core.contract.models.McpServerStatus
-import xyz.mederi.core.ui.WorkspaceViewModel
-import xyz.mederi.core.ui.appstate.McpStore
+import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.appstate.McpStore
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.CardHeader
 import xyz.mederi.ui.components.atoms.PanelCard
@@ -70,7 +70,7 @@ fun McpManagementCard(
     val enabledCount = mcpServers.count { it.enabled }
 
     LaunchedEffect(Unit) {
-        xyz.mederi.core.ui.DebugLog.info("MCP", "McpManagementCard mounted, current servers count=${mcpServers.size}")
+        xyz.mederi.ui.DebugLog.info("MCP", "McpManagementCard mounted, current servers count=${mcpServers.size}")
         if (mcpServers.isEmpty()) {
             mcpStore.refresh()
         }

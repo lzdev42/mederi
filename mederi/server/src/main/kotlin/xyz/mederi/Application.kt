@@ -5,7 +5,7 @@ import io.ktor.server.netty.Netty
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.core.contract.dto.ReadyInfo
-import xyz.mederi.core.remote.remoteModule
+import xyz.mederi.server.remoteModule
 import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 import java.io.File
 

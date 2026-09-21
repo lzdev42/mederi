@@ -4,7 +4,7 @@ import xyz.mederi.core.contract.SubagentTracker
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.SubagentState
-import xyz.mederi.core.ui.SubagentReportMarkdown
+import xyz.mederi.ui.SubagentReportMarkdown
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

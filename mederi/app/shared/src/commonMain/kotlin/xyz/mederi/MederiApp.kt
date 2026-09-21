@@ -9,9 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import xyz.mederi.core.contract.AiCoreProvider
 import xyz.mederi.core.contract.preferences.defaultPreferencesStore
-import xyz.mederi.core.ui.DebugLog
-import xyz.mederi.core.ui.appstate.AppState
-import xyz.mederi.core.ui.appstate.LocalAppState
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.ui.appstate.AppState
+import xyz.mederi.ui.appstate.LocalAppState
 
 /**
  * Mederi 应用的统一入口。

@@ -320,9 +320,12 @@ object SlashCommandRegistry {
      * 将命令按 Group 顺序进行分组归类。
      */
     fun groupItems(items: List<SlashCommandItem>): Map<CommandGroup, List<SlashCommandItem>> {
+        // KMP 兼容：Map.toSortedMap 仅 JVM 可用（wasmJs 无此扩展），用 entries 排序 + associate（LinkedHashMap 保持序）
         return items
             .groupBy { it.group }
-            .toSortedMap(compareBy { it.order })
+            .entries
+            .sortedBy { it.key.order }
+            .associate { it.key to it.value }
     }
 }
 
