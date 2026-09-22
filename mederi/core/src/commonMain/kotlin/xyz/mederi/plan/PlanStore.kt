@@ -62,26 +62,68 @@ class PlanStore(private val projectDirectories: List<String>) {
     }
 
     /**
-     * 按 sessionId 加载活跃计划（未 COMPLETED 的）。
+     * 按 sessionId 加载该会话最晚的非终态计划（终态 = COMPLETED/VOIDED）。
+     *
+     * 计划状态机：每个会话同时最多一条"活跃"（非终态）计划——新 create_plan 作废旧的非终态
+     * 计划（voidActivePlans）并成为新的活跃计划。多份 semver 文件名并列时按 createdAt 取最新，
+     * 避免目录乱序读到旧的作废前残本。作废计划已移出 plans/，正常不在此目录；此处仍按
+     * [Plan.isTerminal] 兜底排除，兼顾移出失败/历史数据的边界。
      */
-    fun loadBySession(sessionId: String): Plan? {
-        val dir = plansDir ?: return null
-        val files = dir.listFiles { f -> f.extension == "json" } ?: return null
-        for (file in files) {
-            val plan = runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }.getOrNull() ?: continue
-            if (plan.sessionId == sessionId && plan.status != PlanStatus.COMPLETED) return plan
-        }
-        return null
+    fun loadBySession(sessionId: String): Plan? =
+        allPlans()
+            .filter { it.sessionId == sessionId && !it.isTerminal }
+            .maxByOrNull { it.createdAt }
+
+    fun loadActive(): Plan? =
+        allPlans()
+            .filter { !it.isTerminal }
+            .maxByOrNull { it.createdAt }
+
+    /** 读取 plans/ 目录全部可解析计划（文件乱序，供上层按需筛选）。 */
+    private fun allPlans(): List<Plan> {
+        val dir = plansDir ?: return emptyList()
+        return dir.listFiles { f -> f.extension == "json" }
+            ?.mapNotNull { file ->
+                runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }.getOrNull()
+            }
+            ?: emptyList()
     }
 
-    fun loadActive(): Plan? {
-        val dir = plansDir ?: return null
-        val files = dir.listFiles { f -> f.extension == "json" } ?: return null
+    /**
+     * 作废某会话全部非终态计划（含执行中）：状态置 VOIDED 落盘后连同 .md 一起移入
+     * `plans-voided/` 目录（与 [archive] 的 plans-done/ 对称，作废计划留痕可查、不删文件）。
+     *
+     * 触发时机 = 新 create_plan：同一会话只有最新计划可执行，旧计划（无论 PENDING_APPROVAL /
+     * APPROVED / IN_PROGRESS）一律作废。已完成的算凭据保留，不受影响。
+     *
+     * @return 被作废的计划 id 列表（由调用方用于发 PLAN_PROGRESS(voided) 事件）。
+     */
+    fun voidActivePlans(sessionId: String): List<String> {
+        val dir = plansDir ?: return emptyList()
+        val files = dir.listFiles { f -> f.extension == "json" } ?: return emptyList()
+        val voided = mutableListOf<String>()
         for (file in files) {
             val plan = runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }.getOrNull() ?: continue
-            if (plan.status != PlanStatus.COMPLETED) return plan
+            if (plan.sessionId == sessionId && !plan.isTerminal) {
+                updatePlan(plan.id) { it.copy(status = PlanStatus.VOIDED) }
+                moveToVoided(plan.id)
+                voided += plan.id
+            }
         }
-        return null
+        return voided
+    }
+
+    /** 把计划的 json+md 双文件从 plans/ 移入 plans-voided/（作废留痕，对称 archive）。 */
+    private fun moveToVoided(planId: String) {
+        val dst = ensureMederiDir(projectDirectories)?.let { File(it, "plans-voided") } ?: return
+        dst.mkdirs()
+        listOf("json", "md").forEach { ext ->
+            val src = writePlansDir?.let { File(it, "$planId.$ext") }
+            if (src != null && src.exists()) {
+                src.copyTo(File(dst, "$planId.$ext"), overwrite = true)
+                src.delete()
+            }
+        }
     }
 
     /**

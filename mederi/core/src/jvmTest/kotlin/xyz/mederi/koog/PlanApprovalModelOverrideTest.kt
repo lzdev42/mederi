@@ -55,7 +55,9 @@ class PlanApprovalModelOverrideTest {
     private object UnusedProjectManager : ProjectManager {
         private fun unused(): Nothing = throw UnsupportedOperationException("not used in this test")
         override suspend fun list(): List<Project> = unused()
-        override suspend fun get(id: String): Project? = unused()
+        // resolvePlanApproval 跨 turn 分支在 requester 不存活且批准时会访问 projectManager 以构建
+        // PlanStore 查找待批准计划；本测试无真实项目，返回 null → 跨 turn 因计划不存在安全 no-op。
+        override suspend fun get(id: String): Project? = null
         override suspend fun require(id: String): Project = unused()
         override suspend fun create(name: String, directory: String): Project = unused()
         override suspend fun delete(id: String) = unused()

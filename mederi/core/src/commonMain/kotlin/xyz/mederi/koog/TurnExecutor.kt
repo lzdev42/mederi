@@ -66,6 +66,7 @@ import xyz.mederi.store.SessionStore
 import xyz.mederi.skills.SkillManager
 import xyz.mederi.tools.ToolFactory
 import xyz.mederi.tools.diff.TurnDiffTracker
+import xyz.mederi.tools.subagent.SubagentConfigManager
 import xyz.mederi.tools.subagent.SubagentManager
 import xyz.mederi.tools.subagent.SubagentRunnerImpl
 import java.time.Instant
@@ -125,7 +126,8 @@ class TurnExecutor(
         }
     ),
     /** 执行器子代理的文件写入回调（SubagentRunnerImpl 挂，收集 touched files）。 */
-    private val onFileTouched: ((String) -> Unit)? = null
+    private val onFileTouched: ((String) -> Unit)? = null,
+    private val subagentConfigManager: SubagentConfigManager? = null
 ) {
 
     private val subagentRunner = SubagentRunnerImpl(
@@ -225,6 +227,12 @@ class TurnExecutor(
         val hasPendingPlanApproval = planApprovalRequesters[sessionId]?.hasPending() == true
         if (hasPendingQuestion || hasPendingPlanApproval) {
             DebugLog.info("TurnExec", "User sent message while question/plan approval pending for session $sessionId; aborting previous turn cleanly")
+            // 计划待批准时用户直接继续对话 ≠ 拒绝（三条硬规则之一）：先给挂起的 create_plan
+            // 工具调用补写一条中性 ToolResult 落库（非批准/非拒绝/非作废），再中止旧 turn。
+            // 这样下一轮 AI 视图无悬空 tool call，且明确知道计划仍 PENDING_APPROVAL——绝不会
+            // 被误解成"拒绝"而反问用户为什么。abort 会取消 plan 工具协程（其返回不落盘），
+            // 这里的主动落库是中性结果的唯一权威写入，确定性由它保证。
+            if (hasPendingPlanApproval) injectNeutralPlanToolResult(sessionId)
             abortAndJoin(sessionId)
         } else {
             if (session.status == SessionStatus.RUNNING) {
@@ -527,8 +535,98 @@ class TurnExecutor(
                 "sessionId=$sessionId, planId=$planId, model=${aiModel.id} (${aiModel.name}), reasoning=$reasoningLevel"
             )
         }
-        val requester = planApprovalRequesters[sessionId] ?: return false
-        return requester.resolve(planId, approved)
+        // 同 turn 批准：requester 存活时走内存 CompletableDeferred 唤醒挂起的 create_plan 工具协程，
+        // AI 在同一 turn 内立即收到"已批准、去执行"，不落内部消息。
+        val requester = planApprovalRequesters[sessionId]
+        if (requester != null && requester.hasPending()) {
+            return requester.resolve(planId, approved)
+        }
+
+        // 跨 turn / 重启后批准（"批准与 turn 解耦"）：requester 已随旧 turn 消亡（进程重启后压根不存在），
+        // 无法唤醒任何挂起协程。此时把目标计划改 APPROVED 落盘，再以一条内部消息（UI 隐藏、AI 可见）
+        // 启动新 turn，让 AI 读到 Active Plan 已是 APPROVED 后自行走执行链（generate_spec → spawn → verify）。
+        // 拒绝（approved=false）无存活 turn 可唤醒、无状态无需变更，直接返回 false（计划保持 PENDING_APPROVAL，
+        // 由用户继续对话或下个 create_plan 处理）。批准模型写入逻辑在上面已统一执行。
+        if (!approved) return false
+
+        val session = sessionStore.get(sessionId) ?: return false
+        val project = projectManager.get(session.projectId) ?: return false
+        val planStore = xyz.mederi.plan.PlanStore(listOf(project.directory))
+        val plan = planStore.load(planId) ?: return false
+        if (plan.sessionId != sessionId || plan.isTerminal ||
+            plan.status != xyz.mederi.plan.PlanStatus.PENDING_APPROVAL
+        ) {
+            DebugLog.event(
+                "TurnExec",
+                "cross-turn plan approval skipped: not a pending plan (planId=$planId, status=${plan.status}, sessionMisMatch=${plan.sessionId != sessionId})"
+            )
+            return false
+        }
+        val approvedPlan = planStore.updatePlan(planId) {
+            it.copy(status = xyz.mederi.plan.PlanStatus.APPROVED)
+        } ?: return false
+
+        eventBus.emit(MederiEvent(
+            type = EventType.PLAN_APPROVAL_RESOLVED,
+            sessionId = sessionId,
+            payload = mapOf("planId" to planId, "approved" to "true"),
+            timestamp = java.time.Instant.now().toString()
+        ))
+
+        DebugLog.event("TurnExec", "cross-turn plan approval (planId=$planId, sessionId=$sessionId)")
+
+        // 内部消息：整条文本以 UI_HIDDEN_MARKER 开头 → UI 渲染 substringBefore 得空串（用户不可见），
+        // AI 视图看到完整执行指令 + 上下文 Active Plan（APPROVED），据此启动执行。经 sendMessageInternal
+        // 落库并启动新 turn（durable-first 由它保证）。
+        val internalPrompt =
+            "$UI_HIDDEN_MARKER\n" +
+                "Plan '$approvedPlan.title' (id=$planId) has been approved by the user. " +
+                "Execute it now: for each pending subtask, call generate_spec then subagent(SPAWN, planId=$planId, ...), " +
+                "then verify_subtask. Do not re-create or re-ask for approval."
+        sendMessageInternal(
+            sessionId,
+            SendMessageRequest(
+                agentConfig = xyz.mederi.api.AgentConfig(
+                    agentMode = session.agentMode,
+                    aiModel = aiModel ?: session.aiModel,
+                    reasoningLevel = reasoningLevel ?: session.reasoningLevel
+                ),
+                parts = listOf(MessagePart.Text(internalPrompt)),
+                apiKeyId = null
+            )
+        )
+        return true
+    }
+
+    /**
+     * 计划待批准时用户直接继续对话：给挂起的 create_plan 工具调用补写一条中性
+     * [xyz.mederi.tools.PlanTools.USER_REPLIED_NEUTRAL] ToolResult 落库。
+     *
+     * 背景：plan 工具悬在 approval requester 时，其 ToolCall 已由增量持久化落库，但结果未写。
+     * 若直接 abort，下一轮 Koog 加载历史会看到"无结果的 tool call"而催模型补答；更糟的是
+     * 旧路径把批准预置为 false，PlanTools 走"rejected → 问为什么"分支——两者都不是想要的。
+     * 这里主动补写中性结果，让下一轮 AI 视图有完整工具循环且语义中立，确定性由主动落库保证
+     * （abort 取消 plan 工具协程，其真实返回不会落盘）。
+     */
+    private suspend fun injectNeutralPlanToolResult(sessionId: String) {
+        val history = historyStore.load(sessionId)
+        val pendingCall = history.asReversed().firstNotNullOfOrNull { msg ->
+            msg.parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.ToolCall>()
+                .firstOrNull { it.tool == xyz.mederi.tools.PlanTools.PLAN_TOOL }
+        } ?: return
+        historyStore.append(sessionId, xyz.mederi.domain.model.Message(
+            id = "msg_${java.util.UUID.randomUUID().toString().take(8)}",
+            sessionId = sessionId,
+            role = xyz.mederi.domain.model.MessageRole.USER,
+            parts = listOf(xyz.mederi.domain.model.MessagePart.ToolResult(
+                id = pendingCall.id,
+                tool = pendingCall.tool,
+                output = xyz.mederi.tools.PlanTools.USER_REPLIED_NEUTRAL
+            )),
+            status = xyz.mederi.domain.model.MessageStatus.COMPLETED,
+            createdAt = java.time.Instant.now().toString()
+        ))
+        DebugLog.event("TurnExec", "injected neutral ToolResult for pending create_plan call id=${pendingCall.id}")
     }
 
     /**
@@ -768,7 +866,8 @@ class TurnExecutor(
                 mcpTools = mcpSession?.tools ?: emptyList(),
                 agentsDiscovery = agentsDiscovery,
                 onFileTouched = onFileTouched,
-                apiKeyId = apiKeyId
+                apiKeyId = apiKeyId,
+                subagentConfigManager = subagentConfigManager
             )
 
             val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics)

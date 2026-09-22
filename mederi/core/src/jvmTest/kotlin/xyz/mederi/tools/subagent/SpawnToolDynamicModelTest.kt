@@ -95,7 +95,8 @@ class SpawnToolDynamicModelTest {
         turnModel: AIModel,
         turnReasoning: ReasoningLevel,
         sessionStore: InMemorySessionStore?,
-        planStore: PlanStore
+        planStore: PlanStore,
+        subagentConfigManager: SubagentConfigManager? = null
     ) = SpawnAgentTool(
         subagentManager = SubagentManager(runner, scope),
         directories = emptyList(),
@@ -106,7 +107,8 @@ class SpawnToolDynamicModelTest {
         planStore = planStore,
         eventBus = null,
         apiKeyId = null,
-        sessionStore = sessionStore
+        sessionStore = sessionStore,
+        subagentConfigManager = subagentConfigManager
     )
 
     @Test
@@ -164,5 +166,87 @@ class SpawnToolDynamicModelTest {
 
         assertEquals("C", runner.lastModel?.id, "researcher 同样以 session 现值优先")
         assertEquals(ReasoningLevel.LOW, runner.lastReasoning)
+    }
+
+    private class FakeProviderManager(
+        private val models: Map<String, AIModel>
+    ) : xyz.mederi.provider.ProviderManager {
+        override suspend fun getModel(modelId: String): AIModel? = models[modelId]
+        override suspend fun list(): List<xyz.mederi.provider.domain.model.Provider> = emptyList()
+        override suspend fun listWithoutKeys(): List<xyz.mederi.provider.domain.model.Provider> = emptyList()
+        override suspend fun get(id: String): xyz.mederi.provider.domain.model.Provider? = null
+        override suspend fun require(id: String): xyz.mederi.provider.domain.model.Provider = throw NotImplementedError()
+        override suspend fun create(name: String, type: xyz.mederi.provider.domain.model.ProviderType, baseUrl: String, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?): xyz.mederi.provider.domain.model.Provider = throw NotImplementedError()
+        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?): xyz.mederi.provider.domain.model.Provider = throw NotImplementedError()
+        override suspend fun delete(id: String) {}
+        override suspend fun listKeys(providerId: String): List<xyz.mederi.provider.domain.model.ProviderApiKey> = emptyList()
+        override suspend fun addKey(providerId: String, name: String, value: String, isDefault: Boolean): xyz.mederi.provider.domain.model.ProviderApiKey = throw NotImplementedError()
+        override suspend fun deleteKey(providerId: String, keyId: String) {}
+        override suspend fun setDefaultKey(providerId: String, keyId: String) {}
+        override suspend fun getDefaultKeyValue(providerId: String): String? = null
+        override suspend fun getKeyValue(providerId: String, keyId: String): String? = null
+        override suspend fun listModels(providerId: String): List<AIModel> = models.values.toList()
+        override suspend fun addModel(providerId: String, providerModelId: String, name: String, supportsReasoning: Boolean, reasoningLevel: ReasoningLevel, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean, reasoningLevels: List<ReasoningLevel>, isEnabled: Boolean, inputPricePerMillion: Double?, outputPricePerMillion: Double?): AIModel = throw NotImplementedError()
+        override suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean): AIModel = throw NotImplementedError()
+        override suspend fun applyRemoteMetadata(providerId: String, modelId: String, endpoint: xyz.mederi.provider.domain.model.RemoteModelInfo?, catalog: xyz.mederi.metadata.ModelMetadata?): AIModel = throw NotImplementedError()
+        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?): AIModel = throw NotImplementedError()
+        override suspend fun deleteModel(providerId: String, modelId: String) {}
+        override suspend fun listAllModels(): List<AIModel> = models.values.toList()
+        override suspend fun fetchRemoteModels(providerId: String): List<xyz.mederi.provider.domain.model.RemoteModelInfo> = emptyList()
+    }
+
+    @Test
+    fun `spawn uses subagent config model when configured`() = runBlocking {
+        val runner = RecordingRunner()
+        val (planStore, planId) = planStoreWithSpecdSubtask()
+        val customModel = model("CUSTOM")
+        val configManager = SubagentConfigManager(
+            xyz.mederi.store.InMemorySettingsStore(),
+            FakeProviderManager(mapOf("CUSTOM" to customModel))
+        )
+        configManager.set(
+            SubagentRole.EXECUTOR,
+            xyz.mederi.domain.model.SubagentModelConfig(modelId = "CUSTOM", reasoningLevel = ReasoningLevel.MAX)
+        )
+
+        val tool = newSpawnTool(
+            runner, turnModel = model("A"), turnReasoning = ReasoningLevel.NONE,
+            sessionStore = sessionStoreWith(model("B"), ReasoningLevel.HIGH),
+            planStore = planStore,
+            subagentConfigManager = configManager
+        )
+
+        tool.execute(SpawnAgentArgs(task = "do it", planId = planId, subtaskIndex = 0))
+        kotlinx.coroutines.withTimeout(5_000) { runner.ran.await() }
+
+        assertEquals("CUSTOM", runner.lastModel?.id, "配置了独立模型时优先使用独立模型 CUSTOM，而非 session 模型 B")
+        assertEquals(ReasoningLevel.MAX, runner.lastReasoning, "配置了独立推理等级时优先使用独立推理等级 MAX")
+    }
+
+    @Test
+    fun `spawn falls back to session model when configured model is not found`() = runBlocking {
+        val runner = RecordingRunner()
+        val (planStore, planId) = planStoreWithSpecdSubtask()
+        val configManager = SubagentConfigManager(
+            xyz.mederi.store.InMemorySettingsStore(),
+            FakeProviderManager(emptyMap())
+        )
+        configManager.set(
+            SubagentRole.EXECUTOR,
+            xyz.mederi.domain.model.SubagentModelConfig(modelId = "DELETED", reasoningLevel = ReasoningLevel.LOW)
+        )
+
+        val tool = newSpawnTool(
+            runner, turnModel = model("A"), turnReasoning = ReasoningLevel.NONE,
+            sessionStore = sessionStoreWith(model("B"), ReasoningLevel.HIGH),
+            planStore = planStore,
+            subagentConfigManager = configManager
+        )
+
+        tool.execute(SpawnAgentArgs(task = "do it", planId = planId, subtaskIndex = 0))
+        kotlinx.coroutines.withTimeout(5_000) { runner.ran.await() }
+
+        assertEquals("B", runner.lastModel?.id, "独立配置的模型不存在时应 fallback 到 session 模型 B")
+        assertEquals(ReasoningLevel.LOW, runner.lastReasoning, "独立配置的推理等级仍然生效")
     }
 }

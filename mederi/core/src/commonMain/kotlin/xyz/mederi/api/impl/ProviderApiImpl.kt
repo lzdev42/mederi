@@ -174,8 +174,6 @@ class ProviderApiImpl(
         val provider = providerManager.require(providerId)
         var updated = 0
         for (model in provider.models) {
-            // MANUAL 模型是用户权威，自动设置不触碰
-            if (model.origin != ModelOrigin.FETCHED) continue
             val meta = modelCatalog.getFor(provider.modelsDevKey, provider.baseUrl, model.providerModelId) ?: continue
             val after = providerManager.applyRemoteMetadata(providerId, model.id, endpoint = null, catalog = meta)
             if (after != model) updated++

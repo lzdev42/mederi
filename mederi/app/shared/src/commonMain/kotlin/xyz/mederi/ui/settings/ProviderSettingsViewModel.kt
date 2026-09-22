@@ -15,6 +15,7 @@ import xyz.mederi.core.contract.models.ProviderType
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.ReasoningConfigInput
+import xyz.mederi.ui.DebugLog
 import xyz.mederi.ui.UiMessage
 import xyz.mederi.ui.appstate.AppState
 import mederi.app.shared.generated.resources.Res
@@ -162,6 +163,28 @@ enum class CapabilityFilter {
     REASONING,
     IMAGE,
     FREE
+}
+
+/**
+ * 判定模型是否为免费：
+ * 1. 模型显示名称或 providerModelId 中包含 "free"（不区分大小写）
+ * 2. 或 models.dev 目录中记录的输入和输出价格均为 0.0
+ */
+internal fun isModelFree(
+    name: String,
+    providerModelId: String,
+    inputPricePerMillion: Double?,
+    outputPricePerMillion: Double?
+): Boolean {
+    val nameHasFree = name.contains("free", ignoreCase = true) ||
+            providerModelId.contains("free", ignoreCase = true)
+    val priceIsZero = inputPricePerMillion == 0.0 && outputPricePerMillion == 0.0
+    val result = nameHasFree || priceIsZero
+    DebugLog.info(
+        "ProviderSettingsViewModel",
+        "isModelFree: modelId=$providerModelId, name='$name', inputPrice=$inputPricePerMillion, outputPrice=$outputPricePerMillion -> nameHasFree=$nameHasFree, priceIsZero=$priceIsZero => isFree=$result"
+    )
+    return result
 }
 
 /**
@@ -349,11 +372,17 @@ class ProviderSettingsViewModel(
     /**
      * ModelOption (contract) → ModelItemUiState。
      *
-     * 注意 core 未建模的字段映射：
-     * - isFree / isRichMetadata 恒 false（core 无此概念）
-     * - isEnabled 来自 core（任务 5 起持久化）
+     * 免费模型判定：
+     * - 模型显示名称或 providerModelId 中包含 "free"（不区分大小写）
+     * - 或输入和输出参考价格均为 0.0
      */
     private fun toModelItemUiState(model: ModelOption): ModelItemUiState {
+        val free = isModelFree(
+            name = model.name,
+            providerModelId = model.providerModelId,
+            inputPricePerMillion = model.inputPricePerMillion,
+            outputPricePerMillion = model.outputPricePerMillion
+        )
         return ModelItemUiState(
             id = model.id,
             providerModelId = model.providerModelId,
@@ -363,7 +392,7 @@ class ProviderSettingsViewModel(
             supportsImages = model.supportsImages,
             supportsImagesOverride = model.supportsImagesOverride,
             origin = model.origin,
-            isFree = false,
+            isFree = free,
             contextWindow = model.contextWindow,
             maxTokens = model.maxTokens,
             reasoningLevels = model.reasoningLevels,
@@ -743,13 +772,6 @@ class ProviderSettingsViewModel(
         maxTokens: Int?,
         reasoningLevels: List<String>
     ) {
-        // FETCHED 模型元数据是端点/目录权威（ModelMerge 唯一写入），UI 不提供编辑；
-        // 这里兜底拦一次，防止调用方绕过对话框状态直接发起
-        val target = uiState.providers.find { it.id == providerId }?.models?.find { it.id == modelId }
-        if (target?.origin == ModelOrigin.FETCHED) {
-            uiState = uiState.copy(errorMessage = UiMessage(Res.string.model_metadata_locked))
-            return
-        }
         viewModelScope.launch {
             val result = appState.aiCore.updateProviderModel(
                 providerId = providerId,

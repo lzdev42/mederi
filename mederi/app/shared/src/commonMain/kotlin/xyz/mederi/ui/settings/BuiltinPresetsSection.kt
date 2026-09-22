@@ -36,6 +36,7 @@ import mederi.app.shared.generated.resources.settings_panel_cancel
 import mederi.app.shared.generated.resources.settings_panel_recommended_presets
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.ProviderIcon
 
 // ============================================================================
 // 2. 侧边栏与预设组件
@@ -77,12 +78,21 @@ internal fun BuiltinPresetsSection(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = preset,
-                        color = colors.textPrimary,
-                        fontSize = ProviderTokens.FontValue,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall),
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        ProviderIcon(name = preset, size = 15.dp)
+                        Text(
+                            text = preset,
+                            color = colors.textPrimary,
+                            fontSize = ProviderTokens.FontValue,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     Text(stringResource(Res.string.settings_panel_add), color = colors.accentPrimary, fontSize = ProviderTokens.FontBadge)
                 }
             }
@@ -109,12 +119,7 @@ internal fun AddBuiltinProviderDialog(
                 Text(stringResource(Res.string.settings_panel_add_provider), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 HorizontalDivider(color = colors.divider)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
-                    Box(
-                        Modifier.size(24.dp).clip(ProviderTokens.RadiusBadge).background(colors.surfaceInput),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(FeatherIcons.Cpu, null, tint = colors.textSecondary, modifier = Modifier.size(13.dp))
-                    }
+                    ProviderIcon(name = providerName, size = 24.dp)
                     Column {
                         Text(providerName, color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
                         Text(stringResource(Res.string.settings_panel_builtin_base_url_hint), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
@@ -210,6 +215,8 @@ internal fun ProviderSidebarRow(
                     .clip(CircleShape)
                     .background(if (provider.isConnected) colors.accentSuccess else colors.textMuted.copy(alpha = 0.4f))
             )
+
+            ProviderIcon(name = provider.name, baseUrl = provider.baseUrl, size = 15.dp)
 
             Text(
                 text = provider.name,

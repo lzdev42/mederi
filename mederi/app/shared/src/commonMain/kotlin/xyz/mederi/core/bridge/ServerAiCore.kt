@@ -58,6 +58,8 @@ import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ApiKeyOption
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
+import xyz.mederi.core.contract.models.SubagentConfigItem
+import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
@@ -620,5 +622,21 @@ class ServerAiCore(
             "/v1/projects/${projectId.encodeURLParameter()}/agents-file/generate",
             requestBody = xyz.mederi.core.contract.dto.GenerateAgentsFileInput(modelId)
         ).content
+    }
+
+    // ------------------------------------------------------------------
+    // 子代理模型配置（遥控 REST 桥）
+    // ------------------------------------------------------------------
+
+    override suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>> = runCatching {
+        httpGet("/v1/subagent-configs")
+    }
+
+    override suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = runCatching {
+        httpCall(
+            "/v1/subagent-configs/${role.encodeURLParameter()}",
+            method = HttpMethod.Put,
+            requestBody = input
+        )
     }
 }

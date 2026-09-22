@@ -96,6 +96,18 @@ open class QuestionRequester(
     fun reject(questionId: String): Boolean {
         val deferred = pending.remove(questionId) ?: return false
         deferred.complete(QuestionResult(answers = emptyList(), rejected = true))
+        // 与 [resolve] 对称：拒绝也补发 QUESTION_RESOLVED 事件，UI 据此清除问题卡片。
+        // 契约层无独立 reject 通道，UI 拒绝当前走 resolveQuestion(emptyList)；
+        // 此处的 rejected 标志供直接调用 reject() 的内部路径消费（防 UI 卡片悬挂）。
+        eventBus.tryEmit(MederiEvent(
+            type = EventType.QUESTION_RESOLVED,
+            sessionId = sessionId,
+            payload = mapOf(
+                "questionId" to questionId,
+                "answers" to "[]"
+            ),
+            timestamp = Instant.now().toString()
+        ))
         return true
     }
 

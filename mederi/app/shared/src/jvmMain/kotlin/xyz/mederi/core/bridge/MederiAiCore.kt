@@ -49,6 +49,8 @@ import xyz.mederi.core.contract.models.ProviderConfig
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.TokenUsage
+import xyz.mederi.core.contract.models.SubagentConfigItem
+import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.Session
 import xyz.mederi.debug.DebugLog
@@ -544,6 +546,7 @@ class MederiAiCore(
             sessions = mederi.sessions,
             modelToProvider = { modelToProvider[it] },
             planTodos = { id -> initialTodos(id) },
+            planApproval = { id -> initialPlanApproval(id) },
             lastError = { lastErrorBySessionId[it] }
         )
     }
@@ -564,6 +567,39 @@ class MederiAiCore(
     }
 
     /**
+     * 会话重开时的计划审批展示项 hydration（"批准与 turn 解耦"配套，见 P3）：
+     * 读该会话当前活跃（最新非终态）计划，投影为契约层 [PlanApprovalRequest] 填入快照，
+     * 让重启/翻历史后 UI 仍能看到本次计划并（审批模式）补触发跨 turn 批准。
+     *
+     * 职能边界：core **只负责把计划当前状态作为数据give给 UI**，不负责判定计划卡片必须
+     * 渲染在对话内还是外。status 按计划模式区分：
+     * - APPROVAL 模式 + PENDING_APPROVAL → "PENDING"（待用户批准）
+     * - 其他（自动模式已 APPOVED / 执行中 IN_PROGRESS / 已完成等非终态）→ "AUTO_APPROVED"
+     *   （已自动批准，UI 可展示"已自动审批"而非完全不展示）
+     * 计划无/已终态 → 返回 null（无卡片可展示）。
+     */
+    private suspend fun initialPlanApproval(conversationId: String): xyz.mederi.core.contract.models.PlanApprovalRequest? {
+        return runCatching {
+            val session = mederi.sessions.get(conversationId)
+            val project = mederi.projects.get(session.projectId)
+            val plan = xyz.mederi.plan.PlanStore(listOf(project.directory)).loadBySession(conversationId) ?: return@runCatching null
+            val planPath = xyz.mederi.plan.PlanStore(listOf(project.directory)).getPlanAbsolutePath(plan.id)
+            xyz.mederi.core.contract.models.PlanApprovalRequest(
+                id = plan.id,
+                conversationId = conversationId,
+                planPath = planPath ?: "",
+                title = plan.title,
+                summary = plan.summary,
+                subtaskCount = plan.subtasks.size,
+                planContent = planPath?.let { p -> runCatching { java.io.File(p).readText() }.getOrNull() },
+                status = if (plan.agentMode == AgentMode.APPROVAL &&
+                    plan.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL
+                ) "PENDING" else "AUTO_APPROVED"
+            )
+        }.getOrNull()
+    }
+
+    /**
      * 构建会话当前完整快照（不订阅事件流）。
      * server 模式下由 GET /v1/sessions/{id}/snapshot 暴露给 wasmJs 客户端作初始状态。
      */
@@ -577,7 +613,9 @@ class MederiAiCore(
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
             contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages),
             cost = MederiModelMapper.toCostSummary(),
-            todos = initialTodos(conversationId)
+            todos = initialTodos(conversationId),
+            // 重启/翻历史恢复：当前活跃计划（审批模式待批准 / 自动模式已自动审批），UI 自由决定卡片渲染位置
+            pendingPlanApproval = initialPlanApproval(conversationId)
         )
         hydrateLastError(base, lastErrorBySessionId[conversationId])
     }
@@ -1078,5 +1116,43 @@ class MederiAiCore(
             _isReady.first { it }
         }
         agentsFileGenerator.generate(projectId, modelId).getOrThrow()
+    }
+
+    // ==========================================
+    // 子代理模型配置
+    // ==========================================
+
+    override suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.subagentConfigs.list().map {
+            SubagentConfigItem(
+                role = it.role.name,
+                displayName = it.displayName,
+                description = it.description,
+                modelId = it.modelId,
+                modelName = it.modelName,
+                reasoningLevel = it.reasoningLevel?.name,
+                isInheriting = it.isInheriting
+            )
+        }
+    }
+
+    override suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        val subagentRole = xyz.mederi.domain.model.SubagentRole.valueOf(role)
+        val reasoningLevel = input.reasoningLevel?.let {
+            xyz.mederi.provider.domain.model.ReasoningLevel.valueOf(it)
+        }
+        mederi.subagentConfigs.update(
+            subagentRole,
+            xyz.mederi.api.UpdateSubagentConfigRequest(
+                modelId = input.modelId,
+                reasoningLevel = reasoningLevel
+            )
+        )
     }
 }

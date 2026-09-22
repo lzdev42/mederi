@@ -10,7 +10,7 @@ import kotlinx.serialization.json.*
 import xyz.mederi.domain.model.AgentMode
 
 @Serializable
-enum class PlanStatus { PENDING_APPROVAL, APPROVED, IN_PROGRESS, COMPLETED }
+enum class PlanStatus { PENDING_APPROVAL, APPROVED, IN_PROGRESS, COMPLETED, VOIDED }
 
 @Serializable
 enum class SubtaskStatus { PENDING, IN_PROGRESS, COMPLETED, FAILED }
@@ -200,6 +200,9 @@ data class Plan(
     val createdAt: String,
     val agentMode: AgentMode
 ) {
+    /** 是否处于终态：已归档（COMPLETED）或已作废（VOIDED）。终态计划不再是被"活跃"的候选。 */
+    val isTerminal: Boolean get() = status == PlanStatus.COMPLETED || status == PlanStatus.VOIDED
+
     val isAllCompleted: Boolean get() =
         subtasks.isNotEmpty() &&
         subtasks.all { it.status == SubtaskStatus.COMPLETED } &&

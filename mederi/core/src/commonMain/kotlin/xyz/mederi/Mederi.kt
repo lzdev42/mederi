@@ -7,6 +7,7 @@ import xyz.mederi.api.ProjectApi
 import xyz.mederi.api.ProviderApi
 import xyz.mederi.api.SessionApi
 import xyz.mederi.api.SkillApi
+import xyz.mederi.api.SubagentConfigApi
 import xyz.mederi.api.impl.McpMarketApiImpl
 import xyz.mederi.api.impl.McpServerApiImpl
 import xyz.mederi.api.impl.ModelApiImpl
@@ -14,6 +15,8 @@ import xyz.mederi.api.impl.ProjectApiImpl
 import xyz.mederi.api.impl.ProviderApiImpl
 import xyz.mederi.api.impl.SessionApiImpl
 import xyz.mederi.api.impl.SkillApiImpl
+import xyz.mederi.api.impl.SubagentConfigApiImpl
+import xyz.mederi.tools.subagent.SubagentConfigManager
 import xyz.mederi.config.ConfigMigrationRequester
 import xyz.mederi.config.MederiConfig
 import xyz.mederi.config.MederiPaths
@@ -104,6 +107,10 @@ class Mederi private constructor(
      * Skill 管理：列表 / 设根目录 / 安装（下载+解压）/ 卸载。UI 薄触发，文件操作全在 core。
      */
     val skills: SkillApi,
+    /**
+     * 子代理模型配置：列表 / 设置独立模型 / 推理等级 / 恢复继承。
+     */
+    val subagentConfigs: SubagentConfigApi,
     /**
      * models.dev 模型元数据目录（内存索引，启动后调用 [ModelCatalog.start] 开始
      * 立即拉取 + 每小时刷新；不 start 也可用，查询返回空）。
@@ -241,6 +248,10 @@ class Mederi private constructor(
                 defaultSkillsRoot = paths?.skillsDir?.absolutePath
                     ?: java.io.File(System.getProperty("user.home"), ".mederi/skills").absolutePath
             )
+            val subagentConfigManager = SubagentConfigManager(
+                settingsStore = settingsStore,
+                providerManager = providerManager
+            )
             val sessionManager = SessionManagerImpl(
                 sessionStore = sessionStore,
                 historyStore = historyStore,
@@ -248,7 +259,8 @@ class Mederi private constructor(
                 providerManager = providerManager,
                 diffStore = diffStore,
                 mcpConnector = mcpConnector,
-                skills = skillManager
+                skills = skillManager,
+                subagentConfigManager = subagentConfigManager
             )
 
             // === API 层装配 ===
@@ -259,6 +271,7 @@ class Mederi private constructor(
             val mcpServerApi = McpServerApiImpl(mcpServerManager)
             val mcpMarketApi = McpMarketApiImpl(mcpMarketManager)
             val skillApi = SkillApiImpl(skillManager)
+            val subagentConfigApi = SubagentConfigApiImpl(subagentConfigManager, providerManager)
 
             return Mederi(
                 paths = paths,
@@ -275,6 +288,7 @@ class Mederi private constructor(
                 mcpMarket = mcpMarketApi,
                 mcpServers = mcpServerApi,
                 skills = skillApi,
+                subagentConfigs = subagentConfigApi,
                 modelCatalog = modelCatalog
             )
         }

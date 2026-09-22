@@ -57,3 +57,27 @@ data class SubagentToolResult(
         }.getOrNull()
     }
 }
+
+/**
+ * 子代理模型配置（UI 契约层）。
+ */
+@Serializable
+data class SubagentConfigItem(
+    val role: String,
+    val displayName: String,
+    val description: String,
+    val modelId: String? = null,
+    val modelName: String? = null,
+    val reasoningLevel: String? = null,
+    val isInheriting: Boolean = true
+)
+
+/**
+ * 更新子代理配置输入（UI 契约层）。
+ */
+@Serializable
+data class UpdateSubagentConfigInput(
+    val modelId: String? = null,
+    val reasoningLevel: String? = null
+)
+

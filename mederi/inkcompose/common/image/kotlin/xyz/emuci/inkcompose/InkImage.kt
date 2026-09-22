@@ -52,7 +52,7 @@ internal fun inkNormalizeImageModel(model: String): String {
 // 自定义 loader 会自动并入 ServiceLoader 注册的组件（网络 fetcher、Android coil-svg 解码器等）。
 private var inkImageLoader: ImageLoader? = null
 
-private fun inkImageLoader(context: coil3.PlatformContext): ImageLoader =
+fun getInkImageLoader(context: coil3.PlatformContext): ImageLoader =
     inkImageLoader ?: ImageLoader.Builder(context)
         .components { inkSvgDecoderFactory()?.let(::add) }
         .crossfade(false)
@@ -86,7 +86,7 @@ fun InkImage(
     val context = LocalPlatformContext.current
     val density = androidx.compose.ui.platform.LocalDensity.current.density
     println("[InkImage] Loading model=$model with screen density=$density")
-    val loader = remember { inkImageLoader(context) }
+    val loader = remember { getInkImageLoader(context) }
     val request = remember(model, density) {
         ImageRequest.Builder(context)
             .data(inkNormalizeImageModel(model))

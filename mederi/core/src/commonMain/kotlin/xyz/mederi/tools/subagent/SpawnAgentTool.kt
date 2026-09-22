@@ -70,7 +70,8 @@ class SpawnAgentTool(
     private val planStore: PlanStore? = null,
     private val eventBus: MutableSharedFlow<MederiEvent>? = null,
     private val apiKeyId: String? = null,
-    private val sessionStore: xyz.mederi.store.SessionStore? = null
+    private val sessionStore: xyz.mederi.store.SessionStore? = null,
+    private val subagentConfigManager: SubagentConfigManager? = null
 ) : SimpleTool<SpawnAgentArgs>(
     argsType = typeToken<SpawnAgentArgs>(),
     name = "spawn_agent",
@@ -140,9 +141,15 @@ class SpawnAgentTool(
         ))
 
         // 模型/推理档位动态读 session 现值（计划批准时用户可能已切换模型，见类注释）
+        // 若配置了子代理独立模型，以子代理独立配置为准，否则继承父会话
         val sessionNow = sessionStore?.get(parentSessionId)
-        val effectiveAiModel = sessionNow?.aiModel ?: aiModel
-        val effectiveReasoningLevel = sessionNow?.reasoningLevel ?: reasoningLevel
+        val parentModel = sessionNow?.aiModel ?: aiModel
+        val parentReasoning = sessionNow?.reasoningLevel ?: reasoningLevel
+        val (effectiveAiModel, effectiveReasoningLevel) = subagentConfigManager?.resolve(
+            role = SubagentRole.EXECUTOR,
+            fallbackModel = parentModel,
+            fallbackReasoning = parentReasoning
+        ) ?: (parentModel to parentReasoning)
 
         val agentId = subagentManager.spawn(
             task = args.task,
@@ -200,7 +207,8 @@ class SpawnResearcherTool(
     private val projectId: String,
     private val parentSessionId: String,
     private val apiKeyId: String? = null,
-    private val sessionStore: xyz.mederi.store.SessionStore? = null
+    private val sessionStore: xyz.mederi.store.SessionStore? = null,
+    private val subagentConfigManager: SubagentConfigManager? = null
 ) : SimpleTool<SpawnResearcherArgs>(
     argsType = typeToken<SpawnResearcherArgs>(),
     name = "spawn_researcher",
@@ -215,9 +223,15 @@ class SpawnResearcherTool(
             return "Error: task must not be empty."
         }
         // 模型/推理档位动态读 session 现值（与 SpawnAgentTool 同策略）
+        // 若配置了子代理独立模型，以子代理独立配置为准，否则继承父会话
         val sessionNow = sessionStore?.get(parentSessionId)
-        val effectiveAiModel = sessionNow?.aiModel ?: aiModel
-        val effectiveReasoningLevel = sessionNow?.reasoningLevel ?: reasoningLevel
+        val parentModel = sessionNow?.aiModel ?: aiModel
+        val parentReasoning = sessionNow?.reasoningLevel ?: reasoningLevel
+        val (effectiveAiModel, effectiveReasoningLevel) = subagentConfigManager?.resolve(
+            role = SubagentRole.RESEARCHER,
+            fallbackModel = parentModel,
+            fallbackReasoning = parentReasoning
+        ) ?: (parentModel to parentReasoning)
         val agentId = subagentManager.spawn(
             task = args.task,
             briefing = args.briefing.takeIf { it.isNotBlank() },

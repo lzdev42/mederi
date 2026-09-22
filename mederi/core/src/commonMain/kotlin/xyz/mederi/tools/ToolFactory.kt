@@ -23,6 +23,7 @@ import xyz.mederi.store.SessionStore
 import xyz.mederi.tools.diff.TurnDiffTracker
 import xyz.mederi.tools.subagent.SpawnAgentTool
 import xyz.mederi.tools.subagent.SpawnResearcherTool
+import xyz.mederi.tools.subagent.SubagentConfigManager
 import xyz.mederi.tools.subagent.SubagentManager
 import xyz.mederi.tools.subagent.SubagentTool
 import java.util.concurrent.atomic.AtomicBoolean
@@ -75,7 +76,8 @@ object ToolFactory {
         agentsDiscovery: AgentsSubtreeDiscovery? = null,
         apiKeyId: String? = null,
         /** 执行器子代理的文件写入回调（SubagentRunnerImpl 挂，收集 touched files）。 */
-        onFileTouched: ((String) -> Unit)? = null
+        onFileTouched: ((String) -> Unit)? = null,
+        subagentConfigManager: SubagentConfigManager? = null
     ): ToolRegistry {
         val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched)
         val shellTools = ShellTools(directories, commandSandbox)
@@ -165,11 +167,13 @@ object ToolFactory {
                     SubagentTool(
                         spawnExecutor = SpawnAgentTool(
                             mgr, directories, aiModel!!, reasoningLevel!!, projectId!!,
-                            sessionId, planStore, eventBus, apiKeyId, sessionStore
+                            sessionId, planStore, eventBus, apiKeyId, sessionStore,
+                            subagentConfigManager = subagentConfigManager
                         ),
                         spawnResearcher = SpawnResearcherTool(
                             mgr, directories, aiModel!!, reasoningLevel!!, projectId!!,
-                            sessionId, apiKeyId, sessionStore
+                            sessionId, apiKeyId, sessionStore,
+                            subagentConfigManager = subagentConfigManager
                         ),
                         manager = mgr
                     )

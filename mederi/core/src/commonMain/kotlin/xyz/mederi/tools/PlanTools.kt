@@ -258,6 +258,24 @@ class PlanTools(
             val error = validatePlan(args)
             if (error != null) return "Error: $error"
 
+            // 三条硬规则之二：同一会话只有最新计划可执行——新 create_plan 作废全部非终态旧计划
+            // （含执行中），作废旧计划移入 plans-voided/ 留痕。已完成的 COMPLETED 计划保留不受影响。
+            val voidedIds = planStore.voidActivePlans(sessionId)
+            if (voidedIds.isNotEmpty()) {
+                voidedIds.forEach { oldPlanId ->
+                    eventBus.emit(MederiEvent(
+                        type = EventType.PLAN_PROGRESS,
+                        sessionId = sessionId,
+                        payload = mapOf(
+                            "planId" to oldPlanId,
+                            "action" to "voided"
+                        ),
+                        timestamp = Instant.now().toString()
+                    ))
+                }
+                DebugLog.data("PlanTools", "voided prior non-terminal plans", "count=${voidedIds.size}, ids=$voidedIds")
+            }
+
             val now = Instant.now().atZone(ZoneOffset.UTC)
             val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").format(now)
 
@@ -333,12 +351,12 @@ class PlanTools(
                     emitPlanTodos(plan.copy(status = PlanStatus.APPROVED), "approved")
                     "Plan approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
                 } else {
-                    // 拒绝后不盲目重提：直接在最终回复里问用户理由，turn 正常结束，
-                    // 用户答复后（下一轮）再修订重提——避免被拒后疯狂 create_plan 循环
-                    "Plan rejected by the user. Do NOT retry create_plan now. In your final " +
-                        "reply, ask the user why it was rejected and what to adjust " +
-                        "(scope, approach, files, granularity), then wait for their answer " +
-                        "before revising and requesting approval again."
+                    // 计划无"拒绝"态（只有批准/作废/被无视）。此分支是用户未批准也未作废时的
+                    // 兜底：不预设意图、绝不反问"为什么"。让模型回去响应用户最新消息，计划保持
+                    // PENDING_APPROVAL，等用户明确批准或下个 create_plan 作废它。
+                    "Plan was not approved and not voided; it remains PENDING_APPROVAL. " +
+                        "Do not retry create_plan now. Respond to the user's latest message; " +
+                        "do not ask why they did not approve."
                 }
             } else {
                 notebook.append("## ${Instant.now()} — Plan created (auto-approved): ${plan.title}")
@@ -664,6 +682,22 @@ class PlanTools(
                 "Reason: ${args.reason}\n" +
                 "Change #${updated.subtasks[args.subtaskIndex].verificationChanges.size} recorded in plan audit trail."
         }
+    }
+
+    companion object {
+        /** create_plan 工具名（TurnExecutor 据此刻意写或找到挂起的计划工具调用）。 */
+        const val PLAN_TOOL = "create_plan"
+
+        /**
+         * 用户在有计划待批准时直接继续对话的中性结果语料（非批准、非拒绝、非作废）。
+         *
+         * 这是三条硬规则之一"用户直接回复 ≠ 拒绝"的落库文本：TurnExecutor 在用户继续对话时
+         * 把这条作为 create_plan 的 ToolResult 写入历史，让下一轮 AI 视图无悬空 tool call，
+         * 并明确"计划仍 PENDING_APPROVAL、用户只是继续了对话"——绝不引导模型追问为什么没批准。
+         */
+        const val USER_REPLIED_NEUTRAL =
+            "User did not approve or reject the plan; they continued the conversation. " +
+            "The plan stays PENDING_APPROVAL — respond to their message, do not ask why."
     }
 
 }

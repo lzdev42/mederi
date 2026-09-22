@@ -459,6 +459,38 @@ class MockAiCore(
         "<html><body><h1>Mock preview for $path</h1></body></html>"
     }
 
+    private val subagentConfigs = mutableMapOf(
+        "EXECUTOR" to SubagentConfigItem(
+            role = "EXECUTOR",
+            displayName = "执行器 (Executor)",
+            description = "负责执行计划中的具体子任务，拥有代码修改与命令执行权限"
+        ),
+        "RESEARCHER" to SubagentConfigItem(
+            role = "RESEARCHER",
+            displayName = "研究员 (Researcher)",
+            description = "负责只读调研代码库与分析上下文，无写入与命令执行权限"
+        )
+    )
+
+    override suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>> = runCatching {
+        subagentConfigs.values.toList()
+    }
+
+    override suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = runCatching {
+        val current = subagentConfigs[role] ?: SubagentConfigItem(
+            role = role,
+            displayName = role,
+            description = ""
+        )
+        val modelName = availableModels.value.find { it.id == input.modelId }?.name
+        subagentConfigs[role] = current.copy(
+            modelId = input.modelId,
+            modelName = modelName,
+            reasoningLevel = input.reasoningLevel,
+            isInheriting = input.modelId == null && input.reasoningLevel == null
+        )
+    }
+
     fun injectSnapshot(conversationId: String, snapshot: ConversationSnapshot) {
         conversations[conversationId]?.value = snapshot
     }

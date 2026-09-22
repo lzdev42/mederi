@@ -49,7 +49,8 @@ class SessionManagerImpl(
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     ),
     private val mcpConnector: McpConnector? = null,
-    private val skills: SkillManager? = null
+    private val skills: SkillManager? = null,
+    private val subagentConfigManager: xyz.mederi.tools.subagent.SubagentConfigManager? = null
 ) : SessionManager {
 
     private val turnExecutor = TurnExecutor(
@@ -60,7 +61,8 @@ class SessionManagerImpl(
         projectManager = projectManager,
         diffStore = diffStore,
         mcpConnector = mcpConnector,
-        skills = skills
+        skills = skills,
+        subagentConfigManager = subagentConfigManager
     )
 
     override suspend fun list(): List<Session> = sessionStore.list()

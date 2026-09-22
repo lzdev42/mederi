@@ -35,14 +35,19 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.provider_api_key_label
 import mederi.app.shared.generated.resources.provider_base_url_label
 import mederi.app.shared.generated.resources.provider_reasoning_label
+import mederi.app.shared.generated.resources.auto_setup_confirm_message
+import mederi.app.shared.generated.resources.auto_setup_confirm_ok
+import mederi.app.shared.generated.resources.auto_setup_confirm_title
 import mederi.app.shared.generated.resources.settings_filter_all_count
 import mederi.app.shared.generated.resources.settings_filter_enabled_count
 import mederi.app.shared.generated.resources.settings_filter_free
 import mederi.app.shared.generated.resources.settings_filter_image
 import mederi.app.shared.generated.resources.settings_filter_reasoning
+import xyz.mederi.ui.components.ProviderIcon
 import mederi.app.shared.generated.resources.settings_panel_add_model
 import mederi.app.shared.generated.resources.settings_panel_add_short
 import mederi.app.shared.generated.resources.settings_panel_auto_setup
+import mederi.app.shared.generated.resources.settings_panel_cancel
 import mederi.app.shared.generated.resources.settings_panel_configure_keys
 import mederi.app.shared.generated.resources.settings_panel_delete
 import mederi.app.shared.generated.resources.settings_panel_delete_provider_message
@@ -65,6 +70,7 @@ import mederi.app.shared.generated.resources.settings_panel_sync_unsupported
 import mederi.app.shared.generated.resources.settings_panel_syncing
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.atoms.ConfirmDialog
 
 // ============================================================================
 // 4. 右侧工作台：供应商详情与模型管理
@@ -83,6 +89,7 @@ internal fun ProviderDetailWorkspace(
     var showAddManualModelDialog by remember { mutableStateOf(false) }
     var editingModel by remember { mutableStateOf<ModelItemUiState?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showAutoSetupConfirm by remember { mutableStateOf(false) }
 
     val filteredModels = viewModel.uiState.filteredModels
     val isSyncing = provider.syncStatus is ModelsSyncStatus.Syncing
@@ -131,6 +138,7 @@ internal fun ProviderDetailWorkspace(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
             ) {
+                ProviderIcon(name = provider.name, baseUrl = provider.baseUrl, size = 20.dp)
                 Text(
                     text = provider.name,
                     color = colors.textPrimary,
@@ -144,7 +152,8 @@ internal fun ProviderDetailWorkspace(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)
             ) {
-                StatusIndicator(isConnected = provider.isConnected, colors = colors)
+                // 用户指定暂时不显示右侧“已连接”状态指示
+                // StatusIndicator(isConnected = provider.isConnected, colors = colors)
 
                 if (!provider.isBuiltin) {
                     Text(
@@ -327,7 +336,7 @@ internal fun ProviderDetailWorkspace(
                             .clip(ProviderTokens.RadiusControl)
                             .background(colors.surfaceCard)
                             .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
-                            .clickable { viewModel.autoSetupModels(provider.id) }
+                            .clickable { showAutoSetupConfirm = true }
                             .padding(horizontal = 8.dp, vertical = 5.dp)
                     ) {
                         Text(stringResource(Res.string.settings_panel_auto_setup), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
@@ -398,52 +407,140 @@ internal fun ProviderDetailWorkspace(
             }
         } else {
             // 桌面端横向工具栏
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
             ) {
-                // 搜索框
-                Box(
-                    modifier = Modifier
-                        .width(180.dp)
-                        .height(28.dp)
-                        .clip(ProviderTokens.RadiusControl)
-                        .background(colors.surfaceInput)
-                        .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
-                        .padding(horizontal = ProviderTokens.SpacingSmall),
-                    contentAlignment = Alignment.CenterStart
+                // 上行：搜索框（弹性宽度）与右侧批量/维护操作按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 搜索框
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .widthIn(min = 120.dp, max = 220.dp)
+                            .height(28.dp)
+                            .clip(ProviderTokens.RadiusControl)
+                            .background(colors.surfaceInput)
+                            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
+                            .padding(horizontal = ProviderTokens.SpacingSmall),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
+                        ) {
+                            Icon(FeatherIcons.Search, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
+                            BasicTextField(
+                                value = viewModel.uiState.searchQuery,
+                                onValueChange = { viewModel.updateSearchQuery(it) },
+                                singleLine = true,
+                                textStyle = TextStyle(fontSize = ProviderTokens.FontLabel, color = colors.textPrimary),
+                                cursorBrush = SolidColor(colors.accentPrimary),
+                                modifier = Modifier.fillMaxWidth(),
+                                decorationBox = { inner ->
+                                    if (viewModel.uiState.searchQuery.isEmpty()) {
+                                        Text(stringResource(Res.string.settings_panel_search_models), fontSize = ProviderTokens.FontLabel, color = colors.textMuted)
+                                    }
+                                    inner()
+                                }
+                            )
+                        }
+                    }
+
+                    // 批量操作、刷新模型与新增
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
+                        horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
                     ) {
-                        Icon(FeatherIcons.Search, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
-                        BasicTextField(
-                            value = viewModel.uiState.searchQuery,
-                            onValueChange = { viewModel.updateSearchQuery(it) },
-                            singleLine = true,
-                            textStyle = TextStyle(fontSize = ProviderTokens.FontLabel, color = colors.textPrimary),
-                            cursorBrush = SolidColor(colors.accentPrimary),
-                            modifier = Modifier.fillMaxWidth(),
-                            decorationBox = { inner ->
-                                if (viewModel.uiState.searchQuery.isEmpty()) {
-                                    Text(stringResource(Res.string.settings_panel_search_models), fontSize = ProviderTokens.FontLabel, color = colors.textMuted)
-                                }
-                                inner()
-                            }
+                        Text(
+                            text = stringResource(Res.string.settings_panel_show_all),
+                            color = colors.textMuted,
+                            fontSize = ProviderTokens.FontLabel,
+                            modifier = Modifier.clickable { viewModel.setAllModelsEnabled(provider.id, true) }
                         )
+                        Text(
+                            text = stringResource(Res.string.settings_panel_hide_all),
+                            color = colors.textMuted,
+                            fontSize = ProviderTokens.FontLabel,
+                            modifier = Modifier.clickable { viewModel.setAllModelsEnabled(provider.id, false) }
+                        )
+
+                        // 固定的刷新模型按钮
+                        Box(
+                            modifier = Modifier
+                                .clip(ProviderTokens.RadiusControl)
+                                .background(colors.surfaceCard)
+                                .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
+                                .clickable(enabled = !isSyncing) { viewModel.autoFetchModels(provider.id) }
+                                .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
+                            ) {
+                                if (isSyncing) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 1.5.dp,
+                                        modifier = Modifier.size(11.dp),
+                                        color = colors.accentPrimary
+                                    )
+                                    Text(
+                                        text = stringResource(Res.string.settings_panel_syncing),
+                                        color = colors.textSecondary,
+                                        fontSize = ProviderTokens.FontLabel
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = FeatherIcons.RefreshCw,
+                                        contentDescription = stringResource(Res.string.settings_panel_refresh_models),
+                                        tint = colors.textSecondary,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                    Text(
+                                        text = stringResource(Res.string.settings_panel_refresh_models),
+                                        color = colors.textSecondary,
+                                        fontSize = ProviderTokens.FontLabel
+                                    )
+                                }
+                            }
+                        }
+
+                        // 「自动设置」：显式应用目录元数据（系统唯一自动写入通道，用户覆盖优先）
+                        Box(
+                            modifier = Modifier
+                                .clip(ProviderTokens.RadiusControl)
+                                .background(colors.surfaceCard)
+                                .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
+                                .clickable { showAutoSetupConfirm = true }
+                                .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
+                        ) {
+                            Text(stringResource(Res.string.settings_panel_auto_setup), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(ProviderTokens.RadiusControl)
+                                .background(colors.surfaceCard)
+                                .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
+                                .clickable { showAddManualModelDialog = true }
+                                .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
+                        ) {
+                            Text(stringResource(Res.string.settings_panel_add_model), color = colors.textPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
+                        }
                     }
                 }
 
-                // 统一风格的 Segmented Filter 控制器
+                // 下行：分类筛选 Chip 控制条（支持水平滑动防溢出）
                 Row(
                     modifier = Modifier
-                        .clip(ProviderTokens.RadiusControl)
-                        .background(colors.surfaceInput)
-                        .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
-                        .padding(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     CapabilityFilter.entries.forEach { filter ->
                         val isSel = viewModel.uiState.capabilityFilter == filter
@@ -456,10 +553,11 @@ internal fun ProviderDetailWorkspace(
                         }
                         Box(
                             modifier = Modifier
-                                .clip(ProviderTokens.RadiusBadge)
-                                .background(if (isSel) colors.surfaceCard else Color.Transparent)
+                                .clip(ProviderTokens.RadiusControl)
+                                .background(if (isSel) colors.surfaceCard else colors.surfaceInput)
+                                .border(1.dp, if (isSel) colors.accentPrimary.copy(alpha = 0.5f) else colors.divider, ProviderTokens.RadiusControl)
                                 .clickable { viewModel.setCapabilityFilter(filter) }
-                                .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 3.dp)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
                                 text = label,
@@ -468,88 +566,6 @@ internal fun ProviderDetailWorkspace(
                                 fontWeight = if (isSel) FontWeight.Medium else FontWeight.Normal
                             )
                         }
-                    }
-                }
-
-                // 批量操作、刷新模型与新增
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
-                ) {
-                    Text(
-                        text = stringResource(Res.string.settings_panel_show_all),
-                        color = colors.textMuted,
-                        fontSize = ProviderTokens.FontLabel,
-                        modifier = Modifier.clickable { viewModel.setAllModelsEnabled(provider.id, true) }
-                    )
-                    Text(
-                        text = stringResource(Res.string.settings_panel_hide_all),
-                        color = colors.textMuted,
-                        fontSize = ProviderTokens.FontLabel,
-                        modifier = Modifier.clickable { viewModel.setAllModelsEnabled(provider.id, false) }
-                    )
-
-                    // 固定的刷新模型按钮
-                    Box(
-                        modifier = Modifier
-                            .clip(ProviderTokens.RadiusControl)
-                            .background(colors.surfaceCard)
-                            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
-                            .clickable(enabled = !isSyncing) { viewModel.autoFetchModels(provider.id) }
-                            .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
-                        ) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(
-                                    strokeWidth = 1.5.dp,
-                                    modifier = Modifier.size(11.dp),
-                                    color = colors.accentPrimary
-                                )
-                                Text(
-                                    text = stringResource(Res.string.settings_panel_syncing),
-                                    color = colors.textSecondary,
-                                    fontSize = ProviderTokens.FontLabel
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = FeatherIcons.RefreshCw,
-                                    contentDescription = stringResource(Res.string.settings_panel_refresh_models),
-                                    tint = colors.textSecondary,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Text(
-                                    text = stringResource(Res.string.settings_panel_refresh_models),
-                                    color = colors.textSecondary,
-                                    fontSize = ProviderTokens.FontLabel
-                                )
-                            }
-                        }
-                    }
-
-                    // 「自动设置」：显式应用目录元数据（系统唯一自动写入通道，用户覆盖优先）
-                    Box(
-                        modifier = Modifier
-                            .clip(ProviderTokens.RadiusControl)
-                            .background(colors.surfaceCard)
-                            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
-                            .clickable { viewModel.autoSetupModels(provider.id) }
-                            .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
-                    ) {
-                        Text(stringResource(Res.string.settings_panel_auto_setup), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(ProviderTokens.RadiusControl)
-                            .background(colors.surfaceCard)
-                            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
-                            .clickable { showAddManualModelDialog = true }
-                            .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 4.dp)
-                    ) {
-                        Text(stringResource(Res.string.settings_panel_add_model), color = colors.textPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -675,9 +691,6 @@ internal fun ProviderDetailWorkspace(
             model = model,
             colors = colors,
             onDismiss = { editingModel = null },
-            onImageOverride = { supported ->
-                viewModel.setImageOverride(provider.id, model.id, supported)
-            },
             onSave = { newName, newImages, newThinking, newCw, newMt, newLevels ->
                 viewModel.updateModelConfig(
                     providerId = provider.id,
@@ -704,6 +717,21 @@ internal fun ProviderDetailWorkspace(
                 showDeleteConfirm = false
                 onDelete()
             }
+        )
+    }
+    if (showAutoSetupConfirm) {
+        ConfirmDialog(
+            title = stringResource(Res.string.auto_setup_confirm_title),
+            message = stringResource(Res.string.auto_setup_confirm_message),
+            confirmLabel = stringResource(Res.string.auto_setup_confirm_ok),
+            cancelLabel = stringResource(Res.string.settings_panel_cancel),
+            onConfirm = {
+                showAutoSetupConfirm = false
+                viewModel.autoSetupModels(provider.id)
+            },
+            onDismiss = { showAutoSetupConfirm = false },
+            danger = false,
+            width = 380.dp
         )
     }
 }

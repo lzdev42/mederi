@@ -209,9 +209,6 @@ class ProviderManagerImpl(
             ?: throw NoSuchElementException("Provider not found: $providerId")
         val existing = provider.getModel(modelId)
             ?: throw NoSuchElementException("Model not found: $modelId")
-        check(existing.origin == ModelOrigin.FETCHED) {
-            "MANUAL 模型是用户权威，禁止远端元数据合并: ${existing.providerModelId}"
-        }
         val merged = ModelMerge.mergeFetched(existing, endpoint, catalog)
         // 无变化不落库（回填路径每模型都会调，省一次写放大）
         if (merged == existing) return existing
@@ -235,13 +232,6 @@ class ProviderManagerImpl(
             ?: throw NoSuchElementException("Provider not found: $providerId")
         val existing = provider.getModel(modelId)
             ?: throw NoSuchElementException("Model not found: $modelId")
-        if (existing.origin == ModelOrigin.FETCHED) {
-            val metadataTouched = name != null || supportsReasoning != null || reasoningLevel != null ||
-                contextWindow != null || maxTokens != null || reasoningLevels != null
-            check(!metadataTouched) {
-                "FETCHED 模型元数据是端点/目录权威，只能改 isEnabled / 图片覆盖: ${existing.providerModelId}"
-            }
-        }
         val updated = existing.copy(
             name = name ?: existing.name,
             supportsReasoning = supportsReasoning ?: existing.supportsReasoning,

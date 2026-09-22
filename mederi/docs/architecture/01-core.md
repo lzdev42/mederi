@@ -70,6 +70,7 @@ classDiagram
         +index +name +status +planDetail(brief恒不变)
         +spec(generate_spec写入) +targetFiles +decisions
         +verification +verificationResult? +verificationChanges: List~VerificationChange~ +dependsOn +parallelizable
+        +executorTouchedFiles: List~String~ +executorProgress?
     }
     class TurnDiff { +sessionId +messageId? +changes: List~FileChange~ +unifiedDiff +createdAt }
     class MederiEvent { +type: EventType +sessionId +messageId? +payload +timestamp }

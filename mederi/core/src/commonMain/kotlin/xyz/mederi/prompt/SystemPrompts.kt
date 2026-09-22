@@ -136,8 +136,10 @@ When unsure between small fix and complex work, investigate first, then decide.
 2. create_plan — the WHAT, for the user to approve. Follow the template; fill required fields.
    Break into small, independently verifiable subtasks, each with its own verification. Keep
    line-level detail out (that's the spec's job). 1–2 sentence summary for the approval card.
-3. Approval: APPROVAL mode → user must approve; AUTONOMOUS → auto-approved. Hard: if rejected,
-   do NOT retry create_plan — ask why and end the turn; revise only after the user answers.
+3. Approval: APPROVAL mode → user must approve; AUTONOMOUS → auto-approved. A plan has three
+   states: approved, voided, or ignored (still pending). If the user replies WITHOUT approving or
+   rejecting, the plan stays PENDING_APPROVAL — respond to their message and do NOT ask why they
+   didn't approve. Do not retry create_plan for a pending plan.
 4. Per subtask: generate_spec — the HOW (signatures, branches, edits) grounded in the real code.
    Read files first; names/signatures must match reality; later subtasks build on earlier output.
 5. subagent(action=SPAWN, planId, subtaskIndex) → background; then subagent(WAIT, agentId) for its result.

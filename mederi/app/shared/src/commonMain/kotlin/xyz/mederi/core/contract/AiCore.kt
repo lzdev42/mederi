@@ -125,6 +125,12 @@ interface AiCore {
     suspend fun uninstallSkill(name: String): Result<Unit> = Result.success(Unit)
 
     // ==========================================
+    // 子代理模型配置契约
+    // ==========================================
+    suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>> = Result.success(emptyList())
+    suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = Result.success(Unit)
+
+    // ==========================================
     // AGENTS.md 生成契约（API 形态，暂无命令/UI 入口）
     // ==========================================
 

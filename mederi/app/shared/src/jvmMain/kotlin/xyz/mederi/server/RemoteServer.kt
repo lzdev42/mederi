@@ -27,7 +27,9 @@ import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
+import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import io.ktor.server.sse.ServerSSESession
 import io.ktor.server.sse.SSE
 import io.ktor.server.sse.heartbeat
@@ -463,6 +465,19 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     delete("/v1/skills/{name}") {
         call.respondResult(aiCore.uninstallSkill(call.parameters["name"]!!))
+    }
+
+    // ------------------------------------------------------------------
+    // 子代理模型配置
+    // ------------------------------------------------------------------
+
+    get("/v1/subagent-configs") {
+        call.respondResult(aiCore.listSubagentConfigs())
+    }
+    put("/v1/subagent-configs/{role}") {
+        val role = call.parameters["role"]!!
+        val input = call.receive<UpdateSubagentConfigInput>()
+        call.respondResult(aiCore.updateSubagentConfig(role, input))
     }
 }
 

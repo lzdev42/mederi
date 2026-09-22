@@ -145,13 +145,13 @@ fun ProviderSettingsPanel() {
             }
         } else {
             // ========================================================
-            // 桌面端 Master-Detail 双栏并排模式 (Desktop Layout)
+            // 桌面端 三栏并排模式 (Desktop Layout: 左可选 | 中工作台 | 右已配置)
             // ========================================================
             Row(modifier = Modifier.fillMaxSize()) {
-                // 左侧导航栏 (Master Navigation)
+                // 1. 左侧：可选供应商 (Available Presets & Custom Add)
                 Column(
                     modifier = Modifier
-                        .width(220.dp)
+                        .width(170.dp)
                         .fillMaxHeight()
                         .background(colors.surfaceSidebar)
                         .padding(ProviderTokens.SpacingSmall),
@@ -163,52 +163,32 @@ fun ProviderSettingsPanel() {
                         onClick = { viewModel.startCreateCustomProvider() }
                     )
 
-                    BuiltinPresetsSection(
-                        presets = viewModel.builtinPresets,
-                        existingProviderNames = uiState.providers.map { it.name }.toSet(),
-                        colors = colors,
-                        onAddPreset = { addingBuiltin = it }
-                    )
-
-                    HorizontalDivider(color = colors.divider)
-
-                    Text(
-                        text = stringResource(Res.string.settings_panel_providers_count, uiState.providers.size),
-                        color = colors.textMuted,
-                        fontSize = ProviderTokens.FontLabel,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
                             .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
+                        verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
                     ) {
-                        uiState.providers.forEach { provider ->
-                            val isSelected = !uiState.isCreatingCustom && uiState.selectedProviderId == provider.id
-                            ProviderSidebarRow(
-                                provider = provider,
-                                isSelected = isSelected,
-                                colors = colors,
-                                onClick = { viewModel.selectProvider(provider.id) }
-                            )
-                        }
+                        BuiltinPresetsSection(
+                            presets = viewModel.builtinPresets,
+                            existingProviderNames = uiState.providers.map { it.name }.toSet(),
+                            colors = colors,
+                            onAddPreset = { addingBuiltin = it }
+                        )
                     }
                 }
 
-                // 竖向细分割线
+                // 竖向细分割线 1
                 Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(colors.divider))
 
-                // 右侧工作台 (Detail Workspace)
+                // 2. 中间：工作台 (Detail Workspace)
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .background(colors.surfaceWorkspace)
-                        .padding(ProviderTokens.SpacingLarge)
+                        .padding(ProviderTokens.SpacingMedium)
                 ) {
                     when {
                         uiState.isCreatingCustom -> {
@@ -232,6 +212,45 @@ fun ProviderSettingsPanel() {
                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(stringResource(Res.string.settings_panel_empty_select_hint), color = colors.textMuted, fontSize = ProviderTokens.FontValue)
                             }
+                        }
+                    }
+                }
+
+                // 竖向细分割线 2
+                Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(colors.divider))
+
+                // 3. 右侧：已配置供应商列表 (Configured Providers)
+                Column(
+                    modifier = Modifier
+                        .width(180.dp)
+                        .fillMaxHeight()
+                        .background(colors.surfaceSidebar)
+                        .padding(ProviderTokens.SpacingSmall),
+                    verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
+                ) {
+                    Text(
+                        text = stringResource(Res.string.settings_panel_providers_count, uiState.providers.size),
+                        color = colors.textMuted,
+                        fontSize = ProviderTokens.FontLabel,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
+                    ) {
+                        uiState.providers.forEach { provider ->
+                            val isSelected = !uiState.isCreatingCustom && uiState.selectedProviderId == provider.id
+                            ProviderSidebarRow(
+                                provider = provider,
+                                isSelected = isSelected,
+                                colors = colors,
+                                onClick = { viewModel.selectProvider(provider.id) }
+                            )
                         }
                     }
                 }

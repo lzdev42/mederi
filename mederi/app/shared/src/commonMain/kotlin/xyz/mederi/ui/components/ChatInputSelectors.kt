@@ -84,16 +84,18 @@ internal fun ModelPickerList(
     itemWrapper: @Composable (model: ModelOption, isSelected: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) -> Unit,
     groupWrapper: @Composable (groupIndex: Int, content: @Composable () -> Unit) -> Unit,
 ) {
-    val providerNameMap = remember(providers) { providers.associate { it.id to it.name } }
+    val providerMap = remember(providers) { providers.associateBy { it.id } }
     val groupedModels = remember(models) { models.groupBy { it.provider } }
 
     Column(modifier = modifier) {
         groupedModels.entries.forEachIndexed { groupIndex, (providerId, providerModels) ->
-            val providerDisplayName = (providerNameMap[providerId] ?: providerId).uppercase()
+            val provider = providerMap[providerId]
+            val providerDisplayName = (provider?.name ?: providerId).uppercase()
             groupWrapper(groupIndex) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     ModelPickerGroupHeader(
                         providerDisplayName = providerDisplayName,
+                        providerBaseUrl = provider?.baseUrl,
                         count = providerModels.size,
                         colors = colors,
                     )
@@ -116,10 +118,11 @@ internal fun ModelPickerList(
     }
 }
 
-/** 供应商分组头：Cpu 图标 + 供应商名（大写）+ 模型数。 */
+/** 供应商分组头：ProviderIcon 图标 + 供应商名（大写）+ 模型数。 */
 @Composable
 private fun ModelPickerGroupHeader(
     providerDisplayName: String,
+    providerBaseUrl: String?,
     count: Int,
     colors: xyz.mederi.theme.MederiColors,
 ) {
@@ -135,7 +138,11 @@ private fun ModelPickerGroupHeader(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.weight(1f, fill = false)
         ) {
-            Icon(FeatherIcons.Cpu, null, tint = colors.textMuted, modifier = Modifier.size(12.dp))
+            ProviderIcon(
+                name = providerDisplayName,
+                baseUrl = providerBaseUrl,
+                size = 14.dp
+            )
             Text(
                 text = providerDisplayName,
                 fontSize = 11.sp,

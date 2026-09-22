@@ -41,9 +41,22 @@ import xyz.mederi.theme.MederiColors
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
 import mederi.app.shared.generated.resources.language_system
+import kotlinx.coroutines.launch
 import mederi.app.shared.generated.resources.settings_add
+import xyz.mederi.debug.DebugLog
+import xyz.mederi.ui.components.ChipSelectorPill
+import xyz.mederi.ui.components.ModelPickerList
+import xyz.mederi.ui.components.formatReasoningLevelLabel
+import mederi.app.shared.generated.resources.input_thinking_label
 import mederi.app.shared.generated.resources.settings_agents_desc
 import mederi.app.shared.generated.resources.settings_agents_title
+import mederi.app.shared.generated.resources.settings_agents_inherit
+import mederi.app.shared.generated.resources.settings_agents_inherit_reasoning
+import mederi.app.shared.generated.resources.settings_agents_inherit_reasoning_short
+import mederi.app.shared.generated.resources.settings_agents_model_label
+import mederi.app.shared.generated.resources.settings_agents_reasoning_label
+import mederi.app.shared.generated.resources.settings_agents_status_custom
+import mederi.app.shared.generated.resources.settings_agents_status_inheriting
 import mederi.app.shared.generated.resources.settings_appearance_desc
 import mederi.app.shared.generated.resources.settings_appearance_title
 import mederi.app.shared.generated.resources.settings_language_desc
@@ -202,7 +215,7 @@ fun SettingsDialog(
                         SettingsTab.PROVIDERS -> ProviderSettingsPanel()
                         SettingsTab.GENERAL -> GeneralPanel(isCompact = isCompact)
                         SettingsTab.SANDBOX -> SandboxPanel()
-                        SettingsTab.AGENTS -> AgentsPanel()
+                        SettingsTab.AGENTS -> AgentsPanel(isCompact = isCompact)
                         SettingsTab.REMOTE -> RemoteControlPanel(isCompact = isCompact)
                         SettingsTab.SYSTEM -> SystemPanel(isCompact = isCompact)
                     }
@@ -848,12 +861,427 @@ private fun SandboxWhitelistCard(appState: xyz.mederi.ui.appstate.AppState, c: M
 }
 
 @Composable
-private fun AgentsPanel() {
+private fun AgentsPanel(isCompact: Boolean = false) {
+    val appState = LocalAppState.current
     val c = LocalMederiColors.current
+    val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
-    Column(Modifier.fillMaxSize().verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text(stringResource(Res.string.settings_agents_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Text(stringResource(Res.string.settings_agents_desc), color = c.textMuted, fontSize = 12.sp)
+
+    var configs by remember { mutableStateOf<List<SubagentConfigItem>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    val availableModels by appState.availableModels.collectAsState()
+    val providers by appState.providers.collectAsState()
+    val parentModel by appState.selectedModel.collectAsState()
+
+    val refreshConfigs: () -> Unit = {
+        scope.launch {
+            val list = appState.aiCore.listSubagentConfigs().getOrDefault(emptyList())
+            DebugLog.info("AgentsPanel", "Subagent configs fetched: count=${list.size}, configs=$list")
+            configs = list
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshConfigs()
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(scroll),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(Res.string.settings_agents_title), color = c.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(Res.string.settings_agents_desc), color = c.textMuted, fontSize = 12.sp)
+        }
+
+        if (isLoading && configs.isEmpty()) {
+            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = c.accentPrimary, strokeWidth = 2.dp)
+            }
+        } else {
+            configs.forEach { item ->
+                AgentConfigCard(
+                    item = item,
+                    availableModels = availableModels,
+                    providers = providers,
+                    parentModel = parentModel,
+                    isCompact = isCompact,
+                    colors = c,
+                    onUpdate = { modelId, reasoningLevel ->
+                        DebugLog.info("AgentsPanel", "Update config for role=${item.role}: modelId=$modelId, reasoningLevel=$reasoningLevel")
+                        scope.launch {
+                            appState.aiCore.updateSubagentConfig(
+                                item.role,
+                                UpdateSubagentConfigInput(modelId = modelId, reasoningLevel = reasoningLevel)
+                            )
+                            refreshConfigs()
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentConfigCard(
+    item: SubagentConfigItem,
+    availableModels: List<ModelOption>,
+    providers: List<ProviderConfig>,
+    parentModel: ModelOption?,
+    isCompact: Boolean,
+    colors: MederiColors,
+    onUpdate: (modelId: String?, reasoningLevel: String?) -> Unit
+) {
+    // 选中的模型对象：如果未指定（null），说明继承父会话模型；否则查 availableModels
+    val currentSelectedModel = remember(item.modelId, availableModels) {
+        item.modelId?.let { id -> availableModels.find { it.id == id } }
+    }
+
+    // 真正生效的模型（用于推导是否支持推理）：
+    // 若指定了模型则为该模型；若继承父模型则为当前会话主模型 parentModel
+    val effectiveModel = currentSelectedModel ?: parentModel
+
+    // 推理能力关联判断：完全复用对话框逻辑
+    val reasoningLevels = effectiveModel?.reasoningLevels ?: emptyList()
+    val supportsReasoning = effectiveModel?.supportsThinking == true && reasoningLevels.isNotEmpty()
+    DebugLog.debug("AgentsPanel", "Role ${item.role} effectiveModel=${effectiveModel?.id}, supportsReasoning=$supportsReasoning, levels=$reasoningLevels")
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(12.dp))
+            .padding(if (isCompact) 12.dp else 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 头部：角色名 + 状态徽章 + 恢复继承按钮
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    if (item.role == "RESEARCHER") FeatherIcons.Search else FeatherIcons.Cpu,
+                    contentDescription = null,
+                    tint = colors.accentPrimary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(item.displayName, color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                // 状态徽章
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (item.isInheriting) colors.surfaceCardBorder else colors.accentPrimary.copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        if (item.isInheriting) stringResource(Res.string.settings_agents_status_inheriting)
+                        else stringResource(Res.string.settings_agents_status_custom),
+                        color = if (item.isInheriting) colors.textMuted else colors.accentPrimary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            if (!item.isInheriting) {
+                Text(
+                    text = stringResource(Res.string.settings_agents_inherit),
+                    color = colors.accentPrimary,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { onUpdate(null, null) }
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        // 描述文本
+        if (item.description.isNotBlank()) {
+            Text(item.description, color = colors.textMuted, fontSize = 12.sp)
+        }
+
+        HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
+
+        // 选择器栏：完全复用对话框样式（ChipSelectorPill）与弹窗（ModelPickerList）
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 1. 模型选择器（复用对话框 ModelSelectorMenu 弹窗与样式）
+            SubagentModelMenu(
+                selectedModelId = item.modelId,
+                selectedModelName = currentSelectedModel?.name ?: item.modelName,
+                models = availableModels,
+                providers = providers,
+                compact = isCompact,
+                colors = colors,
+                onSelect = { selectedModel ->
+                    if (selectedModel == null) {
+                        // 选择了继承父会话模型
+                        onUpdate(null, null)
+                    } else {
+                        // 选择具体模型后，检查原有 reasoningLevel 在新模型中是否合法
+                        val newLevels = selectedModel.reasoningLevels
+                        val validReasoning = if (selectedModel.supportsThinking && item.reasoningLevel != null && newLevels.contains(item.reasoningLevel)) {
+                            item.reasoningLevel
+                        } else null
+                        onUpdate(selectedModel.id, validReasoning)
+                    }
+                }
+            )
+
+            // 2. 推理选择器（关联生效：仅当当前生效模型支持推理时展示，复用对话框 ThinkingLevelMenu 逻辑与样式）
+            if (supportsReasoning) {
+                SubagentReasoningMenu(
+                    currentReasoningLevel = item.reasoningLevel,
+                    levels = reasoningLevels,
+                    colors = colors,
+                    onSelect = { lvl ->
+                        onUpdate(item.modelId, lvl)
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 子代理模型选择器菜单：完全复用对话框 [ModelPickerList] 结构与 [DropdownMenu] 样式。
+ */
+@Composable
+private fun SubagentModelMenu(
+    selectedModelId: String?,
+    selectedModelName: String?,
+    models: List<ModelOption>,
+    providers: List<ProviderConfig>,
+    compact: Boolean,
+    colors: MederiColors,
+    onSelect: (ModelOption?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    val pillLabel = if (selectedModelId == null) {
+        stringResource(Res.string.settings_agents_inherit)
+    } else {
+        selectedModelName ?: selectedModelId
+    }
+
+    Box {
+        ChipSelectorPill(
+            label = pillLabel,
+            onClick = { expanded = true }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = colors.surfaceCard,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+                .widthIn(min = if (compact) 400.dp else 500.dp, max = if (compact) 480.dp else 560.dp)
+                .heightIn(max = 480.dp)
+                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
+        ) {
+            // 首项：继承父会话模型
+            val isInheritSelected = selectedModelId == null
+            DropdownMenuItem(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (isInheritSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent),
+                text = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                FeatherIcons.CornerDownRight,
+                                null,
+                                tint = if (isInheritSelected) colors.accentPrimary else colors.textMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = stringResource(Res.string.settings_agents_inherit),
+                                fontSize = if (compact) 12.sp else 12.5.sp,
+                                fontWeight = if (isInheritSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isInheritSelected) colors.accentPrimary else colors.textPrimary
+                            )
+                        }
+                        if (isInheritSelected) {
+                            Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                }
+            )
+
+            HorizontalDivider(
+                color = colors.divider.copy(alpha = 0.6f),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+
+            // 图 2 的供应商分组模型列表（完全复用 ModelPickerList）
+            ModelPickerList(
+                models = models,
+                providers = providers,
+                selectedModelId = selectedModelId,
+                nameFontSize = if (compact) 12.sp else 12.5.sp,
+                unselectedContextColor = colors.textSecondary,
+                checkSize = 14.dp,
+                onSelect = { model ->
+                    onSelect(model)
+                    expanded = false
+                },
+                colors = colors,
+                itemWrapper = { _, isSelected, onClick, content ->
+                    DropdownMenuItem(
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent),
+                        text = { content() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        onClick = onClick,
+                    )
+                },
+                groupWrapper = { groupIndex, content ->
+                    if (groupIndex > 0) {
+                        HorizontalDivider(
+                            color = colors.divider.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    content()
+                }
+            )
+        }
+    }
+}
+
+/**
+ * 子代理推理等级菜单：完全复用对话框 [ThinkingLevelMenu] 的选项推导格式化与样式。
+ */
+@Composable
+private fun SubagentReasoningMenu(
+    currentReasoningLevel: String?,
+    levels: List<String>,
+    colors: MederiColors,
+    onSelect: (String?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    val pillLabel = if (currentReasoningLevel == null) {
+        stringResource(Res.string.input_thinking_label, stringResource(Res.string.settings_agents_inherit_reasoning_short))
+    } else {
+        stringResource(Res.string.input_thinking_label, formatReasoningLevelLabel(currentReasoningLevel))
+    }
+
+    Box {
+        ChipSelectorPill(
+            icon = FeatherIcons.Sliders,
+            label = pillLabel,
+            onClick = { expanded = true }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = colors.surfaceCard,
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .widthIn(min = 160.dp)
+                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+        ) {
+            // 首项：继承父会话推理级别
+            val isInheritSelected = currentReasoningLevel == null
+            DropdownMenuItem(
+                text = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.settings_agents_inherit_reasoning),
+                            fontSize = 12.sp,
+                            fontWeight = if (isInheritSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isInheritSelected) colors.accentPrimary else colors.textPrimary
+                        )
+                        if (isInheritSelected) {
+                            Icon(
+                                FeatherIcons.Check,
+                                null,
+                                tint = colors.accentPrimary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                }
+            )
+
+            if (levels.isNotEmpty()) {
+                HorizontalDivider(
+                    color = colors.divider.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+
+            // 各级别项（复用对话框格式化与高亮逻辑）
+            levels.forEach { lvl ->
+                val isSelected = currentReasoningLevel.equals(lvl, ignoreCase = true)
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = formatReasoningLevelLabel(lvl),
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) colors.accentPrimary else if (lvl == "NONE") colors.textSecondary else colors.textPrimary
+                            )
+                            if (isSelected) {
+                                Icon(
+                                    FeatherIcons.Check,
+                                    null,
+                                    tint = colors.accentPrimary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    onClick = {
+                        onSelect(lvl)
+                        expanded = false
+                    }
+                )
+            }
+        }
     }
 }
 

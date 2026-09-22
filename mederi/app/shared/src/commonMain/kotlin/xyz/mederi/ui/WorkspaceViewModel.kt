@@ -223,11 +223,11 @@ class WorkspaceViewModel(
         val selectedModel = appState.selectedModel.value
         val thinkingLevel = computeEffectiveThinkingLevel()
         viewModelScope.launch {
-            if (currentPending != null && currentPending.id == planId) {
-                appState.aiCore.resolvePlanApproval(convId, planId, approved, selectedModel, thinkingLevel)
-            } else if (approved) {
-                send("请批准并开始执行已制定的计划 $planId")
-            }
+            // 统一走 core 的 resolvePlanApproval：core 内部先判"同 turn"（内存 requester 存活，
+            // 直接唤醒挂起的 create_plan，AI 同 turn 执行）再判"跨 turn/重启"（把 PENDING_APPROVAL
+            // 计划改 APPROVED，以 UI 隐藏的内部消息启动新执行 turn）。不再在 UI 层用发送用户消息
+            // "请批准..." 兜底——那会污染对话，也不走跨 turn 执行链。
+            appState.aiCore.resolvePlanApproval(convId, planId, approved, selectedModel, thinkingLevel)
         }
     }
 
@@ -1241,9 +1241,10 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             }
 
             val pendingPlan = snapshot?.pendingPlanApproval
+            // 计划待批准时用户直接回复 ≠ 拒绝（三条硬规则之一）：不再预置 resolvePlanApproval(false)，
+            // 交给 TurnExecutor 的 pending 分支补写中性 ToolResult + 中止旧 turn，计划保持 PENDING_APPROVAL。
             if (pendingPlan != null) {
-                DebugLog.info("UI", "user replied while plan approval pending: resolving approval as false (continue discussion), planId=${pendingPlan.id}")
-                appState.aiCore.resolvePlanApproval(targetConvId, pendingPlan.id, false)
+                DebugLog.info("UI", "user replied while plan approval pending: plan stays PENDING_APPROVAL (continue discussion), planId=${pendingPlan.id}")
             }
 
             // StatusBar 计时锚点：从"发送请求时刻"起算（切会话回来不重置）
