@@ -64,6 +64,8 @@ fun MarkdownView(
     type: RenderType = RenderType.AUTO,
     isStreaming: Boolean = false,
     language: String? = null,
+    style: RenderStyle = RenderStyle.Chat,
+    colors: MarkdownColors? = null,
     markdownTheme: MarkdownTheme? = null,
     codeTheme: CodeTheme? = null,
     markdownConfig: MarkdownConfig = MarkdownConfig.Default,
@@ -78,6 +80,11 @@ fun MarkdownView(
     val effectiveType = if (type == RenderType.AUTO) RenderType.MARKDOWN else type
     val effectiveSessionKey = sessionKey ?: LocalSessionKey.current
 
+    val colorScheme = MaterialTheme.colorScheme
+    val effectiveColors = colors ?: remember(colorScheme) {
+        MarkdownColors.fromMaterial3(colorScheme)
+    }
+
     val contentComposable: @Composable () -> Unit = when (effectiveType) {
         RenderType.TEXT -> {
             {
@@ -89,9 +96,8 @@ fun MarkdownView(
 
         RenderType.MARKDOWN -> {
             {
-                val colorScheme = MaterialTheme.colorScheme
-                val effectiveTheme = markdownTheme ?: remember(colorScheme) {
-                    MarkdownTheme.material3(colorScheme)
+                val effectiveTheme = markdownTheme ?: remember(style, effectiveColors) {
+                    MarkdownTheme.from(style = style, colors = effectiveColors)
                 }
                 if (enableScrollOverride != null) {
                     // 调用方已知 enableScroll，跳过 BoxWithConstraints（SubcomposeLayout），
@@ -157,9 +163,8 @@ fun MarkdownView(
 
         RenderType.VLR -> {
             {
-                val colorScheme = MaterialTheme.colorScheme
-                val effectiveTheme = markdownTheme ?: remember(colorScheme) {
-                    MarkdownTheme.material3(colorScheme)
+                val effectiveTheme = markdownTheme ?: remember(style, effectiveColors) {
+                    MarkdownTheme.from(style = style, colors = effectiveColors)
                 }
                 VTextView(
                     text = content,
@@ -184,7 +189,12 @@ fun MarkdownView(
         RenderType.AUTO -> error("unreachable: AUTO should be normalized to MARKDOWN above")
     }
 
-    CompositionLocalProvider(LocalSessionKey provides effectiveSessionKey) {
+    CompositionLocalProvider(
+        LocalSessionKey provides effectiveSessionKey,
+        LocalRenderStyle provides style,
+        LocalMarkdownColors provides effectiveColors,
+    ) {
         contentComposable()
     }
 }
+

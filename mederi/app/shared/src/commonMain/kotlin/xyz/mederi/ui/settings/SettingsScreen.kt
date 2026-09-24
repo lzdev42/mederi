@@ -968,7 +968,11 @@ private fun AgentConfigCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(
-                    if (item.role == "RESEARCHER") FeatherIcons.Search else FeatherIcons.Cpu,
+                    when (item.role) {
+                        "RESEARCHER" -> FeatherIcons.Search
+                        "BROWSER_OPERATOR", "BROWSER_BRAIN" -> FeatherIcons.Globe
+                        else -> FeatherIcons.Cpu
+                    },
                     contentDescription = null,
                     tint = colors.accentPrimary,
                     modifier = Modifier.size(16.dp)

@@ -8,11 +8,12 @@ import kotlinx.serialization.Serializable
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.encodeTodos
-import xyz.mederi.plan.GapType
 import xyz.mederi.plan.PlanStore
+import xyz.mederi.plan.RootCause
 import xyz.mederi.plan.SubtaskStatus
 import xyz.mederi.plan.VerifyStatus
 import xyz.mederi.plan.VerificationResult
+import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.tools.ShellTools.CommandResult
 import java.time.Instant
@@ -27,18 +28,49 @@ internal fun verifyCommandOutcome(exitCode: Int, timedOut: Boolean): VerifyComma
     else -> VerifyCommandOutcome.FAIL
 }
 
+/** 字面量预期核对结果（机器硬校验）。[ok] = 无缺失的必须项、也无意外出现的禁止项。 */
+internal data class LiteralCheckResult(
+    val missingContains: List<String>,
+    val hitNotContains: List<String>
+) {
+    val ok: Boolean get() = missingContains.isEmpty() && hitNotContains.isEmpty()
+}
+
 /**
- * 验证工具。主代理在 spawn_agent 返回后调用 verify_subtask。
+ * 字面量预期核对（机器硬校验，2026-09-24）。
  *
- * **自动验证**：若子任务存了 [xyz.mederi.plan.Subtask.verification] 命令，工具在
- * 存储 status 之前自动执行它（经 ShellTools 沙箱），把真实输出摆到桌面——
- * 主代理无法再仅凭 executor 自述就盖章 PASS。
+ * 抓的是"命令 exit 0 但计划预期没达到"——例：`pytest` 只跑通 1 条也 exit 0，
+ * 但计划写明必须输出 "3 passed"，此时必须判 FAIL，不能靠模型自觉。
+ */
+internal fun checkOutputLiterals(
+    output: String,
+    mustContain: List<String>,
+    mustNotContain: List<String>
+): LiteralCheckResult = LiteralCheckResult(
+    missingContains = mustContain.filterNot { output.contains(it) },
+    hitNotContains = mustNotContain.filter { output.contains(it) }
+)
+
+/**
+ * 验证工具。主代理在子任务执行完成后调用 verify_subtask。
  *
- * - exit code 0：正常存储 status，输出附在返回文本里供模型参考。
- * - exit code 非 0 且模型声明 PASS：**拒绝存储**，返回真实输出让模型重判。
+ * **机器硬校验（2026-09-24 改造）**：只要子任务存了 verification 命令，**无条件**执行它
+ * （不再只在模型声明 PASS 时才跑）——"验证被正确执行"不能依赖模型自觉：
  *
- * 端到端实测：watchdog 回滚文件后 executor 诚实报 success 但文件实为 v1，
- * 主代理 evidence 转述 executor 自述、归档了产物错误的"COMPLETED"计划。
+ * 1. exit 非零 → 机器 FAIL（模型声明 PASS 时拒绝存储，返回真实输出要求重判）
+ * 2. exit 0 但缺 `expectStdoutContains` 字面量 → 机器 FAIL（命令通过但预期没达到）
+ * 3. exit 0 但命中 `expectStdoutNotContains` 字面量 → 机器 FAIL
+ * 4. 超时 → inconclusive（不存 PASS，也不硬拒——超时可能是缓存未热）
+ * 5. 机器判定 FAIL 而模型坚持未通过（矛盾）→ 按未通过记录，标 `machineMismatch`，
+ *    并要求主代理**如实告知用户**这是异常态（机器证明预期达成、模型判定不同）
+ *
+ * **归因两分支**：未通过时必须给 rootCause，且判定顺序是硬性的——
+ * 先对照真实代码确认 executor 是否照 spec 执行（IMPLEMENTATION 错），
+ * 只有在实现无误时才可归因于计划本身（PLAN 错）。
+ * 验证方法对不对是计划的问题，不是验证器的问题。
+ *
+ * **真实证据落盘**：[VerificationResult.commandOutput]/[VerificationResult.commandExitCode]
+ * 存机器真实输出与退出码，与模型自述的 evidence 分开——审计不经模型转述。
  */
 class VerifyTools(
     private val sessionId: String,
@@ -57,8 +89,12 @@ class VerifyTools(
         val status: String,
         @LLMDescription("What you checked and what you found. Must reference real code or command output, not assumptions.")
         val evidence: String,
-        @LLMDescription("Gap type for PARTIAL/FAIL: MISSING, PARTIAL, CONTRADICTS, or UNREQUESTED.")
-        val gapType: String? = null,
+        @LLMDescription(
+            "Required for PARTIAL/FAIL. Root cause — decide the order STRICTLY: first read the real code and " +
+                "confirm whether the executor followed the spec (if it did not → IMPLEMENTATION); only if it " +
+                "did → PLAN (the plan's own logic / verification method / expectation is wrong)."
+        )
+        val rootCause: String? = null,
         @LLMDescription("For FAIL: how to fix. Required when status is FAIL.")
         val remediation: String? = null
     )
@@ -66,9 +102,10 @@ class VerifyTools(
     inner class VerifySubtaskTool : SimpleTool<VerifySubtaskArgs>(
         argsType = typeToken<VerifySubtaskArgs>(),
         name = "verify_subtask",
-        description = "Verifies a subtask result against its verification criteria (the plan's stored " +
-            "verification command and targetFiles). Reads the actual code/files, runs the stored " +
-            "verification command, and records PASS, PARTIAL, or FAIL."
+        description = "Verifies a subtask result against the plan's stored verification contract. The contract's " +
+            "command is ALWAYS executed and its exit code + machine-checked output literals decide the machine " +
+            "verdict; declaring PASS while the machine verdict fails is refused. Records PASS/PARTIAL/FAIL with " +
+            "a required root cause (IMPLEMENTATION vs PLAN) when not passing."
     ) {
         override suspend fun execute(args: VerifySubtaskArgs): String {
             val plan = planStore.load(args.planId)
@@ -82,47 +119,65 @@ class VerifyTools(
                 return "Error: Invalid status '${args.status}'. Use PASS, PARTIAL, or FAIL."
             }
 
-            val gapType = args.gapType?.let {
-                try { GapType.valueOf(it) } catch (e: IllegalArgumentException) { null }
+            val rootCause = args.rootCause?.let {
+                try { RootCause.valueOf(it) } catch (e: IllegalArgumentException) { null }
             }
 
-            if (verifyStatus != VerifyStatus.PASS && gapType == null) {
-                return "Error: gapType is required when status is PARTIAL or FAIL. " +
-                    "Use: MISSING, PARTIAL, CONTRADICTS, or UNREQUESTED."
+            if (verifyStatus != VerifyStatus.PASS && rootCause == null) {
+                return "Error: rootCause is required when status is PARTIAL or FAIL. Use IMPLEMENTATION " +
+                    "(the spec said it clearly but the execution did not deliver) or PLAN (the execution " +
+                    "matched the spec, but the plan's own logic/verification/expectation is wrong). " +
+                    "Decide in this order, strictly: first confirm against the real code that the executor " +
+                    "followed the spec; only if it did may you attribute the failure to the plan."
             }
 
             if (verifyStatus == VerifyStatus.FAIL && args.remediation.isNullOrBlank()) {
                 return "Error: remediation is required when status is FAIL."
             }
 
-            // 自动执行子任务的 verification 命令（若存了），在存储 status 之前。
-            // 这把"验证"从模型自觉行为变成工具强制行为——主代理无法回避真实输出。
+            // 无条件执行验证命令（2026-09-24）：不再只在模型声明 PASS 时才跑——"验证被正确执行"
+            // 不能依赖模型自觉。命令退出码 + 字面量预期是机器判据，真实输出一律摆到桌面。
             val spec = subtask.verification
             val verifyCmd = spec.command.takeIf { it.isNotBlank() }
-            val autoVerify: CommandResult? = verifyCmd?.let { cmd ->
-                runCatching {
-                    shellTools?.runCommand(cmd, spec.timeoutSeconds ?: 30, spec.cwd)
-                }.getOrNull()
+            val autoVerify: CommandResult? = if (verifyCmd != null) {
+                val shell = shellTools
+                    ?: return "Error: this subtask has a verification command but the shell runner is not " +
+                        "available in this assembly. That is a configuration fault, not a verification result — " +
+                        "refusing to record anything. Do not declare PASS."
+                runCatching { shell.runCommand(verifyCmd, spec.timeoutSeconds ?: 30, spec.cwd) }.getOrNull()
+            } else null
+
+            val literalCheck = autoVerify?.let {
+                checkOutputLiterals(it.output, spec.expectStdoutContains, spec.expectStdoutNotContains)
+            }
+            // 机器判定 = exit 码三态 + 字面量预期（只有 exit 0 才继续查字面量）
+            val machineOutcome: VerifyCommandOutcome? = autoVerify?.let {
+                val base = verifyCommandOutcome(it.exitCode, it.timedOut)
+                if (base == VerifyCommandOutcome.PASS && literalCheck?.ok == false) VerifyCommandOutcome.FAIL
+                else base
             }
 
-            // PASS 时按三态判定自动验证结果（exit0→正常存储；非零→拒绝存储；
-            // 超时→不存 PASS 也不硬拒，回报 inconclusive 让主代理决定）：
-            // 环境超时与真实失败必须分开——超时可能是缓存未热/资源争抢，不能当失败盖棺。
-            if (verifyStatus == VerifyStatus.PASS && autoVerify != null) {
-                when (verifyCommandOutcome(autoVerify.exitCode, autoVerify.timedOut)) {
-                    VerifyCommandOutcome.TIMEOUT -> return "Verification command (auto-executed) TIMED OUT (inconclusive):\n  $verifyCmd\n" +
+            // 模型声明 PASS：机器判定必须放行（这是防"命令失败/预期未达成却盖章 PASS"的硬门）
+            if (verifyStatus == VerifyStatus.PASS) {
+                when (machineOutcome) {
+                    VerifyCommandOutcome.TIMEOUT -> return "Verification command (auto-executed) TIMED OUT " +
+                        "(inconclusive):\n  $verifyCmd\n" +
                         "Output:\n${autoVerify.output.take(2000)}\n\n" +
                         "The verification timed out instead of failing — PASS is not stored. " +
                         "Re-run verify_subtask after warming the cache, or accept manual evidence."
-                    VerifyCommandOutcome.FAIL -> return "Verification command (auto-executed from plan):\n  $verifyCmd\n" +
-                        "Exit code: ${autoVerify.exitCode}\n" +
-                        "Output:\n${autoVerify.output.take(2000)}\n\n" +
-                        "The verification command exited non-zero — the result does NOT match the plan's criteria. " +
-                        "Do NOT declare PASS. Re-examine the actual output and call verify_subtask again with " +
-                        "the correct status (FAIL with remediation, or PARTIAL with gapType)."
-                    VerifyCommandOutcome.PASS -> {} // exit 0：继续正常存储
+                    VerifyCommandOutcome.FAIL -> return "Verification command (auto-executed from plan):\n" +
+                        "  $verifyCmd\n" + describeMachineFailure(autoVerify, literalCheck, spec) + "\n\n" +
+                        "The result does NOT match the plan's criteria — do NOT declare PASS. Re-examine the " +
+                        "real output and call verify_subtask again with the correct status (FAIL with " +
+                        "remediation + rootCause, or PARTIAL with rootCause)."
+                    VerifyCommandOutcome.PASS, null -> {} // 机器放行（或无命令）：继续正常存储
                 }
             }
+
+            // 机器判定通过、模型却坚持未通过 → 异常态。用户裁定：算未通过（不 PASS），
+            // 但必须让主代理如实告知用户"机器证明预期已达成、模型判定不同"。
+            val contradiction = verifyStatus != VerifyStatus.PASS &&
+                machineOutcome == VerifyCommandOutcome.PASS
 
             // scope 越界检查（信任 AI 哲学：只报告、不硬拒 PASS/FAIL 判定）：
             // 执行器实际改动的文件（Subtask.executorTouchedFiles）vs 子任务声明的 targetFiles——
@@ -138,8 +193,12 @@ class VerifyTools(
             val result = VerificationResult(
                 status = verifyStatus,
                 evidence = evidenceWithScope,
-                gapType = gapType,
-                remediation = args.remediation
+                rootCause = rootCause,
+                remediation = args.remediation,
+                // 机器真实输出/退出码（截断存储，审计用；未经模型转述）
+                commandOutput = autoVerify?.output?.take(4000),
+                commandExitCode = autoVerify?.takeIf { !it.timedOut }?.exitCode,
+                machineMismatch = contradiction
             )
 
             val newStatus = when (verifyStatus) {
@@ -163,6 +222,8 @@ class VerifyTools(
                 else withResult
             } ?: return "Error: Plan not found: ${args.planId}"
             if (finalizedPlan.status == xyz.mederi.plan.PlanStatus.COMPLETED) {
+                // 先落 Walkthrough（结果总结，自动装配自 Plan 数据）再归档——归档只移整个计划目录
+                runCatching { planStore.writeWalkthrough(finalizedPlan) }
                 runCatching { planStore.archive(args.planId) }
             }
 
@@ -181,7 +242,7 @@ class VerifyTools(
                     "pending" to pending.toString(),
                     "lastSubtaskIndex" to args.subtaskIndex.toString(),
                     "lastSubtaskStatus" to args.status,
-                    "lastSubtaskGapType" to (args.gapType ?: ""),
+                    "lastSubtaskRootCause" to (args.rootCause ?: ""),
                     "todos" to finalizedPlan.toTodoProjection().encodeTodos()
                 ),
                 timestamp = Instant.now().toString()
@@ -191,25 +252,82 @@ class VerifyTools(
                 "\n\nVerification command output (auto-executed, exit ${vr.exitCode}):\n${vr.output.take(2000)}"
             } ?: ""
 
+            val contradictionNotice = if (contradiction) buildContradictionNotice(
+                verifyCmd ?: "", spec, args.status
+            ) else ""
+
             return if (finalizedPlan.status == xyz.mederi.plan.PlanStatus.COMPLETED) {
-                "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: PASS. All subtasks completed — plan ${args.planId} archived to .mederi/plans-done/.$verifyNote"
+                "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: PASS. All subtasks completed — " +
+                    "plan ${args.planId} archived to .mederi/plans-done/${args.planId}/, walkthrough at " +
+                    ".mederi/plans-done/${args.planId}/walkthrough.md. Report completion to the user in their language " +
+                    "(what changed, what was tested, results); optionally enrich the walkthrough's Notes section " +
+                    "(key findings; screenshots for UI changes).$verifyNote$contradictionNotice"
             } else if (verifyStatus == VerifyStatus.PASS) {
-                "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: PASS. ($passed passed, $failed failed, $pending pending)$verifyNote"
+                "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: PASS. ($passed passed, $failed failed, $pending pending)$verifyNote$contradictionNotice"
             } else {
-                // 缺口 D：按 gapType 分流，不再对所有 FAIL 都说 converge_plan。
-                // CONTRADICTS = spec 跟现实矛盾（AI 能修：re-generate_spec 覆盖）；
-                // 其余 = 执行错（converge_plan 追加补救）。
-                val guidance = if (gapType == GapType.CONTRADICTS) {
-                    "The spec contradicts reality — re-call generate_spec(planId=${args.planId}, " +
-                        "subtaskIndex=${args.subtaskIndex}) to replace the spec, then subagent(SPAWN) to re-execute. " +
-                        "Do NOT use converge_plan for a spec error."
-                } else {
-                    "Call converge_plan to append remediation subtasks."
-                }
                 "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: ${args.status}" +
-                    (args.gapType?.let { " ($it)" } ?: "") +
-                    ". ($passed passed, $failed failed, $pending pending) $guidance$verifyNote"
+                    (args.rootCause?.let { " ($it)" } ?: "") +
+                    ". ($passed passed, $failed failed, $pending pending) ${guidanceFor(rootCause)}$verifyNote$contradictionNotice"
             }
         }
+    }
+
+    /** 机器 FAIL 的具体原因（exit 非零 / 缺 must-contain / 命中 must-not-contain）。 */
+    private fun describeMachineFailure(
+        autoVerify: CommandResult,
+        literalCheck: LiteralCheckResult?,
+        spec: VerificationSpec
+    ): String {
+        val sb = StringBuilder()
+        if (autoVerify.exitCode != 0) {
+            sb.appendLine("Exit code: ${autoVerify.exitCode}")
+        }
+        literalCheck?.missingContains?.takeIf { it.isNotEmpty() }?.let {
+            sb.appendLine("Expected output literals NOT found: ${it.joinToString(", ")}")
+            sb.appendLine("(The command may have exited 0, but the plan's expected result was not met.)")
+        }
+        literalCheck?.hitNotContains?.takeIf { it.isNotEmpty() }?.let {
+            sb.appendLine("Output contained FORBIDDEN literals: ${it.joinToString(", ")}")
+        }
+        if (spec.expected.isNotBlank()) sb.appendLine("Plan's stated expectation: ${spec.expected}")
+        sb.appendLine("Output:")
+        sb.append(autoVerify.output.take(2000))
+        return sb.toString().trimEnd()
+    }
+
+    /** 机器判定通过、模型判定未通过 → 异常态告知模板（要求主代理向用户如实说明）。 */
+    private fun buildContradictionNotice(
+        command: String,
+        spec: VerificationSpec,
+        declaredStatus: String
+    ): String = buildString {
+        appendLine()
+        appendLine()
+        appendLine("⚠ MACHINE/MODEL CONTRADICTION — ABNORMAL STATE (machineMismatch=true)")
+        appendLine("The plan's verification command was auto-executed and the MACHINE verdict is PASS:")
+        appendLine("  command: $command")
+        if (spec.expectStdoutContains.isNotEmpty())
+            appendLine("  must-contain literals all matched: ${spec.expectStdoutContains.joinToString(", ")}")
+        if (spec.expectStdoutNotContains.isNotEmpty())
+            appendLine("  must-not-contain literals all absent: ${spec.expectStdoutNotContains.joinToString(", ")}")
+        if (spec.expected.isNotBlank()) appendLine("  plan's stated expectation: ${spec.expected}")
+        appendLine("You nonetheless declared $declaredStatus. When the machine-checked expectations hold this")
+        appendLine("should not happen, so it was recorded as $declaredStatus (non-PASS, machineMismatch=true).")
+        appendLine("You MUST tell the user about this anomaly explicitly and in their language: state that the machine")
+        appendLine("verified the plan's expectations were met while your own assessment differed, and say what you")
+        appendLine("believe the machine's check missed. Do not silently proceed and do not hide the disagreement.")
+    }
+
+    /** 归因两分支 → 下一步动作（IMPLEMENTATION=追加补救；PLAN=追加修订）。 */
+    private fun guidanceFor(rootCause: RootCause?): String = when (rootCause) {
+        RootCause.IMPLEMENTATION ->
+            "Root cause = IMPLEMENTATION: the spec was clear but the execution did not deliver it. " +
+                "Call converge_plan to append remediation subtasks, then re-execute."
+        RootCause.PLAN ->
+            "Root cause = PLAN: the execution matched the spec, so the plan itself is wrong (its logic, " +
+                "verification method, or expectation). Amend append-only, never rewrite: if the verification " +
+                "contract is wrong call update_verification (reason required); if the spec was wrong call " +
+                "generate_spec with reason= to correct it. Do NOT use converge_plan for a plan error."
+        null -> ""
     }
 }

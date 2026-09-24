@@ -39,8 +39,15 @@ interface SubagentRunner {
         projectId: String,
         parentSessionId: String,
         apiKeyId: String? = null,
-        /** 执行器子代理所属的 plan/subtask（SpawnAgentTool 传入）。非 null 时把 touched files flush 到 Subtask.executorTouchedFiles。 */
-        executorPlanId: String? = null,
+        /**
+         * 子代理所属的 plan（SpawnAgentTool 传入；researcher 在有活跃 plan 时由 SpawnResearcherTool 传入）。
+         * 非 null 时：
+         * - EXECUTOR：把 touched files flush 到 Subtask.executorTouchedFiles（需配合 executorSubtaskIndex）
+         *   并把完整报告落盘到 {planId}/reports/NN-executor.md，父上下文只收摘要+路径
+         * - RESEARCHER：把完整报告落盘到 {planId}/research.md，父上下文只收摘要+路径
+         *   （无活跃 plan 时 planId=null，保持原有行为：全文回灌父上下文）
+         */
+        planId: String? = null,
         executorSubtaskIndex: Int? = null,
         planStore: PlanStore? = null
     ): String

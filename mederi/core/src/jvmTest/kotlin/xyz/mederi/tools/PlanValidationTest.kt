@@ -101,7 +101,8 @@ class PlanValidationTest {
                         name = "grep check",
                         planDetail = "run grep check",
                         targetFiles = listOf("check.sh"),
-                        verification = "grep -q foo file.txt"
+                        verification = "grep -q foo file.txt",
+                        verificationExpected = "命令 exit 0，输出为空"
                     )
                 )
             )
@@ -143,7 +144,8 @@ class PlanValidationTest {
                         targetFiles = listOf("compile.sh"),
                         verification = "grep -q foo file.txt",
                         verificationCwd = "sub/dir",
-                        verificationTimeoutSeconds = 120
+                        verificationTimeoutSeconds = 120,
+                        verificationExpected = "命令 exit 0，输出为空"
                     )
                 )
             )

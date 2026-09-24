@@ -135,8 +135,45 @@ data class MarkdownTheme(
         fontSize = 13.sp,
         lineHeight = 21.5.sp,
     ),
+    /** 是否在 H1 与 H2 标题底部渲染实线分割线（GitHub GFM 标准特征，由 RenderStyle 控制） */
+    val showHeadingDividers: Boolean = true,
 ) {
     companion object {
+        /**
+         * 由正交的排版风格 [RenderStyle] 与色彩配置 [MarkdownColors] 组装为通用主题。
+         */
+        fun from(
+            style: RenderStyle = RenderStyle.Chat,
+            colors: MarkdownColors = MarkdownColors.light()
+        ): MarkdownTheme {
+            val base = if (colors.isDark) dark() else light()
+            return base.copy(
+                bodyStyle = style.bodyStyle.copy(color = colors.textPrimary),
+                headingStyles = style.headingStyles.map { it.copy(color = colors.textPrimary) },
+                inlineCodeStyle = style.inlineCodeStyle.copy(color = colors.textPrimary),
+                inlineCodeBackground = colors.inlineCodeBackground,
+                codeBlockStyle = style.codeBlockStyle.copy(color = colors.textPrimary),
+                codeBlockBackground = colors.codeBlockBackground,
+                codeBlockPadding = style.codeBlockPadding,
+                blockQuoteBorderColor = colors.blockQuoteBorder,
+                blockQuoteBorderWidth = style.blockQuoteBorderWidth,
+                blockQuotePadding = style.blockQuotePadding,
+                blockQuoteTextColor = colors.textSecondary,
+                dividerColor = colors.divider,
+                dividerThickness = style.dividerThickness,
+                linkColor = colors.link,
+                blockSpacing = style.blockSpacing,
+                listIndent = style.listIndent,
+                listBulletColor = colors.textPrimary,
+                tableBorderColor = colors.tableBorder,
+                tableHeaderBackground = colors.tableHeaderBackground,
+                tableCellPadding = style.tableCellPadding,
+                showHeadingDividers = style.showHeadingDividers,
+                taskCheckedColor = colors.taskCheckedColor,
+                taskUncheckedColor = colors.taskUncheckedColor,
+                highlightColor = colors.highlightColor,
+            )
+        }
         /**
          * 亮色主题（GitHub Light 风格），等同于无参构造 `MarkdownTheme()`。
          */

@@ -40,7 +40,7 @@ class SpawnToolDynamicModelTest {
             task: String, briefing: String?, plan: String?, role: SubagentRole,
             directories: List<String>, aiModel: AIModel,
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
-            apiKeyId: String?, executorPlanId: String?, executorSubtaskIndex: Int?,
+            apiKeyId: String?, planId: String?, executorSubtaskIndex: Int?,
             planStore: xyz.mederi.plan.PlanStore?
         ): String {
             lastModel = aiModel

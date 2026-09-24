@@ -37,6 +37,8 @@
     <string name="tool_action_subagent_many">派发 %1$d 个子任务</string>
     <string name="tool_action_other_one">调用工具</string>
     <string name="tool_action_other_many">调用 %1$d 个工具</string>
+    <string name="tool_action_verify_one">验证子任务</string>
+    <string name="tool_action_verify_many">验证 %1$d 项子任务</string>
     <!-- 工具动作时间线：带目标/执行中变体 -->
     <string name="tool_action_failed_suffix">（失败）</string>
     <string name="tool_action_run_target">运行命令 %1$s</string>
@@ -64,6 +66,9 @@
     <string name="tool_action_other_target">调用 %1$s</string>
     <string name="tool_action_other_running">正在调用工具…</string>
     <string name="tool_action_other_running_target">正在调用 %1$s…</string>
+    <string name="tool_action_verify_target">验证子任务 %1$s</string>
+    <string name="tool_action_verify_running">正在验证子任务…</string>
+    <string name="tool_action_verify_running_target">正在验证子任务 %1$s…</string>
     <string name="tool_detail_output">输出</string>
     <string name="tool_detail_failed_output">执行失败</string>
     <string name="tool_detail_report">任务报告</string>

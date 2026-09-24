@@ -499,7 +499,7 @@ internal fun ProjectSelectorMenu(
             IconToolButton(
                 icon = FeatherIcons.Folder,
                 onClick = { expanded = true },
-                size = 40
+                size = 28
             )
         } else {
             ContextToolChip(

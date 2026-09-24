@@ -5,6 +5,7 @@ import xyz.emuci.markdown.parser.ast.Document
 import xyz.emuci.markdown.parser.flavour.ExtendedFlavour
 import xyz.emuci.markdown.parser.flavour.MarkdownFlavour
 import xyz.emuci.markdown.parser.html.HtmlRenderer
+import xyz.kbrowser.webview.KBrowser
 
 /**
  * HTML 导出配置
@@ -26,6 +27,7 @@ data class PdfExportOptions(
     val landscape: Boolean = false,
     val printBackground: Boolean = true,
     val flavour: MarkdownFlavour = ExtendedFlavour,
+    val browser: KBrowser? = null,
 )
 
 /**
@@ -48,6 +50,19 @@ internal expect fun getBundledMongolianFontBase64(): String?
  * 支持将 Markdown 文本或 AST 导出为完整的自包含 HTML 页面，或通过无头打印导出矢量 PDF。
  */
 object MarkdownExporter {
+
+    @kotlin.concurrent.Volatile
+    private var defaultBrowser: KBrowser? = null
+
+    /**
+     * 由外部（宿主应用）注入已初始化就绪的 KBrowser 全局单例。
+     * 若导出时 options.browser 为空，则回退使用此默认注入。
+     */
+    fun setBrowser(browser: KBrowser?) {
+        this.defaultBrowser = browser
+    }
+
+    fun getBrowser(): KBrowser? = defaultBrowser
 
     /**
      * 将 Markdown 字符串导出为完整的、自包含样式的独立 HTML 页面。
@@ -110,6 +125,11 @@ object MarkdownExporter {
             flavour = options.flavour,
         )
         val html = toHtml(document, htmlOptions)
-        return exportMarkdownHtmlToPdfPlatform(html, outputPath, options)
+        val effectiveOptions = if (options.browser == null && defaultBrowser != null) {
+            options.copy(browser = defaultBrowser)
+        } else {
+            options
+        }
+        return exportMarkdownHtmlToPdfPlatform(html, outputPath, effectiveOptions)
     }
 }

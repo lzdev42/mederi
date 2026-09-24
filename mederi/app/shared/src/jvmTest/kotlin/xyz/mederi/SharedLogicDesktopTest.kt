@@ -1862,6 +1862,26 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testToolActionAskAndTaskDisambiguation() {
+        val resultVerifySubtask = xyz.mederi.ui.chat.classifyToolAction("verify_subtask")
+        val resultSubtask = xyz.mederi.ui.chat.classifyToolAction("subtask")
+        val resultAskUser = xyz.mederi.ui.chat.classifyToolAction("ask_user")
+        val resultAskQuestion = xyz.mederi.ui.chat.classifyToolAction("ask_question")
+        val resultAsk = xyz.mederi.ui.chat.classifyToolAction("ask")
+        println("[LOG-VERIFY-FIXED] classifyToolAction('verify_subtask') = $resultVerifySubtask")
+        println("[LOG-VERIFY-FIXED] classifyToolAction('subtask') = $resultSubtask")
+        println("[LOG-VERIFY-FIXED] classifyToolAction('ask_user') = $resultAskUser")
+        println("[LOG-VERIFY-FIXED] classifyToolAction('ask_question') = $resultAskQuestion")
+        println("[LOG-VERIFY-FIXED] classifyToolAction('ask') = $resultAsk")
+
+        assertEquals(xyz.mederi.ui.chat.ToolActionKind.VERIFY, resultVerifySubtask)
+        assertEquals(xyz.mederi.ui.chat.ToolActionKind.OTHER, resultSubtask)
+        assertEquals(xyz.mederi.ui.chat.ToolActionKind.ASK, resultAskUser)
+        assertEquals(xyz.mederi.ui.chat.ToolActionKind.ASK, resultAskQuestion)
+        assertEquals(xyz.mederi.ui.chat.ToolActionKind.ASK, resultAsk)
+    }
+
+    @Test
     fun testProbeToolTargetReadFileLineRange() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {
@@ -1917,6 +1937,44 @@ class SharedLogicDesktopTest {
 
             val jsonObjectTarget = vm.probeToolTarget("mcp_complex", mapOf("data" to "{\"foo\":\"bar\"}"))
             assertNull(jsonObjectTarget)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testProbeToolTargetPlanAndVerifyTools() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val appState = xyz.mederi.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore(),
+                scope = testScope
+            )
+            val vm = xyz.mederi.ui.WorkspaceViewModel(appState)
+
+            val verifyTarget = vm.probeToolTarget("verify_subtask", mapOf(
+                "planId" to "plan_2e844161",
+                "subtaskIndex" to "4",
+                "status" to "PASS",
+                "evidence" to "04-flows.md 验证全部通过：无 JcefBrowserHost/JCEFBrowserControl 字样"
+            ))
+            val writeLogTarget = vm.probeToolTarget("write_log", mapOf(
+                "entry" to "5 通过（每篇的 grep 验证命令全部 PASS）。纯文档改写，未改源码。"
+            ))
+            val nonTargetFiltered = vm.probeToolTarget("unknown_tool", mapOf(
+                "evidence" to "some long evidence",
+                "summary" to "some long summary"
+            ))
+            println("[LOG-VERIFY-TARGET-FIXED] verify_subtask target = $verifyTarget")
+            println("[LOG-VERIFY-TARGET-FIXED] write_log target = $writeLogTarget")
+            println("[LOG-VERIFY-TARGET-FIXED] nonTargetFiltered = $nonTargetFiltered")
+
+            assertEquals("#4 (PASS)", verifyTarget)
+            assertEquals(".mederi/notebook.md", writeLogTarget)
+            assertNull(nonTargetFiltered)
         } finally {
             testScope.cancel()
         }
@@ -2297,6 +2355,111 @@ class SharedLogicDesktopTest {
         val runningState = finalTool.state as ToolCallState.Running
         assertFalse(runningState.input.isEmpty(), "TOOL_CALLED 后 input 必须包含解析出的入参")
         assertTrue(runningState.input.containsKey("questions"))
+    }
+
+    @Test
+    fun testStatusBarTurnStartPreservedWhenIdleBeforeWorking() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            appState.selectModel(appState.availableModels.value.first())
+            val viewModel = WorkspaceViewModel(appState)
+
+            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            viewModel.attach(conv.id)
+
+            // 发送消息，turnStartedAt 会被写入
+            viewModel.send("Hello")
+            assertNotNull(viewModel.turnStartedAt, "send() 之后 turnStartedAt 应该非空")
+
+            // 模拟在进入 Working 之前，收到一个处于 Idle 的快照（例如 initial observe snapshot）
+            val idleSnap = mockAiCore.getSnapshot(conv.id).getOrThrow().copy(
+                conversation = conv.copy(status = ConversationStatus.Idle)
+            )
+            val applySnapshotMethod = viewModel::class.java.getDeclaredMethod(
+                "applySnapshot",
+                String::class.java,
+                xyz.mederi.core.contract.dto.ConversationSnapshot::class.java
+            ).apply { isAccessible = true }
+
+            applySnapshotMethod.invoke(viewModel, conv.id, idleSnap)
+
+            // 验证计时锚点没有被误清为 null
+            assertNotNull(viewModel.turnStartedAt, "进入 Working 之前的 Idle 快照绝不能清除 turnStartedAt 计时锚点（避免显示 0 秒并卡死）")
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testAutoContinueTriggeredOnceOnStreamInterruptedWithEmittedTokens() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            appState.selectModel(appState.availableModels.value.first())
+            val viewModel = WorkspaceViewModel(appState)
+
+            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            viewModel.attach(conv.id)
+
+            val applySnapshotMethod = viewModel::class.java.getDeclaredMethod(
+                "applySnapshot",
+                String::class.java,
+                xyz.mederi.core.contract.dto.ConversationSnapshot::class.java
+            ).apply { isAccessible = true }
+
+            // 构造一个中途断流且已吐出部分字符的快照
+            val partialAssistantMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_partial",
+                conversationId = conv.id,
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(ChatBlock.Text("t_partial", "这是半截回复")),
+                createdAt = 1000L,
+                completedAt = 2000L,
+                parentMessageId = "msg_user_1",
+                model = "test-model",
+                agent = "AUTONOMOUS"
+            )
+            val interruptedSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+                conversation = conv.copy(status = ConversationStatus.Error),
+                messages = listOf(partialAssistantMsg),
+                tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+                cost = xyz.mederi.core.contract.models.CostSummary(0.0),
+                errorIsStreamInterrupted = true,
+                errorMessage = "流式空闲超时"
+            )
+
+            applySnapshotMethod.invoke(viewModel, conv.id, interruptedSnap)
+
+            // 等待 450ms 让自动补发协程执行（delay 300ms）
+            kotlinx.coroutines.delay(450L)
+
+            // 验证自动触发了 sendMessage("Continue")（由于 MockAiCore 响应极快，可能在乐观消息中或已落库进入 messages）
+            val hasContinueUserMessage = viewModel.optimisticUserMessage?.blocks?.any { (it as? ChatBlock.Text)?.text == "Continue" } == true ||
+                viewModel.messages.any { msg ->
+                    msg.role == xyz.mederi.core.contract.models.ChatRole.User &&
+                        msg.blocks.any { (it as? ChatBlock.Text)?.text == "Continue" }
+                }
+            assertTrue(hasContinueUserMessage, "应自动替用户补发一句 Continue")
+
+            // 再次调用 applySnapshot 模拟相同中断快照再次推送，验证严格只发一次（防死循环）
+            val autoContinueCountField = viewModel::class.java.getDeclaredField("sessionCache").apply { isAccessible = true }
+            val sessionCache = autoContinueCountField.get(viewModel)
+            val countMapField = sessionCache::class.java.getDeclaredField("autoContinueCountByConv").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val countMap = countMapField.get(sessionCache) as Map<String, Int>
+            assertEquals(1, countMap[conv.id], "自动补发次数必须为 1")
+        } finally {
+            testScope.cancel()
+        }
     }
 }
 

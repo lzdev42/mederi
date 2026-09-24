@@ -6,9 +6,11 @@ import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * 计划作废机制（P2）行为锁定，三条硬规则之二"同一会话只有最新计划可执行"：
@@ -104,14 +106,16 @@ class PlanStoreVoidTest {
         planStore.voidActivePlans("sess_test")
 
         val voidDir = File(tmpDir, ".mederi/plans-voided")
-        assertNotNull(voidDir.listFiles { f -> f.name.startsWith(plan.id) }, "作废双文件应入 plans-voided/")
+        // 新结构：一个计划一个目录，下挂 plan.json + plan.md
+        val planVoidDir = File(voidDir, plan.id)
+        assertTrue(planVoidDir.isDirectory, "作废计划目录应入 plans-voided/{planId}/")
         // 落盘的 json 状态应为 VOIDED
-        val jsonFile = voidDir.listFiles { f -> f.name == "${plan.id}.json" }.first()
+        val jsonFile = File(planVoidDir, "plan.json")
         val persisted = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
             .decodeFromString(Plan.serializer(), jsonFile.readText())
         assertEquals(PlanStatus.VOIDED, persisted.status)
-        // plans/ 下无残留
+        // plans/ 下无残留目录
         val plansDir = File(tmpDir, ".mederi/plans")
-        assertEquals(0, plansDir.listFiles { f -> f.name.startsWith(plan.id) }.size)
+        assertFalse(File(plansDir, plan.id).exists(), "plans/ 下不应残留 {planId} 目录")
     }
 }

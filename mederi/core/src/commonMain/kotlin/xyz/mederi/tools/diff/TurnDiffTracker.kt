@@ -35,6 +35,7 @@ class TurnDiffTracker(
     /**
      * 记录 apply_patch 工具产生的变更。
      */
+    @Synchronized
     fun trackPatch(changes: List<PatchChange>) {
         for (change in changes) {
             val path = normalizePath(change.path)
@@ -53,6 +54,7 @@ class TurnDiffTracker(
      * @param oldContent 变更前内容（新增文件传 null）。
      * @param newContent 变更后内容。
      */
+    @Synchronized
     fun recordWrite(path: String, oldContent: String?, newContent: String) {
         val normalized = normalizePath(path)
         if (!currentByPath.containsKey(normalized) && !baselineByPath.containsKey(normalized)) {
@@ -64,6 +66,7 @@ class TurnDiffTracker(
     /**
      * 记录文件删除。
      */
+    @Synchronized
     fun recordDelete(path: String, oldContent: String) {
         val normalized = normalizePath(path)
         if (!currentByPath.containsKey(normalized) && !baselineByPath.containsKey(normalized)) {
@@ -77,6 +80,7 @@ class TurnDiffTracker(
      *
      * 直接按已知路径读文件，不遍历整棵目录树。
      */
+    @Synchronized
     fun captureSnapshot() {
         val knownPaths = baselineByPath.keys + currentByPath.keys
         DebugLog.section("DiffTracker", "captureSnapshot")
@@ -102,8 +106,30 @@ class TurnDiffTracker(
     }
 
     /**
+     * 合并另一来源（子代理 turn）的文件改动进本 tracker。
+     *
+     * 首次写入者固定 baseline：同一文件本 tracker 已追踪时保留本侧 baseline、
+     * 仅覆盖 current——谁先碰文件谁定"变更前"内容，diff 语义保持正确。
+     * （同一文件的并发写已被 FileWriteRegistry 硬拒绝，此处的竞争只是时序性的。）
+     */
+    @Synchronized
+    fun mergeChanges(changes: List<FileChange>) {
+        for (change in changes) {
+            when (change.status) {
+                FileChangeStatus.ADDED -> applyAdd(change.path, change.after ?: "")
+                FileChangeStatus.DELETED -> applyDelete(change.path, change.before ?: "")
+                FileChangeStatus.MODIFIED -> applyUpdate(change.path, change.before ?: "", change.after ?: "")
+            }
+        }
+        if (changes.isNotEmpty()) {
+            DebugLog.event("DiffTracker", "merged ${changes.size} sub-agent file changes into session $sessionId")
+        }
+    }
+
+    /**
      * 生成最终的 [TurnDiff]。
      */
+    @Synchronized
     fun buildDiff(messageId: String?, createdAt: String): TurnDiff {
         val changes = buildFileChanges()
         DebugLog.event("DiffTracker", "buildDiff: ${changes.size} file changes")
@@ -193,5 +219,45 @@ class TurnDiffTracker(
         )
         val ext = path.substringAfterLast(".", "").lowercase()
         return ext !in binaryExtensions
+    }
+}
+
+/**
+ * 会话级 TurnDiffTracker 注册表：把子代理的文件改动归并进父会话当前活跃 turn。
+ *
+ * 修复"turn 结束显示的改动文件不含子代理改动"：子代理 TurnExecutor 的 diffStore 为 null，
+ * 其 TurnDiff 在子 turn 结束时即丢弃。主 turn 开始时注册自己的 tracker（[register]），
+ * 子代理 turn 结束时按 parentSessionId 查到父 tracker 并把 changes 合并进去（[mergeInto]）——
+ * 主 turn 的 buildDiff 因此包含子代理改动（turnDiffSummary / diffStore 双双覆盖）。
+ *
+ * 归属语义：主 turn 结束后才完成的子代理改动，归入父会话下一个活跃 turn 的 diff
+ * （此时该文件改动落在哪个 turn 就算哪个 turn 的）；无活跃 turn 则丢弃并记日志。
+ */
+object ParentDiffRegistry {
+    private val trackers = java.util.concurrent.ConcurrentHashMap<String, TurnDiffTracker>()
+
+    /** 主 turn 开始时注册；同会话新 turn 覆盖旧注册（旧 turn 必然已 unregister，兜底而已）。 */
+    fun register(sessionId: String, tracker: TurnDiffTracker) {
+        trackers[sessionId] = tracker
+    }
+
+    /** turn 结束（含异常/取消路径）注销，防止泄漏与误归并。 */
+    fun unregister(sessionId: String) {
+        trackers.remove(sessionId)
+    }
+
+    /** 子代理 turn 结束时调用：把其文件改动合并进父会话当前活跃 turn 的 tracker。 */
+    fun mergeInto(parentSessionId: String, changes: List<FileChange>) {
+        val parent = trackers[parentSessionId]
+        if (parent == null) {
+            if (changes.isNotEmpty()) {
+                DebugLog.event(
+                    "ParentDiffRegistry",
+                    "parent turn not active, drop ${changes.size} sub-agent file changes (parentSessionId=$parentSessionId)"
+                )
+            }
+            return
+        }
+        parent.mergeChanges(changes)
     }
 }

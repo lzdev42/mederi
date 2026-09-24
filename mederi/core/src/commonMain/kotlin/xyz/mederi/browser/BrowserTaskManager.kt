@@ -6,12 +6,16 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import xyz.mederi.browser.drill.DrillExecutor
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
+import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import xyz.mederi.tools.subagent.SubagentConfigManager
+import java.io.File
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -29,14 +33,22 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * 所有复杂状态收敛在 [tasks] 表里。
  *
- * @param providerManager 供应商管理。
+ * @param providerManager 供应商管理（仅 llmCallerProvider == null 时触达，走 BrowserLLMHelper 真路径）。
  * @param scope 后台协程作用域。
  * @param eventBus 全局事件总线（浏览器任务事件供 UI 消费）。
+ * @param workingDir Brain 报告落盘目录（reports/）与 Drill 文件相对路径的解析根；null = 不落盘。
+ * @param recipeStore 配方存储；非 null 且任务 recipe 非 inline（无 drillScript）时，按 recipe.name 解析 skill 增强配方。
+ * @param llmCallerProvider LLM caller 工厂注入（测试/自定义 LLM 路径）；null = 走 [BrowserLLMHelper] 真路径。
+ * @param subagentConfigManager 子代理模型配置（操作者/大脑独立模型解析）；null = 全部继承父会话模型。
  */
 class BrowserTaskManager(
     private val providerManager: ProviderManager,
     private val scope: CoroutineScope,
-    private val eventBus: MutableSharedFlow<MederiEvent>
+    private val eventBus: MutableSharedFlow<MederiEvent>,
+    private val workingDir: File? = null,
+    private val recipeStore: RecipeStore? = null,
+    private val llmCallerProvider: ((aiModel: AIModel, reasoningLevel: ReasoningLevel, apiKeyId: String?) -> BrowserLLMCaller)? = null,
+    private val subagentConfigManager: SubagentConfigManager? = null
 ) : BrowserTaskService {
 
     enum class TaskStatus { STARTED, RUNNING, COMPLETED, ERROR, STOPPED }
@@ -49,6 +61,7 @@ class BrowserTaskManager(
         val projectId: String,
         val parentSessionId: String,
         val apiKeyId: String? = null,
+        val recipe: BrowserRecipe? = null,
         @Volatile var browserName: String,
         @Volatile var job: Job,
         @Volatile var status: TaskStatus,
@@ -59,6 +72,7 @@ class BrowserTaskManager(
         @Volatile var control: BrowserControl? = null,
         @Volatile var lastUrl: String = "",
         @Volatile var lastTitle: String = "",
+        @Volatile var brainResult: BrainResult? = null,
         val steps: MutableList<String> = mutableListOf(),
         val createdAt: String = Instant.now().toString()
     )
@@ -76,7 +90,8 @@ class BrowserTaskManager(
         projectId: String,
         parentSessionId: String,
         browser: String?,
-        apiKeyId: String?
+        apiKeyId: String?,
+        recipe: BrowserRecipe?
     ): String {
         val resolved = BrowserRegistry.resolve(browser)
             ?: return Json.encodeToString(
@@ -95,6 +110,7 @@ class BrowserTaskManager(
             projectId = projectId,
             parentSessionId = parentSessionId,
             apiKeyId = apiKeyId,
+            recipe = recipe,
             browserName = resolved.name,
             job = Job(),
             status = TaskStatus.STARTED,
@@ -109,12 +125,57 @@ class BrowserTaskManager(
             taskObj.control = control
             taskObj.status = TaskStatus.RUNNING
             emit(taskId, EventType.BROWSER_TASK_STEP, status = TaskStatus.RUNNING, browser = resolved.name, message = "启动浏览器")
-            val runner = BrowserAgentRunner(
-                providerManager = providerManager,
-                browserControl = control,
-                aiModel = aiModel,
-                reasoningLevel = reasoningLevel,
-                apiKeyId = apiKeyId,
+
+            // ST3 完整接线：recipe 解析（RecipeStore）+ LLM caller 注入（llmCallerProvider 优先，
+            // 否则 BrowserLLMHelper 真路径）+ workingDir/drillExecutor 真传（Brain 报告落盘、
+            // Drill 文件路径相对解析），修复 ST2 的 null。
+            val effectiveRecipe = resolveRecipe(recipe)
+
+            // 浏览器子代理独立模型解析（2026-09-23）：操作者（BROWSER_OPERATOR）与大脑（BROWSER_BRAIN）
+            // 在设置页各自可配模型/推理档；配置了独立模型则覆盖，否则继承父会话模型。
+            // 浏览器实现（JCEF/Camoufox）由主代理在 browser(RUN) 的 browser 参数选择，与角色配置无关。
+            val (operatorModel, operatorReasoning) = subagentConfigManager?.resolve(
+                role = SubagentRole.BROWSER_OPERATOR,
+                fallbackModel = aiModel,
+                fallbackReasoning = reasoningLevel
+            ) ?: (aiModel to reasoningLevel)
+            val (brainModel, brainReasoning) = subagentConfigManager?.resolve(
+                role = SubagentRole.BROWSER_BRAIN,
+                fallbackModel = aiModel,
+                fallbackReasoning = reasoningLevel
+            ) ?: (aiModel to reasoningLevel)
+
+            val operatorLlmCaller = llmCallerProvider?.invoke(operatorModel, operatorReasoning, apiKeyId)
+                ?: BrowserLLMHelper(
+                    providerManager = providerManager,
+                    aiModel = operatorModel,
+                    reasoningLevel = operatorReasoning,
+                    apiKeyId = apiKeyId
+                )
+            val brainLlmCaller = llmCallerProvider?.invoke(brainModel, brainReasoning, apiKeyId)
+                ?: BrowserLLMHelper(
+                    providerManager = providerManager,
+                    aiModel = brainModel,
+                    reasoningLevel = brainReasoning,
+                    apiKeyId = apiKeyId
+                )
+
+            val drillExecutor = DrillExecutor(control = control, workingDir = workingDir)
+
+            val brain = BrowserBrain(
+                llmCaller = brainLlmCaller,
+                workingDir = workingDir,
+                continuousMemory = false
+            )
+
+            val runner = BrowserOperator(
+                control = control,
+                aiModel = operatorModel,
+                llmCaller = operatorLlmCaller,
+                brain = brain,
+                drillExecutor = drillExecutor,
+                recipe = effectiveRecipe,
+                maxSteps = 50,
                 onStep = { step, thought, results ->
                     taskObj.lastStep = step
                     taskObj.lastThought = thought
@@ -135,15 +196,39 @@ class BrowserTaskManager(
                 }
             )
             try {
-                val result = runner.run(task)
-                taskObj.result = result
-                taskObj.status = if (result.success) TaskStatus.COMPLETED else TaskStatus.ERROR
-                taskObj.error = if (result.success) null else result.message
+                val opResult = runner.run(task)
+
+                // 任务终态：由 BrowserBrain 生成结构化简报与报告
+                val reportResult = runCatching {
+                    brain.generateFinalReport(
+                        taskHistory = taskObj.steps.joinToString("\n"),
+                        goal = task,
+                        rawOperatorMessage = opResult.message,
+                        recipeRules = effectiveRecipe?.judgeRules.orEmpty()
+                    )
+                }.getOrNull()
+                taskObj.brainResult = reportResult
+
+                // 优先使用 Brain 产出的一句话简报给主管，主管查状态即得精简结论
+                val executiveSummary = if (reportResult != null && reportResult.success) {
+                    val summary = reportResult.data["summary"]
+                    val fileNotice = if (reportResult.filesWritten.isNotEmpty()) {
+                        " (报告已保存: ${reportResult.filesWritten.joinToString(", ")})"
+                    } else ""
+                    if (!summary.isNullOrBlank()) "$summary$fileNotice" else opResult.message
+                } else {
+                    opResult.message
+                }
+
+                val finalResult = opResult.copy(message = executiveSummary)
+                taskObj.result = finalResult
+                taskObj.status = if (opResult.success) TaskStatus.COMPLETED else TaskStatus.ERROR
+                taskObj.error = if (opResult.success) null else opResult.message
                 emit(
                     taskId,
-                    if (result.success) EventType.BROWSER_TASK_COMPLETED else EventType.BROWSER_TASK_ERROR,
+                    if (opResult.success) EventType.BROWSER_TASK_COMPLETED else EventType.BROWSER_TASK_ERROR,
                     status = taskObj.status,
-                    message = result.message
+                    message = executiveSummary
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 taskObj.status = TaskStatus.STOPPED
@@ -154,6 +239,8 @@ class BrowserTaskManager(
                 taskObj.status = TaskStatus.ERROR
                 taskObj.error = e.message ?: e::class.simpleName.orEmpty()
                 emit(taskId, EventType.BROWSER_TASK_ERROR, status = TaskStatus.ERROR, message = taskObj.error)
+            } finally {
+                // ST2：Brain 不再持有 client（llmCaller 自管），无 close
             }
         }
         taskObj.job = job
@@ -270,7 +357,8 @@ class BrowserTaskManager(
             lastStep = t.lastStep,
             lastThought = t.lastThought,
             steps = t.steps.toList(),
-            createdAt = t.createdAt
+            createdAt = t.createdAt,
+            brainResult = t.brainResult
         )
     }
 
@@ -287,10 +375,28 @@ class BrowserTaskManager(
         lastStep = lastStep,
         lastThought = lastThought,
         steps = steps.toList(),
-        createdAt = createdAt
+        createdAt = createdAt,
+        brainResult = brainResult
     )
 
     // ── 内部 ──
+
+    /**
+     * ST3：配方解析——非 inline recipe（未带 drillScript）且配了 [recipeStore] 时，
+     * 按 recipe.name 从 skills 目录加载 skill 增强配方（operator 规则/判定规则/drill 脚本）。
+     * 加载失败（文件不存在/解析异常）安全回退原 recipe（不兜底不伪造，直接按原名挂载）。
+     */
+    private fun resolveRecipe(recipe: BrowserRecipe?): BrowserRecipe? {
+        if (recipe == null || recipeStore == null || recipe.drillScript != null) return recipe
+        val loaded = recipeStore.load(recipe.name) ?: return recipe
+        return BrowserRecipe(
+            name = loaded.id,
+            description = loaded.description,
+            operatorContent = loaded.operatorContent,
+            judgeRules = loaded.judgeRules,
+            drillScript = loaded.drillScriptJson
+        )
+    }
 
     private suspend fun createBrowserControl(registered: RegisteredBrowser, taskId: String): BrowserControl =
         registered.factory(taskId)
@@ -344,5 +450,7 @@ data class BrowserTaskDetails(
     val lastStep: Int,
     val lastThought: String,
     val steps: List<String>,
-    val createdAt: String
+    val createdAt: String,
+    /** Brain 终态分析结果（任务完成时由 BrowserBrain.generateFinalReport 产出，未完成/失败为 null）。 */
+    val brainResult: BrainResult? = null
 )

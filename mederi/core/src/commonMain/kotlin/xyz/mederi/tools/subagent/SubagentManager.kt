@@ -38,14 +38,53 @@ import kotlinx.coroutines.flow.MutableSharedFlow
  * sessionId = 父会话 ID；不注入 eventBus 时静默跳过（测试/无事件场景）。
  *
  * 所有复杂状态都收敛在 [agents] 表里，外部（工具/UI）只通过这里的方法交互。
+ *
+ * **主动上报（2026-09-25）**：子代理终态时经 [onTerminal] 回调通知父会话——
+ * 父代理不再需要 WAIT 阻塞拉取，TurnExecutor 收到回调后合成内部消息唤起新 turn
+ * （批量合并：同一会话多个通知合并成一条内部消息、一次 turn）。
  */
 class SubagentManager(
     private val subagentRunner: SubagentRunner,
     private val scope: CoroutineScope,
-    private val eventBus: MutableSharedFlow<MederiEvent>? = null
+    private val eventBus: MutableSharedFlow<MederiEvent>? = null,
+    /**
+     * 子代理终态回调（2026-09-25）。在 spawn 的 finally 里、emitEvent 旁调用。
+     * 携带终态信息（agentId/role/parentSessionId/planId/subtaskIndex/status/result/stalled）。
+     * 调用方（TurnExecutor）据此把通知入队，在父 turn 空闲时合并成一条内部消息唤起新 turn。
+     * 不注入时静默跳过（测试/无唤醒需求场景）。
+     */
+    private val onTerminal: ((TerminalNotice) -> Unit)? = null,
+    /**
+     * 卡死检测超时（毫秒，默认 10 分钟）。spawn 时起一个 watchdog 协程，
+     * 超时后若子代理仍 RUNNING → 发一条 stalled=true 的 [TerminalNotice] 通知父会话，
+     * 由 AI 决定 stop 还是继续等。不强制 cancel——"让AI主动检查一下是不是卡死了"。
+     * 全局可配：TurnExecutor 从设置注入，测试可传短超时。
+     */
+    private val stallTimeoutMs: Long = 10 * 60 * 1000L
 ) {
 
     enum class SubagentStatus { RUNNING, COMPLETED, ERROR, STOPPED }
+
+    /**
+     * 子代理终态通知（主动上报通道，2026-09-25）。
+     *
+     * TurnExecutor 收到此通知后：
+     * - 入 pendingNotices 队列（按 parentSessionId 分组）
+     * - 父 turn 空闲时 maybeFlush 合并成一条内部消息唤起新 turn
+     * - 父 turn 活跃时等 turn 收尾再冲刷
+     *
+     * [stalled] = true 表示 watchdog 超时触发（子代理可能卡死），非正常终态。
+     */
+    data class TerminalNotice(
+        val agentId: String,
+        val role: SubagentRole,
+        val parentSessionId: String,
+        val planId: String?,
+        val subtaskIndex: Int?,
+        val status: SubagentStatus,
+        val result: String?,
+        val stalled: Boolean = false
+    )
 
     data class BackgroundAgent(
         val agentId: String,
@@ -62,8 +101,9 @@ class SubagentManager(
         /** 主代理派发的命令（task）与补充说明（briefing）——SUBAGENT_STARTED payload。 */
         val task: String = "",
         val briefing: String? = null,
-        /** 执行器子代理的 plan/subtask 归属（SpawnAgentTool 传入），用于丢失后恢复与 scope 检查。 */
-        val executorPlanId: String? = null,
+        /** 子代理的 plan 归属（EXECUTOR 与有活跃 plan 的 RESEARCHER 都传入）。
+         *  用于丢失后恢复：executor 据此查 touchedFiles，researcher 据此恢复报告路径认知。 */
+        val planId: String? = null,
         val executorSubtaskIndex: Int? = null,
         val planStore: PlanStore? = null
     )
@@ -120,8 +160,8 @@ class SubagentManager(
         projectId: String,
         parentSessionId: String,
         apiKeyId: String? = null,
-        /** 执行器子代理的 plan/subtask 归属（SpawnAgentTool 传入，透传给 SubagentRunnerImpl flush touched files）。 */
-        executorPlanId: String? = null,
+        /** 子代理的 plan 归属（EXECUTOR 由 SpawnAgentTool 传、RESEARCHER 由 SpawnResearcherTool 在有活跃 plan 时传）。 */
+        planId: String? = null,
         executorSubtaskIndex: Int? = null,
         planStore: PlanStore? = null
     ): String {
@@ -139,7 +179,7 @@ class SubagentManager(
             reasoningLevel = reasoningLevel,
             task = task,
             briefing = briefing,
-            executorPlanId = executorPlanId,
+            planId = planId,
             executorSubtaskIndex = executorSubtaskIndex,
             planStore = planStore
         )
@@ -167,7 +207,7 @@ class SubagentManager(
                     projectId = projectId,
                     parentSessionId = parentSessionId,
                     apiKeyId = apiKeyId,
-                    executorPlanId = executorPlanId,
+                    planId = planId,
                     executorSubtaskIndex = executorSubtaskIndex,
                     planStore = planStore
                 )
@@ -195,7 +235,7 @@ class SubagentManager(
                     else -> EventType.SUBAGENT_ERROR
                 }, mapOf("agentId" to agentId))
                 // 归档恢复记录：agent 丢失/归档后，agent_status 的 NOT_FOUND 也能返回部分认知
-                val touched = bg.executorPlanId?.let { pid ->
+                val touched = bg.planId?.let { pid ->
                     bg.planStore?.load(pid)?.subtasks
                         ?.getOrNull(bg.executorSubtaskIndex ?: -1)
                         ?.executorTouchedFiles
@@ -209,9 +249,54 @@ class SubagentManager(
                     subtaskIndex = bg.executorSubtaskIndex,
                     atMs = System.currentTimeMillis()
                 )
+                // 主动上报（2026-09-25）：通知父会话——TurnExecutor 据此合成内部消息唤起新 turn。
+                // STOPPED 也通知：否则父代理永远等不到那个子任务的音讯。
+                // 去重：watchdog 超时已发过 stalled 通知时跳过（progress=="stalled"），避免重复唤醒。
+                // NonCancellable：回调可能处于协程取消路径（STOPPED/abort），裸调用可能被吞。
+                if (bg.progress != "stalled") {
+                    runCatching {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            onTerminal?.invoke(TerminalNotice(
+                                agentId = agentId,
+                                role = role,
+                                parentSessionId = parentSessionId,
+                                planId = planId,
+                                subtaskIndex = executorSubtaskIndex,
+                                status = bg.status,
+                                result = bg.result,
+                                stalled = false
+                            ))
+                        }
+                    }
+                }
             }
         }
         bg.job = job
+        // watchdog（2026-09-25）：超时提醒——子代理可能卡死。
+        // 超时后若仍 RUNNING → 发 stalled 通知（不 cancel，AI 决定 stop 还是等），
+        // 并标记 progress="stalled" 让 finally 的 onTerminal 跳过（去重）。
+        if (stallTimeoutMs > 0) {
+            scope.launch {
+                delay(stallTimeoutMs)
+                if (bg.status == SubagentStatus.RUNNING) {
+                    bg.progress = "stalled"
+                    runCatching {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            onTerminal?.invoke(TerminalNotice(
+                                agentId = agentId,
+                                role = role,
+                                parentSessionId = parentSessionId,
+                                planId = planId,
+                                subtaskIndex = executorSubtaskIndex,
+                                status = SubagentStatus.RUNNING,
+                                result = null,
+                                stalled = true
+                            ))
+                        }
+                    }
+                }
+            }
+        }
         return agentId
     }
 

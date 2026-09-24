@@ -197,8 +197,10 @@ inkcompose/
 **项目目录模型**：`directories.first()` = 主目录（承载 `.mederi/` 工作区、shell cwd、相对路径解析首选），
 其余目录平等读写。多目录 containment 白名单有效。
 
-**计划/Spec 分层（2026-09 定稿）**：create_plan = WHAT（中层技术方案，用户批准的对象）；批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）；subagent(SPAWN, planId, subtaskIndex) 硬绑定执行存储的 spec；
-verify 三分支：PASS / 执行错→converge_plan / **spec 错→重新 generate_spec 覆盖→重执行**。
+**计划/Spec 分层（2026-09-24 重构验证契约 + 严格 append-only）**：create_plan = WHAT（中层技术方案，用户批准的对象，含每个子任务的 verification 契约：命令 + 预期结果 + 机器校验字面量）；批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）；subagent(SPAWN, planId, subtaskIndex) 硬绑定执行存储的 spec；
+verify 两分支（根因轴，**先验实现、实现无误再验计划**）：PASS / rootCause=IMPLEMENTATION（spec 清楚、执行没做到）→converge_plan / rootCause=PLAN（实现照 spec 做到、计划本身错）→ append-only 修订（update_verification 改契约 / generate_spec reason= 改 spec）。
+**验证机器硬校验**：verify_subtask 无条件执行验证命令（不再只在声明 PASS 时才跑）；exit 0 + expectStdoutContains 全过 = 机器 PASS；exit 非零 / 缺字面量 / 命中 expectStdoutNotContains = 机器 FAIL（声明 PASS 时拒绝存储）；机器 PASS 而模型坚持 FAIL/PARTIAL → 记非 PASS + machineMismatch=true（异常态，主代理必须告知用户）。
+**严格 append-only（spec + verification）**：spec 修正（generate_spec 覆盖既有 spec）必须给 reason，完整旧 spec 文本保存进 specChanges；verification 契约修正（update_verification）必须给 reason，完整旧/新契约保存进 verificationChanges。信息零销毁，生效值 = Subtask.spec / Subtask.verification（最新）。
 
 **并行工具调度（2026-09 定稿）**：Koog 工具执行节点已开 `parallel=true`——同一条消息里的多个工具调用并行执行，**无并发上限，由 AI 调度**（信任 AI 策略）。配套硬性约束：
 - `create_plan` 必须单独发一条消息，不得与任何工具同消息批量；
@@ -226,10 +228,12 @@ shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该
 │    （不建 plan、不 spawn；apply_patch 已注销，不注册给 AI）
 └─【复杂改动】多文件/逻辑变化/需用户决策 → Plan Loop：
      （理解不足先 subagent(SPAWN_RESEARCHER)）→ create_plan → 批准 → generate_spec
-     → subagent(SPAWN, planId, subtaskIndex) → verify_subtask
+     → subagent(SPAWN, planId, subtaskIndex) → END TURN（子代理后台跑，完成自动唤醒父 turn）
+     → 唤醒后 verify_subtask（机器无条件执行验证命令 + 字面量硬校验）
        ├─ PASS → 下一个子任务
-       ├─ 执行错 → converge_plan 追加补救 → 重执行
-       └─ spec 错 → 重新 generate_spec 覆盖→重执行
+       ├─ rootCause=IMPLEMENTATION（spec 清楚、执行没做到）→ converge_plan 追加补救 → 重执行
+       └─ rootCause=PLAN（实现照 spec 做到、计划本身错）→ append-only 修订
+            （update_verification 改契约 / generate_spec reason= 改 spec）→ 重执行
      → 全部 PASS → 归档
 ```
 
@@ -254,15 +258,63 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 ### 并行执行（2026-09）
 
 **相互独立（无 dependsOn、不写同一批文件）的子任务用并行 spawn 执行**：先为这些子任务逐个
-`generate_spec`，然后同一条消息发多个 `subagent`(SPAWN) 一起跑，全部返回后再逐个 `verify_subtask`。
+`generate_spec`，然后同一条消息发多个 `subagent`(SPAWN) 一起跑，结束 turn。子代理完成后
+**自动唤醒父 turn**（同会话多个完成通知合并成一条内部消息、一次 turn），唤醒后逐个 `verify_subtask`。
 有依赖的子任务保持串行。并行度不设上限，由 AI 自己判断——信任 AI 调度，代码不设闸门（仅沙箱兜底）。
 
-### 上下文挂载（防失忆）
+### 上下文挂载（防失忆，方案A 2026-09-24）
 
-- **主代理**：每轮 turn 从 PlanStore 现读活跃计划，把每个子任务的 status/targetFiles/brief（planDetail）+ verification/验证结果拼进系统提示词的 `# Active Plan` 段——**spec 只挂活跃子任务**（IN_PROGRESS 优先，否则 nextPending），历史 spec 留在磁盘（spawn_agent 自取）；挂 `Current: Subtask N` 指针行给模型 todo 式焦点
+- **主代理**：每轮 turn 从 PlanStore 现读活跃计划，只把**动态状态**挂进系统提示词的 `# Active Plan` 段——
+  title/status/businessLogic + 进度计数（passed/failed/pending/in-progress）+ `Current: Subtask N` 指针行 +
+  每个子任务的一行状态速览（`- [status] Subtask N: name`）+ 活跃子任务 spec + 已验证子任务最近一次验证结果（status/gapType/evidence）。
+  静态详情（brief/targetFiles/verification 命令/decisions）**不再挂**——`plan.md` 落盘在
+  `.mederi/plans/{planId}/plan.md`，主代理按需 `read_file` 取（活动子任务 spec 仍挂：spawn 前确认要用）。
+  段尾给两个路径指针：`plan.md`（静态详情）+ `research.md`（researcher 报告）。
 - **轻量 todo（update_todo，2026-09）**：无 Plan 任务的进度跟踪，真理源 = sessions.todos 列，每轮挂 `# Current Todo` 段（turn 边界刷新）；**有活跃 Plan（执行期）时代码级硬门禁禁用**（AgentTools 校验）——todo 面板显示 Plan 子任务投影（`PLAN_PROGRESS` payload `todos`，投影函数 `Plan.toTodoProjection()` 唯一），防止两份进度真理源
-- **Executor**：spec（Subtask.spec）注入其唯一一条用户消息（brief 拼进 briefing 作意图上下文），系统提示词要求自顶向下执行——一次性任务无需持续挂载
-- **Researcher**：只挂 task + briefing，无计划上下文
+- **Executor**：spec（Subtask.spec）+ brief（planDetail）注入其唯一一条用户消息；
+  不再注入 researchNotes 全文或 appendix 摘录（appendix 字段已删）。需要调研结论时 read_file
+  `.mederi/plans/{planId}/research.md`；需要某个原文件认知时直接 read_file 该路径——executor 是
+  干脏活的便宜模型，自己读盘，模型不必预先转述文件内容。报告完成时落盘到
+  `.mederi/plans/{planId}/reports/NN-executor.md`，父上下文只收摘要+路径（尾部 1500 字符 + 路径，捕获
+  SPEC_FEEDBACK）。
+- **Researcher**：有活跃 plan 时（spawn 时 planStore.loadBySession 返回非空）报告落盘到
+  `.mederi/plans/{planId}/research.md`，父上下文只收摘要+路径（头部 800 字符）；无活跃 plan 时（分诊
+  阶段调研）保持原有行为——全文回灌父上下文（无法保证制定 plan 时该 researcher 仍可用）。
+
+### 工作文件落地（方案A 2026-09-24）
+
+主↔子代理交互只传简介；全量内容落盘到 `.mederi/plans/{planId}/` 下，谁需要谁读全：
+
+| 文件 | 内容 | 谁写、何时 | 谁读、何时 |
+|---|---|---|---|
+| `plans/{planId}/plan.json` | 聚合根（含全部动态状态：subtasks[].status/spec/verificationResult/executorTouchedFiles/researchNotes） | create_plan 写；后续 spawn/verify/converge 通过 updatePlan 原子改动态字段 | PlanStore.load（代码内部） |
+| `plans/{planId}/plan.md` | 人读投影（动态渲染） | save 同步写 | UI 批准卡片、用户查看；主代理按需 read_file 取静态详情 |
+| `plans/{planId}/research.md` | researcher 报告全文 | researcher 子代理完成时落盘（有活跃 plan 才落） | executor 需要调研结论时 read_file；主代理按需 |
+| `plans/{planId}/reports/NN-executor.md` | executor 报告全文（per-subtask） | executor 完成时落盘 | 主代理按需 read_file（摘要+路径默认回灌） |
+| `plans/{planId}/walkthrough.md` | 完成总结 | 全部 PASS 时 writeWalkthrough 装配（archive 时随之移到 plans-done/{planId}/） | 用户阅读；AI 可补 Notes 段 |
+| `plans-done/{planId}/...` | 归档整个计划目录（同结构复制） | archive(planId) 触发 | 审计留痕 |
+| `plans-voided/{planId}/...` | 作废整个计划目录（同结构移动） | voidActivePlans → moveToVoided 触发 | 作废留痕 |
+
+**不落盘的内存字段**：spec 文本（落 Subtask.spec 在 plan.json 内）；executorProgress/executorTouchedFiles（落 plan.json）。
+
+### 子代理主动上报（异步唤醒，2026-09-25）
+
+子代理终态时经 `SubagentManager.onTerminal` 回调**主动通知父会话**，父代理不再需要 WAIT 阻塞拉取：
+
+- **完成即唤醒**：子代理后台协程的 finally 块里发 `TerminalNotice`（agentId/role/planId/subtaskIndex/status/result），
+  TurnExecutor 收到后入 `pendingNotices` 队列 → 父 turn 空闲时 `maybeFlush` 合并成一条内部消息唤起新 turn。
+- **批量合并**：同会话多个子代理先后完成 → 合并成一条内部消息、一次 turn（省 token）。
+- **父 turn 活跃时**：等 `runTurn` finally 冲刷（`scope.launch { flushPendingNotices }`），不与活跃 turn 争 RUNNING 守卫。
+- **竞态回退**：`sendMessageInternal` 撞上"会话正在跑"（用户消息恰好进来）→ 通知放回队列，等 turn 收尾再冲刷。
+- **STOPPED 也通知**：否则父代理永远等不到被 stop 的子任务的音讯。
+- **卡死检测（watchdog）**：spawn 时起 `delay(stallTimeoutMs)` 协程（默认 10 分钟），超时后仍 RUNNING →
+  发 `stalled=true` 通知（不 cancel，AI 决定 stop 还是等）；正常完成时 `progress="stalled"` 标记让 finally 跳过（去重）。
+- **abort 清队列**：`abortAndJoin` 清掉该会话的待唤醒通知——用户中止后不该再被唤起。
+- **计划活性校验**：冲刷时校验 `planStore.loadBySession` 仍返回活跃计划；已归档/作废时丢弃通知。
+- **WAIT 已删**：`SubagentAction` 枚举不再有 WAIT 值。历史消息中的旧 WAIT 调用不会反序列化失败
+  （args 是原始 JSON 字符串不经枚举解码），模型收到错误后自纠。
+**已删除的旧字段**：`Subtask.appendix` 与 `AppendixEntry`（2026-09-24）——executor 直接 read_file 原文件，
+不再要求模型在 generate_spec 时手工转录文件摘录（输出 token 浪费）。
 
 ### 安全网
 

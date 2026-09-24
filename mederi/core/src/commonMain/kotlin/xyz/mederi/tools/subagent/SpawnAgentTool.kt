@@ -40,8 +40,10 @@ data class SpawnAgentArgs(
  * spawn_agent 工具。
  *
  * **异步派工**：调用后立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`，不阻塞父 Agent 的 turn。
- * 子 Agent 在后台运行（内存中，不创建持久化 Session）。需要结果时用 `wait_agent(agentId)` 等待，
- * 或 `agent_status` 查询、`stop_agent` 主动停止。子 Agent 继承父 Agent 的所有配置。
+ * 子 Agent 在后台运行（内存中，不创建持久化 Session）。完成后经 SubagentManager.onTerminal
+ * 回调**自动唤醒**父 turn（TurnExecutor pendingNotices 队列 + maybeFlush）；
+ * 卡死由 watchdog（默认 10 分钟）发 stalled 通知，父代理可用 `agent_status` 查询、`stop_agent` 主动停止。
+ * 子 Agent 继承父 Agent 的所有配置。
  *
  * 门禁（代码强制）：spec 必须已由 generate_spec 写入 Subtask.spec（非空才放行），
  * 杜绝"未生成 spec 直接派活"绕过；brief（planDetail）随 briefing 一并带给子代理作意图上下文。
@@ -79,8 +81,8 @@ class SpawnAgentTool(
         "agentId — the subagent runs in the background. Requires planId + subtaskIndex; the subagent " +
         "executes the exact spec stored by generate_spec. Call generate_spec(planId, subtaskIndex) first, " +
         "then spawn with both. Multiple spawn calls sent together in one message run in parallel. " +
-        "After spawning, use wait_agent(agentId) to block for the result (plan workflow), or " +
-        "agent_status / stop_agent to monitor or stop it."
+        "You will be AUTOMATICALLY woken up when the subagent finishes — end your turn, do NOT poll. " +
+        "Use agent_status / stop_agent to monitor or stop it."
 ) {
 
     @Serializable
@@ -153,7 +155,11 @@ class SpawnAgentTool(
 
         val agentId = subagentManager.spawn(
             task = args.task,
-            // brief（用户批准的意图）拼进 briefing 给子代理作上下文；spec 是主执行清单
+            // briefing 注入执行所需的最低意图（executor 自己读盘获取详情）：
+            // 1. 父 agent 调研结论（plan.researchNotes）——主 agent 备忘字段，不再注入 executor
+            //    briefing。executor 需要调研结论时 read_file .mederi/plans/{planId}/research.md
+            // 2. brief（用户批准的意图）——子任务在全局中的定位
+            // spec 是主执行清单（作为 plan 参数单独传，不拼进 briefing）
             briefing = listOfNotNull(
                 args.briefing.takeIf { it.isNotBlank() },
                 st.planDetail.takeIf { it.isNotBlank() }?.let { "Brief: $it" }
@@ -166,7 +172,7 @@ class SpawnAgentTool(
             projectId = projectId,
             parentSessionId = parentSessionId,
             apiKeyId = apiKeyId,
-            executorPlanId = args.planId,
+            planId = args.planId,
             executorSubtaskIndex = args.subtaskIndex,
             planStore = planStore
         )
@@ -192,7 +198,7 @@ data class SpawnResearcherArgs(
  * spawn_researcher 工具：研究型子代理，只读文件、无写权限、无命令执行。
  *
  * **异步派工**：调用后立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`，不阻塞父 Agent 的 turn。
- * 需要结果时用 `wait_agent(agentId)` 等待。
+ * 完成后经 SubagentManager.onTerminal 回调自动唤醒父 turn（有活跃 plan 时报告落盘 research.md）。
  *
  * 不需要计划，不需要 spec——研究发生在计划之前（调研代码以支撑制定计划）。
  * 子代理的意识：自己是研究助手，不对用户发问，自主调研、汇总结果、返回给父 Agent。
@@ -208,13 +214,14 @@ class SpawnResearcherTool(
     private val parentSessionId: String,
     private val apiKeyId: String? = null,
     private val sessionStore: xyz.mederi.store.SessionStore? = null,
-    private val subagentConfigManager: SubagentConfigManager? = null
+    private val subagentConfigManager: SubagentConfigManager? = null,
+    private val planStore: PlanStore? = null
 ) : SimpleTool<SpawnResearcherArgs>(
     argsType = typeToken<SpawnResearcherArgs>(),
     name = "spawn_researcher",
     description = "Asynchronously creates a read-only subagent to investigate the codebase: read files, " +
         "explore the directory structure, and synthesize a structured summary for the parent. " +
-        "Returns immediately with an agentId — use wait_agent(agentId) to get the result. " +
+        "Returns immediately with an agentId — you will be AUTOMATICALLY woken up when it finishes. " +
         "No write access, no command execution. The subagent reports findings and terminates — " +
         "it does not ask the parent clarifying questions."
 ) {
@@ -232,6 +239,9 @@ class SpawnResearcherTool(
             fallbackModel = parentModel,
             fallbackReasoning = parentReasoning
         ) ?: (parentModel to parentReasoning)
+        // 查活跃 plan：有 plan 时把 planId 传下去，researcher 完成时把报告落盘到 {planId}/research.md；
+        // 无 plan（分诊阶段调研，plan 尚未建）时 planId=null，保持原有行为（全文回灌父上下文）。
+        val activePlanId = planStore?.loadBySession(parentSessionId)?.id
         val agentId = subagentManager.spawn(
             task = args.task,
             briefing = args.briefing.takeIf { it.isNotBlank() },
@@ -242,7 +252,9 @@ class SpawnResearcherTool(
             reasoningLevel = effectiveReasoningLevel,
             projectId = projectId,
             parentSessionId = parentSessionId,
-            apiKeyId = apiKeyId
+            apiKeyId = apiKeyId,
+            planId = activePlanId,
+            planStore = planStore
         )
         return Json.encodeToString(
             SpawnAgentTool.SpawnResult.serializer(),

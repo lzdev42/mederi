@@ -74,6 +74,13 @@ interface AiCore {
 
     // AGENTS.md 生成（API 形态，暂无命令/UI 入口；读取/注入在 core 代码级自动完成，见 01-core.md §7.4）
     suspend fun generateAgentsFile(projectId, modelId: String? = null): Result<String>  // 返回写入内容；modelId 缺省用项目最近会话模型
+
+    // Office 文档预览（.docx/.xlsx → HTML，经 DesktopBrowserRuntime KBrowser 渲染 / RemoteServer REST 获取）
+    suspend fun previewOffice(conversationId: String, path: String): Result<String>  // 返回 HTML 字符串
+
+    // SubagentConfig（子代理角色独立模型/推理档配置，设置页 Agents 面板）
+    suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>>
+    suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit>
 }
 ```
 
@@ -152,9 +159,9 @@ SUBAGENT_* 事件 → 子代理缓存表的纯逻辑（与 SnapshotReducer 同�
 
 - `SubagentTracker.apply(states: Map<agentId, SubagentState>, event): Map` —— STARTED 以 agentId 建条目（全量元数据来自 payload），终态覆盖 status；乱序终态（无 STARTED）安全跳过；非子代理事件原样返回
 - `SubagentState(agentId, parentSessionId, role, modelId, modelName, reasoningLevel?, task, briefing?, status, startedAt)` —— 每个子代理一个 UI 缓存对象（MVVM Model）；"工作中" = status==RUNNING（真实 job 状态，SSE 空闲 10 分钟超时兜底判死）
-- `SubagentToolResult` —— core `SubagentManager.StatusResult` JSON 的契约镜像（宽松解码），subagent(WAIT) 落库 tool result 的解析用
+- `SubagentToolResult` —— core `SubagentManager.StatusResult` JSON 的契约镜像（宽松解码），subagent(STATUS) 落库 tool result 的解析用（WAIT 已删 2026-09-25）
 
-**VM 接线**（WorkspaceViewModel）：`allSubagents`（compose state，事件驱动）+ `subagents`（按当前会话过滤的派生 getter）+ `subagent(agentId)`（详情只读数据源）+ `subagentReportMarkdown(toolName, resultJson)`（`ui/SubagentReport.kt` 纯转换：subagent/wait_agent/agent_status 的 COMPLETED 结果 → 汇报 markdown，null=非汇报普通卡片渲染；UI 折叠卡片点开用 InkCompose 渲染）——汇报全文不进事件/缓存，它在数据库的 tool result 里。
+**VM 接线**（WorkspaceViewModel）：`allSubagents`（compose state，事件驱动）+ `subagents`（按当前会话过滤的派生 getter）+ `subagent(agentId)`（详情只读数据源）+ `subagentReportMarkdown(toolName, resultJson)`（`ui/SubagentReport.kt` 纯转换：subagent/agent_status 的 COMPLETED 结果 → 汇报 markdown，null=非汇报普通卡片渲染；UI 折叠卡片点开用 InkCompose 渲染）——汇报全文不进事件/缓存，它在数据库的 tool result 里（wait_agent 已删 2026-09-25；完成报告落盘到 `.mederi/plans/{planId}/reports/NN-executor.md`，父上下文只收摘要+路径）。
 
 ## 4. 三实现架构图
 
@@ -243,6 +250,8 @@ flowchart TB
 | GET `/v1/mcp/servers`；POST `/v1/mcp/servers`（InstallMcpServerInput）；PATCH/DELETE `/v1/mcp/servers/{name}`；POST `.../enabled`；POST `.../verify`；GET `.../json`（→McpServerJsonResponse） | MCP 组（ServerAiCore 遥控桥，desktop 直调不经过） |
 | GET `/v1/skills`；GET `/v1/skills/root`（→SkillsRootResponse）；POST `/v1/skills/root`（SetSkillsRootInput）；POST `/v1/skills/install`（InstallSkillInput → SkillItem）；DELETE `/v1/skills/{name}` | Skill 组（UI 薄触发：列表/根目录/安装/卸载，文件操作全在 core） |
 | POST `/v1/projects/{id}/agents-file/generate`（GenerateAgentsFileInput → GenerateAgentsFileResponse） | AGENTS.md 生成：扫描项目生成（已存在则原地改进）项目根 AGENTS.md（暂无 UI 入口，纯 API 形态） |
+| GET `/v1/sessions/{id}/office-preview[?path=]` | Office 文档预览：`.docx/.xlsx` → HTML 字符串（供浏览器面板渲染） |
+| GET `/v1/subagent-configs`；PUT `/v1/subagent-configs/{role}`（UpdateSubagentConfigInput） | SubagentConfig 组：子代理角色（EXECUTOR/RESEARCHER/BROWSER_OPERATOR/BROWSER_BRAIN）独立模型/推理档配置 CRUD |
 
 响应助手：`respondResult(Result)`（Unit 成功返回 `{}`，失败按 MederiException 子类映射 404/400/409/500 + ApiError）、`respondData(裸值)`、`respondError`。
 
@@ -259,7 +268,7 @@ flowchart TB
 
 ### 7.1 AppState（`…/commonMain/ui/appstate/AppState.kt`）
 
-`class AppState(aiCore, preferences: PreferencesStore, scope)`；宿主注入点 = `remoteControl: RemoteControlHooks?`、`terminalManager: TerminalManager?` 与 `uiBrowserHost: UiBrowserHost?`（内置 JCEF 浏览器宿主，仅 desktop 注入）；`canRenderJcef = uiBrowserHost != null`（遥控端/wasm 恒 false）；`LocalAppState` CompositionLocal。
+`class AppState(aiCore, preferences: PreferencesStore, scope)`；宿主注入点 = `remoteControl: RemoteControlHooks?`、`terminalManager: TerminalManager?` 与 `uiBrowserHost: UiBrowserHost?`（**已移除/保留待清理**：内置 JCEF 浏览器宿主类已整体移除，接口 `UiBrowserHost` 与 `AppState.uiBrowserHost` 字段保留但无实现注入，恒 null）；`canRenderJcef = uiBrowserHost != null`（恒 false，保留待清理）；`LocalAppState` CompositionLocal。
 
 **持久化字段**：
 
@@ -303,7 +312,7 @@ classDiagram
         % 错误族与 diff 族已收敛为分组状态(2026-09 UI 规范化)
         +inputDraft: TextFieldValue  % 输入草稿唯一真理源
         -activeDockPanel: RightDockPanel?  % 保守保留平铺(同时服务全部 dock 面板)
-        +uiBrowserHost: UiBrowserHost?  % 窄访问器 get() = appState.uiBrowserHost; 组件不直操 AppState(2026-09)
+        +uiBrowserHost: UiBrowserHost?  % 窄访问器 get() = appState.uiBrowserHost; 已移除/恒 null（保留待清理）
         +chatItems: List~ChatListItem~  % derivedStateOf 展平
         +effectiveThinkingLevel: StateFlow  % 推理档位唯一真理源(ReasoningMenu.resolve)
         +effects: Flow~UiEffect~  % 一次性导航命令通道(Channel 派发: openSettings/openProjectMenu)
@@ -313,7 +322,7 @@ classDiagram
         +approvePlan(planId, approved) / replyQuestion(...) 
         +tryAttachImage(...) Boolean  % 图片能力门禁
         +openDiff/closeDiff + toggleDockPanel...
-        % 全局事件监听：BROWSER_TASK_STARTED(browser=="jcef") 且 canRenderJcef → 自动展开 BROWSER 面板
+        % 全局事件监听：BROWSER_TASK_STARTED → 自动展开 BROWSER 面板（JCEF 宿主已移除，面板无内置浏览器渲染）
     }
     class SidebarViewModel {
         +uiState(expandedProjectIds, isBusy, error)
@@ -345,7 +354,7 @@ classDiagram
     AppState --> SidebarViewModel
     AppState --> RawMessagesViewModel
     AppState --> TerminalViewModel : terminalManager
-    AppState --> UiBrowserHost : uiBrowserHost（desktop 注入 JCEF）
+    AppState --> UiBrowserHost : uiBrowserHost（已移除/保留待清理，恒 null）
 ```
 
 - **子 VM 生命周期（2026-09 规范化）**：`RawMessagesViewModel` 与 `TerminalViewModel` 由 `Workspace()`（Route/Screen 层）`viewModel {}` 创建，经 `RightExtensionPanel` → `OverviewTabContent`（rawVm）/ `TerminalPanelContent`（terminalVm）注入——组件不再自建 VM、不再经 `WorkspaceViewModel.appStateRef` 摸全局单例（该出口已删除，浏览器 host 改 `uiBrowserHost` 窄访问器）。
@@ -382,7 +391,7 @@ flowchart TD
 - `ChatLayout.kt` 不是 Composable，是**布局常量对象**（contentMaxWidth=1000dp、userBubbleMaxWidth=680dp、sidebarWidth=260dp、rightPanelWidth=360dp、**conversationMinWidth=360dp（对话区最小宽度=手机宽度）**、**rightDockWidth=46dp**、headerHeight=40dp、turnSpacing=14dp 等）。
 - 三个职责分离的条栏：**StatusBar**（消息区，AI 运转状态，`deriveTurnStatus(snapshot)`，永不显示错误；计时锚定"发送请求时刻"`WorkspaceViewModel.turnStartedAt`（send 时记录、turn 结束清除），每秒 `now - turnStartedAt` 重算——切会话回来不重置；**与 footer durationMs 语义不同：StatusBar=从发请求起算，footer=API 有回应起算到回复结束**）、**ErrorBoard**（ChatInputCard 顶部，错误/警告唯一出口：单行简报 + "详细报告"展开 + 关闭；断流时（快照 errorIsStreamInterrupted）额外显示"继续"按钮 → `continueAfterInterruption()` 重发 Continue 续写半截回复，数据源=快照 errorMessage）、**SystemInfoBar**（最底部，纯 CPU/RSS/JVM 资源监控，不接错误）。
 - **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
-- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`HelpCircleTooltip`（InfoTooltip.kt，hover/tap 信息气泡，AgentMode 开关旁）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：uiBrowserHost 注入则渲染 JCEF 浏览器，未注入显示"当前端不支持内置浏览器"占位——遥控/wasm 端门禁）。
+- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`HelpCircleTooltip`（InfoTooltip.kt，hover/tap 信息气泡，AgentMode 开关旁）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：JCEF 宿主已移除，面板显示"当前端不支持内置浏览器"占位）。
 - **共享原子组件库 `ui/components/atoms/`（2026-09 新建）**：ExpandableRow.kt（`ExpandableContent`/`ExpandChevron`/`ExpandableRow` 折叠交互）、Dialogs.kt（`MederiDialog` 基底 + `ConfirmDialog` + `InputDialog`）、PanelCard.kt（`PanelCard`/`CardHeader`/`PanelEmptyState`）、MederiIconButton.kt、CopyButton.kt（`CopyFeedbackState`/`rememberCopyFeedback`/`CopyButton`）、MederiMarkdown.kt（MarkdownView 包裹样板）。回填了 Sidebar 4 对话框、InfoPanels/Skill/Mcp 空态、Skill/Mcp/Metrics/RawMessages 卡片外壳与 Header、ProviderKeyDialogs 确认框等 10+ 处重复；折叠交互统一（ToolCallsBlock/UserMessageCards/WorkTraceCard/ReasoningBlock 7 处）。
 - **层归位（2026-09）**：`TurnStatus`/`RetryHint`/`deriveTurnStatus`/`parseRetryHint` 从 ui/components 移入 `ui/TurnStatus.kt`（VM 不再反向依赖视图层）；`ToolActionKind`/`classifyToolAction`/`ToolActionGroup`/`groupToolCallsByAction` 从 ChatCards.kt 移入 `ui/chat/ToolActions.kt`（数据投影层单一来源）；新增 `ui/ErrorDetailFormatter.kt`（extractErrorCategory/cleanErrorSummary/extractErrorSuggestion/buildBugReportMarkdown 纯函数，ErrorDetailDialog 组合期解析下沉）；`RightDockPanel` 枚举从 ChatListItems.kt 移入 `ui/RightDockPanel.kt`。
 - **重文件拆分（2026-09）**：Sidebar.kt 拆出 `ConversationStatusDot.kt`；ChatInputCard.kt 拆出 `command/SlashCommandTransformation.kt` + `ChatInputAttachments.kt`（附件行）；ChatCards.kt 拆出 `icons.kt`（BrainIcon/TerminalPromptIcon）与 `scroll.kt`（shouldEnableReasoningScroll/ContainNestedScrollConnection/containScroll），ChatCards 只留 format 工具；ChatInputSelectors.kt 抽 `ModelPickerList`（ModelSelectorMenu 与 MobileModelBottomSheet 共用）；ViewerTabs.kt 新增 `ExportActionButton` 原子（导出 5 Boolean 状态机收敛为 Idle/Exporting/Done）。
@@ -417,8 +426,8 @@ flowchart TD
 
 ### 9.3 desktopApp（`app/desktopApp/src/main/kotlin/xyz/mederi/`）
 
-- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **创建 `JcefBrowserHost()` → `appState.uiBrowserHost` + `BrowserRegistry.register("jcef", BrowserKind.JCEF) { host.createAiTab() }`**（camoufox 在 MederiAiCore 注册，jcef 在 desktopApp 注册，幂等覆盖）；`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`RemoteServer.stop()` → `terminalHub.shutdown()` → `browserHost?.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
-- **内置 JCEF 浏览器（desktopApp `browser/`）**：`JcefBrowserHost`（UiBrowserHost 实现，"一个 tab = 一个 KBPage" 轻量标签容器）——`createAiTab()`（desktopApp 专属，**不在接口上**——core 仅有 jvm 目标，commonMain 禁止引用 core 浏览器类型）惰性初始化 KBrowser（JcefChecker 检查 + `initializeConfig(useOsr=true)` + `initializeKBrowser()`，与 inkcompose mermaid worker 共用运行时）→ `KBrowser.newPage()`（viewport-less，挂 KBWebView 渲染）→ 返回 `JCEFBrowserControl`；`BrowserContent` = tab 栏（新建/关闭/切换）+ 激活 tab 的 `KBWebView` + 定时回读 document.title；`closeTab`/`shutdown` 关闭 KBPage。`JCEFBrowserControl`（BrowserControl 实现，绑定单个 KBPage）：**start/close 均幂等空实现**（任务结束 finally 总调 close()，但 tab 保留让用户看结果，手动关或退出才回收）、navigate/click/type（click 聚焦后逐字符输入）/scroll/press/snapshot/screenshot 全落对应 KBPage——AI 切 tab 不影响绑定页。desktopApp 新增 `libs.kbrowser` 依赖（与 inkcompose 同版本同源）。`UiBrowserHost`（commonMain）= `isAvailable` + `@Composable BrowserContent(colors)` + `shutdown()`，不引用 core 类型（wasm/移动端可编译）。
+- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **后台预热 `DesktopBrowserRuntime.ensureInitialized()`**（KBrowser 全局单例，`useOsr=true`，专供 inkcompose mermaid 渲染 / Markdown 导出）；camoufox 在 MederiAiCore 注册（唯一注册源），desktopApp 不再注册 JCEF 浏览器宿主。`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`RemoteServer.stop()` → `terminalHub.shutdown()` → `DesktopBrowserRuntime.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
+- **`DesktopBrowserRuntime`（desktopApp `browser/DesktopBrowserRuntime.kt`，object 全局单例）**：统一管理 KBrowser（JCEF/Chromium）的生命周期——`ensureInitialized()` 幂等线程安全：`JcefChecker.isJcefAvailable` 检查 → `KBrowser.initializeConfig(storageDir, useOsr=true)` + `initializeKBrowser()` → 向 inkcompose 注入单例引用（`SingleMermaidWorker.attachBrowser(KBrowser)` + `MarkdownExporter.setBrowser(KBrowser)`）；`shutdown()` 回收 KBrowser。**职责 = 渲染运行时宿主**（mermaid 离屏 PNG / Markdown→PDF 导出），**非浏览器自动化宿主**（内置 JCEF 浏览器宿主类已整体移除）。`UiBrowserHost`（commonMain）接口与 `AppState.uiBrowserHost` 字段保留但无实现注入（恒 null），保留待清理。desktopApp 依赖 `libs.kbrowser`（与 inkcompose 同版本同源）。
 - `DesktopRemoteControlHooks.kt`：`start(port, password) = RemoteServer.start(...)`；`localAddress` = 枚举 site-local IPv4（10/8、172.16/12、192.168/16）；`isCloudflaredInstalled()` = `cloudflared --version` 探测（未装 UI 提示自行安装，不代装）；`startTunnel(port)` = **pty4j** 真实 pty 拉起 `cloudflared tunnel run`（读 `~/.cloudflared/config.yml`），幂等；**生命周期** = 本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（无需看门狗）；`parseTunnelDomain()` = 解析 config.yml 第一条 ingress hostname 拼 `https://<host>`。
 
 ### 9.4 其他入口

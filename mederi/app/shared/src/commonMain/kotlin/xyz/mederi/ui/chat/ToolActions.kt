@@ -7,7 +7,7 @@ import xyz.mederi.core.contract.models.ToolCallUi
  * 数据投影层（core/ui/chat）单一来源：视图层不得再定义工具名→动作分类规则。
  */
 enum class ToolActionKind {
-    COMMAND, READ, EDIT, SEARCH, LIST, SUBAGENT, MCP, ASK, TODO, OTHER
+    COMMAND, READ, EDIT, SEARCH, LIST, SUBAGENT, MCP, ASK, TODO, VERIFY, OTHER
 }
 
 /**
@@ -23,10 +23,21 @@ fun classifyToolAction(name: String): ToolActionKind {
         lower.contains("list") || lower.contains("dir") || lower.contains("tree") -> ToolActionKind.LIST
         lower == "subagent" || lower.contains("agent") -> ToolActionKind.SUBAGENT
         lower.contains("mcp") -> ToolActionKind.MCP
-        lower.contains("ask") -> ToolActionKind.ASK
+        isAskAction(lower) -> ToolActionKind.ASK
+        lower.contains("verify") -> ToolActionKind.VERIFY
         lower.contains("todo") -> ToolActionKind.TODO
         else -> ToolActionKind.OTHER
     }
+}
+
+private fun isAskAction(lower: String): Boolean {
+    // 排除包含 task/subtask 的工具名（如 verify_subtask）被子串误匹配
+    if (lower.contains("task") && !lower.startsWith("ask")) return false
+    return lower.startsWith("ask") ||
+        lower.contains("question") ||
+        lower.endsWith("_ask") ||
+        lower.contains("_ask_") ||
+        lower.contains("-ask")
 }
 
 /**

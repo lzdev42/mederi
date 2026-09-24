@@ -10,6 +10,12 @@ import xyz.mederi.core.contract.dto.ConversationSnapshot
  * - todo 工具 → 返回 null（UI 仅显示“更新待办清单”，不显示内容）；
  * - 其余 → 回退到 path/file/command 等常见键，最后兜底第一个参数值（拦截任何以 [ 或 { 开头的复合 JSON 文本）。
  */
+private val NON_TARGET_KEYS = setOf(
+    "evidence", "entry", "content", "text", "body", "spec",
+    "prompt", "diff", "patch", "description", "reason", "summary",
+    "output", "stdout", "stderr", "gaptype", "gap_type"
+)
+
 internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot: ConversationSnapshot?): String? {
     val lowerName = name.lowercase()
     // todo 工具不显示参数内容（用户要求仅显示“更新待办清单”）
@@ -36,6 +42,23 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
             input["command"]?.takeIf { it.isNotBlank() } ?: input["cmd"]?.takeIf { it.isNotBlank() }
         name == "ask_user" ->
             extractAskUserSummary(input)
+        name == "verify_subtask" -> {
+            val subtaskIndex = input["subtaskIndex"] ?: input["subtask_index"]
+            val status = input["status"]
+            when {
+                subtaskIndex != null && !status.isNullOrBlank() -> "#$subtaskIndex ($status)"
+                subtaskIndex != null -> "#$subtaskIndex"
+                else -> null
+            }
+        }
+        name == "generate_spec" || name == "update_verification" -> {
+            val subtaskIndex = input["subtaskIndex"] ?: input["subtask_index"]
+            if (subtaskIndex != null) "#$subtaskIndex" else null
+        }
+        name == "write_log" ->
+            ".mederi/notebook.md"
+        name == "create_plan" ->
+            input["title"]?.takeIf { it.isNotBlank() }
         searchQuery != null ->
             searchQuery
         firstFileValue != null -> {
@@ -54,7 +77,9 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
             input["command"]?.takeIf { it.isNotBlank() }
                 ?: input["cmd"]?.takeIf { it.isNotBlank() }
                 ?: input["patch"]?.let { extractPatchFiles(it, snapshot) }?.takeIf { it.isNotBlank() }
-                ?: input.values.firstOrNull { it.isNotBlank() }
+                ?: input.entries.firstOrNull { (k, v) ->
+                    k.lowercase() !in NON_TARGET_KEYS && v.isNotBlank() && !v.contains("\n") && v.length <= 80
+                }?.value
     }
 
     // 全局防御：任何复合 JSON 结构（数组或对象）绝不作为单行摘要塞入标题

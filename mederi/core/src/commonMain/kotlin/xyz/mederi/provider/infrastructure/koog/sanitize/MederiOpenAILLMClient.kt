@@ -20,7 +20,9 @@ import ai.koog.prompt.streaming.emitToolCallDelta
 import ai.koog.prompt.streaming.requireEndFrame
 import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.timeout
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -35,11 +38,13 @@ import kotlinx.serialization.json.put
 import ai.koog.agents.core.tools.ToolDescriptor
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
+import xyz.mederi.http.SseIdleTimeoutException
 
 class MederiOpenAILLMClient(
     apiKey: String,
@@ -63,12 +68,12 @@ class MederiOpenAILLMClient(
          * SSE 空闲超时：连续这么久没收到**任何一行**（含 keep-alive 注释行 `: ping` /
          * `: OPENROUTER PROCESSING` 等）才判定连接已死。
          *
-         * 语义：只要 SSE 还在吐数据（哪怕两帧之间卡三五分钟、哪怕一次推理跑一两个小时），
+         * 语义：只要 SSE 还在吐数据（哪怕两帧之间卡几十秒、哪怕一次推理跑一两个小时），
          * 就永远不超时；只有连接真正没数据到达才计时。Koog/Ktor 的 requestTimeout 和
          * socketTimeout 已在 [xyz.mederi.http.MederiHttpClientFactory] 禁用（设为 0），
          * 这里是我们自己的唯一超时判定。
          */
-        val SSE_IDLE_TIMEOUT: Duration = 10.minutes
+        val SSE_IDLE_TIMEOUT: Duration = 90.seconds
     }
 
     /**
@@ -203,11 +208,6 @@ class MederiOpenAILLMClient(
             // 原始 SSE 行 ring buffer（data: 过滤前）+ 非 data: 错误信号行——供断流诊断
             val lastRawLines = ArrayDeque<String>()
             val errorSseLines = mutableListOf<String>()
-            // 自计超时：记录上一行到达时刻。两行之间只要还在收到任何行（含 keep-alive 注释行），
-            // 就永不超时——只有超过 [SSE_IDLE_TIMEOUT] 没有任何行到达（连接真正死掉）才判超时。
-            // Koog/Ktor 的 requestTimeout/socketTimeout 已被 MederiHttpClientFactory 禁用（设为 0），
-            // 超时完全由这里掌控，不约束 AI 的处理时长。
-            var lastLineAt = TimeSource.Monotonic.markNow()
             try {
                 emitAll(
                     httpClient.lines(
@@ -220,13 +220,21 @@ class MederiOpenAILLMClient(
                             "Content-Type" to "application/json"
                         )
                     )
-                        .onEach {
-                            if (lastLineAt.elapsedNow() > SSE_IDLE_TIMEOUT) {
-                                throw IllegalStateException(
-                                    "SSE idle timeout: no data received for ${lastLineAt.elapsedNow().inWholeSeconds}s"
+                        .timeout(SSE_IDLE_TIMEOUT)
+                        .catch { e ->
+                            if (e is TimeoutCancellationException) {
+                                DebugLog.error(
+                                    "SSE",
+                                    "SSE idle timeout triggered: no lines received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s (lines=$linesReceived, bytes=$bytesReceived)"
                                 )
+                                throw SseIdleTimeoutException(
+                                    "SSE idle timeout: no data received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s"
+                                )
+                            } else {
+                                throw e
                             }
-                            lastLineAt = TimeSource.Monotonic.markNow()
+                        }
+                        .onEach {
                             timing.sample(it.length)
                             bytesReceived += it.length
                             linesReceived++
@@ -491,9 +499,6 @@ class MederiOpenAILLMClient(
             // 原始 SSE 行 ring buffer + 非 data: 错误信号行——供断流诊断
             val lastRawLines = ArrayDeque<String>()
             val errorSseLines = mutableListOf<String>()
-            // 自计超时：与 chat lines 路径同理——只要在收到任何行就不超时，只有超过
-            // [SSE_IDLE_TIMEOUT] 无行到达（连接死掉）才判超时。
-            var lastLineAt = TimeSource.Monotonic.markNow()
             try {
                 emitAll(
                     httpClient.lines(
@@ -506,13 +511,21 @@ class MederiOpenAILLMClient(
                             "Content-Type" to "application/json"
                         )
                     )
-                        .onEach {
-                            if (lastLineAt.elapsedNow() > SSE_IDLE_TIMEOUT) {
-                                throw IllegalStateException(
-                                    "SSE idle timeout: no data received for ${lastLineAt.elapsedNow().inWholeSeconds}s"
+                        .timeout(SSE_IDLE_TIMEOUT)
+                        .catch { e ->
+                            if (e is TimeoutCancellationException) {
+                                DebugLog.error(
+                                    "SSE",
+                                    "SSE responses idle timeout triggered: no lines received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s (lines=$linesReceived, bytes=$bytesReceived)"
                                 )
+                                throw SseIdleTimeoutException(
+                                    "SSE idle timeout: no data received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s"
+                                )
+                            } else {
+                                throw e
                             }
-                            lastLineAt = TimeSource.Monotonic.markNow()
+                        }
+                        .onEach {
                             timing.sample(it.length)
                             bytesReceived += it.length
                             linesReceived++

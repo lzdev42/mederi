@@ -19,6 +19,14 @@ class AgentCapabilitiesTest {
         assertEquals(AgentCapabilities.MAIN, AgentCapabilities.of(null))
         assertEquals(AgentCapabilities.EXECUTOR, AgentCapabilities.of(SubagentRole.EXECUTOR))
         assertEquals(AgentCapabilities.RESEARCHER, AgentCapabilities.of(SubagentRole.RESEARCHER))
+        assertEquals(AgentCapabilities.BROWSER, AgentCapabilities.of(SubagentRole.BROWSER_OPERATOR))
+        assertEquals(AgentCapabilities.BROWSER, AgentCapabilities.of(SubagentRole.BROWSER_BRAIN))
+    }
+
+    @Test
+    fun browser_mapsToBrowserCapabilities() {
+        assertTrue(AgentCapabilities.BROWSER.inheritMcp, "浏览器角色继承 MCP")
+        assertTrue(AgentCapabilities.BROWSER.inheritSkills, "浏览器角色注入 skills")
     }
 
     @Test

@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -287,19 +288,14 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 在内置浏览器面板预览 Office 文档（.docx/.xlsx/.pptx）。
-     * 调 core 转换为 HTML → 注入 uiBrowserHost.loadHtml → 自动打开浏览器面板。
+     * Office 文档预览（.docx/.xlsx/.pptx）。
      */
     fun previewOffice(path: String) {
-        val host = appState.uiBrowserHost ?: return
-        if (!host.isAvailable) return
         val conversationId = this.conversationId ?: return
         viewModelScope.launch {
             appState.aiCore.previewOffice(conversationId, path)
                 .onSuccess { html ->
-                    val title = path.substringAfterLast('/').ifBlank { "Office Preview" }
-                    host.loadHtml(title, html)
-                    openDockPanel(RightDockPanel.BROWSER)
+                    DebugLog.event("UI", "previewOffice success: html generated for $path (${html.length} chars)")
                 }
                 .onFailure { err ->
                     DebugLog.event("UI", "previewOffice failed: ${err.message}")
@@ -475,6 +471,12 @@ class WorkspaceViewModel(
      * 点击经 [continueAfterInterruption] 重发 Continue 续写半截回复。
      */
     val isStreamInterrupted: Boolean get() = errorState.isStreamInterrupted
+
+    /** 是否正在自动补发 Continue（避免 send 时重置 autoContinueCount） */
+    private var isAutoContinuing = false
+
+    /** 自动补发 Continue 的调度任务句柄（防并发） */
+    private var autoContinueJob: Job? = null
 
     /**
      * 是否正在展示详细错误报告弹窗。
@@ -867,18 +869,13 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 if (id != conversationId) attach(id)
             }
         }
-        // 浏览器任务监听（app 级，不绑定会话）：子 agent 启动内置 JCEF 浏览器 → 自动展开浏览器面板。
-        // 遥控端/wasm 端 uiBrowserHost 为 null（canRenderJcef=false）→ 不展开；camoufox 无头任务不展开。
-        // 先等 isReady：MederiAiCore.events() 访问 lateinit mederi，初始化完成前订阅会崩。
+        // 浏览器任务监听：外部自动化浏览器任务启动 → 自动展开浏览器面板展示执行流程
         viewModelScope.launch {
             appState.aiCore.isReady.first { it }
             appState.aiCore.events()
-                .filter {
-                    it.type == xyz.mederi.core.contract.models.CoreEventType.BROWSER_TASK_STARTED &&
-                        it.payload["browser"] == "jcef"
-                }
+                .filter { it.type == xyz.mederi.core.contract.models.CoreEventType.BROWSER_TASK_STARTED }
                 .collect {
-                    if (appState.canRenderJcef && activeDockPanel != RightDockPanel.BROWSER) {
+                    if (activeDockPanel != RightDockPanel.BROWSER) {
                         openDockPanel(RightDockPanel.BROWSER)
                     }
                 }
@@ -1013,6 +1010,8 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 DebugLog.debug("UI", "optimistic user message NOT matched in snapshot, keeping optimistic (id=${pendingOpt.id}, optText='$optText')")
             }
         }
+        val prevSnap = sessionCache.snapshotCache[id]
+        val wasWorking = prevSnap?.conversation?.status == ConversationStatus.Working
         sessionCache.snapshotCache[id] = snap
         if (conversationId == id) {
             snapshot = snap
@@ -1023,9 +1022,11 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 id = snap.errorId,
                 isStreamInterrupted = snap.errorIsStreamInterrupted,
             )
+            checkAndTriggerAutoContinue(id, snap)
         }
-        // turn 结束（离开 Working）清除 StatusBar 计时锚点 + 快照缓存
-        if (snap.conversation.status != ConversationStatus.Working) {
+        // 仅在真实离开 Working 状态（turn 结束）时清除 StatusBar 计时锚点 + 快照缓存
+        if (wasWorking && snap.conversation.status != ConversationStatus.Working) {
+            DebugLog.debug("UI-Timer", "turn ended for $id (wasWorking=$wasWorking, newStatus=${snap.conversation.status}), removing timer and snapshotCache")
             sessionCache.turnStartByConv.remove(id)
             // turn 已结束：store 已有完整数据，缓存不再需要（下次切回走 getSnapshot 即可）。
             // 观察流保留——后续新 turn 的事件仍持续聚合进缓存。
@@ -1034,6 +1035,49 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         if (conversationId == id && !selectionHydrated) {
             selectionHydrated = true
             hydrateSelectionFromConversation(snap.conversation)
+        }
+    }
+
+    /**
+     * 流式闲置超时/中途断流后，若模型已吐出部分内容，UI 层自动替用户补发一句 "Continue"（且严格只发一次）。
+     * 若未吐出内容，Core 层已在内部静默重试，此处不处理。
+     */
+    private fun checkAndTriggerAutoContinue(id: String, snap: ConversationSnapshot) {
+        if (!snap.errorIsStreamInterrupted) return
+        if (snap.conversation.status == ConversationStatus.Working) return
+
+        val count = sessionCache.autoContinueCountByConv.getOrElse(id) { 0 }
+        val lastAssistant = snap.messages.lastOrNull { it.role == ChatRole.Assistant }
+        val hasEmittedTokens = lastAssistant != null && lastAssistant.blocks.any { block ->
+            when (block) {
+                is ChatBlock.Text -> block.text.isNotBlank()
+                is ChatBlock.Reasoning -> block.text.isNotBlank()
+                is ChatBlock.ToolCall -> true
+                else -> false
+            }
+        }
+
+        DebugLog.info(
+            "UI-AutoContinue",
+            "evaluating auto-continue: conv=$id, interrupted=${snap.errorIsStreamInterrupted}, " +
+                "status=${snap.conversation.status}, autoContinueCount=$count, hasEmittedTokens=$hasEmittedTokens"
+        )
+
+        if (count < 1 && hasEmittedTokens) {
+            sessionCache.autoContinueCountByConv[id] = count + 1
+            DebugLog.info("UI-AutoContinue", "scheduling auto-continue for conversation $id (attempt ${count + 1}/1)")
+            autoContinueJob?.cancel()
+            autoContinueJob = viewModelScope.launch {
+                delay(300L)
+                if (conversationId == id && snapshot?.conversation?.status != ConversationStatus.Working) {
+                    isAutoContinuing = true
+                    try {
+                        continueAfterInterruption()
+                    } finally {
+                        isAutoContinuing = false
+                    }
+                }
+            }
         }
     }
 
@@ -1128,6 +1172,9 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             return
         }
         val convId = conversationId
+        if (!isAutoContinuing && convId != null) {
+            sessionCache.autoContinueCountByConv[convId] = 0
+        }
         // 未选中会话：若已选中项目，则发送时自动创建新会话；两者都无才报错
         val projectId = if (convId == null) appState.selectedProjectId.value else null
         if (convId == null && projectId == null) {
@@ -1213,6 +1260,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         DebugLog.data("UI", "model.contextWindow", "${model.contextWindow}, maxTokens=${model.maxTokens}")
         DebugLog.data("UI", "agent", "${agent?.id} (${agent?.name}), reasoningLevel=${agent?.reasoningLevel}")
         DebugLog.data("UI", "thinkingLevel (sent)", computeEffectiveThinkingLevel())
+        val isAuto = isAutoContinuing
         viewModelScope.launch {
             // 未选中会话时：基于已选项目自动创建新会话，再发送
             val targetConvId = if (convId != null) {
@@ -1240,6 +1288,10 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 conv.id
             }
 
+            if (!isAuto) {
+                sessionCache.autoContinueCountByConv[targetConvId] = 0
+            }
+
             val pendingPlan = snapshot?.pendingPlanApproval
             // 计划待批准时用户直接回复 ≠ 拒绝（三条硬规则之一）：不再预置 resolvePlanApproval(false)，
             // 交给 TurnExecutor 的 pending 分支补写中性 ToolResult + 中止旧 turn，计划保持 PENDING_APPROVAL。
@@ -1260,6 +1312,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                         ?: UiMessage(Res.string.err_send_failed)
                 )
                 sessionCache.pendingUserMessages.remove(targetConvId)
+                sessionCache.turnStartByConv.remove(targetConvId)
             }
         }
     }
@@ -1453,5 +1506,8 @@ private class SessionUiCache {
 
     /** 各会话的后台观察 Job（conversationId → Job） */
     val observeJobs = mutableMapOf<String, Job>()
+
+    /** 断流自动补发 Continue 计数：conversationId → 已补发次数（防死循环，单次中断最多自动补发 1 次） */
+    val autoContinueCountByConv = mutableMapOf<String, Int>()
 }
 

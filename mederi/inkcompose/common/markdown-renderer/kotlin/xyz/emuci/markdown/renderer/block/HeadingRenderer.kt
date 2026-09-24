@@ -42,7 +42,7 @@ internal fun HeadingRenderer(
         level = level,
         numbering = numbering,
         inlineModel = inlineModel,
-        showDivider = node.level <= 2,
+        showDivider = theme.showHeadingDividers && node.level <= 2,
         modifier = modifier,
     )
 }
@@ -67,7 +67,7 @@ internal fun SetextHeadingRenderer(
         level = level,
         numbering = numbering,
         inlineModel = inlineModel,
-        showDivider = true,
+        showDivider = theme.showHeadingDividers,
         modifier = modifier,
     )
 }

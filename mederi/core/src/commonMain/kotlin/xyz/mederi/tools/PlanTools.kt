@@ -23,6 +23,7 @@ import xyz.mederi.plan.PlanApprovalRequester
 import xyz.mederi.plan.PlanStatus
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.PlannedChange
+import xyz.mederi.plan.SpecChange
 import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.plan.SubtaskStatus
@@ -105,6 +106,13 @@ private object LenientSubtaskArg :
         OBJECT_LIST_FIELDS.fold(element) { acc, f -> coerceObjectListField(acc, f) }
 }
 
+/** generate_spec 参数形状矫正（appendix 已删除，目前为 no-op fold，保留为扩展预留） */
+private object LenientGenerateSpecArgs :
+    JsonTransformingSerializer<PlanTools.GenerateSpecArgs>(PlanTools.GenerateSpecArgs.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        OBJECT_LIST_FIELDS.fold(element) { acc, f -> coerceObjectListField(acc, f) }
+}
+
 private fun JsonElement.subelement(name: String): JsonElement? =
     (this as? kotlinx.serialization.json.JsonObject)?.get(name)
 
@@ -166,6 +174,26 @@ class PlanTools(
         val verificationCwd: String? = null,
         @LLMDescription("Optional timeout for the verification command, in seconds. Default = 30.")
         val verificationTimeoutSeconds: Int? = null,
+        @LLMDescription(
+            "REQUIRED. Expected result in plain words: what the command must output for this subtask to " +
+                "count as passed (e.g. 'pytest reports 3 passed, 0 failed'). Rendered on the approval card " +
+                "so the user can judge whether the verification method itself is right. Use the user's language."
+        )
+        val verificationExpected: String = "",
+        @LLMDescription(
+            "Optional but strongly recommended. Literal strings the command's output MUST contain — " +
+                "MACHINE-CHECKED. Exiting 0 is not enough: if any literal here is missing from the real " +
+                "output, verification is mechanically judged FAIL. Pin the actual expectation " +
+                "(e.g. [\"3 passed\", \"BUILD SUCCESSFUL\"]) so a partially-passing command cannot slip through."
+        )
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val verificationExpectStdoutContains: List<String> = emptyList(),
+        @LLMDescription(
+            "Optional. Literal strings the command's output MUST NOT contain — MACHINE-CHECKED " +
+                "(e.g. [\"FAILED\", \"Traceback\"])."
+        )
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val verificationExpectStdoutNotContains: List<String> = emptyList(),
         @LLMDescription("Indices of subtasks this depends on (0-based).")
         val dependsOn: List<Int> = emptyList(),
         @LLMDescription("Whether this can run in parallel with other subtasks.")
@@ -206,6 +234,21 @@ class PlanTools(
         @LLMDescription("Out of scope: what this plan will NOT do.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val outScope: List<String> = emptyList(),
+        @LLMDescription(
+            "Optional. Items the user should pay attention to BEFORE approving: breaking changes, " +
+                "major trade-offs, risky/irreversible operations. One item per entry, in the user's language. " +
+                "Prefix critical items with a GitHub alert tag ([!IMPORTANT]/[!WARNING]/[!CAUTION]). " +
+                "Omit entirely when nothing needs special attention."
+        )
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val userReviewRequired: List<String> = emptyList(),
+        @LLMDescription(
+            "Optional. Non-blocking defaults you chose WITHOUT asking the user. Each entry reads like " +
+                "'Chose X because Y — if you disagree, just say so in chat.' In the user's language. " +
+                "Omit when every decision was asked about, or no defaults were taken."
+        )
+        @kotlinx.serialization.Serializable(with = LenientStringList::class)
+        val openQuestions: List<String> = emptyList(),
         @LLMDescription("Key decisions: trade-offs, breaking changes, and rationale.")
         val keyDecisions: List<DecisionArg> = emptyList(),
         @LLMDescription("Proposed changes per module with [MODIFY]/[NEW]/[DELETE] markers.")
@@ -224,11 +267,19 @@ class PlanTools(
         val successCriteria: List<String> = emptyList(),
         @LLMDescription("Optional: Mermaid diagram code (without fence) for architecture visualization. Mermaid is the only diagram format the UI renders; do not use PlantUML/DOT or other DSLs.")
         val architecture: String? = null,
+        @LLMDescription(
+            "Optional. Research conclusions from your investigation (or a researcher sub-agent's report) " +
+                "that the executing sub-agents need to know — key findings, patterns, gotchas, architecture notes. " +
+                "This is injected into each executor's briefing so it doesn't re-investigate the same code. " +
+                "Omit when no research was done."
+        )
+        val researchNotes: String = "",
         @LLMDescription("Subtask list (the skeleton). Each must include name, brief intent, targetFiles, and verification. Detailed implementation specs are generated after approval via generate_spec.")
         val subtasks: List<SubtaskArg>
     )
 
-    @Serializable
+    @KeepGeneratedSerializer
+    @Serializable(with = LenientGenerateSpecArgs::class)
     data class GenerateSpecArgs(
         @LLMDescription("Plan ID from the approved plan.")
         val planId: String,
@@ -239,9 +290,18 @@ class PlanTools(
                 "each step concrete and independently verifiable (create X, modify Y, add test Z), " +
                 "in execution order. Include exact function names/signatures grounded in the real code " +
                 "(read the files first), data structures, edge cases, and error handling. " +
-                "The executing subagent works through this checklist top-down, item by item."
+                "The executing subagent works through this checklist top-down, item by item. " +
+                "The executor is a cheap model that reads files directly — do NOT transcribe file " +
+                "excerpts into the spec; just reference paths and let the executor read them."
         )
-        val spec: String
+        val spec: String,
+        @LLMDescription(
+            "REQUIRED when the subtask ALREADY has a spec — i.e. you are correcting it (typically after " +
+                "verification showed the spec contradicts reality), not generating it for the first time. " +
+                "State why the old spec was wrong; it is kept in the append-only spec audit trail " +
+                "(the full old spec text is preserved). Omit on first generation."
+        )
+        val reason: String = ""
     )
 
     inner class CreatePlanTool : SimpleTool<CreatePlanArgs>(
@@ -292,12 +352,15 @@ class PlanTools(
                 overview = args.overview,
                 inScope = args.inScope,
                 outScope = args.outScope,
+                userReviewRequired = args.userReviewRequired,
+                openQuestions = args.openQuestions,
                 keyDecisions = args.keyDecisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
                 changes = args.changes.map { PlannedChange(it.module.ifBlank { "core" }, it.action.uppercase(), it.filePath, it.description, it.rationale) },
                 dataAndParams = args.dataAndParams,
                 risks = args.risks,
                 successCriteria = args.successCriteria,
                 architecture = args.architecture,
+                researchNotes = args.researchNotes,
                 subtasks = args.subtasks.mapIndexed { i, st ->
                     Subtask(
                         index = i,
@@ -309,6 +372,9 @@ class PlanTools(
                             command = st.verification,
                             cwd = st.verificationCwd,
                             timeoutSeconds = st.verificationTimeoutSeconds,
+                            expected = st.verificationExpected,
+                            expectStdoutContains = st.verificationExpectStdoutContains,
+                            expectStdoutNotContains = st.verificationExpectStdoutNotContains,
                         ),
                         dependsOn = st.dependsOn,
                         parallelizable = st.parallelizable
@@ -415,6 +481,9 @@ class PlanTools(
                         command = st.verification,
                         cwd = st.verificationCwd,
                         timeoutSeconds = st.verificationTimeoutSeconds,
+                        expected = st.verificationExpected,
+                        expectStdoutContains = st.verificationExpectStdoutContains,
+                        expectStdoutNotContains = st.verificationExpectStdoutNotContains,
                     ),
                     dependsOn = st.dependsOn,
                     parallelizable = st.parallelizable
@@ -477,7 +546,7 @@ class PlanTools(
      * - Spec（批准后）= HOW：对照真实代码写函数签名/数据结构/边界情况——
      *   此时计划已定、前序子任务已有产出，spec 天然贴地，不存在"写着写着过期"
      * - spawn_agent 只能按已存在的 Spec 执行（硬保证），发现 spec 与现实矛盾
-     *   → 重新 generate_spec（upsert 覆盖）→ 重执行
+     *   → 重新 generate_spec 修正（append-only：完整旧 spec 留存 reason 后写入 specChanges）→ 重执行
      */
     inner class GenerateSpecTool : SimpleTool<GenerateSpecArgs>(
         argsType = typeToken<GenerateSpecArgs>(),
@@ -485,9 +554,10 @@ class PlanTools(
         description = "Generate the detailed implementation spec for ONE subtask of an APPROVED plan, " +
             "grounded in the actual codebase (read the real files first: function names, signatures, " +
             "data structures must match reality). Call this right before spawning an agent for the " +
-            "subtask — and re-call it to REPLACE the spec whenever verification shows the spec itself " +
-            "contradicts reality. The spec is stored per (planId, subtaskIndex); subagent(SPAWN) will " +
-            "execute exactly this spec."
+            "subtask — and re-call it (with reason=) to CORRECT the spec whenever verification shows " +
+            "the spec itself is wrong. Corrections are append-only: the full old spec text is preserved " +
+            "in the audit trail (specChanges). The spec is stored per (planId, subtaskIndex); " +
+            "subagent(SPAWN) will execute exactly this spec."
     ) {
         override suspend fun execute(args: GenerateSpecArgs): String {
             val plan = planStore.load(args.planId)
@@ -500,15 +570,31 @@ class PlanTools(
                 return "Error: Subtask ${args.subtaskIndex} is COMPLETED. Use converge_plan to append new work instead."
             if (args.spec.isBlank())
                 return "Error: spec must not be empty."
+            // 修正（覆盖既有 spec）必须给 reason：严格 append-only 要求每次修正留痕，
+            // 且完整旧 spec 文本会被保存（SpecChange.oldSpec），信息零销毁。
+            val isCorrection = !st.spec.isNullOrBlank()
+            if (isCorrection && args.reason.isBlank())
+                return "Error: subtask ${args.subtaskIndex} already has a spec — you are CORRECTING it, " +
+                    "not generating it. Pass reason=<why the old spec was wrong>. " +
+                    "The old spec text is preserved in the append-only audit trail (specChanges)."
 
-            // Spec 只写进 Subtask.spec（spawn_agent 读取的真理源）；brief（planDetail）保留不动，
-            // 用户批准时看到的内容永不失真，spec 可反复覆盖重写。
+            // Spec 生效值写 Subtask.spec（spawn_agent 读取的真理源）；brief（planDetail）保留不动，
+            // 用户批准时看到的内容永不失真。修正 = 追加一条 SpecChange（含完整旧 spec）+ 更新生效值，
+            // 不是覆盖销毁（严格 append-only）。
             // 用 updatePlan 原子写入：工具支持并行调度，同消息多次 generate_spec 时
             // 裸 load→copy→save 会互相覆盖（后写把前写的 spec 恢复成旧值）。
             val updated = planStore.updatePlan(args.planId) { p ->
                 p.copy(
                     subtasks = p.subtasks.map { s ->
-                        if (s.index == args.subtaskIndex) s.copy(spec = args.spec) else s
+                        if (s.index == args.subtaskIndex) s.copy(
+                            spec = args.spec,
+                            specChanges = s.specChanges + SpecChange(
+                                oldSpec = s.spec,
+                                newSpec = args.spec,
+                                reason = args.reason,
+                                timestamp = Instant.now().toString()
+                            )
+                        ) else s
                     }
                 )
             } ?: return "Error: Plan not found: ${args.planId}"
@@ -587,6 +673,13 @@ class PlanTools(
                     "Subtask $i (${st.name}): verification 必须是单条可执行命令（ASCII），不能是散文描述。" +
                         "示例：`python3 -c 'assert 1+1==2'`。"
                 )
+            if (st.verificationExpected.isBlank())
+                errors.add(
+                    "Subtask $i (${st.name}): verificationExpected is required — state in plain words what the " +
+                        "command must output for this subtask to count as passed (e.g. '3 passed, 0 failed'). " +
+                        "It is rendered on the approval card so the user can judge whether the verification " +
+                        "method itself is right."
+                )
             if (st.targetFiles.isEmpty())
                 errors.add("Subtask $i (${st.name}): targetFiles required (which files will be changed?).")
             for (dep in st.dependsOn) {
@@ -625,40 +718,53 @@ class PlanTools(
         val cwd: String? = null,
         @LLMDescription("Optional: timeout seconds. Default 30.")
         val timeoutSeconds: Int? = null,
-        @LLMDescription("Required: why the verification command is being changed (e.g. 'old command counted comments as false-positives'). Human-readable reason for audit trail.")
+        @LLMDescription("Optional. New expected result in plain words. Omit to KEEP the existing one.")
+        val expected: String? = null,
+        @LLMDescription("Optional. New machine-checked literals the output MUST contain. Omit to KEEP the existing list.")
+        val expectStdoutContains: List<String>? = null,
+        @LLMDescription("Optional. New machine-checked literals the output MUST NOT contain. Omit to KEEP the existing list.")
+        val expectStdoutNotContains: List<String>? = null,
+        @LLMDescription("Required: why the verification contract is being changed (e.g. 'old command counted comments as false-positives'). Human-readable reason for the append-only audit trail.")
         val reason: String = "",
     )
 
     inner class UpdateVerificationTool : SimpleTool<UpdateVerificationArgs>(
         argsType = typeToken<UpdateVerificationArgs>(),
         name = "update_verification",
-        description = "Amend an existing subtask's verification (command/cwd/timeout) atomically via PlanStore.updatePlan. " +
-            "Allowed for non-COMPLETED subtasks (PENDING/IN_PROGRESS/FAILED). Use when a verification command was " +
-            "written wrong and needs fixing before re-verify — the legal amendment entry, no store hand-editing."
+        description = "Amend an existing subtask's verification CONTRACT (command/cwd/timeout/expected/machine-checked " +
+            "literals) atomically via PlanStore.updatePlan. Allowed for non-COMPLETED subtasks " +
+            "(PENDING/IN_PROGRESS/FAILED). Use when the verification method itself was written wrong and needs " +
+            "fixing before re-verify. Append-only: the FULL old contract is preserved in the audit trail " +
+            "(verificationChanges) — amendments never destroy history."
     ) {
         override suspend fun execute(args: UpdateVerificationArgs): String {
             if (args.command.isBlank()) return "Error: command must not be blank."
             val hasCJK = args.command.any { it.code in 0x4E00..0x9FFF }
             if (hasCJK) return "Error: command 必须是单条可执行命令（ASCII），不能是散文描述。"
-            if (args.reason.isBlank()) return "Error: reason must not be blank — the audit trail requires a human-readable explanation of why the command is being changed."
-            var oldCommand = ""
+            if (args.reason.isBlank()) return "Error: reason must not be blank — the audit trail requires a human-readable explanation of why the contract is being changed."
+            var oldSpec: VerificationSpec? = null
             val updated = planStore.updatePlan(args.planId) { p ->
                 val st = p.subtasks.getOrNull(args.subtaskIndex) ?: return@updatePlan null
                 if (st.status == SubtaskStatus.COMPLETED) return@updatePlan null
-                oldCommand = st.verification.command
+                oldSpec = st.verification
+                // null = 保留原值：避免"只想改命令"却把既有预期静默清空（数据零销毁原则）
+                val newSpec = VerificationSpec(
+                    command = args.command,
+                    cwd = args.cwd,
+                    timeoutSeconds = args.timeoutSeconds,
+                    expected = args.expected ?: st.verification.expected,
+                    expectStdoutContains = args.expectStdoutContains ?: st.verification.expectStdoutContains,
+                    expectStdoutNotContains = args.expectStdoutNotContains ?: st.verification.expectStdoutNotContains,
+                )
                 val change = VerificationChange(
-                    oldCommand = oldCommand,
-                    newCommand = args.command,
+                    oldSpec = st.verification,
+                    newSpec = newSpec,
                     reason = args.reason,
                     timestamp = java.time.Instant.now().toString()
                 )
                 p.copy(subtasks = p.subtasks.map { s ->
                     if (s.index == args.subtaskIndex) s.copy(
-                        verification = VerificationSpec(
-                            command = args.command,
-                            cwd = args.cwd,
-                            timeoutSeconds = args.timeoutSeconds,
-                        ),
+                        verification = newSpec,
                         verificationChanges = s.verificationChanges + change
                     ) else s
                 })
@@ -670,17 +776,18 @@ class PlanTools(
                     "planId" to args.planId,
                     "action" to "verification-updated",
                     "subtaskIndex" to args.subtaskIndex.toString(),
-                    "oldCommand" to oldCommand,
+                    "oldCommand" to (oldSpec?.command ?: ""),
                     "newCommand" to args.command,
                     "reason" to args.reason
                 ),
                 timestamp = java.time.Instant.now().toString()
             ))
             return "Updated verification for subtask ${args.subtaskIndex}.\n" +
-                "Old command: $oldCommand\n" +
+                "Old command: ${oldSpec?.command ?: ""}\n" +
                 "New command: ${args.command}\n" +
+                "Expected: ${updated.subtasks[args.subtaskIndex].verification.expected}\n" +
                 "Reason: ${args.reason}\n" +
-                "Change #${updated.subtasks[args.subtaskIndex].verificationChanges.size} recorded in plan audit trail."
+                "Change #${updated.subtasks[args.subtaskIndex].verificationChanges.size} recorded in plan audit trail (full old contract preserved)."
         }
     }
 

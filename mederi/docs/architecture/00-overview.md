@@ -13,7 +13,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │       ├── store/ + store/sqlite/       ← Store 层（纯持久化，InMemory + Sqlite 双实现）
 │       ├── koog/ + infrastructure/koog/ ← Koog 执行引擎适配（TurnExecutor 等）
 │       ├── tools/                       ← 工具系统（FS/Shell/Plan/Verify/Subagent/Sandbox/Diff/Patch）
-│       ├── browser/ + browser/bidi/ + browser/install/  ← 浏览器自动化模块（BrowserControl/BrowserAgentRunner/BrowserTaskManager + BiDi 层 + Camoufox 下载安装）
+│       ├── browser/ + browser/bidi/ + browser/install/  ← 浏览器自动化模块（BrowserControl/BrowserOperator/BrowserBrain/BrowserTaskManager + BiDi 层 + Camoufox 下载安装）
 │       ├── plan/                        ← 计划系统（Plan/PlanStore/Notebook/审批）
 │       ├── mcp/{servers,engine,market}/ ← MCP 配置管理 + 内核引擎（McpConnector）+ MCP 市场
 │       ├── provider/                    ← Provider 领域模型 + Koog client 适配
@@ -114,7 +114,8 @@ flowchart TB
 | `AiCoreProvider.default()` | `MederiAiCore("~/.mederi")` | （main 直接 new MederiAiCore） | `ServerAiCore`（baseUrl/密码读 SharedPrefs） | `ServerAiCore`（暂硬编码 127.0.0.1:8081） | `ServerAiCore`（origin 自身，密码 localStorage，dev 可 `?server=`） |
 | preferences 实现 | `JsonFilePreferencesStore(~/.mederi/preferences.json)` | —（headless） | `SharedPrefsPreferencesStore` | 沙盒 Documents `preferences.json` | `WasmJsPreferencesStore`（localStorage，前缀 `mederi.pref.`，禁用时降级内存） |
 | 终端 TerminalManager | `PtyTerminalHub`（pty4j） | `PtyTerminalHub` | null（遥控） | null（遥控） | null（遥控） |
-| 内置浏览器 UiBrowserHost | **`JcefBrowserHost`（tab=KBPage，`BrowserRegistry.register("jcef")`）** | null | null（遥控） | null（遥控） | null（遥控） |
+| 浏览器自动化 BrowserControl | **`Camoufox`（core 注册，`BiDiBrowserControl`，唯一注册源）** | 同 desktop（core 注册） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） |
+| inkcompose 渲染运行时（KBrowser） | **`DesktopBrowserRuntime` 全局单例（`useOsr=true`；供 mermaid 渲染 / Markdown 导出，非浏览器自动化宿主）** | null | null | null | null |
 | RemoteControlHooks | `DesktopRemoteControlHooks`（RemoteServer + cloudflared 隧道） | 本身即 server | — | — | — |
 | Mermaid 缓存目录 | `~/.mederi/mermaid/` | — | `cacheDir`（MainActivity 注入） | NSCachesDirectory | no-op（同文档 DOM 渲染） |
 | RemoteGate 密码门 | 无 | 无 | 无 | 无 | **有**（包在 MederiApp 外层） |

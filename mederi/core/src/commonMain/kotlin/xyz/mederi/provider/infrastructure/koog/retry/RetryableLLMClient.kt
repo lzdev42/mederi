@@ -180,6 +180,8 @@ class RetryableLLMClient(
         var cur: Throwable? = e
         var depth = 0
         while (cur != null && depth < 6) {
+            if (cur is xyz.mederi.http.SseIdleTimeoutException || cur::class.simpleName == "SseIdleTimeoutException") return true
+            if (cur is java.net.SocketTimeoutException) return true
             val lower = ((cur.message ?: "") + " " + cur.javaClass.simpleName).lowercase()
             if (TRANSIENT_MARKERS.any { lower.contains(it) }) return true
             cur = cur.cause
@@ -208,6 +210,8 @@ class RetryableLLMClient(
             var cur: Throwable? = e
             var depth = 0
             while (cur != null && depth < 6) {
+                if (cur is xyz.mederi.http.SseIdleTimeoutException || cur::class.simpleName == "SseIdleTimeoutException") return true
+                if (cur is java.net.SocketTimeoutException) return true
                 val lower = ((cur.message ?: "") + " " + cur.javaClass.simpleName).lowercase()
                 if (TRANSIENT_MARKERS.any { lower.contains(it) }) return true
                 cur = cur.cause
@@ -221,7 +225,8 @@ class RetryableLLMClient(
             "429", "rpm exhausted", "tpm exhausted", "rate limit", "ratelimit",
             "quota_exceeded", "too many requests", "overloaded", "overload",
             "temporarily unavailable", "service unavailable",
-            "502", "503", "504", "bad gateway", "gateway timeout"
+            "502", "503", "504", "bad gateway", "gateway timeout",
+            "sse idle timeout", "idle timeout", "sockettimeoutexception"
         )
     }
 }

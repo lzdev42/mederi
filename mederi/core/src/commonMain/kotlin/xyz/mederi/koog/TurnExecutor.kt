@@ -23,6 +23,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.debug.DebugLog
@@ -127,6 +129,12 @@ class TurnExecutor(
     ),
     /** 执行器子代理的文件写入回调（SubagentRunnerImpl 挂，收集 touched files）。 */
     private val onFileTouched: ((String) -> Unit)? = null,
+    /**
+     * turn 结束时回传本 turn 的 [xyz.mederi.tools.diff.TurnDiff]（buildDiff 之后调用）。
+     * SubagentRunnerImpl 挂此回调，把子代理 turn 的文件改动经 ParentDiffRegistry
+     * 合并进父会话当前活跃 turn 的 tracker——修复"turn 改动摘要不含子代理改动"。
+     */
+    private val onTurnDiff: ((xyz.mederi.tools.diff.TurnDiff) -> Unit)? = null,
     private val subagentConfigManager: SubagentConfigManager? = null
 ) {
 
@@ -141,17 +149,37 @@ class TurnExecutor(
         subagentRunner = subagentRunner,
         scope = scope,
         // 生命周期事件总线：SUBAGENT_STARTED/COMPLETED/ERROR/STOPPED（UI 子代理面板消费）
-        eventBus = eventBus
+        eventBus = eventBus,
+        // 主动上报（2026-09-25）：子代理终态 → 入 pendingNotices 队列 + maybeFlush 唤醒父 turn
+        onTerminal = { notice -> onSubagentTerminal(notice) },
+        // 卡死检测超时：默认 10 分钟，全局可配（TODO: 从设置注入）
+        stallTimeoutMs = 10 * 60 * 1000L
     )
+
+    /**
+     * 子代理终态通知队列（2026-09-25 主动上报通道）。
+     *
+     * 按 parentSessionId 分组。子代理完成时入队；父 turn 空闲时 [maybeFlush] 批量 drain
+     * 合并成一条内部消息唤起新 turn。父 turn 活跃时等 runTurn finally 冲刷。
+     * 并行 spawn 的 N 个子任务先后完成 → 合并成一条内部消息、一次 turn（省 token）。
+     */
+    private val pendingNotices = ConcurrentHashMap<String, MutableList<SubagentManager.TerminalNotice>>()
+
+    /** flush 串行锁：防止并发 maybeFlush 对同一 session 同时 sendMessageInternal。 */
+    private val flushLock = Mutex()
 
     // 浏览器任务管理：持有 BrowserRegistry（UI 注册 JCEF、core 注册 Camoufox，启动装配时填充）。
     // 主代理获得 run_browser_task / browser_task_status / stop_browser_task 三个工具；
     // 注册表为空时 runTask 返回明确错误引导用户配置。
+    // TODO(ST3+)：真实 browserHome 接线（workingDir=reportsDir / recipeStore=skillsDir / llmCallerProvider）
+    //   属 app 层装配职责——在 MederiAiCore 装配处从 BrowserRuntime/settings 解析 reportsDir/skillsDir 后传参。
+    //   当前保持默认 null（= ST2 行为：BrowserLLMHelper 真路径、无 recipe/drill 面板装配），不在此强接。
     private val browserTaskManager: xyz.mederi.browser.BrowserTaskService? =
         xyz.mederi.browser.BrowserTaskManager(
             providerManager = providerManager,
             scope = scope,
-            eventBus = eventBus
+            eventBus = eventBus,
+            subagentConfigManager = subagentConfigManager
         )
 
     private val activeJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
@@ -255,6 +283,11 @@ class TurnExecutor(
         val notebook = xyz.mederi.plan.Notebook(projectDirs)
         val activePlan = planStore.loadBySession(sessionId)
         val activePlanContent = activePlan?.let { p ->
+            // 方案A：activePlan 段只挂"动态状态"——主 agent 每轮编排决策（spawn 下一个/verify/converge）
+            // 真正需要的实时信息：进度计数、当前指针、最近一次验证结果。子任务的静态详情
+            // （brief/targetFiles/verification 命令/decisions）随 plan.md 落盘在 .mederi/plans/{planId}/plan.md，
+            // 主 agent 需要时 read_file 即可——避免每轮把全量静态骨架重发进 system prompt。
+            // 活跃子任务的 spec 仍挂（spawn 前主 agent 确认要用）；其余子任务的 spec 留磁盘。
             buildString {
                 appendLine("Title: ${p.title}")
                 appendLine("Status: ${p.status}")
@@ -264,32 +297,38 @@ class TurnExecutor(
                 val passed = p.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.COMPLETED }
                 val failed = p.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.FAILED }
                 val pending = p.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.PENDING }
-                appendLine("Progress: $passed passed, $failed failed, $pending pending")
-                // 指针行：给模型 todo 式的焦点（"正在做哪个/下一个做哪个"），与轻量 todo 的单 in_progress 同机制
+                val inProgress = p.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.IN_PROGRESS }
+                appendLine("Progress: $passed passed, $failed failed, $pending pending, $inProgress in-progress")
+                // 指针行：给模型 todo 式的焦点（"正在做哪个/下一个做哪个"）
                 val activeSubtask = p.currentSubtask ?: p.nextPending
                 activeSubtask?.let { appendLine("Current: Subtask ${it.index + 1} [${it.status}]: ${it.name}") }
-                // 失败子任务的处置指令不在此挂（Plan Loop 静态规则已覆盖）；这里只挂状态事实，
-                // 由模型对照 [FAILED] + Verification Result 自行走 converge_plan / re-generate_spec 分支
-                // spec 只挂活跃子任务：历史 spec 留在磁盘（spawn_agent 自取、generate_spec 可重写），
-                // 主代理的编排/验证/收敛决策只需要骨架（brief/verification/验证结果），避免 token 无界增长
+                // 子任务状态速览：一行一个，只挂 status + name（静态详情见 plan.md）
                 p.subtasks.forEach { st ->
                     appendLine("- [${st.status}] Subtask ${st.index + 1}: ${st.name}")
-                    if (st.targetFiles.isNotEmpty()) appendLine("  Files: ${st.targetFiles.joinToString()}")
-                    if (st.planDetail.isNotBlank()) appendLine("  Brief: ${st.planDetail}")
+                    // 活跃子任务的 spec 单独挂（spawn 前主 agent 确认要用）；其余子任务 spec 留磁盘
                     when {
                         st.index == activeSubtask?.index && !st.spec.isNullOrBlank() ->
-                            appendLine("  Spec: ${st.spec}")
+                            appendLine("  Spec (active): ${st.spec}")
                         st.spec.isNullOrBlank() ->
                             appendLine("  Spec: (not generated yet — call generate_spec before spawning)")
                         else ->
                             appendLine("  Spec: (stored on disk; mounted only for the active subtask)")
                     }
-                    st.decisions.forEach { d -> appendLine("  Decision: ${d.question} -> ${d.choice} (${d.rationale})") }
-                    appendLine("  Verification: ${st.verification.command}")
+                    // 最近一次验证结果：主 agent converge / 追加修订 决策的直接依据
                     st.verificationResult?.let { r ->
-                        appendLine("  Result: ${r.status}" + (r.gapType?.let { g -> " ($g)" } ?: ""))
+                        appendLine("  Last result: ${r.status}" +
+                            (r.rootCause?.let { c -> " (root cause: $c)" } ?: "") +
+                            (if (r.machineMismatch)
+                                " [MACHINE/MODEL CONTRADICTION — abnormal; you must tell the user]"
+                            else ""))
                         appendLine("  Evidence: ${r.evidence}")
                     }
+                }
+                // 静态详情路径指针（read_file 按需取 brief/targetFiles/verification/decisions/spec 全文）
+                val planMdPath = planStore.getPlanRelativePath(p.id)
+                if (planMdPath != null) {
+                    appendLine("Static details (brief/files/verification/decisions): read_file $planMdPath")
+                    appendLine("Research notes (if researcher ran): read_file ${planMdPath.removeSuffix("plan.md")}research.md")
                 }
             }
         }
@@ -496,6 +535,8 @@ class TurnExecutor(
         // 与 abort 同语义：回滚 = 撤销到目标消息，其后发生的一切都不该继续——
         // 后台子代理一并收割（幂等，abort 路径已收过的这里是 0）
         subagentManager.stopAllForSession(sessionId)
+        // 清掉该会话的待唤醒通知：用户中止后不应该再被唤起
+        pendingNotices.remove(sessionId)
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         // 正常取消路径 runTurn 收尾已写 IDLE；此处对陈旧 RUNNING（进程重启残留等）兜底复位，
@@ -505,6 +546,134 @@ class TurnExecutor(
         }.onFailure {
             DebugLog.error("TurnExec", "abortAndJoin: failed to reset session status: ${it.message}", it)
         }
+    }
+
+    // ============ 子代理主动上报（2026-09-25）============
+
+    /**
+     * 子代理终态回调入口：入队 + 尝试即时冲刷。
+     *
+     * 由 [SubagentManager.onTerminal] 触发（子代理后台协程的 finally / watchdog）。
+     * 入队按 parentSessionId 分组；随后检查父会话是否有活跃 turn——
+     * 无（父 turn 已结束回到 IDLE）→ 用后台协程冲刷（唤起新 turn）；
+     * 有 → 等 runTurn finally 冲刷（避免与活跃 turn 争 RUNNING 守卫）。
+     */
+    private fun onSubagentTerminal(notice: SubagentManager.TerminalNotice) {
+        synchronized(pendingNotices) {
+            val list = pendingNotices.getOrPut(notice.parentSessionId) { mutableListOf() }
+            list.add(notice)
+        }
+        // 会话保有权限判断：该会话是否"值得唤醒"。EXECUTOR/stalled 只对"有活跃计划"的会话有意义——
+        // 计划已归档/作废（用户改用例）时唤醒也得不到有用动作，且会打扰。由 flush 时校验计划活性兜底。
+        val parentActive = activeJobs[notice.parentSessionId]?.isActive == true
+        if (!parentActive) {
+            scope.launch {
+                maybeFlush(notice.parentSessionId)
+            }
+        }
+    }
+
+    /**
+     * 冲刷该会话的待唤醒通知：批量 drain → 合并成一条内部消息 → 启动新 turn。
+     *
+     * 竞态处理：sendMessageInternal 可能因"会话正在跑"（用户消息恰好进来）抛
+     * IllegalStateException → 通知放回队列，等 turn 收尾 finally 再冲刷。
+     * [flushLock] 保证同一会话同一时刻只有一个冲刷。
+     */
+    private suspend fun maybeFlush(sessionId: String) = flushLock.withLock {
+        val batch = synchronized(pendingNotices) { pendingNotices[sessionId]?.toList() } ?: return@withLock
+        if (batch.isEmpty()) return@withLock
+        // 只对"仍活跃"的计划会话唤醒：计划已归档/作废时丢弃（改动已完成或已废弃，无需触发）
+        val planStore = createPlanStoreFor(sessionId) ?: return@withLock
+        val activePlan = planStore.loadBySession(sessionId)
+        if (activePlan == null) {
+            synchronized(pendingNotices) { pendingNotices.remove(sessionId) }
+            return@withLock
+        }
+        synchronized(pendingNotices) { pendingNotices.remove(sessionId) }
+        val internalPrompt = buildSubagentNoticePrompt(activePlan.id, batch)
+        try {
+            val session = sessionStore.get(sessionId) ?: return@withLock
+            sendMessageInternal(
+                sessionId,
+                SendMessageRequest(
+                    agentConfig = xyz.mederi.api.AgentConfig(
+                        agentMode = session.agentMode,
+                        aiModel = session.aiModel,
+                        reasoningLevel = session.reasoningLevel
+                    ),
+                    parts = listOf(MessagePart.Text(internalPrompt)),
+                    apiKeyId = null
+                )
+            )
+        } catch (e: IllegalStateException) {
+            // 竞态：用户消息/其他唤醒已在跑 → 通知放回队列，等 turn 收尾 finally 冲刷
+            DebugLog.info(
+                "TurnExec",
+                "subagent notice flush raced with an active turn; requeueing (sessionId=$sessionId, notices=${batch.size})"
+            )
+            synchronized(pendingNotices) { pendingNotices.getOrPut(sessionId) { mutableListOf() }.addAll(batch) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            synchronized(pendingNotices) { pendingNotices.getOrPut(sessionId) { mutableListOf() }.addAll(batch) }
+            throw e
+        }
+    }
+
+    /** 当前 turn 收尾的冲刷（runTurn finally 调用，带协程上下文所以在锁内可挂起）。 */
+    private suspend fun flushPendingNotices(sessionId: String) {
+        maybeFlush(sessionId)
+    }
+
+    /**
+     * 内部消息拼装：只给事实（完成/失败/停止/stalled + 报告路径），由主代理自行决策
+     * 接下来 verify 还是重跑（动态段只挂状态事实、不挂指令的既定原则）。
+     */
+    private fun buildSubagentNoticePrompt(activePlanId: String, notices: List<SubagentManager.TerminalNotice>): String {
+        val sb = StringBuilder()
+        sb.appendLine("$UI_HIDDEN_MARKER")
+        sb.appendLine("Subagent activity report for active plan $activePlanId (parent session ${notices.first().parentSessionId}):")
+        notices.forEach { n ->
+            sb.appendLine()
+            sb.appendLine("- agentId: ${n.agentId}, role: ${n.role}")
+            if (n.planId != null) sb.appendLine("  planId: ${n.planId}" + (n.subtaskIndex?.let { ", subtaskIndex: $it" } ?: ""))
+            when {
+                n.stalled -> {
+                    sb.appendLine("  status: STALLED (watchdog timeout — the sub-agent may be stuck; check with STATUS or stop with STOP)")
+                }
+                n.status == SubagentManager.SubagentStatus.COMPLETED -> {
+                    sb.appendLine("  status: COMPLETED")
+                    n.result?.let { r ->
+                        sb.appendLine("  report saved to: ${extractReportPath(r)}")
+                        sb.appendLine("  summary tail: ${r.takeLast(500)}")
+                    }
+                }
+                n.status == SubagentManager.SubagentStatus.STOPPED -> {
+                    sb.appendLine("  status: STOPPED (cancelled)")
+                    n.result?.let { sb.appendLine("  result tail: ${it.takeLast(300)}") }
+                }
+                else -> {
+                    sb.appendLine("  status: ERROR")
+                    n.result?.let { sb.appendLine("  error tail: ${it.takeLast(500)}") }
+                }
+            }
+        }
+        sb.appendLine()
+        sb.appendLine("Decide the next step yourself (verify, re-spawn, stop, or ask the user). " +
+            "Do not re-ask for approval and do not recreate the plan.")
+        return sb.toString()
+    }
+
+    /** 从 executor/researcher 摘要文本里提取报告路径（"[executor report saved to PATH]" 等）。 */
+    private fun extractReportPath(result: String): String? {
+        val m = Regex("(saved to|report saved to)\\s+\\[([^]]+)]").find(result)
+        return m?.groupValues?.get(2)
+    }
+
+    /** 临时 PlanStore：maybeFlush 需要查会话活跃计划活性。suspend 因 projectManager.get 是 suspend。 */
+    private suspend fun createPlanStoreFor(sessionId: String): xyz.mederi.plan.PlanStore? {
+        val session = sessionStore.get(sessionId) ?: return null
+        val project = projectManager.get(session.projectId) ?: return null
+        return xyz.mederi.plan.PlanStore(listOf(project.directory))
     }
 
     suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>): Boolean {
@@ -767,6 +936,9 @@ class TurnExecutor(
         val directories = listOf(project.directory)
 
         val diffTracker = TurnDiffTracker(sessionId, directories)
+        // 注册进会话级注册表：本会话内子代理 turn 结束时把其文件改动合并进本 tracker
+        // （子代理 diffStore 为 null，唯一出口就是这里；见 ParentDiffRegistry）
+        xyz.mederi.tools.diff.ParentDiffRegistry.register(sessionId, diffTracker)
 
         // clientRef 在 buildTurnAgent 创建 client 后写入，streamConsumer 读 End 帧时取诊断
         val clientRef = AtomicReference<ai.koog.prompt.executor.clients.LLMClient?>(null)
@@ -914,6 +1086,8 @@ class TurnExecutor(
             val turnDiff = diffTracker.buildDiff(lastMsgId, Instant.now().toString())
             diffStore?.save(turnDiff)
             DebugLog.event("TurnExec", "diffStore saved with messageId=$lastMsgId, changes=${turnDiff.changes.size}")
+            // 子代理 turn：diffStore 为 null，TurnDiff 唯一出口——回传给父级合并进父 turn 的 tracker
+            onTurnDiff?.invoke(turnDiff)
 
             val turnDiffSummary: TurnDiffSummary? = if (turnDiff.changes.isNotEmpty()) {
                 val fileSummaries = turnDiff.changes.map { change ->
@@ -1006,12 +1180,19 @@ class TurnExecutor(
             activeJobs.remove(sessionId)
             questionRequesters.remove(sessionId)?.cancelAll()
             planApprovalRequesters.remove(sessionId)?.cancelAll()
+            // 注销会话级 diff 注册（子代理改动合并入口），防止泄漏与跨 turn 误归并
+            xyz.mederi.tools.diff.ParentDiffRegistry.unregister(sessionId)
             if (mcpSession != null) {
                 try {
                     mcpSession.close()
                 } catch (e: Exception) {
                     DebugLog.error("TurnExec", "关闭 MCP 连接失败: ${e.message}", e)
                 }
+            }
+            // 子代理主动上报（2026-09-25）：turn 已结束（activeJobs 已清），冲刷等待中的通知。
+            // 用 scope.launch：杜绝"本 turn 协程上下文已取消时挂起"；串行锁内部保证不并发。
+            if (pendingNotices.containsKey(sessionId)) {
+                scope.launch { flushPendingNotices(sessionId) }
             }
         }
     }

@@ -29,6 +29,8 @@
     <string name="tool_action_subagent_many">Ran %1$d subagents</string>
     <string name="tool_action_other_one">Called a tool</string>
     <string name="tool_action_other_many">Called %1$d tools</string>
+    <string name="tool_action_verify_one">Verified subtask</string>
+    <string name="tool_action_verify_many">Verified %1$d subtasks</string>
     <string name="tool_action_failed_suffix">(failed)</string>
     <string name="tool_action_run_target">Ran command %1$s</string>
     <string name="tool_action_run_running">Running a command…</string>
@@ -55,6 +57,9 @@
     <string name="tool_action_other_target">Called %1$s</string>
     <string name="tool_action_other_running">Running tools…</string>
     <string name="tool_action_other_running_target">Running %1$s…</string>
+    <string name="tool_action_verify_target">Verified subtask %1$s</string>
+    <string name="tool_action_verify_running">Verifying subtask…</string>
+    <string name="tool_action_verify_running_target">Verifying subtask %1$s…</string>
     <string name="tool_detail_output">OUTPUT</string>
     <string name="tool_detail_failed_output">FAILED</string>
     <string name="tool_detail_report">REPORT</string>

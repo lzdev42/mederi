@@ -20,7 +20,8 @@ enum class AgentCapabilities(
 ) {
     MAIN(inheritMcp = true, inheritSkills = true),
     EXECUTOR(inheritMcp = true, inheritSkills = true),
-    RESEARCHER(inheritMcp = true, inheritSkills = false);
+    RESEARCHER(inheritMcp = true, inheritSkills = false),
+    BROWSER(inheritMcp = true, inheritSkills = true);
 
     companion object {
         /** 主代理传 null；子代理按角色取。 */
@@ -28,6 +29,8 @@ enum class AgentCapabilities(
             null -> MAIN
             SubagentRole.EXECUTOR -> EXECUTOR
             SubagentRole.RESEARCHER -> RESEARCHER
+            SubagentRole.BROWSER_OPERATOR -> BROWSER
+            SubagentRole.BROWSER_BRAIN -> BROWSER
         }
     }
 }

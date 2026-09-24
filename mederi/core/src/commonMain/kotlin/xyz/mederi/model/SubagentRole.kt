@@ -12,5 +12,20 @@ package xyz.mederi.domain.model
  */
 enum class SubagentRole {
     EXECUTOR,
-    RESEARCHER
+    RESEARCHER,
+
+    /**
+     * 浏览器操作员（BrowserOperator，手和眼）。配置专属角色：仅用于在设置页为浏览器子代理
+     * 单独配置模型/推理档；实际执行不走 [SubagentRunnerImpl]（turn 子代理），
+     * 由 BrowserTaskManager 在后台驱动（4-phase 循环：perceive→decide→execute→postprocess）。
+     * 浏览器实现（JCEF/Camoufox）由主代理在 browser(RUN) 的 browser 参数选择，与角色无关。
+     */
+    BROWSER_OPERATOR,
+
+    /**
+     * 浏览器大脑（BrowserBrain，判定与报告）。配置专属角色：仅用于在设置页为浏览器子代理
+     * 单独配置模型/推理档；实际执行不走 turn 子代理路径，由 BrowserTaskManager 后台执行
+     * （内容判定 judge + 终态简报/报告 generateFinalReport）。
+     */
+    BROWSER_BRAIN
 }

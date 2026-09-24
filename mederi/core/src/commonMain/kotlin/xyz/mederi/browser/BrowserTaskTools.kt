@@ -31,7 +31,9 @@ data class RunBrowserTaskArgs(
             "- jcef: built-in visible browser, user can watch.\n" +
             "- camoufox: headless anti-detection, for third-party automation/scraping."
     )
-    val browser: String = ""
+    val browser: String = "",
+    @LLMDescription("Optional recipe name or rules configuration to mount onto the task for guiding execution and judgment.")
+    val recipe: String = ""
 )
 
 @Serializable
@@ -57,6 +59,14 @@ class RunBrowserTaskTool(
     override suspend fun execute(args: RunBrowserTaskArgs): String {
         if (args.task.isBlank()) return "Error: task must not be empty."
         val browser = args.browser.ifBlank { service.defaultBrowser() }
+
+        val recipeObj = if (args.recipe.isNotBlank()) {
+            runCatching {
+                Json { ignoreUnknownKeys = true }.decodeFromString<BrowserRecipe>(args.recipe)
+            }.getOrElse {
+                BrowserRecipe(name = args.recipe, description = args.recipe)
+            }
+        } else null
         val taskId = service.runTask(
             task = args.task,
             aiModel = aiModel,
@@ -64,7 +74,8 @@ class RunBrowserTaskTool(
             projectId = projectId,
             parentSessionId = sessionId,
             browser = browser,
-            apiKeyId = apiKeyId
+            apiKeyId = apiKeyId,
+            recipe = recipeObj
         )
         return Json.encodeToString(
             RunBrowserTaskResult.serializer(),
@@ -196,6 +207,8 @@ data class BrowserArgs(
     val task: String = "",
     @LLMDescription("RUN: browser to use, from the registered browsers. Empty = default browser.")
     val browser: String = "",
+    @LLMDescription("RUN: optional recipe name or rules configuration to mount onto the browser task.")
+    val recipe: String = "",
     @LLMDescription("STATUS / STOP: task ID from a previous RUN.")
     val taskId: String = ""
 )
@@ -205,9 +218,9 @@ data class BrowserArgs(
  *
  * 原四个工具（run_browser_task / browser_task_status / stop_browser_task / browser_info）
  * 封装为一个 `browser`，用 [BrowserTaskAction] 分流，全部委托原工具类（保留各自校验与返回格式）。
- * 架构：页面操作由专用 BROWSER 子代理执行（jcef 可见 / camoufox 无头反检测，经
- * BrowserRegistry 抽象，RUN 的 browser 参数选择）——主代理只做编排：下命令、看状态、
- * 关任务、看运行时。无 WAIT：浏览器任务为分钟级长跑，主代理不阻塞等待（设计使然）。
+ * 架构：页面操作由专用 BrowserOperator 子代理执行（jcef 可见 / camoufox 无头反检测，经
+ * BrowserRegistry 抽象，RUN 的 browser 参数选择）与 BrowserBrain（大脑）协同工作——主代理只做编排：下命令、看状态、
+ * 关任务、看运行时。无 WAIT：浏览器任务为长耗时操作，主代理不阻塞等待。
  *
  * 仅主代理注册。返回值：RUN → {taskId,status,browser}；STATUS/STOP → 任务状态/停止结果；
  * INFO → 浏览器运行时 JSON。
@@ -224,7 +237,7 @@ class BrowserTool(
     description = buildDescription(service)
 ) {
     override suspend fun execute(args: BrowserArgs): String = when (args.action) {
-        BrowserTaskAction.RUN -> run.execute(RunBrowserTaskArgs(task = args.task, browser = args.browser))
+        BrowserTaskAction.RUN -> run.execute(RunBrowserTaskArgs(task = args.task, browser = args.browser, recipe = args.recipe))
         BrowserTaskAction.STATUS ->
             if (args.taskId.isBlank()) "Error: STATUS requires taskId (from a previous RUN)."
             else status.execute(BrowserTaskStatusArgs(taskId = args.taskId))

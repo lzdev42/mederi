@@ -230,7 +230,7 @@ object ErrorCollector {
                 append("HTTP $httpStatusCode")
                 errorBody?.take(120)?.let { if (it.isNotBlank()) append(": $it") }
             }
-            FailureMode.PREMATURE_CLOSE -> "服务器关闭连接但未发送结束标记"
+            FailureMode.PREMATURE_CLOSE -> if (networkErrorType == "SseIdleTimeout") "流式连接空闲超时：服务器长时间未输出后续数据" else "服务器关闭连接但未发送结束标记"
             FailureMode.NETWORK_ERROR -> buildString {
                 append("网络错误")
                 networkErrorType?.let { append("($it)") }
@@ -314,6 +314,7 @@ object ErrorCollector {
         var koogException: KoogHttpClientException? = null
         var networkException: Throwable? = null
         var networkType: String? = null
+        var sseTimeoutException: Throwable? = null
 
         var cur: Throwable? = throwable
         var depth = 0
@@ -321,6 +322,10 @@ object ErrorCollector {
             val cls = cur::class.qualifiedName ?: cur.javaClass.name
             val msg = cur.message?.lineSequence()?.firstOrNull()?.take(120)
             chain.add(if (msg != null) "$cls → $msg" else cls)
+
+            if (sseTimeoutException == null && (cur is xyz.mederi.http.SseIdleTimeoutException || cur::class.simpleName == "SseIdleTimeoutException" || cur.message?.contains("SSE idle timeout") == true)) {
+                sseTimeoutException = cur
+            }
 
             if (koogException == null && cur is KoogHttpClientException) {
                 koogException = cur
@@ -333,6 +338,16 @@ object ErrorCollector {
 
             cur = cur.cause
             depth++
+        }
+
+        // 流式闲置超时直接判定为 PREMATURE_CLOSE（断流，触发 UI 自动/手动 Continue 续写）
+        if (sseTimeoutException != null) {
+            return DiagnosticInfo(
+                failureMode = FailureMode.PREMATURE_CLOSE,
+                networkErrorType = "SseIdleTimeout",
+                networkErrorMessage = sseTimeoutException.message?.lineSequence()?.firstOrNull()?.take(120) ?: "流式连接空闲超时",
+                causeChain = chain
+            )
         }
 
         // 优先用 HTTP 状态码判定
@@ -377,10 +392,12 @@ object ErrorCollector {
     }
 
     private fun isNetworkException(e: Throwable): Boolean =
-        e is SocketException || e is SocketTimeoutException || e is ConnectException ||
+        e is xyz.mederi.http.SseIdleTimeoutException || e::class.simpleName == "SseIdleTimeoutException" ||
+            e is SocketException || e is SocketTimeoutException || e is ConnectException ||
             e is UnknownHostException || e is SSLException || e is SSLHandshakeException
 
     private fun networkExceptionType(e: Throwable): String = when (e) {
+        is xyz.mederi.http.SseIdleTimeoutException -> "SseIdleTimeout"
         is SocketTimeoutException -> "SocketTimeout"
         is ConnectException -> "ConnectionRefused"
         is UnknownHostException -> "DNS解析失败"
@@ -392,7 +409,7 @@ object ErrorCollector {
             e.message?.lowercase()?.contains("broken") == true -> "连接断裂"
             else -> "Socket异常"
         }
-        else -> e::class.simpleName ?: "网络异常"
+        else -> if (e::class.simpleName == "SseIdleTimeoutException") "SseIdleTimeout" else e::class.simpleName ?: "网络异常"
     }
 
     // ==================================================================
@@ -422,7 +439,7 @@ object ErrorCollector {
 
         if (searchCauseChain(throwable, listOf("invalid api key", "unauthorized", "forbidden", "authentication"))) return ErrorCategory.AUTH
         if (searchCauseChain(throwable, listOf("429", "rate limit", "ratelimit", "quota", "rpm", "tpm", "too many requests"))) return ErrorCategory.RATE_LIMIT
-        if (diag.failureMode == FailureMode.NETWORK_ERROR) return ErrorCategory.NETWORK
+        if (diag.failureMode == FailureMode.NETWORK_ERROR || diag.failureMode == FailureMode.PREMATURE_CLOSE) return ErrorCategory.NETWORK
         if (searchCauseChain(throwable, listOf("serialization", "deserialization", "json", "parse", "no creators", "missing field"))) return ErrorCategory.SERIALIZATION
         if (throwable is IllegalStateException) return ErrorCategory.STATE
 

@@ -19,16 +19,19 @@ class BrowserToolTest {
     private class FakeService : BrowserTaskService {
         var lastRunTask: String? = null
         var lastBrowser: String? = null
+        var lastRecipe: BrowserRecipe? = null
         var statusQueried: String? = null
         var stopped: String? = null
         var statusSessionId: String? = null
 
         override fun runTask(
             task: String, aiModel: AIModel, reasoningLevel: ReasoningLevel,
-            projectId: String, parentSessionId: String, browser: String?, apiKeyId: String?
+            projectId: String, parentSessionId: String, browser: String?, apiKeyId: String?,
+            recipe: BrowserRecipe?
         ): String {
             lastRunTask = task
             lastBrowser = browser
+            lastRecipe = recipe
             return "task_1"
         }
 
@@ -63,14 +66,15 @@ class BrowserToolTest {
     }
 
     @Test
-    fun `run delegates with task and browser`() = runBlocking {
+    fun `run delegates with task and browser and recipe`() = runBlocking {
         val svc = FakeService()
         val result = newTool(svc).execute(
-            BrowserArgs(action = BrowserTaskAction.RUN, task = "search jobs", browser = "camoufox")
+            BrowserArgs(action = BrowserTaskAction.RUN, task = "search jobs", browser = "camoufox", recipe = "job_filter")
         )
 
         assertEquals("search jobs", svc.lastRunTask)
         assertEquals("camoufox", svc.lastBrowser)
+        assertEquals("job_filter", svc.lastRecipe?.name)
         assertTrue(result.contains("\"taskId\":\"task_1\""), "RUN 应返回 taskId JSON: $result")
         assertTrue(result.contains("\"browser\":\"camoufox\""), "RUN 应返回所选 browser: $result")
     }

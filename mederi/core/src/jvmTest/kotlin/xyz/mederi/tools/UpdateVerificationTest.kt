@@ -144,8 +144,9 @@ class UpdateVerificationTest {
         assertEquals("new cmd", st.verification.command)
         assertEquals(1, st.verificationChanges.size)
         val change = st.verificationChanges[0]
-        assertEquals("old cmd", change.oldCommand, "oldCommand must be preserved")
-        assertEquals("new cmd", change.newCommand)
+        // append-only：保存完整旧/新契约（含预期字段），信息零销毁
+        assertEquals("old cmd", change.oldSpec.command, "old contract must be preserved")
+        assertEquals("new cmd", change.newSpec.command)
         assertTrue(change.reason.isNotBlank(), "reason must be non-blank in audit trail")
         assertEquals("old command counted comments as false-positives", change.reason)
     }
@@ -167,10 +168,10 @@ class UpdateVerificationTest {
         val st = updated.subtasks[0]
         assertEquals("cmd v2", st.verification.command, "latest command must win")
         assertEquals(2, st.verificationChanges.size, "two changes must accumulate")
-        assertEquals("cmd v0", st.verificationChanges[0].oldCommand)
-        assertEquals("cmd v1", st.verificationChanges[0].newCommand)
-        assertEquals("cmd v1", st.verificationChanges[1].oldCommand)
-        assertEquals("cmd v2", st.verificationChanges[1].newCommand)
+        assertEquals("cmd v0", st.verificationChanges[0].oldSpec.command)
+        assertEquals("cmd v1", st.verificationChanges[0].newSpec.command)
+        assertEquals("cmd v1", st.verificationChanges[1].oldSpec.command)
+        assertEquals("cmd v2", st.verificationChanges[1].newSpec.command)
     }
 
     @Test

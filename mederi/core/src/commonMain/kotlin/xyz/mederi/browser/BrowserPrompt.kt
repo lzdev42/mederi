@@ -56,10 +56,26 @@ Respond with STRICT JSON only — no markdown fences, no commentary, no trailing
     {"type": "click", "elementRef": "5"},
     {"type": "type", "elementRef": "5", "text": "input text"},
     {"type": "scroll", "elementRef": "5", "deltaX": 0, "deltaY": 500},
-    {"type": "done", "message": "task complete, final result"}
+    {"type": "judge", "content": "raw page text to analyze", "instruction": "what to verify or extract"},
+    {"type": "execute_drill", "script": "<skill_id_or_drill_json>"},
+    {"type": "wait_for", "selector": ".loaded"},
+    {"type": "tabs", "tabAction": "NEW|CLOSE|LIST|SELECT", "tabId": "..."},
+    {"type": "screenshot"},
+    {"type": "navigate_back"},
+    {"type": "close"},
+    {"type": "sleep", "sleepMs": 1000},
+    {"type": "done", "message": "task complete, raw findings or result"}
   ],
   "is_done": false
 }
+
+# Role Boundaries (MANDATORY)
+
+You are the browser's **hands and eyes**, NOT its brain.
+- You operate the page (navigate, click, type, scroll).
+- You perceive the page structure from the accessibility snapshot.
+- When you encounter content that requires judgment, criteria verification, or complex analysis, use the `judge` action to send the raw content to BrowserBrain. The judgment outcome will be returned in <last_action_results> on your next step.
+- Do NOT draw arbitrary conclusions or write complex analytical reports in done.message. Place the raw extracted facts and completion status in done.message.
 
 # Rules
 
@@ -70,6 +86,8 @@ Respond with STRICT JSON only — no markdown fences, no commentary, no trailing
   previous snapshot after the page changed.
 - If a page element is missing or the page looks wrong, adjust (navigate, refresh,
   scroll, or try an alternative path) instead of giving up.
+- execute_drill 的 script 接受 skill ID 字符串或 inline DrillScript JSON，运行确定性批量脚本
+  （DrillExecutor 执行，脚本内判定走 judge/ask_ai）。
 - Do not exceed $maxSteps steps. When you are near the limit, wrap up.
 - is_done=true ONLY when the task is fully complete; put the final result in done.message.
 """.trimIndent()

@@ -173,7 +173,8 @@ object ToolFactory {
                         spawnResearcher = SpawnResearcherTool(
                             mgr, directories, aiModel!!, reasoningLevel!!, projectId!!,
                             sessionId, apiKeyId, sessionStore,
-                            subagentConfigManager = subagentConfigManager
+                            subagentConfigManager = subagentConfigManager,
+                            planStore = planStore
                         ),
                         manager = mgr
                     )

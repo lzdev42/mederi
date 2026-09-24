@@ -56,8 +56,7 @@ class SubagentRunnerImpl(
         projectId: String,
         parentSessionId: String,
         apiKeyId: String?,
-        /** 执行器子代理所属的 plan/subtask（SpawnAgentTool 传入）。非 null 时把 touched files flush 到 Subtask.executorTouchedFiles。 */
-        executorPlanId: String?,
+        planId: String?,
         executorSubtaskIndex: Int?,
         planStore: PlanStore?
     ): String {
@@ -96,8 +95,14 @@ class SubagentRunnerImpl(
             // 继承调用方协程上下文：外部取消（SubagentManager.stop）能级联取消内部 turn，
             // 避免"外层 job 取消但内层 Koog turn 继续跑"的资源泄漏。
             scope = CoroutineScope(coroutineContext + SupervisorJob()),
-            // 文件写入追踪：写工具成功后回调入队，turn 结束 finally 时 flush（见 flushTouchedFiles）
-            onFileTouched = { path -> touchedFiles.add(path) }
+            // 文件写入追踪：写工具成功后回调入队，turn 结束时 flush（见 flushTouchedFiles）
+            onFileTouched = { path -> touchedFiles.add(path) },
+            // 子 turn 的 TurnDiff 回传：合并进父会话当前活跃 turn 的 diff tracker——
+            // 修复"turn 结束改动摘要不含子代理改动"（子代理 diffStore 为 null，这是唯一出口）。
+            // 父 turn 已结束时 mergeInto 按注册表缺失丢弃并记日志（见 ParentDiffRegistry）。
+            onTurnDiff = { diff ->
+                xyz.mederi.tools.diff.ParentDiffRegistry.mergeInto(parentSessionId, diff.changes)
+            }
         )
 
         val inputText = when (role) {
@@ -128,6 +133,9 @@ class SubagentRunnerImpl(
                     append(briefing)
                 }
             }
+            SubagentRole.BROWSER_OPERATOR,
+            SubagentRole.BROWSER_BRAIN ->
+                throw IllegalStateException("BROWSER_* roles are configuration-only: browser tasks run via BrowserTaskManager, not SubagentRunner")
         }
 
         return try {
@@ -161,10 +169,13 @@ class SubagentRunnerImpl(
 
             val messages = historyStore.load(sessionId)
             val assistantMessage = messages.lastOrNull { it.role == MessageRole.ASSISTANT }
-            assistantMessage?.parts
+            val fullText = assistantMessage?.parts
                 ?.filterIsInstance<MessagePart.Text>()
                 ?.joinToString("") { it.text }
                 ?: "[subagent completed with no response]"
+            // 落盘报告：有 planId+planStore 时写盘并返回摘要+路径（减少父上下文 token），
+            // 否则全文回灌（无 plan 上下文的 researcher 保持原行为）。
+            persistReportAndReturnSummary(fullText, role, planId, executorSubtaskIndex, planStore)
         } catch (e: CancellationException) {
             // 协程规范：取消必须重新抛出，不得吞掉（外部 SubagentManager 据此标记 STOPPED）
             throw e
@@ -172,15 +183,56 @@ class SubagentRunnerImpl(
             "[subagent error] ${e.message ?: e.javaClass.simpleName}"
         } finally {
             // 无论成功/失败/取消，都把已写入的文件清单 flush 回 PlanStore——agent 丢失后父代理可据此恢复/查越界。
-            if (executorPlanId != null && executorSubtaskIndex != null && planStore != null && touchedFiles.isNotEmpty()) {
+            if (planId != null && executorSubtaskIndex != null && planStore != null && touchedFiles.isNotEmpty()) {
                 val files = touchedFiles.toList()
-                planStore.updatePlan(executorPlanId) { p ->
+                planStore.updatePlan(planId) { p ->
                     p.copy(subtasks = p.subtasks.map { st ->
                         if (st.index == executorSubtaskIndex) st.copy(executorTouchedFiles = (st.executorTouchedFiles + files).distinct())
                         else st
                     })
                 }
             }
+        }
+    }
+
+    /**
+     * 落盘子代理报告并返回摘要（父上下文用）。
+     *
+     * - EXECUTOR + planId：写 `{planId}/reports/NN-executor.md`，返回"已保存+尾部1500字符"。
+     *   尾部捕获 SPEC_FEEDBACK（位于报告末尾，父 agent 据此决定 re-generate_spec / ask_user）。
+     * - RESEARCHER + planId：写 `{planId}/research.md`，返回"已保存+头部800字符"。
+     *   头部通常是核心结论。
+     * - 无 planId / planStore / 写盘失败：回退全文回灌（兼容旧行为，无活跃 plan 的 researcher 走此路）。
+     */
+    private fun persistReportAndReturnSummary(
+        fullText: String,
+        role: SubagentRole,
+        planId: String?,
+        executorSubtaskIndex: Int?,
+        planStore: PlanStore?
+    ): String {
+        if (planId == null || planStore == null) return fullText
+        return when (role) {
+            SubagentRole.EXECUTOR -> {
+                val idx = executorSubtaskIndex ?: return fullText
+                val path = runCatching { planStore.writeExecutorReport(planId, idx, fullText) }
+                    .getOrNull() ?: return fullText
+                buildString {
+                    appendLine("[executor report saved to $path]")
+                    appendLine("Tail (last 1500 chars — SPEC_FEEDBACK lives here if any):")
+                    append(fullText.takeLast(1500))
+                }
+            }
+            SubagentRole.RESEARCHER -> {
+                val path = runCatching { planStore.writeResearchReport(planId, fullText) }
+                    .getOrNull() ?: return fullText
+                buildString {
+                    appendLine("[research report saved to $path]")
+                    appendLine("Summary (first 800 chars):")
+                    append(fullText.take(800))
+                }
+            }
+            SubagentRole.BROWSER_OPERATOR, SubagentRole.BROWSER_BRAIN -> fullText
         }
     }
 }

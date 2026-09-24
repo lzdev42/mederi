@@ -137,11 +137,14 @@ class ConvergePlanMechanismTest {
     @Test
     fun `verify_subtask PASS archives plan when all complete`() = runBlocking {
         val plan = makePlan(SubtaskStatus.PENDING)
-
+        // verify_subtask 现在无条件执行验证命令——先创建 file.txt 让 `test -f file.txt` 真实通过
+        File(tmpDir, "file.txt").writeText("created by test")
+        // 传真实 ShellTools：验证器需要执行命令（2026-09-24 无条件执行改造）
         val verifyTools = xyz.mederi.tools.VerifyTools(
             sessionId = "sess_test",
             planStore = planStore,
-            eventBus = eventBus
+            eventBus = eventBus,
+            shellTools = xyz.mederi.tools.ShellTools(listOf(tmpDir.absolutePath))
         )
         val result = verifyTools.VerifySubtaskTool().execute(
             xyz.mederi.tools.VerifyTools.VerifySubtaskArgs(
@@ -154,10 +157,10 @@ class ConvergePlanMechanismTest {
 
         assertTrue(result.contains("archived"), "Expected 'archived': $result")
         // 归档后 plan 从 plans/ 移到 plans-done/——planStore.load 只查 plans/，归档后返回 null
-        assertTrue(File(tmpDir, ".mederi/plans-done/${plan.id}.json").exists(),
-            "Plan not in plans-done/")
+        assertTrue(File(tmpDir, ".mederi/plans-done/${plan.id}/plan.json").exists(),
+            "Plan not in plans-done/{planId}/")
         // 从 plans-done/ 直接读 JSON 验证状态
-        val archivedJson = File(tmpDir, ".mederi/plans-done/${plan.id}.json").readText()
+        val archivedJson = File(tmpDir, ".mederi/plans-done/${plan.id}/plan.json").readText()
         assertTrue(archivedJson.contains("\"COMPLETED\""), "Plan status not COMPLETED in archived JSON")
         assertTrue(archivedJson.contains("\"COMPLETED\"") && archivedJson.contains("subtask 0"),
             "Subtask not COMPLETED in archived JSON")

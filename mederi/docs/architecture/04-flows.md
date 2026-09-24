@@ -118,6 +118,8 @@ flowchart TD
     D & C2 & ER & TO & PE & TD & ST & SU --> UI["WorkspaceViewModel.snapshot<br/>→ chatItems(derivedStateOf 展平渲染)"]
 ```
 
+**BROWSER_TASK_* 事件**：`BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` 不经 `SnapshotReducer` 聚合，由 `WorkspaceViewModel` 侧直接消费（展开浏览器面板 / 更新步骤列表）。
+
 ## 4. Plan Loop（复杂改动主流程）
 
 ```mermaid
@@ -126,28 +128,29 @@ flowchart TD
     T -- "纯读" --> R1["直接读文件回答<br/>不够深 → spawn_researcher → 完整报告 → 回答"]
     T -- "小改动(已知根因/几行代码)" --> R2["主代理直接 edit/write<br/>进度走 update_todo(无Plan)"]
     T -- "复杂改动" --> RES["(理解不足先 spawn_researcher)"]
-    RES --> CP["create_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
+    RES --> CP["create_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>前置 voidActivePlans 作废同会话旧计划（发 PLAN_PROGRESS 'voided'）<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
     CP --> MODE{"agentMode"}
     MODE -- "AUTONOMOUS" --> AUTO["自动 APPROVED"]
     MODE -- "APPROVAL" --> WAIT["PLAN_APPROVAL_REQUESTED → UI PlanApprovalCard<br/>用户批准/拒绝(resolvePlanApproval)"]
     WAIT -- "拒绝" --> REJ["告知用户结束/修改"]
     WAIT -- "批准" --> GEN
-    AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变"]
-    GEN --> SPAWN["spawn_agent(planId, subtaskIndex)<br/>硬校验 planId/index/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>PLAN_PROGRESS('subtask-started'+todos投影)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
-    SPAWN --> WAITAG["wait_agent(agentId, timeout)<br/>阻塞拿子代理执行报告"]
-    WAITAG --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
-    SUB --> VER["verify_subtask(planId, subtaskIndex, status, evidence)<br/>自动执行 Subtask.verification 命令(30s)"]
+    AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变<br/>不转录文件摘录:executor 自己 read_file 原文件"]
+    GEN --> SPAWN["spawn_agent(planId, subtaskIndex)<br/>硬校验 planId/index/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>PLAN_PROGRESS('subtask-started'+todos投影)<br/>briefing 简化注入: 只 task + planDetail(意图)<br/>(researchNotes/appendix 不再注入,executor 自己 read_file research.md/原文件)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
+    SPAWN --> ENDTURN["END TURN（父代理 turn 结束,不阻塞）"]
+    ENDTURN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>完成时报告落盘 {planId}/reports/NN-executor.md, 父上下文只收尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
+    SUB --> WAKE["子代理完成 → onTerminal 回调<br/>→ pendingNotices 入队 → maybeFlush 合并唤醒父 turn<br/>(同会话多个完成合并成一条内部消息,一次 turn)"]
+    WAKE --> VER["verify_subtask(planId, subtaskIndex, status, evidence)<br/>自动执行 Subtask.verification 命令(30s)"]
     VER --> CHK{"verify 结果"}
     CHK -- "PASS(且命令 exit=0)" --> NEXT["子任务 COMPLETED → 下一个子任务"]
-    CHK -- "执行错(FAIL/PARTIAL)" --> CONV["converge_plan 追加补救子任务(append-only) → 重执行"]
+    CHK -- "执行错(FAIL/PARTIAL)" --> CONV["converge_plan 追加补救子任务 → 重执行"]
     CHK -- "spec 错" --> REGEN["重新 generate_spec 覆盖 → 重执行"]
     NEXT --> MORE{"还有子任务?"}
     MORE -- "是" --> SPAWN
-    MORE -- "否" --> ARCH["全部 COMPLETED → plan 置 COMPLETED<br/>planStore.archive → .mederi/plans-done/"]
+    MORE -- "否" --> ARCH["全部 COMPLETED → plan 置 COMPLETED<br/>planStore.archive → .mederi/plans-done/{planId}/<br/>planStore.writeWalkthrough → plans/{planId}/walkthrough.md (archive 时随之移动)"]
     CONV & REGEN --> SPAWN
 ```
 
-**并行执行（2026-09，2026-09-14 异步化）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）**：spawn_agent / spawn_researcher 改为异步派工（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；plan workflow 中父代理在 spawn 后调 `wait_agent(agentId)` 阻塞拿结果再 verify。
+**并行执行（2026-09，2026-09-14 异步化）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）+ 主动上报（2026-09-25）**：spawn_agent / spawn_researcher 改为异步派工（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；子代理终态经 `SubagentManager.onTerminal` 回调入 TurnExecutor `pendingNotices` 队列，父 turn 空闲时 `maybeFlush` 批量合并成一条内部消息自动唤起新 turn（同会话多个完成合并成一次 turn；竞态时放回队列等 turn 收尾冲刷；watchdog 默认 10 分钟超时发 stalled 通知）。`wait_agent` 枚举值已删，父代理不再阻塞拉取。**diff 合并子代理改动（2026-09-23）**：主 turn runTurn 开头 `ParentDiffRegistry.register`，子代理 turn 结束时把文件改动经 `onTurnDiff` 回调 + `ParentDiffRegistry.mergeInto` 合并进父 turn 的 `TurnDiffTracker`（`mergeChanges`），finally 里 `unregister`——修复"turn 改动摘要不含子代理改动"的 bug。子代理自身 diff 仍独立落库（其临时 InMemory store），合并只影响父 turn 的 TurnDiff 聚合。**walkthrough 自动生成（2026-09-23）**：计划全部子任务 COMPLETED 时，`PlanStore.writeWalkthrough(plan)` 自动装配 walkthrough 文档写至 `plans-done/{planId}-walkthrough.md`（内容由 `buildWalkthrough` 聚合 plan/subtask/spec/verification/changes）。
 
 **Plan 审批时序（APPROVAL 模式）**：
 
@@ -202,27 +205,30 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant M as 主代理(spawn_agent 工具)
+    participant M as 主代理(subagent 工具)
     participant SS as SessionStore
     participant SM as SubagentManager
     participant SR as SubagentRunnerImpl
     participant EB as eventBus(主)
+    participant TE as TurnExecutor(父)
 
     M->>SS: get(parentSession) — 动态读模型<br/>(session.aiModel ?: 构造捕获的 turn 模型)
     M->>SM: spawn(task, briefing, spec, aiModel, reasoningLevel, ...)
-    SM->>SM: agents[agentId] 占位注册(RUNNING)
+    SM->>SM: agents[agentId] 占位注册(RUNNING)<br/>+ watchdog 协程 delay(stallTimeoutMs, 默认10min)
     SM->>EB: SUBAGENT_STARTED(agentId, role, modelId, modelName, reasoningLevel, task, briefing?)
     Note over EB: sessionId=父会话；UI SubagentTracker 聚合进<br/>SubagentState 缓存(每个子代理一个 MVVM 对象)
+    SM-->>M: 返回 agentId（立即，不阻塞父 turn）
+    M->>M: END TURN（父代理结束 turn，期间可自由对话）
     SM->>SR: 后台协程 run(内存 store + 独立 TurnExecutor)
-    alt 正常
-        SR-->>SM: 汇报全文
-        SM->>EB: SUBAGENT_COMPLETED(agentId)
-    else runner 抛错/结果带 [subagent error]
-        SM->>EB: SUBAGENT_ERROR(agentId)
-    else stop_agent / abort 级联收割
-        SM->>EB: SUBAGENT_STOPPED(agentId)(NonCancellable emit)
+    alt 正常完成/出错/停止
+        SR-->>SM: 汇报全文（executor 报告落盘 {planId}/reports/NN-executor.md）
+        SM->>EB: SUBAGENT_COMPLETED / ERROR / STOPPED(agentId)
+        SM->>TE: onTerminal(TerminalNotice: agentId/role/planId/subtaskIndex/status/result)
+    else watchdog 超时（10min 仍 RUNNING）
+        SM->>TE: onTerminal(stalled=true)（不 cancel，AI 决定 STATUS 查或 STOP）
     end
-    Note over M: 父代理 subagent(WAIT, agentId) 拿汇报全文<br/>(tool result 落库; UI 经 SubagentReportMarkdown 转折叠卡片)
+    TE->>TE: pendingNotices 入队 → 父 turn 空闲时 maybeFlush 批量合并<br/>→ 合成一条内部消息唤起新 turn（同会话多通知合并成一次 turn）
+    Note over TE: 竞态：唤起时父会话正忙 → 通知放回队列，等 turn 收尾 finally 再冲刷<br/>计划已归档/作废 → 丢弃；abortAndJoin → 清空该会话队列
 ```
 
 **abort 级联收割**：用户点"停止"（abort/abortAndJoin）→ cancel 父 turn job → `stopAllForSession(parentSessionId)` 杀本会话全部 RUNNING 子代理——子代理挂全局 scope 不随父 turn 取消而亡，不收割即孤儿（旧模型继续写文件，与"继续"后重 spawn 的新代理并发写同一批 targetFiles）。被杀子代理发 `SUBAGENT_STOPPED`，plan 子任务保持 IN_PROGRESS（"继续"后重 spawn 是干净路径）。
@@ -272,11 +278,14 @@ sequenceDiagram
     end
 ```
 
-## 7. 子代理（spawn_agent / spawn_researcher / 异步管理）时序
+## 7. 子代理（spawn / spawn_researcher / 异步管理 / 主动上报）时序
 
 > 2026-09-14：spawn 改为**异步派工**——`SpawnAgentTool` 调 `SubagentManager.spawn` 立即返回 agentId，
-> 子代理在后台协程运行，父代理 turn 不被阻塞。需要结果时父代理再调 `wait_agent` 阻塞拿结果，
-> 或 `agent_status` 查询、`stop_agent` 主动停止。
+> 子代理在后台协程运行，父代理 turn 不被阻塞。
+> 2026-09-25：**主动上报**——子代理终态经 `SubagentManager.onTerminal` 回调通知父 TurnExecutor，
+> 入 `pendingNotices` 队列，父 turn 空闲时 `maybeFlush` 批量合并成一条内部消息唤起新 turn；
+> 父代理不再需要 `wait_agent`（已删），可用 `agent_status` 查询、`stop_agent` 主动停止。
+> watchdog（默认 10 分钟）超时后发 `stalled=true` 通知，AI 决定查状态还是停止。
 
 ```mermaid
 sequenceDiagram
@@ -286,6 +295,7 @@ sequenceDiagram
     participant PS as PlanStore
     participant SR as SubagentRunnerImpl<br/>(后台协程)
     participant ITE as 独立 TurnExecutor<br/>(InMemory store + 独立 eventBus)
+    participant PTE as 父 TurnExecutor<br/>(pendingNotices 队列)
     participant EB as 主 eventBus
 
     M->>PS: load(planId) 硬校验 planId/subtaskIndex/spec 非空
@@ -294,10 +304,11 @@ sequenceDiagram
     end
     M->>PS: updatePlan 原子置 subtask IN_PROGRESS
     M->>EB: PLAN_PROGRESS('subtask-started' + todos 投影)
-    M->>SM: spawn(task, briefing(含 planDetail), plan=st.spec, role=EXECUTOR, ...)
-    SM->>SM: agents[agentId]=RUNNING; scope.launch { SR.run(...) }
+    M->>M: SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER,<br/>fallbackModel=会话模型, fallbackReasoning=会话推理档)<br/>→ 配置了独立模型/推理档则覆盖父会话, 否则继承
+    M->>SM: spawn(task, briefing(简化: 只 task + planDetail, 不再注入 researchNotes/appendix), plan=st.spec, role=EXECUTOR, planId=plan.id, executorSubtaskIndex, planStore)
+    SM->>SM: agents[agentId]=RUNNING; scope.launch { SR.run(...) }<br/>+ watchdog: scope.launch { delay(stallTimeoutMs, 默认10min) }
     SM-->>M: 立即返回 {"agentId":"sub_xxx","status":"RUNNING"} (不阻塞)
-    M-->>M: 主代理继续对话/派发其他任务/调 wait_agent
+    M-->>M: 主代理 END TURN; 期间继续对话/派发其他任务
     Note over SM,ITE: 后台执行(与父 turn 并行)
     SR->>SR: 内存建临时 Session(sub_xxxxxxxx, AUTONOMOUS)
     SR->>ITE: sendMessage(inputText=spec清单自顶向下+SPEC_FEEDBACK约定, subagentRole=EXECUTOR)
@@ -307,14 +318,19 @@ sequenceDiagram
         ITE->>ITE: 正常 TurnExecutor 流程(事件走独立 eventBus)
     end
     SR->>SR: 等 MESSAGE_COMPLETED/MESSAGE_ERROR 终态事件
-    SR->>SR: 取最后一条 ASSISTANT 消息文本 → SM 更新状态 COMPLETED/ERROR
+    SR->>SR: 取最后一条 ASSISTANT 消息文本 → persistReportAndReturnSummary<br/>EXECUTOR: 落盘 {planId}/reports/NN-executor.md, 返回尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>RESEARCHER: 有活跃 plan 时落盘 {planId}/research.md, 返回头部800字符+路径; 无活跃 plan 全文回灌
+    SR->>SM: 更新状态 COMPLETED/ERROR, 返回摘要
     Note over SM,SR: scope 继承调用方协程上下文: stop_agent 取消可级联取消内部 turn
-    M->>SM: wait_agent(agentId, timeout) [父代理需要结果时]
-    SM-->>M: 返回最终状态+结果(超时 TIMEOUT, 子代理继续后台跑)
-    M->>EB: (主代理继续) verify_subtask / converge_plan / 下一个 spawn
-    Note over M: 独立子任务可同消息并行: 多个 spawn 各自后台跑,<br/>无并发上限, 由 AI 调度(信任 AI); 逐个 wait_agent 拿结果后 verify_subtask
+    SM->>PTE: onTerminal(TerminalNotice: agentId/role/planId/subtaskIndex/status/result)<br/>(正常终态/STOPPED 均发; watchdog 超时未 RUNNING 完则发 stalled=true)
+    PTE->>PTE: pendingNotices 入队(按父会话分组)<br/>父 turn 空闲 → maybeFlush 批量合并成一条内部消息唤起新 turn<br/>竞态(父会话正忙) → 放回队列, 等 turn 收尾 finally 冲刷<br/>计划已归档/作废 → 丢弃; abortAndJoin → 清空该会话队列
+    PTE->>M: (被唤醒的新 turn) verify_subtask / converge_plan / 下一个 spawn
+    Note over M: 独立子任务可同消息并行: 多个 spawn 各自后台跑,<br/>无并发上限, 由 AI 调度(信任 AI); 完成通知合并唤醒后逐个 verify_subtask
     Note over ITE: 子代理一次任务即死; 无会话残留
 ```
+
+**briefing 简化 + 报告落盘（方案A 2026-09-24）**：SpawnAgentTool 拼装 briefing 时只注入 ①`task`（来自调用方参数）②`planDetail`（子任务意图/brief，恒不变）——不再注入 `researchNotes` 全文、不再注入 `appendix` 摘录（appendix 字段已删）。executor 是干脏活的便宜模型，需要调研结论时自己 `read_file .mederi/plans/{planId}/research.md`，需要原文件认知时直接 `read_file` 该路径。executor 完成时报告落盘到 `{planId}/reports/NN-executor.md`，父上下文只收尾部 1500 字符 + 路径（尾部捕获 SPEC_FEEDBACK）；researcher 在有活跃 plan 时报告落盘到 `{planId}/research.md`，父上下文只收头部 800 字符 + 路径，无活跃 plan 时保持原行为——全文回灌父上下文（无法保证制定 plan 时该 researcher 仍可用）。子代理 TurnExecutor 透传 `onTurnDiff` 回调，结束时把文件改动经 `ParentDiffRegistry` 合并进父 turn 的 diffTracker（见 §4 diff 合并说明）。
+
+**per-role 模型解析（2026-09）**：`SpawnAgentTool` / `SpawnResearcherTool` 派发时经 `SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER, fallbackModel=会话模型, fallbackReasoning=会话推理档)` 覆盖父会话模型——配置了独立模型/推理档则覆盖，否则继承。
 
 ## 8. 回滚（rollbackMessage）流程
 
@@ -344,42 +360,57 @@ sequenceDiagram
     participant MA as 主代理 turn
     participant RBT as browser(RUN)→RunBrowserTaskTool
     participant BTM as BrowserTaskManager
-    participant BA as BrowserAgentRunner(后台协程)
-    participant BC as BrowserControl(Camoufox/JCEF)
+    participant BO as BrowserOperator(手和眼)
+    participant BB as BrowserBrain(大脑)
+    participant BC as BrowserControl(Camoufox)
     participant EB as eventBus
     participant WV as WorkspaceViewModel
 
     U->>MA: "搜一下51job的Java开发工作"
-    MA->>RBT: browser(action=RUN, task, browser="jcef")
-    RBT->>BTM: runTask(task, model, projectId, sessionId, browser)
+    MA->>RBT: browser(action=RUN, task, browser="camoufox", recipe="job_filter")
+    RBT->>BTM: runTask(task, model, projectId, sessionId, browser, recipe)
     BTM->>BTM: resolve(browser)→factory(suspend)→createBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
-    BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="jcef")
-    RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"jcef"} (立即返回, 不阻塞)
+    BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="camoufox")
+    RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"camoufox"} (立即返回, 不阻塞)
     MA-->>U: 主代理继续对话(浏览器任务在后台跑)
-    Note over WV: JCEF 分支：UI 自动展开浏览器面板
-    EB-->>WV: BROWSER_TASK_STARTED(browser=="jcef")
-    Note over WV: canRenderJcef==true → openDockPanel(BROWSER)
+    Note over WV: 任意 BROWSER_TASK_STARTED：UI 自动展开浏览器面板
+    EB-->>WV: BROWSER_TASK_STARTED(任意 browser)
+    Note over WV: openDockPanel(BROWSER)（Camoufox 任务监控）
     Note over BTM,BC: 后台执行(与主 turn 并行)
-    BTM->>BC: JCEF: createAiTab()→新建 tab=KBPage→JCEFBrowserControl<br/>Camoufox: BiDiBrowserControl(binary 已下载)→start()
-    BTM->>BA: runner.run(task)
+    BTM->>BC: Camoufox: BiDiBrowserControl(binary 已下载)→start()
+    BTM->>BO: operator.run(task)
     loop 4-phase 循环(每步)
-        BA->>BC: snapshot() → 新鲜 a11y tree
-        BA->>BA: LLM 一次调用([system+memory+history+snapshot]) → decision{actions,memory,is_done}
-        BA->>BC: 执行 actions(navigate/click/type/scroll/done)
-        BA->>BTM: onStep(step, thought, results)
+        BO->>BC: snapshot() → 新鲜 a11y tree
+        BO->>BO: LLM 一次调用([system+memory+history+snapshot]) → decision{actions,memory,is_done}
+        opt 需要内容判定 (遇到判定需求 / ask_ai)
+            BO->>BB: judge(content, instruction, recipeRules)
+            BB-->>BO: BrainResult (返回结构化判定)
+        end
+        BO->>BC: 执行 actions(navigate/click/type/scroll/done)
+        BO->>BTM: onStep(step, thought, results)
         BTM->>EB: BROWSER_TASK_STEP(taskId, step, thought, results, browser)
-        Note over BA: memory = decision.memory(AI自总结)<br/>stepHistory 保留最后10条<br/>snapshot 用完即丢
+        Note over BO: memory = decision.memory(AI自总结)<br/>stepHistory 保留最后10条<br/>snapshot 用完即丢
     end
-    BA-->>BTM: BrowserTaskResult(success, message)
-    BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, message, browser)
-    Note over U: 用户自己在浏览器任务面板看细节<br/>JCEF 任务时浏览器面板已自动展开(tab=该任务页面)
+    BO-->>BTM: BrowserTaskResult(success, rawMessage)
+    BTM->>BB: generateFinalReport(taskHistory, goal, rawMessage, recipeRules)
+    BB-->>BTM: BrainResult (一句话简报 + reports/*.md 落盘)
+    BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, executiveSummary, browser)
+    Note over U: 用户在任务面板看细节；主代理查 STATUS 拿到一句话简报<br/>任意 BROWSER_TASK_STARTED 即浏览器面板已自动展开（Camoufox 任务监控面板）
     Note over MA: 用户问"任务怎样了?" → 主代理查 browser(STATUS, taskId)
 ```
 
-> 浏览器选择（2026-09-15）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认。
-> AI 提示词：测用户自己的网页 → `jcef`（内置可见，UI 自动展开浏览器面板显示该 tab）；
-> 第三方自动化/抓取 → `camoufox`（无头，不展开面板）。遥控端/wasm 无 JCEF 宿主（canRenderJcef=false），
-> 收到 jcef 事件不展开。
+> 浏览器选择（2026-09）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认。
+> 内置 JCEF 浏览器宿主已移除，Camoufox（BiDiBrowserControl）是唯一注册源、即默认；
+> 任意 BROWSER_TASK_STARTED 都会把浏览器面板展开为 Camoufox 任务监控视图。浏览器面板在所有端均可展开
+> （不再依赖内置 JCEF 宿主，遥控端/wasm 同样适用）。
+
+> 浏览器子代理模型解析（2026-09-23）：browser(RUN) 派发时，RunBrowserTaskTool 直传父会话模型/推理档
+> （不再按浏览器名解析）；BrowserTaskManager.runTask 后台按角色独立解析——操作者
+> （SubagentRole.BROWSER_OPERATOR）与大脑（SubagentRole.BROWSER_BRAIN）经 SubagentConfigManager.resolve
+> 各取配置的独立模型/推理档（设置页 Agents 面板与 Executor/Researcher 同款卡片可配模型+推理档+恢复继承），
+> 配置了独立模型/推理档则覆盖父会话，否则继承；operator/brain 各建独立 llmCaller
+> （BrowserLLMHelper 或注入的 llmCallerProvider），Operator 按操作者模型执行、Brain 按大脑模型执行。
+> 浏览器实现（现仅 Camoufox）仍由 browser(RUN) 的 browser 参数选择，与角色配置无关。
 
 ## 9. 会话自动改名（SessionTitleService）
 
@@ -451,6 +482,7 @@ sequenceDiagram
     participant SVC as 子服务
 
     M->>M: PtyTerminalHub() → terminalManager
+    M->>M: 后台 CoroutineScope(Dispatchers.Default).launch { DesktopBrowserRuntime.ensureInitialized() } 预热 KBrowser（供 inkcompose mermaid/导出）
     M->>APP: setContent { App() }
     APP->>ST: 创建 AppState(AiCoreProvider.default(), preferences)
     APP->>MAC: initialize()
@@ -514,7 +546,7 @@ flowchart LR
 
 **Message 状态机**：`PROCESSING(streaming 占位) → COMPLETED / ERROR`；快照里 isStreaming 对应 PROCESSING。
 
-**Plan 状态机**：`PENDING_APPROVAL → (批准) APPROVED → (spawn 首子任务) IN_PROGRESS → (全子任务 COMPLETED) COMPLETED → archive(plans-done/)`；`PENDING_APPROVAL → (拒绝) 停留/用户重试`。
+**Plan 状态机**：`PENDING_APPROVAL → (批准) APPROVED → (spawn 首子任务) IN_PROGRESS → (全子任务 COMPLETED) COMPLETED → archive(plans-done/)`；`PENDING_APPROVAL/APPROVED/IN_PROGRESS → (create_plan 前置 voidActivePlans) VOIDED → .mederi/plans-voided/`；`PENDING_APPROVAL → (拒绝) 停留/用户重试`。
 
 **Subtask 状态机**：`PENDING → (spawn) IN_PROGRESS → (verify PASS) COMPLETED`；`IN_PROGRESS → (verify FAIL/PARTIAL) FAILED → (converge_plan 追加补救 或 regenerate spec) 重执行`。
 

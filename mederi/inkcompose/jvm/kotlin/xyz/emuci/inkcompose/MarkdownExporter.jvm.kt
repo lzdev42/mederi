@@ -16,7 +16,6 @@ import xyz.kbrowser.webview.JcefChecker
 import xyz.kbrowser.webview.JvmWebView
 import xyz.kbrowser.webview.KBPage
 import xyz.kbrowser.webview.KBrowser
-import xyz.kbrowser.webview.initializeKBrowser
 import java.io.File
 import java.util.Base64
 import kotlin.concurrent.Volatile
@@ -50,6 +49,13 @@ internal actual suspend fun exportMarkdownHtmlToPdfPlatform(
     outputPath: String,
     options: PdfExportOptions,
 ): Result<String> = withContext(Dispatchers.IO) {
+    val browser = options.browser
+    if (browser == null) {
+        return@withContext Result.failure(
+            IllegalStateException("KBrowser runtime is not provided or initialized. Cannot export PDF.")
+        )
+    }
+
     if (!JcefChecker.isJcefAvailable) {
         return@withContext Result.failure(
             IllegalStateException("JCEF runtime is not available in current environment.")
@@ -62,15 +68,8 @@ internal actual suspend fun exportMarkdownHtmlToPdfPlatform(
     pdfExportMutex.withLock {
         var page: KBPage? = null
         try {
-            val baseDir = MermaidCacheConfig.getBaseDirectory() 
-                ?: (System.getProperty("java.io.tmpdir") ?: ".") + File.separator + "inkcompose"
-            val storageDir = baseDir + File.separator + "kbrowser"
-            File(storageDir).mkdirs()
-            KBrowser.initializeConfig(storageDir, useOsr = true)
-            initializeKBrowser()
-
             page = withContext(Dispatchers.Main) {
-                KBrowser.newPage(viewportWidth = 1200, viewportHeight = 1600)
+                browser.newPage(viewportWidth = 1200, viewportHeight = 1600)
             }
             val webView = page.webView as? JvmWebView
                 ?: return@withLock Result.failure(IllegalStateException("Page webView is not JvmWebView"))

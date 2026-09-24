@@ -13,6 +13,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.emuci.inkcompose.MarkdownColors
+import xyz.emuci.inkcompose.RenderStyle
 import xyz.emuci.markdown.renderer.MarkdownTheme
 import xyz.emuci.syntax.theme.GithubLightTheme
 import xyz.emuci.syntax.theme.LocalCodeTheme
@@ -234,80 +236,71 @@ fun AppTheme(
 }
 
 /**
- * Mederi 统一 Markdown 排版主题规范。
- * 遵循现代 Agent 对话排版：字号平级化与高密度紧凑排版，杜绝标题突兀过大。
+ * 获取适配当前 Mederi 主题配色的 [MarkdownColors]。
+ */
+@Composable
+fun rememberMederiMarkdownColors(): MarkdownColors {
+    val colors = LocalMederiColors.current
+    return remember(colors) {
+        MarkdownColors(
+            textPrimary = colors.textPrimary,
+            textSecondary = colors.textSecondary,
+            textMuted = colors.textMuted,
+            link = colors.accentPrimary,
+            inlineCodeBackground = if (colors.isDark) Color(0xFF21262D) else Color(0xFFE2E8F0),
+            codeBlockBackground = if (colors.isDark) Color(0xFF14171F) else Color(0xFFF1F5F9),
+            blockQuoteBorder = colors.divider,
+            divider = colors.divider,
+            tableBorder = colors.divider,
+            tableHeaderBackground = if (colors.isDark) Color(0xFF161B22) else Color(0xFFF8FAFC),
+            isDark = colors.isDark,
+        )
+    }
+}
+
+/**
+ * Mederi 统一 Markdown 主题适配：
+ * 将业务色彩规范（[rememberMederiMarkdownColors]）与几何排版（[RenderStyle]）组装为 [MarkdownTheme]。
  *
+ * @param style 排版风格（默认为面向对话的 [RenderStyle.Chat]，长文阅读可传入 [RenderStyle.Github]）
  * @param compact 紧凑变体，适用于思维链、追踪折叠卡片等空间受限区域。
  */
 @Composable
-fun rememberMederiMarkdownTheme(compact: Boolean = false): MarkdownTheme {
-    val colors = LocalMederiColors.current
-    val colorScheme = MaterialTheme.colorScheme
-
-    return remember(colors, colorScheme, compact) {
-        val base = if (colors.isDark) MarkdownTheme.dark() else MarkdownTheme.light()
-        if (compact) {
-            base.copy(
-                bodyStyle = base.bodyStyle.copy(
+fun rememberMederiMarkdownTheme(
+    style: RenderStyle = RenderStyle.Chat,
+    compact: Boolean = false,
+): MarkdownTheme {
+    val colors = rememberMederiMarkdownColors()
+    return remember(colors, style, compact) {
+        val effectiveStyle = if (compact) {
+            style.copy(
+                blockSpacing = 5.dp,
+                bodyStyle = style.bodyStyle.copy(
                     fontSize = 12.5.sp,
                     lineHeight = 18.sp,
-                    color = colors.textPrimary
                 ),
                 headingStyles = listOf(
-                    TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 17.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp, color = colors.textPrimary),
+                    TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp),
+                    TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp),
+                    TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp),
+                    TextStyle(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 17.sp),
+                    TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp),
+                    TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp),
                 ),
-                codeBlockStyle = base.codeBlockStyle.copy(
+                codeBlockStyle = style.codeBlockStyle.copy(
                     fontSize = 12.sp,
-                    lineHeight = 16.5.sp
+                    lineHeight = 16.5.sp,
                 ),
-                inlineCodeStyle = base.inlineCodeStyle.copy(
-                    fontSize = 11.5.sp
+                inlineCodeStyle = style.inlineCodeStyle.copy(
+                    fontSize = 11.5.sp,
                 ),
-                blockSpacing = 5.dp,
                 tableCellPadding = 4.dp,
                 codeBlockPadding = 6.dp,
-                codeBlockBackground = if (colors.isDark) Color(0xFF14171F) else Color(0xFFF1F5F9),
-                inlineCodeBackground = if (colors.isDark) Color(0xFF21262D) else Color(0xFFE2E8F0),
-                tableBorderColor = colors.divider,
-                tableHeaderBackground = if (colors.isDark) Color(0xFF161B22) else Color(0xFFF8FAFC),
-                dividerColor = colors.divider
             )
         } else {
-            base.copy(
-                bodyStyle = base.bodyStyle.copy(
-                    fontSize = 13.5.sp,
-                    lineHeight = 20.sp,
-                    color = colors.textPrimary
-                ),
-                headingStyles = listOf(
-                    TextStyle(fontSize = 16.5.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, lineHeight = 18.sp, color = colors.textPrimary),
-                    TextStyle(fontSize = 12.5.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp, color = colors.textPrimary),
-                ),
-                codeBlockStyle = base.codeBlockStyle.copy(
-                    fontSize = 12.5.sp,
-                    lineHeight = 17.5.sp
-                ),
-                inlineCodeStyle = base.inlineCodeStyle.copy(
-                    fontSize = 12.sp
-                ),
-                blockSpacing = 6.dp,
-                tableCellPadding = 5.dp,
-                codeBlockPadding = 8.dp,
-                codeBlockBackground = if (colors.isDark) Color(0xFF14171F) else Color(0xFFF1F5F9),
-                inlineCodeBackground = if (colors.isDark) Color(0xFF21262D) else Color(0xFFE2E8F0),
-                tableBorderColor = colors.divider,
-                tableHeaderBackground = if (colors.isDark) Color(0xFF161B22) else Color(0xFFF8FAFC),
-                dividerColor = colors.divider
-            )
+            style
         }
+        MarkdownTheme.from(style = effectiveStyle, colors = colors)
     }
 }
+

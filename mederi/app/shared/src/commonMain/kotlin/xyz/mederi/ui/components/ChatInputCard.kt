@@ -561,55 +561,56 @@ fun ChatInputCard(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 第二层：工具栏（移动端/桌面端自适应排版）
+                // 第二层：工具栏（自适应换行排版）
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val isCompact = maxWidth < 540.dp
+                    val isCompact = maxWidth < 640.dp
+                    DebugLog.data(
+                        "UI", "ChatInputCard toolbar layout",
+                        "maxWidth=$maxWidth, layoutMode=${if (isCompact) "STACKED_FLOW" else "SINGLE_LINE"}, model=${selectedModel?.name}"
+                    )
 
                     if (isCompact) {
-                        // 移动端：第二层独立单行，分左右两组
-                        Row(
+                        // 挤压模式：提高输入框高度，换行排列控件，控件尺寸固定且不缺失任何功能项
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // 左侧：单次操作图标化组（40×40dp 触控区，横向可滚动）
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            // 第一行：上下文控制组（项目选择、附件、图片、自动审批）
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.Start),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 ProjectSelectorMenu(
                                     onOpenProjectPicker = onOpenProjectPicker,
                                     onSelect = { viewModel.selectProject(it) },
-                                    iconOnly = true,
                                     highlight = needProjectGuide,
                                     openRequest = projectMenuOpenCount
                                 )
-                                IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 40)
-                                // 图片门禁：仅支持图片输入的模型显示附件按钮（粘贴路径由 tryAttachImage 拦截）
+                                IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
                                 if (modelSupportsImages) {
-                                    IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 40)
+                                    IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
                                 }
+                                AgentModeSelector(viewModel = viewModel)
                             }
 
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            // 右侧：模型选择药丸（点击唤起抽屉） + 独立高亮发送圆钮
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            // 第二行：模型配置与主操作组（API Key、模型、思考等级、发送/停止按钮）
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 ApiKeySelectorMenu(viewModel = viewModel)
-                                ChipSelectorPill(
-                                    icon = FeatherIcons.Cpu,
-                                    label = (selectedModel?.name ?: stringResource(Res.string.input_select_model)).take(12),
-                                    onClick = { isMobileSheetOpen = true },
-                                    height = 40.dp
-                                )
+                                ModelSelectorMenu(viewModel = viewModel, compact = false)
+                                AnimatedVisibility(
+                                    visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
+                                    enter = fadeIn(tween(180)) + expandHorizontally(tween(180)),
+                                    exit = fadeOut(tween(180)) + shrinkHorizontally(tween(180))
+                                ) {
+                                    ThinkingLevelMenu(viewModel = viewModel)
+                                }
                                 SendButton(
-                                    size = 40.dp,
+                                    size = 28.dp,
                                     isStreaming = isStreaming,
                                     canSend = canSend,
                                     onSubmit = submit
@@ -617,15 +618,15 @@ fun ChatInputCard(
                             }
                         }
                     } else {
-                        // 桌面端：单行完整排版
+                        // 宽屏模式：单行两端对齐排版
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 左侧：项目选择器 + 附件 + 执行策略
+                            // 左侧：项目选择器 + 附件 + 图片 + 执行策略
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 ProjectSelectorMenu(
@@ -635,14 +636,13 @@ fun ChatInputCard(
                                     openRequest = projectMenuOpenCount
                                 )
                                 IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
-                                // 图片门禁：仅支持图片输入的模型显示附件按钮（粘贴路径由 tryAttachImage 拦截）
                                 if (modelSupportsImages) {
                                     IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
                                 }
                                 AgentModeSelector(viewModel = viewModel)
                             }
 
-                            // 右侧：模型 / 思考等级（条件显示 + 过渡动画） / 发送
+                            // 右侧：模型 / 思考等级 / 发送
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -657,7 +657,7 @@ fun ChatInputCard(
                                     ThinkingLevelMenu(viewModel = viewModel)
                                 }
                                 SendButton(
-                                    size = 32.dp,
+                                    size = 28.dp,
                                     isStreaming = isStreaming,
                                     canSend = canSend,
                                     onSubmit = submit

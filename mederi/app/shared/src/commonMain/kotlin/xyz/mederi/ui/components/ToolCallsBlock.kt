@@ -71,6 +71,11 @@ import mederi.app.shared.generated.resources.tool_action_subagent_target
 import mederi.app.shared.generated.resources.tool_action_todo_many
 import mederi.app.shared.generated.resources.tool_action_todo_one
 import mederi.app.shared.generated.resources.tool_action_todo_running
+import mederi.app.shared.generated.resources.tool_action_verify_many
+import mederi.app.shared.generated.resources.tool_action_verify_one
+import mederi.app.shared.generated.resources.tool_action_verify_running
+import mederi.app.shared.generated.resources.tool_action_verify_running_target
+import mederi.app.shared.generated.resources.tool_action_verify_target
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.ui.DebugLog
@@ -159,6 +164,7 @@ fun ToolActionGroupRow(
         group.kind == ToolActionKind.MCP -> Pair(FeatherIcons.Cpu, defaultMutedColor)
         group.kind == ToolActionKind.ASK -> Pair(FeatherIcons.HelpCircle, defaultMutedColor)
         group.kind == ToolActionKind.TODO -> Pair(FeatherIcons.CheckSquare, defaultMutedColor)
+        group.kind == ToolActionKind.VERIFY -> Pair(FeatherIcons.CheckCircle, colors.thoughtAccent)
         else -> Pair(FeatherIcons.Zap, defaultMutedColor)
     }
 
@@ -181,6 +187,8 @@ fun ToolActionGroupRow(
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_running_target, singleTarget ?: firstCall.name)
                 ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_running)
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_running)
+                ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_running_target, it) }
+                    ?: stringResource(Res.string.tool_action_verify_running)
                 else -> singleTarget?.let { stringResource(Res.string.tool_action_other_running_target, it) }
                     ?: stringResource(Res.string.tool_action_other_running)
             }
@@ -200,6 +208,8 @@ fun ToolActionGroupRow(
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_target, singleTarget ?: firstCall.name)
                 ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_one)
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_one)
+                ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_target, it) }
+                    ?: stringResource(Res.string.tool_action_verify_one)
                 else -> stringResource(Res.string.tool_action_other_target, singleTarget ?: firstCall.name)
             }
             else -> when (group.kind) {
@@ -212,9 +222,11 @@ fun ToolActionGroupRow(
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_many, count)
                 ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_many, count)
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_many, count)
+                ToolActionKind.VERIFY -> stringResource(Res.string.tool_action_verify_many, count)
                 else -> stringResource(Res.string.tool_action_other_many, count)
             }
         }
+
         if (isFailed) "$base ${stringResource(Res.string.tool_action_failed_suffix)}" else base
     }
 
@@ -250,46 +262,15 @@ fun ToolActionGroupRow(
                 )
             }
 
-            if (group.kind == ToolActionKind.EDIT && !singleTarget.isNullOrBlank() && count == 1) {
-                val fileName = singleTarget.substringAfterLast("/")
-                val parentDir = singleTarget.substringBeforeLast("/", "").let {
-                    if (it.isNotEmpty()) ".../$it" else ""
-                }
-                Row(
-                    modifier = Modifier.weight(1f, fill = false),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = fileName,
-                        color = if (isFailed) colors.accentDanger else colors.textPrimary,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1
-                    )
-                    if (parentDir.isNotEmpty()) {
-                        Text(
-                            text = parentDir,
-                            color = defaultMutedColor.copy(alpha = 0.85f),
-                            fontSize = 11.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            } else {
-                Text(
-                    text = titleText,
-                    color = if (isFailed) colors.accentDanger else defaultMutedColor,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-            }
+            Text(
+                text = titleText,
+                color = if (isFailed) colors.accentDanger else defaultMutedColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
 
             Spacer(modifier = Modifier.width(2.dp))
 
@@ -398,8 +379,9 @@ private fun ToolCallOutputBlock(
     isFailed: Boolean,
     colors: xyz.mederi.theme.MederiColors,
     maxHeight: Dp = 280.dp,
+    defaultExpanded: Boolean = true,
 ) {
-    var isOutputExpanded by remember(callId) { mutableStateOf(false) }
+    var isOutputExpanded by remember(callId) { mutableStateOf(defaultExpanded) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),

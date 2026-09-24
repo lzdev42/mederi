@@ -349,6 +349,7 @@ fun Workspace(
                         rawMessagesViewModel = rawMessagesViewModel,
                         terminalViewModel = terminalViewModel,
                         isCompact = false,
+                        screenWidth = screenWidth,
                         maxPanelWidth = maxPanelWidth
                     )
 

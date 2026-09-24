@@ -24,16 +24,15 @@ import mederi.app.shared.generated.resources.dock_artifact_empty
 import mederi.app.shared.generated.resources.dock_artifact_empty_hint
 import mederi.app.shared.generated.resources.dock_diff_empty
 import mederi.app.shared.generated.resources.dock_diff_empty_hint
-import mederi.app.shared.generated.resources.dock_plan_approve
 import mederi.app.shared.generated.resources.dock_plan_empty
 import mederi.app.shared.generated.resources.dock_plan_empty_hint
-import mederi.app.shared.generated.resources.dock_plan_modify
-import mederi.app.shared.generated.resources.dock_plan_pending
 import mederi.app.shared.generated.resources.dock_refresh_changes
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.DiffView
 import xyz.emuci.inkcompose.MarkdownView
+import xyz.emuci.inkcompose.RenderStyle
 import xyz.mederi.ui.ArtifactItem
+import xyz.mederi.ui.ChatLayout
 import xyz.mederi.ui.RawMessagesViewModel
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.MederiColors
@@ -149,65 +148,21 @@ internal fun PlanPanelContent(
             hint = stringResource(Res.string.dock_plan_empty_hint)
         )
     } else {
-        Column(modifier = Modifier.fillMaxSize()) {
-            if (pending != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(colors.accentWarning.copy(alpha = 0.12f))
-                        .border(1.dp, colors.accentWarning.copy(alpha = 0.3f))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(Res.string.dock_plan_pending),
-                        color = colors.accentWarning,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(
-                            onClick = { viewModel.approvePlan(pending.id, approved = false) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.buttonSecondary,
-                                contentColor = colors.textPrimary
-                            ),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(26.dp),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(stringResource(Res.string.dock_plan_modify), fontSize = 10.5.sp)
-                        }
-                        Button(
-                            onClick = { viewModel.approvePlan(pending.id, approved = true) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.accentPrimary,
-                                contentColor = colors.onAccentPrimary
-                            ),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(26.dp),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(stringResource(Res.string.dock_plan_approve), fontSize = 10.5.sp)
-                        }
-                    }
-                }
-            }
-
-            Box(
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            MarkdownView(
+                content = planContent,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(14.dp)
-            ) {
-                MarkdownView(
-                    content = planContent,
-                    modifier = Modifier.fillMaxSize(),
-                    enableScrollOverride = true,
-                    markdownTheme = rememberMederiMarkdownTheme()
-                )
-            }
+                    .fillMaxHeight()
+                    .widthIn(max = ChatLayout.contentMaxWidth)
+                    .fillMaxWidth(),
+                enableScrollOverride = true,
+                markdownTheme = rememberMederiMarkdownTheme(style = RenderStyle.Github)
+            )
         }
     }
 }

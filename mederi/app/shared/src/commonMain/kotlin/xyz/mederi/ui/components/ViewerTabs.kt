@@ -45,8 +45,10 @@ import mederi.app.shared.generated.resources.pick_save_file_title
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.inkcompose.MarkdownView
+import xyz.emuci.inkcompose.RenderStyle
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
+import xyz.mederi.ui.ChatLayout
 import xyz.mederi.util.DocumentExporter
 import xyz.mederi.util.ExportStatus
 
@@ -371,14 +373,18 @@ internal fun TextReaderTabContent(
             modifier = Modifier
                 .fillMaxSize()
                 .background(colors.surfaceWorkspace)
-                .padding(14.dp)
+                .padding(14.dp),
+            contentAlignment = Alignment.TopCenter
         ) {
             MarkdownView(
                 content = content,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .widthIn(max = ChatLayout.contentMaxWidth)
+                    .fillMaxWidth(),
                 enableScrollOverride = true,
                 isStreaming = isStreaming,
-                markdownTheme = rememberMederiMarkdownTheme()
+                markdownTheme = rememberMederiMarkdownTheme(style = RenderStyle.Github)
             )
         }
     }

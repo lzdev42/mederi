@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,11 +46,12 @@ internal fun AgentModeSelector(viewModel: WorkspaceViewModel) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
+            .height(28.dp)
             .clip(RoundedCornerShape(6.dp))
             .clickable {
                 viewModel.selectAgentMode(if (isAutoApprove) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
             }
-            .padding(horizontal = 4.dp, vertical = 2.dp)
+            .padding(horizontal = 4.dp)
     ) {
         Text(
             text = stringResource(Res.string.auto_approve_title),
@@ -105,7 +107,7 @@ internal fun AutoApproveSwitch(
 /** 发送 / 停止按钮。 */
 @Composable
 internal fun SendButton(
-    size: Dp,
+    size: Dp = 28.dp,
     isStreaming: Boolean,
     canSend: Boolean,
     onSubmit: () -> Unit
@@ -145,41 +147,40 @@ internal fun ChipSelectorPill(
     onClick: () -> Unit = {}
 ) {
     val colors = LocalMederiColors.current
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = colors.surfaceInput,
-        border = androidx.compose.foundation.BorderStroke(1.dp, colors.surfaceCardBorder)
+    Row(
+        modifier = Modifier
+            .height(height)
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surfaceInput)
+            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .height(height)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            if (icon != null) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = colors.textSecondary,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-            Text(
-                text = label,
-                color = colors.textPrimary,
-                fontSize = 11.5.sp,
-                lineHeight = 11.5.sp,
-                fontWeight = FontWeight.Medium
-            )
+        if (icon != null) {
             Icon(
-                imageVector = FeatherIcons.ChevronDown,
+                imageVector = icon,
                 contentDescription = null,
-                tint = colors.textMuted,
-                modifier = Modifier.size(10.dp)
+                tint = colors.textSecondary,
+                modifier = Modifier.size(13.dp)
             )
         }
+        Text(
+            text = label,
+            color = colors.textPrimary,
+            fontSize = 11.5.sp,
+            lineHeight = 11.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Icon(
+            imageVector = FeatherIcons.ChevronDown,
+            contentDescription = null,
+            tint = colors.textMuted,
+            modifier = Modifier.size(10.dp)
+        )
     }
 }
 
@@ -216,36 +217,41 @@ internal fun ContextToolChip(
 ) {
     val colors = LocalMederiColors.current
     val contentColor = if (highlight) colors.accentWarning else colors.textSecondary
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = if (highlight) colors.accentWarning.copy(alpha = 0.10f) else Color.Transparent,
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (highlight) colors.accentWarning.copy(alpha = 0.5f) else colors.surfaceCardBorder)
+    Row(
+        modifier = Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (highlight) colors.accentWarning.copy(alpha = 0.10f) else Color.Transparent)
+            .border(
+                1.dp,
+                if (highlight) colors.accentWarning.copy(alpha = 0.5f) else colors.surfaceCardBorder,
+                RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(12.dp)
-            )
-            Text(
-                text = label,
-                color = contentColor,
-                fontSize = 11.sp,
-                lineHeight = 11.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Icon(
-                imageVector = FeatherIcons.ChevronDown,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(10.dp)
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(12.dp)
+        )
+        Text(
+            text = label,
+            color = contentColor,
+            fontSize = 11.5.sp,
+            lineHeight = 11.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Icon(
+            imageVector = FeatherIcons.ChevronDown,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(10.dp)
+        )
     }
 }

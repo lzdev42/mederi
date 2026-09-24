@@ -10,8 +10,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import xyz.kbrowser.webview.JcefChecker
 import xyz.kbrowser.webview.KBWebView
 import xyz.kbrowser.webview.KBrowser
-import xyz.kbrowser.webview.initializeKBrowser
-import java.io.File
+import kotlinx.coroutines.delay
 import java.util.Base64
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -28,7 +27,7 @@ internal data class MermaidWorkerResult(
  * 2. 严格串行执行：内部使用协程 Mutex 排队，每次只渲染一张图，求稳不出错，绝无多进程/多实例争抢与闪退；
  * 3. 磁盘缓存贯通：渲染完成后立即通过 MermaidDiskCache 原子安全落盘，并生成 ImageBitmap。
  */
-internal object SingleMermaidWorker {
+object SingleMermaidWorker {
 
     private val queueMutex = Mutex()
     private val initMutex = Mutex()
@@ -38,6 +37,20 @@ internal object SingleMermaidWorker {
 
     @Volatile
     private var isReady = false
+
+    @Volatile
+    private var attachedBrowser: KBrowser? = null
+
+    /**
+     * 由外部（宿主应用）注入已初始化就绪的 KBrowser 全局单例。
+     * 未注入前，Worker 处于不可用状态，不会尝试自行初始化。
+     */
+    fun attachBrowser(browser: KBrowser) {
+        this.attachedBrowser = browser
+        println("[SingleMermaidWorker] KBrowser attached successfully.")
+    }
+
+    fun isBrowserAttached(): Boolean = attachedBrowser != null
 
     @Volatile
     private var pendingDeferred: CompletableDeferred<WorkerPayload>? = null
@@ -58,20 +71,30 @@ internal object SingleMermaidWorker {
         return initMutex.withLock {
             if (isReady && webView != null) return@withLock true
 
+            var browser = attachedBrowser
+            if (browser == null) {
+                // 等待短时间以防宿主正在异步完成注入
+                var waitCount = 0
+                while (attachedBrowser == null && waitCount < 10) {
+                    delay(200)
+                    waitCount++
+                }
+                browser = attachedBrowser
+            }
+
+            if (browser == null) {
+                println("[SingleMermaidWorker] WARNING: KBrowser is not attached. Worker cannot initialize.")
+                return@withLock false
+            }
+
             if (!JcefChecker.isJcefAvailable) {
                 println("[SingleMermaidWorker] WARNING: JCEF is not available in current JBR!")
                 return@withLock false
             }
 
             try {
-                println("[SingleMermaidWorker] Initializing single dedicated KBWebView...")
-                val storageDir = MermaidDiskCache.getBaseDir() + File.separator + "kbrowser"
-                File(storageDir).mkdirs()
-
-                KBrowser.initializeConfig(storageDir, useOsr = true)
-                initializeKBrowser()
-
-                val page = KBrowser.newPage(viewportWidth = 1920, viewportHeight = 1080)
+                println("[SingleMermaidWorker] Initializing single dedicated KBWebView using attached KBrowser...")
+                val page = browser.newPage(viewportWidth = 1920, viewportHeight = 1080)
                 val view = page.webView
                 webView = view
 
@@ -121,7 +144,7 @@ internal object SingleMermaidWorker {
      * 串行渲染一张 Mermaid 结构图。
      * 若磁盘已有图则直接返回；无图时排队渲染，并将结果保存至磁盘。
      */
-    suspend fun renderOrLoad(
+    internal suspend fun renderOrLoad(
         key: String,
         code: String,
         widthCss: Int,

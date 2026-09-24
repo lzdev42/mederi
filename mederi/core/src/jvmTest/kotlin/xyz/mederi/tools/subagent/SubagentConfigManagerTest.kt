@@ -2,17 +2,9 @@ package xyz.mederi.tools.subagent
 
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.domain.model.AIModel
-import xyz.mederi.domain.model.ModelOrigin
 import xyz.mederi.domain.model.SubagentModelConfig
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.metadata.ModelMetadata
-import xyz.mederi.provider.ProviderManager
-import xyz.mederi.provider.domain.model.Provider
-import xyz.mederi.provider.domain.model.ProviderApiKey
-import xyz.mederi.provider.domain.model.ProviderType
 import xyz.mederi.provider.domain.model.ReasoningLevel
-import xyz.mederi.provider.domain.model.ReasoningParameter
-import xyz.mederi.provider.domain.model.RemoteModelInfo
 import xyz.mederi.store.InMemorySettingsStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -20,33 +12,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SubagentConfigManagerTest {
-
-    private class FakeProviderManager(
-        private val models: Map<String, AIModel>
-    ) : ProviderManager {
-        override suspend fun getModel(modelId: String): AIModel? = models[modelId]
-        override suspend fun list(): List<Provider> = emptyList()
-        override suspend fun listWithoutKeys(): List<Provider> = emptyList()
-        override suspend fun get(id: String): Provider? = null
-        override suspend fun require(id: String): Provider = throw NotImplementedError()
-        override suspend fun create(name: String, type: ProviderType, baseUrl: String, reasoningParameter: ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?): Provider = throw NotImplementedError()
-        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: ReasoningParameter?, modelsDevKey: String?): Provider = throw NotImplementedError()
-        override suspend fun delete(id: String) {}
-        override suspend fun listKeys(providerId: String): List<ProviderApiKey> = emptyList()
-        override suspend fun addKey(providerId: String, name: String, value: String, isDefault: Boolean): ProviderApiKey = throw NotImplementedError()
-        override suspend fun deleteKey(providerId: String, keyId: String) {}
-        override suspend fun setDefaultKey(providerId: String, keyId: String) {}
-        override suspend fun getDefaultKeyValue(providerId: String): String? = null
-        override suspend fun getKeyValue(providerId: String, keyId: String): String? = null
-        override suspend fun listModels(providerId: String): List<AIModel> = models.values.toList()
-        override suspend fun addModel(providerId: String, providerModelId: String, name: String, supportsReasoning: Boolean, reasoningLevel: ReasoningLevel, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean, reasoningLevels: List<ReasoningLevel>, isEnabled: Boolean, inputPricePerMillion: Double?, outputPricePerMillion: Double?): AIModel = throw NotImplementedError()
-        override suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean): AIModel = throw NotImplementedError()
-        override suspend fun applyRemoteMetadata(providerId: String, modelId: String, endpoint: RemoteModelInfo?, catalog: ModelMetadata?): AIModel = throw NotImplementedError()
-        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?): AIModel = throw NotImplementedError()
-        override suspend fun deleteModel(providerId: String, modelId: String) {}
-        override suspend fun listAllModels(): List<AIModel> = models.values.toList()
-        override suspend fun fetchRemoteModels(providerId: String): List<RemoteModelInfo> = emptyList()
-    }
 
     private fun model(id: String) = AIModel(id = id, providerModelId = id, name = "Model $id")
 
@@ -146,9 +111,38 @@ class SubagentConfigManagerTest {
         manager.set(SubagentRole.EXECUTOR, SubagentModelConfig(modelId = "m1"))
 
         val list = manager.list()
-        assertEquals(2, list.size)
+        assertEquals(4, list.size)
         assertEquals("m1", list[SubagentRole.EXECUTOR]?.modelId)
         assertNull(list[SubagentRole.RESEARCHER]?.modelId)
+    }
+
+    @Test
+    fun `browser roles resolve configured model and inherit when unconfigured`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val targetModel = model("mdl_browser")
+        val providerManager = FakeProviderManager(mapOf("mdl_browser" to targetModel))
+        val manager = SubagentConfigManager(settingsStore, providerManager)
+
+        manager.set(
+            SubagentRole.BROWSER_OPERATOR,
+            SubagentModelConfig(modelId = "mdl_browser", reasoningLevel = ReasoningLevel.MAX)
+        )
+        val fallbackModel = model("parent_model")
+        val (opModel, opReasoning) = manager.resolve(
+            role = SubagentRole.BROWSER_OPERATOR,
+            fallbackModel = fallbackModel,
+            fallbackReasoning = ReasoningLevel.NONE
+        )
+        assertEquals("mdl_browser", opModel.id)
+        assertEquals(ReasoningLevel.MAX, opReasoning)
+
+        val (brainModel, brainReasoning) = manager.resolve(
+            role = SubagentRole.BROWSER_BRAIN,
+            fallbackModel = fallbackModel,
+            fallbackReasoning = ReasoningLevel.NONE
+        )
+        assertEquals("parent_model", brainModel.id)
+        assertEquals(ReasoningLevel.NONE, brainReasoning)
     }
 
     @Test

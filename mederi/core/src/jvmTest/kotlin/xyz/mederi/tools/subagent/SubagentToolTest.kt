@@ -25,7 +25,7 @@ class SubagentToolTest {
             task: String, briefing: String?, plan: String?, role: SubagentRole,
             directories: List<String>, aiModel: AIModel,
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
-            apiKeyId: String?, executorPlanId: String?, executorSubtaskIndex: Int?,
+            apiKeyId: String?, planId: String?, executorSubtaskIndex: Int?,
             planStore: xyz.mederi.plan.PlanStore?
         ): String {
             delay(50)
@@ -63,9 +63,6 @@ class SubagentToolTest {
 
             val status = tool.execute(SubagentArgs(action = SubagentAction.STATUS, agentId = agentId))
             assertTrue(status.contains("\"status\":\"COMPLETED\""), "STATUS 应委托 manager: $status")
-
-            val blankWait = tool.execute(SubagentArgs(action = SubagentAction.WAIT))
-            assertTrue(blankWait.startsWith("Error: WAIT"), "WAIT 缺 agentId 应返回 Error: $blankWait")
 
             val blankStop = tool.execute(SubagentArgs(action = SubagentAction.STOP))
             assertTrue(blankStop.startsWith("Error: STOP"), "STOP 缺 agentId 应返回 Error: $blankStop")
