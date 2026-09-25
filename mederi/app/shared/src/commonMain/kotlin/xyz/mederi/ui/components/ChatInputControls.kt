@@ -104,18 +104,22 @@ internal fun AutoApproveSwitch(
     )
 }
 
-/** 发送 / 停止按钮。 */
+/** 发送 / 停止按钮。支持排队模式与中止模式。 */
 @Composable
 internal fun SendButton(
     size: Dp = 28.dp,
     isStreaming: Boolean,
+    hasContent: Boolean = false,
     canSend: Boolean,
     onSubmit: () -> Unit
 ) {
     val colors = LocalMederiColors.current
+    val showSendIcon = !isStreaming || hasContent
+    val isEnabled = if (isStreaming) true else canSend
+
     val bgColor = when {
-        isStreaming -> colors.accentDanger
-        canSend -> colors.accentPrimary
+        isStreaming && !hasContent -> colors.accentDanger
+        canSend || (isStreaming && hasContent) -> colors.accentPrimary
         else -> colors.buttonSecondary
     }
     val iconColor = when {
@@ -127,11 +131,11 @@ internal fun SendButton(
             .size(size)
             .clip(CircleShape)
             .background(bgColor)
-            .border(1.dp, if (canSend) colors.accentPrimary else colors.surfaceCardBorder, CircleShape)
-            .clickable(enabled = isStreaming || canSend, onClick = onSubmit),
+            .border(1.dp, if (canSend || (isStreaming && hasContent)) colors.accentPrimary else colors.surfaceCardBorder, CircleShape)
+            .clickable(enabled = isEnabled, onClick = onSubmit),
         contentAlignment = Alignment.Center
     ) {
-        if (isStreaming) {
+        if (!showSendIcon) {
             Icon(FeatherIcons.Square, stringResource(Res.string.input_stop), tint = iconColor, modifier = Modifier.size(size * 0.37f))
         } else {
             Icon(FeatherIcons.ArrowUp, stringResource(Res.string.input_send), tint = iconColor, modifier = Modifier.size(size * 0.48f))

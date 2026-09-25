@@ -49,7 +49,7 @@ enum class EventType {
      * sessionId = 父会话 ID；payload 约定（key 统一 camelCase）：
      * - STARTED: agentId, role(EXECUTOR/RESEARCHER), modelId, modelName, reasoningLevel,
      *   task(主代理派发的命令), briefing?(可选)
-     * - COMPLETED / ERROR / STOPPED: agentId
+     * - COMPLETED / ERROR / STOPPED: agentId, role, status, reportPath?, result?, planId?, subtaskIndex?
      */
     SUBAGENT_STARTED,
     SUBAGENT_COMPLETED,

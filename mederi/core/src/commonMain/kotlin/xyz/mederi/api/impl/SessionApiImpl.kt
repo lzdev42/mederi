@@ -53,6 +53,10 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.sendMessage(sessionId, request)
     }
 
+    override suspend fun steerMessage(sessionId: String, request: SendMessageRequest) = mederiCall {
+        sessionManager.steerMessage(sessionId, request)
+    }
+
     override suspend fun rollbackToMessage(sessionId: String, messageId: String) = mederiCall {
         sessionManager.rollbackToMessage(sessionId, messageId)
     }
@@ -93,6 +97,10 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
                 createdAt = it.createdAt
             )
         }
+    }
+
+    override suspend fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? = mederiCall {
+        sessionManager.getSubagentReport(agentId)
     }
 
     override suspend fun getFileDiffs(sessionId: String, messageId: String?): List<FileDiff> = mederiCall {

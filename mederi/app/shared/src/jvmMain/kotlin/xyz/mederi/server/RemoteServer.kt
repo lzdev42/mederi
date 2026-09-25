@@ -291,6 +291,10 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
         val input = call.receive<ChatPromptInput>()
         call.respondResult(aiCore.sendMessage(call.parameters["id"]!!, input))
     }
+    post("/v1/sessions/{id}/steer") {
+        val input = call.receive<ChatPromptInput>()
+        call.respondResult(aiCore.steerMessage(call.parameters["id"]!!, input))
+    }
     post("/v1/sessions/{id}/abort") {
         call.respondResult(aiCore.abort(call.parameters["id"]!!))
     }
@@ -478,6 +482,15 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
         val role = call.parameters["role"]!!
         val input = call.receive<UpdateSubagentConfigInput>()
         call.respondResult(aiCore.updateSubagentConfig(role, input))
+    }
+
+    // ------------------------------------------------------------------
+    // 子代理任务汇报
+    // ------------------------------------------------------------------
+
+    get("/v1/subagents/{agentId}/report") {
+        val agentId = call.parameters["agentId"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.getSubagentReport(agentId))
     }
 }
 

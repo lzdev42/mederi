@@ -59,6 +59,7 @@ interface AiCore {
     suspend fun setDefaultProviderApiKey(providerId: String, keyId: String): Result<Unit>
 
     suspend fun sendMessage(conversationId: String, input: ChatPromptInput): Result<Unit>
+    suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit>
     suspend fun abort(conversationId: String): Result<Unit>
     suspend fun rollbackToMessage(conversationId: String, messageId: String): Result<Unit>
     suspend fun resolveQuestion(conversationId: String, questionId: String, answers: List<List<String>>): Result<Unit>
@@ -129,6 +130,8 @@ interface AiCore {
     // ==========================================
     suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>> = Result.success(emptyList())
     suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = Result.success(Unit)
+    suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> =
+        Result.failure(xyz.mederi.api.exception.MederiNotFoundException("Subagent report not found for agent: $agentId"))
 
     // ==========================================
     // AGENTS.md 生成契约（API 形态，暂无命令/UI 入口）

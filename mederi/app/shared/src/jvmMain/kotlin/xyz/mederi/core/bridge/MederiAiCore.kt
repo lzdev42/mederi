@@ -807,6 +807,20 @@ class MederiAiCore(
         mederi.sessions.sendMessage(conversationId, request)
     }
 
+    override suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit> = runCatching {
+        DebugLog.section("AiCore", "MederiAiCore.steerMessage")
+        DebugLog.data("AiCore", "conversationId", conversationId)
+        val model = input.model?.let { findCoreModel(it.id) }
+        val agentConfig = MederiInputMapper.toAgentConfig(input.agent, model, input.thinkingLevel)
+        val parts = MederiInputMapper.toMessageParts(input)
+        val request = SendMessageRequest(
+            agentConfig = agentConfig,
+            parts = parts,
+            apiKeyId = input.apiKeyId
+        )
+        mederi.sessions.steerMessage(conversationId, request)
+    }
+
     override suspend fun abort(conversationId: String): Result<Unit> = runCatching {
         mederi.sessions.abort(conversationId)
     }
@@ -1154,5 +1168,13 @@ class MederiAiCore(
                 reasoningLevel = reasoningLevel
             )
         )
+    }
+
+    override suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.sessions.getSubagentReport(agentId)
+            ?: throw xyz.mederi.api.exception.MederiNotFoundException("Subagent report not found for agent: $agentId")
     }
 }

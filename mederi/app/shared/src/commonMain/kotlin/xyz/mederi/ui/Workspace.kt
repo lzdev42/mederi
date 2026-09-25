@@ -58,6 +58,7 @@ import xyz.mederi.theme.rememberMederiMarkdownTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import xyz.emuci.inkcompose.LocalSessionKey
 import xyz.emuci.inkcompose.MarkdownView
+import xyz.mederi.ui.components.EventMessageCard
 import xyz.mederi.ui.components.RightExtensionPanel
 import xyz.mederi.ui.components.RightDock
 import xyz.mederi.ui.components.SystemInfoBar
@@ -538,6 +539,26 @@ private fun MessageList(
                     .padding(top = if (index > 0 && item.isTurnStart) ChatLayout.turnSpacing else 0.dp)
             ) {
                 when (item) {
+                    is ChatListItem.EventMessageCard -> {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = contentMaxWidth)
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
+                                    bottom = 6.dp
+                                )
+                        ) {
+                            EventMessageCard(
+                                item = item,
+                                onOpenReport = { title, content ->
+                                    viewModel.openPlanInExtension(item.agentId, title, content)
+                                },
+                                modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
+                            )
+                        }
+                    }
+
                     is ChatListItem.PlanApproval -> {
                         Box(
                             modifier = Modifier
@@ -657,6 +678,7 @@ private fun MessageList(
                                     // Reasoning/ToolCalls/SubagentCalls/TextMessage 四类，
                                     // 以下分支为不可达的穷尽性占位。
                                     is ChatListItem.DocumentCard -> {}
+                                    is ChatListItem.EventMessageCard -> {}
                                     is ChatListItem.Footer -> {}
                                     is ChatListItem.PlanApproval -> {}
                                     is ChatListItem.TurnDiffCard -> {}

@@ -161,6 +161,11 @@ class SessionManagerImpl(
         turnExecutor.sendMessage(id, request)
     }
 
+    override suspend fun steerMessage(id: String, request: SendMessageRequest) {
+        DebugLog.event("SessionMgr", "steerMessage: sessionId=$id, agentMode=${request.agentConfig.agentMode}, parts=${request.parts.size}")
+        turnExecutor.steerMessage(id, request)
+    }
+
     override suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>) {
         turnExecutor.resolveQuestion(id, questionId, answers)
     }
@@ -184,6 +189,9 @@ class SessionManagerImpl(
 
     override suspend fun listRawMessages(id: String): List<RawMessageRecord> =
         historyStore.listRaw(id)
+
+    override fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? =
+        turnExecutor.getSubagentReport(agentId)
 
     override suspend fun getMessage(id: String, messageId: String): Message {
         return historyStore.load(id).firstOrNull { it.id == messageId }

@@ -6,11 +6,11 @@ import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
 
 /**
- * 子 Agent 异步生命周期管理工具集。
+ * 子 Agent 异步生命周期管理工具集（内部实现，不向 AI 注册）。
  *
  * spawn_agent / spawn_researcher 改为异步后返回 agentId，父 Agent 用这套工具
- * 查询状态、等待结果、主动停止。父 Agent 的 turn 不再被子 Agent 阻塞——
- * 子 Agent 运行期间父 Agent 可以继续对话、派发其他任务。
+ * 查询状态、主动停止。子 Agent 运行期间父 Agent 可以继续对话、派发其他任务。
+ * 完成时经 eventBus 终态事件自动唤醒父 turn，无需阻塞等待。
  */
 
 /** agent_status 工具参数。 */
@@ -43,6 +43,7 @@ data class StopAgentArgs(
     val agentId: String = ""
 )
 
+
 /** 停止正在运行的子代理，返回部分结果（若有）。 */
 class StopAgentTool(
     private val subagentManager: SubagentManager
@@ -55,34 +56,5 @@ class StopAgentTool(
     override suspend fun execute(args: StopAgentArgs): String {
         if (args.agentId.isBlank()) return "Error: agentId must not be empty."
         return subagentManager.stop(args.agentId)
-    }
-}
-
-/** wait_agent 工具参数。 */
-@Serializable
-data class WaitAgentArgs(
-    @LLMDescription("Sub-agent ID to wait on (from SPAWN).")
-    val agentId: String = "",
-    @LLMDescription("Timeout in ms. Default 120000 (2 min). On timeout (TIMEOUT) the sub-agent keeps running.")
-    val timeoutMs: Long = 120_000
-)
-
-/**
- * 带超时地等待子代理完成。阻塞当前 turn 直到子代理结束或超时——
- * 等价于旧版 spawn_agent 的同步行为，但可中断、可指定超时。
- */
-class WaitAgentTool(
-    private val subagentManager: SubagentManager
-) : SimpleTool<WaitAgentArgs>(
-    argsType = typeToken<WaitAgentArgs>(),
-    name = "wait_agent",
-    description = "Blocks (with timeout) until an asynchronously spawned subagent finishes. Returns the " +
-        "final status and result. On TIMEOUT the subagent keeps running in the background — check " +
-        "agent_status later or stop it with stop_agent. Use when you MUST have the subagent's result " +
-        "before proceeding (e.g. plan workflow)."
-) {
-    override suspend fun execute(args: WaitAgentArgs): String {
-        if (args.agentId.isBlank()) return "Error: agentId must not be empty."
-        return subagentManager.wait(args.agentId, args.timeoutMs)
     }
 }

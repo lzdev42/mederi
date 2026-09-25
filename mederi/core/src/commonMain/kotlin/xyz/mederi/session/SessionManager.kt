@@ -43,6 +43,7 @@ interface SessionManager {
     suspend fun abortAndJoin(id: String)
 
     suspend fun sendMessage(id: String, request: SendMessageRequest)
+    suspend fun steerMessage(id: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(id: String, messageId: String)
     suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
     suspend fun resolvePlanApproval(
@@ -58,6 +59,9 @@ interface SessionManager {
 
     /** 原始消息直读（调试用）：落库时的原始 JSON payload，不解析不映射。 */
     suspend fun listRawMessages(id: String): List<RawMessageRecord>
+
+    /** 读取子代理任务汇报。 */
+    fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData?
 
     suspend fun getFileDiffs(id: String, messageId: String? = null): List<FileDiff>
 

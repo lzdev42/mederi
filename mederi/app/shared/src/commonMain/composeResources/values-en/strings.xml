@@ -102,6 +102,10 @@
     <string name="input_placeholder">Type a message...</string>
     <string name="input_send">Send</string>
     <string name="input_stop">Stop generating</string>
+    <string name="queue_banner_title">%1$d message(s) queued</string>
+    <string name="queue_send_now">Send Now</string>
+    <string name="queue_remove">Remove</string>
+    <string name="queue_steer_tooltip">Inject immediately as guidance into the ongoing task</string>
     <string name="input_select_model">Select model</string>
     <string name="input_selected">Selected</string>
     <string name="input_default_key">Default key</string>

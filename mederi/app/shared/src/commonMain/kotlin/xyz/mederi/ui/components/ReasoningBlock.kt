@@ -21,7 +21,6 @@ import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.reasoning_thinking
 import mederi.app.shared.generated.resources.reasoning_thinking_for
 import mederi.app.shared.generated.resources.reasoning_thought

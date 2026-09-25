@@ -166,14 +166,26 @@ const val MEDERI_INPUT_PERSISTED = "\u0000mederi_input_persisted\u0000"
  * 输入为 [MEDERI_INPUT_PERSISTED] 时跳过 user() 追加（消息已落库、随历史恢复）。
  */
 /**
+ * 待注入的用户引导项。
+ */
+data class SteeringItem(
+    val sessionId: String,
+    val text: String,
+    val request: xyz.mederi.api.SendMessageRequest,
+    val timestamp: Long
+)
+
+/**
  * Koog nodeLLMSendToolResults 的可持久化变体：tool results 落库后再请求下一轮 LLM。
  *
  * 背景：turn 中途崩溃（限流耗尽/断流）时 ChatMemory 的 strategy 级 store 不执行，
  * tool results（user 消息）会丢——下一轮模型看不到自己上一轮工具调用的结果。
  * 先落库再请求（persist 内部吞异常，不影响业务流）。
+ * 同时在工具边界检查用户引导队列（Steering），若有中途纠偏指令，包装后在同一步注入 prompt。
  */
 private fun nodeLLMSendToolResultsPersistable(
-    persister: TurnIncrementalPersister?
+    persister: TurnIncrementalPersister?,
+    pollSteering: (() -> SteeringItem?)? = null
 ): AIAgentNodeDelegate<ReceivedToolResults, Message.Assistant> =
     node("send_tool_results") {
         persister?.persistToolResults(it)
@@ -182,6 +194,21 @@ private fun nodeLLMSendToolResultsPersistable(
                 user {
                     it.toolResults.forEach { toolResult -> toolResult(toolResult.toMessagePart()) }
                 }
+            }
+            // 工具边界检查引导注入
+            var steer = pollSteering?.invoke()
+            while (steer != null) {
+                val steerMeta = """
+                    <user_intervention>
+                    [System Note: The user submitted the following guidance while you were executing tools. Incorporate this guidance into your ongoing task without restarting from scratch]:
+                    ${steer.text}
+                    </user_intervention>
+                """.trimIndent()
+                appendPrompt {
+                    user(steerMeta)
+                }
+                persister?.persistSteeringUserMessage(steer.text)
+                steer = pollSteering?.invoke()
             }
             // 流式与 nodeCallLLM 对齐：requestLLM() 是非流式——工具轮之后的
             // LLM 响应（含 turn 的最终文本回复）从不产生 MESSAGE_DELTA，
@@ -199,7 +226,8 @@ private fun nodeLLMSendToolResultsPersistable(
     }
 
 fun mederiSingleRunStrategy(
-    persister: TurnIncrementalPersister? = null
+    persister: TurnIncrementalPersister? = null,
+    pollSteering: (() -> SteeringItem?)? = null
 ): AIAgentGraphStrategy<String, String> =
     strategy<String, String>("mederi_single_run") {
         val nodeCallLLM by node<String, Message.Assistant>("call_llm_streaming") { message ->
@@ -219,7 +247,7 @@ fun mederiSingleRunStrategy(
             }
         }
         val nodeExecuteTool by nodeExecuteTools(parallel = true)
-        val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister)
+        val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister, pollSteering)
 
         edge(nodeStart forwardTo nodeCallLLM)
         edge(nodeCallLLM forwardTo nodeExecuteTool onToolCalls { true })
@@ -243,7 +271,8 @@ fun mederiSingleRunStrategy(
  */
 fun mederiSingleRunStrategyWithCompression(
     config: HistoryCompressionConfig,
-    persister: TurnIncrementalPersister? = null
+    persister: TurnIncrementalPersister? = null,
+    pollSteering: (() -> SteeringItem?)? = null
 ): AIAgentGraphStrategy<String, String> =
     strategy<String, String>("mederi_single_run_with_compression") {
         // 流式 LLM 节点
@@ -261,7 +290,7 @@ fun mederiSingleRunStrategyWithCompression(
             }
         }
         val nodeExecuteTool by nodeExecuteTools(parallel = true)
-        val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister)
+        val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister, pollSteering)
 
         // 压缩节点（Koog 原版，阻塞）
         val nodeCompressHistory by nodeLLMCompressHistory<ReceivedToolResults>(

@@ -69,21 +69,41 @@ fun computeChatItems(
                 val textBlocks = msg.blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() }
                 if (textBlocks.isNotEmpty()) {
                     textBlocks.forEachIndexed { blockIndex, block ->
-                        result.add(
-                            ChatListItem.TextMessage(
-                                key = "${msg.id}_${block.id}",
-                                isUser = true,
-                                isStreaming = false,
-                                isActiveAssistant = false,
-                                text = block.text,
-                                partId = block.id,
-                                conversationId = msg.conversationId,
-                                images = if (blockIndex == 0) messageImages else emptyList(),
-                                isTurnStart = true,
-                                messageId = msg.id,
-                                createdAt = msg.createdAt,
+                        val parsedEvent = parseEventMessage(block.text)
+                        if (parsedEvent != null) {
+                            result.add(
+                                ChatListItem.EventMessageCard(
+                                    key = "${msg.id}_${block.id}",
+                                    eventType = parsedEvent.eventType,
+                                    agentId = parsedEvent.agentId,
+                                    status = parsedEvent.status,
+                                    role = parsedEvent.role,
+                                    subtaskInfo = parsedEvent.subtaskInfo,
+                                    reportPath = parsedEvent.reportPath,
+                                    summary = parsedEvent.summary,
+                                    fullContent = parsedEvent.fullContent,
+                                    isTurnStart = true,
+                                    messageId = msg.id,
+                                    createdAt = msg.createdAt,
+                                )
                             )
-                        )
+                        } else {
+                            result.add(
+                                ChatListItem.TextMessage(
+                                    key = "${msg.id}_${block.id}",
+                                    isUser = true,
+                                    isStreaming = false,
+                                    isActiveAssistant = false,
+                                    text = block.text,
+                                    partId = block.id,
+                                    conversationId = msg.conversationId,
+                                    images = if (blockIndex == 0) messageImages else emptyList(),
+                                    isTurnStart = true,
+                                    messageId = msg.id,
+                                    createdAt = msg.createdAt,
+                                )
+                            )
+                        }
                     }
                 } else if (messageImages.isNotEmpty()) {
                     result.add(
@@ -552,4 +572,61 @@ internal fun isImageBlock(block: ChatBlock.File): Boolean {
         cleanUrl.endsWith(".jpeg") || cleanUrl.endsWith(".webp") ||
         cleanUrl.endsWith(".gif") || cleanUrl.endsWith(".svg") ||
         cleanUrl.endsWith(".bmp") || cleanUrl.endsWith(".ico")
+}
+
+/** 事件消息解析数据模型 */
+data class ParsedEventMessage(
+    val eventType: String,
+    val agentId: String,
+    val status: String,
+    val role: String,
+    val subtaskInfo: String?,
+    val reportPath: String?,
+    val summary: String,
+    val fullContent: String
+)
+
+private val EVENT_MESSAGE_REGEX = Regex(
+    """<event_message\s+type="([^"]+)"\s+agentId="([^"]+)"\s+status="([^"]+)">([\s\S]*?)</event_message>"""
+)
+
+/** 解析 <event_message> 标签文本 */
+fun parseEventMessage(text: String): ParsedEventMessage? {
+    val trimmed = text.trim()
+    val match = EVENT_MESSAGE_REGEX.find(trimmed) ?: return null
+    val eventType = match.groupValues[1]
+    val agentId = match.groupValues[2]
+    val status = match.groupValues[3]
+    val body = match.groupValues[4]
+
+    var role = "AGENT"
+    var subtaskInfo: String? = null
+    var reportPath: String? = null
+
+    val roleMatch = Regex("""^Role:\s*(.*)$""", RegexOption.MULTILINE).find(body)
+    if (roleMatch != null) role = roleMatch.groupValues[1].trim()
+
+    val subtaskMatch = Regex("""^Subtask:\s*(.*)$""", RegexOption.MULTILINE).find(body)
+    if (subtaskMatch != null) subtaskInfo = subtaskMatch.groupValues[1].trim()
+
+    val reportPathMatch = Regex("""^ReportPath:\s*(.*)$""", RegexOption.MULTILINE).find(body)
+    if (reportPathMatch != null) reportPath = reportPathMatch.groupValues[1].trim()
+
+    val summaryIdx = body.indexOf("Summary:")
+    val summary = if (summaryIdx != -1) {
+        body.substring(summaryIdx + "Summary:".length).trim()
+    } else {
+        body.trim()
+    }
+
+    return ParsedEventMessage(
+        eventType = eventType,
+        agentId = agentId,
+        status = status,
+        role = role,
+        subtaskInfo = subtaskInfo,
+        reportPath = reportPath,
+        summary = summary,
+        fullContent = trimmed
+    )
 }

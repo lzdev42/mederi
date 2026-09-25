@@ -348,6 +348,22 @@ class MockAiCore(
         }
     }
 
+    override suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit> = runCatching {
+        val sf = conversations[conversationId] ?: throw Exception("Conversation not found")
+        val userMsg = ChatMessage(
+            id = idGenerator.next(), conversationId = conversationId, role = ChatRole.User,
+            blocks = listOf(ChatBlock.Text(idGenerator.next(), "[Guidance]: ${input.text}")),
+            createdAt = currentTimeMillis(), completedAt = currentTimeMillis(), parentMessageId = null,
+            model = null, agent = null,
+        )
+        if (sf.value.conversation.status == ConversationStatus.Working) {
+            sf.value = sf.value.copy(messages = sf.value.messages + userMsg)
+        } else {
+            val guidedInput = input.copy(text = "[Guidance]: ${input.text}")
+            sendMessage(conversationId, guidedInput).getOrThrow()
+        }
+    }
+
     override suspend fun abort(conversationId: String): Result<Unit> = runCatching {
         activeJobs.remove(conversationId)?.cancel()
         val sf = conversations[conversationId]

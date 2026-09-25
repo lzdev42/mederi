@@ -30,9 +30,9 @@ data class SpawnAgentArgs(
     val task: String = "",
     @LLMDescription("Extra context from the parent: key constraints and relevant file paths.")
     val briefing: String = "",
-    @LLMDescription("Approved plan ID. With subtaskIndex, selects the subtask; the sub-agent runs the exact spec stored by generate_spec.")
+    @LLMDescription("Optional. Approved plan ID — with subtaskIndex, the sub-agent executes the exact spec stored by generate_spec. Omit for ad-hoc execution (no plan needed).")
     val planId: String = "",
-    @LLMDescription("Subtask index to execute (0-based). Requires planId.")
+    @LLMDescription("Optional. Subtask index to execute (0-based). Requires planId.")
     val subtaskIndex: Int = -1
 )
 
@@ -40,13 +40,13 @@ data class SpawnAgentArgs(
  * spawn_agent 工具。
  *
  * **异步派工**：调用后立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`，不阻塞父 Agent 的 turn。
- * 子 Agent 在后台运行（内存中，不创建持久化 Session）。完成后经 SubagentManager.onTerminal
- * 回调**自动唤醒**父 turn（TurnExecutor pendingNotices 队列 + maybeFlush）；
- * 卡死由 watchdog（默认 10 分钟）发 stalled 通知，父代理可用 `agent_status` 查询、`stop_agent` 主动停止。
- * 子 Agent 继承父 Agent 的所有配置。
+ * 子 Agent 在后台运行（内存中，不创建持久化 Session）。完成时经 eventBus 终态事件自动唤醒
+ * 父 turn（TurnExecutor 合成 `<event_message>` 唤起新 turn），父代理用 `agent_status` 查询、
+ * `stop_agent` 主动停止。子 Agent 继承父 Agent 的所有配置。
  *
- * 门禁（代码强制）：spec 必须已由 generate_spec 写入 Subtask.spec（非空才放行），
- * 杜绝"未生成 spec 直接派活"绕过；brief（planDetail）随 briefing 一并带给子代理作意图上下文。
+ * **两条路径**：
+ * - 有 planId：planId + subtaskIndex + spec 硬校验（spec 必须已由 generate_spec 写入），走 plan 流程。
+ * - 无 planId：ad-hoc 执行，task+briefing 直接派 executor（小改动、多文件编辑等自包含任务）。
  *
  * **模型动态读取**：spawn 用的模型/推理档位以 session 现值为准（构造时捕获的 turn 模型仅作
  * session 缺失的 fallback）——计划批准时用户可能已切换模型（resolvePlanApproval 把批准时刻
@@ -78,11 +78,11 @@ class SpawnAgentTool(
     argsType = typeToken<SpawnAgentArgs>(),
     name = "spawn_agent",
     description = "Asynchronously creates a subagent to handle a sub-task. Returns immediately with an " +
-        "agentId — the subagent runs in the background. Requires planId + subtaskIndex; the subagent " +
-        "executes the exact spec stored by generate_spec. Call generate_spec(planId, subtaskIndex) first, " +
-        "then spawn with both. Multiple spawn calls sent together in one message run in parallel. " +
-        "You will be AUTOMATICALLY woken up when the subagent finishes — end your turn, do NOT poll. " +
-        "Use agent_status / stop_agent to monitor or stop it."
+        "agentId — the subagent runs in the background. With planId+subtaskIndex: executes the exact " +
+        "spec stored by generate_spec (plan workflow). Without planId: ad-hoc execution from task+briefing " +
+        "(small fixes, multi-file edits — no plan needed). Multiple spawn calls sent together in one " +
+        "message run in parallel. You will be automatically woken up when the subagent finishes — end " +
+        "your turn after spawning. Use agent_status to check progress or stop_agent to cancel."
 ) {
 
     @Serializable
@@ -97,9 +97,45 @@ class SpawnAgentTool(
         if (args.task.isBlank()) {
             return "Error: task must not be empty."
         }
-        if (args.planId.isBlank() || args.subtaskIndex < 0) {
-            return "Error: planId and subtaskIndex are required. " +
-                "First call generate_spec(planId, subtaskIndex) to create the spec, then spawn with both."
+
+        // 模型/推理档位动态读 session 现值（计划批准时用户可能已切换模型，见类注释）
+        // 若配置了子代理独立模型，以子代理独立配置为准，否则继承父会话
+        val sessionNow = sessionStore?.get(parentSessionId)
+        val parentModel = sessionNow?.aiModel ?: aiModel
+        val parentReasoning = sessionNow?.reasoningLevel ?: reasoningLevel
+        val (effectiveAiModel, effectiveReasoningLevel) = subagentConfigManager?.resolve(
+            role = SubagentRole.EXECUTOR,
+            fallbackModel = parentModel,
+            fallbackReasoning = parentReasoning
+        ) ?: (parentModel to parentReasoning)
+
+        // 无 plan 路径（ad-hoc 执行）：task+briefing 直接派 executor，跳过 plan/spec/IN_PROGRESS。
+        // 用于小改动、多文件编辑等自包含任务——不需要 plan 流程，只省上下文。
+        if (args.planId.isBlank()) {
+            val agentId = subagentManager.spawn(
+                task = args.task,
+                briefing = args.briefing.takeIf { it.isNotBlank() },
+                plan = null,
+                role = SubagentRole.EXECUTOR,
+                directories = directories,
+                aiModel = effectiveAiModel,
+                reasoningLevel = effectiveReasoningLevel,
+                projectId = projectId,
+                parentSessionId = parentSessionId,
+                apiKeyId = apiKeyId,
+                planId = null,
+                executorSubtaskIndex = null,
+                planStore = null
+            )
+            return Json.encodeToString(
+                SpawnResult.serializer(),
+                SpawnResult(agentId = agentId, status = "RUNNING", modelName = effectiveAiModel.name)
+            )
+        }
+
+        // 有 plan 路径：planId + subtaskIndex + spec 硬校验（原有逻辑）
+        if (args.subtaskIndex < 0) {
+            return "Error: subtaskIndex is required when planId is provided."
         }
 
         // 从 PlanStore 取 generate_spec 存储的确切 spec（执行零漂移），并做存在性硬校验
@@ -141,17 +177,6 @@ class SpawnAgentTool(
             ),
             timestamp = Instant.now().toString()
         ))
-
-        // 模型/推理档位动态读 session 现值（计划批准时用户可能已切换模型，见类注释）
-        // 若配置了子代理独立模型，以子代理独立配置为准，否则继承父会话
-        val sessionNow = sessionStore?.get(parentSessionId)
-        val parentModel = sessionNow?.aiModel ?: aiModel
-        val parentReasoning = sessionNow?.reasoningLevel ?: reasoningLevel
-        val (effectiveAiModel, effectiveReasoningLevel) = subagentConfigManager?.resolve(
-            role = SubagentRole.EXECUTOR,
-            fallbackModel = parentModel,
-            fallbackReasoning = parentReasoning
-        ) ?: (parentModel to parentReasoning)
 
         val agentId = subagentManager.spawn(
             task = args.task,
@@ -198,7 +223,7 @@ data class SpawnResearcherArgs(
  * spawn_researcher 工具：研究型子代理，只读文件、无写权限、无命令执行。
  *
  * **异步派工**：调用后立即返回 `{"agentId":"sub_xxx","status":"RUNNING"}`，不阻塞父 Agent 的 turn。
- * 完成后经 SubagentManager.onTerminal 回调自动唤醒父 turn（有活跃 plan 时报告落盘 research.md）。
+ * 完成时经 eventBus 终态事件自动唤醒父 turn。
  *
  * 不需要计划，不需要 spec——研究发生在计划之前（调研代码以支撑制定计划）。
  * 子代理的意识：自己是研究助手，不对用户发问，自主调研、汇总结果、返回给父 Agent。
@@ -221,7 +246,7 @@ class SpawnResearcherTool(
     name = "spawn_researcher",
     description = "Asynchronously creates a read-only subagent to investigate the codebase: read files, " +
         "explore the directory structure, and synthesize a structured summary for the parent. " +
-        "Returns immediately with an agentId — you will be AUTOMATICALLY woken up when it finishes. " +
+        "Returns immediately with an agentId — you will be automatically woken up when it finishes. " +
         "No write access, no command execution. The subagent reports findings and terminates — " +
         "it does not ask the parent clarifying questions."
 ) {

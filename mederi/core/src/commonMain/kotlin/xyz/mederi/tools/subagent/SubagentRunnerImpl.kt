@@ -109,10 +109,16 @@ class SubagentRunnerImpl(
             SubagentRole.EXECUTOR -> buildString {
                 append("You are a subagent executor: execute the task directly with your tools. ")
                 append("Do not create plans or spawn agents.\n\n")
-                append("Work through the spec checklist TOP-DOWN, item by item, in order. ")
-                append("Do not skip items and do not improvise additions. If an item proves impossible ")
-                append("as written, stop rather than improvise, and say so explicitly in your final answer ")
-                append("under a line 'SPEC_FEEDBACK: <what in the spec contradicts reality>'.\n\n")
+                if (!plan.isNullOrBlank()) {
+                    append("Work through the spec checklist TOP-DOWN, item by item, in order. ")
+                    append("Do not skip items and do not improvise additions. If an item proves impossible ")
+                    append("as written, stop rather than improvise, and say so explicitly in your final answer ")
+                    append("under a line 'SPEC_FEEDBACK: <what in the spec contradicts reality>'.\n\n")
+                } else {
+                    append("Execute the task to completion. Read files first to understand the codebase ")
+                    append("before making changes. If something proves impossible, stop and report it ")
+                    append("in your final answer.\n\n")
+                }
                 append(task)
                 if (!briefing.isNullOrBlank()) {
                     append("\n\nAdditional info:\n")
@@ -151,7 +157,7 @@ class SubagentRunnerImpl(
                     // 继承父 Agent 选定 key：子代理与父代理同供应商，用同一把 key
                     apiKeyId = apiKeyId
                 ),
-                // 子代理标记：豁免计划门禁（spawn 入口已校验存在批准计划），工具集按角色裁剪
+                // 子代理标记：切换系统提示词与能力表（AgentCapabilities），工具集按角色裁剪
                 subagentRole = role
             )
 

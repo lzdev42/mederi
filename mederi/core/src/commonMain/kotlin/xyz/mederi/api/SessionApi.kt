@@ -25,6 +25,7 @@ interface SessionApi {
     suspend fun abortAndJoin(id: String)
 
     suspend fun sendMessage(sessionId: String, request: SendMessageRequest)
+    suspend fun steerMessage(sessionId: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(sessionId: String, messageId: String)
     suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>)
     /**
@@ -51,6 +52,9 @@ interface SessionApi {
 
     /** 原始消息直读（调试用）：落库时的原始 JSON payload，不解析不映射。 */
     suspend fun listRawMessages(sessionId: String): List<RawMessageDto>
+
+    /** 读取子代理任务汇报。找不到或未生成时返回 null。 */
+    suspend fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData?
 
     suspend fun getFileDiffs(sessionId: String, messageId: String? = null): List<FileDiff>
 

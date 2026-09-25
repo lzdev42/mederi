@@ -261,3 +261,20 @@ data class ImageAttachment(
 
     override fun hashCode(): Int = 31 * id.hashCode() + bytes.contentHashCode()
 }
+
+/**
+ * 排队待发消息项（排队模式 / 引导模式共用）。
+ */
+@Serializable
+data class QueuedMessage(
+    val id: String,
+    val conversationId: String,
+    val text: String,
+    val pastedTexts: List<PastedTextAttachment> = emptyList(),
+    val images: List<ImageAttachment> = emptyList(),
+    val model: ModelOption? = null,
+    val thinkingLevel: String? = null,
+    val agent: AgentOption? = null,
+    val apiKeyId: String? = null,
+    val createdAt: Long = 0L
+)

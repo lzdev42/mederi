@@ -478,6 +478,10 @@ class ServerAiCore(
         httpCall("/v1/sessions/$conversationId/messages", requestBody = input)
     }
 
+    override suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit> = runCatching {
+        httpCall("/v1/sessions/$conversationId/steer", requestBody = input)
+    }
+
     override suspend fun abort(conversationId: String): Result<Unit> = runCatching {
         httpCall("/v1/sessions/$conversationId/abort")
     }
@@ -638,5 +642,9 @@ class ServerAiCore(
             method = HttpMethod.Put,
             requestBody = input
         )
+    }
+
+    override suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> = runCatching {
+        httpGet("/v1/subagents/${agentId.encodeURLParameter()}/report")
     }
 }

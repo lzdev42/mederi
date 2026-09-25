@@ -111,6 +111,10 @@
     <string name="input_placeholder">输入消息...</string>
     <string name="input_send">发送</string>
     <string name="input_stop">停止生成</string>
+    <string name="queue_banner_title">%1$d 条消息排队中</string>
+    <string name="queue_send_now">立即发送</string>
+    <string name="queue_remove">移出队列</string>
+    <string name="queue_steer_tooltip">立即作为引导信息注入当前任务</string>
     <string name="input_select_model">选择模型</string>
     <string name="input_selected">已选择</string>
     <string name="input_default_key">默认 Key</string>

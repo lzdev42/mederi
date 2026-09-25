@@ -108,6 +108,22 @@ sealed interface ChatListItem {
         val messageId: String,
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
+
+    /** 系统事件卡片（如子代理主动汇报事件） */
+    data class EventMessageCard(
+        override val key: String,
+        val eventType: String,
+        val agentId: String,
+        val status: String,
+        val role: String,
+        val subtaskInfo: String?,
+        val reportPath: String?,
+        val summary: String,
+        val fullContent: String,
+        override val isTurnStart: Boolean = false,
+        val messageId: String = "",
+        val createdAt: Long = 0L,
+    ) : ChatListItem
 }
 
 /**

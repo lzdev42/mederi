@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
@@ -478,6 +479,9 @@ class WorkspaceViewModel(
     /** 自动补发 Continue 的调度任务句柄（防并发） */
     private var autoContinueJob: Job? = null
 
+    /** 排队消息序号自增器（确保同一毫秒内多条消息的 ID 唯一） */
+    private var queuedMsgSeq = 0L
+
     /**
      * 是否正在展示详细错误报告弹窗。
      */
@@ -498,6 +502,9 @@ class WorkspaceViewModel(
 
     /** 当前会话的乐观消息（兼容旧引用/测试） */
     val optimisticUserMessage: ChatMessage? get() = conversationId?.let { sessionCache.pendingUserMessages[it] }
+
+    /** 当前会话的排队消息列表（排队模式 / 引导模式） */
+    val currentQueuedMessages: List<QueuedMessage> get() = conversationId?.let { sessionCache.queuedMessagesByConv[it] } ?: emptyList()
 
     /**
      * 输入框草稿（会话级业务状态，唯一真理源在此）。
@@ -1031,6 +1038,15 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             // turn 已结束：store 已有完整数据，缓存不再需要（下次切回走 getSnapshot 即可）。
             // 观察流保留——后续新 turn 的事件仍持续聚合进缓存。
             sessionCache.snapshotCache.remove(id)
+
+            // 排队模式：当前 turn 结束恢复 Idle 时自动出队消费
+            if (snap.conversation.status == ConversationStatus.Idle) {
+                val queue = sessionCache.queuedMessagesByConv[id]
+                if (!queue.isNullOrEmpty()) {
+                    val nextMsg = queue.removeAt(0)
+                    sendQueuedMessage(nextMsg)
+                }
+            }
         }
         if (conversationId == id && !selectionHydrated) {
             selectionHydrated = true
@@ -1317,6 +1333,159 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         }
     }
 
+    /**
+     * 排队模式：将当前输入框内容压入当前会话的排队队列。
+     */
+    fun enqueueCurrentInput(trimmedText: String) {
+        val convId = conversationId ?: return
+        val pasted = pendingPastedTexts.toList()
+        val images = pendingImages.toList()
+        if (trimmedText.isEmpty() && pasted.isEmpty() && images.isEmpty()) return
+
+        val now = xyz.mederi.currentTimeMillis()
+        val seq = ++queuedMsgSeq
+        val queuedMsg = QueuedMessage(
+            id = "queue_${now}_$seq",
+            conversationId = convId,
+            text = trimmedText,
+            pastedTexts = pasted,
+            images = images,
+            model = appState.selectedModel.value,
+            thinkingLevel = computeEffectiveThinkingLevel(),
+            agent = appState.availableAgents.value.find { it.id == appState.selectedAgentId.value },
+            apiKeyId = appState.selectedModel.value?.let { appState.getApiKeyId(it.provider) },
+            createdAt = now
+        )
+
+        val queue = sessionCache.queuedMessagesByConv.getOrPut(convId) { mutableStateListOf() }
+        queue.add(queuedMsg)
+        DebugLog.event("UI", "enqueued message for conv=$convId, id=${queuedMsg.id}, queueSize=${queue.size}")
+
+        // 清空输入草稿与附件
+        clearInputDraft()
+        clearPendingAttachments()
+    }
+
+    /**
+     * 移出排队消息。
+     */
+    fun removeQueuedMessage(id: String) {
+        val convId = conversationId ?: return
+        val queue = sessionCache.queuedMessagesByConv[convId] ?: return
+        queue.removeAll { it.id == id }
+        DebugLog.event("UI", "removed queued message $id for conv=$convId, remaining=${queue.size}")
+    }
+
+    /**
+     * 立即发送排队消息（引导模式 / Steering）：
+     * 从队列中取出，并在运行时将消息注入当前进行中的 Turn。
+     */
+    fun steerQueuedMessage(queuedMsg: QueuedMessage) {
+        val convId = queuedMsg.conversationId
+        val queue = sessionCache.queuedMessagesByConv[convId]
+        queue?.removeAll { it.id == queuedMsg.id }
+
+        val finalPrompt = PromptComposer.compose(queuedMsg.text, queuedMsg.pastedTexts)
+        val input = ChatPromptInput(
+            text = finalPrompt,
+            model = queuedMsg.model,
+            agent = queuedMsg.agent,
+            thinkingLevel = queuedMsg.thinkingLevel,
+            attachments = queuedMsg.images.map {
+                FileAttachment(name = it.name, mimeType = it.mimeType, bytes = it.bytes)
+            },
+            apiKeyId = queuedMsg.apiKeyId
+        )
+
+        DebugLog.section("UI", "WorkspaceViewModel.steerQueuedMessage")
+        DebugLog.data("UI", "conversationId", convId)
+        DebugLog.data("UI", "text", finalPrompt)
+
+        viewModelScope.launch {
+            val r = appState.aiCore.steerMessage(convId, input)
+            DebugLog.event("UI", "steerMessage result: isSuccess=${r.isSuccess}")
+            if (r.isFailure) {
+                val ex = r.exceptionOrNull()
+                DebugLog.error("UI", "steerMessage failed: ${ex?.message}", ex)
+                errorState = errorState.copy(
+                    message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.err_send_failed)
+                )
+            }
+        }
+    }
+
+    /**
+     * 自动发送排队消息（排队模式正常出队）。
+     */
+    fun sendQueuedMessage(queuedMsg: QueuedMessage) {
+        val convId = queuedMsg.conversationId
+        val finalPrompt = PromptComposer.compose(queuedMsg.text, queuedMsg.pastedTexts)
+        val imageAttachments = queuedMsg.images
+
+        val now = xyz.mederi.currentTimeMillis()
+        val optBlocks = mutableListOf<ChatBlock>()
+        imageAttachments.forEachIndexed { i, img ->
+            optBlocks.add(
+                ChatBlock.File(
+                    id = "optimistic_img_${now}_$i",
+                    name = img.name,
+                    url = img.base64DataUrl,
+                    mimeType = img.mimeType
+                )
+            )
+        }
+        if (finalPrompt.isNotEmpty()) {
+            optBlocks.add(ChatBlock.Text(id = "optimistic_text_$now", text = finalPrompt))
+        }
+        val optMsg = ChatMessage(
+            id = "optimistic_$now",
+            conversationId = convId,
+            role = ChatRole.User,
+            blocks = optBlocks,
+            createdAt = now,
+            completedAt = now,
+            parentMessageId = null,
+            model = null,
+            agent = null,
+            isStreaming = false,
+            error = null
+        )
+        sessionCache.pendingUserMessages[convId] = optMsg
+        DebugLog.info("UI", "sendQueuedMessage: convId=$convId, text='$finalPrompt', images=${imageAttachments.size}")
+
+        val model = queuedMsg.model ?: appState.selectedModel.value
+        val agent = queuedMsg.agent ?: appState.availableAgents.value.find { it.id == appState.selectedAgentId.value }
+        val input = ChatPromptInput(
+            text = finalPrompt,
+            model = model,
+            agent = agent,
+            thinkingLevel = queuedMsg.thinkingLevel ?: computeEffectiveThinkingLevel(),
+            attachments = imageAttachments.map {
+                FileAttachment(name = it.name, mimeType = it.mimeType, bytes = it.bytes)
+            },
+            apiKeyId = queuedMsg.apiKeyId
+        )
+
+        sessionCache.autoContinueCountByConv[convId] = 0
+        sessionCache.turnStartByConv[convId] = now
+
+        viewModelScope.launch {
+            val r = appState.aiCore.sendMessage(convId, input)
+            DebugLog.event("UI", "sendQueuedMessage result: isSuccess=${r.isSuccess}")
+            if (r.isFailure) {
+                val ex = r.exceptionOrNull()
+                DebugLog.error("UI", "sendQueuedMessage failed: ${ex?.message}", ex)
+                errorState = errorState.copy(
+                    message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.err_send_failed)
+                )
+                sessionCache.pendingUserMessages.remove(convId)
+                sessionCache.turnStartByConv.remove(convId)
+            }
+        }
+    }
+
     fun abort() {
         val id = conversationId ?: return
         viewModelScope.launch { appState.aiCore.abort(id) }
@@ -1509,5 +1678,8 @@ private class SessionUiCache {
 
     /** 断流自动补发 Continue 计数：conversationId → 已补发次数（防死循环，单次中断最多自动补发 1 次） */
     val autoContinueCountByConv = mutableMapOf<String, Int>()
+
+    /** 各会话的排队待发消息（按会话归档，FIFO 队列） */
+    val queuedMessagesByConv = mutableStateMapOf<String, SnapshotStateList<QueuedMessage>>()
 }
 

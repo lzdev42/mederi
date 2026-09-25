@@ -2,10 +2,7 @@ package xyz.mederi.tools.subagent
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.mederi.domain.model.AIModel
@@ -38,53 +35,14 @@ import kotlinx.coroutines.flow.MutableSharedFlow
  * sessionId = 父会话 ID；不注入 eventBus 时静默跳过（测试/无事件场景）。
  *
  * 所有复杂状态都收敛在 [agents] 表里，外部（工具/UI）只通过这里的方法交互。
- *
- * **主动上报（2026-09-25）**：子代理终态时经 [onTerminal] 回调通知父会话——
- * 父代理不再需要 WAIT 阻塞拉取，TurnExecutor 收到回调后合成内部消息唤起新 turn
- * （批量合并：同一会话多个通知合并成一条内部消息、一次 turn）。
  */
 class SubagentManager(
     private val subagentRunner: SubagentRunner,
     private val scope: CoroutineScope,
-    private val eventBus: MutableSharedFlow<MederiEvent>? = null,
-    /**
-     * 子代理终态回调（2026-09-25）。在 spawn 的 finally 里、emitEvent 旁调用。
-     * 携带终态信息（agentId/role/parentSessionId/planId/subtaskIndex/status/result/stalled）。
-     * 调用方（TurnExecutor）据此把通知入队，在父 turn 空闲时合并成一条内部消息唤起新 turn。
-     * 不注入时静默跳过（测试/无唤醒需求场景）。
-     */
-    private val onTerminal: ((TerminalNotice) -> Unit)? = null,
-    /**
-     * 卡死检测超时（毫秒，默认 10 分钟）。spawn 时起一个 watchdog 协程，
-     * 超时后若子代理仍 RUNNING → 发一条 stalled=true 的 [TerminalNotice] 通知父会话，
-     * 由 AI 决定 stop 还是继续等。不强制 cancel——"让AI主动检查一下是不是卡死了"。
-     * 全局可配：TurnExecutor 从设置注入，测试可传短超时。
-     */
-    private val stallTimeoutMs: Long = 10 * 60 * 1000L
+    private val eventBus: MutableSharedFlow<MederiEvent>? = null
 ) {
 
     enum class SubagentStatus { RUNNING, COMPLETED, ERROR, STOPPED }
-
-    /**
-     * 子代理终态通知（主动上报通道，2026-09-25）。
-     *
-     * TurnExecutor 收到此通知后：
-     * - 入 pendingNotices 队列（按 parentSessionId 分组）
-     * - 父 turn 空闲时 maybeFlush 合并成一条内部消息唤起新 turn
-     * - 父 turn 活跃时等 turn 收尾再冲刷
-     *
-     * [stalled] = true 表示 watchdog 超时触发（子代理可能卡死），非正常终态。
-     */
-    data class TerminalNotice(
-        val agentId: String,
-        val role: SubagentRole,
-        val parentSessionId: String,
-        val planId: String?,
-        val subtaskIndex: Int?,
-        val status: SubagentStatus,
-        val result: String?,
-        val stalled: Boolean = false
-    )
 
     data class BackgroundAgent(
         val agentId: String,
@@ -94,6 +52,7 @@ class SubagentManager(
         @Volatile var job: kotlinx.coroutines.Job,
         @Volatile var status: SubagentStatus,
         @Volatile var result: String?,
+        @Volatile var reportPath: String? = null,
         @Volatile var progress: String,
         /** spawn 实际使用的模型/推理档位（动态读 session 后的值）——事件与 status() 的元数据来源。 */
         val aiModel: AIModel? = null,
@@ -108,6 +67,15 @@ class SubagentManager(
         val planStore: PlanStore? = null
     )
 
+    @Serializable
+    data class SubagentReportData(
+        val agentId: String,
+        val role: SubagentRole,
+        val status: SubagentStatus,
+        val reportPath: String?,
+        val content: String?
+    )
+
     private val agents = ConcurrentHashMap<String, BackgroundAgent>()
 
     /**
@@ -118,6 +86,8 @@ class SubagentManager(
         val status: String,
         val progress: String,
         val result: String?,
+        val role: String? = null,
+        val reportPath: String? = null,
         val touchedFiles: List<String>,
         val subtaskIndex: Int?,
         val atMs: Long
@@ -228,12 +198,26 @@ class SubagentManager(
                 bg.status = SubagentStatus.ERROR
                 bg.progress = "error"
             } finally {
+                val reportPath = bg.result?.let { extractReportPath(it) }
+                bg.reportPath = reportPath
+
+                val payload = buildMap {
+                    put("agentId", agentId)
+                    put("role", role.name)
+                    put("status", bg.status.name)
+                    reportPath?.let { put("reportPath", it) }
+                    bg.result?.let { put("result", it) }
+                    bg.planId?.let { put("planId", it) }
+                    bg.executorSubtaskIndex?.let { put("subtaskIndex", it.toString()) }
+                }
+
                 // 终态事件（与状态机同分支：runner 报错文本也算 ERROR）
                 emitEvent(parentSessionId, when (bg.status) {
                     SubagentStatus.COMPLETED -> EventType.SUBAGENT_COMPLETED
                     SubagentStatus.STOPPED -> EventType.SUBAGENT_STOPPED
                     else -> EventType.SUBAGENT_ERROR
-                }, mapOf("agentId" to agentId))
+                }, payload)
+
                 // 归档恢复记录：agent 丢失/归档后，agent_status 的 NOT_FOUND 也能返回部分认知
                 val touched = bg.planId?.let { pid ->
                     bg.planStore?.load(pid)?.subtasks
@@ -245,58 +229,15 @@ class SubagentManager(
                     status = bg.status.name,
                     progress = bg.progress,
                     result = bg.result,
+                    role = role.name,
+                    reportPath = reportPath,
                     touchedFiles = touched,
                     subtaskIndex = bg.executorSubtaskIndex,
                     atMs = System.currentTimeMillis()
                 )
-                // 主动上报（2026-09-25）：通知父会话——TurnExecutor 据此合成内部消息唤起新 turn。
-                // STOPPED 也通知：否则父代理永远等不到那个子任务的音讯。
-                // 去重：watchdog 超时已发过 stalled 通知时跳过（progress=="stalled"），避免重复唤醒。
-                // NonCancellable：回调可能处于协程取消路径（STOPPED/abort），裸调用可能被吞。
-                if (bg.progress != "stalled") {
-                    runCatching {
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                            onTerminal?.invoke(TerminalNotice(
-                                agentId = agentId,
-                                role = role,
-                                parentSessionId = parentSessionId,
-                                planId = planId,
-                                subtaskIndex = executorSubtaskIndex,
-                                status = bg.status,
-                                result = bg.result,
-                                stalled = false
-                            ))
-                        }
-                    }
-                }
             }
         }
         bg.job = job
-        // watchdog（2026-09-25）：超时提醒——子代理可能卡死。
-        // 超时后若仍 RUNNING → 发 stalled 通知（不 cancel，AI 决定 stop 还是等），
-        // 并标记 progress="stalled" 让 finally 的 onTerminal 跳过（去重）。
-        if (stallTimeoutMs > 0) {
-            scope.launch {
-                delay(stallTimeoutMs)
-                if (bg.status == SubagentStatus.RUNNING) {
-                    bg.progress = "stalled"
-                    runCatching {
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                            onTerminal?.invoke(TerminalNotice(
-                                agentId = agentId,
-                                role = role,
-                                parentSessionId = parentSessionId,
-                                planId = planId,
-                                subtaskIndex = executorSubtaskIndex,
-                                status = SubagentStatus.RUNNING,
-                                result = null,
-                                stalled = true
-                            ))
-                        }
-                    }
-                }
-            }
-        }
         return agentId
     }
 
@@ -310,6 +251,7 @@ class SubagentManager(
                     status = bg.status.name,
                     progress = bg.progress,
                     result = if (bg.status == SubagentStatus.COMPLETED) bg.result else null,
+                    reportPath = bg.reportPath,
                     modelId = bg.aiModel?.id,
                     modelName = bg.aiModel?.name,
                     reasoningLevel = bg.reasoningLevel?.name
@@ -325,6 +267,7 @@ class SubagentManager(
                     status = "NOT_FOUND",
                     progress = rec.progress,
                     result = rec.result,
+                    reportPath = rec.reportPath,
                     recovery = buildString {
                         append("agent no longer active (last status ${rec.status}). ")
                         if (rec.subtaskIndex != null) append("subtaskIndex=${rec.subtaskIndex}. ")
@@ -379,38 +322,36 @@ class SubagentManager(
     }
 
     /**
-     * 带超时地等待子 Agent 完成。
-     * 超时返回 TIMEOUT（子 Agent 继续在后台跑，可再 wait 或 stop）。
+     * 获取指定子 Agent 的任务汇报详情（供 Server / UI 读取）。
+     * 若已落盘则读取磁盘文件内容；若未落盘则返回内存中的完整 result。
      */
-    suspend fun wait(agentId: String, timeoutMs: Long): String {
+    fun getReport(agentId: String): SubagentReportData? {
         val bg = agents[agentId]
-            ?: return Json.encodeToString(StatusResult(agentId = agentId, status = "NOT_FOUND"))
-        return try {
-            withTimeout(timeoutMs) {
-                while (bg.status == SubagentStatus.RUNNING) {
-                    delay(200)
-                }
-            }
-            Json.encodeToString(
-                StatusResult(
-                    agentId = agentId,
-                    status = bg.status.name,
-                    progress = bg.progress,
-                    result = bg.result,
-                    modelId = bg.aiModel?.id,
-                    modelName = bg.aiModel?.name,
-                    reasoningLevel = bg.reasoningLevel?.name
-                )
-            )
-        } catch (e: TimeoutCancellationException) {
-            Json.encodeToString(
-                StatusResult(
-                    agentId = agentId,
-                    status = "TIMEOUT",
-                    progress = bg.progress
-                )
+        if (bg != null) {
+            val path = bg.reportPath
+            val content = path?.let { p ->
+                runCatching { java.io.File(p).takeIf { it.exists() }?.readText() }.getOrNull()
+            } ?: bg.result
+            return SubagentReportData(
+                agentId = agentId,
+                role = bg.role,
+                status = bg.status,
+                reportPath = path,
+                content = content
             )
         }
+        val rec = retired[agentId] ?: return null
+        val path = rec.reportPath
+        val content = path?.let { p ->
+            runCatching { java.io.File(p).takeIf { it.exists() }?.readText() }.getOrNull()
+        } ?: rec.result
+        return SubagentReportData(
+            agentId = agentId,
+            role = rec.role?.let { runCatching { SubagentRole.valueOf(it) }.getOrNull() } ?: SubagentRole.EXECUTOR,
+            status = runCatching { SubagentStatus.valueOf(rec.status) }.getOrDefault(SubagentStatus.COMPLETED),
+            reportPath = path,
+            content = content
+        )
     }
 
     @Serializable
@@ -419,6 +360,7 @@ class SubagentManager(
         val status: String,
         val progress: String? = null,
         val result: String? = null,
+        val reportPath: String? = null,
         /** spawn 实际使用的模型元数据（动态读 session 后的值）——父代理/用户可查"哪个模型在干活"。 */
         val modelId: String? = null,
         val modelName: String? = null,
@@ -426,4 +368,12 @@ class SubagentManager(
         /** agent 已从内存表移除（丢失/归档）时，携带可恢复的部分认知（touched files 等）。 */
         val recovery: String? = null
     )
+
+    companion object {
+        /** 从报告文本中提取报告落盘路径。格式形如：`[executor report saved to /path/to/file]` */
+        fun extractReportPath(text: String): String? {
+            val regex = Regex("""\[(?:executor|research)\s+report\s+saved\s+to\s+([^]]+)]""")
+            return regex.find(text)?.groupValues?.get(1)?.trim()
+        }
+    }
 }

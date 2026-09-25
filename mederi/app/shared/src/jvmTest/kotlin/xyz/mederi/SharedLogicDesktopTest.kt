@@ -2461,6 +2461,115 @@ class SharedLogicDesktopTest {
             testScope.cancel()
         }
     }
+
+    @Test
+    fun testQueuedMessagesEnqueueRemoveAndSteer() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            val viewModel = WorkspaceViewModel(appState)
+
+            // 选择会话
+            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            appState.selectConversation(conv.id)
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
+            }
+
+            // 初始队列为空
+            assertTrue(viewModel.currentQueuedMessages.isEmpty(), "初始排队应为空")
+
+            // 入队 2 条消息
+            viewModel.enqueueCurrentInput("Message 1")
+            viewModel.enqueueCurrentInput("Message 2")
+
+            val queued = viewModel.currentQueuedMessages
+            assertEquals(2, queued.size, "排队队列应有 2 条消息")
+            assertEquals("Message 1", queued[0].text)
+            assertEquals("Message 2", queued[1].text)
+
+            // 移出第一条
+            viewModel.removeQueuedMessage(queued[0].id)
+            val remaining = viewModel.currentQueuedMessages
+            assertEquals(1, remaining.size, "移出后应剩 1 条")
+            assertEquals("Message 2", remaining[0].text)
+
+            // 立即发送（引导模式）
+            viewModel.steerQueuedMessage(remaining[0])
+            assertTrue(viewModel.currentQueuedMessages.isEmpty(), "引导发送后队列应清空")
+
+            // 等待异步写入完成并校验 MockAiCore 成功收到了引导消息
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (true) {
+                    val convSnapshot = mockAiCore.getSnapshot(conv.id).getOrThrow()
+                    val hasGuidance = convSnapshot.messages.any { msg ->
+                        msg.blocks.any { (it as? ChatBlock.Text)?.text?.contains("[Guidance]: Message 2") == true }
+                    }
+                    if (hasGuidance) break
+                    kotlinx.coroutines.delay(50)
+                }
+            }
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testAutoDrainQueuedMessagesWhenTurnCompletes() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            appState.selectModel(appState.availableModels.value.first())
+            val viewModel = WorkspaceViewModel(appState)
+
+            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            appState.selectConversation(conv.id)
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
+            }
+
+            // 入队排队消息
+            viewModel.enqueueCurrentInput("Next queued task")
+            assertEquals(1, viewModel.currentQueuedMessages.size)
+
+            val applySnapshotMethod = viewModel::class.java.getDeclaredMethod(
+                "applySnapshot",
+                String::class.java,
+                xyz.mederi.core.contract.dto.ConversationSnapshot::class.java
+            ).apply { isAccessible = true }
+
+            // 模拟之前状态为 Working
+            val workingSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+                conversation = conv.copy(status = ConversationStatus.Working),
+                messages = emptyList(),
+                tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+                cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+            )
+            applySnapshotMethod.invoke(viewModel, conv.id, workingSnap)
+
+            // 模拟转变为 Idle 状态（回合执行结束）
+            val idleSnap = workingSnap.copy(
+                conversation = conv.copy(status = ConversationStatus.Idle)
+            )
+            applySnapshotMethod.invoke(viewModel, conv.id, idleSnap)
+
+            // 等待出队发送协程完成（delay 100ms）
+            kotlinx.coroutines.delay(200L)
+
+            // 队列应被自动消费出队
+            assertTrue(viewModel.currentQueuedMessages.isEmpty(), "Turn 结束恢复 Idle 时应自动出队发送")
+        } finally {
+            testScope.cancel()
+        }
+    }
 }
 
 

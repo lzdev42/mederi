@@ -80,4 +80,20 @@ class TurnIncrementalPersister(
             DebugLog.error("Persist", "tool results persist failed: ${e.message}", e)
         }
     }
+
+    /** 用户中途引导（Steering）消息落库 */
+    suspend fun persistSteeringUserMessage(text: String) {
+        runCatching {
+            val koogUser = KoogMessage.User(
+                content = text,
+                metaInfo = RequestMetaInfo.create(KoogClock.System)
+            )
+            val msg = KoogMessageMapper.fromKoogUserMessage(sessionId, koogUser)
+                .withDiagnostics(diagnostics)
+            historyStore.append(sessionId, msg)
+            DebugLog.event("Persist", "steering message appended: id=${msg.id}, text='$text'")
+        }.onFailure { e ->
+            DebugLog.error("Persist", "steering message persist failed: ${e.message}", e)
+        }
+    }
 }

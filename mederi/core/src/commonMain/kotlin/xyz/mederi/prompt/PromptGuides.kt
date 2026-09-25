@@ -168,7 +168,7 @@ Example (shape to follow; content from your real task):
 ```
 
 After approval, per subtask: generate_spec(planId, subtaskIndex, spec) as an ordered checklist,
-then subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background),
-then subagent(WAIT, agentId) for the result, then verify_subtask(planId, subtaskIndex, status, evidence).
+then subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background, END YOUR TURN —
+you will be auto-woken with the result), then verify_subtask(planId, subtaskIndex, status, evidence).
 """.trimIndent()
 }

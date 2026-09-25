@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
 
 /**
  * SubagentTool（6 工具合一，action 分流）行为锁定：
- * - STATUS / STOP / WAIT 委托 SubagentManager
+ * - STATUS / STOP 委托 SubagentManager
  * - agentId 空白时各管理 action 返回 Error 文本（不抛异常）
  * - SPAWN / SPAWN_RESEARCHER 委托原 spawn 工具（深链由 SpawnToolDynamicModelTest 覆盖）
  */

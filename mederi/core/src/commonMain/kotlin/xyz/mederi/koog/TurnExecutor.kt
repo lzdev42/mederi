@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.debug.ErrorCollector
@@ -149,24 +150,33 @@ class TurnExecutor(
         subagentRunner = subagentRunner,
         scope = scope,
         // 生命周期事件总线：SUBAGENT_STARTED/COMPLETED/ERROR/STOPPED（UI 子代理面板消费）
-        eventBus = eventBus,
-        // 主动上报（2026-09-25）：子代理终态 → 入 pendingNotices 队列 + maybeFlush 唤醒父 turn
-        onTerminal = { notice -> onSubagentTerminal(notice) },
-        // 卡死检测超时：默认 10 分钟，全局可配（TODO: 从设置注入）
-        stallTimeoutMs = 10 * 60 * 1000L
+        eventBus = eventBus
     )
 
-    /**
-     * 子代理终态通知队列（2026-09-25 主动上报通道）。
-     *
-     * 按 parentSessionId 分组。子代理完成时入队；父 turn 空闲时 [maybeFlush] 批量 drain
-     * 合并成一条内部消息唤起新 turn。父 turn 活跃时等 runTurn finally 冲刷。
-     * 并行 spawn 的 N 个子任务先后完成 → 合并成一条内部消息、一次 turn（省 token）。
-     */
-    private val pendingNotices = ConcurrentHashMap<String, MutableList<SubagentManager.TerminalNotice>>()
+    /** 事件消息等待队列（按 parentSessionId 分组）：子代理终态时暂存，父 turn 空闲时冲刷唤醒新 turn。 */
+    private val pendingEventMessages = ConcurrentHashMap<String, MutableList<String>>()
+    private val eventMessageLock = Mutex()
 
-    /** flush 串行锁：防止并发 maybeFlush 对同一 session 同时 sendMessageInternal。 */
-    private val flushLock = Mutex()
+    /** 引导消息等待队列（按 sessionId 分组）：用户在 turn 运行时插话，工具边界时注入 prompt。 */
+    private val pendingSteerings = ConcurrentHashMap<String, java.util.concurrent.ConcurrentLinkedQueue<SteeringItem>>()
+
+    init {
+        // 监听系统事件总线：当子代理（或未来其他异步任务）产生终态事件时，组装 <event_message> 唤醒父 turn
+        if (eventBus != null) {
+            scope.launch {
+                eventBus.collect { event ->
+                    when (event.type) {
+                        EventType.SUBAGENT_COMPLETED,
+                        EventType.SUBAGENT_ERROR,
+                        EventType.SUBAGENT_STOPPED -> {
+                            handleSubagentTerminalEvent(event)
+                        }
+                        else -> { /* 其余事件暂不转化为 event_message */ }
+                    }
+                }
+            }
+        }
+    }
 
     // 浏览器任务管理：持有 BrowserRegistry（UI 注册 JCEF、core 注册 Camoufox，启动装配时填充）。
     // 主代理获得 run_browser_task / browser_task_status / stop_browser_task 三个工具；
@@ -238,6 +248,54 @@ class TurnExecutor(
             emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             throw e
         }
+    }
+
+    /**
+     * 引导模式（Steering）：用户在 turn 运行时插话。
+     * 若会话正在运行，将消息存入 [pendingSteerings] 队列，在下一个工具边界（nodeSendToolResult）注入；
+     * 若会话未处于 RUNNING，安全降级走普通的 [sendMessage]。
+     */
+    suspend fun steerMessage(sessionId: String, request: SendMessageRequest) {
+        val session = sessionStore.get(sessionId)
+            ?: throw NoSuchElementException("Session not found: $sessionId")
+
+        DebugLog.section("TurnExec", "TurnExecutor.steerMessage")
+        DebugLog.data("TurnExec", "sessionId", sessionId)
+        DebugLog.data("TurnExec", "session.status", session.status)
+
+        // 若会话当前非 RUNNING 且无活跃 job，直接回退走正常 sendMessage
+        if (session.status != SessionStatus.RUNNING && activeJobs[sessionId]?.isActive != true) {
+            DebugLog.info("TurnExec", "Session $sessionId is not running a turn; falling back to sendMessage")
+            sendMessage(sessionId, request)
+            return
+        }
+
+        val text = request.parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.Text>()
+            .joinToString("\n") { it.text }
+        val item = SteeringItem(
+            sessionId = sessionId,
+            text = text,
+            request = request,
+            timestamp = System.currentTimeMillis()
+        )
+        val queue = pendingSteerings.computeIfAbsent(sessionId) { java.util.concurrent.ConcurrentLinkedQueue() }
+        queue.offer(item)
+        DebugLog.event("TurnExec", "steering item enqueued for session $sessionId: text='$text', queueSize=${queue.size}")
+
+        // 触发环境状态通知：UI 收到 steering_queued
+        emit(sessionId, EventType.STATUS, payload = mapOf(
+            "status" to "steering_queued",
+            "message" to text
+        ))
+    }
+
+    fun pollSteering(sessionId: String): SteeringItem? {
+        val queue = pendingSteerings[sessionId] ?: return null
+        val item = queue.poll()
+        if (queue.isEmpty()) {
+            pendingSteerings.remove(sessionId)
+        }
+        return item
     }
 
     private suspend fun sendMessageInternal(sessionId: String, request: SendMessageRequest, subagentRole: SubagentRole? = null) {
@@ -507,6 +565,7 @@ class TurnExecutor(
         }
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
+        pendingEventMessages.remove(sessionId)
         scope.launch {
             runCatching {
                 sessionStore.update(sessionId, SessionStatus.IDLE)
@@ -535,10 +594,10 @@ class TurnExecutor(
         // 与 abort 同语义：回滚 = 撤销到目标消息，其后发生的一切都不该继续——
         // 后台子代理一并收割（幂等，abort 路径已收过的这里是 0）
         subagentManager.stopAllForSession(sessionId)
-        // 清掉该会话的待唤醒通知：用户中止后不应该再被唤起
-        pendingNotices.remove(sessionId)
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
+        pendingEventMessages.remove(sessionId)
+        pendingSteerings.remove(sessionId)
         // 正常取消路径 runTurn 收尾已写 IDLE；此处对陈旧 RUNNING（进程重启残留等）兜底复位，
         // 避免紧随的 sendMessage 被 RUNNING 检查误拒
         runCatching {
@@ -548,138 +607,13 @@ class TurnExecutor(
         }
     }
 
-    // ============ 子代理主动上报（2026-09-25）============
-
-    /**
-     * 子代理终态回调入口：入队 + 尝试即时冲刷。
-     *
-     * 由 [SubagentManager.onTerminal] 触发（子代理后台协程的 finally / watchdog）。
-     * 入队按 parentSessionId 分组；随后检查父会话是否有活跃 turn——
-     * 无（父 turn 已结束回到 IDLE）→ 用后台协程冲刷（唤起新 turn）；
-     * 有 → 等 runTurn finally 冲刷（避免与活跃 turn 争 RUNNING 守卫）。
-     */
-    private fun onSubagentTerminal(notice: SubagentManager.TerminalNotice) {
-        synchronized(pendingNotices) {
-            val list = pendingNotices.getOrPut(notice.parentSessionId) { mutableListOf() }
-            list.add(notice)
-        }
-        // 会话保有权限判断：该会话是否"值得唤醒"。EXECUTOR/stalled 只对"有活跃计划"的会话有意义——
-        // 计划已归档/作废（用户改用例）时唤醒也得不到有用动作，且会打扰。由 flush 时校验计划活性兜底。
-        val parentActive = activeJobs[notice.parentSessionId]?.isActive == true
-        if (!parentActive) {
-            scope.launch {
-                maybeFlush(notice.parentSessionId)
-            }
-        }
-    }
-
-    /**
-     * 冲刷该会话的待唤醒通知：批量 drain → 合并成一条内部消息 → 启动新 turn。
-     *
-     * 竞态处理：sendMessageInternal 可能因"会话正在跑"（用户消息恰好进来）抛
-     * IllegalStateException → 通知放回队列，等 turn 收尾 finally 再冲刷。
-     * [flushLock] 保证同一会话同一时刻只有一个冲刷。
-     */
-    private suspend fun maybeFlush(sessionId: String) = flushLock.withLock {
-        val batch = synchronized(pendingNotices) { pendingNotices[sessionId]?.toList() } ?: return@withLock
-        if (batch.isEmpty()) return@withLock
-        // 只对"仍活跃"的计划会话唤醒：计划已归档/作废时丢弃（改动已完成或已废弃，无需触发）
-        val planStore = createPlanStoreFor(sessionId) ?: return@withLock
-        val activePlan = planStore.loadBySession(sessionId)
-        if (activePlan == null) {
-            synchronized(pendingNotices) { pendingNotices.remove(sessionId) }
-            return@withLock
-        }
-        synchronized(pendingNotices) { pendingNotices.remove(sessionId) }
-        val internalPrompt = buildSubagentNoticePrompt(activePlan.id, batch)
-        try {
-            val session = sessionStore.get(sessionId) ?: return@withLock
-            sendMessageInternal(
-                sessionId,
-                SendMessageRequest(
-                    agentConfig = xyz.mederi.api.AgentConfig(
-                        agentMode = session.agentMode,
-                        aiModel = session.aiModel,
-                        reasoningLevel = session.reasoningLevel
-                    ),
-                    parts = listOf(MessagePart.Text(internalPrompt)),
-                    apiKeyId = null
-                )
-            )
-        } catch (e: IllegalStateException) {
-            // 竞态：用户消息/其他唤醒已在跑 → 通知放回队列，等 turn 收尾 finally 冲刷
-            DebugLog.info(
-                "TurnExec",
-                "subagent notice flush raced with an active turn; requeueing (sessionId=$sessionId, notices=${batch.size})"
-            )
-            synchronized(pendingNotices) { pendingNotices.getOrPut(sessionId) { mutableListOf() }.addAll(batch) }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            synchronized(pendingNotices) { pendingNotices.getOrPut(sessionId) { mutableListOf() }.addAll(batch) }
-            throw e
-        }
-    }
-
-    /** 当前 turn 收尾的冲刷（runTurn finally 调用，带协程上下文所以在锁内可挂起）。 */
-    private suspend fun flushPendingNotices(sessionId: String) {
-        maybeFlush(sessionId)
-    }
-
-    /**
-     * 内部消息拼装：只给事实（完成/失败/停止/stalled + 报告路径），由主代理自行决策
-     * 接下来 verify 还是重跑（动态段只挂状态事实、不挂指令的既定原则）。
-     */
-    private fun buildSubagentNoticePrompt(activePlanId: String, notices: List<SubagentManager.TerminalNotice>): String {
-        val sb = StringBuilder()
-        sb.appendLine("$UI_HIDDEN_MARKER")
-        sb.appendLine("Subagent activity report for active plan $activePlanId (parent session ${notices.first().parentSessionId}):")
-        notices.forEach { n ->
-            sb.appendLine()
-            sb.appendLine("- agentId: ${n.agentId}, role: ${n.role}")
-            if (n.planId != null) sb.appendLine("  planId: ${n.planId}" + (n.subtaskIndex?.let { ", subtaskIndex: $it" } ?: ""))
-            when {
-                n.stalled -> {
-                    sb.appendLine("  status: STALLED (watchdog timeout — the sub-agent may be stuck; check with STATUS or stop with STOP)")
-                }
-                n.status == SubagentManager.SubagentStatus.COMPLETED -> {
-                    sb.appendLine("  status: COMPLETED")
-                    n.result?.let { r ->
-                        sb.appendLine("  report saved to: ${extractReportPath(r)}")
-                        sb.appendLine("  summary tail: ${r.takeLast(500)}")
-                    }
-                }
-                n.status == SubagentManager.SubagentStatus.STOPPED -> {
-                    sb.appendLine("  status: STOPPED (cancelled)")
-                    n.result?.let { sb.appendLine("  result tail: ${it.takeLast(300)}") }
-                }
-                else -> {
-                    sb.appendLine("  status: ERROR")
-                    n.result?.let { sb.appendLine("  error tail: ${it.takeLast(500)}") }
-                }
-            }
-        }
-        sb.appendLine()
-        sb.appendLine("Decide the next step yourself (verify, re-spawn, stop, or ask the user). " +
-            "Do not re-ask for approval and do not recreate the plan.")
-        return sb.toString()
-    }
-
-    /** 从 executor/researcher 摘要文本里提取报告路径（"[executor report saved to PATH]" 等）。 */
-    private fun extractReportPath(result: String): String? {
-        val m = Regex("(saved to|report saved to)\\s+\\[([^]]+)]").find(result)
-        return m?.groupValues?.get(2)
-    }
-
-    /** 临时 PlanStore：maybeFlush 需要查会话活跃计划活性。suspend 因 projectManager.get 是 suspend。 */
-    private suspend fun createPlanStoreFor(sessionId: String): xyz.mederi.plan.PlanStore? {
-        val session = sessionStore.get(sessionId) ?: return null
-        val project = projectManager.get(session.projectId) ?: return null
-        return xyz.mederi.plan.PlanStore(listOf(project.directory))
-    }
-
     suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>): Boolean {
         val requester = questionRequesters[sessionId] ?: return false
         return requester.resolve(questionId, answers)
     }
+
+    fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? =
+        subagentManager.getReport(agentId)
 
     suspend fun resolvePlanApproval(
         sessionId: String,
@@ -1189,10 +1123,31 @@ class TurnExecutor(
                     DebugLog.error("TurnExec", "关闭 MCP 连接失败: ${e.message}", e)
                 }
             }
-            // 子代理主动上报（2026-09-25）：turn 已结束（activeJobs 已清），冲刷等待中的通知。
-            // 用 scope.launch：杜绝"本 turn 协程上下文已取消时挂起"；串行锁内部保证不并发。
-            if (pendingNotices.containsKey(sessionId)) {
-                scope.launch { flushPendingNotices(sessionId) }
+            // 串行冲刷事件消息 + steering 残留，避免并发争抢 RUNNING 守卫导致丢消息
+            scope.launch {
+                // 1. 子代理事件消息（dispatchPendingEventMessages 内部有 requeue 保护）
+                if (pendingEventMessages.containsKey(sessionId)) {
+                    dispatchPendingEventMessages(sessionId)
+                }
+                // 2. 未被工具边界消费的引导消息——降级为新 turn 触发。
+                //    event 派发可能已起新 turn → sendMessage 撞 RUNNING → 放回队列等下次冲刷
+                val remainingSteers = pendingSteerings.remove(sessionId)
+                if (!remainingSteers.isNullOrEmpty()) {
+                    val toRequeue = mutableListOf<SteeringItem>()
+                    for (item in remainingSteers) {
+                        try {
+                            sendMessage(sessionId, item.request)
+                        } catch (e: IllegalStateException) {
+                            toRequeue.add(item)
+                        }
+                    }
+                    if (toRequeue.isNotEmpty()) {
+                        val queue = pendingSteerings.computeIfAbsent(sessionId) {
+                            java.util.concurrent.ConcurrentLinkedQueue()
+                        }
+                        toRequeue.forEach { queue.offer(it) }
+                    }
+                }
             }
         }
     }
@@ -1468,9 +1423,9 @@ class TurnExecutor(
             .toolRegistry(toolRegistry)
             .graphStrategy(
                 if (compressionConfig != null) {
-                    mederiSingleRunStrategyWithCompression(compressionConfig, incrementalPersister)
+                    mederiSingleRunStrategyWithCompression(compressionConfig, incrementalPersister, pollSteering = { pollSteering(sessionId) })
                 } else {
-                    mederiSingleRunStrategy(incrementalPersister)
+                    mederiSingleRunStrategy(incrementalPersister, pollSteering = { pollSteering(sessionId) })
                 }
             )
             .install(ChatMemory.Feature) { config ->
@@ -1585,6 +1540,105 @@ class TurnExecutor(
             )
         } catch (e: Throwable) {
             DebugLog.error("EventBus", "Failed to emit event $type for session $sessionId: ${e.message}", e)
+        }
+    }
+
+    private fun handleSubagentTerminalEvent(event: MederiEvent) {
+        val parentSessionId = event.sessionId
+        if (parentSessionId.isBlank()) return
+
+        val msgText = formatSubagentEventMessage(event)
+        DebugLog.event("TurnExec", "handleSubagentTerminalEvent: session=$parentSessionId, agentId=${event.payload["agentId"]}, type=${event.type}")
+
+        val list = pendingEventMessages.computeIfAbsent(parentSessionId) {
+            java.util.Collections.synchronizedList(mutableListOf())
+        }
+        list.add(msgText)
+
+        // 异步尝试调度：dispatchPendingEventMessages 内部持锁检查会话是否空闲
+        scope.launch {
+            dispatchPendingEventMessages(parentSessionId)
+        }
+    }
+
+    private fun formatSubagentEventMessage(event: MederiEvent): String {
+        val eventTypeStr = when (event.type) {
+            EventType.SUBAGENT_COMPLETED -> "subagent_completed"
+            EventType.SUBAGENT_ERROR -> "subagent_error"
+            EventType.SUBAGENT_STOPPED -> "subagent_stopped"
+            else -> "subagent_event"
+        }
+        val agentId = event.payload["agentId"] ?: "unknown"
+        val status = event.payload["status"] ?: "UNKNOWN"
+        val role = event.payload["role"] ?: "AGENT"
+        val reportPath = event.payload["reportPath"]
+        val planId = event.payload["planId"]
+        val subtaskIndex = event.payload["subtaskIndex"]
+        val result = event.payload["result"].orEmpty()
+
+        return buildString {
+            appendLine("""<event_message type="$eventTypeStr" agentId="$agentId" status="$status">""")
+            appendLine("Role: $role")
+            if (planId != null && subtaskIndex != null) {
+                appendLine("Subtask: Subtask $subtaskIndex (planId: $planId, index: $subtaskIndex)")
+            }
+            if (!reportPath.isNullOrBlank()) {
+                appendLine("ReportPath: $reportPath")
+            }
+            if (result.isNotBlank()) {
+                appendLine("Summary:")
+                appendLine(result)
+            }
+            append("</event_message>")
+        }
+    }
+
+    private suspend fun dispatchPendingEventMessages(sessionId: String) {
+        eventMessageLock.withLock {
+            val list = pendingEventMessages[sessionId]
+            if (list.isNullOrEmpty()) return
+
+            val session = sessionStore.get(sessionId) ?: return
+            if (session.status == SessionStatus.RUNNING || activeJobs[sessionId]?.isActive == true) {
+                DebugLog.debug("TurnExec", "dispatchPendingEventMessages: session $sessionId is RUNNING, deferring dispatch")
+                return
+            }
+
+            val messagesToDispatch = synchronized(list) {
+                val copy = list.toList()
+                list.clear()
+                copy
+            }
+            if (messagesToDispatch.isEmpty()) return
+
+            val combinedText = messagesToDispatch.joinToString("\n\n")
+            val effectiveModel = session.aiModel
+            if (effectiveModel == null) {
+                DebugLog.error("TurnExec", "dispatchPendingEventMessages failed: no aiModel configured for session $sessionId")
+                return
+            }
+
+            val request = SendMessageRequest(
+                agentConfig = AgentConfig(
+                    agentMode = session.agentMode,
+                    aiModel = effectiveModel,
+                    reasoningLevel = session.reasoningLevel
+                ),
+                parts = listOf(MessagePart.Text(combinedText)),
+                apiKeyId = null
+            )
+
+            try {
+                DebugLog.event("TurnExec", "dispatchPendingEventMessages: dispatching ${messagesToDispatch.size} event message(s) to session $sessionId")
+                sendMessageInternal(sessionId, request)
+            } catch (e: IllegalStateException) {
+                DebugLog.info("TurnExec", "dispatchPendingEventMessages busy ($sessionId), requeueing: ${e.message}")
+                synchronized(list) {
+                    list.addAll(0, messagesToDispatch)
+                }
+            } catch (e: Throwable) {
+                DebugLog.error("TurnExec", "dispatchPendingEventMessages failed for $sessionId: ${e.message}", e)
+            }
         }
     }
 }
