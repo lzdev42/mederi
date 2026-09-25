@@ -207,6 +207,22 @@ class PlanStore(private val projectDirectories: List<String>) {
     }
 
     /**
+     * 落盘独立研究报告到 `.mederi/research/{timestamp}.md`（无活跃 plan 时）。
+     *
+     * 触发时机：researcher 子代理完成、但无活跃 plan（分诊阶段调研）。
+     * 用途：研究报告始终落盘——父上下文只收摘要+路径，需要详情时 read_file。
+     * 返回：写入文件的绝对路径；写盘失败返回 null。
+     */
+    fun writeStandaloneResearchReport(text: String): String? {
+        val mederi = ensureMederiDir(projectDirectories) ?: return null
+        val dir = File(mederi, "research").apply { mkdirs() }
+        val fileName = "${java.time.Instant.now().toString().replace(":", "-").replace(".", "-")}.md"
+        val file = File(dir, fileName)
+        file.writeText(text)
+        return file.absolutePath
+    }
+
+    /**
      * 落盘 executor 报告到 `plans/{planId}/reports/{NN}-executor.md`。
      *
      * 触发时机：executor 子代理完成时调用（per-subtask 一份）。

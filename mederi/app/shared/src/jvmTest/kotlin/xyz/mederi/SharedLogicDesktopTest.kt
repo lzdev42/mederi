@@ -23,6 +23,7 @@ import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.core.contract.ToolArgParser
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.ToolCallState
+import xyz.mederi.core.contract.models.ToolCallUi
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.domain.model.Message as CoreMessage
@@ -2569,6 +2570,24 @@ class SharedLogicDesktopTest {
         } finally {
             testScope.cancel()
         }
+    }
+
+    @Test
+    fun testSubagentPreparingState() {
+        val call = ToolCallUi(
+            id = "call_sub_1",
+            name = "subagent",
+            state = ToolCallState.Running(mapOf("action" to "SPAWN_RESEARCHER", "task" to "research tech")),
+            target = "research tech"
+        )
+        val groups = xyz.mederi.ui.chat.groupToolCallsByAction(listOf(call))
+        assertEquals(1, groups.size)
+        assertEquals(xyz.mederi.ui.chat.ToolActionKind.SUBAGENT, groups.first().kind)
+
+        val isGroupRunning = true
+        val isSubagentPreparing = groups.first().kind == xyz.mederi.ui.chat.ToolActionKind.SUBAGENT && isGroupRunning
+        val canExpand = !isSubagentPreparing
+        assertFalse(canExpand, "子agent准备中状态不可展开")
     }
 }
 

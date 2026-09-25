@@ -48,7 +48,7 @@
     <string name="tool_action_list_running">Listing directories…</string>
     <string name="tool_action_list_running_target">Listing directory %1$s</string>
     <string name="tool_action_subagent_target">Ran subagent %1$s</string>
-    <string name="tool_action_subagent_running">Running subagents…</string>
+    <string name="tool_action_subagent_running">Preparing sub-agent task…</string>
     <string name="tool_action_subagent_running_target">Running subagent %1$s</string>
     <string name="tool_action_mcp_target">Called MCP tool %1$s</string>
     <string name="tool_action_mcp_running_target">Calling MCP tool %1$s…</string>

@@ -141,10 +141,12 @@ fun ToolActionGroupRow(
     val colors = LocalMederiColors.current
     val isFailed = group.calls.any { it.isFailed }
     val isGroupRunning = (isRunning || isStreaming) && group.calls.any { it.state is ToolCallState.Running }
+    val isSubagentPreparing = group.kind == ToolActionKind.SUBAGENT && isGroupRunning
+    val canExpand = !isSubagentPreparing
 
-    // 所有工具动作行严格默认不展开（即使执行失败也保持折叠，需要点击才展开）；用户点击后以用户状态为准
+    // 所有工具动作行严格默认不展开（即使执行失败也保持折叠，需要点击才展开）；用户点击后以用户状态为准；准备中子任务不可展开
     var userChoice by remember(group.calls.map { it.id }) { mutableStateOf(false) }
-    val isExpanded = userChoice
+    val isExpanded = userChoice && canExpand
 
     val count = group.calls.size
     val firstCall = group.calls.first()
@@ -182,8 +184,7 @@ fun ToolActionGroupRow(
                     ?: stringResource(Res.string.tool_action_search_running)
                 ToolActionKind.LIST -> singleTarget?.let { stringResource(Res.string.tool_action_list_running_target, it) }
                     ?: stringResource(Res.string.tool_action_list_running)
-                ToolActionKind.SUBAGENT -> singleTarget?.let { stringResource(Res.string.tool_action_subagent_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_subagent_running)
+                ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_running)
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_running_target, singleTarget ?: firstCall.name)
                 ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_running)
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_running)
@@ -234,15 +235,19 @@ fun ToolActionGroupRow(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        // 折叠微条（无卡片背景与硬边框，整行可点击）
+        // 折叠微条（无卡片背景与硬边框，整行可点击，准备中子任务不可展开）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
-                .clickable {
-                    userChoice = !isExpanded
-                    DebugLog.event("UI", "ToolActionGroupRow clicked: kind=${group.kind}, count=${group.calls.size}, isExpanded=$userChoice")
-                }
+                .then(
+                    if (canExpand) {
+                        Modifier.clickable {
+                            userChoice = !isExpanded
+                            DebugLog.event("UI", "ToolActionGroupRow clicked: kind=${group.kind}, count=${group.calls.size}, isExpanded=$userChoice")
+                        }
+                    } else Modifier
+                )
                 .padding(vertical = 2.dp, horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -272,13 +277,15 @@ fun ToolActionGroupRow(
                 modifier = Modifier.weight(1f, fill = false)
             )
 
-            Spacer(modifier = Modifier.width(2.dp))
-
-            ExpandChevron(expanded = isExpanded, tint = defaultMutedColor, size = 11.dp)
+            if (canExpand) {
+                Spacer(modifier = Modifier.width(2.dp))
+                ExpandChevron(expanded = isExpanded, tint = defaultMutedColor, size = 11.dp)
+            }
         }
 
-        // 展开后的具体执行明细
-        ExpandableContent(expanded = isExpanded) {
+        // 展开后的具体执行明细（可展开时才渲染）
+        if (canExpand) {
+            ExpandableContent(expanded = isExpanded) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -365,6 +372,7 @@ fun ToolActionGroupRow(
             }
         }
     }
+}
 }
 
 /**

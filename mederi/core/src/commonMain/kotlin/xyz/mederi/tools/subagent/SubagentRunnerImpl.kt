@@ -208,7 +208,9 @@ class SubagentRunnerImpl(
      *   尾部捕获 SPEC_FEEDBACK（位于报告末尾，父 agent 据此决定 re-generate_spec / ask_user）。
      * - RESEARCHER + planId：写 `{planId}/research.md`，返回"已保存+头部800字符"。
      *   头部通常是核心结论。
-     * - 无 planId / planStore / 写盘失败：回退全文回灌（兼容旧行为，无活跃 plan 的 researcher 走此路）。
+     * - RESEARCHER 无 planId：写 `.mederi/research/{timestamp}.md`，返回"已保存+头部800字符"。
+     *   研究报告始终落盘——不让全量报告撑大父上下文。
+     * - EXECUTOR 无 planId / planStore 为 null / 写盘失败：回退全文回灌。
      */
     private fun persistReportAndReturnSummary(
         fullText: String,
@@ -217,9 +219,10 @@ class SubagentRunnerImpl(
         executorSubtaskIndex: Int?,
         planStore: PlanStore?
     ): String {
-        if (planId == null || planStore == null) return fullText
+        if (planStore == null) return fullText
         return when (role) {
             SubagentRole.EXECUTOR -> {
+                if (planId == null) return fullText
                 val idx = executorSubtaskIndex ?: return fullText
                 val path = runCatching { planStore.writeExecutorReport(planId, idx, fullText) }
                     .getOrNull() ?: return fullText
@@ -230,8 +233,11 @@ class SubagentRunnerImpl(
                 }
             }
             SubagentRole.RESEARCHER -> {
-                val path = runCatching { planStore.writeResearchReport(planId, fullText) }
-                    .getOrNull() ?: return fullText
+                val path = if (planId != null) {
+                    runCatching { planStore.writeResearchReport(planId, fullText) }.getOrNull()
+                } else {
+                    runCatching { planStore.writeStandaloneResearchReport(fullText) }.getOrNull()
+                } ?: return fullText
                 buildString {
                     appendLine("[research report saved to $path]")
                     appendLine("Summary (first 800 chars):")

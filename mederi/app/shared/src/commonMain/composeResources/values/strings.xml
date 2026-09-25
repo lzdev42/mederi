@@ -57,7 +57,7 @@
     <string name="tool_action_list_running">正在查看目录…</string>
     <string name="tool_action_list_running_target">正在查看目录 %1$s</string>
     <string name="tool_action_subagent_target">派发子任务 %1$s</string>
-    <string name="tool_action_subagent_running">子任务执行中…</string>
+    <string name="tool_action_subagent_running">正在准备子agent任务</string>
     <string name="tool_action_subagent_running_target">正在派发子任务 %1$s</string>
     <string name="tool_action_mcp_target">调用 MCP 工具 %1$s</string>
     <string name="tool_action_mcp_running_target">正在调用 MCP 工具 %1$s…</string>
