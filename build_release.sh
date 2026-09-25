@@ -68,12 +68,9 @@ echo "=============================================="
 echo "🎯 Target: $PLATFORM-$ARCH_NAME"
 echo "=============================================="
 
-# 定位项目目录与 gradlew（兼容根目录或子目录）
-if [[ -f "$SCRIPT_DIR/gradlew" ]]; then
-    PROJECT_DIR="$SCRIPT_DIR"
-elif [[ -f "$SCRIPT_DIR/mederi/gradlew" ]]; then
-    PROJECT_DIR="$SCRIPT_DIR/mederi"
-else
+# 定位项目目录与 gradlew（脚本与 gradlew 同处仓库根）
+PROJECT_DIR="$SCRIPT_DIR"
+if [[ ! -f "$PROJECT_DIR/gradlew" ]]; then
     echo "❌ 未找到 gradlew！"
     exit 1
 fi
