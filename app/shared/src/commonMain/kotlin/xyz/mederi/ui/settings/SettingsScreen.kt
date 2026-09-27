@@ -7,7 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -116,7 +115,7 @@ fun SettingsDialog(
 }
 
 /**
- * 桌面端左右分栏布局（Sidebar + Content Workspace）。
+ * 桌面端顶部浏览器式选项卡布局（Header + Tab Strip + Content Workspace）。
  */
 @Composable
 private fun DesktopSettingsLayout(
@@ -125,153 +124,88 @@ private fun DesktopSettingsLayout(
     onClose: () -> Unit,
     colors: MederiColors
 ) {
-    Row(modifier = Modifier.fillMaxSize()) {
-        // ─── 左侧导航栏 ───
-        Column(
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ─── 顶部标题栏：品牌 + 版本 + 关闭按钮 ───
+        Row(
             modifier = Modifier
-                .width(220.dp)
-                .fillMaxHeight()
+                .fillMaxWidth()
                 .background(colors.surfaceSidebar)
-                .padding(horizontal = 14.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                // 顶部品牌/标题
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(colors.accentPrimary.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Sliders,
-                            contentDescription = null,
-                            tint = colors.accentPrimary,
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = stringResource(Res.string.settings_title),
-                            color = colors.textPrimary,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = stringResource(Res.string.settings_subtitle),
-                            color = colors.textMuted,
-                            fontSize = 10.5.sp,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = colors.divider.copy(alpha = 0.6f))
-
-                // 导航菜单列表
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    SettingsTab.entries.forEach { tab ->
-                        val isSelected = selectedTab == tab
-                        val bg by animateColorAsState(
-                            if (isSelected) colors.accentPrimary.copy(alpha = 0.12f)
-                            else Color.Transparent
-                        )
-                        val contentColor by animateColorAsState(
-                            if (isSelected) colors.accentPrimary
-                            else colors.textSecondary
-                        )
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(bg)
-                                .clickable { onSelectTab(tab) }
-                                .padding(horizontal = 10.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = null,
-                                tint = contentColor,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Text(
-                                text = settingsTabLabel(tab),
-                                color = if (isSelected) colors.textPrimary else colors.textSecondary,
-                                fontSize = 13.sp,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (isSelected) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(3.dp)
-                                        .height(12.dp)
-                                        .clip(RoundedCornerShape(1.5.dp))
-                                        .background(colors.accentPrimary)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 侧栏底部：版本信息微标
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(colors.accentSuccess)
-                )
-                Text(
-                    text = "v${AppInfo.VERSION}",
-                    color = colors.textMuted,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.accentPrimary.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = FeatherIcons.Sliders,
+                        contentDescription = null,
+                        tint = colors.accentPrimary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        text = stringResource(Res.string.settings_title),
+                        color = colors.textPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "v${AppInfo.VERSION}",
+                        color = colors.textMuted,
+                        fontSize = 10.5.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            // 关闭按钮
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.surfaceCard)
+                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+                    .clickable { onClose() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.X,
+                    contentDescription = stringResource(Res.string.close),
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
 
-        // 竖向分割线
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .fillMaxHeight()
-                .background(colors.divider)
+        // ─── 浏览器式横向选项卡条 ───
+        BrowserTabStrip(
+            selectedTab = selectedTab,
+            onSelectTab = onSelectTab,
+            colors = colors
         )
 
-        // ─── 右侧内容工作区 ───
+        // ─── 内容工作区 ───
         Column(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight()
+                .fillMaxWidth()
                 .background(colors.surfaceWorkspace)
         ) {
-            // 右侧顶部标题栏与关闭按钮
+            // 选中标签的标题栏与说明
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 24.dp, vertical = 14.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
@@ -284,24 +218,6 @@ private fun DesktopSettingsLayout(
                         text = settingsTabSubtitle(selectedTab),
                         color = colors.textMuted,
                         fontSize = 12.sp
-                    )
-                }
-
-                // 关闭按钮
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceCard)
-                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                        .clickable { onClose() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(Res.string.close),
-                        tint = colors.textSecondary,
-                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
@@ -336,6 +252,70 @@ private fun DesktopSettingsLayout(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 浏览器式横向选项卡条：选中标签底色与内容区一致并盖住底部分割线，
+ * 形成“标签与下方内容视觉相连”的浏览器效果；未选中标签透明，分割线在其下贯通。
+ */
+@Composable
+private fun BrowserTabStrip(
+    selectedTab: SettingsTab,
+    onSelectTab: (SettingsTab) -> Unit,
+    colors: MederiColors
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.surfaceSidebar)
+    ) {
+        // 底部分割线先绘制，选中标签的实底会后盖住它
+        HorizontalDivider(
+            color = colors.divider.copy(alpha = 0.6f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            SettingsTab.entries.forEach { tab ->
+                val isSelected = selectedTab == tab
+                val bg by animateColorAsState(
+                    if (isSelected) colors.surfaceWorkspace else Color.Transparent
+                )
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
+                        .background(bg)
+                        .clickable { onSelectTab(tab) }
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = tab.icon,
+                        contentDescription = null,
+                        tint = if (isSelected) colors.accentPrimary else colors.iconMuted,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = settingsTabLabel(tab),
+                        color = if (isSelected) colors.textPrimary else colors.textSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                    )
                 }
             }
         }
