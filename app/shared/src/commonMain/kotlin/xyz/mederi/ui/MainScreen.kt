@@ -209,7 +209,7 @@ fun MainScreen() {
 
             if (isPinned) {
                 // 常驻分栏模式 (Pinned: Side-by-side)
-                Row(modifier = Modifier.fillMaxSize().background(colors.surfaceSidebar)) {
+                Row(modifier = Modifier.fillMaxSize()) {
                     Sidebar(
                         viewModel = sidebarViewModel,
                         isCompact = false,
@@ -232,7 +232,7 @@ fun MainScreen() {
                 }
             } else {
                 // 自动隐藏模式 (Auto-hide overlay with hover reveal & edge indicator)
-                Box(modifier = Modifier.fillMaxSize().background(colors.surfaceWorkspace)) {
+                Box(modifier = Modifier.fillMaxSize()) {
                     Workspace(
                         modifier = Modifier.fillMaxSize(),
                         viewModel = workspaceViewModel,

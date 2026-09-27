@@ -81,3 +81,22 @@ data class UpdateSubagentConfigInput(
     val reasoningLevel: String? = null
 )
 
+/**
+ * 全局子代理设置（与角色无关的项）。
+ *
+ * [maxConcurrentAgents] 单会话并发子代理上限：core 的 spawn 原子门禁拒绝超发
+ * （EXECUTOR/RESEARCHER 同池计数）；浏览器任务不经 SubagentManager，不受此限制。
+ */
+@Serializable
+data class SubagentGlobalSettings(
+    val maxConcurrentAgents: Int = 2
+)
+
+/**
+ * 更新全局子代理设置输入（UI 契约层）。[maxConcurrentAgents] 必须 >= 1。
+ */
+@Serializable
+data class UpdateSubagentGlobalSettingsInput(
+    val maxConcurrentAgents: Int
+)
+

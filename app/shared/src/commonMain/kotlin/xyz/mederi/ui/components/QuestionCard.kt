@@ -31,6 +31,9 @@ import mederi.app.shared.generated.resources.question_title
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
+import xyz.mederi.ui.components.atoms.MederiSurfaceButton
 
 /**
  * 3. 选择题/问询交互卡片 (QuestionCard)
@@ -191,49 +194,32 @@ fun QuestionCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(
+            MederiGhostButton(
+                text = stringResource(Res.string.question_cancel),
                 onClick = onCancel,
-                modifier = Modifier.height(30.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) {
-                Text(stringResource(Res.string.question_cancel), color = colors.textMuted, fontSize = 11.5.sp)
-            }
+            )
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (currentIndex > 0) {
-                    OutlinedButton(
+                    MederiSurfaceButton(
+                        text = stringResource(Res.string.question_prev),
                         onClick = onPrevPage,
-                        modifier = Modifier.height(30.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(stringResource(Res.string.question_prev), fontSize = 11.5.sp, color = colors.textPrimary)
-                    }
+                    )
                 }
 
                 if (currentIndex < qList.size - 1) {
-                    Button(
+                    MederiSurfaceButton(
+                        text = stringResource(Res.string.question_next),
                         onClick = onNextPage,
-                        modifier = Modifier.height(30.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                        shape = RoundedCornerShape(6.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.buttonSecondary)
-                    ) {
-                        Text(stringResource(Res.string.question_next), fontSize = 11.5.sp, color = colors.textPrimary)
-                    }
+                    )
                 } else {
-                    Button(
+                    MederiPrimaryDecisionButton(
+                        text = stringResource(Res.string.question_submit),
                         onClick = onSubmit,
-                        modifier = Modifier.height(30.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        shape = RoundedCornerShape(6.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
-                    ) {
-                        Text(stringResource(Res.string.question_submit), fontSize = 11.5.sp, color = colors.onAccentPrimary)
-                    }
+                    )
                 }
             }
         }

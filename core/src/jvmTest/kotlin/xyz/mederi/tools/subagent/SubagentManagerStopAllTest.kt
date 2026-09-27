@@ -38,7 +38,7 @@ class SubagentManagerStopAllTest {
         }
     }
 
-    private fun spawn(manager: SubagentManager, sessionId: String): String = manager.spawn(
+    private suspend fun spawn(manager: SubagentManager, sessionId: String): String = manager.spawn(
         task = "t", briefing = null, plan = null, role = SubagentRole.EXECUTOR,
         directories = emptyList(),
         aiModel = AIModel(id = "m", providerModelId = "m", name = "m"), reasoningLevel = ReasoningLevel.NONE,

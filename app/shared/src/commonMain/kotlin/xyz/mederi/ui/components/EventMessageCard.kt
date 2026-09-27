@@ -21,6 +21,7 @@ import compose.icons.feathericons.*
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.ChatListItem
+import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
 
 /**
  * 通用事件消息卡片 (EventMessageCard)
@@ -123,30 +124,18 @@ fun EventMessageCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (onOpenReport != null && reportContent.isNotBlank()) {
-                    IconButton(
+                    MederiMinimalIconButton(
+                        icon = FeatherIcons.Maximize2,
                         onClick = { onOpenReport("$displayTitle Report", reportContent) },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Maximize2,
-                            contentDescription = "Open in side panel",
-                            tint = colors.textMuted,
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
-                }
-                // 折叠/展开按钮
-                IconButton(
-                    onClick = { isExpanded = !isExpanded },
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                        contentDescription = if (isExpanded) "Collapse" else "Expand",
-                        tint = colors.textMuted,
-                        modifier = Modifier.size(14.dp)
+                        contentDescription = "Open in side panel",
                     )
                 }
+                // 折叠/展开按钮
+                MederiMinimalIconButton(
+                    icon = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                    onClick = { isExpanded = !isExpanded },
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                )
             }
         }
 

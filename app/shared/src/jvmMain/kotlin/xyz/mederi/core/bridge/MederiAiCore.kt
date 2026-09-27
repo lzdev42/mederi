@@ -50,7 +50,9 @@ import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.TokenUsage
 import xyz.mederi.core.contract.models.SubagentConfigItem
+import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
+import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.Session
 import xyz.mederi.debug.DebugLog
@@ -1220,6 +1222,23 @@ class MederiAiCore(
                 modelId = input.modelId,
                 reasoningLevel = reasoningLevel
             )
+        )
+    }
+
+    override suspend fun getSubagentGlobalSettings(): Result<SubagentGlobalSettings> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        val settings = mederi.subagentConfigs.getGlobalSettings()
+        SubagentGlobalSettings(maxConcurrentAgents = settings.maxConcurrentAgents)
+    }
+
+    override suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.subagentConfigs.updateGlobalSettings(
+            xyz.mederi.api.UpdateSubagentGlobalSettingsRequest(maxConcurrentAgents = input.maxConcurrentAgents)
         )
     }
 

@@ -1,15 +1,13 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,7 +19,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
@@ -58,6 +55,8 @@ import mederi.app.shared.generated.resources.settings_panel_set_default_key
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.ConfirmDialog
+import xyz.mederi.ui.components.atoms.MederiDialog
+import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 @Composable
 internal fun EditProviderCredentialsDialog(
@@ -71,39 +70,37 @@ internal fun EditProviderCredentialsDialog(
     var apiKey by remember { mutableStateOf(provider.apiKey) }
     var reasoningLevels by remember { mutableStateOf(provider.reasoningLevels) }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = ProviderTokens.RadiusCard,
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.divider),
-            modifier = Modifier.width(480.dp).padding(ProviderTokens.SpacingLarge)
-        ) {
-            Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text(stringResource(Res.string.settings_panel_edit_reasoning), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
-                HorizontalDivider(color = colors.divider)
+    // 对话框壳走 MederiDialog（统一 12dp 圆角 + surfaceSidebar chrome + 16dp 内边距 + spacedBy(12)）
+    MederiDialog(
+        onDismiss = onDismiss,
+        width = 480.dp
+    ) {
+        Text(stringResource(Res.string.settings_panel_edit_reasoning), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+        HorizontalDivider(color = colors.divider)
 
-                LabeledTextField(stringResource(Res.string.settings_panel_provider_name_label), name, { name = it }, stringResource(Res.string.settings_panel_name_placeholder), colors)
-                LabeledTextField(stringResource(Res.string.provider_base_url), baseUrl, { baseUrl = it }, stringResource(Res.string.provider_base_url_placeholder), colors)
-                LabeledTextField(stringResource(Res.string.provider_api_key), apiKey, { apiKey = it }, stringResource(Res.string.provider_api_key_placeholder), isPassword = true, colors = colors)
+        LabeledTextField(stringResource(Res.string.settings_panel_provider_name_label), name, { name = it }, stringResource(Res.string.settings_panel_name_placeholder), colors)
+        LabeledTextField(stringResource(Res.string.provider_base_url), baseUrl, { baseUrl = it }, stringResource(Res.string.provider_base_url_placeholder), colors)
+        LabeledTextField(stringResource(Res.string.provider_api_key), apiKey, { apiKey = it }, stringResource(Res.string.provider_api_key_placeholder), isPassword = true, colors = colors)
 
-                HorizontalDivider(color = colors.divider.copy(alpha = 0.6f))
-                Text(
-                    stringResource(Res.string.settings_panel_reasoning_edit_hint),
-                    color = colors.textMuted, fontSize = ProviderTokens.FontLabel
-                )
-                ReasoningLevelsEditor(
-                    levels = reasoningLevels,
-                    onChange = { reasoningLevels = it },
-                    colors = colors
-                )
+        HorizontalDivider(color = colors.divider.copy(alpha = 0.6f))
+        Text(
+            stringResource(Res.string.settings_panel_reasoning_edit_hint),
+            color = colors.textMuted, fontSize = ProviderTokens.FontLabel
+        )
+        ReasoningLevelsEditor(
+            levels = reasoningLevels,
+            onChange = { reasoningLevels = it },
+            colors = colors
+        )
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
-                    Spacer(Modifier.width(ProviderTokens.SpacingSmall))
-                    PrimaryActionBtn(stringResource(Res.string.settings_panel_save_reconnect), colors, enabled = baseUrl.isNotBlank()) {
-                        onSave(name, baseUrl, apiKey, reasoningLevels)
-                    }
-                }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            MederiGhostButton(
+                text = stringResource(Res.string.settings_panel_cancel),
+                onClick = onDismiss
+            )
+            Spacer(Modifier.width(ProviderTokens.SpacingSmall))
+            PrimaryActionBtn(stringResource(Res.string.settings_panel_save_reconnect), colors, enabled = baseUrl.isNotBlank()) {
+                onSave(name, baseUrl, apiKey, reasoningLevels)
             }
         }
     }
@@ -199,18 +196,16 @@ internal fun ApiKeyManagementDialog(
     var isNewKeyDefault by remember { mutableStateOf(provider.apiKeys.isEmpty()) }
     var showAddForm by remember { mutableStateOf(provider.apiKeys.isEmpty()) }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = ProviderTokens.RadiusCard,
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.divider),
-            modifier = Modifier.width(460.dp).padding(ProviderTokens.SpacingLarge)
+    // 对话框壳走 MederiDialog（统一 12dp 圆角 + surfaceSidebar chrome + 16dp 内边距 + spacedBy(12)）
+    MederiDialog(
+        onDismiss = onDismiss,
+        width = 460.dp
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)
         ) {
-            Column(
-                modifier = Modifier.padding(ProviderTokens.SpacingLarge),
-                verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)
-            ) {
-                Row(
+            Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -236,11 +231,13 @@ internal fun ApiKeyManagementDialog(
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
                         provider.apiKeys.forEach { keyOpt ->
-                            Surface(
-                                shape = ProviderTokens.RadiusControl,
-                                color = colors.surfaceInput,
-                                border = BorderStroke(1.dp, if (keyOpt.isDefault) colors.accentPrimary.copy(alpha = 0.5f) else colors.divider),
-                                modifier = Modifier.fillMaxWidth()
+                            // 非卡片壳（surfaceInput 输入井容器 + 动态默认描边），MederiCard 底色固定 surfaceCard 不适用，等价 Box 链
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(ProviderTokens.RadiusControl)
+                                    .background(colors.surfaceInput)
+                                    .border(1.dp, if (keyOpt.isDefault) colors.accentPrimary.copy(alpha = 0.5f) else colors.divider, ProviderTokens.RadiusControl)
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = ProviderTokens.SpacingMedium, vertical = 7.dp),
@@ -303,11 +300,13 @@ internal fun ApiKeyManagementDialog(
                 }
 
                 if (showAddForm) {
-                    Surface(
-                        shape = ProviderTokens.RadiusControl,
-                        color = colors.surfaceInput,
-                        border = BorderStroke(1.dp, colors.divider),
-                        modifier = Modifier.fillMaxWidth()
+                    // 非卡片壳（surfaceInput 输入井容器），MederiCard 底色固定 surfaceCard 不适用，等价 Box 链
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(ProviderTokens.RadiusControl)
+                            .background(colors.surfaceInput)
+                            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
                     ) {
                         Column(
                             modifier = Modifier.padding(ProviderTokens.SpacingMedium),
@@ -330,9 +329,10 @@ internal fun ApiKeyManagementDialog(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (provider.apiKeys.isNotEmpty()) {
-                                    TextButton(onClick = { showAddForm = false }) {
-                                        Text(stringResource(Res.string.settings_panel_cancel), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
-                                    }
+                                    MederiGhostButton(
+                                        text = stringResource(Res.string.settings_panel_cancel),
+                                        onClick = { showAddForm = false }
+                                    )
                                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
                                 }
                                 val defaultKeyName = stringResource(Res.string.provider_api_key)
@@ -356,12 +356,12 @@ internal fun ApiKeyManagementDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(Res.string.settings_panel_done), color = colors.accentPrimary, fontSize = ProviderTokens.FontLabel, fontWeight = FontWeight.Medium)
-                    }
+                    MederiGhostButton(
+                        text = stringResource(Res.string.settings_panel_done),
+                        onClick = onDismiss
+                    )
                 }
             }
         }
-    }
 }
 

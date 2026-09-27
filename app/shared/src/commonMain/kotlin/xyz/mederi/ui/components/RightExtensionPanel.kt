@@ -31,6 +31,7 @@ import xyz.mederi.ui.TerminalViewModel
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
 
 @Composable
 fun RightExtensionPanel(
@@ -44,33 +45,43 @@ fun RightExtensionPanel(
     maxPanelWidth: Dp = Dp.Infinity,
     modifier: Modifier = Modifier
 ) {
+    val defaultOverviewWidthDp = 400f
     val defaultReaderWidthDp = remember(screenWidth, maxPanelWidth) {
         (screenWidth.value * (2f / 3f)).coerceAtMost(maxPanelWidth.value).coerceAtLeast(340f)
     }
-    var panelWidthDp by remember { mutableStateOf(defaultReaderWidthDp) }
 
     val currentPanel = viewModel.activeDockPanel
     // 关闭动画期间保持上一个面板渲染（收缩动画中内容不闪空）。
     // 副作用经 LaunchedEffect，不在组合期直接写状态
     var panelToDisplay by remember { mutableStateOf(currentPanel ?: RightDockPanel.OVERVIEW) }
+
+    var overviewWidthDp by remember { mutableStateOf(defaultOverviewWidthDp) }
+    var readerWidthDp by remember { mutableStateOf(defaultReaderWidthDp) }
+
     LaunchedEffect(currentPanel) {
         if (currentPanel != null) {
             panelToDisplay = currentPanel
             // 切换到实施计划等阅读面板时，若当前宽度较小，默认展开至 2/3 窗口宽度以提供最佳阅读体验
-            if (currentPanel == RightDockPanel.PLAN && panelWidthDp < defaultReaderWidthDp) {
-                panelWidthDp = defaultReaderWidthDp
+            if (currentPanel == RightDockPanel.PLAN && readerWidthDp < defaultReaderWidthDp) {
+                readerWidthDp = defaultReaderWidthDp
             }
         }
     }
 
+    val currentWidthDp = if (panelToDisplay == RightDockPanel.OVERVIEW) overviewWidthDp else readerWidthDp
     // 布局期钳制：面板拖宽后窗口缩小、或面板打开时窗口较窄，面板让位给对话区（不超 maxPanelWidth）
-    val effectivePanelWidthDp = panelWidthDp.coerceAtMost(maxPanelWidth.value)
+    val effectivePanelWidthDp = currentWidthDp.coerceAtMost(maxPanelWidth.value)
 
-    DebugLog.debug("UI", "RightExtensionPanel: isOpen=$isOpen, currentPanel=$currentPanel, rendering=$panelToDisplay, width=$effectivePanelWidthDp (raw=$panelWidthDp, maxPanel=$maxPanelWidth)")
+    DebugLog.debug("UI", "RightExtensionPanel: isOpen=$isOpen, currentPanel=$currentPanel, rendering=$panelToDisplay, width=$effectivePanelWidthDp (raw=$currentWidthDp, maxPanel=$maxPanelWidth)")
 
     val handleWidthChange: (Float) -> Unit = { newWidth ->
         // 不设固定上限：宽度上限 = maxPanelWidth，保证对话区 ≥ 手机宽度
-        panelWidthDp = newWidth.coerceAtLeast(240f).coerceAtMost(maxPanelWidth.value)
+        val clamped = newWidth.coerceAtLeast(240f).coerceAtMost(maxPanelWidth.value)
+        if (panelToDisplay == RightDockPanel.OVERVIEW) {
+            overviewWidthDp = clamped
+        } else {
+            readerWidthDp = clamped
+        }
     }
 
     if (isCompact) {
@@ -265,16 +276,12 @@ private fun SinglePanelHeader(
             )
         }
 
-        IconButton(
+        // 面板头关闭按钮：收敛为 MederiPanelHeaderIconButton（22dp / 透明 + textMuted，hover 反馈）
+        MederiPanelHeaderIconButton(
+            icon = FeatherIcons.X,
             onClick = onClose,
-            modifier = Modifier.size(24.dp)
-        ) {
-            Icon(
-                FeatherIcons.X,
-                contentDescription = stringResource(Res.string.dock_close_panel),
-                tint = colors.textMuted,
-                modifier = Modifier.size(13.dp)
-            )
-        }
+            contentDescription = stringResource(Res.string.dock_close_panel),
+            colors = colors,
+        )
     }
 }

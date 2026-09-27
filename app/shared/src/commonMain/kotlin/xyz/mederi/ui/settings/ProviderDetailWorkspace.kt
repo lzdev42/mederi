@@ -1,6 +1,5 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,7 +12,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +69,7 @@ import mederi.app.shared.generated.resources.settings_panel_syncing
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.ConfirmDialog
+import xyz.mederi.ui.components.atoms.MederiCard
 
 // ============================================================================
 // 4. 右侧工作台：供应商详情与模型管理
@@ -169,13 +168,11 @@ internal fun ProviderDetailWorkspace(
         }
 
         // ----------------------------------------------------
-        // B. 认证凭据卡片：数据展示区 与 操作区 物理拆分
+        // B. 认证凭据卡片：数据展示区 与 操作区 物理拆分（壳走 MederiCard；RadiusCard 8dp = MederiRadius.Card）
         // ----------------------------------------------------
-        Surface(
-            shape = ProviderTokens.RadiusCard,
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.divider),
-            modifier = Modifier.fillMaxWidth()
+        MederiCard(
+            modifier = Modifier.fillMaxWidth(),
+            padding = PaddingValues(0.dp) // 内边距由各区块显式控制，壳不加
         ) {
             Column {
                 // 数据展示区：Label + Value 两行式网格

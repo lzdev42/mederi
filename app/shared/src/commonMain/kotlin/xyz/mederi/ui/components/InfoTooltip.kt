@@ -1,6 +1,7 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -126,14 +127,16 @@ fun HelpCircleTooltip(
                     hoverVisible = false
                 }
             ) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = colors.surfaceCard,
-                    border = BorderStroke(1.dp, colors.surfaceCardBorder),
-                    shadowElevation = 8.dp,
+                // 弹层壳（tooltip popup 非卡片壳）：MederiCard 无 shadow 参数，直接套会丢 8dp 层级阴影；
+                // 保留等价 Box 修饰链替代 M3 Surface（渲染层级与 Surface 一致，不影响 z-order）
+                Box(
                     modifier = Modifier
                         .widthIn(max = 280.dp)
                         .padding(4.dp)
+                        .shadow(8.dp, RoundedCornerShape(8.dp), clip = false)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.surfaceCard)
+                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
                         .pointerInput(Unit) {
                             awaitPointerEventScope {
                                 while (true) {

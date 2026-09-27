@@ -12,8 +12,11 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │       ├── session/ project/ provider/  ← Manager 层（唯一真理源）
 │       ├── store/ + store/sqlite/       ← Store 层（纯持久化，InMemory + Sqlite 双实现）
 │       ├── koog/ + infrastructure/koog/ ← Koog 执行引擎适配（TurnExecutor 等）
-│       ├── tools/                       ← 工具系统（FS/Shell/Plan/Verify/Subagent/Sandbox/Diff/Patch）
+│       ├── tools/                       ← 工具系统（FS/Shell/Plan/Verify/Subagent/Sandbox/Diff/Office/Process(list_processes, stop_process)/Browser 单入口）
 │       ├── browser/ + browser/bidi/ + browser/install/  ← 浏览器自动化模块（BrowserControl/BrowserOperator/BrowserBrain/BrowserTaskManager + BiDi 层 + Camoufox 下载安装）
+│       ├── office/                      ← Office 工具（OfficeTools/OfficeConverter，docx/xlsx/pptx ↔ markdown）
+│       ├── skills/ + skills/domain/     ← 技能发现/解析（SkillManager/SkillDiscovery/SkillFrontmatterParser + 领域模型）
+│       ├── http/                        ← HTTP 客户端工厂（MederiHttpClientFactory/SseIdleTimeoutException）
 │       ├── plan/                        ← 计划系统（Plan/PlanStore/Notebook/审批）
 │       ├── mcp/{servers,engine,market}/ ← MCP 配置管理 + 内核引擎（McpConnector）+ MCP 市场
 │       ├── provider/                    ← Provider 领域模型 + Koog client 适配
@@ -126,8 +129,8 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    A["API 层<br/>ProviderApi / ProjectApi / SessionApi / ModelApi / McpServerApi / McpMarketApi / SkillApi<br/>职责 = DTO 转换 + mederiCall 异常包装（只抛 MederiException）"]
-    M["Manager 层（唯一真理源）<br/>ProviderManager / ProjectManager / SessionManager / McpServerManager / McpMarketManager / SkillManager"]
+    A["API 层<br/>ProviderApi / ProjectApi / SessionApi / ModelApi / McpServerApi / McpMarketApi / SkillApi / SubagentConfigApi<br/>职责 = DTO 转换 + mederiCall 异常包装（只抛 MederiException）"]
+    M["Manager 层（唯一真理源）<br/>ProviderManager / ProjectManager / SessionManager / McpServerManager / McpMarketManager / SkillManager / SubagentConfigManager"]
     S["Store 层（纯持久化，可注入）<br/>ProviderStore / ApiKeyStore / ProjectStore / SessionStore / HistoryStore / DiffStore / McpServersStore / SettingsStore"]
     T["Koog 执行引擎（被 SessionManager 创建）<br/>TurnExecutor → ToolFactory / Strategies / ChatHistoryProvider / Compression"]
     P["Plan/Notebook（项目 .mederi/ 目录，不走 DB）"]
@@ -153,7 +156,7 @@ flowchart TD
 | `~/.mederi/data/data.db` | sessions、message_history、diffs | 高频 append、随使用增长 | Sqlite*Store(dataDriver) |
 | `~/.mederi/skills/` | skill 包（每个 skill 一个子目录，含 SKILL.md） | Koog discoverSkills 自动发现根 | SkillManagerImpl |
 | `~/.mederi/preferences.json` | UI 偏好（theme、遥控端口、选中态、推理档位记忆、沙盒白名单） | **设备级语义**，app:shared 层管理，不进库 | PreferencesStore |
-| `<项目>/.mederi/` | plans/*.json+md、plans-done/、notebook.md | 计划系统文件（机器+人读双份） | PlanStore / Notebook |
+| `<项目>/.mederi/` | plans/{planId}/（plan.json/plan.md/research.md/reports/NN-executor.md/walkthrough.md，一计划一目录）、plans-done/、plans-voided/、.mederi/research/（无活跃 plan 时 researcher 独立报告）、notebook.md | 计划系统文件（机器+人读双份） | PlanStore / Notebook |
 
 ## 6. 硬性规则速查索引（细节见 AGENTS.md）
 
@@ -166,7 +169,7 @@ flowchart TD
 | 能力传导到引擎 | supportsImages/supportsReasoning → `KoogModelBuilder.buildCapabilities` 加 LLMCapability | 设置全通但引擎拒绝图片 |
 | durable-first | 用户消息先落库再置 RUNNING | 回查/自动改名拿到旧状态 |
 | 上下文挂载互斥 | 有活跃 Plan 时禁用 update_todo（AgentTools 硬门禁），todo 面板显示 Plan 投影 | 两份进度真理源 |
-| 文件写白名单 | write/edit/patch 只能写项目目录 + `.mederi/` + 全局白名单；读全盘放行 | 沙盒逃逸 |
+| 文件写白名单 | write_file/edit_file 只能写项目目录 + `.mederi/` + 全局白名单；读全盘放行 | 沙盒逃逸 |
 | 不兜底原则 | 数据层面没有就是没有；程序层面报错不崩 | 默认值掩盖问题 |
 | 禁手拼 JSON | 结构化数据一律 @Serializable + kotlinx.serialization | 解析脆弱 |
 | 删库审批 | 删任何用户数据文件前必须经用户批准 | — |

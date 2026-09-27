@@ -507,6 +507,17 @@ class MockAiCore(
         )
     }
 
+    private var subagentGlobalSettings = SubagentGlobalSettings(maxConcurrentAgents = 2)
+
+    override suspend fun getSubagentGlobalSettings(): Result<SubagentGlobalSettings> = runCatching {
+        subagentGlobalSettings
+    }
+
+    override suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit> = runCatching {
+        require(input.maxConcurrentAgents >= 1) { "maxConcurrentAgents must be >= 1" }
+        subagentGlobalSettings = subagentGlobalSettings.copy(maxConcurrentAgents = input.maxConcurrentAgents)
+    }
+
     fun injectSnapshot(conversationId: String, snapshot: ConversationSnapshot) {
         conversations[conversationId]?.value = snapshot
     }

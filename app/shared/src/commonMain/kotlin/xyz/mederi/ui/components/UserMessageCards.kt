@@ -43,6 +43,8 @@ import xyz.mederi.ui.AssistantFooterInfo
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent
+import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
 
 /**
  * 用户消息中的大段文本折叠卡片 (UserPastedTextCard)
@@ -201,39 +203,21 @@ fun UserMessageFooter(
         }
 
         // 2. 退回并重新编辑按钮（回退一步 = 撤回本条及后续记录，内容粘贴回输入框，可切换模型/模式后再发）
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(3.dp))
-                .clickable { onRollback() }
-                .padding(3.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = FeatherIcons.CornerUpLeft,
-                contentDescription = stringResource(Res.string.action_rollback),
-                tint = colors.textMuted,
-                modifier = Modifier.size(12.dp)
-            )
-        }
+        MederiMinimalIconButton(
+            icon = FeatherIcons.CornerUpLeft,
+            onClick = onRollback,
+            contentDescription = stringResource(Res.string.action_rollback),
+        )
 
-        // 3. 复制按钮
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(3.dp))
-                .clickable {
-                    onCopy()
-                    copied = true
-                }
-                .padding(3.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
-                contentDescription = stringResource(if (copied) Res.string.copy_done else Res.string.copy),
-                tint = if (copied) colors.accentSuccess else colors.textMuted,
-                modifier = Modifier.size(12.dp)
-            )
-        }
+        // 3. 复制按钮（copied 态以 Check 图标切换表达，颜色收敛为 Minimal 的 textSecondary 系）
+        MederiMinimalIconButton(
+            icon = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
+            onClick = {
+                onCopy()
+                copied = true
+            },
+            contentDescription = stringResource(if (copied) Res.string.copy_done else Res.string.copy),
+        )
     }
 }
 
@@ -327,56 +311,26 @@ fun AssistantMessageFooter(
         ) {
             if (lastMessageText.isNotBlank()) {
                 val textLast = if (copiedLast) stringResource(Res.string.copy_done) else stringResource(Res.string.chat_copy_last_message)
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .clickable {
-                            clipboardManager.setText(AnnotatedString(lastMessageText))
-                            copiedLast = true
-                        }
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = if (copiedLast) FeatherIcons.Check else FeatherIcons.Copy,
-                        contentDescription = textLast,
-                        tint = if (copiedLast) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Text(
-                        text = textLast,
-                        color = if (copiedLast) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
-                        fontSize = 10.5.sp
-                    )
-                }
+                MederiGhostButton(
+                    text = textLast,
+                    icon = if (copiedLast) FeatherIcons.Check else FeatherIcons.Copy,
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(lastMessageText))
+                        copiedLast = true
+                    },
+                )
             }
 
             if (fullTurnText.isNotBlank()) {
                 val textFull = if (copiedFull) stringResource(Res.string.copy_done) else stringResource(Res.string.chat_copy_full_turn)
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .clickable {
-                            clipboardManager.setText(AnnotatedString(fullTurnText))
-                            copiedFull = true
-                        }
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = if (copiedFull) FeatherIcons.Check else FeatherIcons.Copy,
-                        contentDescription = textFull,
-                        tint = if (copiedFull) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Text(
-                        text = textFull,
-                        color = if (copiedFull) colors.accentSuccess else colors.textMuted.copy(alpha = 0.8f),
-                        fontSize = 10.5.sp
-                    )
-                }
+                MederiGhostButton(
+                    text = textFull,
+                    icon = if (copiedFull) FeatherIcons.Check else FeatherIcons.Copy,
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(fullTurnText))
+                        copiedFull = true
+                    },
+                )
             }
         }
     }

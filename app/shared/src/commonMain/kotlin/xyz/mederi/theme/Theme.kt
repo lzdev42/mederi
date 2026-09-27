@@ -26,8 +26,8 @@ import xyz.emuci.syntax.theme.OneDarkProTheme
  * 显示文案唯一映射点 = SettingsScreen 的主题卡（枚举不持有表现层文案，i18n 约定）。
  */
 enum class AppThemeMode(val isDark: Boolean) {
-    DARK(true),
-    LIGHT(false);
+    DARK(isDark = true),
+    LIGHT(isDark = false);
 
     companion object {
         fun fromString(value: String?): AppThemeMode {

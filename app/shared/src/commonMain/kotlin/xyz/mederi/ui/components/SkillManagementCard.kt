@@ -11,7 +11,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -26,6 +25,11 @@ import xyz.mederi.ui.appstate.SkillStore
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.MederiCompatBadge
+import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
+import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
+import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 import xyz.mederi.ui.components.atoms.PanelCard
 import xyz.mederi.ui.components.atoms.PanelEmptyState
 import xyz.mederi.util.pickDirectory
@@ -122,23 +126,14 @@ fun SkillManagementCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 设定根目录按钮（优先调用系统原生选择器）
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { onSelectDirectory() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.Folder,
-                                contentDescription = stringResource(Res.string.skill_set_root_desc),
-                                tint = colors.textMuted,
-                                modifier = Modifier.size(12.dp)
-                            )
-                        }
+                        // 设定根目录按钮（收敛为 MederiPanelHeaderIconButton；优先调用系统原生选择器）
+                        MederiPanelHeaderIconButton(
+                            icon = FeatherIcons.Folder,
+                            onClick = { onSelectDirectory() },
+                            contentDescription = stringResource(Res.string.skill_set_root_desc),
+                        )
 
-                        // 刷新按钮
+                        // 刷新按钮内联保留：isRefreshing → accent 高亮为状态反馈，atom 暂无状态色参数，待对齐
                         Box(
                             modifier = Modifier
                                 .size(22.dp)
@@ -154,21 +149,12 @@ fun SkillManagementCard(
                             )
                         }
 
-                        // 安装按钮
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { isAddDialogOpen = true },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.Plus,
-                                contentDescription = stringResource(Res.string.skill_install),
-                                tint = colors.textSecondary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
+                        // 安装按钮（收敛为 MederiPanelHeaderIconButton）
+                        MederiPanelHeaderIconButton(
+                            icon = FeatherIcons.Plus,
+                            onClick = { isAddDialogOpen = true },
+                            contentDescription = stringResource(Res.string.skill_install),
+                        )
 
                         // 折叠/展开箭头
                         Box(
@@ -195,7 +181,7 @@ fun SkillManagementCard(
                 modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 当前目录提示小字
+                // 当前目录提示小字（内联保留：folder 图标 + 单行 ellipsis + 整行点击重选目录，MederiProjectPill 无图标/ellipsis/onClick，待配色迁移时对齐）
                 if (skillsRoot.isNotBlank()) {
                     Row(
                         modifier = Modifier
@@ -317,19 +303,8 @@ private fun SkillItemRow(
                 )
 
                 skill.compatibility?.takeIf { it.isNotBlank() }?.let { compat ->
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(colors.accentPrimary.copy(alpha = 0.12f))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                    ) {
-                        Text(
-                            text = compat,
-                            color = colors.accentPrimary,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    // 兼容性徽标：收敛为 MederiCompatBadge（warning 软底 + 描边，对齐标准 §3.6）
+                    MederiCompatBadge(text = compat)
                 }
             }
 
@@ -345,21 +320,12 @@ private fun SkillItemRow(
             }
         }
 
-        // 卸载按钮
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .clickable { onUninstall() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = FeatherIcons.Trash2,
-                contentDescription = stringResource(Res.string.skill_uninstall),
-                tint = colors.textMuted,
-                modifier = Modifier.size(12.dp)
-            )
-        }
+        // 卸载按钮（收敛为 MederiMinimalIconButton：透明方形 + hover 反馈）
+        MederiMinimalIconButton(
+            icon = FeatherIcons.Trash2,
+            onClick = { onUninstall() },
+            contentDescription = stringResource(Res.string.skill_uninstall),
+        )
     }
 }
 
@@ -444,43 +410,34 @@ private fun InstallSkillDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss, enabled = !isInstalling) {
-                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
-                    }
+                    // 取消/安装：收敛为 MederiGhostButton + MederiPrimaryDecisionButton（安装中 spinner 收敛为文案切换）
+                    MederiGhostButton(
+                        text = stringResource(Res.string.cancel),
+                        onClick = onDismiss,
+                        enabled = !isInstalling,
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Button(
+                    MederiPrimaryDecisionButton(
+                        text = if (isInstalling) stringResource(Res.string.skill_installing) else stringResource(Res.string.skill_install_action),
                         onClick = {
                             val trimmed = urlText.trim()
                             if (trimmed.isBlank()) {
                                 errorMessage = urlRequiredMsg
-                                return@Button
-                            }
-                            scope.launch {
-                                isInstalling = true
-                                val res = onConfirm(trimmed)
-                                isInstalling = false
-                                if (res.isSuccess) {
-                                    onDismiss()
-                                } else {
-                                    errorMessage = res.exceptionOrNull()?.message ?: installFailedMsg
+                            } else {
+                                scope.launch {
+                                    isInstalling = true
+                                    val res = onConfirm(trimmed)
+                                    isInstalling = false
+                                    if (res.isSuccess) {
+                                        onDismiss()
+                                    } else {
+                                        errorMessage = res.exceptionOrNull()?.message ?: installFailedMsg
+                                    }
                                 }
                             }
                         },
                         enabled = !isInstalling && urlText.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
-                    ) {
-                        if (isInstalling) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(12.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(stringResource(Res.string.skill_installing), fontSize = 11.sp)
-                        } else {
-                            Text(stringResource(Res.string.skill_install_action), fontSize = 11.sp)
-                        }
-                    }
+                    )
                 }
             }
         }
@@ -589,33 +546,34 @@ private fun SetSkillRootDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss, enabled = !isSaving) {
-                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
-                    }
+                    // 取消/保存：收敛为 MederiGhostButton + MederiPrimaryDecisionButton
+                    MederiGhostButton(
+                        text = stringResource(Res.string.cancel),
+                        onClick = onDismiss,
+                        enabled = !isSaving,
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Button(
+                    MederiPrimaryDecisionButton(
+                        text = if (isSaving) stringResource(Res.string.skill_saving) else stringResource(Res.string.skill_save),
                         onClick = {
                             val trimmed = pathText.trim()
                             if (trimmed.isBlank()) {
                                 errorMessage = pathRequiredMsg
-                                return@Button
-                            }
-                            scope.launch {
-                                isSaving = true
-                                val res = onConfirm(trimmed)
-                                isSaving = false
-                                if (res.isSuccess) {
-                                    onDismiss()
-                                } else {
-                                    errorMessage = res.exceptionOrNull()?.message ?: saveDirFailedMsg
+                            } else {
+                                scope.launch {
+                                    isSaving = true
+                                    val res = onConfirm(trimmed)
+                                    isSaving = false
+                                    if (res.isSuccess) {
+                                        onDismiss()
+                                    } else {
+                                        errorMessage = res.exceptionOrNull()?.message ?: saveDirFailedMsg
+                                    }
                                 }
                             }
                         },
                         enabled = !isSaving && pathText.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
-                    ) {
-                        Text(if (isSaving) stringResource(Res.string.skill_saving) else stringResource(Res.string.skill_save), fontSize = 11.sp)
-                    }
+                    )
                 }
             }
         }
@@ -664,20 +622,30 @@ private fun UninstallSkillConfirmDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss, enabled = !isDeleting) {
-                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
-                    }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                onConfirm()
-                            }
-                        },
+                    MederiGhostButton(
+                        text = stringResource(Res.string.cancel),
+                        onClick = onDismiss,
                         enabled = !isDeleting,
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accentDanger)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    // 危险确认按钮自绘保留：atom 无 danger 变体（accentDanger 容器 + onAccentPrimary 文案），待配色迁移时补 danger 变体
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(colors.accentDanger)
+                            .clickable(enabled = !isDeleting) {
+                                scope.launch {
+                                    onConfirm()
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Text(if (isDeleting) stringResource(Res.string.skill_deleting) else stringResource(Res.string.skill_uninstall_confirm_action), fontSize = 11.sp)
+                        Text(
+                            text = if (isDeleting) stringResource(Res.string.skill_deleting) else stringResource(Res.string.skill_uninstall_confirm_action),
+                            color = colors.onAccentPrimary,
+                            fontSize = 11.sp,
+                        )
                     }
                 }
             }

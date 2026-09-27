@@ -109,7 +109,7 @@ inkcompose/
 ├── common/<domain>/kotlin/   # commonMain，按领域分目录：entry, latex-*, syntax-*,
 │                             # diagram, markdown-*, vtext
 ├── common/composeResources/font/   # KaTeX×20 + NotoSansMongolian（customDirectory 注册）
-├── jvm/ android/ ios/ wasmJs/      # 平台 actual 平铺合并（各领域无同名文件）
+├── jvm/ android/ ios/ wasmJs/      # 平台 actual 落在 {platform}/kotlin/xyz/emuci/ 下嵌套（nested）域子包（codehigh/diagram/inkcompose/latex/markdown 等）
 ├── common-test/<domain>/     # commonTest 按领域分目录
 └── jvm-test/                 # JVM 测试 + commonmark/gfm spec 资源
 ```
@@ -192,7 +192,7 @@ inkcompose/
 - execute_command：macOS Seatbelt（sandbox-exec）/ Linux bwrap（只检测不代装）/ Windows 降级警告；shell 探测链 bash→sh（Windows bash.exe→cmd）
 - **进程回收**：每条命令是独立进程组，execute_command 启动即登记 `ProcessRegistry`；`list_processes`/`stop_process` 宿主侧（沙箱外）按注册表整组回收——macOS 沙箱内信号不可用（profile 无 process-signal，实测 unbound），只能靠宿主侧。**只杀 mederi 自己启动的进程**，注册表查不到 pid 即拒绝，沙箱内命令无法写注册表
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行
-- `subagent`(action=SPAWN) 硬校验 planId/subtaskIndex/spec 存在性（spec 不存在即拒）
+- `subagent`(action=SPAWN) planId/subtaskIndex 可选：携带 planId+subtaskIndex 时硬校验 spec 存在性（spec 不存在即拒）；不带 planId 走 ad-hoc 执行路径（task+briefing 直接派 executor，无 spec 门禁）
 
 **项目目录模型**：`directories.first()` = 主目录（承载 `.mederi/` 工作区、shell cwd、相对路径解析首选），
 其余目录平等读写。多目录 containment 白名单有效。
@@ -277,9 +277,10 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
   干脏活的便宜模型，自己读盘，模型不必预先转述文件内容。报告完成时落盘到
   `.mederi/plans/{planId}/reports/NN-executor.md`，父上下文只收摘要+路径（尾部 1500 字符 + 路径，捕获
   SPEC_FEEDBACK）。
-- **Researcher**：有活跃 plan 时（spawn 时 planStore.loadBySession 返回非空）报告落盘到
-  `.mederi/plans/{planId}/research.md`，父上下文只收摘要+路径（头部 800 字符）；无活跃 plan 时（分诊
-  阶段调研）保持原有行为——全文回灌父上下文（无法保证制定 plan 时该 researcher 仍可用）。
+- **Researcher**：研究报告始终落盘——有活跃 plan 时（spawn 时 planStore.loadBySession 返回非空）
+  落 `.mederi/plans/{planId}/research.md`；无活跃 plan 时（分诊阶段调研）经
+  `PlanStore.writeStandaloneResearchReport` 落 `.mederi/research/{timestamp}.md`；父上下文都只收摘要
+  （头部约 800 字符）+ 路径。
 
 ### 工作文件落地（方案A 2026-09-24）
 
@@ -290,6 +291,7 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 | `plans/{planId}/plan.json` | 聚合根（含全部动态状态：subtasks[].status/spec/verificationResult/executorTouchedFiles/researchNotes） | create_plan 写；后续 spawn/verify/converge 通过 updatePlan 原子改动态字段 | PlanStore.load（代码内部） |
 | `plans/{planId}/plan.md` | 人读投影（动态渲染） | save 同步写 | UI 批准卡片、用户查看；主代理按需 read_file 取静态详情 |
 | `plans/{planId}/research.md` | researcher 报告全文 | researcher 子代理完成时落盘（有活跃 plan 才落） | executor 需要调研结论时 read_file；主代理按需 |
+| `.mederi/research/{timestamp}.md` | researcher 独立研究报告（无活跃 plan 时落盘） | researcher 子代理完成时经 `PlanStore.writeStandaloneResearchReport` 落盘 | 主代理按需 read_file（父上下文收摘要+路径） |
 | `plans/{planId}/reports/NN-executor.md` | executor 报告全文（per-subtask） | executor 完成时落盘 | 主代理按需 read_file（摘要+路径默认回灌） |
 | `plans/{planId}/walkthrough.md` | 完成总结 | 全部 PASS 时 writeWalkthrough 装配（archive 时随之移到 plans-done/{planId}/） | 用户阅读；AI 可补 Notes 段 |
 | `plans-done/{planId}/...` | 归档整个计划目录（同结构复制） | archive(planId) 触发 | 审计留痕 |
@@ -299,18 +301,18 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 
 ### 子代理主动上报（异步唤醒，2026-09-25）
 
-子代理终态时经 `SubagentManager.onTerminal` 回调**主动通知父会话**，父代理不再需要 WAIT 阻塞拉取：
+子代理终态时 `SubagentManager` 向主 `eventBus` 发终态事件**主动通知父会话**，父代理不再需要 WAIT 阻塞拉取：
 
-- **完成即唤醒**：子代理后台协程的 finally 块里发 `TerminalNotice`（agentId/role/planId/subtaskIndex/status/result），
-  TurnExecutor 收到后入 `pendingNotices` 队列 → 父 turn 空闲时 `maybeFlush` 合并成一条内部消息唤起新 turn。
-- **批量合并**：同会话多个子代理先后完成 → 合并成一条内部消息、一次 turn（省 token）。
-- **父 turn 活跃时**：等 `runTurn` finally 冲刷（`scope.launch { flushPendingNotices }`），不与活跃 turn 争 RUNNING 守卫。
-- **竞态回退**：`sendMessageInternal` 撞上"会话正在跑"（用户消息恰好进来）→ 通知放回队列，等 turn 收尾再冲刷。
+- **完成即唤醒**：子代理后台协程终态（COMPLETED/ERROR/STOPPED）时，`SubagentManager` 发
+  `SUBAGENT_COMPLETED`/`SUBAGENT_ERROR`/`SUBAGENT_STOPPED` 事件到主 `eventBus`（NonCancellable emit，
+  payload = agentId/role/planId?/subtaskIndex?/status/reportPath?/result?）。
+- **事件 → 内部消息**：TurnExecutor init 订阅 `eventBus`，收到终态事件时 `handleSubagentTerminalEvent`
+  组 `<event_message>` 内部消息，入该会话的 `pendingEventMessages` 队列。
+- **批量合并**：父 turn 空闲时 `dispatchPendingEventMessages` 把同会话待处理事件合并成一条消息、
+  一次 turn 唤起（省 token）；撞上 RUNNING（用户消息恰好进来、会话正在跑）→ 重新入队，等下一轮冲刷。
 - **STOPPED 也通知**：否则父代理永远等不到被 stop 的子任务的音讯。
-- **卡死检测（watchdog）**：spawn 时起 `delay(stallTimeoutMs)` 协程（默认 10 分钟），超时后仍 RUNNING →
-  发 `stalled=true` 通知（不 cancel，AI 决定 stop 还是等）；正常完成时 `progress="stalled"` 标记让 finally 跳过（去重）。
-- **abort 清队列**：`abortAndJoin` 清掉该会话的待唤醒通知——用户中止后不该再被唤起。
-- **计划活性校验**：冲刷时校验 `planStore.loadBySession` 仍返回活跃计划；已归档/作废时丢弃通知。
+- **abort 清队列**：`abortAndJoin` 清掉该会话的 `pendingEventMessages`——用户中止后不该再被唤起。
+- **计划活性校验**：冲刷时校验 `planStore.loadBySession` 仍返回活跃计划；已归档/作废时丢弃消息。
 - **WAIT 已删**：`SubagentAction` 枚举不再有 WAIT 值。历史消息中的旧 WAIT 调用不会反序列化失败
   （args 是原始 JSON 字符串不经枚举解码），模型收到错误后自纠。
 **已删除的旧字段**：`Subtask.appendix` 与 `AppendixEntry`（2026-09-24）——executor 直接 read_file 原文件，

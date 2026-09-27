@@ -28,6 +28,9 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.appstate.McpStore
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
+import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 import xyz.mederi.ui.components.atoms.PanelCard
 import xyz.mederi.ui.components.atoms.PanelEmptyState
 import mederi.app.shared.generated.resources.Res
@@ -101,7 +104,7 @@ fun McpManagementCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 刷新按钮
+                        // 刷新按钮内联保留：isRefreshing → accent 高亮为状态反馈，MederiPanelHeaderIconButton 暂无状态色参数，待 atom 支持后对齐
                         Box(
                             modifier = Modifier
                                 .size(22.dp)
@@ -117,21 +120,12 @@ fun McpManagementCard(
                             )
                         }
 
-                        // 添加按钮
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { isAddDialogOpen = true },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.Plus,
-                                contentDescription = stringResource(Res.string.mcp_add),
-                                tint = colors.textSecondary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
+                        // 添加按钮（收敛为 MederiPanelHeaderIconButton）
+                        MederiPanelHeaderIconButton(
+                            icon = FeatherIcons.Plus,
+                            onClick = { isAddDialogOpen = true },
+                            contentDescription = stringResource(Res.string.mcp_add),
+                        )
 
                         // 折叠/展开箭头
                         Box(
@@ -458,11 +452,15 @@ private fun McpConfigDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss, enabled = !isSaving) {
-                        Text(stringResource(Res.string.cancel), color = colors.textMuted, fontSize = 11.sp)
-                    }
+                    // 取消/保存：收敛为 MederiGhostButton（TextButton 语义）+ MederiPrimaryDecisionButton（主操作）
+                    MederiGhostButton(
+                        text = stringResource(Res.string.cancel),
+                        onClick = onDismiss,
+                        enabled = !isSaving,
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Button(
+                    MederiPrimaryDecisionButton(
+                        text = if (isSaving) stringResource(Res.string.mcp_saving) else stringResource(Res.string.mcp_save),
                         onClick = {
                             scope.launch {
                                 isSaving = true
@@ -476,10 +474,7 @@ private fun McpConfigDialog(
                             }
                         },
                         enabled = !isSaving && jsonText.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accentPrimary)
-                    ) {
-                        Text(if (isSaving) stringResource(Res.string.mcp_saving) else stringResource(Res.string.mcp_save), fontSize = 11.sp)
-                    }
+                    )
                 }
             }
         }

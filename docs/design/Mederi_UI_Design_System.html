@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mederi UI 设计规范说明</title>
+<style>
+:root {
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  --bg: #F7F6F4;
+  --surface-1: #FFFFFF;
+  --surface-2: #F1F0ED;
+  --border: rgba(0,0,0,0.09);
+  --border-strong: rgba(0,0,0,0.16);
+  --text-primary: #1A1A19;
+  --text-secondary: #5B5A57;
+  --text-muted: #8C8B87;
+  --accent: #6E64D9;
+  --accent-bg: #EDEBFC;
+  --success: #1D9E75;
+  --success-bg: #E1F5EE;
+  --warning: #BA7517;
+  --warning-bg: #FAEEDA;
+  --danger: #A32D2D;
+  --danger-bg: #FCEBEB;
+  --radius-card: 14px;
+  --radius-ctrl: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", Consolas, monospace;
+}
+html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0A0A0B; --surface-1: #131315; --surface-2: #1B1B1E;
+    --border: rgba(255,255,255,0.08); --border-strong: rgba(255,255,255,0.15);
+    --text-primary: #F2F1EF; --text-secondary: #A3A2A0; --text-muted: #6B6A67;
+    --accent: #8B83EC; --accent-bg: rgba(139,131,236,0.16);
+    --success: #5DCAA5; --success-bg: rgba(93,202,165,0.14);
+    --warning: #EF9F27; --warning-bg: rgba(239,159,39,0.14);
+    --danger: #E5807F; --danger-bg: rgba(226,75,74,0.16);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0A0A0B; --surface-1: #131315; --surface-2: #1B1B1E;
+  --border: rgba(255,255,255,0.08); --border-strong: rgba(255,255,255,0.15);
+  --text-primary: #F2F1EF; --text-secondary: #A3A2A0; --text-muted: #6B6A67;
+  --accent: #8B83EC; --accent-bg: rgba(139,131,236,0.16);
+  --success: #5DCAA5; --success-bg: rgba(93,202,165,0.14);
+  --warning: #EF9F27; --warning-bg: rgba(239,159,39,0.14);
+  --danger: #E5807F; --danger-bg: rgba(226,75,74,0.16);
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text-primary); font-family:var(--font); line-height:1.6; }
+.page { max-width: 760px; margin:0 auto; padding: 48px 24px 80px; }
+header { margin-bottom: 48px; }
+.eyebrow { font-size:13px; color:var(--accent); font-weight:500; margin:0 0 8px; }
+h1 { font-size:26px; font-weight:500; margin:0 0 12px; line-height:1.3; }
+.lede { font-size:15px; color:var(--text-secondary); margin:0; max-width:56ch; }
+section { margin-bottom: 56px; }
+h2 { font-size:19px; font-weight:500; margin:0 0 6px; display:flex; align-items:baseline; gap:10px; }
+h2 .num { color:var(--text-muted); font-size:14px; font-weight:400; }
+.section-desc { font-size:14px; color:var(--text-secondary); margin:0 0 20px; max-width:62ch; }
+p { font-size:14.5px; color:var(--text-secondary); }
+.diag-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+.diag-card { background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius-card); padding:16px 18px; }
+.diag-card .t { font-size:14px; font-weight:500; color:var(--text-primary); margin-bottom:6px; }
+.diag-card .d { font-size:13px; color:var(--text-secondary); }
+.diag-card .badge { display:inline-block; font-size:11px; color:var(--danger); background:var(--danger-bg); padding:2px 8px; border-radius:20px; margin-bottom:8px; }
+.swatch-row { display:flex; gap:10px; flex-wrap:wrap; margin: 4px 0 24px; }
+.swatch { width:88px; }
+.chip { height:56px; border-radius:10px; border:1px solid var(--border); margin-bottom:6px; }
+.swatch .name { font-size:12px; color:var(--text-primary); font-weight:500; }
+.swatch .hex { font-size:11px; color:var(--text-muted); font-family:var(--mono); }
+table { width:100%; border-collapse:collapse; font-size:13.5px; margin-bottom:8px; }
+th { text-align:left; font-weight:500; color:var(--text-muted); font-size:12px; padding:8px 10px; border-bottom:1px solid var(--border-strong); }
+td { padding:10px; border-bottom:1px solid var(--border); color:var(--text-secondary); }
+td.k { color:var(--text-primary); font-weight:500; }
+td code, .hex { font-family:var(--mono); }
+ul.spec { margin:0; padding-left:18px; }
+ul.spec li { font-size:14px; color:var(--text-secondary); margin-bottom:8px; }
+ul.spec li b { color:var(--text-primary); font-weight:500; }
+.card-types { display:flex; flex-direction:column; gap:12px; }
+.ct { background:var(--surface-1); border:1px solid var(--border); border-radius:var(--radius-card); padding:16px 18px; display:flex; gap:14px; align-items:flex-start; }
+.ct .dot { width:10px; height:10px; border-radius:50%; margin-top:6px; flex-shrink:0; }
+.ct .body .t { font-size:14.5px; font-weight:500; color:var(--text-primary); margin-bottom:4px; }
+.ct .body .d { font-size:13px; color:var(--text-secondary); }
+pre { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-card); padding:18px 20px; overflow-x:auto; }
+code { font-family:var(--mono); font-size:12.5px; color:var(--text-primary); line-height:1.7; }
+.note { font-size:12.5px; color:var(--text-muted); margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <p class="eyebrow">Mederi UI 设计规范</p>
+  <h1>从"能用"到"高级"：一套可执行的说明</h1>
+  <p class="lede">这份文档把"不够高级"拆成可判断、可实现的具体规则，覆盖整体配色、排版间距、右侧概览面板与主对话流三处，末尾附 Compose 取值速查，可以直接交给实现的同学或 agent。</p>
+</header>
+
+<section id="diagnosis">
+  <h2><span class="num">1</span>"不够高级"具体是什么</h2>
+  <p class="section-desc">这种感觉通常不是审美问题，而是四个结构性问题叠加的结果：</p>
+  <div class="diag-grid">
+    <div class="diag-card">
+      <div class="t">强调色太多</div>
+      <div class="d">橙(待批准)、蓝(状态点/链接)、绿(在线)、紫(选中)同时出现，注意力被分散，感觉杂乱。</div>
+    </div>
+    <div class="diag-card">
+      <div class="t">靠边框分区，不靠留白</div>
+      <div class="d">用细线分割每一块，而不是用背景层次+间距；边框越多越像表格/终端，不像产品。</div>
+    </div>
+    <div class="diag-card">
+      <div class="t">信息层级扁平</div>
+      <div class="d">标签、数值、正文几乎同字号同灰度，眼睛需要主动"找"重点，而不是被引导到重点。</div>
+    </div>
+    <div class="diag-card">
+      <div class="t">等宽字体滥用</div>
+      <div class="d">模型名、工具名这类普通标签也套用等宽字体+灰底 pill，整体偏"开发者控制台"而非"产品"。</div>
+    </div>
+  </div>
+</section>
+
+<section id="color">
+  <h2><span class="num">2</span>整体配色</h2>
+  <p class="section-desc">规则很简单：<b style="color:var(--text-primary)">只保留一个品牌强调色</b>，其余颜色全部收作"语义色"——只在对应状态下才出现，不参与日常界面装饰。</p>
+  <div class="swatch-row">
+    <div class="swatch"><div class="chip" style="background:var(--accent)"></div><div class="name">品牌强调色</div><div class="hex">选中态 / 主按钮 / 链接</div></div>
+    <div class="swatch"><div class="chip" style="background:var(--success)"></div><div class="name">成功 / 在线</div><div class="hex">仅状态点、完成态</div></div>
+    <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="name">待处理</div><div class="hex">仅"待批准"类徽标</div></div>
+    <div class="swatch"><div class="chip" style="background:var(--danger)"></div><div class="name">错误 / 危险</div><div class="hex">仅报错、删除确认</div></div>
+  </div>
+  <table>
+    <tr><th>层级</th><th>用途</th><th>说明</th></tr>
+    <tr><td class="k">surface-0</td><td>页面底色</td><td>整个应用背景，最暗（深色下）</td></tr>
+    <tr><td class="k">surface-1</td><td>卡片背景</td><td>消息卡、面板卡片主用色，比页面亮一档</td></tr>
+    <tr><td class="k">surface-2</td><td>弹出层/嵌套区块</td><td>代码输出块、弹窗，再亮一档，用于"层次"而非边框</td></tr>
+  </table>
+  <p class="note">当前截图接近这个结构，但边框太密、强调色太杂；把"分割线"预算砍掉一半，换成 surface 层次和间距。</p>
+</section>
+
+<section id="type-space">
+  <h2><span class="num">3</span>排版与间距</h2>
+  <table>
+    <tr><th>用途</th><th>字号/字重</th><th>颜色</th></tr>
+    <tr><td class="k">关键数值(费用/百分比)</td><td>22–24sp / 500</td><td>text-primary</td></tr>
+    <tr><td class="k">正文/卡片标题</td><td>14–15sp / 500</td><td>text-primary</td></tr>
+    <tr><td class="k">次要信息/标签</td><td>12–13sp / 400</td><td>text-secondary</td></tr>
+    <tr><td class="k">辅助提示/时间戳</td><td>11–12sp / 400</td><td>text-muted</td></tr>
+  </table>
+  <ul class="spec">
+    <li><b>停用全大写分区标题</b>（如 RUNTIME、EXTENSIONS）— 改成中文/句首大写的小号弱化标签，全大写是最快让界面显"工具感"而非"产品感"的因素之一。</li>
+    <li>区块间距最少 <code>24dp</code>，卡片内边距 <code>16–20dp</code>，卡片之间不再画分割线，靠间距区分。</li>
+    <li>圆角统一：卡片 <code>14dp</code>，按钮/输入控件/徽标 <code>8dp</code>，不再用"只画左边框"的强调方式（如当前橙色左边条的 Plan 卡）。</li>
+  </ul>
+</section>
+
+<section id="sidebar">
+  <h2><span class="num">4</span>右侧概览面板</h2>
+  <p class="section-desc">对应此前给出的可视化稿，落成具体规则：</p>
+  <ul class="spec">
+    <li><b>数字卡片化</b>：费用、Token 用量做成 2 列数字卡片（surface-1，圆角 <code>8dp</code>），大号数值 + 小号说明文字，替代当前逐行的 label/value 排布。</li>
+    <li><b>Plan 步骤用状态图形</b>：已完成 = 勾选图标（success 色）、进行中 = 实心圆点（accent 色）+ 加粗、待处理 = 空心/浅色圆点，不再用整行同色文字区分状态。</li>
+    <li><b>Extensions 合并为一张卡片</b>：Subagent / MCP Tools / Skill 三行放进同一张卡片内，行与行之间用极浅的 1px 内部分割线，不再是三个独立小节。</li>
+    <li><b>原始消息流默认折叠</b>：只保留一行"共 N 条 ›"的入口，点击展开，不再默认铺开占用侧栏三分之一高度。</li>
+  </ul>
+</section>
+
+<section id="chat-flow">
+  <h2><span class="num">5</span>主对话流</h2>
+  <p class="section-desc">当前问题是三类内容（叙述文字、终端输出、决策卡片）视觉上没有区分开，混在一起阅读很累。建议明确分成三种卡片类型：</p>
+  <div class="card-types">
+    <div class="ct"><span class="dot" style="background:var(--text-muted)"></span>
+      <div class="body"><div class="t">叙述文本</div><div class="d">assistant 的说明性文字，不加卡片、不加边框，就是普通段落，保持阅读速度。</div></div>
+    </div>
+    <div class="ct"><span class="dot" style="background:var(--accent)"></span>
+      <div class="body"><div class="t">工作过程卡（可折叠）</div><div class="d">思考过程/命令/文件读取整体收进一张 surface-1 卡片；命令与终端输出单独用 surface-2 的"代码块"包裹，等宽字体只出现在这个子区域内，不要泄漏到卡片标题或过渡语上。</div></div>
+    </div>
+    <div class="ct"><span class="dot" style="background:var(--warning)"></span>
+      <div class="body"><div class="t">决策 / 审批卡</div><div class="d">问答、Plan 审批、Diff 摘要统一用同一种卡片外观（完整边框 + <code>14dp</code> 圆角），只用一个强调色的按钮做主操作，不再用左侧色条区分类型——类型用卡片顶部一个小徽标文字代替（如"问题 1/1""计划待批准"）。</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="compose">
+  <h2><span class="num">6</span>Compose 取值速查</h2>
+  <pre><code>// Color tokens
+val Surface0 = Color(0xFF0A0A0B)
+val Surface1 = Color(0xFF131315)
+val Surface2 = Color(0xFF1B1B1E)
+val BorderHairline = Color(0x14FFFFFF)   // 8% white
+
+val TextPrimary   = Color(0xFFF2F1EF)
+val TextSecondary = Color(0xFFA3A2A0)
+val TextMuted     = Color(0xFF6B6A67)
+
+val Accent    = Color(0xFF8B83EC)  // 唯一品牌强调色
+val Success   = Color(0xFF5DCAA5)
+val Warning   = Color(0xFFEF9F27)
+val Danger    = Color(0xFFE5807F)
+
+// Shape
+val CardRadius = 14.dp
+val ControlRadius = 8.dp
+
+// Spacing
+val SpaceXS = 4.dp
+val SpaceSM = 8.dp
+val SpaceMD = 12.dp
+val SpaceLG = 16.dp
+val SpaceXL = 24.dp
+
+// Type scale
+val MetricNumber = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Medium)
+val CardTitle     = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium)
+val Secondary     = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Normal)
+val Muted         = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Normal)</code></pre>
+  <p class="note">建议只保留 Regular(400)与 Medium(500)两档字重，Bold 在深色底上会显得过重，是让界面显"廉价"的另一个常见原因。</p>
+</section>
+
+</div>
+</body>
+</html>

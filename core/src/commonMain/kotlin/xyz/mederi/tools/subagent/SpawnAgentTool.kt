@@ -112,21 +112,25 @@ class SpawnAgentTool(
         // 无 plan 路径（ad-hoc 执行）：task+briefing 直接派 executor，跳过 plan/spec/IN_PROGRESS。
         // 用于小改动、多文件编辑等自包含任务——不需要 plan 流程，只省上下文。
         if (args.planId.isBlank()) {
-            val agentId = subagentManager.spawn(
-                task = args.task,
-                briefing = args.briefing.takeIf { it.isNotBlank() },
-                plan = null,
-                role = SubagentRole.EXECUTOR,
-                directories = directories,
-                aiModel = effectiveAiModel,
-                reasoningLevel = effectiveReasoningLevel,
-                projectId = projectId,
-                parentSessionId = parentSessionId,
-                apiKeyId = apiKeyId,
-                planId = null,
-                executorSubtaskIndex = null,
-                planStore = null
-            )
+            val agentId = try {
+                subagentManager.spawn(
+                    task = args.task,
+                    briefing = args.briefing.takeIf { it.isNotBlank() },
+                    plan = null,
+                    role = SubagentRole.EXECUTOR,
+                    directories = directories,
+                    aiModel = effectiveAiModel,
+                    reasoningLevel = effectiveReasoningLevel,
+                    projectId = projectId,
+                    parentSessionId = parentSessionId,
+                    apiKeyId = apiKeyId,
+                    planId = null,
+                    executorSubtaskIndex = null,
+                    planStore = null
+                )
+            } catch (e: SubagentLimitReachedException) {
+                return e.modelGuidance
+            }
             return Json.encodeToString(
                 SpawnResult.serializer(),
                 SpawnResult(agentId = agentId, status = "RUNNING", modelName = effectiveAiModel.name)
@@ -183,29 +187,33 @@ class SpawnAgentTool(
             timestamp = Instant.now().toString()
         ))
 
-        val agentId = subagentManager.spawn(
-            task = args.task,
-            // briefing 注入执行所需的最低意图（executor 自己读盘获取详情）：
-            // 1. 父 agent 调研结论（plan.researchNotes）——主 agent 备忘字段，不再注入 executor
-            //    briefing。executor 需要调研结论时 read_file .mederi/plans/{planId}/research.md
-            // 2. brief（用户批准的意图）——子任务在全局中的定位
-            // spec 是主执行清单（作为 plan 参数单独传，不拼进 briefing）
-            briefing = listOfNotNull(
-                args.briefing.takeIf { it.isNotBlank() },
-                st.planDetail.takeIf { it.isNotBlank() }?.let { "Brief: $it" }
-            ).takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
-            plan = st.spec,
-            role = SubagentRole.EXECUTOR,
-            directories = directories,
-            aiModel = effectiveAiModel,
-            reasoningLevel = effectiveReasoningLevel,
-            projectId = projectId,
-            parentSessionId = parentSessionId,
-            apiKeyId = apiKeyId,
-            planId = args.planId,
-            executorSubtaskIndex = args.subtaskIndex,
-            planStore = planStore
-        )
+        val agentId = try {
+            subagentManager.spawn(
+                task = args.task,
+                // briefing 注入执行所需的最低意图（executor 自己读盘获取详情）：
+                // 1. 父 agent 调研结论（plan.researchNotes）——主 agent 备忘字段，不再注入 executor
+                //    briefing。executor 需要调研结论时 read_file .mederi/plans/{planId}/research.md
+                // 2. brief（用户批准的意图）——子任务在全局中的定位
+                // spec 是主执行清单（作为 plan 参数单独传，不拼进 briefing）
+                briefing = listOfNotNull(
+                    args.briefing.takeIf { it.isNotBlank() },
+                    st.planDetail.takeIf { it.isNotBlank() }?.let { "Brief: $it" }
+                ).takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
+                plan = st.spec,
+                role = SubagentRole.EXECUTOR,
+                directories = directories,
+                aiModel = effectiveAiModel,
+                reasoningLevel = effectiveReasoningLevel,
+                projectId = projectId,
+                parentSessionId = parentSessionId,
+                apiKeyId = apiKeyId,
+                planId = args.planId,
+                executorSubtaskIndex = args.subtaskIndex,
+                planStore = planStore
+            )
+        } catch (e: SubagentLimitReachedException) {
+            return e.modelGuidance
+        }
         return Json.encodeToString(
             SpawnResult.serializer(),
             SpawnResult(agentId = agentId, status = "RUNNING", modelName = effectiveAiModel.name)
@@ -272,20 +280,24 @@ class SpawnResearcherTool(
         // 查活跃 plan：有 plan 时把 planId 传下去，researcher 完成时把报告落盘到 {planId}/research.md；
         // 无 plan（分诊阶段调研，plan 尚未建）时 planId=null，保持原有行为（全文回灌父上下文）。
         val activePlanId = planStore?.loadBySession(parentSessionId)?.id
-        val agentId = subagentManager.spawn(
-            task = args.task,
-            briefing = args.briefing.takeIf { it.isNotBlank() },
-            plan = null,
-            role = SubagentRole.RESEARCHER,
-            directories = directories,
-            aiModel = effectiveAiModel,
-            reasoningLevel = effectiveReasoningLevel,
-            projectId = projectId,
-            parentSessionId = parentSessionId,
-            apiKeyId = apiKeyId,
-            planId = activePlanId,
-            planStore = planStore
-        )
+        val agentId = try {
+            subagentManager.spawn(
+                task = args.task,
+                briefing = args.briefing.takeIf { it.isNotBlank() },
+                plan = null,
+                role = SubagentRole.RESEARCHER,
+                directories = directories,
+                aiModel = effectiveAiModel,
+                reasoningLevel = effectiveReasoningLevel,
+                projectId = projectId,
+                parentSessionId = parentSessionId,
+                apiKeyId = apiKeyId,
+                planId = activePlanId,
+                planStore = planStore
+            )
+        } catch (e: SubagentLimitReachedException) {
+            return e.modelGuidance
+        }
         return Json.encodeToString(
             SpawnAgentTool.SpawnResult.serializer(),
             SpawnAgentTool.SpawnResult(agentId = agentId, status = "RUNNING", modelName = effectiveAiModel.name)

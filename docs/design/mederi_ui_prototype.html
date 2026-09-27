@@ -1,0 +1,3846 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mederi UI Prototype - Refined Architecture Alignment</title>
+    <!-- Fonts: Inter & JetBrains Mono (Linear / Raycast Standard) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/feather-icons"></script>
+    <style>
+        :root {
+            /* Radix Radius Tokens (Default Medium scale) */
+            --radius-1: 3px;
+            --radius-2: 4px;
+            --radius-3: 6px;    /* medium (buttons, inputs) */
+            --radius-4: 8px;    /* large (cards, containers) */
+            --radius-full: 9999px;
+
+            --radius-card: var(--radius-4);
+            --radius-ctrl: var(--radius-3);
+
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            --font-mono: "SF Mono", "JetBrains Mono", Consolas, monospace;
+
+            --sidebar-width: 245px;
+            --right-dock-width: 44px;
+            --right-panel-width: 410px;
+            --content-max-width: 820px;
+        }
+
+        /* ==========================================================================
+           1. Radix Themes Dark Scale (深色主题 - 沉浸专业)
+           ========================================================================== */
+        :root,
+        [data-theme="dark"],
+        body.dark {
+            /* Radix Gray (Dark Scale: Neutral Base) */
+            --gray-1: #111113;  /* App background */
+            --gray-2: #18181a;  /* Subtle background (Card, sidebar subtle) */
+            --gray-3: #222225;  /* UI element background (Hover, code, inputs) */
+            --gray-4: #2a2a2e;  /* Hovered UI element background */
+            --gray-5: #313136;  /* Active / Pressed element background */
+            --gray-6: #3a3a40;  /* Subtle borders and separators (Hairlines) */
+            --gray-7: #484851;  /* UI element border and focus rings */
+            --gray-8: #60606b;  /* Hovered UI element border */
+            --gray-9: #6e6d7a;  /* Solid backgrounds */
+            --gray-10: #7b7a87; /* Hovered solid */
+            --gray-11: #a09fa6; /* Low-contrast text (Muted, metadata) */
+            --gray-12: #ededef; /* High-contrast text (Primary readable) */
+
+            /* Radix Iris (Dark Scale: Accent / Brand Purple) */
+            --iris-1: #13131e;
+            --iris-2: #171625;
+            --iris-3: #201e39;  /* Soft button background */
+            --iris-4: #272449;  /* Hovered soft button */
+            --iris-5: #302c5b;  /* Active soft button */
+            --iris-6: #3c3673;  /* Subtle accent border */
+            --iris-7: #4e459c;  /* Accent border */
+            --iris-8: #6357c7;  /* Focus rings */
+            --iris-9: #5b5bd6;  /* Solid accent / Primary button */
+            --iris-10: #534bc6; /* Hovered solid */
+            --iris-11: #a39cf4; /* Low-contrast accent text / Soft button text */
+            --iris-12: #e0ddfe; /* High-contrast accent text */
+
+            /* Radix Semantic Status Colors (Dark) */
+            --green-3: #13271f;
+            --green-6: #1f4f3a;
+            --green-9: #30a46c;
+            --green-11: #55cf8d;
+            --amber-3: #2a1f0a;
+            --amber-6: #583d0c;
+            --amber-9: #ffb224;
+            --amber-11: #ffca16;
+            --red-3: #291415;
+            --red-6: #5c2023;
+            --red-9: #e5484d;
+            --red-11: #ff8589;
+
+            /* Mederi 系统映射 (Dark) */
+            --bg: var(--gray-1);
+            --surface-1: var(--gray-2);
+            --surface-2: var(--gray-3);
+            --border: var(--gray-6);
+            --border-strong: var(--gray-7);
+            --text-primary: var(--gray-12);
+            --text-secondary: var(--gray-11);
+            --text-muted: #74737d;
+
+            --accent: var(--iris-9);
+            --accent-hover: var(--iris-10);
+            --accent-bg: var(--iris-3);
+            --accent-text: var(--iris-11);
+
+            --success: var(--green-9);
+            --success-bg: var(--green-3);
+            --success-text: var(--green-11);
+            --warning: var(--amber-9);
+            --warning-bg: var(--amber-3);
+            --warning-text: var(--amber-11);
+            --danger: var(--red-9);
+            --danger-bg: var(--red-3);
+            --danger-text: var(--red-11);
+
+            --bg-window: var(--bg);
+            --bg-sidebar: var(--bg);
+            --bg-workspace: var(--bg);
+            --bg-card: var(--surface-1);
+            --bg-card-hover: var(--gray-3);
+            --bg-input: var(--gray-2);
+            --bg-code: #131316;
+            --bg-hover: var(--gray-3);
+            --bg-active: var(--iris-3);
+            --border-default: var(--border);
+            --border-hover: var(--border-strong);
+            --accent-primary: var(--accent);
+            --accent-purple: var(--accent);
+            --accent-success: var(--success);
+            --accent-warning: var(--warning);
+            --rail-color: var(--gray-6);
+            --bg-card-subtle: var(--gray-2);
+        }
+
+        /* ==========================================================================
+           2. Radix Themes Light Scale (浅色主题 - 优雅清透)
+           ========================================================================== */
+        [data-theme="light"],
+        body.light {
+            /* Radix Gray (Light Scale: Neutral Base) */
+            --gray-1: #fcfcfd;  /* App background 干净极简淡白 */
+            --gray-2: #f9f9fb;  /* Subtle background (Sidebar, input cards) */
+            --gray-3: #f0f0f3;  /* UI element background (Hover, inputs, code) */
+            --gray-4: #e8e8ec;  /* Hovered UI element background */
+            --gray-5: #e0e0e6;  /* Active / Pressed element background */
+            --gray-6: #d9d9df;  /* Subtle borders and separators (Hairlines) */
+            --gray-7: #ceced6;  /* UI element border and focus rings */
+            --gray-8: #bbbbc4;  /* Hovered UI element border */
+            --gray-9: #8d8d99;  /* Solid backgrounds */
+            --gray-10: #83838f; /* Hovered solid */
+            --gray-11: #646470; /* Low-contrast text (Muted, metadata) */
+            --gray-12: #18181b; /* High-contrast text (Primary readable) */
+
+            /* Radix Iris (Light Scale: Accent / Brand Purple) */
+            --iris-1: #fdfdff;
+            --iris-2: #f8f8ff;
+            --iris-3: #f0f0ff;  /* Soft button background 雅致浅透紫 */
+            --iris-4: #e6e5ff;  /* Hovered soft button */
+            --iris-5: #dad9ff;  /* Active soft button */
+            --iris-6: #cbcafe;  /* Subtle accent border */
+            --iris-7: #b8b6fc;  /* Accent border */
+            --iris-8: #9f9cf9;  /* Focus rings */
+            --iris-9: #5b5bd6;  /* Solid accent / Primary button */
+            --iris-10: #514ec7; /* Hovered solid */
+            --iris-11: #534bc6; /* High-contrast accent text in light mode */
+            --iris-12: #272368; /* High-contrast accent text 深邃高贵紫 */
+
+            /* Radix Semantic Status Colors (Light) */
+            --green-3: #e6f6eb;
+            --green-6: #b4dfc4;
+            --green-9: #2d9d64;
+            --green-11: #218358;
+            --amber-3: #fef3d6;
+            --amber-6: #f5d990;
+            --amber-9: #e59300;
+            --amber-11: #9b5a00;
+            --red-3: #feecee;
+            --red-6: #f9c6cb;
+            --red-9: #e5484d;
+            --red-11: #ce2c31;
+
+            /* Mederi 系统映射 (Light) */
+            --bg: var(--gray-1);
+            --surface-1: #ffffff;
+            --surface-2: var(--gray-2);
+            --border: var(--gray-6);
+            --border-strong: var(--gray-7);
+            --text-primary: var(--gray-12);
+            --text-secondary: var(--gray-11);
+            --text-muted: #8c8b94;
+
+            --accent: var(--iris-9);
+            --accent-hover: var(--iris-10);
+            --accent-bg: var(--iris-3);
+            --accent-text: var(--iris-11);
+
+            --success: var(--green-9);
+            --success-bg: var(--green-3);
+            --success-text: var(--green-11);
+            --warning: var(--amber-9);
+            --warning-bg: var(--amber-3);
+            --warning-text: var(--amber-11);
+            --danger: var(--red-9);
+            --danger-bg: var(--red-3);
+            --danger-text: var(--red-11);
+
+            --bg-window: var(--bg);
+            --bg-sidebar: var(--gray-2);
+            --bg-workspace: #ffffff;
+            --bg-card: #ffffff;
+            --bg-card-hover: var(--gray-3);
+            --bg-input: #ffffff;
+            --bg-code: #f3f3f6;
+            --bg-hover: var(--gray-3);
+            --bg-active: var(--iris-3);
+            --border-default: var(--border);
+            --border-hover: var(--border-strong);
+            --accent-primary: var(--accent);
+            --accent-purple: var(--accent);
+            --accent-success: var(--success);
+            --accent-warning: var(--warning);
+            --rail-color: var(--gray-6);
+            --bg-card-subtle: var(--gray-2);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-window);
+            color: var(--text-primary);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 13px;
+            font-weight: 450;
+            line-height: 1.5;
+            letter-spacing: -0.015em;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            font-feature-settings: 'cv01' on, 'ss03' on;
+        }
+
+        /* Layout */
+        .app-container { display: flex; width: 100%; height: 100%; }
+
+        /* Left Sidebar (Sidebar.kt) */
+        .sidebar {
+            width: var(--sidebar-width);
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-default);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            padding: 8px 10px;
+            user-select: none;
+        }
+
+        .sidebar-search-row {
+            height: 40px;
+            display: flex;
+            align-items: center;
+            padding-bottom: 8px;
+        }
+
+        .icon-btn-minimal {
+            width: 28px;
+            height: 28px;
+            border-radius: var(--radius-2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--gray-11);
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            transition: all 120ms ease;
+        }
+        .icon-btn-minimal:hover { background-color: var(--gray-3); color: var(--gray-12); }
+
+        .fixed-menu-group { display: flex; flex-direction: column; gap: 4px; }
+        .sidebar-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px;
+            height: 36px;
+            border-radius: var(--radius-ctrl);
+            color: var(--gray-11);
+            font-size: 13.5px;
+            font-weight: 450;
+            cursor: pointer;
+            transition: all 120ms ease;
+        }
+        .sidebar-menu-item:hover { background-color: var(--gray-3); color: var(--gray-12); }
+        .sidebar-menu-item.active {
+            background-color: var(--iris-3);
+            color: var(--iris-11);
+            border: 1px solid var(--iris-6);
+            font-weight: 500;
+        }
+        .sidebar-menu-item svg { width: 16px; height: 16px; stroke-width: 1.8; }
+
+        .sidebar-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 6px 4px 6px;
+            margin-top: 20px;
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--gray-11);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .project-tree { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+        .project-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            margin-bottom: 2px;
+            border-radius: var(--radius-ctrl);
+            cursor: pointer;
+            color: var(--gray-12);
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .project-row:hover { background-color: var(--gray-3); }
+        .project-row-left { display: flex; align-items: center; gap: 8px; }
+
+        .conversation-list { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; margin-top: 2px; }
+        .conv-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px;
+            height: 32px;
+            border-radius: var(--radius-ctrl);
+            cursor: pointer;
+            color: var(--gray-11);
+            font-size: 12.5px;
+            font-weight: 400;
+            transition: all 120ms ease;
+        }
+        .conv-item:hover { background-color: var(--gray-3); color: var(--gray-12); }
+        .conv-item.active {
+            background-color: var(--gray-3);
+            color: var(--gray-12);
+            font-weight: 500;
+        }
+        .conv-item-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .conv-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .conv-status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--iris-9);
+            flex-shrink: 0;
+        }
+        .conv-status-dot.idle { background-color: var(--gray-8); }
+
+        .sidebar-divider { height: 1px; background-color: var(--gray-6); margin: 8px 0; }
+
+        /* Sidebar Footer */
+        .sidebar-footer { padding: 4px 4px 2px 4px; display: flex; flex-direction: column; gap: 6px; }
+        .footer-line-1 { display: flex; align-items: center; justify-content: space-between; }
+        .settings-button {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 6px;
+            border-radius: var(--radius-ctrl);
+            color: var(--gray-11);
+            font-size: 12.5px;
+            cursor: pointer;
+            transition: all 120ms ease;
+        }
+        .settings-button:hover { background-color: var(--gray-3); color: var(--gray-12); }
+        .footer-tools-right { display: flex; align-items: center; gap: 6px; }
+        .icon-square-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: var(--radius-ctrl);
+            background-color: var(--gray-3);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--gray-11);
+            cursor: pointer;
+            transition: all 120ms ease;
+        }
+        .icon-square-btn:hover {
+            color: var(--gray-12);
+            border-color: var(--border-strong);
+            background-color: var(--gray-4);
+        }
+        .footer-line-2 { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 0 4px; }
+
+        /* Central Workspace */
+        .workspace { flex: 1; display: flex; flex-direction: column; background-color: var(--bg); min-width: 0; position: relative; }
+
+        /* Header (Workspace.kt height = 40.dp) */
+        .workspace-header {
+            height: 40px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            background-color: var(--bg);
+            flex-shrink: 0;
+        }
+        .header-title-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        .header-project-pill {
+            background-color: var(--gray-3);
+            border: 1px solid var(--gray-6);
+            padding: 4px 10px;
+            border-radius: var(--radius-ctrl);
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Chat Scroll List */
+        .chat-scroll-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px 10px 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+        .chat-content-container { width: 100%; max-width: var(--content-max-width); display: flex; flex-direction: column; gap: 20px; }
+
+        /* User Message */
+        .user-turn-row { display: flex; justify-content: flex-end; width: 100%; }
+        .user-bubble-container {
+            max-width: 680px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
+        .user-bubble {
+            background-color: var(--gray-3);
+            border: 1px solid var(--gray-6);
+            border-radius: 12px 12px 2px 12px;
+            padding: 10px 14px;
+            font-size: 13.5px;
+            line-height: 1.6;
+            color: var(--text-primary);
+        }
+        .user-footer {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 10.5px;
+            color: var(--text-muted);
+            padding: 0 4px;
+        }
+        .user-footer-btn { display: flex; align-items: center; cursor: pointer; color: var(--text-muted); }
+        .user-footer-btn:hover { color: var(--text-secondary); }
+
+        /* Assistant Turn */
+        .assistant-turn-block { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+
+        /* 1. WorkTraceCard (工作过程聚合栏 - 严格还原 WorkTraceCard.kt) */
+        .work-trace-card { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+        .work-trace-summary-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            user-select: none;
+            width: fit-content;
+            transition: background 0.15s ease;
+        }
+        .work-trace-summary-bar:hover { background-color: var(--bg-hover); }
+        .work-trace-title { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+        .chevron-icon { width: 11px; height: 11px; transition: transform 0.2s ease; color: var(--text-secondary); }
+        .work-trace-card.expanded .summary-chevron { transform: rotate(90deg); }
+
+        /* 展开后内部视口（左贯穿微导轨 1.5px，限高 320px + 独立滚动） */
+        .work-trace-expanded-container {
+            display: none;
+            flex-direction: column;
+            border-left: 1.5px solid var(--rail-color);
+            margin-left: 8px;
+            padding-left: 14px;
+            padding-top: 4px;
+            padding-bottom: 2px;
+        }
+        .work-trace-card.expanded .work-trace-expanded-container { display: flex; }
+
+        .work-trace-scroll-viewport {
+            max-height: 320px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-right: 6px;
+        }
+        .work-trace-scroll-viewport.unbounded { max-height: none; }
+
+        /* 容器底部固定锚定切换按钮 */
+        .work-trace-height-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 6px 0;
+            margin-top: 4px;
+            border-top: 1px solid var(--gray-6);
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .work-trace-height-toggle:hover { color: var(--text-secondary); }
+
+        /* 1.1 ReasoningBlock (思维链 - 单行微条 + 2px 导轨) */
+        .reasoning-block { display: flex; flex-direction: column; gap: 3px; }
+        .reasoning-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            width: fit-content;
+        }
+        .reasoning-bar:hover { background-color: var(--bg-hover); }
+        .reasoning-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+        .reasoning-expanded-content {
+            display: none;
+            border-left: 2px solid var(--rail-color);
+            margin-left: 6px;
+            padding-left: 12px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            font-size: 12.5px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+        .reasoning-block.expanded .reasoning-expanded-content { display: block; }
+        .reasoning-block.expanded .reasoning-chevron { transform: rotate(90deg); }
+
+        /* 1.2 StepNarration (步骤过渡语) */
+        .step-narration {
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 2px 4px;
+            font-style: italic;
+        }
+
+        /* 1.3 ToolActionGroupRow (工具调用行: COMMAND, READ, EDIT) */
+        .tool-action-group { display: flex; flex-direction: column; gap: 2px; }
+        .tool-action-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            width: fit-content;
+        }
+        .tool-action-bar:hover { background-color: var(--bg-hover); }
+        .tool-action-title { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+        .tool-action-details {
+            display: none;
+            padding-left: 14px;
+            margin-top: 3px;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .tool-action-group.expanded .tool-action-details { display: flex; }
+        .tool-action-group.expanded .tool-chevron { transform: rotate(90deg); }
+
+        .tool-command-target {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-primary);
+            padding: 2px 4px;
+        }
+
+        /* ToolCallOutputBlock (OUTPUT 折叠微条 + 黑色终端输出框) */
+        .tool-output-block { display: flex; flex-direction: column; gap: 2px; }
+        .tool-output-trigger {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            padding: 2px 4px;
+            width: fit-content;
+        }
+        .tool-output-tag {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+        .tool-terminal-box {
+            display: none;
+            background-color: var(--bg-code);
+            border: 1px solid var(--gray-6);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            line-height: 16px;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            max-height: 280px;
+            overflow-y: auto;
+        }
+        .tool-output-block.expanded .tool-terminal-box { display: block; }
+        .tool-output-block.expanded .output-chevron { transform: rotate(90deg); }
+
+        /* 1.4 Subagent Report Block */
+        .report-box {
+            display: none;
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: var(--text-primary);
+        }
+        .tool-action-group.expanded .report-box { display: block; }
+
+        /* 2. TextMessage (交付正文 Markdown) */
+        .deliverable-text-message {
+            font-size: 13.5px;
+            line-height: 1.7;
+            color: var(--text-primary);
+            padding: 4px 2px;
+        }
+        .deliverable-text-message p { margin-bottom: 8px; }
+        .deliverable-text-message code {
+            background-color: var(--bg-code);
+            border: 1px solid var(--border-default);
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+        }
+
+        /* ==========================================================================
+           Radix Themes Standard Component System
+           ========================================================================== */
+
+        /* Radix Primary Decision Button (统一主决策规范 - 紧凑尺寸) */
+        .btn-primary-decision,
+        .btn-proceed,
+        .btn-submit-q {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            height: 28px;
+            padding: 0 12px;
+            border-radius: var(--radius-ctrl);
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1;
+            white-space: nowrap;
+            user-select: none;
+            cursor: pointer;
+            background-color: var(--iris-3);
+            color: var(--iris-11);
+            border: 1px solid var(--iris-6);
+            transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+            box-sizing: border-box;
+            outline: none;
+        }
+        .btn-primary-decision:hover,
+        .btn-proceed:hover,
+        .btn-submit-q:hover {
+            background-color: var(--iris-4);
+            border-color: var(--iris-7);
+            color: var(--iris-12);
+        }
+        .btn-primary-decision:active,
+        .btn-proceed:active,
+        .btn-submit-q:active {
+            background-color: var(--iris-5);
+        }
+        .btn-kbd-hint {
+            font-family: var(--font-sans);
+            font-size: 10px;
+            opacity: 0.7;
+            margin-left: 2px;
+        }
+
+        /* Radix Button Variant: Surface (次级微凸起) */
+        .rt-variant-surface,
+        .btn-review-diff {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            height: 24px;
+            padding: 0 8px;
+            border-radius: var(--radius-ctrl);
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            color: var(--gray-12);
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 120ms ease;
+        }
+        .rt-variant-surface:hover,
+        .btn-review-diff:hover {
+            background-color: var(--gray-3);
+            border-color: var(--gray-7);
+        }
+
+        /* Radix Button Variant: Ghost (纯图标与无边框操作) */
+        .rt-variant-ghost,
+        .user-footer-btn,
+        .footer-action-btn {
+            background-color: transparent;
+            border: 1px solid transparent;
+            color: var(--gray-11);
+            cursor: pointer;
+            border-radius: var(--radius-ctrl);
+            transition: all 120ms ease;
+        }
+        .rt-variant-ghost:hover,
+        .user-footer-btn:hover,
+        .footer-action-btn:hover {
+            background-color: var(--gray-3);
+            color: var(--gray-12);
+        }
+
+        /* Radix Card System (仅供独立浮层/抽屉容器使用) */
+        .rt-Card {
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-card);
+            box-sizing: border-box;
+            transition: border-color 140ms ease, background-color 140ms ease;
+        }
+
+        /* ==========================================================================
+           Zero-Card / Flat Stream Layout (对话流去卡片化流式排版)
+           彻底消除四面封闭的盒子与多余背景色，转为自然流式融入聊天
+           ========================================================================== */
+
+        /* 3. Document Artifact (内联文件条 - 紧凑内联，非卡片) */
+        .document-artifact-card,
+        .stream-artifact-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 10px;
+            border-radius: var(--radius-ctrl);
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            cursor: pointer;
+            width: fit-content;
+            max-width: 100%;
+            transition: all 120ms ease;
+            margin: 2px 0;
+            box-sizing: border-box;
+        }
+        .document-artifact-card:hover,
+        .stream-artifact-row:hover {
+            border-color: var(--iris-7);
+            background-color: var(--gray-3);
+        }
+        .artifact-left {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+        .artifact-icon-box {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--iris-11);
+        }
+        .artifact-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .artifact-title {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--gray-12);
+        }
+        .artifact-sub {
+            font-size: 11px;
+            color: var(--gray-11);
+        }
+        .artifact-capsule {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 11px;
+            color: var(--iris-11);
+            margin-left: 4px;
+        }
+        .document-artifact-card:hover .artifact-capsule,
+        .stream-artifact-row:hover .artifact-capsule {
+            color: var(--iris-12);
+        }
+
+        /* 4. Question (流式问询块 - 无卡片外壳，左侧 2px 鸢尾紫指示线) */
+        .question-card,
+        .stream-question-block {
+            padding: 2px 0 2px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-width: 560px;
+            border: none;
+            border-left: 2px solid var(--iris-8);
+            background: transparent;
+            margin: 6px 0;
+            box-sizing: border-box;
+        }
+        .question-header {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--iris-11);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+        .question-prompt {
+            font-size: 12.5px;
+            font-weight: 450;
+            color: var(--gray-12);
+            line-height: 1.5;
+        }
+        .question-options {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .question-option-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 8px;
+            border-radius: var(--radius-ctrl);
+            background-color: transparent;
+            border: 1px solid transparent;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--gray-11);
+            transition: all 120ms ease;
+        }
+        .question-option-row:hover {
+            background-color: var(--gray-3);
+            color: var(--gray-12);
+        }
+        .question-option-row.selected {
+            background-color: var(--iris-3);
+            color: var(--gray-12);
+            border-color: transparent;
+        }
+        .question-option-row input[type="radio"] {
+            accent-color: var(--iris-9);
+            width: 13px;
+            height: 13px;
+            cursor: pointer;
+            margin: 0;
+        }
+        .question-actions {
+            display: flex;
+            justify-content: flex-start;
+            margin-top: 2px;
+        }
+
+        /* 5. Plan Approval (流式计划审批 - 无卡片外壳，左侧 2px 发丝灰引用线) */
+        .plan-approval-card,
+        .stream-plan-block {
+            padding: 2px 0 2px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-width: 560px;
+            border: none;
+            border-left: 2px solid var(--gray-6);
+            background: transparent;
+            margin: 6px 0;
+            box-sizing: border-box;
+        }
+        .plan-approval-top {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            width: fit-content;
+        }
+        .plan-approval-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12.5px;
+            font-weight: 500;
+            color: var(--gray-12);
+        }
+        .plan-approval-title:hover {
+            color: var(--iris-11);
+        }
+        .plan-id-tag {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--gray-11);
+            background-color: var(--gray-3);
+            border: 1px solid var(--gray-6);
+            padding: 1px 5px;
+            border-radius: var(--radius-1);
+        }
+        .plan-approval-summary {
+            font-size: 12px;
+            line-height: 1.55;
+            color: var(--gray-11);
+        }
+        .plan-actions-row {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin-top: 2px;
+        }
+        .btn-proceed:disabled {
+            background-color: var(--gray-3);
+            color: var(--gray-9);
+            border-color: transparent;
+            cursor: not-allowed;
+        }
+
+        /* 6. Turn Diff Summary (流式变更清单 - 无外壳纯平铺) */
+        .turn-diff-card,
+        .stream-diff-block {
+            padding: 2px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-width: 560px;
+            border: none;
+            background: transparent;
+            margin: 4px 0;
+            box-sizing: border-box;
+        }
+        .turn-diff-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .turn-diff-title {
+            font-size: 11.5px;
+            font-weight: 500;
+            color: var(--gray-12);
+        }
+        .file-diff-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 6px;
+            border-radius: var(--radius-ctrl);
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            transition: background 120ms ease;
+            width: fit-content;
+            max-width: 100%;
+        }
+        .file-diff-row:hover {
+            background-color: var(--gray-3);
+        }
+        .diff-file-name {
+            font-weight: 500;
+            color: var(--gray-12);
+        }
+        .diff-file-dir {
+            color: var(--gray-11);
+            font-size: 10.5px;
+            margin: 0 4px;
+        }
+        .diff-add {
+            color: var(--green-11);
+            font-weight: 500;
+        }
+        .diff-del {
+            color: var(--red-11);
+            font-weight: 500;
+        }
+
+        /* 7. AssistantMessageFooter (UserMessageCards.kt) */
+        .assistant-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 2px 0 2px;
+            font-size: 10.5px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+        .footer-meta-left { display: flex; align-items: center; gap: 6px; }
+        .footer-actions-right { display: flex; align-items: center; gap: 6px; }
+        .footer-action-btn {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            color: var(--text-muted);
+        }
+        .footer-action-btn:hover { background-color: var(--bg-hover); color: var(--text-secondary); }
+
+        /* Chat Input Area (ChatInputCard.kt & ChatInputControls.kt) */
+        .chat-input-wrapper {
+            padding: 0 24px 20px 24px;
+            display: flex;
+            justify-content: center;
+            width: 100%;
+        }
+        .chat-input-card {
+            width: 100%;
+            max-width: var(--content-max-width);
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-card);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: border-color 140ms ease, box-shadow 140ms ease;
+        }
+        .chat-input-card:focus-within {
+            border-color: var(--iris-7);
+            box-shadow: 0 0 0 1px var(--iris-7);
+        }
+
+        .chat-input-textarea {
+            min-height: 48px;
+            max-height: 160px;
+            padding: 14px 16px 4px 16px;
+            border: none;
+            outline: none;
+            resize: none;
+            background: transparent;
+            font-family: var(--font-sans);
+            font-size: 13.5px;
+            line-height: 20px;
+            color: var(--gray-12);
+        }
+        .chat-input-textarea::placeholder { color: var(--gray-11); }
+
+        .chat-input-controls-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+        }
+        .controls-group-left, .controls-group-right { display: flex; align-items: center; gap: 6px; }
+
+        .selector-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            height: 26px;
+            padding: 0 8px;
+            border-radius: var(--radius-ctrl);
+            background-color: var(--gray-3);
+            border: 1px solid var(--gray-6);
+            color: var(--gray-12);
+            font-size: 11.5px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 120ms ease;
+        }
+        .selector-pill:hover {
+            border-color: var(--gray-7);
+            background-color: var(--gray-4);
+        }
+
+        .auto-approve-toggle {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            height: 26px;
+            padding: 0 6px;
+            border-radius: var(--radius-ctrl);
+            cursor: pointer;
+            color: var(--gray-11);
+            font-size: 11.5px;
+            font-weight: 500;
+        }
+        .mini-switch {
+            width: 28px;
+            height: 16px;
+            border-radius: 10px;
+            background-color: var(--iris-9);
+            position: relative;
+            cursor: pointer;
+            transition: background-color 120ms ease;
+        }
+        .mini-switch-thumb {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: white;
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            transition: all 0.15s ease;
+        }
+
+        .send-round-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: var(--radius-ctrl);
+            background-color: var(--gray-12);
+            color: var(--gray-1);
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background-color 120ms ease, transform 80ms ease;
+        }
+        .send-round-btn:hover { background-color: #ffffff; color: #000000; }
+        .send-round-btn:active { transform: scale(0.96); }
+
+        /* Right Extension Panel (RightExtensionPanel.kt) */
+        .right-extension-panel {
+            width: var(--right-panel-width);
+            background-color: var(--bg-sidebar);
+            border-left: 1px solid var(--border-default);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            position: relative;
+        }
+        .panel-header {
+            height: 40px;
+            border-bottom: 1px solid var(--border-default);
+            padding: 0 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12.5px;
+            font-weight: 600;
+            background-color: var(--bg-sidebar);
+            flex-shrink: 0;
+        }
+        .panel-header-left { display: flex; align-items: center; gap: 8px; color: var(--text-primary); }
+
+        /* Panel Views */
+        .panel-view-content {
+            flex: 1;
+            overflow-y: auto;
+            display: none;
+            flex-direction: column;
+        }
+        .panel-view-content.active { display: flex; }
+
+        /* 1. OVERVIEW VIEW: 严格遵循 Mederi UI 规范第 4 节 (数字卡片化、状态图形、合并扩展、折叠消息) */
+        .inspector-container {
+            padding: 20px 20px 12px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            flex: 1;
+        }
+
+        /* 概览顶部标题: 16sp/500 #F2F1EF */
+        .overview-title-heading {
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        /* 区块标题与状态字: 中文句首大写，11sp/500 #6B6A67，间距 0.05em; IDLE=灰，待批准=#EF9F27，3 ONLINE=#5DCAA5 */
+        .overview-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 2px;
+        }
+        .overview-section-label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+        }
+        .overview-status-text {
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .status-idle { color: var(--text-muted); }
+        .status-pending { color: var(--warning); }
+        .status-online { color: var(--success); }
+
+        /* ==========================================================================
+           Radix Overview Panel (rt-Card & Component Scaling)
+           ========================================================================== */
+
+        /* 1. Tokens Card (Radix rt-Card) */
+        .overview-tokens-card {
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-card);
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .tokens-card-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .tokens-card-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--gray-11);
+        }
+        .btn-compact-stroke {
+            background-color: var(--gray-3);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-ctrl);
+            color: var(--gray-12);
+            font-size: 11px;
+            font-weight: 500;
+            padding: 2px 8px;
+            cursor: pointer;
+            transition: all 120ms ease;
+        }
+        .btn-compact-stroke:hover {
+            color: #ffffff;
+            border-color: var(--gray-7);
+            background-color: var(--gray-4);
+        }
+        .tokens-val-row {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+        }
+        .tokens-main-val {
+            font-size: 24px;
+            font-weight: 500;
+            color: var(--gray-12);
+            line-height: 1;
+            letter-spacing: -0.02em;
+        }
+        .tokens-sub-text {
+            font-size: 11.5px;
+            color: var(--gray-11);
+        }
+        .tokens-progress-track {
+            width: 100%;
+            height: 4px;
+            background-color: var(--gray-4);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .tokens-progress-fill {
+            width: 21.4%;
+            height: 100%;
+            background-color: var(--iris-9);
+            border-radius: 2px;
+        }
+
+        /* 2. Usage Grid (Radix 2-col Grid Cards) */
+        .overview-usage-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .usage-col-card {
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-ctrl);
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .usage-col-title {
+            font-size: 11.5px;
+            color: var(--gray-11);
+        }
+        .usage-col-val {
+            font-size: 20px;
+            font-weight: 500;
+            color: var(--gray-12);
+            line-height: 1.2;
+        }
+        .usage-col-sub {
+            font-size: 11px;
+            color: var(--gray-11);
+        }
+
+        /* 4. Plan Overview Card (Radix rt-Card) */
+        .overview-plan-card {
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-card);
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .overview-plan-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .overview-section-title {
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--gray-12);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .plan-main-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .plan-name-text {
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--gray-12);
+        }
+        .plan-doc-link {
+            font-size: 12px;
+            color: var(--iris-11);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            width: fit-content;
+        }
+        .plan-doc-link:hover { text-decoration: underline; color: var(--iris-12); }
+
+        .overview-steps-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 2px;
+            padding-top: 8px;
+            border-top: 1px solid var(--gray-6);
+        }
+        .step-row-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12.5px;
+            color: var(--gray-11);
+        }
+        .step-row-item.done {
+            color: var(--gray-10);
+            font-size: 12.5px;
+        }
+        .step-row-item.done .step-text {
+            text-decoration: line-through;
+            color: var(--gray-10);
+        }
+        .step-row-item.in-progress {
+            color: var(--gray-12);
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .step-row-item.todo {
+            color: var(--gray-11);
+            font-size: 12.5px;
+        }
+        .step-dot-done {
+            color: var(--green-11);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+        }
+        .step-dot-active {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--iris-9);
+            flex-shrink: 0;
+            margin: 0 3px;
+        }
+        .step-dot-todo {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            border: 1.5px solid var(--gray-8);
+            flex-shrink: 0;
+            margin: 0 3px;
+        }
+        .step-text {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .step-spec-link {
+            font-size: 11px;
+            color: var(--iris-11);
+            cursor: pointer;
+            margin-left: auto;
+            padding: 2px 4px;
+        }
+        .step-spec-link:hover { text-decoration: underline; color: var(--iris-12); }
+
+        .step-expand-more-btn {
+            font-size: 11.5px;
+            color: var(--gray-11);
+            cursor: pointer;
+            text-align: center;
+            padding: 4px 0;
+            transition: color 120ms ease;
+        }
+        .step-expand-more-btn:hover { color: var(--gray-12); }
+
+        /* ==========================================================================
+           PanelCard 家族体系（严格对齐 PanelCard.kt / CardHeader 规范）
+           ========================================================================== */
+        .panel-card {
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-card);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: border-color 140ms ease, background-color 140ms ease;
+        }
+        .panel-card:hover {
+            border-color: var(--gray-7);
+        }
+
+        /* CardHeader 规范（CardHeader.kt: 图标 + 标题 + 计数 + 操作） */
+        .panel-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 120ms ease;
+        }
+        .panel-card-header:hover {
+            background-color: var(--gray-3);
+        }
+        .panel-header-left {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .panel-header-count {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--iris-11);
+            margin-left: 2px;
+        }
+        .panel-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .panel-header-btn {
+            width: 22px;
+            height: 22px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            transition: all 120ms ease;
+        }
+        .panel-header-btn:hover {
+            background-color: var(--gray-4);
+            color: var(--text-primary);
+        }
+        .panel-chevron {
+            width: 14px;
+            height: 14px;
+            color: var(--text-muted);
+            transition: transform 160ms ease;
+        }
+        .panel-card.expanded .panel-chevron {
+            transform: rotate(180deg);
+        }
+
+        /* 运行中雷达脉冲微标 (RadarPulseDot) */
+        .running-pulse-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 1px 6px;
+            border-radius: 10px;
+            background-color: var(--iris-3);
+            border: 1px solid var(--iris-6);
+            color: var(--iris-11);
+            font-size: 10px;
+            font-weight: 500;
+        }
+        .pulse-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--iris-9);
+            box-shadow: 0 0 0 2px var(--iris-5);
+            animation: pulse-glow 1.5s infinite ease-in-out;
+        }
+        @keyframes pulse-glow {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.6; }
+        }
+
+        /* 卡片折叠内容区（默认 display: none） */
+        .panel-card-body {
+            display: none;
+            padding: 8px 12px 10px 12px;
+            flex-direction: column;
+            gap: 6px;
+            border-top: 1px solid var(--gray-6);
+            background-color: var(--bg);
+        }
+        .panel-card.expanded .panel-card-body {
+            display: flex;
+        }
+
+        /* SubAgentTaskRow 规范 (SubAgentComponents.kt) */
+        .subagent-task-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            cursor: pointer;
+            transition: all 120ms ease;
+        }
+        .subagent-task-row:hover {
+            border-color: var(--iris-7);
+            background-color: var(--gray-3);
+        }
+        .subagent-status-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: var(--iris-3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--iris-9);
+            flex-shrink: 0;
+        }
+        .subagent-content-col {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            flex: 1;
+            min-width: 0;
+        }
+        .subagent-top-line {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+        }
+        .subagent-role-tag {
+            padding: 1px 5px;
+            border-radius: 3px;
+            background-color: var(--gray-4);
+            color: var(--gray-12);
+            font-weight: 500;
+            font-size: 10px;
+        }
+        .subagent-model-tag {
+            color: var(--gray-11);
+            font-size: 10.5px;
+            font-family: var(--font-mono);
+        }
+        .subagent-time-tag {
+            color: var(--gray-11);
+            font-size: 10.5px;
+            margin-left: auto;
+        }
+        .subagent-task-desc {
+            font-size: 11.5px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* McpServerRow 规范 (McpManagementCard.kt) */
+        .mcp-server-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border-radius: 6px;
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+        }
+        .mcp-toggle-switch {
+            width: 28px;
+            height: 16px;
+            border-radius: 10px;
+            background-color: var(--iris-9);
+            position: relative;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background-color 140ms ease;
+        }
+        .mcp-toggle-switch.off {
+            background-color: var(--gray-6);
+        }
+        .mcp-toggle-thumb {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #ffffff;
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            transition: all 140ms ease;
+        }
+        .mcp-toggle-switch.off .mcp-toggle-thumb {
+            right: auto;
+            left: 2px;
+        }
+        .mcp-info-col {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+            min-width: 0;
+        }
+        .mcp-name-line {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11.5px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        .mcp-online-badge {
+            font-size: 10px;
+            color: var(--green-11);
+            font-weight: 500;
+        }
+        .mcp-desc-line {
+            font-size: 10.5px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mcp-row-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* SkillItemRow 规范 (SkillManagementCard.kt) */
+        .skill-item-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border-radius: 6px;
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+        }
+        .skill-info-col {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+            min-width: 0;
+        }
+        .skill-name-line {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11.5px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .skill-compat-badge {
+            background-color: var(--amber-3);
+            border: 1px solid var(--amber-6);
+            color: var(--amber-11);
+            font-size: 9px;
+            font-weight: 600;
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+        .skill-desc-line {
+            font-size: 10.5px;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        /* 根目录小提示条 (SkillManagementCard.kt) */
+        .skill-root-bar {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background-color: var(--gray-3);
+            font-size: 10.5px;
+            color: var(--gray-11);
+            cursor: pointer;
+            transition: background-color 120ms ease;
+        }
+        .skill-root-bar:hover {
+            background-color: var(--gray-4);
+            color: var(--text-primary);
+        }
+        .skill-root-text {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* 刷新按钮旋转动画 */
+        .panel-header-btn.rotating svg {
+            animation: panel-spin 0.8s linear infinite;
+        }
+        @keyframes panel-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* 概览面板三卡片纵向排列容器 (严格对齐 InfoPanels.kt 10dp 间距) */
+        .overview-management-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        /* 6. Raw Messages Accordion (Radix rt-Card Collapsible) */
+        .raw-messages-collapsible {
+            background-color: var(--gray-2);
+            border: 1px solid var(--gray-6);
+            border-radius: var(--radius-card);
+            overflow: hidden;
+            transition: all 140ms ease;
+        }
+        .raw-messages-summary-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            cursor: pointer;
+            font-size: 12.5px;
+            color: var(--gray-11);
+            font-weight: 500;
+            user-select: none;
+        }
+        .raw-messages-summary-bar:hover {
+            color: var(--gray-12);
+            background-color: var(--gray-3);
+        }
+        .raw-messages-body {
+            display: none;
+            padding: 4px 12px 12px 12px;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .raw-messages-collapsible.expanded .raw-messages-body {
+            display: flex;
+        }
+        .raw-messages-collapsible.expanded .raw-main-chevron {
+            transform: rotate(90deg);
+        }
+        .raw-main-chevron {
+            transition: transform 0.2s ease;
+            color: var(--text-muted);
+        }
+
+        .raw-log-item {
+            border-radius: var(--radius-ctrl);
+            background: var(--surface-2);
+            border: none;
+            overflow: hidden;
+        }
+        .raw-log-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 40px;
+            padding: 0 12px;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .raw-log-header:hover { color: var(--text-primary); }
+        .raw-role-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+        .raw-time-tag { font-size: 11px; color: var(--text-muted); }
+        .raw-token-tag { font-size: 12px; color: var(--text-muted); }
+        .raw-log-body {
+            display: none;
+            padding: 8px 12px;
+            border-top: 1px solid var(--border);
+            position: relative;
+        }
+        .raw-log-item.expanded .raw-log-body { display: block; }
+        .raw-log-item.expanded .raw-item-chevron { transform: rotate(90deg); }
+        .raw-item-chevron { transition: transform 0.15s ease; color: var(--text-muted); }
+        .raw-json-text {
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            overflow-x: auto;
+            margin: 0;
+            white-space: pre;
+        }
+        .copy-float-btn {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            padding: 4px;
+            border-radius: 4px;
+            background: var(--surface-1);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .copy-float-btn:hover {
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+        }
+
+        /* 2. FILES VIEW (文件面板：双 Tab：项目目录 / 改动过的) */
+        .subtab-header {
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--border-default);
+            background-color: var(--bg-card);
+            padding: 0 10px;
+            height: 36px;
+            flex-shrink: 0;
+            gap: 14px;
+        }
+        .subtab-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+            height: 100%;
+            position: relative;
+            padding: 0 4px;
+        }
+        .subtab-btn:hover { color: var(--text-primary); }
+        .subtab-btn.active { color: var(--accent-primary); font-weight: 600; }
+        .subtab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background-color: var(--accent-primary);
+            border-radius: 2px 2px 0 0;
+        }
+        .tab-badge {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-default);
+            padding: 1px 5px;
+            border-radius: 10px;
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        /* Professional IDE-Grade File Tree Styles */
+        .tree-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background-color: var(--bg-window);
+            border-bottom: 1px solid var(--border-default);
+            font-size: 11px;
+            flex-shrink: 0;
+        }
+        .tree-toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .tree-branch-badge {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-default);
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+        .tree-toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+        .tree-search-bar {
+            padding: 6px 12px;
+            background-color: var(--bg-sidebar);
+            border-bottom: 1px solid var(--border-default);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .tree-search-input {
+            width: 100%;
+            background: var(--bg-card);
+            border: 1px solid var(--border-default);
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 11px;
+            color: var(--text-primary);
+            outline: none;
+            font-family: var(--font-sans);
+        }
+        .tree-search-input::placeholder { color: var(--text-muted); }
+
+        .files-tree-container {
+            padding: 6px 0;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            flex: 1;
+            user-select: none;
+        }
+
+        /* Tree Node Rows */
+        .tree-node-row {
+            display: flex;
+            align-items: center;
+            height: 25px;
+            padding-right: 12px;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--text-secondary);
+            position: relative;
+            transition: background 0.1s ease;
+        }
+        .tree-node-row:hover { background-color: var(--bg-hover); color: var(--text-primary); }
+        .tree-node-row.active {
+            background-color: var(--bg-active);
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        .tree-node-row.active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 3px;
+            bottom: 3px;
+            width: 2px;
+            background-color: var(--accent-primary);
+            border-radius: 0 2px 2px 0;
+        }
+
+        /* Indentation Guides */
+        .tree-indent {
+            display: inline-flex;
+            height: 100%;
+            align-items: center;
+        }
+        .tree-guide-line {
+            width: 16px;
+            height: 100%;
+            display: inline-block;
+            position: relative;
+            flex-shrink: 0;
+        }
+        .tree-guide-line::after {
+            content: '';
+            position: absolute;
+            left: 8px;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background-color: var(--gray-6);
+        }
+
+        /* Node Chevron & Icons */
+        .tree-chevron {
+            width: 12px;
+            height: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            margin-right: 3px;
+            transition: transform 0.15s ease;
+            flex-shrink: 0;
+        }
+        .tree-chevron.expanded { transform: rotate(90deg); color: var(--text-secondary); }
+        .tree-chevron.hidden { visibility: hidden; }
+
+        .tree-icon {
+            width: 15px;
+            height: 15px;
+            margin-right: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        /* File badges & Type Icons */
+        .icon-folder { color: var(--gray-11); }
+        .tree-chevron.expanded + .icon-folder { color: var(--accent-primary); }
+        .icon-kt {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            background: linear-gradient(135deg, #7F52FF, #C711E1);
+            color: white;
+            font-size: 8.5px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            letter-spacing: -0.5px;
+        }
+        .icon-md {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            background-color: var(--iris-3);
+            border: 1px solid var(--iris-6);
+            color: var(--iris-11);
+            font-size: 8.5px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+        }
+        .icon-gradle {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            background-color: var(--green-3);
+            border: 1px solid var(--green-6);
+            color: var(--green-11);
+            font-size: 8px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+        }
+
+        .tree-label {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex: 1;
+        }
+        .tree-label.modified { color: var(--amber-11); }
+
+        .file-change-badge, .git-status-badge {
+            margin-left: auto;
+            font-size: 10px;
+            font-family: var(--font-mono);
+            font-weight: 600;
+            padding: 0 4px;
+            border-radius: 3px;
+        }
+        .change-m, .git-status-m { color: var(--amber-11); background-color: var(--amber-3); }
+        .change-a, .git-status-u { color: var(--green-11); background-color: var(--green-3); }
+
+        .tree-children-container {
+            display: flex;
+            flex-direction: column;
+        }
+        .tree-children-container.collapsed { display: none; }
+
+        .changed-files-container {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .diff-file-selector-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+        }
+        .diff-file-tab-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 5px;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-default);
+            font-size: 11.5px;
+            font-family: var(--font-mono);
+            color: var(--text-secondary);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .diff-file-tab-btn:hover { color: var(--text-primary); }
+        .diff-file-tab-btn.active {
+            background-color: var(--bg-active);
+            border-color: var(--border-strong);
+            color: var(--accent-primary);
+            font-weight: 600;
+        }
+
+        .diff-viewer-box {
+            background-color: var(--bg-code);
+            border: 1px solid var(--border-default);
+            border-radius: 6px;
+            overflow: hidden;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            line-height: 18px;
+        }
+        .diff-line { display: flex; }
+        .diff-line-num {
+            width: 38px;
+            padding: 0 8px;
+            color: var(--text-muted);
+            text-align: right;
+            user-select: none;
+            background-color: var(--gray-3);
+            border-right: 1px solid var(--border-default);
+            opacity: 0.8;
+        }
+        .diff-line-content { padding: 0 10px; white-space: pre; flex: 1; overflow-x: auto; }
+        .diff-line.add { background-color: var(--green-3); color: var(--green-11); }
+        .diff-line.add .diff-line-num { color: var(--green-11); opacity: 0.8; }
+        .diff-line.del { background-color: var(--red-3); color: var(--red-11); }
+        .diff-line.del .diff-line-num { color: var(--red-11); opacity: 0.8; }
+
+        /* 3. FILE VIEWER VIEW (文件阅读面板：多 Tab + 路径面包屑 + 代码/Markdown 渲染) */
+        .viewer-tab-bar {
+            height: 36px;
+            background-color: var(--bg-card);
+            border-bottom: 1px solid var(--border-default);
+            display: flex;
+            align-items: center;
+            padding: 0 8px;
+            gap: 4px;
+            overflow-x: auto;
+            flex-shrink: 0;
+        }
+        .viewer-tab-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 5px;
+            font-size: 11.5px;
+            font-family: var(--font-mono);
+            color: var(--text-secondary);
+            cursor: pointer;
+            background-color: transparent;
+            border: 1px solid transparent;
+        }
+        .viewer-tab-item:hover { background-color: var(--bg-hover); color: var(--text-primary); }
+        .viewer-tab-item.active {
+            background-color: var(--bg-workspace);
+            border-color: var(--border-default);
+            color: var(--accent-primary);
+            font-weight: 500;
+        }
+        .tab-close-icon { width: 11px; height: 11px; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+        .tab-close-icon:hover { background-color: var(--bg-hover); color: var(--accent-danger); }
+
+        .viewer-meta-bar {
+            padding: 6px 12px;
+            background-color: var(--bg-window);
+            border-bottom: 1px solid var(--border-default);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            flex-shrink: 0;
+        }
+        .viewer-content-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 14px;
+            background-color: var(--bg-workspace);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            line-height: 20px;
+            color: var(--text-code);
+        }
+        .code-line-row { display: flex; }
+        .code-ln { width: 36px; color: var(--text-muted); text-align: right; padding-right: 12px; user-select: none; opacity: 0.5; }
+        .code-val { flex: 1; white-space: pre; }
+
+        .markdown-reader-body {
+            padding: 16px;
+            line-height: 1.7;
+            font-family: var(--font-sans);
+            font-size: 13.5px;
+            color: var(--text-primary);
+        }
+        .markdown-reader-body h2 { font-size: 16px; margin: 16px 0 8px 0; color: var(--accent-primary); }
+        .markdown-reader-body p { margin-bottom: 12px; color: var(--text-secondary); }
+        .markdown-reader-body ul { padding-left: 20px; margin-bottom: 12px; color: var(--text-secondary); }
+
+        /* Right Dock (RightDock.kt - 46dp) */
+        .right-dock {
+            width: var(--right-dock-width);
+            background-color: var(--bg-sidebar);
+            border-left: 1px solid var(--border-default);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 10px 0;
+            flex-shrink: 0;
+            user-select: none;
+        }
+        .dock-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            cursor: pointer;
+            margin-bottom: 6px;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+        .dock-btn:hover { background-color: var(--bg-hover); color: var(--text-primary); }
+        .dock-btn.active {
+            background-color: var(--bg-active);
+            color: var(--accent-primary);
+        }
+        .dock-spacer { flex: 1; }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/@radix-ui/themes@3.1.6/styles.css">
+</head>
+<body class="radix-themes" data-accent-color="iris" data-gray-color="slate" data-has-background="true" data-panel-background="translucent" data-radius="medium" data-scaling="100%">
+<div class="app-container">
+    <!-- 1. Left Sidebar (Sidebar.kt) -->
+    <aside class="sidebar">
+        <!-- 搜索行 -->
+        <div class="sidebar-search-row">
+            <button class="icon-btn-minimal" title="搜索会话"><i data-feather="search" width="16"></i></button>
+        </div>
+
+        <!-- 顶层三大固定菜单 -->
+        <div class="fixed-menu-group">
+            <div class="sidebar-menu-item active">
+                <i data-feather="message-square"></i>
+                <span>新建任务</span>
+            </div>
+            <div class="sidebar-menu-item">
+                <i data-feather="grid"></i>
+                <span>插件市场</span>
+            </div>
+            <div class="sidebar-menu-item">
+                <i data-feather="clock"></i>
+                <span>自动化</span>
+            </div>
+        </div>
+
+        <!-- 项目分组 Header -->
+        <div class="sidebar-section-header">
+            <span>项目</span>
+            <button class="icon-btn-minimal" style="width:20px; height:20px;" title="打开项目目录"><i data-feather="plus" width="13"></i></button>
+        </div>
+
+        <!-- 项目层级树与会话列表 -->
+        <div class="project-tree">
+            <div class="project-row">
+                <div class="project-row-left">
+                    <i data-feather="chevron-down" width="13" color="var(--text-muted)"></i>
+                    <i data-feather="folder" width="14" color="var(--accent-primary)"></i>
+                    <span>mederi</span>
+                </div>
+                <button class="icon-btn-minimal" style="width:20px; height:20px;"><i data-feather="more-horizontal" width="13"></i></button>
+            </div>
+
+            <!-- 会话列表 -->
+            <div class="conversation-list">
+                <div class="conv-item active">
+                    <div class="conv-item-left">
+                        <div class="conv-status-dot"></div>
+                        <span class="conv-title">优化 Mederi UI 原型设计</span>
+                    </div>
+                </div>
+                <div class="conv-item">
+                    <div class="conv-item-left">
+                        <div class="conv-status-dot idle"></div>
+                        <span class="conv-title">重构验证契约与规范体系</span>
+                    </div>
+                </div>
+                <div class="conv-item">
+                    <div class="conv-item-left">
+                        <div class="conv-status-dot idle"></div>
+                        <span class="conv-title">SQLDelight 数据迁移排查</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar-divider"></div>
+
+        <!-- Sidebar Footer (严格两行：设置与语言主题，版本号) -->
+        <div class="sidebar-footer">
+            <div class="footer-line-1">
+                <div class="settings-button">
+                    <i data-feather="settings" width="16" color="#6B6A67"></i>
+                    <span>设置</span>
+                </div>
+                <div class="footer-tools-right">
+                    <div class="icon-square-btn" title="语言切换">
+                        <i data-feather="globe" width="14"></i>
+                    </div>
+                    <div class="icon-square-btn" title="切换深色/浅色模式 (⌘T)" id="theme-toggle-btn" onclick="toggleTheme()">
+                        <i data-feather="moon" width="14" class="theme-toggle-icon" color="var(--accent-primary)"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-line-2">Mederi v1.0.0</div>
+        </div>
+    </aside>
+
+    <!-- 2. Central Workspace (对话流布局钉死，保持 100% 正确) -->
+    <main class="workspace">
+        <!-- Header (40dp) -->
+        <header class="workspace-header">
+            <div class="header-title-box">
+                <i data-feather="message-circle" width="16" color="var(--accent-primary)"></i>
+                <span>优化 Mederi UI 原型设计</span>
+                <span class="header-project-pill">mederi</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 4px;">
+                <button class="icon-btn-minimal" title="切换深色/浅色模式 (⌘T)" onclick="toggleTheme()">
+                    <i data-feather="moon" width="15" class="theme-toggle-icon"></i>
+                </button>
+                <button class="icon-btn-minimal"><i data-feather="more-horizontal" width="16"></i></button>
+            </div>
+        </header>
+
+        <!-- Chat List View -->
+        <div class="chat-scroll-area">
+            <div class="chat-content-container">
+
+                <!-- User Turn -->
+                <div class="user-turn-row">
+                    <div class="user-bubble-container">
+                        <div class="user-bubble">
+                            你找出来每一个可操作的view的样式，比如对话流中会出现多少个，全列出来，概览中会出现多少个，全列出来，包括ask_user，子agent调度等等，一个不差。
+                        </div>
+                        <div class="user-footer">
+                            <i data-feather="clock" width="11"></i>
+                            <span>10:42</span>
+                            <div class="user-footer-btn" title="退回并重新编辑"><i data-feather="corner-up-left" width="12"></i></div>
+                            <div class="user-footer-btn" title="复制消息"><i data-feather="copy" width="12"></i></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Assistant Turn -->
+                <div class="assistant-turn-block">
+
+                    <!-- 1. WorkTraceCard (结构化多步工作过程聚合栏) -->
+                    <div class="work-trace-card expanded" id="main-worktrace">
+                        <!-- 汇总折叠条 -->
+                        <div class="work-trace-summary-bar" onclick="toggleWorkTrace()">
+                            <i data-feather="activity" width="13" color="var(--accent-primary)"></i>
+                            <span class="work-trace-title">工作过程 (4 项操作 · 耗时 2.4s)</span>
+                            <i data-feather="chevron-right" class="chevron-icon summary-chevron"></i>
+                        </div>
+
+                        <!-- 展开后的完整工作轨迹子项（左侧 1.5px 贯通微导轨） -->
+                        <div class="work-trace-expanded-container">
+                            <div class="work-trace-scroll-viewport" id="trace-viewport">
+
+                                <!-- 1.1 ReasoningBlock -->
+                                <div class="reasoning-block expanded" id="reasoning-1">
+                                    <div class="reasoning-bar" onclick="toggleReasoning()">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" color="var(--text-muted)"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>
+                                        <span class="reasoning-label">已思考 (1.4s)</span>
+                                        <i data-feather="chevron-right" class="chevron-icon reasoning-chevron"></i>
+                                    </div>
+                                    <div class="reasoning-expanded-content">
+                                        用户要求梳理 Mederi 前端 UI 每一个可操作的真实组件。我们需要严格基于源码：对话流中的 <code>WorkTraceCard</code>, <code>ReasoningBlock</code>, <code>ToolCallsBlock</code> (COMMAND, READ, EDIT), <code>SubagentCallsBlock</code>, <code>DocumentArtifactCard</code>, <code>QuestionCard</code>, <code>PlanApprovalCard</code>, <code>TurnDiffSummaryCard</code> 以及右侧 Dock 的各个面板。
+                                    </div>
+                                </div>
+
+                                <!-- 1.2 StepNarration -->
+                                <div class="step-narration">
+                                    正在排查项目代码结构与 RightDock 组件定义...
+                                </div>
+
+                                <!-- 1.3 ToolCallsBlock: COMMAND (git status) -->
+                                <div class="tool-action-group expanded" id="tool-cmd-1">
+                                    <div class="tool-action-bar" onclick="toggleToolAction('tool-cmd-1')">
+                                        <i data-feather="terminal" width="13" color="var(--text-secondary)"></i>
+                                        <span class="tool-action-title">Ran command git status --short</span>
+                                        <i data-feather="chevron-right" class="chevron-icon tool-chevron"></i>
+                                    </div>
+                                    <div class="tool-action-details">
+                                        <div class="tool-command-target">$ git status --short</div>
+                                        <!-- ToolCallOutputBlock -->
+                                        <div class="tool-output-block expanded" id="out-cmd-1">
+                                            <div class="tool-output-trigger" onclick="toggleOutput('out-cmd-1')">
+                                                <span class="tool-output-tag">OUTPUT</span>
+                                                <i data-feather="chevron-right" class="chevron-icon output-chevron"></i>
+                                            </div>
+                                            <div class="tool-terminal-box"> M app/shared/src/commonMain/kotlin/xyz/mederi/ui/Sidebar.kt
+ M app/shared/src/commonMain/kotlin/xyz/mederi/ui/components/InfoPanels.kt</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 1.4 ToolCallsBlock: READ (RightDock.kt) -->
+                                <div class="tool-action-group" id="tool-read-1">
+                                    <div class="tool-action-bar" onclick="toggleToolAction('tool-read-1')">
+                                        <i data-feather="file-text" width="13" color="var(--text-secondary)"></i>
+                                        <span class="tool-action-title">Read file RightDock.kt</span>
+                                        <i data-feather="chevron-right" class="chevron-icon tool-chevron"></i>
+                                    </div>
+                                    <div class="tool-action-details">
+                                        <!-- 点击链接触发打开文件阅读面板 -->
+                                        <div style="font-size: 11.5px; color: var(--accent-primary); cursor: pointer; padding: 2px 4px;" onclick="openFileInViewer('RightDock.kt', 'kotlin')">
+                                            在文件阅读器中打开 RightDock.kt ↗
+                                        </div>
+                                        <div class="tool-output-block" id="out-read-1">
+                                            <div class="tool-output-trigger" onclick="toggleOutput('out-read-1')">
+                                                <span class="tool-output-tag">OUTPUT</span>
+                                                <i data-feather="chevron-right" class="chevron-icon output-chevron"></i>
+                                            </div>
+                                            <div class="tool-terminal-box">package xyz.mederi.ui.components
+val dockItems = listOf(RightDockPanel.OVERVIEW, RightDockPanel.DIFF, ...)</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 1.5 SubagentCallsBlock (子代理调度) -->
+                                <div class="tool-action-group" id="tool-subagent-1">
+                                    <div class="tool-action-bar" onclick="toggleToolAction('tool-subagent-1')">
+                                        <i data-feather="users" width="13" color="var(--accent-purple)"></i>
+                                        <span class="tool-action-title" style="color:var(--accent-purple);">Subagent 执行代码回归验证</span>
+                                        <i data-feather="chevron-right" class="chevron-icon tool-chevron"></i>
+                                    </div>
+                                    <div class="tool-action-details">
+                                        <div class="report-box">
+                                            <strong>Executor 汇报：</strong> 已完成全套 UI 组件生命周期状态校验，全部通过。
+                                        </div>
+                                    </div>
+                                </div>
+
+                            </div>
+
+                            <!-- 底部固定锚定切换按钮 -->
+                            <div class="work-trace-height-toggle" onclick="toggleTraceHeight()">
+                                <i data-feather="chevron-down" width="12" id="height-toggle-icon"></i>
+                                <span id="height-toggle-text">展开全部步骤</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. TextMessage (AI 交付正文) -->
+                    <div class="deliverable-text-message">
+                        <p>已全量对齐 Mederi 现有架构与布局规范。上方 <strong>工作过程栏 (WorkTraceCard)</strong> 已完整还原思考过程、过渡语与终端命令输出，下方为当前方案的生成产物、决策问询与实施计划：</p>
+                    </div>
+
+                    <!-- 3. Document Artifact (内联文件条 - 紧凑内联，非卡片) -->
+                    <div class="stream-artifact-row" onclick="openFileInViewer('Mederi_UI_Refactor_Spec.md', 'markdown')">
+                        <div class="artifact-left">
+                            <div class="artifact-icon-box">
+                                <i data-feather="file-text" width="13"></i>
+                            </div>
+                            <div class="artifact-meta">
+                                <span class="artifact-title">Mederi_UI_Refactor_Spec.md</span>
+                                <span class="artifact-sub">142 行 · 4.8k 字符</span>
+                            </div>
+                        </div>
+                        <div class="artifact-capsule">
+                            <i data-feather="sidebar" width="11"></i>
+                            <span>阅读器 ↗</span>
+                        </div>
+                    </div>
+
+                    <!-- 4. Question (流式问询交互 - 无外框，左侧指示线) -->
+                    <div class="stream-question-block">
+                        <div class="question-header">问题 1/1 · 单选交互</div>
+                        <div class="question-prompt">针对右侧概览面板中的原始消息 (RawMessagesCard)，是否采用倒序展开式手风琴交互？</div>
+                        <div class="question-options">
+                            <div class="question-option-row selected">
+                                <input type="radio" checked name="q_design">
+                                <span>(推荐) 是的，倒序展示多条条目，点击单条展开高亮 JSON 与复制按钮</span>
+                            </div>
+                            <div class="question-option-row">
+                                <input type="radio" name="q_design">
+                                <span>否，保持全部平铺</span>
+                            </div>
+                        </div>
+                        <div class="question-actions">
+                            <button class="btn-primary-decision" onclick="alert('已确认选择！')">
+                                <i data-feather="check" width="13"></i>
+                                <span>确认选择</span>
+                                <span class="btn-kbd-hint">⌘↵</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 5. Plan Approval (流式计划审批 - 无外框，自然引用段落) -->
+                    <div class="stream-plan-block">
+                        <div class="plan-approval-top" onclick="switchRightPanel('plan')">
+                            <div class="plan-approval-title">
+                                <i data-feather="file-text" width="14" color="var(--iris-9)"></i>
+                                <span>Implementation Plan: 重构侧边栏与工作流</span>
+                            </div>
+                            <span class="plan-id-tag">plan_c8f31b</span>
+                        </div>
+                        <div class="plan-approval-summary">
+                            按架构文档对齐侧边栏三大菜单与 Footer；在对话流聚合工作过程与终端执行输出；在概览面板实现倒序手风琴原始消息卡片。
+                        </div>
+                        <div class="plan-actions-row">
+                            <button class="btn-primary-decision" id="btn-proceed" onclick="approvePlan()">
+                                <i data-feather="check" width="13"></i>
+                                <span>批准实施 (Proceed)</span>
+                                <span class="btn-kbd-hint">⌘↵</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 6. Turn Diff Summary (流式文件变更清单 - 紧凑平铺) -->
+                    <div class="stream-diff-block">
+                        <div class="turn-diff-header">
+                            <span class="turn-diff-title">2 files changed (+42, -18)</span>
+                            <div class="btn-review-diff" onclick="openDiffView('Sidebar.kt')">
+                                <i data-feather="book-open" width="11"></i>
+                                <span>Review</span>
+                            </div>
+                        </div>
+                        <div class="file-diff-row" onclick="openFileInViewer('Sidebar.kt', 'kotlin')">
+                            <i data-feather="edit-3" width="12" color="var(--iris-9)"></i>
+                            <span class="diff-file-name">Sidebar.kt</span>
+                            <span class="diff-file-dir">.../app/shared/src/commonMain/kotlin/xyz/mederi/ui/</span>
+                            <span class="diff-add">+18</span>
+                            <span class="diff-del">-6</span>
+                        </div>
+                        <div class="file-diff-row" onclick="openFileInViewer('InfoPanels.kt', 'kotlin')">
+                            <i data-feather="edit-3" width="12" color="var(--iris-9)"></i>
+                            <span class="diff-file-name">InfoPanels.kt</span>
+                            <span class="diff-file-dir">.../ui/components/</span>
+                            <span class="diff-add">+24</span>
+                            <span class="diff-del">-12</span>
+                        </div>
+                    </div>
+
+                    <!-- 7. AssistantMessageFooter (轮次底栏) -->
+                    <div class="assistant-footer">
+                        <div class="footer-meta-left">
+                            <i data-feather="info" width="11"></i>
+                            <span>claude-3-5-sonnet · 自动审批 · high · 2.4s · 10:45:12</span>
+                        </div>
+                        <div class="footer-actions-right">
+                            <div class="footer-action-btn" onclick="alert('已复制最后回复')">
+                                <i data-feather="copy" width="11"></i>
+                                <span>复制回复</span>
+                            </div>
+                            <div class="footer-action-btn" onclick="alert('已复制本轮完整内容')">
+                                <i data-feather="copy" width="11"></i>
+                                <span>复制本轮</span>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Chat Input Card (ChatInputCard.kt & ChatInputControls.kt) -->
+        <div class="chat-input-wrapper">
+            <div class="chat-input-card">
+                <textarea class="chat-input-textarea" placeholder="向 Mederi 发送指令，输入 / 查看快捷命令..."></textarea>
+                <div class="chat-input-controls-row">
+                    <!-- 左侧：项目选择器 + 附件 + 图片 + 自动审批 -->
+                    <div class="controls-group-left">
+                        <div class="selector-pill" title="选择所属项目">
+                            <i data-feather="folder" width="13"></i>
+                            <span>mederi</span>
+                            <i data-feather="chevron-down" width="11"></i>
+                        </div>
+                        <button class="icon-btn-minimal" title="添加文本附件"><i data-feather="paperclip" width="15"></i></button>
+                        <button class="icon-btn-minimal" title="添加图片"><i data-feather="image" width="15"></i></button>
+                        <div class="auto-approve-toggle" title="自动审批开关">
+                            <span>自动审批</span>
+                            <i data-feather="help-circle" width="12" color="var(--text-muted)"></i>
+                            <div class="mini-switch" onclick="toggleSwitch(this)">
+                                <div class="mini-switch-thumb"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：API Key + 模型 + 思考档位 + 28dp 圆形发送按钮 -->
+                    <div class="controls-group-right">
+                        <div class="selector-pill" title="API Key">
+                            <i data-feather="key" width="12"></i>
+                            <span>Default Key</span>
+                            <i data-feather="chevron-down" width="10"></i>
+                        </div>
+                        <div class="selector-pill" title="选择模型">
+                            <i data-feather="cpu" width="12"></i>
+                            <span>claude-3-5-sonnet</span>
+                            <i data-feather="chevron-down" width="10"></i>
+                        </div>
+                        <div class="selector-pill" title="思考等级">
+                            <span>High</span>
+                            <i data-feather="chevron-down" width="10"></i>
+                        </div>
+                        <div class="send-round-btn" title="发送消息 (Enter)">
+                            <i data-feather="arrow-up" width="14"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 3. Right Extension Panel (RightExtensionPanel.kt) -->
+    <section class="right-extension-panel" id="right-panel">
+        <!-- Panel Header -->
+        <div class="panel-header">
+            <div class="panel-header-left" id="panel-header-title">
+                <i data-feather="activity" width="14" color="var(--accent-primary)" id="panel-header-icon"></i>
+                <span id="panel-header-text">概览 (Overview)</span>
+            </div>
+            <button class="icon-btn-minimal" onclick="closeRightPanel()"><i data-feather="x" width="14"></i></button>
+        </div>
+
+        <!-- 3.1 VIEW: OVERVIEW (遵循规范第 4 节: 数字卡片化、状态图形、合并扩展、折叠消息) -->
+        <div class="panel-view-content active" id="view-overview">
+            <div class="inspector-container">
+
+                <div class="overview-title-heading">概览</div>
+
+                <!-- 区块 1: 会话状态 (Tokens & Usage & Model) -->
+                <div>
+                    <div class="overview-section-header">
+                        <span class="overview-section-label">会话状态</span>
+                        <span class="overview-status-text status-idle">IDLE</span>
+                    </div>
+
+                    <!-- Tokens 卡 (单张卡片 bg #131315 圆角 14dp padding 16/18，主数值 25sp/500 #F2F1EF，4dp 进度条) -->
+                    <div class="overview-tokens-card">
+                        <div class="tokens-card-top">
+                            <span class="tokens-card-title">Token 用量</span>
+                            <button class="btn-compact-stroke" onclick="alert('已触发上下文压缩')">Compact</button>
+                        </div>
+                        <div class="tokens-val-row">
+                            <span class="tokens-main-val">42.8k</span>
+                            <span class="tokens-sub-text">21.4% · 上限 200k</span>
+                        </div>
+                        <div class="tokens-progress-track">
+                            <div class="tokens-progress-fill"></div>
+                        </div>
+                    </div>
+
+                    <!-- Usage 并排 2 列卡片 (bg #131315 圆角 8dp padding 16dp，主数值 22sp/500 #F2F1EF) -->
+                    <div class="overview-usage-grid overview-metrics-grid" style="margin-top: 10px;">
+                        <div class="usage-col-card metric-stat-card">
+                            <span class="usage-col-title">交互轮次</span>
+                            <span class="usage-col-val">8 turns</span>
+                            <span class="usage-col-sub">耗时 2.4s</span>
+                        </div>
+                        <div class="usage-col-card metric-stat-card">
+                            <span class="usage-col-title">参考费用</span>
+                            <span class="usage-col-val">$0.04</span>
+                            <span class="usage-col-sub">8 次请求</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 区块 2: 实施计划 (Plan 步骤用状态图形，单张 surface-1 卡片，圆角 14dp) -->
+                <div>
+                    <div class="overview-section-header">
+                        <span class="overview-section-label">实施计划</span>
+                        <span class="overview-status-text status-pending">待批准</span>
+                    </div>
+
+                    <div class="overview-plan-card">
+                        <div class="plan-main-row">
+                            <span class="plan-name-text">重构侧边栏与工作流</span>
+                            <button class="btn-primary-decision" onclick="approvePlan()">
+                                <i data-feather="check" width="13"></i>
+                                <span>批准实施</span>
+                                <span class="btn-kbd-hint">⌘↵</span>
+                            </button>
+                        </div>
+
+                        <div class="plan-doc-link" onclick="switchRightPanel('plan')">
+                            <i data-feather="file-text" width="12"></i>
+                            <span>阅读 plan.md 全文 ↗</span>
+                        </div>
+
+                        <!-- 步骤图形化列表 (已完成 = 勾选 success，进行中 = 实心 accent，待处理 = 空心/浅色) -->
+                        <div class="overview-steps-list">
+                            <!-- 步骤 1 (已完成) -->
+                            <div class="step-row-item done">
+                                <span class="step-dot-done"><i data-feather="check" width="13"></i></span>
+                                <span class="step-text">步骤 1: 规范化侧边栏</span>
+                                <span class="step-spec-link" onclick="openFileInViewer('01-core.md', 'markdown')">Spec ↗</span>
+                            </div>
+                            <!-- 步骤 2 (进行中) -->
+                            <div class="step-row-item in-progress">
+                                <span class="step-dot-active"></span>
+                                <span class="step-text">步骤 2: 实现原始消息手风琴</span>
+                                <span class="step-spec-link" onclick="openFileInViewer('RawMessagesCard.kt', 'kotlin')">Spec ↗</span>
+                            </div>
+                            <!-- 步骤 3 (待处理) -->
+                            <div class="step-row-item todo">
+                                <span class="step-dot-todo"></span>
+                                <span class="step-text">步骤 3: 还原工作过程聚合栏</span>
+                                <span style="font-size: 11px; color: var(--text-muted); margin-left: auto;">待处理</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 概览核心管理三卡片 (严格对齐 InfoPanels.kt: SubAgentManagementCard, McpManagementCard, SkillManagementCard，默认全部折叠) -->
+                <div class="overview-management-cards">
+                    <!-- 1. 子 Agent 任务卡片 (SubAgentManagementCard.kt) -->
+                    <div class="panel-card" id="card-subagent">
+                        <div class="panel-card-header" onclick="togglePanelCard('card-subagent')">
+                            <div class="panel-header-left">
+                                <i data-feather="users" width="13" color="var(--iris-9)"></i>
+                                <span>子 Agent 任务</span>
+                                <span class="panel-header-count">1</span>
+                                <div class="running-pulse-badge">
+                                    <span class="pulse-dot"></span>
+                                    <span>1 运行中</span>
+                                </div>
+                            </div>
+                            <div class="panel-header-actions">
+                                <i data-feather="chevron-down" class="panel-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="panel-card-body">
+                            <!-- SubAgentTaskRow: 角色徽标 + 模型标识 + 耗时 + 任务简述 -->
+                            <div class="subagent-task-row" onclick="alert('查看 Subagent 详情 (SubAgentDetailDialog):\n角色: Executor\n模型: claude-3-5-sonnet\n耗时: 2.1s\n目标: 步骤 2: 实现原始消息手风琴与状态流挂载')">
+                                <div class="subagent-status-icon" title="执行中">
+                                    <span class="pulse-dot"></span>
+                                </div>
+                                <div class="subagent-content-col">
+                                    <div class="subagent-top-line">
+                                        <span class="subagent-role-tag">Executor</span>
+                                        <span class="subagent-model-tag">claude-3-5-sonnet</span>
+                                        <span class="subagent-time-tag">2.1s</span>
+                                    </div>
+                                    <div class="subagent-task-desc">步骤 2: 实现原始消息手风琴与状态流挂载</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. MCP 服务管理卡片 (McpManagementCard.kt) -->
+                    <div class="panel-card" id="card-mcp">
+                        <div class="panel-card-header" onclick="togglePanelCard('card-mcp')">
+                            <div class="panel-header-left">
+                                <i data-feather="cpu" width="13" color="var(--iris-9)"></i>
+                                <span>MCP 服务管理</span>
+                                <span class="panel-header-count">2/2</span>
+                            </div>
+                            <div class="panel-header-actions">
+                                <button class="panel-header-btn" title="刷新服务状态" onclick="triggerCardRefresh(event, this, 'mcp')">
+                                    <i data-feather="refresh-cw" width="12"></i>
+                                </button>
+                                <button class="panel-header-btn" title="添加 MCP 服务配置" onclick="event.stopPropagation(); alert('打开 McpConfigDialog 添加服务配置');">
+                                    <i data-feather="plus" width="13"></i>
+                                </button>
+                                <i data-feather="chevron-down" class="panel-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="panel-card-body">
+                            <!-- McpServerRow 1: filesystem -->
+                            <div class="mcp-server-row">
+                                <div class="mcp-toggle-switch" onclick="toggleMcpSwitch(event, this)" title="切换启用状态">
+                                    <div class="mcp-toggle-thumb"></div>
+                                </div>
+                                <div class="mcp-info-col">
+                                    <div class="mcp-name-line">
+                                        <span>filesystem</span>
+                                        <span class="mcp-online-badge">4 tools</span>
+                                    </div>
+                                    <div class="mcp-desc-line">项目目录受限读写（受沙箱白名单管辖）</div>
+                                </div>
+                                <div class="mcp-row-actions">
+                                    <button class="panel-header-btn" title="服务设置与校验 (McpConfigDialog)" onclick="alert('filesystem 服务设置 (McpConfigDialog)');">
+                                        <i data-feather="more-vertical" width="12"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- McpServerRow 2: git-mcp -->
+                            <div class="mcp-server-row">
+                                <div class="mcp-toggle-switch" onclick="toggleMcpSwitch(event, this)" title="切换启用状态">
+                                    <div class="mcp-toggle-thumb"></div>
+                                </div>
+                                <div class="mcp-info-col">
+                                    <div class="mcp-name-line">
+                                        <span>git-mcp</span>
+                                        <span class="mcp-online-badge">3 tools</span>
+                                    </div>
+                                    <div class="mcp-desc-line">Git 分支、提交记录与 diff 追踪服务</div>
+                                </div>
+                                <div class="mcp-row-actions">
+                                    <button class="panel-header-btn" title="服务设置与校验 (McpConfigDialog)" onclick="alert('git-mcp 服务设置 (McpConfigDialog)');">
+                                        <i data-feather="more-vertical" width="12"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. Skill 技能管理卡片 (SkillManagementCard.kt) -->
+                    <div class="panel-card" id="card-skill">
+                        <div class="panel-card-header" onclick="togglePanelCard('card-skill')">
+                            <div class="panel-header-left">
+                                <i data-feather="package" width="13" color="var(--iris-9)"></i>
+                                <span>Skill 技能管理</span>
+                                <span class="panel-header-count">1</span>
+                            </div>
+                            <div class="panel-header-actions">
+                                <button class="panel-header-btn" title="设定技能根目录" onclick="event.stopPropagation(); alert('选择 Skill 根目录 (SkillRootDirectoryPicker)');">
+                                    <i data-feather="folder" width="12"></i>
+                                </button>
+                                <button class="panel-header-btn" title="刷新技能列表" onclick="triggerCardRefresh(event, this, 'skill')">
+                                    <i data-feather="refresh-cw" width="12"></i>
+                                </button>
+                                <button class="panel-header-btn" title="安装新技能" onclick="event.stopPropagation(); alert('安装新技能 (InstallSkillDialog)');">
+                                    <i data-feather="plus" width="13"></i>
+                                </button>
+                                <i data-feather="chevron-down" class="panel-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="panel-card-body">
+                            <!-- 技能根目录小提示条 (skillsRoot) -->
+                            <div class="skill-root-bar" onclick="alert('设定 Skill 根目录');" title="点击更改技能根目录">
+                                <i data-feather="folder" width="11" color="var(--gray-10)"></i>
+                                <span class="skill-root-text">根目录: ~/.gemini/config/skills</span>
+                            </div>
+
+                            <!-- SkillItemRow 1: compose-skill -->
+                            <div class="skill-item-row">
+                                <div class="skill-info-col">
+                                    <div class="skill-name-line">
+                                        <span>compose-skill</span>
+                                        <span class="skill-compat-badge">KMP / CMP</span>
+                                    </div>
+                                    <div class="skill-desc-line">Jetpack Compose 与 Compose Multiplatform 架构规范与最佳实践。提示词上下文注入，执行器共享能力。</div>
+                                </div>
+                                <div class="mcp-row-actions">
+                                    <button class="panel-header-btn" title="卸载技能" onclick="if(confirm('确定卸载 compose-skill 技能吗？')) { alert('已卸载'); }">
+                                        <i data-feather="trash-2" width="12" color="var(--gray-10)"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 区块 4: 原始消息 (默认折叠为一行 "共3条 ›"，展开后每行高 40dp，行间距 4dp，无描边分割线) -->
+                <div>
+                    <div class="overview-section-header">
+                        <span class="overview-section-label">原始消息</span>
+                    </div>
+
+                    <div class="raw-messages-collapsible" id="raw-collapse">
+                        <div class="raw-messages-summary-bar" onclick="document.getElementById('raw-collapse').classList.toggle('expanded')">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <i data-feather="terminal" width="13" color="var(--text-muted)"></i>
+                                <span>共 3 条 ›</span>
+                            </div>
+                            <i data-feather="chevron-right" width="13" class="raw-main-chevron"></i>
+                        </div>
+                        <div class="raw-messages-body">
+                            <!-- Message 3 (最新) -->
+                            <div class="raw-log-item" id="raw-item-3">
+                                <div class="raw-log-header" onclick="toggleRawMsg('raw-item-3')">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <span class="raw-time-tag">10:44:12</span>
+                                        <span class="raw-role-name">assistant</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 6px;">
+                                        <span class="raw-token-tag">4.2k tokens</span>
+                                        <i data-feather="chevron-right" width="11" class="raw-item-chevron"></i>
+                                    </div>
+                                </div>
+                                <div class="raw-log-body">
+                                    <button class="copy-float-btn" title="复制 JSON" onclick="copyRaw(this, 'raw-json-3')"><i data-feather="copy" width="11"></i></button>
+                                    <pre class="raw-json-text" id="raw-json-3">{
+  "role": "assistant",
+  "model": "claude-3-5-sonnet",
+  "tools": ["execute_command", "read_file"],
+  "usage": { "prompt_tokens": 4200, "completion_tokens": 380 }
+}</pre>
+                                </div>
+                            </div>
+
+                            <!-- Message 2 -->
+                            <div class="raw-log-item" id="raw-item-2">
+                                <div class="raw-log-header" onclick="toggleRawMsg('raw-item-2')">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <span class="raw-time-tag">10:42:01</span>
+                                        <span class="raw-role-name">user</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 6px;">
+                                        <span class="raw-token-tag">850 tokens</span>
+                                        <i data-feather="chevron-right" width="11" class="raw-item-chevron"></i>
+                                    </div>
+                                </div>
+                                <div class="raw-log-body">
+                                    <button class="copy-float-btn" title="复制 JSON" onclick="copyRaw(this, 'raw-json-2')"><i data-feather="copy" width="11"></i></button>
+                                    <pre class="raw-json-text" id="raw-json-2">{
+  "role": "user",
+  "content": "你找出来每一个可操作的view的样式...",
+  "timestamp": 1727404921000
+}</pre>
+                                </div>
+                            </div>
+
+                            <!-- Message 1 -->
+                            <div class="raw-log-item" id="raw-item-1">
+                                <div class="raw-log-header" onclick="toggleRawMsg('raw-item-1')">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <span class="raw-time-tag">10:40:30</span>
+                                        <span class="raw-role-name">assistant</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 6px;">
+                                        <span class="raw-token-tag">2.1k tokens</span>
+                                        <i data-feather="chevron-right" width="11" class="raw-item-chevron"></i>
+                                    </div>
+                                </div>
+                                <div class="raw-log-body">
+                                    <button class="copy-float-btn" title="复制 JSON" onclick="copyRaw(this, 'raw-json-1')"><i data-feather="copy" width="11"></i></button>
+                                    <pre class="raw-json-text" id="raw-json-1">{
+  "role": "assistant",
+  "reasoning_tokens": 1200,
+  "content": "已完成初始会话环境初始化..."
+}</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- 3.2 VIEW: FILES (文件面板：由 DIFF 升级，带双 Tab：项目目录 / 改动过的) -->
+        <div class="panel-view-content" id="view-files">
+            <!-- 二级 Tab 切换栏 -->
+            <div class="subtab-header">
+                <div class="subtab-btn active" id="subtab-tree-btn" onclick="switchFilesSubTab('tree')">
+                    <i data-feather="folder" width="13"></i>
+                    <span>项目目录</span>
+                </div>
+                <div class="subtab-btn" id="subtab-diff-btn" onclick="switchFilesSubTab('diff')">
+                    <i data-feather="git-commit" width="13"></i>
+                    <span>已修改</span>
+                    <span class="tab-badge">2</span>
+                </div>
+            </div>
+
+            <!-- Tab 1 内容：项目目录树 (专业 IDE 级逐级嵌套树，带缩进导轨、折叠与 Git 修改高亮) -->
+            <div class="files-tree-wrapper" id="files-tree-content" style="display:flex; flex-direction:column; flex:1; overflow:hidden;">
+                <!-- 树顶工具栏 (检测到 .git 则显示分支，无 Git 自动隐藏徽标) -->
+                <div class="tree-toolbar">
+                    <div class="tree-toolbar-left">
+                        <i data-feather="folder" width="13" color="var(--accent-primary)"></i>
+                        <span id="tree-project-name">mederi</span>
+                        <!-- 有 Git 仓库时渲染；无 Git 普通目录时此项不渲染 (或隐藏) -->
+                        <span class="tree-branch-badge" id="tree-branch-badge" title="Git 分支 (点击可模拟切换无 Git 状态)" onclick="toggleGitBranchDisplay()"><i data-feather="git-branch" width="9"></i> main</span>
+                    </div>
+                    <div class="tree-toolbar-actions">
+                        <button class="panel-icon-btn" title="全部折叠" onclick="collapseAllTreeNodes()">
+                            <i data-feather="chevrons-down" width="12"></i>
+                        </button>
+                        <button class="panel-icon-btn" title="刷新目录" onclick="refreshTree()">
+                            <i data-feather="rotate-cw" width="12"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 树内过滤搜索栏 -->
+                <div class="tree-search-bar">
+                    <i data-feather="search" width="12" color="var(--text-muted)"></i>
+                    <input type="text" class="tree-search-input" id="tree-filter-input" placeholder="过滤项目文件 (⌘P)..." oninput="filterTreeNodes(this.value)">
+                </div>
+
+                <!-- 树节点列表容器 -->
+                <div class="files-tree-container" id="tree-nodes-list">
+                    
+                    <!-- 根目录：app/ -->
+                    <div class="tree-node-row" onclick="toggleFolderNode('folder-app')">
+                        <div class="tree-chevron expanded" id="chev-folder-app"><i data-feather="chevron-right" width="11"></i></div>
+                        <i data-feather="folder" class="tree-icon icon-folder"></i>
+                        <span class="tree-label">app</span>
+                    </div>
+                    <div class="tree-children-container" id="folder-app">
+                        
+                        <!-- app/shared/ -->
+                        <div class="tree-node-row" onclick="toggleFolderNode('folder-app-shared')">
+                            <span class="tree-guide-line"></span>
+                            <div class="tree-chevron expanded" id="chev-folder-app-shared"><i data-feather="chevron-right" width="11"></i></div>
+                            <i data-feather="folder" class="tree-icon icon-folder"></i>
+                            <span class="tree-label">shared</span>
+                        </div>
+                        <div class="tree-children-container" id="folder-app-shared">
+                            
+                            <!-- app/shared/src/commonMain/kotlin/.../ui/ -->
+                            <div class="tree-node-row" onclick="toggleFolderNode('folder-app-ui')">
+                                <span class="tree-guide-line"></span>
+                                <span class="tree-guide-line"></span>
+                                <div class="tree-chevron expanded" id="chev-folder-app-ui"><i data-feather="chevron-right" width="11"></i></div>
+                                <i data-feather="folder" class="tree-icon icon-folder"></i>
+                                <span class="tree-label">src/commonMain/kotlin/.../ui</span>
+                            </div>
+                            <div class="tree-children-container" id="folder-app-ui">
+                                
+                                <!-- components/ 目录 -->
+                                <div class="tree-node-row" onclick="toggleFolderNode('folder-components')">
+                                    <span class="tree-guide-line"></span>
+                                    <span class="tree-guide-line"></span>
+                                    <span class="tree-guide-line"></span>
+                                    <div class="tree-chevron expanded" id="chev-folder-components"><i data-feather="chevron-right" width="11"></i></div>
+                                    <i data-feather="folder" class="tree-icon icon-folder"></i>
+                                    <span class="tree-label">components</span>
+                                </div>
+                                <div class="tree-children-container" id="folder-components">
+                                    <!-- Sidebar.kt (MODIFIED) -->
+                                    <div class="tree-node-row active" onclick="openFileInViewer('Sidebar.kt', 'kotlin'); selectTreeNode(this);">
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <div class="tree-chevron hidden"></div>
+                                        <div class="tree-icon icon-kt">Kt</div>
+                                        <span class="tree-label modified">Sidebar.kt</span>
+                                        <span class="git-status-badge git-status-m">M</span>
+                                    </div>
+                                    <!-- InfoPanels.kt (MODIFIED) -->
+                                    <div class="tree-node-row" onclick="openFileInViewer('InfoPanels.kt', 'kotlin'); selectTreeNode(this);">
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <div class="tree-chevron hidden"></div>
+                                        <div class="tree-icon icon-kt">Kt</div>
+                                        <span class="tree-label modified">InfoPanels.kt</span>
+                                        <span class="git-status-badge git-status-m">M</span>
+                                    </div>
+                                    <!-- RightDock.kt -->
+                                    <div class="tree-node-row" onclick="openFileInViewer('RightDock.kt', 'kotlin'); selectTreeNode(this);">
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <div class="tree-chevron hidden"></div>
+                                        <div class="tree-icon icon-kt">Kt</div>
+                                        <span class="tree-label">RightDock.kt</span>
+                                    </div>
+                                    <!-- RightExtensionPanel.kt -->
+                                    <div class="tree-node-row" onclick="openFileInViewer('RightExtensionPanel.kt', 'kotlin'); selectTreeNode(this);">
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <div class="tree-chevron hidden"></div>
+                                        <div class="tree-icon icon-kt">Kt</div>
+                                        <span class="tree-label">RightExtensionPanel.kt</span>
+                                    </div>
+                                    <!-- WorkTraceCard.kt -->
+                                    <div class="tree-node-row" onclick="openFileInViewer('WorkTraceCard.kt', 'kotlin'); selectTreeNode(this);">
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <div class="tree-chevron hidden"></div>
+                                        <div class="tree-icon icon-kt">Kt</div>
+                                        <span class="tree-label">WorkTraceCard.kt</span>
+                                    </div>
+                                </div>
+
+                                <!-- chat/ 目录 -->
+                                <div class="tree-node-row" onclick="toggleFolderNode('folder-chat')">
+                                    <span class="tree-guide-line"></span>
+                                    <span class="tree-guide-line"></span>
+                                    <span class="tree-guide-line"></span>
+                                    <div class="tree-chevron" id="chev-folder-chat"><i data-feather="chevron-right" width="11"></i></div>
+                                    <i data-feather="folder" class="tree-icon icon-folder"></i>
+                                    <span class="tree-label">chat</span>
+                                </div>
+                                <div class="tree-children-container collapsed" id="folder-chat">
+                                    <div class="tree-node-row" onclick="openFileInViewer('ChatItemsBuilder.kt', 'kotlin'); selectTreeNode(this);">
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <div class="tree-chevron hidden"></div>
+                                        <div class="tree-icon icon-kt">Kt</div>
+                                        <span class="tree-label">ChatItemsBuilder.kt</span>
+                                    </div>
+                                    <div class="tree-node-row" onclick="openFileInViewer('ChatLayout.kt', 'kotlin'); selectTreeNode(this);">
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <span class="tree-guide-line"></span>
+                                        <div class="tree-chevron hidden"></div>
+                                        <div class="tree-icon icon-kt">Kt</div>
+                                        <span class="tree-label">ChatLayout.kt</span>
+                                    </div>
+                                </div>
+
+                            </div>
+                        </div>
+
+                        <!-- app/desktopApp/ -->
+                        <div class="tree-node-row" onclick="toggleFolderNode('folder-app-desktop')">
+                            <span class="tree-guide-line"></span>
+                            <div class="tree-chevron" id="chev-folder-app-desktop"><i data-feather="chevron-right" width="11"></i></div>
+                            <i data-feather="folder" class="tree-icon icon-folder"></i>
+                            <span class="tree-label">desktopApp</span>
+                        </div>
+                        <div class="tree-children-container collapsed" id="folder-app-desktop">
+                            <div class="tree-node-row" onclick="openFileInViewer('Main.kt', 'kotlin'); selectTreeNode(this);">
+                                <span class="tree-guide-line"></span>
+                                <span class="tree-guide-line"></span>
+                                <div class="tree-chevron hidden"></div>
+                                <div class="tree-icon icon-kt">Kt</div>
+                                <span class="tree-label">Main.kt</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 根目录：core/ (折叠) -->
+                    <div class="tree-node-row" onclick="toggleFolderNode('folder-core')">
+                        <div class="tree-chevron" id="chev-folder-core"><i data-feather="chevron-right" width="11"></i></div>
+                        <i data-feather="folder" class="tree-icon icon-folder"></i>
+                        <span class="tree-label">core</span>
+                    </div>
+                    <div class="tree-children-container collapsed" id="folder-core">
+                        <div class="tree-node-row" onclick="openFileInViewer('SessionManager.kt', 'kotlin'); selectTreeNode(this);">
+                            <span class="tree-guide-line"></span>
+                            <div class="tree-chevron hidden"></div>
+                            <div class="tree-icon icon-kt">Kt</div>
+                            <span class="tree-label">SessionManager.kt</span>
+                        </div>
+                        <div class="tree-node-row" onclick="openFileInViewer('TurnExecutor.kt', 'kotlin'); selectTreeNode(this);">
+                            <span class="tree-guide-line"></span>
+                            <div class="tree-chevron hidden"></div>
+                            <div class="tree-icon icon-kt">Kt</div>
+                            <span class="tree-label">TurnExecutor.kt</span>
+                        </div>
+                    </div>
+
+                    <!-- 根目录：docs/ (展开) -->
+                    <div class="tree-node-row" onclick="toggleFolderNode('folder-docs')">
+                        <div class="tree-chevron expanded" id="chev-folder-docs"><i data-feather="chevron-right" width="11"></i></div>
+                        <i data-feather="folder" class="tree-icon icon-folder"></i>
+                        <span class="tree-label">docs</span>
+                    </div>
+                    <div class="tree-children-container" id="folder-docs">
+                        <div class="tree-node-row" onclick="toggleFolderNode('folder-docs-arch')">
+                            <span class="tree-guide-line"></span>
+                            <div class="tree-chevron expanded" id="chev-folder-docs-arch"><i data-feather="chevron-right" width="11"></i></div>
+                            <i data-feather="folder" class="tree-icon icon-folder"></i>
+                            <span class="tree-label">architecture</span>
+                        </div>
+                        <div class="tree-children-container" id="folder-docs-arch">
+                            <div class="tree-node-row" onclick="openFileInViewer('00-overview.md', 'markdown'); selectTreeNode(this);">
+                                <span class="tree-guide-line"></span>
+                                <span class="tree-guide-line"></span>
+                                <div class="tree-chevron hidden"></div>
+                                <div class="tree-icon icon-md">MD</div>
+                                <span class="tree-label">00-overview.md</span>
+                            </div>
+                            <div class="tree-node-row" onclick="openFileInViewer('01-core.md', 'markdown'); selectTreeNode(this);">
+                                <span class="tree-guide-line"></span>
+                                <span class="tree-guide-line"></span>
+                                <div class="tree-chevron hidden"></div>
+                                <div class="tree-icon icon-md">MD</div>
+                                <span class="tree-label">01-core.md</span>
+                            </div>
+                            <div class="tree-node-row" onclick="openFileInViewer('02-app-shared.md', 'markdown'); selectTreeNode(this);">
+                                <span class="tree-guide-line"></span>
+                                <span class="tree-guide-line"></span>
+                                <div class="tree-chevron hidden"></div>
+                                <div class="tree-icon icon-md">MD</div>
+                                <span class="tree-label">02-app-shared.md</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 根目录单文件：build.gradle.kts -->
+                    <div class="tree-node-row" onclick="openFileInViewer('build.gradle.kts', 'kotlin'); selectTreeNode(this);">
+                        <div class="tree-chevron hidden"></div>
+                        <div class="tree-icon icon-gradle">G</div>
+                        <span class="tree-label">build.gradle.kts</span>
+                    </div>
+                    <!-- 根目录单文件：settings.gradle.kts -->
+                    <div class="tree-node-row" onclick="openFileInViewer('settings.gradle.kts', 'kotlin'); selectTreeNode(this);">
+                        <div class="tree-chevron hidden"></div>
+                        <div class="tree-icon icon-gradle">G</div>
+                        <span class="tree-label">settings.gradle.kts</span>
+                    </div>
+                    <!-- 根目录单文件：AGENTS.md -->
+                    <div class="tree-node-row" onclick="openFileInViewer('AGENTS.md', 'markdown'); selectTreeNode(this);">
+                        <div class="tree-chevron hidden"></div>
+                        <div class="tree-icon icon-md">MD</div>
+                        <span class="tree-label">AGENTS.md</span>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Tab 2 内容：已修改的文件差异列表与 Diff 视图 -->
+            <div class="changed-files-container" id="changed-files-content" style="display:none;">
+                <div class="diff-file-selector-row">
+                    <div class="diff-file-tab-btn active" id="diff-tab-sidebar" onclick="switchDiffTarget('Sidebar.kt')">
+                        <i data-feather="edit-3" width="12"></i>
+                        <span>Sidebar.kt</span>
+                        <span style="color:var(--accent-success);">+18</span>
+                        <span style="color:var(--accent-danger);">-6</span>
+                    </div>
+                    <div class="diff-file-tab-btn" id="diff-tab-infopanels" onclick="switchDiffTarget('InfoPanels.kt')">
+                        <i data-feather="edit-3" width="12"></i>
+                        <span>InfoPanels.kt</span>
+                        <span style="color:var(--accent-success);">+24</span>
+                        <span style="color:var(--accent-danger);">-12</span>
+                    </div>
+                </div>
+
+                <!-- Diff 对比视图 -->
+                <div class="diff-viewer-box" id="diff-view-sidebar">
+                    <div class="diff-line"><div class="diff-line-num">178</div><div class="diff-line-content">         // Sidebar Footer 两行布局</div></div>
+                    <div class="diff-line del"><div class="diff-line-num">179</div><div class="diff-line-content">-        SidebarMenuItem(title = "旧菜单项", icon = FeatherIcons.Menu)</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">179</div><div class="diff-line-content">+        // 顶层三大固定菜单 (新建任务、插件市场、自动化)</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">180</div><div class="diff-line-content">+        SidebarMenuItem(title = "新建任务", icon = FeatherIcons.MessageSquare)</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">181</div><div class="diff-line-content">+        SidebarMenuItem(title = "插件市场", icon = FeatherIcons.Grid)</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">182</div><div class="diff-line-content">+        SidebarMenuItem(title = "自动化", icon = FeatherIcons.Clock)</div></div>
+                    <div class="diff-line"><div class="diff-line-num">184</div><div class="diff-line-content">         Text(text = AppInfo.VERSION, color = colors.textMuted)</div></div>
+                </div>
+
+                <div class="diff-viewer-box" id="diff-view-infopanels" style="display:none;">
+                    <div class="diff-line"><div class="diff-line-num">350</div><div class="diff-line-content">         // 原始消息列表 (RawMessagesCard)</div></div>
+                    <div class="diff-line del"><div class="diff-line-num">351</div><div class="diff-line-content">-        RawMessageStaticView(json = payload)</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">351</div><div class="diff-line-content">+        // 倒序手风琴多条消息列表展示</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">352</div><div class="diff-line-content">+        rawMessages.reversed().forEach { item -&gt;</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">353</div><div class="diff-line-content">+            RawMessageItemRow(item, isExpanded = item.seq in expandedSeqs)</div></div>
+                    <div class="diff-line add"><div class="diff-line-num">354</div><div class="diff-line-content">+        }</div></div>
+                </div>
+
+                <!-- 快捷操作：切换至全量文件阅读 -->
+                <div style="display:flex; justify-content:flex-end; margin-top:4px;">
+                    <button class="icon-btn-minimal" style="width:auto; height:24px; padding:0 8px; font-size:11px; color:var(--accent-primary); border:1px solid var(--border-default);" onclick="openFileInViewer('Sidebar.kt', 'kotlin')">
+                        在文件阅读器中查看完整源码 ↗
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3.3 VIEW: FILE VIEWER (文件阅读面板：多 Tab + 路径面包屑 + 代码/Markdown 查看器) -->
+        <div class="panel-view-content" id="view-reader">
+            <!-- 多标签页 Tab 栏 -->
+            <div class="viewer-tab-bar" id="viewer-tabs">
+                <div class="viewer-tab-item active" id="tab-file-sidebar" onclick="selectViewerTab('Sidebar.kt', 'kotlin')">
+                    <i data-feather="file" width="12"></i>
+                    <span>Sidebar.kt</span>
+                    <span class="tab-close-icon"><i data-feather="x" width="10"></i></span>
+                </div>
+                <div class="viewer-tab-item" id="tab-file-spec" onclick="selectViewerTab('Mederi_UI_Refactor_Spec.md', 'markdown')">
+                    <i data-feather="file-text" width="12"></i>
+                    <span>Mederi_UI_Refactor_Spec.md</span>
+                    <span class="tab-close-icon"><i data-feather="x" width="10"></i></span>
+                </div>
+                <div class="viewer-tab-item" id="tab-file-dock" onclick="selectViewerTab('RightDock.kt', 'kotlin')">
+                    <i data-feather="file" width="12"></i>
+                    <span>RightDock.kt</span>
+                    <span class="tab-close-icon"><i data-feather="x" width="10"></i></span>
+                </div>
+            </div>
+
+            <!-- 面包屑与元数据栏 -->
+            <div class="viewer-meta-bar">
+                <span id="viewer-filepath">app/shared/src/commonMain/kotlin/xyz/mederi/ui/Sidebar.kt</span>
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <span id="viewer-filemeta">Kotlin · 811 lines · 34.0 KB</span>
+                    <button class="icon-btn-minimal" style="width:20px; height:20px;" title="复制文件内容" onclick="alert('已复制当前文件内容')"><i data-feather="copy" width="12"></i></button>
+                </div>
+            </div>
+
+            <!-- 文件正文查看器 (代码查看模式) -->
+            <div class="viewer-content-body" id="viewer-code-content">
+                <div class="code-line-row"><div class="code-ln">1</div><div class="code-val"><span style="color:#C678DD;">package</span> xyz.mederi.ui</div></div>
+                <div class="code-line-row"><div class="code-ln">2</div><div class="code-val"></div></div>
+                <div class="code-line-row"><div class="code-ln">3</div><div class="code-val"><span style="color:#C678DD;">import</span> androidx.compose.foundation.layout.*</div></div>
+                <div class="code-line-row"><div class="code-ln">4</div><div class="code-val"><span style="color:#C678DD;">import</span> androidx.compose.material3.*</div></div>
+                <div class="code-line-row"><div class="code-ln">5</div><div class="code-val"><span style="color:#C678DD;">import</span> androidx.compose.runtime.*</div></div>
+                <div class="code-line-row"><div class="code-ln">6</div><div class="code-val"></div></div>
+                <div class="code-line-row"><div class="code-ln">7</div><div class="code-val"><span style="color:#61AFEF;">@Composable</span></div></div>
+                <div class="code-line-row"><div class="code-ln">8</div><div class="code-val"><span style="color:#C678DD;">fun</span> <span style="color:#61AFEF;">Sidebar</span>(</div></div>
+                <div class="code-line-row"><div class="code-ln">9</div><div class="code-val">    viewModel: SidebarViewModel,</div></div>
+                <div class="code-line-row"><div class="code-ln">10</div><div class="code-val">    onOpenSettings: () -&gt; Unit,</div></div>
+                <div class="code-line-row"><div class="code-ln">11</div><div class="code-val">) {</div></div>
+                <div class="code-line-row"><div class="code-ln">12</div><div class="code-val">    <span style="color:#5C6370;">// 顶层三大固定菜单 (新建任务、插件市场、自动化)</span></div></div>
+                <div class="code-line-row"><div class="code-ln">13</div><div class="code-val">    SidebarMenuItem(title = <span style="color:#98C379;">"新建任务"</span>, icon = FeatherIcons.MessageSquare)</div></div>
+                <div class="code-line-row"><div class="code-ln">14</div><div class="code-val">    SidebarMenuItem(title = <span style="color:#98C379;">"插件市场"</span>, icon = FeatherIcons.Grid)</div></div>
+                <div class="code-line-row"><div class="code-ln">15</div><div class="code-val">    SidebarMenuItem(title = <span style="color:#98C379;">"自动化"</span>, icon = FeatherIcons.Clock)</div></div>
+                <div class="code-line-row"><div class="code-ln">16</div><div class="code-val">}</div></div>
+            </div>
+
+            <!-- Markdown 文档查看模式 -->
+            <div class="markdown-reader-body" id="viewer-markdown-content" style="display:none;">
+                <h2># Mederi UI 重构规范文档</h2>
+                <p>本文档明确了 Mederi 桌面与跨平台端 UI 视觉与架构交互统一规范：</p>
+                <ul>
+                    <li><strong>对话流</strong>：工作过程统一聚合进 <code>WorkTraceCard</code>，支持限高独立滚动与全量展开；</li>
+                    <li><strong>右侧栏</strong>：原 DIFF 升级为<strong>文件</strong>面板，双 Tab 涵盖项目目录树与改动文件；原 ARTIFACTS 升级为<strong>文件阅读</strong>面板，支持任意文件点开即读。</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 3.4 VIEW: PLAN (实施计划全文阅读) -->
+        <div class="panel-view-content" id="view-plan">
+            <div class="markdown-reader-body">
+                <h2>实施计划：重构侧边栏与工作流 (plan_c8f31b)</h2>
+                <p><strong>状态：</strong> <span style="color:#F59E0B; font-weight:600;">PENDING_APPROVAL (待批准)</span></p>
+                <p><strong>技术方案：</strong> 按照 Mederi 架构对齐三大菜单与 Footer；在对话流聚合工作过程；在右侧栏将 DIFF 升级为文件面板，提供项目目录与改动对比双视角，同时提供统一文件阅读器。</p>
+                <div style="background:var(--bg-card); border:1px solid var(--border-default); border-radius:6px; padding:10px; margin-top:12px;">
+                    <div style="font-weight:600; margin-bottom:6px;">验收标准契约：</div>
+                    <code style="font-family:var(--font-mono); font-size:11px; color:#38BDF8;">./gradlew :app:shared:jvmTest --tests="xyz.mederi.ui.*"</code>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3.5 VIEW: TERMINAL (终端面板) -->
+        <div class="panel-view-content" id="view-terminal">
+            <div style="padding:10px; background:var(--bg-code); font-family:var(--font-mono); font-size:11.5px; color:var(--text-code); flex:1;">
+                <div>[Mederi Terminal Session - project:mederi]</div>
+                <div>$ git status</div>
+                <div>On branch develop</div>
+                <div>Changes not staged for commit:</div>
+                <div style="color:var(--accent-warning);">  modified:   Sidebar.kt</div>
+                <div style="color:var(--accent-warning);">  modified:   InfoPanels.kt</div>
+                <div>$ <span style="border-right: 2px solid var(--accent-primary); animation: blink 1s infinite;">&nbsp;</span></div>
+            </div>
+        </div>
+
+        <!-- 3.6 VIEW: BROWSER (浏览器面板) -->
+        <div class="panel-view-content" id="view-browser">
+            <div style="padding:24px; text-align:center; color:var(--text-muted);">
+                <i data-feather="globe" width="32" style="margin-bottom:12px;"></i>
+                <div style="font-size:13px; font-weight:600; color:var(--text-secondary);">自动化浏览器环境</div>
+                <div style="font-size:11px; margin-top:6px;">AI 执行自动化网页检索时在此展现运行时日志与截图。</div>
+            </div>
+        </div>
+
+    </section>
+
+    <!-- 4. Right Dock (RightDock.kt - 46dp 垂直图标栏：DIFF 改为「文件」，ARTIFACTS 改为「文件阅读」) -->
+    <nav class="right-dock">
+        <!-- 1. OVERVIEW: 概览 -->
+        <div class="dock-btn active" id="dock-btn-overview" title="概览 (Overview)" onclick="switchRightPanel('overview')">
+            <i data-feather="activity" width="16"></i>
+        </div>
+
+        <!-- 2. FILES: 文件 (原 DIFF 升级，涵盖项目目录与改动) -->
+        <div class="dock-btn" id="dock-btn-files" title="文件 (Files: 目录与改动)" onclick="switchRightPanel('files')">
+            <i data-feather="folder" width="16"></i>
+        </div>
+
+        <!-- 3. READER: 文件阅读 (原 ARTIFACTS 升级，任何文件点开即读) -->
+        <div class="dock-btn" id="dock-btn-reader" title="文件阅读 (File Viewer)" onclick="switchRightPanel('reader')">
+            <i data-feather="file-text" width="16"></i>
+        </div>
+
+        <!-- 4. PLAN: 实施计划 -->
+        <div class="dock-btn" id="dock-btn-plan" title="实施计划 (Plan)" onclick="switchRightPanel('plan')">
+            <i data-feather="compass" width="16"></i>
+        </div>
+
+        <!-- 5. TERMINAL: 终端 -->
+        <div class="dock-btn" id="dock-btn-terminal" title="终端 (Terminal)" onclick="switchRightPanel('terminal')">
+            <i data-feather="terminal" width="16"></i>
+        </div>
+
+        <!-- 6. BROWSER: 浏览器 -->
+        <div class="dock-btn" id="dock-btn-browser" title="浏览器 (Browser)" onclick="switchRightPanel('browser')">
+            <i data-feather="globe" width="16"></i>
+        </div>
+
+        <div class="dock-spacer"></div>
+
+        <!-- 7. SETTINGS: 偏好设置 -->
+        <div class="dock-btn" title="偏好设置" onclick="alert('已打开系统设置弹窗')">
+            <i data-feather="sliders" width="16"></i>
+        </div>
+    </nav>
+</div>
+
+<script>
+    // Initialize Feather Icons
+    feather.replace();
+
+    // 1. Toggle WorkTraceCard
+    function toggleWorkTrace() {
+        const card = document.getElementById('main-worktrace');
+        card.classList.toggle('expanded');
+    }
+
+    // 2. Toggle Height of WorkTraceCard (展开全部步骤 vs 收起限高)
+    function toggleTraceHeight() {
+        const viewport = document.getElementById('trace-viewport');
+        const text = document.getElementById('height-toggle-text');
+        const icon = document.getElementById('height-toggle-icon');
+        viewport.classList.toggle('unbounded');
+        if (viewport.classList.contains('unbounded')) {
+            text.textContent = '收起限高';
+            icon.setAttribute('data-feather', 'chevron-up');
+        } else {
+            text.textContent = '展开全部步骤';
+            icon.setAttribute('data-feather', 'chevron-down');
+        }
+        feather.replace();
+    }
+
+    // 3. Toggle Reasoning Block
+    function toggleReasoning() {
+        const block = document.getElementById('reasoning-1');
+        block.classList.toggle('expanded');
+    }
+
+    // 4. Toggle Tool Action Group
+    function toggleToolAction(id) {
+        const group = document.getElementById(id);
+        if (group) group.classList.toggle('expanded');
+    }
+
+    // 5. Toggle Output Block
+    function toggleOutput(id) {
+        event.stopPropagation();
+        const block = document.getElementById(id);
+        if (block) block.classList.toggle('expanded');
+    }
+
+    // 6. Right Panel Switcher (活动坞与展开面板切换)
+    let currentActivePanel = 'overview';
+
+    function switchRightPanel(panelKey) {
+        const panel = document.getElementById('right-panel');
+        // 如果面板已隐藏，则打开
+        if (panel.style.display === 'none') {
+            panel.style.display = 'flex';
+        }
+
+        // 清理所有 dock 按钮高亮态
+        document.querySelectorAll('.dock-btn').forEach(btn => btn.classList.remove('active'));
+        const dockBtn = document.getElementById(`dock-btn-${panelKey}`);
+        if (dockBtn) dockBtn.classList.add('active');
+
+        // 隐藏所有面板视图
+        document.querySelectorAll('.panel-view-content').forEach(view => view.classList.remove('active'));
+
+        // 激活指定视图
+        const targetView = document.getElementById(`view-${panelKey}`);
+        if (targetView) targetView.classList.add('active');
+
+        // 更新 Header 标题与图标
+        const headerTitle = document.getElementById('panel-header-text');
+        const headerIcon = document.getElementById('panel-header-icon');
+        
+        const titles = {
+            'overview': '概览 (Overview)',
+            'files': '文件 (Files: 目录与改动)',
+            'reader': '文件阅读 (File Viewer)',
+            'plan': '实施计划 (Plan)',
+            'terminal': '终端 (Terminal)',
+            'browser': '自动化浏览器 (Browser)'
+        };
+        const icons = {
+            'overview': 'activity',
+            'files': 'folder',
+            'reader': 'file-text',
+            'plan': 'compass',
+            'terminal': 'terminal',
+            'browser': 'globe'
+        };
+
+        if (headerTitle) headerTitle.textContent = titles[panelKey] || panelKey;
+        if (headerIcon) headerIcon.setAttribute('data-feather', icons[panelKey] || 'activity');
+
+        currentActivePanel = panelKey;
+        feather.replace();
+    }
+
+    function closeRightPanel() {
+        const panel = document.getElementById('right-panel');
+        panel.style.display = 'none';
+        document.querySelectorAll('.dock-btn').forEach(btn => btn.classList.remove('active'));
+    }
+
+    // 7. Files Panel Sub-tab Switcher (项目目录 vs 已修改)
+    function switchFilesSubTab(subTabKey) {
+        const treeBtn = document.getElementById('subtab-tree-btn');
+        const diffBtn = document.getElementById('subtab-diff-btn');
+        const treeContent = document.getElementById('files-tree-content');
+        const diffContent = document.getElementById('changed-files-content');
+
+        if (subTabKey === 'tree') {
+            treeBtn.classList.add('active');
+            diffBtn.classList.remove('active');
+            treeContent.style.display = 'flex';
+            diffContent.style.display = 'none';
+        } else {
+            diffBtn.classList.add('active');
+            treeBtn.classList.remove('active');
+            treeContent.style.display = 'none';
+            diffContent.style.display = 'flex';
+        }
+    }
+
+    // 7.1 Professional Tree Interactivity (逐级折叠、展开、一键折叠、文件过滤)
+    function toggleFolderNode(folderId) {
+        const folder = document.getElementById(folderId);
+        const chev = document.getElementById('chev-' + folderId);
+        if (!folder) return;
+        const isCollapsed = folder.classList.toggle('collapsed');
+        if (chev) {
+            if (isCollapsed) {
+                chev.classList.remove('expanded');
+            } else {
+                chev.classList.add('expanded');
+            }
+        }
+    }
+
+    function selectTreeNode(nodeElem) {
+        document.querySelectorAll('.tree-node-row').forEach(row => row.classList.remove('active'));
+        if (nodeElem) {
+            nodeElem.classList.add('active');
+        }
+    }
+
+    function collapseAllTreeNodes() {
+        document.querySelectorAll('.tree-children-container').forEach(c => c.classList.add('collapsed'));
+        document.querySelectorAll('.tree-chevron').forEach(chev => chev.classList.remove('expanded'));
+    }
+
+    function refreshTree() {
+        const icon = document.querySelector('.panel-icon-btn[title="刷新目录"] i');
+        if (icon) {
+            icon.style.transition = 'transform 0.5s ease';
+            icon.style.transform = 'rotate(360deg)';
+            setTimeout(() => {
+                icon.style.transform = 'rotate(0deg)';
+            }, 500);
+        }
+    }
+
+    function filterTreeNodes(query) {
+        query = query.trim().toLowerCase();
+        const rows = document.querySelectorAll('#tree-nodes-list .tree-node-row');
+        if (!query) {
+            rows.forEach(r => r.style.display = 'flex');
+            return;
+        }
+        rows.forEach(row => {
+            const label = row.querySelector('.tree-label');
+            if (label) {
+                const text = label.textContent.toLowerCase();
+                if (text.includes(query)) {
+                    row.style.display = 'flex';
+                    // 确保父容器展开
+                    let parent = row.parentElement;
+                    while (parent && parent.id !== 'tree-nodes-list') {
+                        if (parent.classList.contains('tree-children-container')) {
+                            parent.classList.remove('collapsed');
+                            const parentId = parent.id;
+                            const chev = document.getElementById('chev-' + parentId);
+                            if (chev) chev.classList.add('expanded');
+                        }
+                        parent = parent.parentElement;
+                    }
+                } else if (row.getAttribute('onclick')?.includes('toggleFolderNode')) {
+                    // 文件夹行默认展示以支撑层级
+                    row.style.display = 'flex';
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+        });
+    }
+
+    // 8. Diff Target Switcher
+    function switchDiffTarget(filename) {
+        document.querySelectorAll('.diff-file-tab-btn').forEach(btn => btn.classList.remove('active'));
+        document.querySelectorAll('.diff-viewer-box').forEach(box => box.style.display = 'none');
+
+        if (filename === 'Sidebar.kt') {
+            document.getElementById('diff-tab-sidebar').classList.add('active');
+            document.getElementById('diff-view-sidebar').style.display = 'block';
+        } else {
+            document.getElementById('diff-tab-infopanels').classList.add('active');
+            document.getElementById('diff-view-infopanels').style.display = 'block';
+        }
+    }
+
+    function openDiffView(filename) {
+        switchRightPanel('files');
+        switchFilesSubTab('diff');
+        switchDiffTarget(filename);
+    }
+
+    // 9. Universal File Reader: 打开任意文件到「文件阅读」面板
+    function openFileInViewer(filename, type) {
+        switchRightPanel('reader');
+        selectViewerTab(filename, type);
+    }
+
+    function selectViewerTab(filename, type) {
+        document.querySelectorAll('.viewer-tab-item').forEach(tab => tab.classList.remove('active'));
+        
+        const pathElem = document.getElementById('viewer-filepath');
+        const metaElem = document.getElementById('viewer-filemeta');
+        const codeView = document.getElementById('viewer-code-content');
+        const mdView = document.getElementById('viewer-markdown-content');
+
+        if (filename.includes('Spec') || type === 'markdown' || filename.endsWith('.md')) {
+            const specTab = document.getElementById('tab-file-spec');
+            if (specTab) {
+                specTab.classList.add('active');
+                specTab.querySelector('span').textContent = filename;
+            }
+            pathElem.textContent = filename.startsWith('0') ? 'docs/architecture/' + filename : (filename === 'AGENTS.md' ? 'AGENTS.md' : 'docs/specs/' + filename);
+            metaElem.textContent = 'Markdown · 142 lines · 4.8 KB';
+            codeView.style.display = 'none';
+            mdView.style.display = 'block';
+        } else if (filename.includes('Dock')) {
+            const dockTab = document.getElementById('tab-file-dock');
+            if (dockTab) dockTab.classList.add('active');
+            pathElem.textContent = 'app/shared/src/commonMain/kotlin/xyz/mederi/ui/components/RightDock.kt';
+            metaElem.textContent = 'Kotlin · 242 lines · 8.8 KB';
+            codeView.style.display = 'block';
+            mdView.style.display = 'none';
+        } else {
+            const sidebarTab = document.getElementById('tab-file-sidebar');
+            if (sidebarTab) {
+                sidebarTab.classList.add('active');
+                sidebarTab.querySelector('span').textContent = filename;
+            }
+            pathElem.textContent = filename.endsWith('.kts') ? filename : 'app/shared/src/commonMain/kotlin/xyz/mederi/ui/components/' + filename;
+            metaElem.textContent = filename.endsWith('.kts') ? 'Gradle Script · 64 lines · 2.1 KB' : 'Kotlin · 811 lines · 34.0 KB';
+            codeView.style.display = 'block';
+            mdView.style.display = 'none';
+        }
+    }
+
+    // 10. Toggle Raw Message Item (手风琴)
+    function toggleRawMsg(id) {
+        const item = document.getElementById(id);
+        if (item) item.classList.toggle('expanded');
+    }
+
+    // 11. Copy Raw Message
+    function copyRaw(btn, jsonId) {
+        event.stopPropagation();
+        const text = document.getElementById(jsonId).innerText;
+        navigator.clipboard.writeText(text);
+        btn.innerHTML = '<i data-feather="check" width="12" color="var(--accent-success)"></i>';
+        feather.replace();
+        setTimeout(() => {
+            btn.innerHTML = '<i data-feather="copy" width="12"></i>';
+            feather.replace();
+        }, 1500);
+    }
+
+    // 12. Approve Plan
+    function approvePlan() {
+        const btn = document.getElementById('btn-proceed');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span>Approved</span>';
+        }
+        alert('计划已批准，主代理将调度 Executor 子代理开展执行！');
+    }
+
+    // 12.1 模拟切换无 Git / 有 Git 状态
+    function toggleGitBranchDisplay() {
+        const badge = document.getElementById('tree-branch-badge');
+        if (badge) {
+            const isHidden = badge.style.display === 'none';
+            badge.style.display = isHidden ? 'inline-flex' : 'none';
+        }
+    }
+
+    // 12.2 Radix Themes 按钮风格即时切换 (Soft ↔ Solid High-Contrast)
+    function toggleRadixButtonVariant() {
+        const btn = document.getElementById('btn-proceed');
+        const label = document.getElementById('btn-variant-label');
+        if (!btn) return;
+        btn.classList.toggle('high-contrast');
+        if (btn.classList.contains('high-contrast')) {
+            label.textContent = '切为微透紫 (Soft Variant)';
+        } else {
+            label.textContent = '切为白底黑字 (High-Contrast)';
+        }
+    }
+
+    // 13. Toggle Auto Approve Switch
+    function toggleSwitch(el) {
+        const thumb = el.querySelector('.mini-switch-thumb');
+        if (thumb.style.right === '2px' || !thumb.style.right) {
+            thumb.style.right = 'auto';
+            thumb.style.left = '2px';
+            el.style.backgroundColor = 'var(--border-default)';
+        } else {
+            thumb.style.left = 'auto';
+            thumb.style.right = '2px';
+            el.style.backgroundColor = 'var(--accent-primary)';
+        }
+    }
+
+    // 13.1 Toggle PanelCard Collapsible (SubAgentManagementCard, McpManagementCard, SkillManagementCard)
+    function togglePanelCard(id) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.classList.toggle('expanded');
+        }
+    }
+
+    // 13.2 Toggle MCP Switch
+    function toggleMcpSwitch(event, switchEl) {
+        if (event) event.stopPropagation();
+        switchEl.classList.toggle('off');
+    }
+
+    // 13.3 Trigger Card Refresh (Spin animation & status update)
+    function triggerCardRefresh(event, btnEl, type) {
+        if (event) event.stopPropagation();
+        btnEl.classList.add('rotating');
+        setTimeout(() => {
+            btnEl.classList.remove('rotating');
+        }, 800);
+    }
+
+    // 13.4 Toggle Feature Collapsible (Legacy support)
+    function toggleFeatureCollapse(id) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.classList.toggle('expanded');
+        }
+    }
+
+    // 14. Theme Management (Radix Themes Dark / Light Toggle)
+    function toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        setTheme(newTheme);
+    }
+
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        document.body.className = `radix-themes ${theme}`;
+        localStorage.setItem('mederi_theme', theme);
+
+        // 更新所有主题图标与提示
+        const themeIcons = document.querySelectorAll('.theme-toggle-icon');
+        themeIcons.forEach(el => {
+            el.setAttribute('data-feather', theme === 'dark' ? 'moon' : 'sun');
+            if (theme === 'light') {
+                el.setAttribute('color', 'var(--iris-9)');
+            } else {
+                el.setAttribute('color', 'var(--accent-primary)');
+            }
+        });
+        const themeBtn = document.getElementById('theme-toggle-btn');
+        if (themeBtn) {
+            themeBtn.title = theme === 'dark' ? '当前: 深色模式 (点击切换浅色 ⌘T)' : '当前: 浅色模式 (点击切换深色 ⌘T)';
+        }
+
+        if (window.feather) {
+            feather.replace();
+        }
+    }
+
+    // 初始化加载保存的主题
+    (function initTheme() {
+        const savedTheme = localStorage.getItem('mederi_theme') || 'dark';
+        setTheme(savedTheme);
+    })();
+
+    // 支持 ⌘T 或 Ctrl+T 快捷切换主题
+    document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && (e.key === 't' || e.key === 'T')) {
+            e.preventDefault();
+            toggleTheme();
+        }
+    });
+</script>
+</body>
+</html>

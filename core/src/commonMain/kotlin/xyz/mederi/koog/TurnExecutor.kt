@@ -150,7 +150,9 @@ class TurnExecutor(
         subagentRunner = subagentRunner,
         scope = scope,
         // 生命周期事件总线：SUBAGENT_STARTED/COMPLETED/ERROR/STOPPED（UI 子代理面板消费）
-        eventBus = eventBus
+        eventBus = eventBus,
+        // 单会话并发上限（设置页 Agents 面板配置，默认 2）：每次 spawn 现读设置存储，改设置即时生效
+        maxConcurrentProvider = subagentConfigManager?.let { cfg -> { cfg.getMaxConcurrentSubagents() } }
     )
 
     /** 事件消息等待队列（按 parentSessionId 分组）：子代理终态时暂存，父 turn 空闲时冲刷唤醒新 turn。 */

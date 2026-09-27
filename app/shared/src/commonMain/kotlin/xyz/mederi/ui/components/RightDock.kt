@@ -1,19 +1,15 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -47,6 +43,7 @@ import xyz.mederi.ui.RightDockPanel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.ChatLayout
+import xyz.mederi.ui.components.atoms.MederiIconSquareButton
 
 data class DockItemData(
     val panel: RightDockPanel,
@@ -135,28 +132,10 @@ private fun DockIconButton(
         }
     }
 
-    val backgroundColor = when {
-        isActive -> colors.accentPrimary.copy(alpha = 0.15f)
-        isHovered -> colors.surfaceHover
-        else -> Color.Transparent
-    }
-
-    val iconTint = when {
-        isActive -> colors.accentPrimary
-        isHovered -> colors.textPrimary
-        else -> colors.textMuted
-    }
-
+    // 按钮本体收敛为 MederiIconSquareButton（28dp / Control / active=accentPrimary 高亮，保留 dock 选中态现状）；
+    // 外层 Box 只负责 tooltip 的 hover 探测与手型光标，不再自绘背景/图标
     Box(
         modifier = Modifier
-            .size(36.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(backgroundColor)
-            .border(
-                width = if (isActive) 1.dp else 0.dp,
-                color = if (isActive) colors.accentPrimary.copy(alpha = 0.35f) else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
-            )
             .pointerHoverIcon(PointerIcon.Hand)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -179,17 +158,16 @@ private fun DockIconButton(
                     }
                 }
             }
-            .clickable(onClick = {
+    ) {
+        MederiIconSquareButton(
+            icon = icon,
+            onClick = {
                 showTooltip = false
                 onClick()
-            }),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = icon,
+            },
             contentDescription = label,
-            tint = iconTint,
-            modifier = Modifier.size(17.dp)
+            active = isActive,
+            colors = colors,
         )
 
         if (showTooltip) {
@@ -203,11 +181,13 @@ private fun DockIconButton(
                     dismissOnClickOutside = false
                 )
             ) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = colors.surfaceCard,
-                    border = BorderStroke(1.dp, colors.surfaceCardBorder),
-                    shadowElevation = 6.dp
+                // 工具提示壳：Surface 收敛为自绘（shadow 6dp 保留原 shadowElevation 视觉 + clip + bg + border）
+                Box(
+                    modifier = Modifier
+                        .shadow(6.dp, RoundedCornerShape(6.dp))
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(colors.surfaceCard)
+                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(6.dp))
                 ) {
                     Text(
                         text = label,

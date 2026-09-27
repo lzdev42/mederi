@@ -34,10 +34,11 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent
+import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 /**
- * 顶层推理块（ReasoningBlock）展开内容的默认最大高度：超过后块内上下滚动，
- * 内容末尾的「展开/收起」按钮可切换为无限高度（真实动态高度），再点缩回限高。
+ * 顶层推理块（ReasoningBlock）展开内容的默认固定容器高度：推理内容在容器内独立上下滚动，
+ * 容器底部的「展开/收起」按钮固定锚定在容器底，点击可切换为无限高度（展示全量文本），再点缩回固定高度。
  */
 private val ReasoningMaxContentHeight = 200.dp
 
@@ -45,8 +46,8 @@ private val ReasoningMaxContentHeight = 200.dp
  * 单独思维链/思考过程折叠面板 (ReasoningBlock)
  * 严格还原极简设计：大脑图标胶囊 + 展开后轻量导轨线。
  *
- * 顶层独立显示（enforceMaxHeight=true）时：展开内容默认限高 [ReasoningMaxContentHeight] 并内部滚动，
- * 内容末尾「展开/收起」按钮可切换为无限高度（真实动态高度）；限高状态下不点按钮也能滚动查看全部。
+ * 顶层独立显示（enforceMaxHeight=true）时：展开内容为默认 [ReasoningMaxContentHeight] 固定高度容器，
+ * 推理内容在容器内独立滚动，容器底部固定锚定「展开/收起」按钮；点击切换为无限高度全量展示。
  * 位于 WorkTraceCard 内（enforceMaxHeight=false）时保持无限高——卡整体已限高滚动，子项不再重复限制。
  */
 @Composable
@@ -164,8 +165,8 @@ fun ReasoningBlock(
         }
 
         // 展开后的思考旁白内容（左侧细垂直导轨线）。
-        // enforceMaxHeight：默认限高 + 块内滚动，内容末尾「展开/收起」按钮切换无限高度（真实动态高度），
-        // 限高状态下不点按钮也能上下滚动查看全部；WorkTraceCard 内子项（enforceMaxHeight=false）保持无限高。
+        // enforceMaxHeight：默认固定高度容器（200.dp）+ 内部独立滚动，底部「展开/收起」按钮固定在容器底；
+        // 点击切换为无限高度（真实动态高度），再点缩回固定高度容器；WorkTraceCard 内子项（enforceMaxHeight=false）保持无限高。
         ExpandableContent(expanded = isExpanded && text.isNotBlank()) {
             val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
             Column(
@@ -175,8 +176,7 @@ fun ReasoningBlock(
                         if (shouldScroll) {
                             Modifier
                                 .containScroll()
-                                .heightIn(max = ReasoningMaxContentHeight)
-                                .verticalScroll(contentScroll)
+                                .height(ReasoningMaxContentHeight)
                         } else {
                             Modifier
                         }
@@ -195,46 +195,44 @@ fun ReasoningBlock(
                     .padding(start = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                MarkdownView(
-                    content = text,
-                    modifier = Modifier.fillMaxWidth(),
-                    enableScrollOverride = false,
-                    markdownTheme = rememberMederiMarkdownTheme(compact = true)
-                )
+                // 上半部分：在容器内独立滚动的推理文本视口
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (shouldScroll) {
+                                Modifier
+                                    .weight(1f)
+                                    .verticalScroll(contentScroll)
+                            } else {
+                                Modifier
+                            }
+                        )
+                ) {
+                    MarkdownView(
+                        content = text,
+                        modifier = Modifier.fillMaxWidth(),
+                        enableScrollOverride = false,
+                        markdownTheme = rememberMederiMarkdownTheme(compact = true)
+                    )
+                }
 
                 if (enforceMaxHeight) {
-                    // 底部切换按钮：位于内容末尾、随内容滚动，恒显示
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable {
-                                isUnbounded = !isUnbounded
-                                DebugLog.debug(
-                                    "UI",
-                                    "ReasoningBlock isUnbounded toggled to: $isUnbounded, contentKey=$contentKey"
-                                )
-                            }
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                            contentDescription = null,
-                            tint = colors.textMuted,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = stringResource(
-                                if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
-                            ),
-                            color = colors.textMuted,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    // 底部切换按钮：固定在容器底部，不随推理内容滚动（收敛为 MederiGhostButton）
+                    MederiGhostButton(
+                        text = stringResource(
+                            if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
+                        ),
+                        icon = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                        onClick = {
+                            isUnbounded = !isUnbounded
+                            DebugLog.debug(
+                                "UI",
+                                "ReasoningBlock isUnbounded toggled to: $isUnbounded, contentKey=$contentKey"
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
         }

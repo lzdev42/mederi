@@ -1,6 +1,5 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,7 +8,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +32,10 @@ import xyz.mederi.ui.cleanErrorSummary
 import xyz.mederi.ui.extractErrorCategory
 import xyz.mederi.ui.extractErrorSuggestion
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.ui.components.atoms.MederiCard
+import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
+import xyz.mederi.ui.components.atoms.MederiSurfaceButton
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
 import mederi.app.shared.generated.resources.error_report_app_version
@@ -115,19 +119,16 @@ fun ErrorDetailDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.surfaceCardBorder),
+        // 诊断面板壳走 MederiCard（surfaceCard 底色/描边一致；圆角按 Card 8dp 收敛，原 14dp 属对话框壳特例）
+        MederiCard(
             modifier = modifier
                 .fillMaxWidth()
                 .widthIn(max = 680.dp)
-                .padding(vertical = 16.dp)
+                .padding(vertical = 16.dp),
+            padding = PaddingValues(20.dp)
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
+                modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 // 1. 顶部标题栏
@@ -176,10 +177,12 @@ fun ErrorDetailDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (categoryBadge != null) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = colors.accentDanger,
-                            modifier = Modifier.padding(end = 2.dp)
+                        // 实心危险徽标：MederiBadges 无 solid accentDanger 变体，保留等价 Box 链替代 M3 Surface
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 2.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(colors.accentDanger)
                         ) {
                             Text(
                                 text = categoryBadge,
@@ -285,31 +288,19 @@ fun ErrorDetailDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 复制日志按钮
-                        OutlinedButton(
+                        MederiSurfaceButton(
+                            text = stringResource(Res.string.error_report_copy_logs),
+                            icon = FeatherIcons.Copy,
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(bugReportMarkdown))
                                 copyHint = copyDoneHint
-                            },
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            border = BorderStroke(1.dp, colors.divider)
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.Copy,
-                                contentDescription = null,
-                                tint = colors.textSecondary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(Res.string.error_report_copy_logs),
-                                color = colors.textSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
+                            }
+                        )
 
                         // 提交 Bug 按钮（自动预填好标题与内容模板并调起浏览器）
-                        Button(
+                        MederiPrimaryDecisionButton(
+                            text = stringResource(Res.string.error_report_submit_bug),
+                            icon = FeatherIcons.ExternalLink,
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(bugReportMarkdown))
                                 copyHint = copiedGithubHint
@@ -317,39 +308,14 @@ fun ErrorDetailDialog(
                                 val issueBody = bugReportMarkdown.encodeURLParameter()
                                 val githubIssueUrl = "https://github.com/lzdev42/mederi/issues/new?title=$issueTitle&body=$issueBody"
                                 uriHandler.openUri(githubIssueUrl)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.accentPrimary
-                            ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.ExternalLink,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(Res.string.error_report_submit_bug),
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                            }
+                        )
 
                         // 关闭按钮
-                        TextButton(
-                            onClick = onDismiss,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.close),
-                                color = colors.textSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
+                        MederiGhostButton(
+                            text = stringResource(Res.string.close),
+                            onClick = onDismiss
+                        )
                     }
                 }
             }

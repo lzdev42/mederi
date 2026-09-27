@@ -35,11 +35,19 @@ import kotlinx.coroutines.flow.MutableSharedFlow
  * sessionId = 父会话 ID；不注入 eventBus 时静默跳过（测试/无事件场景）。
  *
  * 所有复杂状态都收敛在 [agents] 表里，外部（工具/UI）只通过这里的方法交互。
+ *
+ * 并发上限（2026-09，代码级硬门禁）：[spawn] 在注册前原子检查"该父会话 RUNNING 子代理数"，
+ * 达到 [maxConcurrentProvider] 返回的上限即抛 [SubagentLimitReachedException]（工具层转成
+ * Error 文案给模型）。上限与子代理类型无关（EXECUTOR/RESEARCHER 同池计数）；浏览器任务
+ * （BrowserTaskManager 驱动）不经本 Manager，天然排除在外——BROWSER_* 角色即便经 spawn
+ * 也显式豁免。provider 为 null（测试/未装配）时不设限。
  */
 class SubagentManager(
     private val subagentRunner: SubagentRunner,
     private val scope: CoroutineScope,
-    private val eventBus: MutableSharedFlow<MederiEvent>? = null
+    private val eventBus: MutableSharedFlow<MederiEvent>? = null,
+    /** 单会话并发上限提供者（每次 spawn 现读设置存储，改设置即时生效）；null = 不限制。 */
+    private val maxConcurrentProvider: (suspend () -> Int)? = null
 ) {
 
     enum class SubagentStatus { RUNNING, COMPLETED, ERROR, STOPPED }
@@ -77,6 +85,9 @@ class SubagentManager(
     )
 
     private val agents = ConcurrentHashMap<String, BackgroundAgent>()
+
+    /** spawn 原子门禁锁：并行工具调用同消息并发 spawn 时，"计数 + 注册"必须原子，防止超发。 */
+    private val spawnLock = Any()
 
     /**
      * 已结束/丢失 agent 的恢复记录（内存驻留，供 agent_status 的 NOT_FOUND 兜底）。
@@ -118,8 +129,12 @@ class SubagentManager(
      * 后台启动子 Agent，返回 agentId。
      * 复用 [SubagentRunner.run] 的全部逻辑（内存 store + 独立 TurnExecutor + 阻塞等终态），
      * 只是把它放进后台协程，不阻塞调用方。
+     *
+     * 并发门禁：注册前原子检查该父会话 RUNNING 子代理数，达到上限抛
+     * [SubagentLimitReachedException]（工具层捕获转 Error 文案）。检查与注册同锁，
+     * 并行工具调用同消息并发 spawn 不会超发。
      */
-    fun spawn(
+    suspend fun spawn(
         task: String,
         briefing: String?,
         plan: String?,
@@ -153,7 +168,22 @@ class SubagentManager(
             executorSubtaskIndex = executorSubtaskIndex,
             planStore = planStore
         )
-        agents[agentId] = bg
+
+        // 并发上限（浏览器角色显式豁免——浏览器任务本就不经 spawn，此处是规则显式化）
+        val limit = if (role == SubagentRole.BROWSER_OPERATOR || role == SubagentRole.BROWSER_BRAIN) {
+            Int.MAX_VALUE
+        } else {
+            maxConcurrentProvider?.invoke()?.coerceAtLeast(1) ?: Int.MAX_VALUE
+        }
+        synchronized(spawnLock) {
+            val running = agents.values.count {
+                it.parentSessionId == parentSessionId && it.status == SubagentStatus.RUNNING
+            }
+            if (running >= limit) {
+                throw SubagentLimitReachedException(running = running, limit = limit)
+            }
+            agents[agentId] = bg
+        }
 
         val job = scope.launch {
             bg.progress = "running"
@@ -376,4 +406,23 @@ class SubagentManager(
             return regex.find(text)?.groupValues?.get(1)?.trim()
         }
     }
+}
+
+/**
+ * 并发上限拒绝异常（[SubagentManager.spawn] 原子门禁抛出）。
+ *
+ * 内部控制流异常：工具层（SpawnAgentTool / SpawnResearcherTool）捕获后把 [modelGuidance]
+ * 作为 Error 文案返回给模型——模型据此停止派发、结束 turn，等子代理完成的自动唤醒再补派。
+ */
+class SubagentLimitReachedException(
+    /** 拒绝时该父会话已在运行的子代理数。 */
+    val running: Int,
+    /** 当前配置的单会话并发上限。 */
+    val limit: Int
+) : RuntimeException("subagent concurrency limit reached: $running/$limit RUNNING") {
+    /** 给模型的可操作指引（工具层直接作为工具结果返回）。 */
+    val modelGuidance: String
+        get() = "Error: subagent concurrency limit reached (limit=$limit, running=$running in this session). " +
+            "Do NOT spawn more sub-agents now — end your turn. You will be woken up automatically " +
+            "as running sub-agents finish; spawn the remaining sub-tasks in that turn."
 }

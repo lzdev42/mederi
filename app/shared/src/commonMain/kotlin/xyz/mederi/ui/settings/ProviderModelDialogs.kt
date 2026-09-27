@@ -1,16 +1,12 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,8 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.settings_panel_add
 import mederi.app.shared.generated.resources.settings_panel_add_model_title
@@ -42,6 +36,8 @@ import org.jetbrains.compose.resources.stringResource
 
 import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.atoms.MederiDialog
+import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 // ============================================================================
 // 6. 弹窗组件 (Dialogs)
@@ -61,18 +57,15 @@ internal fun AddManualModelDialog(
     var maxTokensText by remember { mutableStateOf("") }
     var selectedLevels by remember { mutableStateOf(ReasoningLevels.SELECTABLE.toSet()) }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = ProviderTokens.RadiusCard,
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.divider),
-            modifier = Modifier.width(440.dp).padding(ProviderTokens.SpacingLarge)
-        ) {
-            Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text(stringResource(Res.string.settings_panel_add_model_title), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
-                HorizontalDivider(color = colors.divider)
+    // 对话框壳走 MederiDialog（统一 12dp 圆角 + surfaceSidebar chrome + 16dp 内边距 + spacedBy(12)）
+    MederiDialog(
+        onDismiss = onDismiss,
+        width = 440.dp
+    ) {
+        Text(stringResource(Res.string.settings_panel_add_model_title), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+        HorizontalDivider(color = colors.divider)
 
-                LabeledTextField(stringResource(Res.string.settings_panel_model_id_label), modelId, { modelId = it; if (name.isBlank()) name = it }, stringResource(Res.string.settings_panel_model_id_placeholder, "deepseek-chat"), colors)
+        LabeledTextField(stringResource(Res.string.settings_panel_model_id_label), modelId, { modelId = it; if (name.isBlank()) name = it }, stringResource(Res.string.settings_panel_model_id_placeholder, "deepseek-chat"), colors)
                 LabeledTextField(stringResource(Res.string.settings_panel_display_name), name, { name = it }, stringResource(Res.string.settings_panel_display_name_placeholder, "DeepSeek V3"), colors)
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
@@ -102,7 +95,10 @@ internal fun AddManualModelDialog(
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    MederiGhostButton(
+                        text = stringResource(Res.string.settings_panel_cancel),
+                        onClick = onDismiss
+                    )
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
                     PrimaryActionBtn(stringResource(Res.string.settings_panel_add), colors, enabled = modelId.isNotBlank()) {
                         val cw = contextWindowText.toIntOrNull()
@@ -113,8 +109,6 @@ internal fun AddManualModelDialog(
                         )
                     }
                 }
-            }
-        }
     }
 }
 
@@ -137,16 +131,13 @@ internal fun EditModelDialog(
         )
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = ProviderTokens.RadiusCard,
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.divider),
-            modifier = Modifier.width(440.dp).padding(ProviderTokens.SpacingLarge)
-        ) {
-            Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text(stringResource(Res.string.settings_panel_edit_model_title, model.providerModelId), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
-                HorizontalDivider(color = colors.divider)
+    // 对话框壳走 MederiDialog（统一 12dp 圆角 + surfaceSidebar chrome + 16dp 内边距 + spacedBy(12)）
+    MederiDialog(
+        onDismiss = onDismiss,
+        width = 440.dp
+    ) {
+        Text(stringResource(Res.string.settings_panel_edit_model_title, model.providerModelId), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
+        HorizontalDivider(color = colors.divider)
 
                 LabeledTextField(stringResource(Res.string.settings_panel_display_name), name, { name = it }, model.providerModelId, colors)
 
@@ -177,7 +168,10 @@ internal fun EditModelDialog(
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    MederiGhostButton(
+                        text = stringResource(Res.string.settings_panel_cancel),
+                        onClick = onDismiss
+                    )
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
                     PrimaryActionBtn(stringResource(Res.string.settings_panel_save_config), colors) {
                         val cw = contextWindowText.toIntOrNull()
@@ -188,8 +182,6 @@ internal fun EditModelDialog(
                         )
                     }
                 }
-            }
-        }
     }
 }
 

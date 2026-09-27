@@ -39,6 +39,7 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.terminalCwdOf
 import xyz.mederi.ui.terminalTabTitle
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.term_all_closed
 import mederi.app.shared.generated.resources.term_all_closed_hint
@@ -142,14 +143,11 @@ internal fun TerminalPanelContent(
                 }
             }
 
-            Icon(
-                imageVector = FeatherIcons.Plus,
+            // 新建 tab 按钮（收敛为 MederiPanelHeaderIconButton，获得 hover 反馈）
+            MederiPanelHeaderIconButton(
+                icon = FeatherIcons.Plus,
+                onClick = { terminalVm.addTab() },
                 contentDescription = stringResource(Res.string.term_new_tab),
-                tint = colors.textSecondary,
-                modifier = Modifier
-                    .size(16.dp)
-                    .clickable { terminalVm.addTab() }
-                    .padding(2.dp),
             )
         }
 

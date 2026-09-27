@@ -1,5 +1,6 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -43,8 +44,12 @@ import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.PlanOverviewItem
 import xyz.mederi.ui.PlanOverviewStatus
 import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.MederiStepStatusIcon
+import xyz.mederi.ui.components.atoms.MederiSurfaceButton
+import xyz.mederi.ui.components.atoms.MederiTabBadge
 import xyz.mederi.ui.components.atoms.PanelCard
 import xyz.mederi.ui.components.atoms.PanelEmptyState
+import xyz.mederi.ui.components.atoms.StepStatus
 
 @Composable
 internal fun DiffPanelContent(
@@ -60,18 +65,12 @@ internal fun DiffPanelContent(
             title = stringResource(Res.string.dock_diff_empty),
             hint = stringResource(Res.string.dock_diff_empty_hint),
             action = {
-                Button(
+                // 空态刷新动作：收敛为 MederiSurfaceButton（次级凸起变体，icon + 11sp 文本）
+                MederiSurfaceButton(
+                    text = stringResource(Res.string.dock_refresh_changes),
                     onClick = { viewModel.openDiff() },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = colors.buttonSecondary,
-                        contentColor = colors.textPrimary
-                    ),
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Icon(FeatherIcons.RefreshCw, contentDescription = null, modifier = Modifier.size(12.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(Res.string.dock_refresh_changes), fontSize = 11.sp)
-                }
+                    icon = FeatherIcons.RefreshCw,
+                )
             }
         )
     } else {
@@ -369,44 +368,71 @@ internal fun PlansOverviewCard(
     viewModel: WorkspaceViewModel,
     colors: MederiColors
 ) {
-    PanelCard(modifier = Modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            CardHeader(
-                icon = FeatherIcons.FileText,
-                title = "实施计划 (Plans)",
-                count = {
-                    Text(
-                        text = "${plans.size} 个计划",
-                        color = colors.textSecondary,
-                        fontSize = 11.sp
-                    )
-                }
-            )
+    var isExpanded by remember { mutableStateOf(true) }
 
-            if (plans.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(colors.surfaceWorkspace)
-                        .padding(vertical = 16.dp, horizontal = 12.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "当前会话尚未制定计划，AI 产出计划时将在此沉淀留痕",
-                        color = colors.textMuted,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    for (plan in plans) {
-                        PlanOverviewItemCard(
-                            item = plan,
-                            viewModel = viewModel,
-                            colors = colors
+    PanelCard(modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 卡片 Header：支持点击折叠/展开
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { isExpanded = !isExpanded }
+            ) {
+                CardHeader(
+                    icon = FeatherIcons.FileText,
+                    title = "实施计划 (Plans)",
+                    count = {
+                        // 计划数徽标：收敛为 MederiTabBadge（tab-badge 标准）
+                        MederiTabBadge(count = plans.size)
+                    },
+                    actions = {
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                                contentDescription = if (isExpanded) "折叠实施计划" else "展开实施计划",
+                                tint = colors.textMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                )
+            }
+
+            AnimatedVisibility(visible = isExpanded) {
+                if (plans.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(colors.surfaceWorkspace)
+                            .padding(vertical = 16.dp, horizontal = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "当前会话尚未制定计划，AI 产出计划时将在此沉淀留痕",
+                            color = colors.textMuted,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
                         )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        for (plan in plans) {
+                            PlanOverviewItemCard(
+                                item = plan,
+                                viewModel = viewModel,
+                                colors = colors
+                            )
+                        }
                     }
                 }
             }
@@ -577,66 +603,89 @@ private fun PlanOverviewItemCard(
                 thickness = 0.5.dp
             )
 
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                for (st in item.subtasks) {
-                    val stDone = st.status.equals("COMPLETED", ignoreCase = true)
-                    val stRunning = st.status.equals("IN_PROGRESS", ignoreCase = true)
-                    val dotColor = when {
-                        stDone -> Color(0xFF10B981)
-                        stRunning -> Color(0xFF0284C7)
-                        else -> colors.textMuted
-                    }
+            var isSubtasksExpanded by remember { mutableStateOf(true) }
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(colors.surfaceCard.copy(alpha = 0.6f))
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { isSubtasksExpanded = !isSubtasksExpanded }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "执行步骤 (${item.subtasks.size})",
+                    fontSize = 11.sp,
+                    color = colors.textSecondary,
+                    fontWeight = FontWeight.Medium
+                )
+                Icon(
+                    imageVector = if (isSubtasksExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                    contentDescription = null,
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+
+            AnimatedVisibility(visible = isSubtasksExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    for (st in item.subtasks) {
+                        val stDone = st.status.equals("COMPLETED", ignoreCase = true)
+                        val stRunning = st.status.equals("IN_PROGRESS", ignoreCase = true)
+
                         Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(colors.surfaceCard.copy(alpha = 0.6f))
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.weight(1f, fill = false)
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(dotColor)
-                            )
-                            // 步骤 1, 步骤 2 胶囊
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(colors.surfaceCardBorder.copy(alpha = 0.4f))
-                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f, fill = false)
                             ) {
+                                // 步骤状态点：收敛为 MederiStepStatusIcon（Done=绿勾 / Active=accent 实心 / Todo=空心环）
+                                MederiStepStatusIcon(
+                                    status = when {
+                                        stDone -> StepStatus.Done
+                                        stRunning -> StepStatus.Active
+                                        else -> StepStatus.Todo
+                                    }
+                                )
+                                // 步骤 1, 步骤 2 胶囊
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(colors.surfaceCardBorder.copy(alpha = 0.4f))
+                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = "步骤 ${st.index + 1}",
+                                        color = colors.textSecondary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                                 Text(
-                                    text = "步骤 ${st.index + 1}",
-                                    color = colors.textSecondary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium
+                                    text = st.name,
+                                    color = if (stDone) colors.textMuted else colors.textPrimary,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Text(
-                                text = st.name,
-                                color = if (stDone) colors.textMuted else colors.textPrimary,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
 
-                        // 如果有关联 spec，展示 [Spec ↗] 按钮
-                        if (!st.spec.isNullOrBlank()) {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(colors.accentPrimary.copy(alpha = 0.12f))
-                                    .border(0.5.dp, colors.accentPrimary.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
+                            // 如果有关联 spec，展示 [Spec ↗] 按钮
+                            if (!st.spec.isNullOrBlank()) {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(colors.accentPrimary.copy(alpha = 0.12f))
+                                        .border(0.5.dp, colors.accentPrimary.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
                                     .clickable {
                                         viewModel.openSpecInExtension(
                                             planId = item.id,
@@ -662,5 +711,6 @@ private fun PlanOverviewItemCard(
                 }
             }
         }
+    }
     }
 }

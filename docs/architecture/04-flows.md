@@ -16,7 +16,7 @@ sequenceDiagram
     participant LLM as LLM 供应商
     participant EB as eventBus (SharedFlow)
 
-    UI->>UI: guardImageSupport 剔除放行(模型不支持图片 → 剔除本次图片<br/>+ 一次性轻提示 imageStrippedNotice; 历史保留)<br/>PromptComposer.compose(主指令+粘贴文本)<br/>乐观消息入 pendingUserMessages
+    UI->>UI: guardImageSupport 剔除放行(模型不支持图片 → 剔除本次图片<br/>+ 一次性轻提示 imageStrippedNotice, 历史保留)<br/>PromptComposer.compose(主指令+粘贴文本)<br/>乐观消息入 pendingUserMessages
     UI->>AC: sendMessage(conversationId, ChatPromptInput{text, model, agent, thinkingLevel=effectiveThinkingLevel, apiKeyId=getApiKeyId(model.provider)})
     AC->>AC: MederiInputMapper.toMessageParts / toAgentConfig；记录 lastApiKeyIdByProvider（自动命名跟随用）
     AC->>SM: SessionManager.sendMessage(id, SendMessageRequest{..., apiKeyId})
@@ -26,10 +26,15 @@ sequenceDiagram
     TE->>TE: SystemPrompts.build(agentMode, activePlan, activeTodo)<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深)
     TE->>TE: effectiveModel/effectiveReasoningLevel → sessionStore.updateAgentConfig
     TE->>HS: append(用户消息+durable环境块) 【durable-first】
-    TE->>EB: SESSION_UPDATED
+    TE->>EB: SESSION_UPDATED (客户端 refreshPage 即时回查, 新 turn 用户消息立即可见)
     TE->>TE: sessionStore.updateStatus(RUNNING)
     TE->>TE: scope.launch { runTurn() }
     AC-->>UI: (立即返回)
+    alt 用户在 turn 运行中插话 (引导模式 Steering, 见 2.1)
+        UI->>AC: steerMessage(conversationId, input)
+        AC->>TE: steerMessage
+        TE->>TE: RUNNING → pendingSteerings 入队 + STATUS(steering_queued)<br/>非 RUNNING → 降级 sendMessage
+    end
 
     rect rgb(235, 244, 255)
         note over TE,LLM: runTurn（后台协程）
@@ -44,11 +49,12 @@ sequenceDiagram
             K-->>EB: MESSAGE_DELTA (launchStreamConsumer)
             EB-->>UI: SSE 或进程内 → SnapshotReducer 更新快照
         end
-        loop 工具循环 (maxAgentIterations=50)
+        loop 工具循环 (maxAgentIterations=3000)
             K->>K: toAssistantMessageSafe(args 坏 JSON 降级 "{}")
             K->>HS: TurnIncrementalPersister.persistAssistant（增量落库防崩丢）
-            K->>K: nodeExecuteTools: 执行工具<br/>(文件写白名单/沙盒命令/Plan/Verify/ask_user...)
+            K->>K: nodeExecuteTools: 执行工具<br/>(文件写白名单/沙盒命令/office_read/office_write(pptx 只读)/<br/>list_processes/stop_process/Plan/Verify/ask_user...)
             K-->>EB: TOOL_CALLED / TOOL_RESULT 事件
+            K->>K: 工具边界 (nodeSendToolResult) pollSteering 出队<br/>→ SteeringItem 注入工具结果消息 (引导模式插话)
             alt ask_user / create_plan(APPROVAL)
                 K-->>EB: QUESTION_REQUESTED / PLAN_APPROVAL_REQUESTED (工具协程挂起)
                 UI-->>AC: resolveQuestion / resolvePlanApproval
@@ -57,11 +63,12 @@ sequenceDiagram
             end
             K->>LLM: send_tool_results → requestLLMStreaming
         end
-        K->>HS: ChatMemory store → HistoryStoreChatHistoryProvider.reconcile<br/>(指纹对齐/插 SUMMARY/补诊断; 失败退回 replace)
+        K->>HS: ChatMemory store → HistoryStoreChatHistoryProvider.reconcile<br/>(指纹对齐/插 SUMMARY/补诊断, 失败退回 replace)
         TE->>HS: (压缩触发时) 插入 SUMMARY 标记消息
-        TE->>EB: MESSAGE_COMPLETED (可选 warning)
-        TE->>TE: diffTracker.captureSnapshot → diffStore.save(TurnDiff)
+        TE->>TE: diffTracker.captureSnapshot → diffStore.save(TurnDiff)<br/>装配 turnDiffSummary (files/additions/deletions 单轮文件变更汇总)<br/>回填最后一条 assistant 消息.turnDiffSummary (UI TurnDiffCard)
         TE->>TE: sessionStore.updateStatus(IDLE)
+        TE->>EB: MESSAGE_COMPLETED (可选 warning)<br/>有文件变更时携 turnDiffSummary/diffMessageId
+        TE->>TE: finally 冲刷: pendingEventMessages 补发 + pendingSteerings 残留降级新 turn<br/>(撞 RUNNING 放回队列)
     end
     UI->>UI: SnapshotReducer.applyWithRefresh + refreshPage 回查落库对齐
 ```
@@ -71,6 +78,10 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     S["sendMessage(sessionId, request, subagentRole?)"] --> V{"会话状态 == IDLE?"}
+    S2["steerMessage(sessionId, request) 引导模式"] --> RQ{"会话 RUNNING<br/>且 activeJobs 活跃?"}
+    RQ -- "否" --> S
+    RQ -- "是" --> STQ["pendingSteerings 入队 (STATUS steering_queued)<br/>工具边界 nodeSendToolResult 经 pollSteering 出队注入<br/>turn 收尾残留: finally 冲刷降级新 turn (见 2.1)"]
+    STQ --> RUN
     V -- "否" --> E1["上抛异常(上游包装 MederiException)"]
     V -- "是" --> PREP["组装上下文: Project/PlanStore/Notebook<br/>activePlanContent(计划+spec指针+活跃spec)<br/>activeTodoContent(仅无活跃Plan)"]
     PREP --> SP["SystemPrompts.build / forSubagent<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深)"]
@@ -78,12 +89,12 @@ flowchart TD
     CFG --> DF["durable-first: buildUserMessage(注入 NOT_FOR_UI 隐藏标记)<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
     DF --> BG["scope.launch runTurn"]
     BG --> PF{"usedTokens > 70% 窗口?"}
-    PF -- "是" --> COMP["compressOnce(mini agent, compressOnlyStrategy)<br/>失败不阻塞"]
+    PF -- "是" --> COMP["compressOnce(mini agent maxAgentIterations=10, compressOnlyStrategy)<br/>失败不阻塞"]
     PF -- "否" --> BUILD
     COMP --> BUILD["ToolFactory.build → buildTurnAgent"]
     BUILD --> RUN["agent.run(MEDERI_INPUT_PERSISTED)"]
     RUN --> OK{"正常结束?"}
-    OK -- "是" --> DONE["IDLE + MESSAGE_COMPLETED(warning?)<br/>diffTracker.captureSnapshot → diffStore.save"]
+    OK -- "是" --> DONE["IDLE + MESSAGE_COMPLETED(warning?; 有文件变更时携 turnDiffSummary/diffMessageId)<br/>diffTracker.captureSnapshot → diffStore.save → 回填最后一条 assistant 消息 turnDiffSummary"]
     OK -- "异常 e" --> T{"RetryableLLMClient.isTransientError(e)?"}
     T -- "是" --> IDLE["IDLE + MESSAGE_ERROR(分类 RATE_LIMIT)<br/>(RetryableLLMClient 已在流内重试过 STATUS/RETRYING)"]
     T -- "否" --> ERR["ERROR + MESSAGE_ERROR<br/>(ErrorCollector rich payload: 简报/errorId/完整诊断)"]
@@ -92,6 +103,42 @@ flowchart TD
 ```
 
 **事件流消费侧**：`eventBus` → 三路消费：① `MederiAiCore.events()`（进程内）/ `GET /v1/events`（SSE 遥控端）→ 客户端 `SnapshotReducer` 聚合快照；② `launchStreamConsumer` 把 StreamFrame 转 MESSAGE_DELTA；③ UI 层特性（SessionTitleService 等）订阅。
+
+### 2.1 引导/排队模式（Steering）
+
+用户在 turn RUNNING 时插话的两条 UI 路径（共用 `QueuedMessage` 模型，输入框上方队列横幅展示 `currentQueuedMessages`）：
+
+- **排队模式**：`WorkspaceViewModel.enqueueCurrentInput` 把当前输入框文本/粘贴/图片压入会话队列 `queuedMessagesByConv`（`removeQueuedMessage` 可移除）；turn 结束恢复 Idle 时**自动出队** `sendQueuedMessage`（即普通 sendMessage，携带入队时的模型/推理档/agent/apiKeyId）。
+- **引导模式**：`steerQueuedMessage` 取出排队项，经 `AiCore.steerMessage`（契约 → `MederiAiCore` 直调 / `POST /v1/sessions/{id}/steer` 遥控路由）**立即注入**运行中的 turn。
+
+Core 侧链路（`TurnExecutor`）：
+
+| 链路环节 | 行为 |
+|---|---|
+| `steerMessage` | 会话 RUNNING 且 activeJobs 活跃 → `SteeringItem` 入 `pendingSteerings` 队列 + 发 `STATUS(status=steering_queued)`（SnapshotReducer 忽略该事件，见 §3）；非 RUNNING → 安全降级 `sendMessage` |
+| 工具边界注入 | `graphStrategy`（`mederiSingleRunStrategy*`）的 `nodeSendToolResult` 调 `pollSteering` 出队，有项则把插话追加进本轮工具结果消息，LLM 下一步即可见并据此调整 |
+| turn 收尾冲刷 | turn 结束 finally 冲刷未被工具边界消费的残留 `pendingSteerings`（逐条降级 `sendMessage` 开新 turn，撞 RUNNING 冲突放回队列） |
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant VM as WorkspaceViewModel
+    participant AC as AiCore
+    participant TE as TurnExecutor
+    participant K as Koog Agent (运行中的 turn)
+
+    Note over VM,K: 当前 turn RUNNING，用户输入插话
+    VM->>VM: enqueueCurrentInput 压入会话队列(队列横幅可见)
+    alt 引导模式(立即注入运行中 turn)
+        VM->>AC: steerMessage(convId, input)
+        AC->>TE: steerMessage
+        TE->>TE: RUNNING → pendingSteerings 入队<br/>+ STATUS(steering_queued)
+        K->>K: 工具边界 (nodeSendToolResult) pollSteering 出队<br/>→ 注入工具结果消息，LLM 下一步可见
+    else 排队模式(turn 先结束)
+        Note over TE: turn 结束 finally: 未消费的残留 steering<br/>降级 sendMessage 开新 turn
+        VM->>VM: Idle → 自动出队 sendQueuedMessage(普通 sendMessage)
+    end
+```
 
 ## 3. 事件 → UI 快照聚合流程
 
@@ -113,8 +160,9 @@ flowchart TD
     SW -- "TOOL_CALLED/RESULT" --> TO["按 toolCallId 精确匹配更新 ToolCall block"]
     SW -- "QUESTION_*/PLAN_APPROVAL_*" --> PE["写/清 pendingQuestion / pendingPlanApproval"]
     SW -- "TODO_UPDATED/PLAN_PROGRESS" --> TD["解码 payload.todos 整体替换(失败丢弃事件)"]
-    SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max'(+|serverMsg 供应商真实报错)<br/>UI StatusBar 重试态第二行渲染"]
-    SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage"]
+    SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max|serverMsg|retryAt'(serverMsg=供应商真实报错; retryAt=delayMs+当前时间)<br/>UI StatusBar 重试态第二行渲染"]
+    SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage<br/>+ refreshPage 即时回查 listMessagesPage(新 turn 用户消息立即可见)"]
+    SW -- "STATUS(steering_queued 引导)" --> SIG["忽略: payload 形状与 RETRYING 约定 key 不符(代码现状)<br/>steering 提示仅入队侧日志, 不渲染 StatusBar"]
     D & C2 & ER & TO & PE & TD & ST & SU --> UI["WorkspaceViewModel.snapshot<br/>→ chatItems(derivedStateOf 展平渲染)"]
 ```
 
@@ -125,9 +173,9 @@ flowchart TD
 ```mermaid
 flowchart TD
     U["用户请求"] --> T{"主代理分诊(Triage Flow, 提示词强制)"}
-    T -- "纯读" --> R1["直接读文件回答<br/>不够深 → spawn_researcher → 完整报告 → 回答"]
+    T -- "纯读" --> R1["直接读文件回答<br/>不够深 → subagent(SPAWN_RESEARCHER) → 报告(始终落盘, 父收摘要+路径) → 回答"]
     T -- "小改动(已知根因/几行代码)" --> R2["主代理直接 edit/write<br/>进度走 update_todo(无Plan)"]
-    T -- "复杂改动" --> RES["(理解不足先 spawn_researcher)"]
+    T -- "复杂改动" --> RES["(理解不足先 subagent(SPAWN_RESEARCHER))"]
     RES --> CP["create_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>前置 voidActivePlans 作废同会话旧计划（发 PLAN_PROGRESS 'voided'）<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
     CP --> MODE{"agentMode"}
     MODE -- "AUTONOMOUS" --> AUTO["自动 APPROVED"]
@@ -135,10 +183,10 @@ flowchart TD
     WAIT -- "拒绝" --> REJ["告知用户结束/修改"]
     WAIT -- "批准" --> GEN
     AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变<br/>不转录文件摘录:executor 自己 read_file 原文件"]
-    GEN --> SPAWN["spawn_agent(planId, subtaskIndex)<br/>硬校验 planId/index/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>PLAN_PROGRESS('subtask-started'+todos投影)<br/>briefing 简化注入: 只 task + planDetail(意图)<br/>(researchNotes/appendix 不再注入,executor 自己 read_file research.md/原文件)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
+    GEN --> SPAWN["subagent(action=SPAWN, planId?, subtaskIndex?)<br/>planId 非空 → 硬校验 subtaskIndex/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>planId 为空 → ad-hoc 路径: task+briefing 直接派 executor(跳过 spec/IN_PROGRESS)<br/>PLAN_PROGRESS('subtask-started'+todos投影+subtasks 全量 JSON 列表)<br/>briefing 简化注入: 只 task + planDetail(意图)<br/>(researchNotes/appendix 不再注入,executor 自己 read_file research.md/原文件)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
     SPAWN --> ENDTURN["END TURN（父代理 turn 结束,不阻塞）"]
     ENDTURN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>完成时报告落盘 {planId}/reports/NN-executor.md, 父上下文只收尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
-    SUB --> WAKE["子代理完成 → onTerminal 回调<br/>→ pendingNotices 入队 → maybeFlush 合并唤醒父 turn<br/>(同会话多个完成合并成一条内部消息,一次 turn)"]
+    SUB --> WAKE["子代理终态 → SUBAGENT_COMPLETED/ERROR/STOPPED 事件(eventBus, NonCancellable emit)<br/>→ handleSubagentTerminalEvent 组 &lt;event_message&gt; → pendingEventMessages 入队<br/>→ 父 turn 空闲 dispatchPendingEventMessages 批量合并唤醒<br/>(同会话多个完成合并成一条内部消息,一次 turn)"]
     WAKE --> VER["verify_subtask(planId, subtaskIndex, status, evidence)<br/>自动执行 Subtask.verification 命令(30s)"]
     VER --> CHK{"verify 结果"}
     CHK -- "PASS(且命令 exit=0)" --> NEXT["子任务 COMPLETED → 下一个子任务"]
@@ -150,7 +198,7 @@ flowchart TD
     CONV & REGEN --> SPAWN
 ```
 
-**并行执行（2026-09，2026-09-14 异步化）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行，无并发上限，由 AI 调度（信任 AI，代码不设闸门，仅沙箱兜底）。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 spawn_agent**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 spawn/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）+ 主动上报（2026-09-25）**：spawn_agent / spawn_researcher 改为异步派工（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；子代理终态经 `SubagentManager.onTerminal` 回调入 TurnExecutor `pendingNotices` 队列，父 turn 空闲时 `maybeFlush` 批量合并成一条内部消息自动唤起新 turn（同会话多个完成合并成一次 turn；竞态时放回队列等 turn 收尾冲刷；watchdog 默认 10 分钟超时发 stalled 通知）。`wait_agent` 枚举值已删，父代理不再阻塞拉取。**diff 合并子代理改动（2026-09-23）**：主 turn runTurn 开头 `ParentDiffRegistry.register`，子代理 turn 结束时把文件改动经 `onTurnDiff` 回调 + `ParentDiffRegistry.mergeInto` 合并进父 turn 的 `TurnDiffTracker`（`mergeChanges`），finally 里 `unregister`——修复"turn 改动摘要不含子代理改动"的 bug。子代理自身 diff 仍独立落库（其临时 InMemory store），合并只影响父 turn 的 TurnDiff 聚合。**walkthrough 自动生成（2026-09-23）**：计划全部子任务 COMPLETED 时，`PlanStore.writeWalkthrough(plan)` 自动装配 walkthrough 文档写至 `plans-done/{planId}-walkthrough.md`（内容由 `buildWalkthrough` 聚合 plan/subtask/spec/verification/changes）。
+**并行执行（2026-09，2026-09-14 异步化，2026-09 并发上限硬门禁）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行；**子代理单会话并发受限**（设置页可配，默认 2，见下述并发门禁），同父会话内 EXECUTOR 与 RESEARCHER 同池计数，达到上限时 spawn 工具返回指导文案让模型结束 turn 等待唤醒；浏览器任务不经 SubagentManager，天然排除在外。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 subagent(SPAWN)**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 subagent(SPAWN)/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）+ 主动上报（2026-09-25）**：子代理统一为单一 `subagent` 工具 action 分流（SPAWN/SPAWN_RESEARCHER/STATUS/STOP，原 6 个独立工具封装合并；`agent_status`/`stop_agent` 工具类保留但不向 AI 注册）。`subagent(SPAWN)` 支持 planId 可选：有 planId 走计划流程（spec 硬校验+IN_PROGRESS），无 planId 走 ad-hoc 路径（task+briefing 直接派 executor，跳过 spec/IN_PROGRESS）。派工异步（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；子代理终态经主 eventBus 发 `SUBAGENT_COMPLETED/ERROR/STOPPED` 事件（NonCancellable emit），父 TurnExecutor 订阅后 `handleSubagentTerminalEvent` 合成 `<event_message>` 入 `pendingEventMessages` 队列，父 turn 空闲时 `dispatchPendingEventMessages` 批量合并成一条内部消息自动唤起新 turn（同会话多个完成合并成一次 turn；竞态（父会话正忙）时放回队列等 turn 收尾 finally 冲刷；abortAndJoin 清空该会话队列）。agent 丢失/归档（不在内存表）时 `subagent(STATUS)` 返回 NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），父代理据此判断已改动文件（与 targetFiles 比对查越界）再决定重跑或接受部分成果。`wait_agent` 枚举值已删，父代理不再阻塞拉取。**diff 合并子代理改动（2026-09-23）**：主 turn runTurn 开头 `ParentDiffRegistry.register`，子代理 turn 结束时把文件改动经 `onTurnDiff` 回调 + `ParentDiffRegistry.mergeInto` 合并进父 turn 的 `TurnDiffTracker`（`mergeChanges`），finally 里 `unregister`——修复"turn 改动摘要不含子代理改动"的 bug。子代理自身 diff 仍独立落库（其临时 InMemory store），合并只影响父 turn 的 TurnDiff 聚合。**walkthrough 自动生成（2026-09-23）**：计划全部子任务 COMPLETED 时，`PlanStore.writeWalkthrough(plan)` 自动装配 walkthrough 文档写至 `plans/{planId}/walkthrough.md`（archive 时随整个计划目录移到 `plans-done/{planId}/walkthrough.md`，内容由 `buildWalkthrough` 聚合 plan/subtask/spec/verification/changes；`verify_subtask` 全 PASS 文案亦指向该路径）。
 
 **Plan 审批时序（APPROVAL 模式）**：
 
@@ -173,7 +221,7 @@ sequenceDiagram
     UI->>TE: resolvePlanApproval(convId, planId, approved, model, thinkingLevel)
     Note over UI: model/thinkingLevel = 批准时刻输入框选中值<br/>(与 send() 同源: selectedModel/effectiveThinkingLevel)
     TE->>TE: 批准且 model≠null → sessionStore.updateAgentConfig<br/>写入 session.aiModel/reasoningLevel("最后一次选择"语义)
-    Note over TE: create_plan 挂起等批准期间用户可能切了模型——<br/>同 turn 后续 spawn_agent 动态读 session 拿到新模型
+    Note over TE: create_plan 挂起等批准期间用户可能切了模型——<br/>同 turn 后续 subagent(SPAWN) 动态读 session 拿到新模型
     TE->>PAR: resolve(planId, approved) → deferred.complete
     PAR->>EB: PLAN_APPROVAL_RESOLVED
     EB-->>UI: 清 pendingPlanApproval, 对应项 status=APPROVED/REJECTED
@@ -214,7 +262,7 @@ sequenceDiagram
 
     M->>SS: get(parentSession) — 动态读模型<br/>(session.aiModel ?: 构造捕获的 turn 模型)
     M->>SM: spawn(task, briefing, spec, aiModel, reasoningLevel, ...)
-    SM->>SM: agents[agentId] 占位注册(RUNNING)<br/>+ watchdog 协程 delay(stallTimeoutMs, 默认10min)
+    SM->>SM: agents[agentId] 占位注册 RUNNING<br/>后台协程跑子代理, 不阻塞调用方
     SM->>EB: SUBAGENT_STARTED(agentId, role, modelId, modelName, reasoningLevel, task, briefing?)
     Note over EB: sessionId=父会话；UI SubagentTracker 聚合进<br/>SubagentState 缓存(每个子代理一个 MVVM 对象)
     SM-->>M: 返回 agentId（立即，不阻塞父 turn）
@@ -222,16 +270,19 @@ sequenceDiagram
     SM->>SR: 后台协程 run(内存 store + 独立 TurnExecutor)
     alt 正常完成/出错/停止
         SR-->>SM: 汇报全文（executor 报告落盘 {planId}/reports/NN-executor.md）
-        SM->>EB: SUBAGENT_COMPLETED / ERROR / STOPPED(agentId)
-        SM->>TE: onTerminal(TerminalNotice: agentId/role/planId/subtaskIndex/status/result)
-    else watchdog 超时（10min 仍 RUNNING）
-        SM->>TE: onTerminal(stalled=true)（不 cancel，AI 决定 STATUS 查或 STOP）
+        SM->>EB: SUBAGENT_COMPLETED / ERROR / STOPPED(agentId/role/status/result/reportPath/planId/subtaskIndex)<br/>(NonCancellable emit, sessionId=父会话)
+        Note over SM: finally 同步写 retired[agentId]=AgentRecoveryInfo<br/>(agent 丢失/归档后 STATUS 仍能返回部分认知)
+    else agent 丢失/归档(不在内存表)
+        M->>SM: subagent(STATUS, agentId) → NOT_FOUND + recovery<br/>(AgentRecoveryInfo: 末次状态/result/报告路径/touchedFiles 部分认知)
     end
-    TE->>TE: pendingNotices 入队 → 父 turn 空闲时 maybeFlush 批量合并<br/>→ 合成一条内部消息唤起新 turn（同会话多通知合并成一次 turn）
-    Note over TE: 竞态：唤起时父会话正忙 → 通知放回队列，等 turn 收尾 finally 再冲刷<br/>计划已归档/作废 → 丢弃；abortAndJoin → 清空该会话队列
+    EB->>TE: SUBAGENT_* 终态事件 → handleSubagentTerminalEvent<br/>组 <event_message> (type/agentId/status/ReportPath/Summary)
+    TE->>TE: pendingEventMessages 入队(按父会话分组)<br/>父 turn 空闲 → dispatchPendingEventMessages 批量合并成一条内部消息<br/>→ sendMessageInternal 唤起新 turn（同会话多通知合并成一次 turn）
+    Note over TE: 竞态：唤起时父会话正忙 → 放回队列，等 turn 收尾 finally 再冲刷<br/>abortAndJoin → 清空该会话队列
 ```
 
 **abort 级联收割**：用户点"停止"（abort/abortAndJoin）→ cancel 父 turn job → `stopAllForSession(parentSessionId)` 杀本会话全部 RUNNING 子代理——子代理挂全局 scope 不随父 turn 取消而亡，不收割即孤儿（旧模型继续写文件，与"继续"后重 spawn 的新代理并发写同一批 targetFiles）。被杀子代理发 `SUBAGENT_STOPPED`，plan 子任务保持 IN_PROGRESS（"继续"后重 spawn 是干净路径）。
+
+**子代理汇报取数链（2026-09）**：全量报告可随时拉取——`AiCore.getSubagentReport(agentId)` → `SessionManager.getSubagentReport` → `SubagentManager.getReport`：磁盘读报告全文（`{planId}/reports/NN-executor.md` / `research.md`），文件缺失时回退内存 result 或 `AgentRecoveryInfo`（retired）记录；遥控端对应路由 `GET /v1/subagents/{agentId}/report`。`<event_message>` 唤醒消息的 UI 通道：对话流内由 `EventMessageCard`（系统事件卡）渲染——读落盘报告全文/摘要展示，**非**仅 SubagentTracker 卡片。
 
 ## 5. 上下文压缩流程（自动 + 手动）
 
@@ -242,7 +293,7 @@ flowchart TD
     C["触发3: 用户手动 compressHistory()"]
     A & B & C --> D["MederiCompressionStrategy.compress(llmSession, memory)"]
     D --> E["压缩源 = llmSession.prompt.messages<br/>保留最近 30%(最少5条)原文"]
-    E --> F["更早非 system 消息 → requestLLMWithoutTools<br/>生成 TLDR(五节: 关键决策/用户讨论/未完成讨论/当前阶段/关键记忆)"]
+    E --> F["更早非 system 消息 → requestLLMWithoutTools(压缩 mini agent maxAgentIterations=10)<br/>生成 TLDR(五节: 关键决策/用户讨论/未完成讨论/当前阶段/关键记忆)"]
     F --> G["新历史 = system + TLDR:... + recent"]
     G --> H["ChatMemory 回写 store → HistoryStoreChatHistoryProvider.reconcile<br/>检测首条 TLDR 未落库 → 按内容指纹对齐<br/>→ 插入 SUMMARY 标记消息(不删任何已有消息)"]
     H --> I["效果: message_history 全量保留(UI 可见/回滚可用)<br/>aiViewWindow = 最后一条 SUMMARY 及其后 → AI 视图变小"]
@@ -278,37 +329,48 @@ sequenceDiagram
     end
 ```
 
-## 7. 子代理（spawn / spawn_researcher / 异步管理 / 主动上报）时序
+## 7. 子代理（subagent 工具 action 分流 / 异步管理 / 主动上报）时序
 
-> 2026-09-14：spawn 改为**异步派工**——`SpawnAgentTool` 调 `SubagentManager.spawn` 立即返回 agentId，
-> 子代理在后台协程运行，父代理 turn 不被阻塞。
-> 2026-09-25：**主动上报**——子代理终态经 `SubagentManager.onTerminal` 回调通知父 TurnExecutor，
-> 入 `pendingNotices` 队列，父 turn 空闲时 `maybeFlush` 批量合并成一条内部消息唤起新 turn；
-> 父代理不再需要 `wait_agent`（已删），可用 `agent_status` 查询、`stop_agent` 主动停止。
-> watchdog（默认 10 分钟）超时后发 `stalled=true` 通知，AI 决定查状态还是停止。
+> 2026-09-14：spawn 改为**异步派工**——单一 `subagent` 工具（`ToolFactory.SUBAGENT_TOOL_NAMES`，
+> action=SPAWN/SPAWN_RESEARCHER/STATUS/STOP；原 6 个独立工具 spawn_agent/spawn_researcher/agent_status/
+> stop_agent/wait_agent 封装合并，内部实现类保留但不向 AI 注册）调 `SubagentManager.spawn`
+> 立即返回 agentId，子代理在后台协程运行，父代理 turn 不被阻塞。
+> 2026-09-25：**主动上报（eventBus 事件链）**——子代理终态经主 eventBus 发
+> `SUBAGENT_COMPLETED/ERROR/STOPPED` 事件（NonCancellable emit，sessionId=父会话），父 TurnExecutor
+> 订阅后组 `<event_message>` 入 `pendingEventMessages` 队列，父 turn 空闲时
+> `dispatchPendingEventMessages` 批量合并成一条内部消息唤起新 turn；
+> 父代理不再需要 `wait_agent`（已删），用 `subagent(STATUS)` 查询、`subagent(STOP)` 主动停止。
+> agent 丢失/归档（不在内存表）后无超时卡死类通知机制（代码无该实现）——`subagent(STATUS)` 返回
+> NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），
+> AI 据此判断已改动文件、再决定重跑或接受部分成果。
+> 子代理 `SPAWN` 的 planId 可选：无 planId 走 ad-hoc 路径（task+briefing 直接派 executor，
+> 跳过 spec/IN_PROGRESS）；有 planId+subtaskIndex 时 spec 存在性硬校验仍成立。
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant M as 主代理工具协程(SpawnAgentTool)
+    participant M as 主代理工具协程(subagent 工具 → SpawnAgentTool)
     participant SM as SubagentManager
     participant PS as PlanStore
     participant SR as SubagentRunnerImpl<br/>(后台协程)
     participant ITE as 独立 TurnExecutor<br/>(InMemory store + 独立 eventBus)
-    participant PTE as 父 TurnExecutor<br/>(pendingNotices 队列)
+    participant PTE as 父 TurnExecutor<br/>(pendingEventMessages 队列)
     participant EB as 主 eventBus
 
-    M->>PS: load(planId) 硬校验 planId/subtaskIndex/spec 非空
-    alt 校验失败
-        M-->>M: 返回拒绝文本(spec 不存在即拒)
+    M->>M: subagent(action=SPAWN, planId?, subtaskIndex?)
+    alt planId 非空（计划流程）
+        M->>PS: load(planId) 硬校验 subtaskIndex/spec<br/>(subtaskIndex 越界/spec 缺失/已 COMPLETED 均返回拒绝文本)
+        M->>PS: updatePlan 原子置 subtask IN_PROGRESS
+        M->>EB: PLAN_PROGRESS('subtask-started' + todos 投影 + subtasks 全量 JSON 列表)
+    else planId 为空（ad-hoc 执行）
+        M->>M: task+briefing 直接派 executor<br/>(跳过 spec/IN_PROGRESS/PLAN_PROGRESS)
     end
-    M->>PS: updatePlan 原子置 subtask IN_PROGRESS
-    M->>EB: PLAN_PROGRESS('subtask-started' + todos 投影)
     M->>M: SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER,<br/>fallbackModel=会话模型, fallbackReasoning=会话推理档)<br/>→ 配置了独立模型/推理档则覆盖父会话, 否则继承
-    M->>SM: spawn(task, briefing(简化: 只 task + planDetail, 不再注入 researchNotes/appendix), plan=st.spec, role=EXECUTOR, planId=plan.id, executorSubtaskIndex, planStore)
-    SM->>SM: agents[agentId]=RUNNING; scope.launch { SR.run(...) }<br/>+ watchdog: scope.launch { delay(stallTimeoutMs, 默认10min) }
+    M->>SM: spawn(task, briefing(简化: 只 task + planDetail, 不再注入 researchNotes/appendix), plan=st.spec, role=EXECUTOR, planId, executorSubtaskIndex, planStore)
+    SM->>SM: agents[agentId]=RUNNING<br/>scope.launch 后台协程跑子代理, 不阻塞调用方
+    SM->>EB: SUBAGENT_STARTED(agentId, role, modelId, modelName, reasoningLevel, task, briefing?)
     SM-->>M: 立即返回 {"agentId":"sub_xxx","status":"RUNNING"} (不阻塞)
-    M-->>M: 主代理 END TURN; 期间继续对话/派发其他任务
+    M-->>M: 主代理 END TURN, 期间继续对话/派发其他任务
     Note over SM,ITE: 后台执行(与父 turn 并行)
     SR->>SR: 内存建临时 Session(sub_xxxxxxxx, AUTONOMOUS)
     SR->>ITE: sendMessage(inputText=spec清单自顶向下+SPEC_FEEDBACK约定, subagentRole=EXECUTOR)
@@ -318,17 +380,18 @@ sequenceDiagram
         ITE->>ITE: 正常 TurnExecutor 流程(事件走独立 eventBus)
     end
     SR->>SR: 等 MESSAGE_COMPLETED/MESSAGE_ERROR 终态事件
-    SR->>SR: 取最后一条 ASSISTANT 消息文本 → persistReportAndReturnSummary<br/>EXECUTOR: 落盘 {planId}/reports/NN-executor.md, 返回尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>RESEARCHER: 有活跃 plan 时落盘 {planId}/research.md, 返回头部800字符+路径; 无活跃 plan 全文回灌
+    SR->>SR: 取最后一条 ASSISTANT 消息文本 → persistReportAndReturnSummary<br/>EXECUTOR: 落盘 {planId}/reports/NN-executor.md, 返回尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>RESEARCHER: 报告始终落盘——有活跃 plan → PlanStore.writeResearchReport 写 {planId}/research.md<br/>无活跃 plan → PlanStore.writeStandaloneResearchReport 写 .mederi/research/{timestamp}.md<br/>(两种均返回头部800字符+路径, 全量报告不再回灌父上下文)
     SR->>SM: 更新状态 COMPLETED/ERROR, 返回摘要
-    Note over SM,SR: scope 继承调用方协程上下文: stop_agent 取消可级联取消内部 turn
-    SM->>PTE: onTerminal(TerminalNotice: agentId/role/planId/subtaskIndex/status/result)<br/>(正常终态/STOPPED 均发; watchdog 超时未 RUNNING 完则发 stalled=true)
-    PTE->>PTE: pendingNotices 入队(按父会话分组)<br/>父 turn 空闲 → maybeFlush 批量合并成一条内部消息唤起新 turn<br/>竞态(父会话正忙) → 放回队列, 等 turn 收尾 finally 冲刷<br/>计划已归档/作废 → 丢弃; abortAndJoin → 清空该会话队列
-    PTE->>M: (被唤醒的新 turn) verify_subtask / converge_plan / 下一个 spawn
-    Note over M: 独立子任务可同消息并行: 多个 spawn 各自后台跑,<br/>无并发上限, 由 AI 调度(信任 AI); 完成通知合并唤醒后逐个 verify_subtask
-    Note over ITE: 子代理一次任务即死; 无会话残留
+    Note over SM,SR: scope 继承调用方协程上下文: subagent(STOP) 取消可级联取消内部 turn
+    SM->>EB: SUBAGENT_COMPLETED/ERROR/STOPPED (payload agentId/role/status/result/reportPath/planId/subtaskIndex)<br/>NonCancellable emit, sessionId=父会话, 同时写 retired[agentId]=AgentRecoveryInfo
+    EB->>PTE: SUBAGENT_* 终态事件 → handleSubagentTerminalEvent<br/>组 <event_message> (type/agentId/status/ReportPath/Summary)
+    PTE->>PTE: pendingEventMessages 入队(按父会话分组)<br/>父 turn 空闲 → dispatchPendingEventMessages 批量合并成一条内部消息<br/>→ sendMessageInternal 唤起新 turn<br/>竞态(父会话正忙) → 放回队列, 等 turn 收尾 finally 冲刷<br/>abortAndJoin → 清空该会话队列
+    PTE->>M: (被唤醒的新 turn) verify_subtask / converge_plan / 下一个 subagent(SPAWN)
+    Note over M: 独立子任务可同消息并行: 多个 subagent(SPAWN/SPAWN_RESEARCHER) 各自后台跑,<br/>单会话受并发上限控制(默认 2, 达上限原子拒绝), 完成事件合并唤醒后逐个 verify_subtask
+    Note over ITE: 子代理一次任务即死, 无会话残留
 ```
 
-**briefing 简化 + 报告落盘（方案A 2026-09-24）**：SpawnAgentTool 拼装 briefing 时只注入 ①`task`（来自调用方参数）②`planDetail`（子任务意图/brief，恒不变）——不再注入 `researchNotes` 全文、不再注入 `appendix` 摘录（appendix 字段已删）。executor 是干脏活的便宜模型，需要调研结论时自己 `read_file .mederi/plans/{planId}/research.md`，需要原文件认知时直接 `read_file` 该路径。executor 完成时报告落盘到 `{planId}/reports/NN-executor.md`，父上下文只收尾部 1500 字符 + 路径（尾部捕获 SPEC_FEEDBACK）；researcher 在有活跃 plan 时报告落盘到 `{planId}/research.md`，父上下文只收头部 800 字符 + 路径，无活跃 plan 时保持原行为——全文回灌父上下文（无法保证制定 plan 时该 researcher 仍可用）。子代理 TurnExecutor 透传 `onTurnDiff` 回调，结束时把文件改动经 `ParentDiffRegistry` 合并进父 turn 的 diffTracker（见 §4 diff 合并说明）。
+**briefing 简化 + 报告落盘（方案A 2026-09-24）**：SpawnAgentTool 拼装 briefing 时只注入 ①`task`（来自调用方参数）②`planDetail`（子任务意图/brief，恒不变）——不再注入 `researchNotes` 全文、不再注入 `appendix` 摘录（appendix 字段已删）。executor 是干脏活的便宜模型，需要调研结论时自己 `read_file .mederi/plans/{planId}/research.md`，需要原文件认知时直接 `read_file` 该路径。executor 完成时报告落盘到 `{planId}/reports/NN-executor.md`，父上下文只收尾部 1500 字符 + 路径（尾部捕获 SPEC_FEEDBACK）；researcher 报告**始终落盘**——有活跃 plan 时写 `{planId}/research.md`，无活跃 plan 时经 `PlanStore.writeStandaloneResearchReport` 写 `.mederi/research/{timestamp}.md`，两种情况父上下文都只收头部 800 字符 + 路径（全量报告不再有回灌通道；详情一律 read_file 取盘）。EXECUTOR 无 planId/planStore 或写盘失败时才回退全文回灌。子代理 TurnExecutor 透传 `onTurnDiff` 回调，结束时把文件改动经 `ParentDiffRegistry` 合并进父 turn 的 diffTracker（见 §4 diff 合并说明）。
 
 **per-role 模型解析（2026-09）**：`SpawnAgentTool` / `SpawnResearcherTool` 派发时经 `SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER, fallbackModel=会话模型, fallbackReasoning=会话推理档)` 覆盖父会话模型——配置了独立模型/推理档则覆盖，否则继承。
 
@@ -490,13 +553,16 @@ sequenceDiagram
     MED->>MED: MederiPaths.ensureDirectories + handleLegacyFiles(旧文件须批准)
     MED->>MED: 双库 driver + Schema.create + 7 Store 装配
     MED->>MED: Manager 层 + API 层装配
+    MED->>MED: Camoufox BrowserRegistry.register(BiDi 浏览器源, 浏览器任务唯一注册源)
     MAC->>MAC: cleanupLegacyBuiltinProviders / cleanupStaleRunningSessions / syncBuiltinProviders
     MAC->>MAC: refreshGlobalState(4 个 StateFlow) → isReady=true
     MAC->>SVC: modelCatalog.start()(models.dev 每小时刷新)
     MAC->>SVC: autoRefreshBuiltinGoogleModels(后台)
     MAC->>SVC: autotitleService.start()(自动改名)
+    MAC->>SVC: startSessionStatusSync()(core 事件流 → _projects 会话状态点, 驱动侧边栏)
+    MAC->>SVC: startCamoufoxUpdateCheck()(后台 Camoufox 更新检查)
     APP->>ST: hydrate()(恢复偏好, 列表就绪后 3s 内回填选中态)
-    APP->>APP: MainScreen 组合 Sidebar+Workspace; WorkspaceViewModel.attach(选中会话)
+    APP->>APP: MainScreen 组合 Sidebar+Workspace, WorkspaceViewModel.attach(选中会话)
     M->>M: 观察 remoteControlEnabled → 自动启停内嵌 RemoteServer
 ```
 
@@ -544,6 +610,10 @@ flowchart LR
 
 **Session 状态机**：`IDLE → (sendMessage) RUNNING → (正常) IDLE`；`RUNNING → (可重试错误) IDLE(限流提示)`；`RUNNING → (致命错误) ERROR → (下次 sendMessage 前校验失败)`；`RUNNING → (abort) IDLE`。
 
+**契约层会话状态（ConversationStatus，SnapshotReducer）**：4 值 `Idle / Working / Error / WaitingUser`——`QUESTION_REQUESTED`/`PLAN_APPROVAL_REQUESTED` → **WaitingUser**（同时把流式占位消息 isStreaming 置 false，交互挂起），对应 `QUESTION_RESOLVED`/`PLAN_APPROVAL_RESOLVED` → Working；双侧（进程内与 SSE 遥控端）经 `startSessionStatusSync` 同步驱动侧边栏状态点。
+
+**排队/引导（Steering，见 §2.1）**：`RUNNING` 中 `steerMessage` → `pendingSteerings` 入队（发 `STATUS(steering_queued)`，SnapshotReducer 按代码现状忽略）→ 工具边界 `pollSteering` 注入；turn 收尾残留降级新 turn；UI 侧 turn 结束回 Idle 时排队队列自动出队。
+
 **Message 状态机**：`PROCESSING(streaming 占位) → COMPLETED / ERROR`；快照里 isStreaming 对应 PROCESSING。
 
 **Plan 状态机**：`PENDING_APPROVAL → (批准) APPROVED → (spawn 首子任务) IN_PROGRESS → (全子任务 COMPLETED) COMPLETED → archive(plans-done/)`；`PENDING_APPROVAL/APPROVED/IN_PROGRESS → (create_plan 前置 voidActivePlans) VOIDED → .mederi/plans-voided/`；`PENDING_APPROVAL → (拒绝) 停留/用户重试`。
@@ -552,4 +622,4 @@ flowchart LR
 
 **ToolCallState（契约层）**：`Pending → Running → Completed / Failed`。
 
-**RemoteServerUiState**：`Idle → Starting → Running(port, portFallback?) / Failed`；**TunnelUiState**：`Idle → Starting → Running(url) / Failed(notInstalled)`。
+**RemoteServerUiState**：`Idle → Starting → Running(port, portFallback?) / Failed`；**TunnelUiState**：`Idle → Starting → Running(url) / Failed(reason, notInstalled)`（`notInstalled=true` = 本机未装 cloudflared，AppState.kt L72-73）。

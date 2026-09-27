@@ -2,7 +2,6 @@ package xyz.mederi.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,7 +51,10 @@ import xyz.mederi.core.contract.models.SubagentToolResult
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.ui.SubagentReportMarkdown
 import xyz.mederi.ui.WorkspaceViewModel
-import xyz.mederi.ui.components.atoms.RadarPulseDot
+import xyz.mederi.ui.components.atoms.MederiCard
+import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
+import xyz.mederi.ui.components.atoms.MederiRoleTag
+import xyz.mederi.ui.components.atoms.MederiRunningPulseBadge
 import xyz.mederi.ui.components.atoms.WorkingAnimationStyle
 import xyz.mederi.ui.components.atoms.workingAnimation
 import xyz.mederi.theme.LocalMederiColors
@@ -146,6 +148,7 @@ private fun SubAgentTaskRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 状态微视觉（告别冗长笨重的文字框，采用高辨识度精致图形与色彩语义）
+        // 待配色迁移时对齐标准 badge：任务行状态为 20dp 图标指示器（旋转/勾/叹号/减号），与 MederiStatusDot 静态圆点差异大，暂保留内联
         when (subagent.status.uppercase()) {
             "RUNNING" -> RunningStatusIndicator(color = colors.accentPrimary)
             "COMPLETED" -> Box(
@@ -203,6 +206,7 @@ private fun SubAgentTaskRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 // 角色徽标
+                // 待配色迁移时对齐标准 badge：角色微标带图标（Search/Cpu），MederiRoleTag 无图标形态，暂保留内联
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
@@ -317,14 +321,12 @@ fun SubAgentDetailDialog(
     val scrollState = rememberScrollState()
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.surfaceCardBorder),
+        MederiCard(
             modifier = modifier
                 .fillMaxWidth()
                 .widthIn(max = 680.dp)
-                .padding(vertical = 20.dp)
+                .padding(vertical = 20.dp),
+            padding = PaddingValues(0.dp),
         ) {
             Column(
                 modifier = Modifier
@@ -355,6 +357,7 @@ fun SubAgentDetailDialog(
                             fontWeight = FontWeight.Bold
                         )
                         // 状态微标
+                        // 待配色迁移时对齐标准 badge：状态胶囊需随状态变色（accent/success/danger/muted），暂无对应原子，暂保留内联
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
@@ -383,17 +386,11 @@ fun SubAgentDetailDialog(
                     }
 
                     // 关闭按钮
-                    IconButton(
+                    MederiMinimalIconButton(
+                        icon = FeatherIcons.X,
                         onClick = onDismiss,
-                        modifier = Modifier.size(28.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = "Close",
-                            tint = colors.textMuted,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
+                        contentDescription = "Close",
+                    )
                 }
 
                 HorizontalDivider(color = colors.divider)
@@ -451,14 +448,14 @@ fun SubAgentDetailDialog(
                             }
                         }
 
-                        // 角色
+                        // 角色（MederiRoleTag：surfaceHover 底 + 10sp Medium textPrimary）
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(text = "协同角色", color = colors.textMuted, fontSize = 11.sp)
-                            Text(text = roleLabel, color = colors.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            MederiRoleTag(text = roleLabel)
                         }
 
                         // 执行模型
@@ -672,24 +669,9 @@ fun SubAgentManagementCard(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium
                 )
-                // 运行中微标
+                // 运行中微标（MederiRunningPulseBadge：Pill 底 + accent 描边 + 脉冲点，对齐标准 §3.6）
                 if (runningCount > 0) {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(colors.accentPrimary.copy(alpha = 0.12f))
-                            .padding(horizontal = 6.dp, vertical = 1.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        RadarPulseDot(color = colors.accentPrimary, size = 8.dp)
-                        Text(
-                            text = "$runningCount 运行中",
-                            color = colors.accentPrimary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    MederiRunningPulseBadge(text = "$runningCount 运行中")
                 }
             }
 
@@ -835,6 +817,7 @@ fun SubAgentCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 待配色迁移时对齐标准 badge：状态胶囊需随状态变色（accent/success/danger/muted），暂无对应原子，暂保留内联
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))

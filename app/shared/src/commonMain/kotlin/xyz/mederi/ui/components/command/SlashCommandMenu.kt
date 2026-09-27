@@ -1,7 +1,7 @@
 package xyz.mederi.ui.components.command
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,12 +18,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,14 +63,16 @@ fun SlashCommandMenu(
     // 计算每个条目在全局 items 中的索引，方便键盘上下键导航
     var globalIndexCounter = 0
 
-    Surface(
+    // 弹层壳（popup 菜单非卡片壳）：MederiCard 无 shadow 参数，直接套会丢 8dp 层级阴影；
+    // 保留等价 Box 修饰链替代 M3 Surface（shadow 先于 clip/background/border，渲染层级与 Surface 一致，不影响 z-order）
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(max = 340.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = colors.surfaceCard,
-        border = BorderStroke(1.dp, colors.surfaceCardBorder),
-        shadowElevation = 8.dp
+            .heightIn(max = 340.dp)
+            .shadow(8.dp, RoundedCornerShape(12.dp), clip = false)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(12.dp))
     ) {
         Column(
             modifier = Modifier

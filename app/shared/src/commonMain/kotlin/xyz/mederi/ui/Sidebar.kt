@@ -362,7 +362,11 @@ fun Sidebar(
                             .clip(RoundedCornerShape(6.dp))
                             .background(colors.surfaceCard)
                             .clickable {
-                                viewModel.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK)
+                                val nextTheme = when (theme) {
+                                    AppThemeMode.DARK -> AppThemeMode.LIGHT
+                                    AppThemeMode.LIGHT -> AppThemeMode.DARK
+                                }
+                                viewModel.setTheme(nextTheme)
                             }
                             .padding(5.dp),
                         contentAlignment = Alignment.Center

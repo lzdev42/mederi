@@ -26,6 +26,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.ui.DebugLog
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 
 /**
  * 4.5. 计划审批卡片 (PlanApprovalCard)
@@ -120,42 +121,15 @@ fun PlanApprovalCard(
             }
         }
 
-        // 3. 底部操作：单个 Proceed 按钮
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Start,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Button(
-                onClick = onApprove,
-                enabled = !isApproved,
-                shape = RoundedCornerShape(6.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.accentPrimary,
-                    disabledContainerColor = colors.buttonSecondary
-                ),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.height(32.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Text(
-                        text = if (isApproved) stringResource(Res.string.plan_approval_approved) else stringResource(Res.string.plan_approval_proceed),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (isApproved) colors.textMuted else colors.onAccentPrimary
-                    )
-                    if (!isApproved) {
-                        Text(
-                            text = "⌘↵",
-                            fontSize = 10.5.sp,
-                            color = colors.onAccentPrimary.copy(alpha = 0.75f)
-                        )
-                    }
-                }
-            }
-        }
+        // 3. 底部操作：单个 Proceed 按钮（MederiPrimaryDecisionButton：disabled 态 = buttonSecondary + textMuted，对齐原 disabledContainerColor）
+        MederiPrimaryDecisionButton(
+            text = if (isApproved) {
+                stringResource(Res.string.plan_approval_approved)
+            } else {
+                stringResource(Res.string.plan_approval_proceed) + "  ⌘↵"
+            },
+            onClick = onApprove,
+            enabled = !isApproved,
+        )
     }
 }

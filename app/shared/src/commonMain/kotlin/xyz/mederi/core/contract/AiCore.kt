@@ -130,6 +130,8 @@ interface AiCore {
     // ==========================================
     suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>> = Result.success(emptyList())
     suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = Result.success(Unit)
+    suspend fun getSubagentGlobalSettings(): Result<SubagentGlobalSettings> = Result.success(SubagentGlobalSettings())
+    suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit> = Result.success(Unit)
     suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> =
         Result.failure(xyz.mederi.api.exception.MederiNotFoundException("Subagent report not found for agent: $agentId"))
 

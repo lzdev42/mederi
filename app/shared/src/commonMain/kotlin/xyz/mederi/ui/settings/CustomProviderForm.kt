@@ -7,7 +7,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +34,7 @@ import mederi.app.shared.generated.resources.settings_panel_save_connect
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 // ============================================================================
 // 3. 右侧工作台：新建自定义供应商表单
@@ -129,15 +129,14 @@ internal fun CreateCustomProviderForm(
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(
+            MederiGhostButton(
+                text = stringResource(Res.string.settings_panel_cancel),
                 onClick = {
                     onCancel()
                     val first = viewModel.uiState.providers.firstOrNull()?.id
                     if (first != null) viewModel.selectProvider(first)
                 }
-            ) {
-                Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
-            }
+            )
 
             Spacer(modifier = Modifier.width(ProviderTokens.SpacingSmall))
 

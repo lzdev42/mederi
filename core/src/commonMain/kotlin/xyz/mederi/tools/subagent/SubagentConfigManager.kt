@@ -23,6 +23,12 @@ class SubagentConfigManager(
     companion object {
         const val KEY_PREFIX = "subagent.config."
 
+        /** 单会话并发子代理上限（与角色无关；浏览器任务不经 SubagentManager，天然不受限）。 */
+        const val KEY_MAX_CONCURRENT = "subagent.maxConcurrent"
+
+        /** 未配置时的默认并发上限。 */
+        const val DEFAULT_MAX_CONCURRENT = 2
+
         fun settingKey(role: SubagentRole): String = "$KEY_PREFIX${role.name}"
     }
 
@@ -69,6 +75,23 @@ class SubagentConfigManager(
      */
     suspend fun clear(role: SubagentRole) {
         settingsStore.delete(settingKey(role))
+    }
+
+    /**
+     * 读取单会话并发子代理上限（全局设置，与角色无关）。
+     * 未配置或值非法（非数字/小于 1）时返回默认值 [DEFAULT_MAX_CONCURRENT]。
+     */
+    suspend fun getMaxConcurrentSubagents(): Int {
+        val raw = settingsStore.get(KEY_MAX_CONCURRENT)?.toIntOrNull() ?: return DEFAULT_MAX_CONCURRENT
+        return if (raw >= 1) raw else DEFAULT_MAX_CONCURRENT
+    }
+
+    /**
+     * 设置单会话并发子代理上限。要求 >= 1（0 或负数没有"派发能力"语义）。
+     */
+    suspend fun setMaxConcurrentSubagents(count: Int) {
+        require(count >= 1) { "max concurrent subagents must be >= 1, got $count" }
+        settingsStore.set(KEY_MAX_CONCURRENT, count.toString())
     }
 
     /**

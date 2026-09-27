@@ -1,8 +1,10 @@
 package xyz.mederi.api.impl
 
 import xyz.mederi.api.SubagentConfigApi
+import xyz.mederi.api.SubagentGlobalSettingsDto
 import xyz.mederi.api.SubagentRoleConfigDto
 import xyz.mederi.api.UpdateSubagentConfigRequest
+import xyz.mederi.api.UpdateSubagentGlobalSettingsRequest
 import xyz.mederi.domain.model.SubagentModelConfig
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.provider.ProviderManager
@@ -45,6 +47,13 @@ class SubagentConfigApiImpl(
                 reasoningLevel = request.reasoningLevel
             )
         )
+    }
+
+    override suspend fun getGlobalSettings(): SubagentGlobalSettingsDto =
+        SubagentGlobalSettingsDto(maxConcurrentAgents = subagentConfigManager.getMaxConcurrentSubagents())
+
+    override suspend fun updateGlobalSettings(request: UpdateSubagentGlobalSettingsRequest) {
+        subagentConfigManager.setMaxConcurrentSubagents(request.maxConcurrentAgents)
     }
 
     private fun roleMetadata(role: SubagentRole): Pair<String, String> = when (role) {

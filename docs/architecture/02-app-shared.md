@@ -49,6 +49,8 @@ interface AiCore {
 
     // Message
     suspend fun sendMessage(conversationId: String, input: ChatPromptInput): Result<Unit>
+    suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit>
+        // 排队/引导（Steering）入口：会话 RUNNING 时进 pendingSteerings 队列（工具边界注入），非 RUNNING 降级为 sendMessage
     suspend fun abort(conversationId: String): Result<Unit>
     suspend fun rollbackToMessage(conversationId: String, messageId: String): Result<Unit>
     suspend fun resolveQuestion(conversationId, questionId, answers: List<List<String>>): Result<Unit>
@@ -75,12 +77,29 @@ interface AiCore {
     // AGENTS.md 生成（API 形态，暂无命令/UI 入口；读取/注入在 core 代码级自动完成，见 01-core.md §7.4）
     suspend fun generateAgentsFile(projectId, modelId: String? = null): Result<String>  // 返回写入内容；modelId 缺省用项目最近会话模型
 
-    // Office 文档预览（.docx/.xlsx → HTML，经 DesktopBrowserRuntime KBrowser 渲染 / RemoteServer REST 获取）
+    // Office 文档预览（.docx/.xlsx/.pptx → HTML，经 DesktopBrowserRuntime KBrowser 渲染 / RemoteServer REST 获取）
     suspend fun previewOffice(conversationId: String, path: String): Result<String>  // 返回 HTML 字符串
+
+    // MCP Server 管理（7 方法契约层带默认实现——成功空值：listMcpServers=emptyList / setMcpServerEnabled、
+    // installMcpServer、updateMcpServer、deleteMcpServer、verifyMcpServer=Unit / getMcpServerJson="{}"；
+    // MockAiCore 不覆写，走默认实现；MederiAiCore/ServerAiCore 覆写为真实转调）
+    suspend fun listMcpServers(): Result<List<McpServerItem>>
+    suspend fun setMcpServerEnabled(name: String, enabled: Boolean): Result<Unit>
+    suspend fun installMcpServer(json: String): Result<Unit>
+    suspend fun updateMcpServer(name: String, json: String): Result<Unit>
+    suspend fun deleteMcpServer(name: String): Result<Unit>
+    suspend fun verifyMcpServer(name: String): Result<Unit>
+    suspend fun getMcpServerJson(name: String): Result<String>
 
     // SubagentConfig（子代理角色独立模型/推理档配置，设置页 Agents 面板）
     suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>>
     suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit>
+    suspend fun getSubagentGlobalSettings(): Result<SubagentGlobalSettings>
+    suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit>
+    // 子代理汇报取数（契约带默认失败实现 failure(MederiNotFoundException)，MederiAiCore/ServerAiCore 覆写）：
+    // core SubagentManager.getReport 磁盘读 .mederi/plans/{planId}/reports/NN-executor.md / research.md，
+    // 未落盘回退内存 result，agent 丢失/归档走 retired 恢复记录
+    suspend fun getSubagentReport(agentId: String): Result<SubagentManager.SubagentReportData>
 }
 ```
 
@@ -95,16 +114,18 @@ interface AiCore {
 
 ### 2.1 ChatModels.kt
 
-- `enum ConversationStatus { Idle, Working, Error }`
+- `enum ConversationStatus { Idle, Working, WaitingUser, Error }` —— 挂起态映射：`QUESTION_REQUESTED` / `PLAN_APPROVAL_REQUESTED` → WaitingUser，对应 RESOLVED → Working（`SnapshotReducer` 与 `MederiAiCore.startSessionStatusSync` / `ServerAiCore.startSessionStatusSync` 同映射，驱动侧边栏状态点）
 - `Conversation(id, projectId?, title, status, createdAt: Long, updatedAt: Long, parentConversationId?=null, modelId?=null, modelProvider?=null, thinkingLevel: String?=null(仅回显 core 诊断值,非 UI 真理源), agent?=null, directory?=null)`
 - `enum ChatRole { User, Assistant, System, Summary }`
-- `ChatMessage(id, conversationId, role, blocks: List<ChatBlock>, createdAt, completedAt?, parentMessageId?, model?, agent?, isStreaming=false, error?=null, modelName?(assistant footer 模型显示名), agentMode?(APPROVAL/AUTONOMOUS), thinkingLevel?(实际推理档位), durationMs?(LLM 耗时))` —— footer 诊断字段由 `MederiModelMapper.toChatMessage` 从 core Message 诊断字段填充（completedAt ≈ createdAt + durationMs 下界估计）
+- `ChatMessage(id, conversationId, role, blocks: List<ChatBlock>, createdAt, completedAt?, parentMessageId?, model?, agent?, isStreaming=false, error?=null, modelName?(assistant footer 模型显示名), agentMode?(APPROVAL/AUTONOMOUS), thinkingLevel?(实际推理档位), durationMs?(LLM 耗时), turnDiffSummary: TurnDiffSummaryUi?(本轮文件变更摘要,assistant 消息底部展示))` —— footer 诊断字段由 `MederiModelMapper.toChatMessage` 从 core Message 诊断字段填充（completedAt ≈ createdAt + durationMs 下界估计）；`turnDiffSummary` 由 MESSAGE_COMPLETED 的 `turnDiffSummary`/`diffMessageId` payload 回填（UI `TurnDiffCard` 单轮"N files changed"卡）
+- `FileDiffSummaryUi(path, status, additions, deletions)`（单文件变更统计）；`TurnDiffSummaryUi(files: List<FileDiffSummaryUi>=[], totalAdditions=0, totalDeletions=0)`（单轮全部文件变更聚合摘要）
 - `sealed class ChatBlock(id)`（type 判别多态序列化）：`Text(id, text)` / `Reasoning(id, text)` / `ToolCall(id, name, state: ToolCallState)` / `File(id, name, url, mimeType?)` / `Diff(id, filePath, before, after)` / `Unknown(id, type)`
 - `sealed class ToolCallState`：`Pending` / `Running(input: Map<String,String>)` / `Completed(input, output)` / `Failed(input, error)`
 - `ToolCallUi(id, name, state, target?=null, isFailed=false)` —— VM 预计算展平展示模型；target = 命令原文 / 文件路径（会话目录内→相对路径，目录外→绝对路径）/ apply_patch 提取的文件清单；工具行展开区显示执行结果（Completed.output / Failed.error）
 - `enum CoreEventType`（与 core EventType 同名一一对应，当前 23 个；`MederiModelMapper.toCoreEvent` 按 `valueOf(name)` 映射）
 - `CoreEvent(type, sessionId, messageId?=null, payload: Map<String,String>, timestamp="")`
 - `PastedTextAttachment(id, index, text, lineCount, charCount)`；`ImageAttachment(id, name, mimeType, bytes, base64DataUrl, width=0, height=0)`
+- `QueuedMessage(id, conversationId, text, pastedTexts=[], images=[], model?, thinkingLevel?, agent?, apiKeyId?, createdAt=0L)` —— 排队待发消息项（排队模式 / 引导模式共用）：排队模式 = 会话运行中输入框新消息进 FIFO 队列，Idle 自动出队发送；引导模式 = 队列项经 `steerMessage` 注入运行中 turn（§7.2 WorkspaceViewModel 排队/引导族）
 
 ### 2.2 其他 models
 
@@ -113,12 +134,14 @@ interface AiCore {
 - **ReasoningMenu.kt（纯函数唯一真理源）**：`derive(providerLevels, modelLevels): List<String>`（推导聊天菜单档位，NONE 恒第一；显示条件=模型勾选了级别或供应商任一档有值）；`resolve(modelMemoryLevel, modelLevels): String?`（**唯一推导链：模型记忆 > 默认档(MEDIUM 优先否则首档)**；菜单空=不支持返回 null）
 - **ProjectModels.kt**：`Project(id, name, directory: String, conversations: List<Conversation>)`
 - **FilesystemModels.kt**：`FileChangeStatus{Added, Modified, Deleted}`；`FileChange(filePath, status)`；`FileDiff(filePath, before, after, additions, deletions)`
-- **PermissionModels.kt**：`QuestionRequest(id, conversationId, questions: List<Question>)`；`Question(id, prompt, options, allowCustom, multiSelect=false)`；`PlanApprovalRequest(id, conversationId, planPath, title, summary="", subtaskCount=0, planContent?=null, status="PENDING")`（审批卡片只展示标题+子任务数，详细内容经 planPath 读取）
+- **PermissionModels.kt**：`QuestionRequest(id, conversationId, questions: List<Question>)`；`Question(id, prompt, options, allowCustom, multiSelect=false)`；`PlanSubtaskItem(index, name, status="PENDING", spec?, planDetail="")`（计划审批卡子任务行模型，PLAN_APPROVAL_REQUESTED / PLAN_PROGRESS 的 `subtasks` payload 解码目标）；`PlanApprovalRequest(id, conversationId, planPath, title, summary="", subtaskCount=0, planContent?=null, status="PENDING", subtasks: List<PlanSubtaskItem>=[]（全生命周期子任务投影，由 SnapshotReducer 驱动更新）)`（审批卡片只展示标题+子任务数，详细内容经 planPath 读取）
 - **TodoModels.kt**：`TodoStatus`（wire 小写 pending/in_progress/completed/cancelled/failed）；`TodoItem(id, content, status, priority?=null)`；`internal TodoWireItem(content, status)`（事件 payload wire DTO，与 core encodeTodos 严格对齐，id/priority 不上 wire）
 - **SkillModels.kt**：`SkillItem(name, description, location="", license?, compatibility?, allowedTools?)`——由 core `SkillInfo` 映射（UI 列表展示）
 - **StatisticsModels.kt**：`TokenUsage(input=0, output=0, reasoning=0, cacheRead=0, cacheWrite=0)`（`total = input+output+reasoning`）；`CostSummary(total=0.0, currency="USD")`
 - **CompactionModels.kt**：`CompactionConfig(auto?, tailTurns?, preserveRecentTokens?, reserved?, prune?)`
 - **ProcessStatsModels.kt**：`ProcessStats(cpuUsage?, cpuCores=1, heapUsedBytes=0, heapCommittedBytes=0, heapMaxBytes?, rssBytes?, timestampMillis=0)`
+- **McpModels.kt**：`McpServerStatus{UNCHECKED, OK, FAILED}`；`McpServerItem(name, enabled, kind="stdio", summary="", status=UNCHECKED, toolCount?, lastError?)`（MCP 列表展示条目，AppState.mcpStore 管理）
+- **SubagentModels.kt**：`SubagentState`（子代理 UI 缓存对象，§3.1）；`SubagentToolResult`（subagent(STATUS) 结果镜像，§3.1）；`SubagentConfigItem(role, displayName, description, modelId?, modelName?, reasoningLevel?, isInheriting=true)`；`UpdateSubagentConfigInput(modelId?, reasoningLevel?)`
 
 ### 2.3 dto/
 
@@ -127,8 +150,10 @@ interface AiCore {
 - `MessagesPage(messages, tokenUsage, contextUsedTokens)` —— MESSAGE_COMPLETED/ERROR 后对齐落库数据用
 - `RawMessageDto(seq, messageId?, role, payload(原始 JSON), createdAt)`
 - `CreateProjectInput(name, directory)`；`ReasoningConfigInput(levels: Map<String,String?>)`；`ProviderUpdateInput(name?, apiKey?, baseUrl?, enabled?, customModels?, reasoningParameter?)`；`CreateCustomProviderInput(name, baseUrl, apiKey?, customModels, type=DEFAULT, responseSanitization=false, reasoningParameter?)`
-- wire 请求 DTO：`CreateConversationInput(projectId, agent)`、`RenameConversationInput(title)`、`RenameProjectInput(name)`、`BuiltinProviderInput(name, apiKey)`、`AddModelInput/UpdateModelInput/SetModelEnabledInput`、`AddApiKeyInput(name, key, isDefault=false)`、`ResolveQuestionInput(answers)`、`ResolvePlanApprovalInput(approved, model: ModelOption?=null, thinkingLevel: String?=null)`（批准时刻选中模型随批准手势传 core，写入 session 供同 turn spawn 动态读）、`ApiError(error)`、`ReadyInfo(ready, configDir)`、`PlanContent(content?)`
+- wire 请求 DTO：`CreateConversationInput(projectId, agent)`、`RenameConversationInput(title)`、`RenameProjectInput(name)`、`BuiltinProviderInput(name, apiKey)`、`AddModelInput/UpdateModelInput/SetModelEnabledInput`、`AddApiKeyInput(name, key, isDefault=false)`、`ResolveQuestionInput(answers)`、`RollbackMessageInput(messageId)`（`dto/ChatPromptInput.kt`，rollback 路由实际请求体）、`ResolvePlanApprovalInput(approved, model: ModelOption?=null, thinkingLevel: String?=null)`（批准时刻选中模型随批准手势传 core，写入 session 供同 turn spawn 动态读）、`ApiError(error)`、`ReadyInfo(ready, configDir)`、`PlanContent(content?)`
 - Skill 组 DTO（`dto/SkillInput.kt`）：`SetSkillsRootInput(path)`、`InstallSkillInput(url)`、`SkillsRootResponse(path)`（String 直出 JSON 带引号，包一层类型安全）
+- MCP 组 DTO（`dto/McpServerInput.kt`）：`InstallMcpServerInput(json)`（用户粘贴的标准 mcpServers JSON 原样传入，core 解析 UI 不解析）、`UpdateMcpServerInput(json)`（编辑回写，条目键须与 path 中 name 一致）、`SetMcpServerEnabledInput(enabled)`、`McpServerJsonResponse(json)`（getMcpServerJson 响应包装，String 直出 JSON 带引号，包一层类型安全）
+- AGENTS.md 生成 2 件套（`dto/AgentsFileInput.kt`）：`GenerateAgentsFileInput(modelId?=null)`（缺省用项目最近会话的模型）、`GenerateAgentsFileResponse(content)`（写入内容响应包装）
 
 ## 3. SnapshotReducer（`…/contract/SnapshotReducer.kt`）
 
@@ -137,31 +162,31 @@ interface AiCore {
 | 事件 | 聚合效果 |
 |---|---|
 | SESSION_CREATED | 原样返回 |
-| SESSION_UPDATED | status=Working、清 errorMessage（新 turn 开始旧错误过时） |
+| SESSION_UPDATED | status=Working、清 errorMessage（新 turn 开始旧错误过时）；`applyWithRefresh` 对此**也触发 refreshPage 回查**（新 turn 开始时立即对齐刚落库的用户消息） |
 | MESSAGE_DELTA | 在当前 streaming Assistant 占位消息上追加块（text/reasoning 合并到最后同类型块、tool_call 增量、image 新建 File 块），status=Working、清 statusHint |
 | MESSAGE_COMPLETED | status=Idle、isStreaming=false、清 statusHint；断流警告以 **ErrorRecord payload**（error/errorId/fullDiagnostic, errorSeverity=WARNING, failureMode=PREMATURE_CLOSE）写入 errorMessage/errorId/errorDiagnostic，**failureMode==PREMATURE_CLOSE → errorIsStreamInterrupted=true** → **ErrorBoard 展示 + 可展开详细报告 + "继续"按钮**（`WorkspaceViewModel.continueAfterInterruption()` 重发 `"Continue"` 走正常 send 流程续写），会话保持 Idle（turn 真实完成）。正常收尾无这些 key → 三者保持原值；MESSAGE_DELTA 复位 errorIsStreamInterrupted |
 | MESSAGE_ERROR | status=Error、errorMessage=payload["error"]（简报）、errorId=payload["errorId"]、errorDiagnostic=payload["fullDiagnostic"]、清 statusHint。**侧边栏红点语义**：状态点按 sessionStore 权威状态判定而非事件本身——ERROR→红点，IDLE（transient 可恢复，如限流重试耗尽）→蓝点，映射纯函数 `mapMessageErrorToStatus`（`…/jvm/core/bridge/MederiModelMapper.kt`） |
-| STATUS | 仅 scope=provider 且 code=RETRYING 时写 statusHint="attempt/max"（带 `message` 时追加 "|serverMsg"，serverMsg=ErrorCollector.extractServerMessage 提取的供应商真实报错），不碰状态机；UI StatusBar 重试态第二行渲染 serverMsg |
+| STATUS | 仅 scope=provider 且 code=RETRYING 时写 statusHint="attempt/max"（带 `message` 时追加 "|serverMsg"，serverMsg=ErrorCollector.extractServerMessage 提取的供应商真实报错；带 `delayMs` 时再追加第三段 "|retryAt"，retryAt=delayMs+当前时间），不碰状态机；UI StatusBar 重试态第二行渲染 serverMsg。新出现的 steering STATUS（`TurnExecutor.steerMessage` 发 `status=steering_queued`，payload 仅 status/message）被 reducer **静默忽略**（payload 缺 RETRYING 约定键 scope=provider/code/attempt，不命中分支）——按代码现状如此 |
 | TOOL_CALLED | 完整 args 更新 ToolCall block(input)，状态 Running |
 | TOOL_RESULT | 按 toolCallId 精确匹配（回退：最后 Running/Pending 同名），状态 Completed/Failed 并保留 input |
 
 工具参数解析走 `ToolArgParser.parse`（commonMain，`SnapshotReducer` 与 `MederiModelMapper` 共用）：以 `JsonObject` 宽容解析为 `Map<String,String>`，数字/布尔转字面量、嵌套结构保留 JSON 文本——避免 `read_file.max_lines` / `execute_command.timeout_seconds` 等非字符串参数让整条 args 解析失败导致路径/命令丢失。
-| QUESTION_REQUESTED / RESOLVED | 写/清 pendingQuestion |
-| PLAN_APPROVAL_REQUESTED / RESOLVED | 写/清 pendingPlanApproval + planApprovals 去重列表 |
+| QUESTION_REQUESTED / RESOLVED | 写/清 pendingQuestion（REQUESTED 置 status=WaitingUser + 流式消息复位，RESOLVED 回 Working） |
+| PLAN_APPROVAL_REQUESTED / RESOLVED | **planApprovals 是全生命周期投影表**：REQUESTED 解码 `subtasks` payload（List<PlanSubtaskItem>）写入 PENDING 条目（按 id 去重置顶）+ 写/清 pendingPlanApproval + status=WaitingUser；RESOLVED 清 pendingPlanApproval、条目 status 迁 APPROVED/REJECTED + status 回 Working。`PLAN_PROGRESS` 按 `action` 驱动同一张表的 status 迁移（voided→VOIDED / completed→COMPLETED / approved→APPROVED / subtask-started→IN_PROGRESS，且 payload `subtasks` 全量最新子任务同步替换）——概览面板"实施计划卡"（planOverviewList）的真理源 |
 | TODO_UPDATED / PLAN_PROGRESS | 解码 payload["todos"] 整体替换快照 todos；解码失败丢弃事件保留先前快照 |
 | SUBAGENT_*（STARTED/COMPLETED/ERROR/STOPPED） | **不改变会话快照**——子代理状态由独立的 `SubagentTracker` 聚合（VM 持缓存），会话快照只反映主代理视角 |
 
-入口：`applyWithRefresh(snapshot, event, refreshPage)`（MESSAGE_COMPLETED 先发"完成状态"快照再回查落库对齐发第二个；MESSAGE_ERROR 回查后只发最终一个）；及不含回查的 `apply(snapshot, event)`。
+入口：`applyWithRefresh(snapshot, event, refreshPage)`（MESSAGE_COMPLETED 先发"完成状态"快照再回查落库对齐发第二个；SESSION_UPDATED 触发 refreshPage 回查对齐刚落库消息后发一个；MESSAGE_ERROR 回查后只发最终一个）；及不含回查的 `apply(snapshot, event)`。
 
 ### 3.1 SubagentTracker + 子代理 MVVM 缓存（`…/contract/SubagentTracker.kt` / `…/contract/models/SubagentModels.kt`）
 
 SUBAGENT_* 事件 → 子代理缓存表的纯逻辑（与 SnapshotReducer 同风格，跨平台，无状态；调用方持状态逐事件 apply）：
 
 - `SubagentTracker.apply(states: Map<agentId, SubagentState>, event): Map` —— STARTED 以 agentId 建条目（全量元数据来自 payload），终态覆盖 status；乱序终态（无 STARTED）安全跳过；非子代理事件原样返回
-- `SubagentState(agentId, parentSessionId, role, modelId, modelName, reasoningLevel?, task, briefing?, status, startedAt)` —— 每个子代理一个 UI 缓存对象（MVVM Model）；"工作中" = status==RUNNING（真实 job 状态，SSE 空闲 10 分钟超时兜底判死）
+- `SubagentState(agentId, parentSessionId, role, modelId, modelName, reasoningLevel?, task, briefing?, status, startedAt)` —— 每个子代理一个 UI 缓存对象（MVVM Model）；"工作中" = status==RUNNING（真实 job 状态；子代理层无独立 watchdog，最终兜底 = LLM 侧 SSE 流式空闲超时 `MederiOpenAILLMClient` 90s 无数据 → SseIdleTimeoutException（transient 走限流重试）→ 子代理终态事件，不会永久假 RUNNING）
 - `SubagentToolResult` —— core `SubagentManager.StatusResult` JSON 的契约镜像（宽松解码），subagent(STATUS) 落库 tool result 的解析用（WAIT 已删 2026-09-25）
 
-**VM 接线**（WorkspaceViewModel）：`allSubagents`（compose state，事件驱动）+ `subagents`（按当前会话过滤的派生 getter）+ `subagent(agentId)`（详情只读数据源）+ `subagentReportMarkdown(toolName, resultJson)`（`ui/SubagentReport.kt` 纯转换：subagent/agent_status 的 COMPLETED 结果 → 汇报 markdown，null=非汇报普通卡片渲染；UI 折叠卡片点开用 InkCompose 渲染）——汇报全文不进事件/缓存，它在数据库的 tool result 里（wait_agent 已删 2026-09-25；完成报告落盘到 `.mederi/plans/{planId}/reports/NN-executor.md`，父上下文只收摘要+路径）。
+**VM 接线**（WorkspaceViewModel）：`allSubagents`（compose state，事件驱动）+ `subagents`（按当前会话过滤的派生 getter）+ `subagent(agentId)`（详情只读数据源）+ `subagentReportMarkdown(toolName, resultJson)`（`ui/SubagentReport.kt` 纯转换：单一 `subagent` 工具（action=SPAWN/SPAWN_RESEARCHER/STATUS/STOP，原 6 工具封装合并，agent_status 不再单独注册）STATUS 的 COMPLETED 结果 → 汇报 markdown，null=非汇报普通卡片渲染；UI 折叠卡片点开用 InkCompose 渲染）——汇报全文不进事件/缓存，它在数据库的 tool result 里（wait_agent 已删 2026-09-25；完成报告落盘到 `.mederi/plans/{planId}/reports/NN-executor.md`，父上下文只收摘要+路径）。
 
 ## 4. 三实现架构图
 
@@ -192,7 +217,7 @@ flowchart TB
 `class MederiAiCore(configDir: String, dispatcher = Dispatchers.Default) : AiCore, SandboxHooks`。
 
 **initialize() 流程（顺序）**：
-1. `mederi = Mederi.create { configDir; userAgent = AppInfo.userAgent }`（出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带 Mederi 身份头）
+1. `mederi = Mederi.create { configDir; userAgent = AppInfo.userAgent; BrowserRegistry.register("camoufox", BiDiBrowserControl) }`（出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带 Mederi 身份头；**Camoufox 注册 = 浏览器自动化 headless 可选能力**——未安装/未配置时选择它得到引导错误，注册表默认策略优先内置可见浏览器（JCEF，desktop 侧注册），headless server 无 JCEF 时默认才落到 Camoufox，AI 经 `run_browser_task(browser=...)` 选择）
 2. `cleanupLegacyBuiltinProviders()` —— 删"无 API Key 且名字命中内置预设"的历史垃圾 Provider
 3. `cleanupStaleRunningSessions()` —— 上次崩溃残留的 RUNNING session 逐个 `abortAndJoin` 复位（**必须走 abortAndJoin 而非 abort**：abort 对"无活跃 turn 的残留 RUNNING"整体 no-op，activeJobs 是内存态新建进程后为空，状态永远卡住；abortAndJoin 对陈旧 RUNNING 兜底复位 IDLE）
 4. `syncBuiltinProviders()` —— 内置供应商 baseUrl/reasoningParameter/responseSanitization/modelsDevKey 与代码预设校验、不一致则更新
@@ -201,6 +226,8 @@ flowchart TB
 7. `mederi.modelCatalog.start()` —— models.dev 目录启动即拉 + 每小时刷新
 8. `autoRefreshBuiltinGoogleModels()` —— 后台刷新已配 Key 的内置 Google 供应商模型（只新增不碰存量）
 9. `autotitleService.start()` —— **会话自动命名挂在此处（谁初始化谁生效，desktop/server 天然一致）**
+10. `startSessionStatusSync()` —— 订阅 core 会话事件流，实时把会话状态同步进 `_projects` StateFlow（驱动侧边栏状态点；映射 = SESSION_UPDATED→Working、MESSAGE_COMPLETED→Idle、MESSAGE_ERROR→sessionStore 权威终态经 `mapMessageErrorToStatus`、QUESTION/PLAN_APPROVAL REQUESTED→WaitingUser、RESOLVED→Working；同时维护 lastErrorBySessionId 终态错误注册表）
+11. `startCamoufoxUpdateCheck()` —— 启动时静默检查 Camoufox 是否有更新（仅在配置了 browserHome 且平台支持时；不自动下载——浏览器体积大，结果打日志，后续 UI 可订阅展示）
 
 `events()` = `mederi.sessions.events().map { MederiModelMapper.toCoreEvent(it) }`；`observeConversation()` 委托 MederiEventAggregator（初始快照 + SnapshotReducer.applyWithRefresh + refreshPage 回查 + initialTodos hydration：Plan 投影 > session.todos）。
 
@@ -214,8 +241,9 @@ flowchart TB
 `class ServerAiCore(baseUrl, passwordProvider: suspend () -> String? = {null}) : AiCore`。
 - Ktor client 配置：`defaultRequest` 统一带 `User-Agent: AppInfo.userAgent`（身份头唯一真理源 = `AppInfo.userAgent`，见 §4.3）。
 - 鉴权：passwordProvider 非空时所有 REST + SSE 带 `Authorization: Bearer <password>`。
-- initialize：校验 baseUrl → 轮询 `GET /v1/ready`（20s 上限、250ms 间隔）→ 拉 presets/agents/models/providers/projects → isReady。
+- initialize：校验 baseUrl → 轮询 `GET /v1/ready`（20s 上限、250ms 间隔）→ 拉 presets/agents/models/providers/projects → isReady → `startSessionStatusSync()`（订阅全局 SSE `events()` 流，实时把会话状态同步进 `_projects` StateFlow 驱动侧边栏状态点；映射与 jvm 桥一致：SESSION_UPDATED→Working、MESSAGE_COMPLETED→Idle、MESSAGE_ERROR→Error、QUESTION/PLAN_APPROVAL REQUESTED→WaitingUser、RESOLVED→Working）。
 - SSE：官方 SSE 插件，incoming data 段反序列化为 CoreEvent（失败丢弃），心跳注释帧不投递；两个流：`/v1/events`（全局）与 `/v1/sessions/{id}/events`（会话）。
+- 新增契约方法的 REST 路径：`steerMessage` → `POST /v1/sessions/{id}/steer`（body=ChatPromptInput）；`getSubagentReport` → `GET /v1/subagents/{agentId}/report`（→ SubagentReportData）。
 - 错误：非 2xx 抛异常（优先 ApiError.error 文本），方法边界包 Result 失败。
 
 ### 4.3 AppInfo（`…/commonMain/AppInfo.kt`，应用身份唯一真理源）
@@ -236,13 +264,15 @@ flowchart TB
 
 | 方法+路径 | 转调 |
 |---|---|
-| GET `/info`、GET `/v1/ready` | ReadyInfo |
+| GET `/info` | 纯文本 `"Mederi Server"`（`respondText` 健康探测，豁免鉴权） |
+| GET `/v1/ready` | ReadyInfo（豁免鉴权） |
 | GET `/v1/presets` / `/v1/agents` / `/v1/models` / `/v1/providers` / `/v1/projects` | 直接 respondData StateFlow 值 |
 | GET `/v1/system/stats` | getProcessStats |
 | POST `/v1/projects`；PATCH/DELETE `/v1/projects/{id}` | Project 组（单目录，无目录增删端点） |
 | POST `/v1/sessions`；DELETE/PATCH `/v1/sessions/{id}` | Conversation 组 |
 | GET `/v1/sessions/{id}/snapshot` \| `messages` \| `messages/raw` \| `messages/{messageId}` \| `diffs[?messageId=]` | 查询组 |
 | POST `/v1/sessions/{id}/messages` \| `abort` \| `rollback` \| `questions/{questionId}` \| `plans/{planId}/approve`（body=`ResolvePlanApprovalInput(approved, model?, thinkingLevel?)`——批准时刻选中模型随批准传 core） \| `compress` | 动作组 |
+| POST `/v1/sessions/{id}/steer`（body=ChatPromptInput） | steerMessage：排队/引导（Steering）入口 |
 | SSE GET `/v1/events`（全局）；GET `/v1/sessions/{id}/events`（按 sessionId filter） | 事件流 |
 | POST `/v1/providers`；POST `/v1/providers/builtin`；PATCH/DELETE `/v1/providers/{id}` | Provider 组 |
 | POST `/v1/providers/{id}/models`；POST `.../models/refresh`；POST `.../models/auto-setup`；PATCH/DELETE `.../models/{modelId}`；POST `.../models/{modelId}/enabled` | Model 组 |
@@ -250,8 +280,9 @@ flowchart TB
 | GET `/v1/mcp/servers`；POST `/v1/mcp/servers`（InstallMcpServerInput）；PATCH/DELETE `/v1/mcp/servers/{name}`；POST `.../enabled`；POST `.../verify`；GET `.../json`（→McpServerJsonResponse） | MCP 组（ServerAiCore 遥控桥，desktop 直调不经过） |
 | GET `/v1/skills`；GET `/v1/skills/root`（→SkillsRootResponse）；POST `/v1/skills/root`（SetSkillsRootInput）；POST `/v1/skills/install`（InstallSkillInput → SkillItem）；DELETE `/v1/skills/{name}` | Skill 组（UI 薄触发：列表/根目录/安装/卸载，文件操作全在 core） |
 | POST `/v1/projects/{id}/agents-file/generate`（GenerateAgentsFileInput → GenerateAgentsFileResponse） | AGENTS.md 生成：扫描项目生成（已存在则原地改进）项目根 AGENTS.md（暂无 UI 入口，纯 API 形态） |
-| GET `/v1/sessions/{id}/office-preview[?path=]` | Office 文档预览：`.docx/.xlsx` → HTML 字符串（供浏览器面板渲染） |
-| GET `/v1/subagent-configs`；PUT `/v1/subagent-configs/{role}`（UpdateSubagentConfigInput） | SubagentConfig 组：子代理角色（EXECUTOR/RESEARCHER/BROWSER_OPERATOR/BROWSER_BRAIN）独立模型/推理档配置 CRUD |
+| GET `/v1/sessions/{id}/office-preview[?path=]` | Office 文档预览：`.docx/.xlsx/.pptx` → HTML 字符串（供浏览器面板渲染） |
+| GET `/v1/subagents/{agentId}/report` | 子代理汇报取数：`aiCore.getSubagentReport` → `SubagentReportData`（磁盘读 `reports/NN-executor.md`/`research.md`，缺失回退内存/retired 记录，agent 不存在 → 404） |
+| GET `/v1/subagent-configs`；PUT `/v1/subagent-configs/{role}`（UpdateSubagentConfigInput）；GET `/v1/subagent-configs/global`；PUT `/v1/subagent-configs/global`（UpdateSubagentGlobalSettingsInput） | SubagentConfig 组：子代理角色（EXECUTOR/RESEARCHER/BROWSER_OPERATOR/BROWSER_BRAIN）独立模型/推理档配置 CRUD 与全局设置（单会话并发上限） |
 
 响应助手：`respondResult(Result)`（Unit 成功返回 `{}`，失败按 MederiException 子类映射 404/400/409/500 + ApiError）、`respondData(裸值)`、`respondError`。
 
@@ -284,6 +315,8 @@ flowchart TB
 | sandboxExtraPaths | `sandbox.extraPaths`(JSON 数组) | 写穿 SandboxHooks |
 | modelReasoningLevels: Map\<modelId, level\> | `workspace.reasoningLevel.$modelId` | **模型推理档位记忆**（ReasoningMenu.resolve 的第一优先输入） |
 | selectedApiKeyIds: Map\<providerId, apiKeyId\> | `workspace.apiKey.$providerId` | **供应商 API Key 记忆**（跨重启恢复；缺省=用默认 key；会话发送经 `getApiKeyId(provider.id)` 注入 ChatPromptInput.apiKeyId） |
+| language: AppLanguage | `app.language` | i18n 语言设置（SYSTEM/中文/英文，缺省 SYSTEM；`setLanguage` 写穿持久化） |
+| leftSidebarPinned | `ui.sidebar.pinned`（缺省 false） | 左侧边栏固定开合态 |
 
 派生：`selectedAgentMode`（selectedAgentId × availableAgents combine）；`processStats`（后台 1s 轮询）。
 扩展 Store（唯一真理源，生命周期绑定 AppState，供概览快捷卡片与后续市场双向同步）：
@@ -306,7 +339,7 @@ classDiagram
     }
     class WorkspaceViewModel {
         +conversationId +snapshot: ConversationSnapshot?
-        -sessionCache: SessionUiCache  % 会话级缓存族(2026-09 收敛,替代散落 map): snapshotCache/observeJobs/pendingUserMessages/turnStartByConv 4 容器
+        -sessionCache: SessionUiCache  % 会话级缓存族(2026-09 收敛,替代散落 map): snapshotCache/observeJobs/pendingUserMessages/turnStartByConv/autoContinueCountByConv/queuedMessagesByConv 6 容器
         -errorState: ErrorState  % 错误族分组状态: message/diagnostic/id/isStreamInterrupted/isDetailOpen(对外 getter: error/errorDiagnostic/errorId/isStreamInterrupted/isErrorDetailOpen 同名)
         -diffState: DiffUiState  % diff 面板分组状态: items/selectedPath/showPanel(对外: diffItems/selectedDiffFilePath/showDiffPanel 同名)
         % 错误族与 diff 族已收敛为分组状态(2026-09 UI 规范化)
@@ -330,7 +363,8 @@ classDiagram
         +theme: StateFlow~AppThemeMode~ / +language: StateFlow~AppLanguage~  % 窄状态转发 AppState(2026-09 规范化, Sidebar 不直操全局单例)
         +setTheme(mode) / setLanguage(lang)  % 转发 AppState.setTheme/setLanguage
         +createProject/renameProject/deleteProject
-        +addProjectDirectory/removeProjectDirectory
+        +createProjectFromDirectory(dir)  % 目录查重：该目录已有项目则直接选中并展开，不重复创建
+        +ensureConversationVisible(conversationId)  % 程序化选中会话前展开其所属项目
         +createConversation/deleteConversation/renameConversation
         +toggleProjectExpanded/selectProject/selectConversation/newSession
     % createConversation = 本地占位不落库（展开+选中项目、清空会话选中，同 newSession）；
@@ -359,6 +393,10 @@ classDiagram
 
 - **子 VM 生命周期（2026-09 规范化）**：`RawMessagesViewModel` 与 `TerminalViewModel` 由 `Workspace()`（Route/Screen 层）`viewModel {}` 创建，经 `RightExtensionPanel` → `OverviewTabContent`（rawVm）/ `TerminalPanelContent`（terminalVm）注入——组件不再自建 VM、不再经 `WorkspaceViewModel.appStateRef` 摸全局单例（该出口已删除，浏览器 host 改 `uiBrowserHost` 窄访问器）。
 - **WorkspaceViewModel 要点**：`attach(id)` = **按会话常驻观察流 + 缓存渲染**：每个被 attach 过的会话有一条 `observeConversation` 观察流持续把最新快照写入 `snapshotCache`（即使 UI 已切到别的会话也不取消），切换会话只改 `conversationId`、立即用缓存渲染（无缓存时先 `getSnapshot` 拉初始再交给观察流）；`send(text)` = 校验就绪/模型/图片门禁 guardImageSupport（send 与 rollbackMessage 共用唯一实现）→ PromptComposer.compose → 乐观更新 → 无会话自动 createConversation → 有待审批先 resolvePlanApproval(false) → sendMessage（thinkingLevel 只发 computeEffectiveThinkingLevel()）；`rollbackMessage` = 先验后切（restoreInputFromMessage 反解主指令/大段文本/图片 → 本地切片 → rollbackToMessage）→ **成功后才把内容粘贴回输入框重建待发态**（inputDraft + pendingPastedTexts + pendingImages，用户切模型/模式/改内容后自行发送），失败走 ErrorBoard；`restoreInputFromMessage(targetMsg?, fallbackText)` 为纯函数（PromptComposer.parse 拆主指令与大段文本、data: File block base64 还原图片）；`chatItems` 预计算 toolSummary/target/headerSummary/isReasoningActive。**会话切换不再闪烁（2026-09）**：历史上切换回 Working 会话时从 store 重建初始快照，而流式中的 assistant 消息尚未落库（`TurnIncrementalPersister.persistAssistant` 只在 LLM 响应结束后写入），导致快照缺 streaming 数据、StatusBar 短暂显示"排队较长"警告。现改为常驻观察流 + 缓存，切回即渲染最新缓存、流式增量不丢。
+- **排队/引导族（Steering，2026-09 新增）**：`enqueueCurrentInput(trimmedText)`（把当前输入草稿（含粘贴文本/图片 + 当前模型/Agent/档位/apiKeyId）固化为 `QueuedMessage` 进按会话 FIFO 队列（本地，不立即落 core），清空输入草稿与附件）/ `removeQueuedMessage(id)`（移出队列）/ `steerQueuedMessage(queuedMsg)`（引导模式：从队列取出，组装 ChatPromptInput 经 `aiCore.steerMessage` 注入运行中 turn）/ `sendQueuedMessage(queuedMsg)`（发送队列项：组装 Prompt + 附件 → 乐观更新 + `aiCore.sendMessage`，清零 auto-continue 计数与计时锚点）/ `currentQueuedMessages`（当前会话队列，输入框顶部队列横幅数据源）；**会话 turn 结束回 Idle 时自动出队消费**队列首项。
+- **计划概览族**：`planOverviewList`（派生 = snapshot.planApprovals + pendingPlanApproval 去重合并，映射四个生命周期阶段 PendingApproval/InProgress/Completed/Voided，**概览面板"实施计划卡"真理源**）/ `openPlanFile(item)`（读 plan.md 全文——planContent 优先、缺失经 planPath 落盘读、再缺退回标题+摘要——在 PLAN 面板打开）/ `openPlanInExtension(planId, title, content)`（写 `currentPlan` + 展开 PLAN 面板，单向数据流唯一写口）/ `openSpecInExtension(planId, planTitle, subtaskIndex, subtaskName, specContent)`（在阅读器打开子任务执行清单 Spec，缺 spec 显示"尚未生成"占位）/ `currentPlan: PlanItem?`（当前展示的实施计划内容）。
+- **断流自动补发**：`checkAndTriggerAutoContinue(id, snap)`（attach 快照时评估：`errorIsStreamInterrupted` 且非 Working 且模型已吐出部分内容（text/reasoning/tool_call 块任一非空）→ **自动补发一次 `"Continue"`**（走 continueAfterInterruption 正常 send 流程），严格每会话每次断流最多补 1 次，`SessionUiCache.autoContinueCountByConv` 计数、手动 send 后清零——与 §8 ErrorBoard 手动"继续"按钮互补：自动只发一次，用户仍可从 ErrorBoard 手动续发）。
+- 次级方法：`requestCompaction()`（手动压缩历史，概览面板 ContextMetricsCard 入口）/ `previewOffice(path)`（office-preview HTML 生成）/ `showErrorDetail()`（展开详细报告）。
 - **TerminalViewModel key 约定**：`"project:<id>"`、`"project:<id>#<n>"`、`"tmp:<n>"`。
 
 ## 8. UI 组合结构（commonMain）
@@ -371,12 +409,12 @@ flowchart TD
     SB["Sidebar<br/>项目/会话树 + 主题切换 + 设置入口"]
     WS["Workspace<br/>中央聊天区"]
     HDR["Workspace Header（标题/模型）"]
-    LIST["LazyColumn 消息列表<br/>聊天卡片已按领域拆分(2026-09):<br/>ReasoningBlock / ToolCallsBlock(含 ToolActionGroupRow) / QuestionCard / PlanApprovalCard<br/>UserMessageCards(含 UserPastedTextCard/UserMessageFooter/AssistantMessageFooter)<br/>DocumentArtifactCard / WorkTraceCard / DiffCards(含 TurnDiffSummaryCard) / ChatCards(类型与工具)"]
+    LIST["LazyColumn 消息列表<br/>聊天卡片已按领域拆分(2026-09):<br/>ReasoningBlock / ToolCallsBlock(含 ToolActionGroupRow) / SubagentCallsBlock(独立折叠条) / EventMessageCard(系统事件卡) / QuestionCard / PlanApprovalCard<br/>UserMessageCards(含 UserPastedTextCard/UserMessageFooter/AssistantMessageFooter)<br/>DocumentArtifactCard / WorkTraceCard / DiffCards(含 TurnDiffSummaryCard) / ChatCards(类型与工具)"]
     INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft<br/>选择器/控件已拆出(2026-09): ChatInputSelectors.kt / ChatInputControls.kt<br/>顶部 ErrorBoard（错误/警告唯一出口）<br/>/skill 命令(2026-09): 输入 /skill 时浮层在输入框顶部展开(SkillCommandPanel, AnimatedVisibility, 数据源 AppState.skillStore.skills), 选中插入 '/skill <name> ' 到草稿末尾且命令前缀经 SkillCommandTransformation(VisualTransformation 仅显示层)高亮, 模型按 description 触发器加载"]
     SBAR["StatusBar（原 TurnStatusBar）<br/>deriveTurnStatus(snapshot) 纯函数<br/>只显示 AI 运转状态（思考/生成/工具/重试），永不显示错误"]
-    DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/SUB_AGENTS/ARTIFACTS/TERMINAL"]
-    REP["RightExtensionPanel(360dp，拖拽调宽)<br/>宽度无固定上限：上限 = 工作区宽 - 对话区最小宽(360dp) - Dock 宽<br/>展开动画 expandFrom=End 从右缘展开<br/>按 activePanel 分发面板内容<br/>面板按域拆分(2026-09): InfoPanels.kt / MetricsCards.kt / ViewerTabs.kt / BrowserPanel.kt<br/>含 RawMessagesCard/图片与大文本阅读器；导出 I/O 在 util/DocumentExporter.kt(Composable 层零 I/O)"]
-    SD["SettingsDialog<br/>6 Tab: PROVIDERS/GENERAL/SANDBOX/AGENTS/REMOTE/SYSTEM<br/>ProviderSettingsPanel+ProviderSettingsViewModel<br/>ProviderSettingsPanel 按 feature 拆分(2026-09): ui/settings/ 下多文件,主入口 ProviderSettingsPanel.kt 瘦身<br/>(Master-Detail/移动端下钻自适应)"]
+    DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/ARTIFACTS/TERMINAL/BROWSER<br/>子代理卡片已并入 OVERVIEW 面板(SubAgentManagementCard)<br/>BROWSER 入口由 BROWSER_TASK_STARTED 事件自动展开(VM 监听, 面板无内置浏览器渲染时显示占位)"]
+    REP["RightExtensionPanel(宽度按面板分档)<br/>OVERVIEW 默认 300.dp; 其余面板默认窗口 2/3 宽(下限 340.dp, 上限 = maxPanelWidth = 工作区宽 - 对话区最小宽 conversationMinWidth(360.dp) - Dock 宽)<br/>切到 PLAN 等阅读面板时若当前宽度过小, 自动展开到 2/3 窗口宽; 拖拽调宽(下限 240.dp)<br/>展开动画 expandFrom=End 从右缘展开<br/>按 activePanel 分发面板内容<br/>面板按域拆分(2026-09): InfoPanels.kt / MetricsCards.kt / ViewerTabs.kt / BrowserPanel.kt<br/>含 RawMessagesCard/图片与大文本阅读器；导出 I/O 在 util/DocumentExporter.kt(Composable 层零 I/O)"]
+    SD["SettingsDialog<br/>桌面端侧栏导航+工作台分栏 / 移动端横向胶囊Tab<br/>6 Tab: PROVIDERS/AGENTS/GENERAL/SANDBOX/REMOTE/SYSTEM<br/>ProviderSettingsPanel(Master-Detail)+SettingsAtoms原子库<br/>Agent面板支持步进器Stepper与模式胶囊切换"]
     MA --> APP --> MS
     MS --> SB
     MS --> WS
@@ -388,13 +426,15 @@ flowchart TD
     MS --> SD
 ```
 
-- `ChatLayout.kt` 不是 Composable，是**布局常量对象**（contentMaxWidth=1000dp、userBubbleMaxWidth=680dp、sidebarWidth=260dp、rightPanelWidth=360dp、**conversationMinWidth=360dp（对话区最小宽度=手机宽度）**、**rightDockWidth=46dp**、headerHeight=40dp、turnSpacing=14dp 等）。
+- `ChatLayout.kt`（`ui/ChatLayout.kt`）不是 Composable，是**布局常量 object**（全部为 Dp 字面量）：`contentMaxWidth=1000.dp`（消息列/输入框内容最大宽）、`userBubbleMaxWidth=680.dp`（用户气泡最大宽）、**`userBubbleCompactMaxWidth=320.dp`（移动端用户气泡最大宽）**、`actionCardMaxWidth=640.dp`（高危授权/计划审批/问询卡最大宽）、**`conversationMinWidth=360.dp`（对话区最小宽=手机宽度，右侧面板+Dock 不得压缩至此宽度以下）**、`rightDockWidth=46.dp`、`itemSpacing=4.dp`（消息条目基础间距）、**`thoughtBottomSpacing=4.dp`（思考折叠条与正文间距）**、`turnSpacing=14.dp`（轮次间距）等。注意：**header 40.dp 不在 ChatLayout，是 `Workspace.kt` 的布局字面量**（Workspace Header `.height(40.dp)` 对齐顶栏线条）。
 - 三个职责分离的条栏：**StatusBar**（消息区，AI 运转状态，`deriveTurnStatus(snapshot)`，永不显示错误；计时锚定"发送请求时刻"`WorkspaceViewModel.turnStartedAt`（send 时记录、turn 结束清除），每秒 `now - turnStartedAt` 重算——切会话回来不重置；**与 footer durationMs 语义不同：StatusBar=从发请求起算，footer=API 有回应起算到回复结束**）、**ErrorBoard**（ChatInputCard 顶部，错误/警告唯一出口：单行简报 + "详细报告"展开 + 关闭；断流时（快照 errorIsStreamInterrupted）额外显示"继续"按钮 → `continueAfterInterruption()` 重发 Continue 续写半截回复，数据源=快照 errorMessage）、**SystemInfoBar**（最底部，纯 CPU/RSS/JVM 资源监控，不接错误）。
 - **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
-- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`HelpCircleTooltip`（InfoTooltip.kt，hover/tap 信息气泡，AgentMode 开关旁）、`SubAgentComponents`（SubAgentCard/SubAgentTabContent）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：JCEF 宿主已移除，面板显示"当前端不支持内置浏览器"占位）。
-- **共享原子组件库 `ui/components/atoms/`（2026-09 新建）**：ExpandableRow.kt（`ExpandableContent`/`ExpandChevron`/`ExpandableRow` 折叠交互）、Dialogs.kt（`MederiDialog` 基底 + `ConfirmDialog` + `InputDialog`）、PanelCard.kt（`PanelCard`/`CardHeader`/`PanelEmptyState`）、MederiIconButton.kt、CopyButton.kt（`CopyFeedbackState`/`rememberCopyFeedback`/`CopyButton`）、MederiMarkdown.kt（MarkdownView 包裹样板）。回填了 Sidebar 4 对话框、InfoPanels/Skill/Mcp 空态、Skill/Mcp/Metrics/RawMessages 卡片外壳与 Header、ProviderKeyDialogs 确认框等 10+ 处重复；折叠交互统一（ToolCallsBlock/UserMessageCards/WorkTraceCard/ReasoningBlock 7 处）。
+- 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`HelpCircleTooltip`（InfoTooltip.kt，hover/tap 信息气泡，AgentMode 开关旁）、`SubAgentComponents`（**主体 = `SubAgentManagementCard`：概览面板子代理任务管理卡——折叠列表（最新在上）+ working 动画（SubAgentTaskRow spinner）+ `SubAgentDetailDialog` 详情大弹窗（点开经 `subagentReportMarkdown` 渲染汇报 markdown）；旧 `SubAgentCard`/`SubAgentTabContent` 降级为"兼容旧组件定义"包装**，见 L762/L919 注释）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：JCEF 宿主已移除，面板显示"当前端不支持内置浏览器"占位）。
+- **对话流子代理卡片（2026-09）**：`SubagentCallsBlock`（`ChatListItem.SubagentCalls` 独立折叠条，与普通工具调用解耦——显示派发的子代理状态与任务，展开查看执行详情；`ui/components/ToolCallsBlock.kt` 尾部 + `chat/ChatListItems.kt` SubagentCalls item）与 `EventMessageCard`（子代理 `<event_message>` 唤醒消息在**对话流内**渲染成系统事件卡：`ChatItemsBuilder.parseEventMessage` 解析 payload → `ChatListItem.EventMessageCard`，`ui/components/EventMessageCard.kt` 渲染，读取落盘报告全文/摘要）。
+- **概览面板（OVERVIEW 入口，`OverviewTabContent` @ InfoPanels.kt）**：卡片自上而下 = `ContextMetricsCard`（上下文占用/参考价/请求数，含 `requestCompaction()` 手动压缩入口）/ `TodoListCard`（仅 todos 非空时；宽屏 ≥600.dp 与 ContextMetricsCard 双列）/ `PlansOverviewCard`（实施计划卡，见下）/ `SubAgentManagementCard`（子代理任务管理）/ `McpManagementCard`（MCP 服务管理，唯一真理源 mcpStore）/ `SkillManagementCard`（技能管理，唯一真理源 skillStore）/ `RawMessagesCard`（原始消息列表，RawMessagesViewModel 驱动）。**`PlansOverviewCard`（实施计划卡）**：数据源 = `planOverviewList`（全生命周期：待批准/执行中/已完成/已作废）；**卡级折叠** = CardHeader 可点击翻转 `isExpanded` + `AnimatedVisibility`（内容区收起/展开）；每步子任务行带 **Spec 按钮**（`openSpecInExtension` 在阅读器打开该子任务执行清单）；待批准计划带 **"批准执行 ⌘↵"按钮**（`approvePlan(id)` 走正常审批链，批准时刻模型/档位随手势传 core）。
+- **共享原子组件库 `ui/components/atoms/`（2026-09 新建）**：ExpandableRow.kt（`ExpandableContent`/`ExpandChevron`/`ExpandableRow` 折叠交互）、Dialogs.kt（`MederiDialog` 基底 + `ConfirmDialog` + `InputDialog`）、MederiCards.kt（`MederiCard` 通用卡片壳——Surface 卡片壳收敛的唯一出口，新卡片一律基于它组装 + `MederiMetricCard` 度量卡）、PanelCard.kt（`PanelCard`/`CardHeader`/`PanelEmptyState`，PanelCard 已基于 MederiCard 组装）、MederiIconButton.kt、CopyButton.kt（`CopyFeedbackState`/`rememberCopyFeedback`/`CopyButton`）、MederiMarkdown.kt（MarkdownView 包裹样板）、MederiButtons.kt（按钮 8 变体：`MederiPrimaryDecisionButton`（含 danger 参数，danger=true 时主色切 accentDanger）/`MederiSurfaceButton`/`MederiGhostButton`/`MederiCompactStrokeButton`/`MederiMinimalIconButton`/`MederiIconSquareButton`（含 active 参数）/`MederiPanelHeaderIconButton`/`MederiSendRoundButton`）、MederiBadges.kt（chip/badge/status：`MederiTabBadge`/`MederiRunningPulseBadge`/`MederiRoleTag`/`MederiCompatBadge`/`MederiProjectPill`/`MederiPlanIdTag`/`MederiStatusDot`/`MederiGitBadge`/`MederiFileTypeIconSquare`）。全局设计 token 另置 `theme/Tokens.kt`（`MederiSpacing`/`MederiRadius`/`MederiTypeScale`，与主题无关 dark/light 共用，取值真理源 = docs/design/standard/01-tokens.md）。回填了 Sidebar 4 对话框、InfoPanels/Skill/Mcp 空态、Skill/Mcp/Metrics/RawMessages 卡片外壳与 Header、ProviderKeyDialogs 确认框等 10+ 处重复；折叠交互统一（ToolCallsBlock/UserMessageCards/WorkTraceCard/ReasoningBlock 7 处）。
 - **层归位（2026-09）**：`TurnStatus`/`RetryHint`/`deriveTurnStatus`/`parseRetryHint` 从 ui/components 移入 `ui/TurnStatus.kt`（VM 不再反向依赖视图层）；`ToolActionKind`/`classifyToolAction`/`ToolActionGroup`/`groupToolCallsByAction` 从 ChatCards.kt 移入 `ui/chat/ToolActions.kt`（数据投影层单一来源）；新增 `ui/ErrorDetailFormatter.kt`（extractErrorCategory/cleanErrorSummary/extractErrorSuggestion/buildBugReportMarkdown 纯函数，ErrorDetailDialog 组合期解析下沉）；`RightDockPanel` 枚举从 ChatListItems.kt 移入 `ui/RightDockPanel.kt`。
-- **重文件拆分（2026-09）**：Sidebar.kt 拆出 `ConversationStatusDot.kt`；ChatInputCard.kt 拆出 `command/SlashCommandTransformation.kt` + `ChatInputAttachments.kt`（附件行）；ChatCards.kt 拆出 `icons.kt`（BrainIcon/TerminalPromptIcon）与 `scroll.kt`（shouldEnableReasoningScroll/ContainNestedScrollConnection/containScroll），ChatCards 只留 format 工具；ChatInputSelectors.kt 抽 `ModelPickerList`（ModelSelectorMenu 与 MobileModelBottomSheet 共用）；ViewerTabs.kt 新增 `ExportActionButton` 原子（导出 5 Boolean 状态机收敛为 Idle/Exporting/Done）。
+- **重文件拆分（2026-09）**：Sidebar.kt 拆出 `ConversationStatusDot.kt`；ChatInputCard.kt 拆出 `command/SlashCommandTransformation.kt` + `ChatInputAttachments.kt`（附件行）；ChatCards.kt 拆出 `icons.kt`（BrainIcon/TerminalPromptIcon）与 `scroll.kt`（shouldEnableReasoningScroll/ContainNestedScrollConnection/containScroll），ChatCards 只留 format 工具；ChatInputSelectors.kt 抽 `ModelPickerList`（ModelSelectorMenu 与 MobileModelBottomSheet 共用）；ViewerTabs.kt 新增 `ExportActionButton` 原子（导出 5 Boolean 状态机收敛为 Idle/Exporting/Done）；SettingsScreen.kt 拆出 `AgentSettingsPanel` / `GeneralSettingsPanel` / `SandboxSettingsPanel` / `RemoteSettingsPanel` / `SystemSettingsPanel`（各面板独立高内聚），设置公共原子沉淀于 `SettingsAtoms.kt`（SettingsCard/Section/Row/Stepper/PillToggle）。
 - 渲染 AI 回复使用 `:inkcompose` 的 `MarkdownView`（见 03-inkcompose.md）。
 
 ## 9. 平台入口与特性
@@ -455,7 +495,8 @@ flowchart TD
 
 ## 12. theme/Theme.kt
 
-主题机制：`AppThemeMode`（AppState 持久化 `app.theme`）→ `AppTheme(theme)` Composable 统一注入 Material3 ColorScheme；DiagramTheme/CodeTheme/LatexTheme 由 inkcompose 侧从 colorScheme 派生（`DiagramTheme.material3(colorScheme)`）。
+主题机制：`AppThemeMode`（`DARK`, `LIGHT`, `GLASS_DARK`, `GLASS_LIGHT`；属性 `isDark`, `isGlass`；AppState 持久化 `app.theme`）→ `AppTheme(theme)` Composable 统一注入 Material3 ColorScheme 与 `LocalMederiColors`；在毛玻璃模式下自动在根节点铺设 `GlassAmbientBackground`（Apple Aurora 径向高斯光晕）；DiagramTheme/CodeTheme/LatexTheme 由 inkcompose 侧从 colorScheme 派生（`DiagramTheme.material3(colorScheme)`）。
 
 - **MederiColors 状态语义 token（2026-09 新增 4 枚）**：`statusWorking`（0xFFF59E0B 琥珀，工作中/流转指示）、`statusWaiting`（0xFF10B981 翠绿，等待用户/空闲）、`statusIdle`（0xFF38BDF8 晴空蓝，正常结束）、`statusError`（0xFFEF4444 玫瑰红，报错）——Dark/Light 双份同值，消费端 = Sidebar ConversationStatusDot、ToolCallsBlock 运行 spinner、DocumentArtifactCard 流式指示。
+- **毛玻璃调色板（2026-09 新增）**：`GlassDarkColors` 与 `GlassLightColors`，采用 50%~75% 丙烯高通透半透明材质 + 1px 晶体白高光描边（`surfaceCardBorder = Color(0x33FFFFFF)`），配合底层的 `GlassAmbientBackground` 呈现苹果风格拟态磨砂玻璃（Glassmorphism）视觉层次。
 - 颜色硬编码收口（2026-09）：ToolCallsBlock 淡灰三元→textSecondary/textMuted、EDIT/SUBAGENT 紫→thoughtAccent、终端输出块→surfaceCode/onSurfaceCode/surfaceCardBorder/accentDanger；SettingsScreen previewBg→surfaceWorkspace 等，ui/ 下断言 hex 零残留。

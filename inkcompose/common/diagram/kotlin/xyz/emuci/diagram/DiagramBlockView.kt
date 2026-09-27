@@ -10,8 +10,10 @@ import xyz.emuci.diagram.theme.DiagramTheme
  * 各平台渲染策略（全部基于官方 mermaid.js，原生渲染管线已删除）：
  * - jvm：KBrowser JCEF 离屏 Worker——全局唯一后台 KBWebView 串行渲染为 2x PNG，
  *   经 [xyz.emuci.diagram.mermaid.MermaidDiskCache] 落盘缓存（自愈 + 原子写）；
- * - android / ios：KBrowser 桥接系统 WebView / WKWebView，内嵌页面从 CDN 加载 mermaid
- *   渲染为内联 SVG，高度回报给 Compose 自适应；
+ * - android / ios：KBrowser 桥接系统 WebView / WKWebView——150ms 防抖 + 隐藏 1×1 WebView
+ *   离屏栅格化（mermaid.js 经 CDN 加载，Canvas 导出 2x Base64 PNG）→ 平台 DiskCache
+ *   （AndroidMermaidDiskCache / IosMermaidDiskCache）落盘 → 全局 mobileRenderMutex 互斥 →
+ *   渲染完即卸载 WebView，UI 树仅挂载原生 Compose Image；
  * - wasmJs：同文档 DOM——mermaid.js（webApp 同源静态资源）离屏 Canvas 超采样为 PNG。
  *
  * 入参是 markdown 管线的原始事实：源码 + 类型提示 + 会话键；

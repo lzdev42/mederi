@@ -28,6 +28,8 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.MederiIconButton
+import xyz.mederi.ui.components.atoms.MederiTabBadge
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.copy_done
@@ -73,11 +75,8 @@ fun RawMessagesCard(
             icon = null,
             title = stringResource(Res.string.rawmsg_title),
             count = {
-                Text(
-                    text = stringResource(Res.string.rawmsg_count, rawMessages.size),
-                    color = colors.textMuted,
-                    fontSize = 10.sp
-                )
+                // 消息计数徽标：收敛为 MederiTabBadge（tab-badge 标准）
+                MederiTabBadge(count = rawMessages.size)
             }
         )
 
@@ -222,24 +221,19 @@ private fun RawMessageItemRow(
                     markdownTheme = rememberMederiMarkdownTheme()
                 )
 
-                // 右上角浮动复制按钮
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(colors.surfaceCard.copy(alpha = 0.85f))
-                        .clickable {
+                // 右上角浮动复制按钮（收敛为 MederiIconButton：copied → active 高亮 + Check，对齐复制反馈语义）
+                Box(modifier = Modifier.align(Alignment.TopEnd)) {
+                    MederiIconButton(
+                        icon = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
+                        onClick = {
                             clipboardManager.setText(AnnotatedString(prettyJson))
                             copied = true
-                        }
-                        .padding(5.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
+                        },
                         contentDescription = stringResource(if (copied) Res.string.copy_done else Res.string.copy),
-                        tint = if (copied) colors.accentSuccess else colors.textMuted,
-                        modifier = Modifier.size(13.dp)
+                        size = 24,
+                        active = copied,
+                        activeTint = colors.accentSuccess,
+                        shape = RoundedCornerShape(4.dp),
                     )
                 }
             }

@@ -34,6 +34,7 @@ import xyz.mederi.core.contract.models.TodoItem
 import xyz.mederi.core.contract.models.TodoStatus
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.MederiCompactStrokeButton
 import xyz.mederi.ui.components.atoms.PanelCard
 
 @Composable
@@ -103,6 +104,7 @@ internal fun ContextMetricsCard(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // 数字小卡内联保留：无描边 / surfaceWorkspace 底 / 13sp 紧凑字号，与 MederiMetricCard（border + 20sp Metric）视觉不一致，待配色迁移时对齐
             // Request Count Box
             Column(
                 modifier = Modifier
@@ -140,35 +142,13 @@ internal fun ContextMetricsCard(
             }
         }
 
-        // Compact Context Button (扁平小高度 30dp)
-        Button(
+        // Compact Context Button（收敛为 MederiCompactStrokeButton：紧凑描边变体，icon + 11sp 文本）
+        MederiCompactStrokeButton(
+            text = stringResource(Res.string.dock_compact_context),
             onClick = onCompact,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(30.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-            shape = RoundedCornerShape(6.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colors.buttonSecondary,
-                contentColor = colors.textPrimary
-            )
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Minimize2,
-                    contentDescription = null,
-                    modifier = Modifier.size(12.dp)
-                )
-                Text(
-                    text = stringResource(Res.string.dock_compact_context),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
+            icon = FeatherIcons.Minimize2,
+            modifier = Modifier.fillMaxWidth(),
+        )
         }
     }
 }

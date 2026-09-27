@@ -32,10 +32,11 @@ import xyz.mederi.ui.ChatListItem
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent
+import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 /**
- * 工作过程（WorkTraceCard）展开内容的最大高度：超过后栏内上下滚动，
- * 避免推理/工具步骤把整个聊天内容顶得过长（折叠条仍可点击收起/展开）。
+ * 工作过程（WorkTraceCard）展开内容的默认固定容器高度：子步骤在容器内独立上下滚动，
+ * 容器底部的「展开/收起」按钮固定锚定在容器底，点击可切换为无限高度（展示全量步骤），再点缩回固定高度。
  */
 private val WorkTraceMaxContentHeight = 320.dp
 
@@ -124,9 +125,9 @@ fun WorkTraceCard(
         }
 
         // 展开后的完整工作轨迹子项（左侧细微导轨线）。
-        // 默认最高高度限制：内容超高时栏内上下滚动，避免推理/工具步骤把整个聊天顶得过长；
-        // 内容末尾的「展开/收起」按钮随内容滚动、永远位于块的最底部：
-        // 点击切换为无限高度（全部摊开，不再限高），再点缩回限高。
+        // 默认固定高度容器（320.dp）+ 内部独立滚动，避免推理/工具步骤把整个聊天顶得过长；
+        // 底部「展开/收起」按钮固定锚定在容器底部，不随内容滚动：
+        // 点击切换为无限高度（全部摊开，不再限高），再点缩回固定高度容器。
         ExpandableContent(expanded = isExpanded) {
             val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
             val traceScrollState = rememberScrollState()
@@ -137,8 +138,7 @@ fun WorkTraceCard(
                         if (!isUnbounded) {
                             Modifier
                                 .containScroll()
-                                .heightIn(max = WorkTraceMaxContentHeight)
-                                .verticalScroll(traceScrollState)
+                                .height(WorkTraceMaxContentHeight)
                         } else {
                             Modifier
                         }
@@ -157,39 +157,38 @@ fun WorkTraceCard(
                     .padding(start = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                workTrace.items.forEach { stepItem ->
-                    renderStepItem(stepItem)
-                }
-
-                // 底部切换按钮：位于内容末尾、随内容滚动（永远在块的最底部），恒显示
-                Row(
+                // 上半部分：在容器内独立滚动的步骤列表视口
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable {
-                            isUnbounded = !isUnbounded
-                            DebugLog.debug("UI", "WorkTraceCard isUnbounded toggled to: $isUnbounded")
-                        }
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                        contentDescription = null,
-                        tint = colors.textMuted,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = stringResource(
-                            if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
+                        .then(
+                            if (!isUnbounded) {
+                                Modifier
+                                    .weight(1f)
+                                    .verticalScroll(traceScrollState)
+                            } else {
+                                Modifier
+                            }
                         ),
-                        color = colors.textMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    workTrace.items.forEach { stepItem ->
+                        renderStepItem(stepItem)
+                    }
                 }
+
+                // 底部切换按钮：固定在容器底部，不随步骤内容滚动（收敛为 MederiGhostButton）
+                MederiGhostButton(
+                    text = stringResource(
+                        if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
+                    ),
+                    icon = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                    onClick = {
+                        isUnbounded = !isUnbounded
+                        DebugLog.debug("UI", "WorkTraceCard isUnbounded toggled to: $isUnbounded")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }

@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,6 +33,8 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.ui.components.atoms.MederiIconButton
+import xyz.mederi.ui.components.atoms.MederiSendRoundButton
 
 /** 自动审批开关与说明气泡。选中态订阅 AppState 派生流（唯一真理源）。 */
 @Composable
@@ -104,7 +105,7 @@ internal fun AutoApproveSwitch(
     )
 }
 
-/** 发送 / 停止按钮。支持排队模式与中止模式。 */
+/** 发送 / 停止按钮。支持排队模式与中止模式。样式收敛为 MederiSendRoundButton（反色 send，KDoc 已注明）。 */
 @Composable
 internal fun SendButton(
     size: Dp = 28.dp,
@@ -113,34 +114,17 @@ internal fun SendButton(
     canSend: Boolean,
     onSubmit: () -> Unit
 ) {
-    val colors = LocalMederiColors.current
     val showSendIcon = !isStreaming || hasContent
     val isEnabled = if (isStreaming) true else canSend
-
-    val bgColor = when {
-        isStreaming && !hasContent -> colors.accentDanger
-        canSend || (isStreaming && hasContent) -> colors.accentPrimary
-        else -> colors.buttonSecondary
-    }
-    val iconColor = when {
-        isStreaming || canSend -> colors.onAccentPrimary
-        else -> colors.textMuted
-    }
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(bgColor)
-            .border(1.dp, if (canSend || (isStreaming && hasContent)) colors.accentPrimary else colors.surfaceCardBorder, CircleShape)
-            .clickable(enabled = isEnabled, onClick = onSubmit),
-        contentAlignment = Alignment.Center
-    ) {
-        if (!showSendIcon) {
-            Icon(FeatherIcons.Square, stringResource(Res.string.input_stop), tint = iconColor, modifier = Modifier.size(size * 0.37f))
-        } else {
-            Icon(FeatherIcons.ArrowUp, stringResource(Res.string.input_send), tint = iconColor, modifier = Modifier.size(size * 0.48f))
-        }
-    }
+    MederiSendRoundButton(
+        icon = if (showSendIcon) FeatherIcons.ArrowUp else FeatherIcons.Square,
+        onClick = onSubmit,
+        contentDescription = stringResource(
+            if (showSendIcon) Res.string.input_send else Res.string.input_stop
+        ),
+        enabled = isEnabled,
+        modifier = Modifier.size(size),
+    )
 }
 
 @Composable
@@ -194,22 +178,11 @@ internal fun IconToolButton(
     onClick: () -> Unit,
     size: Int = 28
 ) {
-    val colors = LocalMederiColors.current
-    Box(
-        modifier = Modifier
-            .size(size.dp)
-            .clip(CircleShape)
-            .background(colors.buttonSecondary)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = colors.textSecondary,
-            modifier = Modifier.size(if (size >= 36) 18.dp else (size * 0.5f).dp)
-        )
-    }
+    MederiIconButton(
+        icon = icon,
+        onClick = onClick,
+        size = size,
+    )
 }
 
 @Composable

@@ -30,6 +30,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
+import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import io.ktor.server.sse.ServerSSESession
 import io.ktor.server.sse.SSE
 import io.ktor.server.sse.heartbeat
@@ -482,6 +483,15 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
         val role = call.parameters["role"]!!
         val input = call.receive<UpdateSubagentConfigInput>()
         call.respondResult(aiCore.updateSubagentConfig(role, input))
+    }
+
+    get("/v1/subagent-configs/global") {
+        call.respondResult(aiCore.getSubagentGlobalSettings())
+    }
+
+    put("/v1/subagent-configs/global") {
+        val input = call.receive<UpdateSubagentGlobalSettingsInput>()
+        call.respondResult(aiCore.updateSubagentGlobalSettings(input))
     }
 
     // ------------------------------------------------------------------

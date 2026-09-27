@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 class SubagentConfigManagerTest {
 
@@ -157,5 +158,51 @@ class SubagentConfigManagerTest {
         manager.clear(SubagentRole.EXECUTOR)
         assertTrue(manager.get(SubagentRole.EXECUTOR).isInheriting)
         assertNull(settingsStore.get("subagent.config.EXECUTOR"))
+    }
+
+    @Test
+    fun `maxConcurrent defaults to 2 when unconfigured`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val manager = SubagentConfigManager(settingsStore, FakeProviderManager(emptyMap()))
+        assertEquals(2, manager.getMaxConcurrentSubagents())
+    }
+
+    @Test
+    fun `maxConcurrent persists and reads back configured value`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val manager = SubagentConfigManager(settingsStore, FakeProviderManager(emptyMap()))
+        manager.setMaxConcurrentSubagents(5)
+        assertEquals(5, manager.getMaxConcurrentSubagents())
+        assertEquals("5", settingsStore.get(SubagentConfigManager.KEY_MAX_CONCURRENT))
+    }
+
+    @Test
+    fun `maxConcurrent falls back to default for invalid stored values`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val manager = SubagentConfigManager(settingsStore, FakeProviderManager(emptyMap()))
+        // 非数字
+        settingsStore.set(SubagentConfigManager.KEY_MAX_CONCURRENT, "abc")
+        assertEquals(2, manager.getMaxConcurrentSubagents())
+        // 小于 1（0 / 负数没有"派发能力"语义）
+        settingsStore.set(SubagentConfigManager.KEY_MAX_CONCURRENT, "0")
+        assertEquals(2, manager.getMaxConcurrentSubagents())
+        settingsStore.set(SubagentConfigManager.KEY_MAX_CONCURRENT, "-3")
+        assertEquals(2, manager.getMaxConcurrentSubagents())
+    }
+
+    @Test
+    fun `setMaxConcurrent rejects sub-one values`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val manager = SubagentConfigManager(settingsStore, FakeProviderManager(emptyMap()))
+        try {
+            manager.setMaxConcurrentSubagents(0)
+            fail("expected IllegalArgumentException for 0")
+        } catch (_: IllegalArgumentException) {
+        }
+        try {
+            manager.setMaxConcurrentSubagents(-1)
+            fail("expected IllegalArgumentException for -1")
+        } catch (_: IllegalArgumentException) {
+        }
     }
 }

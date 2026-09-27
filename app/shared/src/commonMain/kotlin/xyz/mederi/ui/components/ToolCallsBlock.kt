@@ -395,6 +395,8 @@ private fun ToolCallOutputBlock(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
+        // 待配色迁移时对齐标准 badge：OUTPUT/FAILED 标签为 mono 终端风格且 FAILED 态需 danger 色，
+        // 原子（MederiGhostButton/TabBadge）无等价表达，暂保留内联折叠条
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))

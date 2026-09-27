@@ -2705,15 +2705,17 @@ class SharedLogicDesktopTest {
 
     @Test
     fun testPlanOverviewAndSubtaskSpecMapping() = kotlinx.coroutines.runBlocking {
-        val mockAiCore = xyz.mederi.core.mock.MockAiCore()
-        mockAiCore.initialize()
-        val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
-        val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = this)
-        appState.hydrate()
-        val viewModel = xyz.mederi.ui.WorkspaceViewModel(appState)
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            val viewModel = xyz.mederi.ui.WorkspaceViewModel(appState)
 
-        val conv = mockAiCore.createConversation("p1", null).getOrThrow()
-        appState.selectConversation(conv.id)
+            val conv = mockAiCore.createConversation("p1", null).getOrThrow()
+            appState.selectConversation(conv.id)
         kotlinx.coroutines.withTimeout(5_000) {
             while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
         }
@@ -2826,6 +2828,9 @@ class SharedLogicDesktopTest {
         assertNotNull(viewModel.currentPlan)
         assertTrue(viewModel.currentPlan!!.title.contains("步骤 1 Spec"))
         assertTrue(viewModel.currentPlan!!.content.contains("扫描所有 gradle 依赖"))
+        } finally {
+            testScope.cancel()
+        }
     }
 }
 

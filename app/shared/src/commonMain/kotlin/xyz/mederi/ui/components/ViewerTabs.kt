@@ -1,13 +1,11 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -49,6 +47,7 @@ import xyz.emuci.inkcompose.RenderStyle
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.ChatLayout
+import xyz.mederi.ui.components.atoms.MederiRunningPulseBadge
 import xyz.mederi.util.DocumentExporter
 import xyz.mederi.util.ExportStatus
 
@@ -186,17 +185,6 @@ internal fun TextReaderTabContent(
     val htmlFilterLabel = stringResource(Res.string.pick_file_filter, "HTML", "html")
     val pdfFilterLabel = stringResource(Res.string.pick_file_filter, "PDF", "pdf")
 
-    val infiniteTransition = rememberInfiniteTransition(label = "streamingIndicator")
-    val streamGlowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "streamGlowAlpha"
-    )
-
     Column(modifier = Modifier.fillMaxSize()) {
         // 顶部信息条
         Row(
@@ -236,27 +224,8 @@ internal fun TextReaderTabContent(
                     )
                 }
                 if (isStreaming) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(colors.accentPrimary.copy(alpha = 0.12f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(5.dp)
-                                .clip(CircleShape)
-                                .background(colors.accentPrimary.copy(alpha = streamGlowAlpha))
-                        )
-                        Text(
-                            text = stringResource(Res.string.dock_generating),
-                            color = colors.accentPrimary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    // 流式生成中微标：收敛为 MederiRunningPulseBadge（Pill 底 + accent 描边 + 脉冲点）
+                    MederiRunningPulseBadge(text = stringResource(Res.string.dock_generating))
                 }
             }
 

@@ -1,6 +1,5 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,9 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +34,8 @@ import mederi.app.shared.generated.resources.settings_panel_recommended_presets
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.ProviderIcon
+import xyz.mederi.ui.components.atoms.MederiCard
+import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 // ============================================================================
 // 2. 侧边栏与预设组件
@@ -66,15 +65,13 @@ internal fun BuiltinPresetsSection(
             modifier = Modifier.padding(horizontal = 4.dp)
         )
         unaddedPresets.forEach { preset ->
-            Surface(
+            MederiCard(
                 onClick = { onAddPreset(preset) },
-                shape = ProviderTokens.RadiusControl,
-                color = colors.surfaceCard,
-                border = BorderStroke(1.dp, colors.divider),
+                padding = PaddingValues(horizontal = ProviderTokens.SpacingSmall, vertical = 6.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = ProviderTokens.SpacingSmall, vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -109,13 +106,12 @@ internal fun AddBuiltinProviderDialog(
 ) {
     var apiKey by remember { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = ProviderTokens.RadiusCard,
-            color = colors.surfaceCard,
-            border = BorderStroke(1.dp, colors.divider),
-            modifier = Modifier.width(380.dp).padding(ProviderTokens.SpacingLarge)
+        // 对话框壳走 MederiCard（RadiusCard 8dp = MederiRadius.Card、surfaceCard 底色与现状一致）
+        MederiCard(
+            modifier = Modifier.width(380.dp),
+            padding = PaddingValues(ProviderTokens.SpacingLarge)
         ) {
-            Column(Modifier.padding(ProviderTokens.SpacingLarge), verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
+            Column(verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
                 Text(stringResource(Res.string.settings_panel_add_provider), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
                 HorizontalDivider(color = colors.divider)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
@@ -134,7 +130,10 @@ internal fun AddBuiltinProviderDialog(
                     colors = colors
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onDismiss) { Text(stringResource(Res.string.settings_panel_cancel), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel) }
+                    MederiGhostButton(
+                        text = stringResource(Res.string.settings_panel_cancel),
+                        onClick = onDismiss
+                    )
                     Spacer(Modifier.width(ProviderTokens.SpacingSmall))
                     PrimaryActionBtn(
                         text = stringResource(Res.string.settings_panel_add),
@@ -154,12 +153,14 @@ internal fun AddProviderSidebarButton(
     colors: MederiColors,
     onClick: () -> Unit
 ) {
-    Surface(
-        onClick = onClick,
-        shape = ProviderTokens.RadiusControl,
-        color = if (isSelected) colors.surfaceHover else colors.surfaceCard,
-        border = BorderStroke(1.dp, if (isSelected) colors.divider else colors.divider),
-        modifier = Modifier.fillMaxWidth()
+    // 选中态动态底色（surfaceHover）MederiCard 无法表达（固定 surfaceCard 背景），保留等价 Box 链替代 M3 Surface
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(ProviderTokens.RadiusControl)
+            .background(if (isSelected) colors.surfaceHover else colors.surfaceCard)
+            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
+            .clickable { onClick() }
     ) {
         Row(
             modifier = Modifier.padding(horizontal = ProviderTokens.SpacingSmall, vertical = 7.dp),

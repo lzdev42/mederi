@@ -17,6 +17,12 @@ interface SubagentConfigApi {
 
     /** 更新指定角色的模型配置。 */
     suspend fun update(role: SubagentRole, request: UpdateSubagentConfigRequest)
+
+    /** 全局子代理设置（与角色无关的项：单会话并发上限等）。 */
+    suspend fun getGlobalSettings(): SubagentGlobalSettingsDto
+
+    /** 更新全局子代理设置。 */
+    suspend fun updateGlobalSettings(request: UpdateSubagentGlobalSettingsRequest)
 }
 
 /**
@@ -41,4 +47,21 @@ data class SubagentRoleConfigDto(
 data class UpdateSubagentConfigRequest(
     val modelId: String? = null,
     val reasoningLevel: ReasoningLevel? = null
+)
+
+/**
+ * 全局子代理设置（与角色无关）。
+ *
+ * [maxConcurrentAgents] 单会话并发子代理上限：spawn 原子门禁拒绝超发（EXECUTOR/RESEARCHER
+ * 同池计数，与类型无关）；浏览器任务（BrowserTaskManager 驱动）不经 SubagentManager，不受限。
+ */
+@Serializable
+data class SubagentGlobalSettingsDto(
+    val maxConcurrentAgents: Int
+)
+
+/** 更新全局子代理设置请求。[maxConcurrentAgents] 必须 >= 1。 */
+@Serializable
+data class UpdateSubagentGlobalSettingsRequest(
+    val maxConcurrentAgents: Int
 )

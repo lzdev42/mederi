@@ -42,7 +42,7 @@ class SubagentLifecycleEventTest {
         }
     }
 
-    private fun spawn(manager: SubagentManager, task: String = "do it", briefing: String? = null): String =
+    private suspend fun spawn(manager: SubagentManager, task: String = "do it", briefing: String? = null): String =
         manager.spawn(
             task = task, briefing = briefing, plan = null, role = SubagentRole.EXECUTOR,
             directories = emptyList(),
