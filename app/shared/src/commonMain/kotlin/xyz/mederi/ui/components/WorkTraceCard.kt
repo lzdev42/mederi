@@ -1,6 +1,11 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
@@ -12,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
@@ -32,11 +38,11 @@ import xyz.mederi.ui.ChatListItem
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent
-import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 /**
- * 工作过程（WorkTraceCard）展开内容的默认固定容器高度：子步骤在容器内独立上下滚动，
- * 容器底部的「展开/收起」按钮固定锚定在容器底，点击可切换为无限高度（展示全量步骤），再点缩回固定高度。
+ * 工作过程（WorkTraceCard）展开内容的步骤视口**最大**高度：子步骤在视口内独立上下滚动，
+ * 内容超出该上限才出现滚动条；短内容按实际高度收缩（不再撑出固定 320.dp 空盒）。
+ * 视口溢出时，容器底部出现「展开/收起」按钮，点击可切换为无限高度（展示全量步骤），再点缩回限高。
  */
 private val WorkTraceMaxContentHeight = 320.dp
 
@@ -66,13 +72,20 @@ fun WorkTraceCard(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // 汇总微栏整行可点击
+        // 汇总微栏整行可点击（原型 width: fit-content 语义，不 fillMaxWidth；hover 显示 surfaceHover 背景）
+        val interactionSource = remember { MutableInteractionSource() }
+        val isHovered by interactionSource.collectIsHoveredAsState()
+        val barBg by animateColorAsState(
+            if (isHovered) colors.surfaceHover else Color.Transparent,
+            tween(120)
+        )
+
         Row(
             modifier = Modifier
-                .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { userChoice = !isExpanded }
-                .padding(vertical = 4.dp, horizontal = 2.dp),
+                .background(barBg)
+                .clickable(interactionSource = interactionSource, indication = null) { userChoice = !isExpanded }
+                .padding(vertical = 4.dp, horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -116,7 +129,7 @@ fun WorkTraceCard(
                 text = titleText,
                 color = if (workTrace.hasFailedTool) colors.accentDanger else colors.textSecondary,
                 fontSize = 12.5.sp,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.Medium
             )
 
             Spacer(modifier = Modifier.width(2.dp))
@@ -124,21 +137,27 @@ fun WorkTraceCard(
             ExpandChevron(expanded = isExpanded, tint = colors.textSecondary, size = 11.dp)
         }
 
+        // 步骤视口滚动状态提到 lambda 外：底部按钮的显隐需要读 maxValue（内容是否溢出视口），
+        // 必须在组合期求值，不能是 ExpandableContent 内部的局部变量
+        val traceScrollState = rememberScrollState()
+        val showHeightToggle = shouldShowHeightToggle(
+            enforceMaxHeight = true,
+            isUnbounded = isUnbounded,
+            hasOverflow = !isUnbounded && traceScrollState.maxValue > 0,
+        )
+
         // 展开后的完整工作轨迹子项（左侧细微导轨线）。
-        // 默认固定高度容器（320.dp）+ 内部独立滚动，避免推理/工具步骤把整个聊天顶得过长；
-        // 底部「展开/收起」按钮固定锚定在容器底部，不随内容滚动：
-        // 点击切换为无限高度（全部摊开，不再限高），再点缩回固定高度容器。
+        // 容器高度自适应内容（不设固定高），上限 320.dp 由可滚动的步骤视口自己承担
+        // （与 ToolCallsBlock 输出块同一套写法：.heightIn(max) + .verticalScroll，无 weight）：
+        // 步骤少时按实际高度收缩，避免推理/工具步骤把整个聊天顶得过长；
+        // 内容溢出时底部出现「展开/收起」按钮（不随内容滚动），点击切换为无限高度全部摊开，再点缩回。
         ExpandableContent(expanded = isExpanded) {
-            val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
-            val traceScrollState = rememberScrollState()
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
                         if (!isUnbounded) {
-                            Modifier
-                                .containScroll()
-                                .height(WorkTraceMaxContentHeight)
+                            Modifier.containScroll()
                         } else {
                             Modifier
                         }
@@ -147,7 +166,7 @@ fun WorkTraceCard(
                     .drawBehind {
                         val strokeWidth = 1.5.dp.toPx()
                         drawLine(
-                            color = railColor,
+                            color = colors.divider,
                             start = Offset(strokeWidth / 2f, 0f),
                             end = Offset(strokeWidth / 2f, size.height),
                             strokeWidth = strokeWidth,
@@ -157,14 +176,17 @@ fun WorkTraceCard(
                     .padding(start = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // 上半部分：在容器内独立滚动的步骤列表视口
+                // 步骤列表视口：高度自适应内容，上限 WorkTraceMaxContentHeight 由本节点自己承担
+                // （不能用 weight(1f)：Column 中带 weight 的子项会被分配满整个最大约束，
+                //   父级换成 heightIn(max) 也会被撑成固定高——这正是之前 320.dp 空盒的成因）
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(
                             if (!isUnbounded) {
                                 Modifier
-                                    .weight(1f)
+                                    .containScroll()
+                                    .heightIn(max = WorkTraceMaxContentHeight)
                                     .verticalScroll(traceScrollState)
                             } else {
                                 Modifier
@@ -177,18 +199,43 @@ fun WorkTraceCard(
                     }
                 }
 
-                // 底部切换按钮：固定在容器底部，不随步骤内容滚动（收敛为 MederiGhostButton）
-                MederiGhostButton(
-                    text = stringResource(
-                        if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
-                    ),
-                    icon = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                    onClick = {
-                        isUnbounded = !isUnbounded
-                        DebugLog.debug("UI", "WorkTraceCard isUnbounded toggled to: $isUnbounded")
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                // 底部切换按钮：仅步骤溢出视口时出现（点开摊开后恒显示），不随步骤内容滚动
+                // （原型 height-toggle 样式：顶部 1dp divider 分割 + 居中 chevron 12dp + 11sp Medium textMuted 文案）
+                if (showHeightToggle) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .drawBehind {
+                                drawRect(
+                                    color = colors.divider,
+                                    topLeft = Offset(0f, 0f),
+                                    size = Size(size.width, 1.dp.toPx())
+                                )
+                            }
+                            .clickable {
+                                isUnbounded = !isUnbounded
+                                DebugLog.debug("UI", "WorkTraceCard isUnbounded toggled to: $isUnbounded")
+                            }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+                            contentDescription = null,
+                            tint = colors.textMuted,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            text = stringResource(
+                                if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
+                            ),
+                            color = colors.textMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
         }
     }

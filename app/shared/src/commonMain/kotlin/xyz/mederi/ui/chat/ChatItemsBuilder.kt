@@ -12,6 +12,13 @@ import xyz.mederi.util.ArtifactParser
 val SUBAGENT_TOOL_NAMES = setOf("subagent")
 
 /**
+ * 交互工具名集合：这些工具是人机交互用途（提问/计划审批），
+ * 它们前面的 Text 是 AI 给用户的分析/解释，不是步骤间的过渡旁白。
+ * findFinalText 判断"后面是否还有 ToolCall"时应排除这些工具。
+ */
+private val INTERACTIVE_TOOL_NAMES = setOf("ask_user", "create_plan")
+
+/**
  * 展平后的聊天列表派生算法（纯函数，从 WorkspaceViewModel 抽出的展示逻辑）：
  * snapshot 消息列表 → List<ChatListItem>，View 零逻辑。
  *
@@ -155,14 +162,14 @@ fun computeChatItems(
             suffixMsgHasText[i] = nextHasText || suffixMsgHasText[i + 1]
         }
 
-        // 最终消息定位：turn 内最后一个"其后无工具调用"的非空 Text block 视为最终总结。
-        // 有工具的轮次（会创建 WorkTraceBlock）中，除最终总结外的一切内容
+        // 最终收尾文本定位：turn 内最后一个"其后绝无工具调用"的非空 Text block 视为最终总结。
+        // 有工具的轮次（完成状态下会创建 WorkTraceBlock）中，除最终总结外的一切内容
         // （所有推理、所有过渡文本、所有工具调用）都归入工作过程栏内。
-        // 注意：不能只看"最后一个文本"——若它后面还有工具调用（如 asst: [推理, 过渡语, 工具]），
-        // 它只是步骤叙述，必须跳过继续向前找真正收尾的总结文本。
+        // 只要文本之后（当前消息或后续消息中）存在工具调用，即为执行过程叙述，绝不可作为整个轮次的最终收尾总结。
         var finalTextMsgIndex = -1
         var finalTextBlockIndex = -1
         findFinalText@ for (i in turnMessages.indices.reversed()) {
+            if (suffixMsgHasToolCall[i]) continue
             val msg = turnMessages[i]
             for (b in msg.blocks.indices.reversed()) {
                 val block = msg.blocks[b]
@@ -177,7 +184,31 @@ fun computeChatItems(
             }
         }
 
-        // 按真实时序遍历本轮的消息与块，交替收集 Reasoning、Text 与就地工具调用
+        // 预解析计划审批卡片匹配
+        val allToolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
+            .map { toToolCallUi(it, snapshot) }
+        val createPlanCall = allToolCalls.find { it.name == "create_plan" }
+        val (planIdFromTool, planTitleFromTool) = when (val s = createPlanCall?.state) {
+            is ToolCallState.Completed -> {
+                val idFromInput = s.input["planId"]
+                val idFromOutput = s.output?.let { out ->
+                    Regex("""Plan ID:\s*([a-zA-Z0-9_-]+)""").find(out)?.groupValues?.getOrNull(1)
+                        ?: Regex("""(plan_[a-f0-9]{8})""").find(out)?.groupValues?.getOrNull(1)
+                }
+                Pair(idFromInput ?: idFromOutput, s.input["title"])
+            }
+            is ToolCallState.Running -> Pair(s.input["planId"], s.input["title"])
+            else -> Pair(null, null)
+        }
+        val matchedPlan = snapshot?.planApprovals?.find {
+            (planIdFromTool != null && it.id == planIdFromTool) ||
+                (!planTitleFromTool.isNullOrBlank() && it.title == planTitleFromTool)
+        } ?: if (turnMessages == lastAssistantTurn) snapshot?.pendingPlanApproval else null
+
+        // 按真实自然时序收集本轮的消息块
+        val rawChronologicalItems = mutableListOf<Pair<Boolean /* isFinalText */, ChatListItem>>()
+        var planApprovalEmitted = false
+
         for ((msgIndex, msg) in turnMessages.withIndex()) {
             val subsequentHasToolCall = suffixMsgHasToolCall[msgIndex]
             val isMsgStepNarration = hasAnyToolCallInTurn && (msg.blocks.any { it is ChatBlock.ToolCall } || subsequentHasToolCall)
@@ -189,7 +220,6 @@ fun computeChatItems(
 
             for ((blockIndex, block) in msg.blocks.withIndex()) {
                 val isFinalText = hasAnyToolCallInTurn && msgIndex == finalTextMsgIndex && blockIndex == finalTextBlockIndex
-                // 有工具的轮次：除最终总结文本外，其余文本（过渡语/步骤叙述）都算工作过程
                 val isStepNarration = hasAnyToolCallInTurn && !isFinalText
                 when (block) {
                     is ChatBlock.Reasoning -> {
@@ -204,16 +234,11 @@ fun computeChatItems(
                                 key = "${msg.id}_${block.id}",
                                 text = block.text,
                                 isStreaming = isStreaming,
-                                isTurnStart = !turnHasFirstItem && workItems.isEmpty(),
+                                isTurnStart = false,
                                 durationMs = durationMs,
                                 isReasoningActive = isReasoningActive,
                             )
-                            // 有工具的轮次：所有推理（含最后一个工具调用之后的总结前思考）都收进工作过程栏
-                            if (hasAnyToolCallInTurn) {
-                                workItems.add(item)
-                            } else {
-                                deliverableItems.add(item)
-                            }
+                            rawChronologicalItems.add(false to item)
                         }
                     }
 
@@ -238,12 +263,12 @@ fun computeChatItems(
                                         assistantFooter = null,
                                         isStepNarration = isStepNarration,
                                     )
-                                    if (isStepNarration) workItems.add(preItem) else deliverableItems.add(preItem)
+                                    rawChronologicalItems.add(false to preItem)
                                     imagesHandled = true
                                 }
 
-                                deliverableItems.add(
-                                    ChatListItem.DocumentCard(
+                                rawChronologicalItems.add(
+                                    isFinalText to ChatListItem.DocumentCard(
                                         key = "${msg.id}_${block.id}_art_${artifact.identifier}",
                                         artifactId = artifact.identifier,
                                         title = artifact.title,
@@ -273,7 +298,7 @@ fun computeChatItems(
                                         assistantFooter = null,
                                         isStepNarration = isStepNarration,
                                     )
-                                    if (isStepNarration) workItems.add(postItem) else deliverableItems.add(postItem)
+                                    rawChronologicalItems.add(isFinalText to postItem)
                                 }
                             } else {
                                 val textItem = ChatListItem.TextMessage(
@@ -291,11 +316,7 @@ fun computeChatItems(
                                     assistantFooter = null,
                                     isStepNarration = isStepNarration,
                                 )
-                                if (isStepNarration) {
-                                    workItems.add(textItem)
-                                } else {
-                                    deliverableItems.add(textItem)
-                                }
+                                rawChronologicalItems.add(isFinalText to textItem)
                                 imagesHandled = true
                             }
                         }
@@ -305,8 +326,8 @@ fun computeChatItems(
                         val toolUi = toToolCallUi(block, snapshot)
                         val isSubagent = toolUi.name in SUBAGENT_TOOL_NAMES
                         if (isSubagent) {
-                            workItems.add(
-                                ChatListItem.SubagentCalls(
+                            rawChronologicalItems.add(
+                                false to ChatListItem.SubagentCalls(
                                     key = "${msg.id}_${block.id}",
                                     subagents = listOf(toolUi),
                                     isStreaming = isStreaming,
@@ -316,8 +337,8 @@ fun computeChatItems(
                                 )
                             )
                         } else {
-                            workItems.add(
-                                ChatListItem.ToolCalls(
+                            rawChronologicalItems.add(
+                                false to ChatListItem.ToolCalls(
                                     key = "${msg.id}_${block.id}",
                                     toolCalls = listOf(toolUi),
                                     isStreaming = isStreaming,
@@ -327,6 +348,17 @@ fun computeChatItems(
                                     isRunning = isStreaming && toolUi.state is ToolCallState.Running,
                                 )
                             )
+                            // 若为 create_plan 且已匹配到计划卡片，紧随其后就地挂载计划审批卡片
+                            if (toolUi.name == "create_plan" && matchedPlan != null && !planApprovalEmitted) {
+                                rawChronologicalItems.add(
+                                    false to ChatListItem.PlanApproval(
+                                        key = "plan_${matchedPlan.id}",
+                                        request = matchedPlan,
+                                        isTurnStart = false
+                                    )
+                                )
+                                planApprovalEmitted = true
+                            }
                         }
                     }
 
@@ -349,173 +381,180 @@ fun computeChatItems(
                     createdAt = msg.createdAt,
                     isStepNarration = isMsgStepNarration,
                 )
-                if (isMsgStepNarration) workItems.add(imgItem) else deliverableItems.add(imgItem)
+                rawChronologicalItems.add(false to imgItem)
             }
         }
 
         // 过程步骤与工作轨迹生命周期：
-        // - Turn 执行中（isActiveAssistant = true）：所有步骤直接按时序平铺在聊天流中，实时展示各步骤行与命令输出；
+        // - Turn 执行中（isActiveAssistant = true）：所有步骤直接按自然时序平铺在聊天流中，实时展示各步骤行与命令输出；
         // - Turn 完成后（isActiveAssistant = false）：轮次内所有中间过程（思考、工具调用、过渡语）折叠进顶部的 WorkTraceBlock，外部仅留最终答复正文。
         if (isActiveAssistant) {
-            workItems.forEachIndexed { idx, item ->
-                val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) {
-                    when (item) {
-                        is ChatListItem.Reasoning -> item.copy(isTurnStart = true)
-                        is ChatListItem.TextMessage -> item.copy(isTurnStart = true)
-                        is ChatListItem.ToolCalls -> item.copy(isTurnStart = true)
-                        is ChatListItem.SubagentCalls -> item.copy(isTurnStart = true)
-                        else -> item
-                    }
-                } else item
-                result.add(itemWithTurnStart)
+            if (rawChronologicalItems.isEmpty() && !turnHasFirstItem) {
+                val firstMsg = turnMessages.firstOrNull()
+                result.add(
+                    ChatListItem.Reasoning(
+                        key = "${firstMsg?.id ?: "active"}_reasoning",
+                        text = "",
+                        isStreaming = true,
+                        isTurnStart = true,
+                        durationMs = 0L,
+                        isReasoningActive = true,
+                    )
+                )
+                turnHasFirstItem = true
+            } else {
+                rawChronologicalItems.forEachIndexed { idx, (_, item) ->
+                    val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) item.withTurnStart(true) else item
+                    result.add(itemWithTurnStart)
+                    turnHasFirstItem = true
+                }
+            }
+
+            // 兜底：若 matchedPlan 存在且未在遍历 create_plan 时挂载，追加到尾部
+            if (matchedPlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }) {
+                result.add(
+                    ChatListItem.PlanApproval(
+                        key = "plan_${matchedPlan.id}",
+                        request = matchedPlan,
+                        isTurnStart = !turnHasFirstItem
+                    )
+                )
                 turnHasFirstItem = true
             }
-        } else if (workItems.isNotEmpty()) {
-            var totalToolsCount = 0
-            var hasFailed = false
-            for (it in workItems) {
-                when (it) {
-                    is ChatListItem.ToolCalls -> {
-                        totalToolsCount += it.toolCalls.size
-                        if (it.hasFailedTool) hasFailed = true
-                    }
-                    is ChatListItem.SubagentCalls -> {
-                        totalToolsCount += it.subagents.size
-                        if (it.hasFailed) hasFailed = true
-                    }
-                    else -> {}
+        } else {
+            // Turn 已完成
+            if (!hasAnyToolCallInTurn) {
+                // 无工具调用：全时序输出
+                rawChronologicalItems.forEachIndexed { idx, (_, item) ->
+                    val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) item.withTurnStart(true) else item
+                    result.add(itemWithTurnStart)
+                    turnHasFirstItem = true
                 }
-            }
-            val totalDurationMs = turnMessages.mapNotNull { it.durationMs }.sum()
-            result.add(
-                ChatListItem.WorkTraceBlock(
-                    key = "${turnMessages.firstOrNull()?.id ?: ""}_worktrace",
-                    items = workItems,
-                    totalToolsCount = totalToolsCount,
-                    totalDurationMs = totalDurationMs,
-                    hasFailedTool = hasFailed,
-                    isTurnStart = !turnHasFirstItem,
-                )
-            )
-            turnHasFirstItem = true
-        }
-
-        // 活跃 assistant 刚开始流式时，若尚无内容输出、无 workItems 且无 deliverableItems，放一个占位思考微条。
-        // 注意：deliverableItems 在本轮前序块遍历中已填充完毕；若已有真实 Reasoning/文本，绝不插入空占位，
-        // 否则会与真实推理同时渲染出两个"思考中..."条（流式无工具轮次的历史 bug）。
-        if (isActiveAssistant && !turnHasFirstItem && deliverableItems.isEmpty()) {
-            val firstMsg = turnMessages.firstOrNull()
-            result.add(
-                ChatListItem.Reasoning(
-                    key = "${firstMsg?.id ?: "active"}_reasoning",
-                    text = "",
-                    isStreaming = true,
-                    isTurnStart = true,
-                    durationMs = 0L,
-                    isReasoningActive = true,
-                )
-            )
-            turnHasFirstItem = true
-        }
-
-        // 交付内容（最终答复正文、产物卡片等，露在外面作为视觉焦点）
-        deliverableItems.forEach { item ->
-            result.add(item)
-            turnHasFirstItem = true
-        }
-
-        // 沉底汇总区：
-        val allToolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
-            .map { toToolCallUi(it, snapshot) }
-
-        // 3. 计划审批卡片
-        val createPlanCall = allToolCalls.find { it.name == "create_plan" }
-        val (planIdFromTool, planTitleFromTool) = when (val s = createPlanCall?.state) {
-            is ToolCallState.Completed -> {
-                val idFromInput = s.input["planId"]
-                val idFromOutput = s.output?.let { out ->
-                    Regex("""Plan ID:\s*([a-zA-Z0-9_-]+)""").find(out)?.groupValues?.getOrNull(1)
-                        ?: Regex("""(plan_[a-f0-9]{8})""").find(out)?.groupValues?.getOrNull(1)
-                }
-                Pair(idFromInput ?: idFromOutput, s.input["title"])
-            }
-            is ToolCallState.Running -> Pair(s.input["planId"], s.input["title"])
-            else -> Pair(null, null)
-        }
-        val matchedPlan = snapshot?.planApprovals?.find {
-            (planIdFromTool != null && it.id == planIdFromTool) ||
-                (!planTitleFromTool.isNullOrBlank() && it.title == planTitleFromTool)
-        } ?: if (turnMessages == lastAssistantTurn) snapshot?.pendingPlanApproval else null
-
-        if (matchedPlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }) {
-            result.add(
-                ChatListItem.PlanApproval(
-                    key = "plan_${matchedPlan.id}",
-                    request = matchedPlan,
-                    isTurnStart = !turnHasFirstItem
-                )
-            )
-            turnHasFirstItem = true
-        }
-
-        // 3.5. 单轮文件变更汇总卡片（仅当本轮有文件变更且非流式状态时展示，位于交付物之后、Footer 之前）
-        val turnDiffSummary = turnMessages.mapNotNull { it.turnDiffSummary }.lastOrNull()
-        val lastMsg = turnMessages.lastOrNull { it.role == ChatRole.Assistant }
-        if (turnDiffSummary != null && turnDiffSummary.files.isNotEmpty() && !isStreaming) {
-            result.add(
-                ChatListItem.TurnDiffCard(
-                    key = "${turnMessages.firstOrNull()?.id ?: ""}_turndiff",
-                    summary = turnDiffSummary,
-                    messageId = lastMsg?.id ?: "",
-                    isTurnStart = !turnHasFirstItem,
-                )
-            )
-            turnHasFirstItem = true
-        }
-
-        // 4. 轮次底部的诊断与状态栏（非流式结束状态输出）
-        if (lastMsg != null && !isStreaming) {
-            val lastMessageText = if (finalTextMsgIndex >= 0 && finalTextBlockIndex >= 0) {
-                (turnMessages[finalTextMsgIndex].blocks.getOrNull(finalTextBlockIndex) as? ChatBlock.Text)?.text.orEmpty()
             } else {
-                turnMessages.flatMap { it.blocks }.filterIsInstance<ChatBlock.Text>().lastOrNull()?.text.orEmpty()
-            }
+                // 有工具调用：轮次内所有中间过程（思考、工具调用、过渡语）折叠进顶部的 WorkTraceBlock，外部仅留最终答复正文
+                val workItems = mutableListOf<ChatListItem>()
+                val deliverableItems = mutableListOf<ChatListItem>()
+                var planApprovalItem: ChatListItem.PlanApproval? = null
 
-            val fullTurnText = buildString {
-                for (msg in turnMessages) {
-                    for (block in msg.blocks) {
-                        when (block) {
-                            is ChatBlock.Reasoning -> {
-                                if (block.text.isNotBlank()) {
-                                    if (isNotEmpty()) append("\n\n")
-                                    append("> Thinking:\n").append(block.text.trim())
-                                }
+                for ((isFinal, item) in rawChronologicalItems) {
+                    when {
+                        item is ChatListItem.PlanApproval -> {
+                            planApprovalItem = item
+                        }
+                        isFinal -> {
+                            deliverableItems.add(item)
+                        }
+                        else -> {
+                            workItems.add(item)
+                        }
+                    }
+                }
+
+                if (workItems.isNotEmpty()) {
+                    var totalToolsCount = 0
+                    var hasFailed = false
+                    for (it in workItems) {
+                        when (it) {
+                            is ChatListItem.ToolCalls -> {
+                                totalToolsCount += it.toolCalls.size
+                                if (it.hasFailedTool) hasFailed = true
                             }
-                            is ChatBlock.ToolCall -> {
-                                if (isNotEmpty()) append("\n\n")
-                                append("[Tool: ").append(block.name).append("]")
-                            }
-                            is ChatBlock.Text -> {
-                                if (block.text.isNotBlank()) {
-                                    if (isNotEmpty()) append("\n\n")
-                                    append(block.text)
-                                }
+                            is ChatListItem.SubagentCalls -> {
+                                totalToolsCount += it.subagents.size
+                                if (it.hasFailed) hasFailed = true
                             }
                             else -> {}
                         }
                     }
+                    val totalDurationMs = turnMessages.mapNotNull { it.durationMs }.sum()
+                    result.add(
+                        ChatListItem.WorkTraceBlock(
+                            key = "${turnMessages.firstOrNull()?.id ?: ""}_worktrace",
+                            items = workItems,
+                            totalToolsCount = totalToolsCount,
+                            totalDurationMs = totalDurationMs,
+                            hasFailedTool = hasFailed,
+                            isTurnStart = !turnHasFirstItem,
+                        )
+                    )
+                    turnHasFirstItem = true
                 }
-            }.ifBlank { lastMessageText }
 
-            result.add(
-                ChatListItem.Footer(
-                    key = "${turnMessages.firstOrNull()?.id ?: ""}_footer",
-                    footer = lastMsg.toAssistantFooter(),
-                    lastMessageText = lastMessageText,
-                    fullTurnText = fullTurnText,
-                    isTurnStart = false,
+                // 计划卡片展示在工作过程之后
+                val effectivePlan = planApprovalItem ?: matchedPlan?.let {
+                    ChatListItem.PlanApproval(key = "plan_${it.id}", request = it, isTurnStart = !turnHasFirstItem)
+                }
+                if (effectivePlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == effectivePlan.request.id }) {
+                    result.add(effectivePlan.withTurnStart(!turnHasFirstItem))
+                    turnHasFirstItem = true
+                }
+
+                // 交付内容（最终答复正文）
+                deliverableItems.forEach { item ->
+                    result.add(item.withTurnStart(!turnHasFirstItem))
+                    turnHasFirstItem = true
+                }
+            }
+
+            // 单轮文件变更汇总卡片
+            val turnDiffSummary = turnMessages.mapNotNull { it.turnDiffSummary }.lastOrNull()
+            val lastMsg = turnMessages.lastOrNull { it.role == ChatRole.Assistant }
+            if (turnDiffSummary != null && turnDiffSummary.files.isNotEmpty() && !isStreaming) {
+                result.add(
+                    ChatListItem.TurnDiffCard(
+                        key = "${turnMessages.firstOrNull()?.id ?: ""}_turndiff",
+                        summary = turnDiffSummary,
+                        messageId = lastMsg?.id ?: "",
+                        isTurnStart = !turnHasFirstItem,
+                    )
                 )
-            )
+                turnHasFirstItem = true
+            }
+
+            // 轮次底部的诊断与状态栏
+            if (lastMsg != null && !isStreaming) {
+                val lastMessageText = if (finalTextMsgIndex >= 0 && finalTextBlockIndex >= 0) {
+                    (turnMessages[finalTextMsgIndex].blocks.getOrNull(finalTextBlockIndex) as? ChatBlock.Text)?.text.orEmpty()
+                } else {
+                    turnMessages.flatMap { it.blocks }.filterIsInstance<ChatBlock.Text>().lastOrNull()?.text.orEmpty()
+                }
+
+                val fullTurnText = buildString {
+                    for (msg in turnMessages) {
+                        for (block in msg.blocks) {
+                            when (block) {
+                                is ChatBlock.Reasoning -> {
+                                    if (block.text.isNotBlank()) {
+                                        if (isNotEmpty()) append("\n\n")
+                                        append("> Thinking:\n").append(block.text.trim())
+                                    }
+                                }
+                                is ChatBlock.ToolCall -> {
+                                    if (isNotEmpty()) append("\n\n")
+                                    append("[Tool: ").append(block.name).append("]")
+                                }
+                                is ChatBlock.Text -> {
+                                    if (block.text.isNotBlank()) {
+                                        if (isNotEmpty()) append("\n\n")
+                                        append(block.text)
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                }.ifBlank { lastMessageText }
+
+                result.add(
+                    ChatListItem.Footer(
+                        key = "${turnMessages.firstOrNull()?.id ?: ""}_footer",
+                        footer = lastMsg.toAssistantFooter(),
+                        lastMessageText = lastMessageText,
+                        fullTurnText = fullTurnText,
+                        isTurnStart = false,
+                    )
+                )
+            }
         }
     }
 
@@ -551,7 +590,7 @@ internal fun toToolCallUi(toolCall: ChatBlock.ToolCall, snapshot: ConversationSn
         is ToolCallState.Running -> s.input
         is ToolCallState.Completed -> s.input
         is ToolCallState.Failed -> s.input
-        ToolCallState.Pending -> emptyMap()
+        is ToolCallState.Pending -> s.input
     }
     return ToolCallUi(
         id = toolCall.id,
@@ -638,4 +677,18 @@ fun parseEventMessage(text: String): ParsedEventMessage? {
         summary = summary,
         fullContent = trimmed
     )
+}
+
+/** 辅助扩展：设置或更新 ChatListItem 的 isTurnStart 标志 */
+internal fun ChatListItem.withTurnStart(isStart: Boolean): ChatListItem = when (this) {
+    is ChatListItem.Reasoning -> copy(isTurnStart = isStart)
+    is ChatListItem.TextMessage -> copy(isTurnStart = isStart)
+    is ChatListItem.ToolCalls -> copy(isTurnStart = isStart)
+    is ChatListItem.SubagentCalls -> copy(isTurnStart = isStart)
+    is ChatListItem.WorkTraceBlock -> copy(isTurnStart = isStart)
+    is ChatListItem.DocumentCard -> copy(isTurnStart = isStart)
+    is ChatListItem.Footer -> copy(isTurnStart = isStart)
+    is ChatListItem.PlanApproval -> copy(isTurnStart = isStart)
+    is ChatListItem.TurnDiffCard -> copy(isTurnStart = isStart)
+    is ChatListItem.EventMessageCard -> copy(isTurnStart = isStart)
 }

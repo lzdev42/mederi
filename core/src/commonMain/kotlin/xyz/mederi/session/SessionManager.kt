@@ -63,6 +63,9 @@ interface SessionManager {
     /** 读取子代理任务汇报。 */
     fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData?
 
+    /** 停止指定的子代理。 */
+    fun stopSubagent(agentId: String, reason: String = "被用户关闭"): String
+
     suspend fun getFileDiffs(id: String, messageId: String? = null): List<FileDiff>
 
     fun events(sessionId: String): Flow<MederiEvent>

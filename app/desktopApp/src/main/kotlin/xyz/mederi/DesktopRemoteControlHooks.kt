@@ -3,7 +3,7 @@ package xyz.mederi
 import com.pty4j.PtyProcess
 import com.pty4j.PtyProcessBuilder
 import xyz.mederi.core.bridge.MederiAiCore
-import xyz.mederi.server.RemoteServer
+import xyz.mederi.server.Server
 import xyz.mederi.ui.appstate.RemoteControlHooks
 import xyz.mederi.ui.appstate.RemoteStartResult
 import xyz.mederi.ui.appstate.TunnelStartResult
@@ -30,11 +30,11 @@ class DesktopRemoteControlHooks(
     private val homeDir: String = System.getProperty("user.home") ?: ""
 
     override suspend fun start(port: Int, password: String?): RemoteStartResult =
-        RemoteServer.start(aiCore, port, password, webappDir)
+        Server.start(aiCore, port, password, webappDir)
 
-    override fun stop() = RemoteServer.stop()
+    override fun stop() = Server.stop()
 
-    override val isRunning: Boolean get() = RemoteServer.isRunning
+    override val isRunning: Boolean get() = Server.isRunning
 
     /** 本机局域网 IPv4（site-local，非回环）；拿不到返回 null。 */
     override val localAddress: String? by lazy {

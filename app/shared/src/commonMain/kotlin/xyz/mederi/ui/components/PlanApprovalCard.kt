@@ -1,16 +1,16 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,15 +26,17 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.ui.DebugLog
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.ui.components.atoms.MederiPlanIdTag
 import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 
 /**
- * 4.5. 计划审批卡片 (PlanApprovalCard)
+ * 4.5. 计划审批块 (PlanApprovalCard，02-components §2.5 plan-approval-block：去壳 + 2dp 左 rail)
  *
  * 对标 Proceed 极简设计：
- * - 顶栏：Implementation Plan（点击在右侧扩展窗口打开完整文档）
- * - 正文：AI 生成的 1-2 句精炼摘要
- * - 底部：单只 Proceed 按钮，不批准直接在输入框继续对话
+ * - 标题行：FileText 14dp accentPrimary + Implementation Plan（hover → accentText，
+ *   点击在右侧扩展窗口打开完整文档）+ MederiPlanIdTag 徽标；
+ * - 正文：AI 生成的 1-2 句精炼摘要（12sp / lh 1.55 textSecondary）；
+ * - 底部：单只 Proceed 按钮（soft iris primary-decision，不批准直接在输入框继续对话）
  *
  * @param request 计划审批请求数据
  * @param onApprove 批准并开始执行回调
@@ -49,87 +51,86 @@ fun PlanApprovalCard(
 ) {
     if (request == null) return
     val colors = LocalMederiColors.current
-    val isApproved = request.status.equals("APPROVED", ignoreCase = true)
+    val isPending = request.status.equals("PENDING", ignoreCase = true) ||
+        request.status.equals("PENDING_APPROVAL", ignoreCase = true)
 
-    DebugLog.debug("UI", "PlanApprovalCard: rendering planId=${request.id}, title='${request.title.take(30)}', isApproved=$isApproved")
+    DebugLog.debug("UI", "PlanApprovalCard: rendering planId=${request.id}, title='${request.title.take(30)}', isPending=$isPending, status=${request.status}")
 
+    // 去壳：无卡片底/描边，仅 2dp 左 rail（divider hairline）+ 12/2/2 内边距，宽度受限 max 560
     Column(
         modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .widthIn(max = 560.dp)
+            .drawBehind {
+                val rail = 2.dp.toPx()
+                drawRect(
+                    color = colors.divider,
+                    topLeft = Offset(0f, 0f),
+                    size = Size(rail, size.height)
+                )
+            }
+            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // 1. 卡片主体内容（Header + 摘要，整体区域均可点击以在右侧扩展窗口打开完整文档）
-        Column(
+        // 1. 标题行（点击在右侧扩展窗口打开完整文档，hover 标题转 accentText）
+        val titleSource = remember { MutableInteractionSource() }
+        val titleHovered by titleSource.collectIsHoveredAsState()
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable { onOpenInExtension() }
+                .clickable(interactionSource = titleSource, onClick = { onOpenInExtension() })
                 .padding(vertical = 2.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.weight(1f, fill = false),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.weight(1f, fill = false),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.FileText,
-                        contentDescription = null,
-                        tint = colors.accentPrimary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (request.title.isNotBlank()) {
-                            stringResource(Res.string.plan_approval_title, request.title)
-                        } else {
-                            stringResource(Res.string.plan_approval_title_default)
-                        },
-                        color = colors.textPrimary,
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                if (request.id.isNotBlank()) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = request.id,
-                        color = colors.textMuted,
-                        fontSize = 11.sp
-                    )
-                }
+                Icon(
+                    imageVector = FeatherIcons.FileText,
+                    contentDescription = null,
+                    tint = colors.accentPrimary,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = if (request.title.isNotBlank()) {
+                        stringResource(Res.string.plan_approval_title, request.title)
+                    } else {
+                        stringResource(Res.string.plan_approval_title_default)
+                    },
+                    color = if (titleHovered) colors.accentText else colors.textPrimary,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
 
-            // AI 生成的 1-2 句精炼摘要
-            val displayText = request.summary.ifBlank { request.title }
-            if (displayText.isNotBlank()) {
-                Text(
-                    text = displayText,
-                    color = colors.textSecondary,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp
-                )
+            if (request.id.isNotBlank()) {
+                Spacer(modifier = Modifier.width(8.dp))
+                MederiPlanIdTag(request.id)
             }
         }
 
-        // 3. 底部操作：单个 Proceed 按钮（MederiPrimaryDecisionButton：disabled 态 = buttonSecondary + textMuted，对齐原 disabledContainerColor）
+        // 2. AI 生成的 1-2 句精炼摘要
+        val displayText = request.summary.ifBlank { request.title }
+        if (displayText.isNotBlank()) {
+            Text(
+                text = displayText,
+                color = colors.textSecondary,
+                fontSize = 12.sp,
+                lineHeight = 18.6.sp
+            )
+        }
+
+        // 3. 底部操作：单个 Proceed 按钮（仅待审批态启用，已批准/执行中/已完成均保持禁用）
         MederiPrimaryDecisionButton(
-            text = if (isApproved) {
-                stringResource(Res.string.plan_approval_approved)
-            } else {
+            text = if (isPending) {
                 stringResource(Res.string.plan_approval_proceed) + "  ⌘↵"
+            } else {
+                stringResource(Res.string.plan_approval_approved)
             },
             onClick = onApprove,
-            enabled = !isApproved,
+            enabled = isPending,
         )
     }
 }

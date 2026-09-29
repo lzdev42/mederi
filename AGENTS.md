@@ -4,13 +4,13 @@
 
 `docs/architecture/` 是由全量代码结构化提取的架构文档（类图/结构图/流程图/时序图 + 穷尽式字段/签名清单）：
 
-- **排查问题先查这里，不要直接通读源码**：模块总览与平台注入矩阵 → `00-overview.md`；core 模块（DI/模型字段/Manager/Store/Koog 引擎/工具/Plan/Provider/MCP/事件/存储表）→ `01-core.md`；AiCore 契约与三实现、RemoteServer 路由表、AppState/VM/UI → `02-app-shared.md`；inkcompose 渲染管线 → `03-inkcompose.md`；运行时流程与时序（发消息全链路/Turn/事件聚合/Plan Loop/压缩/审批/子代理/回滚/自动改名/遥控启动）→ `04-flows.md`。
+- **排查问题先查这里，不要直接通读源码**：模块总览与平台注入矩阵 → `00-overview.md`；core 模块（DI/模型字段/Manager/Store/Koog 引擎/工具/Plan/Provider/MCP/事件/存储表）→ `01-core.md`；AiCore 契约与三实现、Server 路由表、AppState/VM/UI → `02-app-shared.md`；inkcompose 渲染管线 → `03-inkcompose.md`；运行时流程与时序（发消息全链路/Turn/事件聚合/Plan Loop/压缩/审批/子代理/回滚/自动改名/遥控启动）→ `04-flows.md`。
 - **排查工作流（禁止一上来通读/全量搜索源码）**：先按问题域查对应篇章 → 用文档里的类图/流程图/签名清单定位相关类与 `文件路径` → **只打开这几个文件读相关段落**。文档能回答的问题（结构、字段、谁调谁、事件流向、端点、表结构）直接引用文档答案，不再翻源码确认；只有文档未覆盖或疑似与代码不一致的实现细节，才去读文档标注的那几个源码文件。
 - 每个类都标注了 `文件路径`；只有文档未覆盖的实现细节才去读对应源码。
 - **维护义务（硬性）：每次改动代码，按需同步更新 `docs/architecture/`**，保持文档与代码一致——过时文档比没有文档更误导。改动完成前自检：这次改动是否触碰下列任一项？是 → 更新对应文档：
   - 新增/删除/重命名 **模块、类、接口、方法签名、DTO 字段、枚举值、工具、端点、事件、数据库表/列** → 更新对应篇章（core→`01-core.md`，契约/UI/VM/server→`02-app-shared.md`，inkcompose→`03-inkcompose.md`，总览/平台注入矩阵→`00-overview.md`）；
   - **运行时行为/调用链/流程变化**（新增交互流程、改 sendMessage/turn/压缩/审批/子代理/回滚等链路、新增人机交互挂起点）→ 更新 `04-flows.md` 的流程图/时序图/状态机；
-  - 改 `.sq` schema → 同步 `01-core.md` 存储节；改 RemoteServer/ServerAiCore 路由 → 同步 `02-app-shared.md` 路由表（契约四处同步本来就要做，文档顺带）；
+  - 改 `.sq` schema → 同步 `01-core.md` 存储节；改 Server/ServerAiCore 路由 → 同步 `02-app-shared.md` 路由表（契约四处同步本来就要做，文档顺带）；
   - 纯实现细节修复（内部算法微调、不改对外结构的 bug fix）→ 可不更新；拿不准就更新对应段落，宁多勿漏。
 - 本文档描述"结构"，AGENTS.md 描述"规则"——规则类变更（不变量、真理源、硬性约束）写进 AGENTS.md，不写进该目录。
 
@@ -23,36 +23,35 @@ Koog 是执行引擎（给 LLM 发请求、收响应、调工具），Mederi 是
 
 **InkCompose** 是本项目的富文本渲染核心：Markdown / LaTeX / 代码高亮 / 图表（Mermaid，KBrowser webview 渲染）/ 竖排文字（蒙古文/满文）。Mederi 计划系统产出的 architecture（Mermaid 代码块）由 InkCompose 渲染。
 
-## 1.5 desktop 与 server 只是两个 interface（硬性架构规则）
+## 1.5 core 的两个 interface：desktop 与 server
 
-**desktop 和 server 共享同一个 core，它们只是两个 interface（宿主入口）而已。**
+core（JVM-only 引擎，见 §2）封装成 `MederiAiCore`，对外只有两个 interface：
 
-- `MederiAiCore`（jvmMain 桥）是唯一的 core 实现封装：desktop 进程直调它；server 进程创建它 + Ktor 暴露 REST/SSE；desktop 的内嵌遥控 server 也共享同一 `MederiAiCore` 实例
-- **一切业务行为挂在 AiCore 层**（contract `AiCore.kt` → `MederiAiCore` → `ServerAiCore` → server endpoint 四处同步），例如会话自动改名（`SessionTitleService`）挂在 `MederiAiCore.initialize()`——谁初始化谁生效，所有宿主天然一致
-- **宿主 main（desktopApp / server / androidApp / webApp / iosApp）只做宿主专属注入**（遥控 hooks、pty 终端、平台窗口），**禁止在宿主 main 里挂任何业务逻辑/事件监听**——挂进宿主 = 其他 interface 全都没有
-- 判断标准：新功能先问"挂在 AiCore 是不是所有宿主都能用"，答案几乎总是"是"
+- **desktop interface**：进程内直调 `MederiAiCore`。desktop 进程跑它，UI 直接用，不经网络。
+- **server interface**：Ktor REST/SSE 把同一个 `MederiAiCore` 暴露到网络（类名 `Server`）。
+
+desktop 可在 desktop interface 之外**再起一个 server interface 实例**（共享同一 `MederiAiCore`），让遥端能遥控进来；desktop UI 自己仍直调 core，不走这个 server。`server/` 模块 = 一个只跑 server interface 的无头进程。遥端（ios / android / wasm）是 **server interface 的消费端**，经 `ServerAiCore`（REST 客户端）连任一端的 server；它们**不跑 core**。
+
+**业务逻辑归属（硬性）**：一切业务行为挂在 AiCore 层（contract `AiCore.kt` → `MederiAiCore` → `ServerAiCore` → server endpoint 四处同步），不挂宿主 main。例：会话自动改名（`SessionTitleService`）挂 `MederiAiCore.initialize()`——谁初始化谁生效，两个 interface 天然一致。宿主 main（desktopApp / server）只做宿主专属注入（遥控 hooks、pty 终端、平台窗口），**禁止在宿主 main 挂业务逻辑/事件监听**——挂进宿主 = 另一个 interface 没有。判断标准：新功能先问"挂在 AiCore 是不是两个 interface 都能用"，答案几乎总是"是"。
 
 ## 2. KMP 优先原则（硬性义务）
 
-**所有模块、所有代码都必须按 KMP 跨平台能力规划与开发。**
+**跨平台模块（`app:shared`、`inkcompose`）的所有代码必须按 KMP 跨平台能力规划与开发。`core` 与 `server` 是 JVM-only（见下），不在此列。**
 
 - 模块一律用 `kotlinMultiplatform`（KMP）插件声明，目标平台 = jvm / android / iosArm64+iosSimulatorArm64 / **wasmJs**（不要 js 目标）
 - 平台相关实现一律走 `expect/actual` + 分层 source set（commonMain / jvmMain / androidMain / iosMain / wasmJsMain）
 - 通用逻辑必须放 `commonMain`；**只有在某个能力没有 KMP 可替代品时才允许 JVM 专属代码**，且只能放对应平台源集，不得进 commonMain
-- 有 KMP 替代品的标准库 API 一律用替代品，例如：
+- 有 KMP 替代品的标准库 API 一律用替代品（仅适用于 `app:shared` / `inkcompose`），例如：
   - `java.time` → `kotlinx-datetime`
   - `java.io.File` → okio（FileSystem）或注入的文件抽象
   - `java.util.UUID` → `kotlin.uuid.Uuid`（或 `kotlinx-uuid`）
   - `java.util.concurrent.*` → `kotlin.concurrent.AtomicInt` / `kotlinx-atomicfu`
   - `java.text.*` → `kotlinx-datetime` 格式化 / `kotlin.text` 工具
 - 数据库访问（SQLDelight）本身即 KMP：`.sq` 放 `commonMain/sqldelight`，driver 按平台注入
-- 服务器侧（server 模块）是天然 JVM-only 的例外：Ktor 服务端没有 KMP 替代品，
-  但仍保持模块边界清晰，所有业务逻辑在 core 的 commonMain 中，server 只做薄转调
-- **core 当前仅声明 jvm 目标**：core 的实际实现（Koog / SQLite JDBC / java.io）是 JVM 侧逻辑，
-  ios/android/wasm 平台经 app:shared 的 AiCore 契约桥（ServerAiCore REST）访问、不直连 core。
-  core 真正 KMP 化后再补其他目标；在此之前不要假设 core 具备跨平台能力
-- **判断标准**：写任何新代码先问"这在 iOS/wasm/Android 上跑不跑得了"，
-  跑不了就找 KMP 替代品，没有才允许 JVM 专属，并在代码注释里写明理由
+- **core 是 JVM-only 宿主引擎（by design，非临时）**：core 的实现（Koog / SQLite JDBC / java.io / ProcessBuilder / 信号）是 JVM 侧逻辑，只在 desktop / server 进程里跑；ios/android/wasm 是 server interface 的遥端，经 `ServerAiCore` REST 访问 core，**从不直连、也无需把 core 编译到这些平台**。core 用 KMP 插件 + commonMain/jvmMain 分层仅是源集组织，不代表跨平台能力——commonMain 里出现的 `java.*` 是历史遗留错位（无其他目标编译，故未暴露），新增 core 代码按 JVM 写即可，不必套 KMP 替代品。
+- **server 模块是 JVM-only 薄转调层**：Ktor 服务端无 KMP 替代品；每个 endpoint 转调 `MederiAiCore`，不写业务逻辑。
+- **判断标准**：写跨平台模块（`app:shared` / `inkcompose`）的新代码先问"这在 iOS/wasm/Android 上跑不跑得了"，
+  跑不了就找 KMP 替代品，没有才允许 JVM 专属（放对应平台源集），并在代码注释里写明理由
 
 ### 代码语言与平台规则
 
@@ -66,13 +65,13 @@ Koog 是执行引擎（给 LLM 发请求、收响应、调工具），Mederi 是
 ```
 mederi/
 ├── app/                    # Compose Multiplatform 应用
-│   ├── androidApp/         # Android 入口
-│   ├── desktopApp/         # Desktop (JVM) 入口
-│   ├── webApp/             # Web 入口（仅 wasmJs，不要 js 目标）
-│   ├── iosApp/             # iOS 入口（Xcode 工程）
-│   └── shared/             # 跨平台 UI + AiCore 契约桥（MederiAiCore / ServerAiCore / RemoteServer）
-├── core/                   # 领域模型 + Manager + API + Koog 适配 + 存储（当前仅 jvm 目标，KMP 化后补全平台）
-├── server/                 # Ktor 薄转调层（REST/SSE，每个 endpoint 转调 core API；JVM-only 例外）
+│   ├── desktopApp/         # Desktop 入口（真宿主：跑 core，UI 直调 MederiAiCore）
+│   ├── androidApp/         # Android 遥控 UI 端入口（不跑 core，经 ServerAiCore 连 server）
+│   ├── webApp/             # Web 遥控 UI 端入口（仅 wasmJs，不要 js 目标；不跑 core）
+│   ├── iosApp/             # iOS 遥控 UI 端入口（Xcode 工程；不跑 core）
+│   └── shared/             # 跨平台 UI + AiCore 契约（MederiAiCore 进程内实现 / ServerAiCore REST 客户端 / Server=server interface）
+├── core/                   # 领域模型 + Manager + API + Koog 适配 + 存储（JVM-only 宿主引擎，by design）
+├── server/                 # Ktor server interface（REST/SSE，每个 endpoint 转调 MederiAiCore；JVM-only，by design）
 ├── scripts/                # e2e 冒烟/审批/收敛测试脚本（项目测试资产，纳入版本管理）
 └── inkcompose/             # 富文本渲染库（单 KMP 模块，未来独立发布）
 ```
@@ -376,25 +375,25 @@ AI 会话中做此类操作同样适用此规矩。
 两个实现各走一侧：`MederiAiCore`（jvmMain，进程内直调 core）+ `ServerAiCore`（commonMain，经 REST + SSE 遥控 server）。
 
 **契约同步规则（硬性义务）**：AiCore.kt（contract）→ MederiAiCore（jvm 桥）→ ServerAiCore（REST 桥）→
-server 路由（`RemoteServer.remoteModule`），任何变动四处同步、缺一即编译失败或运行期 404。
+server 路由（`Server.serverModule`），任何变动四处同步、缺一即编译失败或运行期 404。
 新增 DTO 放 `contract/dto` / `contract/models`（kotlinx-serialization，commonMain）。
 
 事件流：core `eventBus` → `MederiAiCore.events()`（进程内直收）与 `GET /v1/events` (SSE)（遥控端），客户端用 commonMain 的 `SnapshotReducer` 本地聚合快照。**事件消费方（自动改名等 UI 层特性）一律挂 `MederiAiCore.initialize()`，不挂宿主 main**（见 §1.5）。
 
-### 嵌入式遥控 Server（app/shared/jvmMain）
+### 嵌入式 server interface（app/shared/jvmMain）
 
-`RemoteServer`（`app/shared/src/jvmMain/kotlin/xyz/mederi/server/RemoteServer.kt`）：
+`Server`（`app/shared/src/jvmMain/kotlin/xyz/mederi/server/Server.kt`）= server interface 的实现：
 
-- **启动**：`RemoteServer.start(aiCore, port, password, webappDir)`，幂等；`stop()` 幂等
+- **启动**：`Server.start(aiCore, port, password, webappDir)`，幂等；`stop()` 幂等
   - `host = "0.0.0.0"` 监听所有网卡，局域网内手机/浏览器可直接访问
   - **端口策略**：先按请求端口起；被占用 → 改 port=0 让 OS 自动挑空闲端口，经 `engine.resolvedConnectors()` 读回实际端口
   - `webappDir` 非空时同源托管 wasm Web UI；`password` 非空时 `/v1` 路由要求 Bearer 鉴权（`/` 与 `/v1/ready` 豁免）
-- **调用方**：desktop（内嵌遥控，观察 `remoteControlEnabled` 自动启停）和 server 模块（独立部署），都依赖 `app:shared`，不相互依赖
-- **server 模块**（`server/Application.kt`）：薄启动器，仅创建 `MederiAiCore` + `initialize()` + 调 `remoteModule()`，路由代码不重复
+- **调用方**：desktop（在 desktop interface 之外再起一个 server interface 实例，观察 `remoteControlEnabled` 自动启停，供遥端遥控进来）和 server 模块（独立部署，只跑 server interface），都依赖 `app:shared`，不相互依赖
+- **server 模块**（`server/Application.kt`）：薄启动器，仅创建 `MederiAiCore` + `initialize()` + 调 `serverModule()`，路由代码不重复
 
 #### 端口记忆（AppState 职责）
 
-遥控端口由 `AppState` 持久化（`remote.port`，默认 8081）：`startRemoteControl()` 用已保存端口起，
+遥控端口由 `appState` 持久化（`remote.port`，默认 8081）：`startRemoteControl()` 用已保存端口起，
 成功（含端口回退）后回写实际端口。UI 展示 `remoteServerState`（Idle/Starting/Running(port, portFallback)/Failed）。
 
 #### 密码门（app/shared/wasmJsMain）
@@ -465,13 +464,13 @@ server 路由（`RemoteServer.remoteModule`），任何变动四处同步、缺�
   合并规则改 `ModelMerge` 一处 + `ModelMergeTest` 穷举组合（历史事故：回填/刷新策略打架、
   用户开关被覆盖、跨重启闪烁）
 - 新增 AIModel 元数据字段三件套：① 在 ModelMerge 所有权表登记 ② ModelMergeTest 补全组合断言
-  ③ 契约四处同步（AiCore.kt → MederiAiCore / ServerAiCore → RemoteServer 路由，Mock 同步）
+  ③ 契约四处同步（AiCore.kt → MederiAiCore / ServerAiCore → Server 路由，Mock 同步）
 
 ## 8. 当前状态
 
 - core / server / app UI：Koog 适配 + 供应商管理 + 计划系统（verify-converge 收敛循环）+ SSE + wasm UI 已就绪
 - 分诊流程（Triage Flow）：已落地（§5.6）；执行沙盒已落地（§5.5 + `docs/sandbox-plan.md`）
 - 存储架构：双库已落地（§5.7）——config.db / data.db + 设备本地 preferences；原始消息 API（listRaw）已就绪
-- 会话自动命名：`SessionTitleService` 挂 `MederiAiCore.initialize()`（§1.5），所有宿主生效
+- 会话自动命名：`SessionTitleService` 挂 `MederiAiCore.initialize()`（§1.5），两个 interface 都生效
 - Todo 系统：`update_todo`（无 Plan 任务，sessions.todos 持久化 + `# Current Todo` 回注入 + UI TodoListCard）+ Plan 子任务投影（create/spawn/verify/converge 发 `PLAN_PROGRESS` 带 todos）已落地（详见 `docs/todo-system-plan.md`）
 - inkcompose：单 KMP 模块已接入 `app:shared`（jvmTest 2600+ tests 全绿，四平台编译通过）

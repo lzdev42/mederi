@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -142,8 +143,8 @@ fun Workspace(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 移动端：始终显示汉堡菜单按钮
-                            if (isCompact) {
+                            // 侧边栏开闭按钮：移动端显示 Menu 图标，桌面端在侧边栏未固定/未打开时显示 Sidebar 图标
+                            if (isCompact || !isLeftSidebarOpen) {
                                 Box(
                                     modifier = Modifier
                                         .size(28.dp)
@@ -152,8 +153,8 @@ fun Workspace(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = FeatherIcons.Menu,
-                                        contentDescription = stringResource(Res.string.ws_open_menu),
+                                        imageVector = if (isCompact) FeatherIcons.Menu else FeatherIcons.Sidebar,
+                                        contentDescription = stringResource(if (isCompact) Res.string.ws_open_menu else Res.string.ws_open_sidebar),
                                         tint = colors.textSecondary,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -526,7 +527,7 @@ private fun MessageList(
         LazyColumn(
             state = lazyListState,
             modifier = modifier,
-        contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 12.dp) else PaddingValues(horizontal = 24.dp, vertical = 24.dp),
+        contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 12.dp) else PaddingValues(start = 24.dp, top = 20.dp, end = 24.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.spacedBy(ChatLayout.itemSpacing),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -659,10 +660,10 @@ private fun MessageList(
                                         if (stepItem.text.isNotBlank()) {
                                             Text(
                                                 text = stepItem.text.trim(),
-                                                color = colors.textSecondary,
-                                                fontSize = 13.sp,
-                                                lineHeight = 19.sp,
-                                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                                color = colors.textMuted,
+                                                fontSize = 12.sp,
+                                                fontStyle = FontStyle.Italic,
+                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
                                             )
                                         }
                                         if (stepItem.images.isNotEmpty()) {
@@ -777,10 +778,10 @@ private fun MessageList(
                                     Column(
                                         modifier = Modifier
                                             .widthIn(max = if (isCompact) ChatLayout.userBubbleCompactMaxWidth else ChatLayout.userBubbleMaxWidth)
-                                            .clip(RoundedCornerShape(10.dp))
+                                            .clip(RoundedCornerShape(12.dp, 12.dp, 2.dp, 12.dp))
                                             .background(colors.userBubbleBackground)
-                                            .border(1.dp, colors.userBubbleBorder, RoundedCornerShape(10.dp))
-                                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                                            .border(1.dp, colors.userBubbleBorder, RoundedCornerShape(12.dp, 12.dp, 2.dp, 12.dp))
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         if (item.images.isNotEmpty()) {
@@ -803,8 +804,8 @@ private fun MessageList(
                                             Text(
                                                 text = parsed.instruction,
                                                 color = colors.textPrimary,
-                                                fontSize = 14.5.sp,
-                                                lineHeight = 23.sp
+                                                fontSize = 13.5.sp,
+                                                lineHeight = 21.6.sp
                                             )
                                         }
                                         if (parsed.pastedTexts.isNotEmpty()) {
@@ -880,23 +881,7 @@ private fun MessageList(
                                     }
                                 }
 
-                                if (item.isTurnStart) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .width(2.5.dp)
-                                                .fillMaxHeight()
-                                                .clip(RoundedCornerShape(1.dp))
-                                                .background(colors.accentPrimary.copy(alpha = 0.45f))
-                                        )
-                                        assistantContent(Modifier.weight(1f))
-                                    }
-                                } else {
-                                    assistantContent(Modifier.fillMaxWidth())
-                                }
+                                assistantContent(Modifier.fillMaxWidth())
                             }
                         }
                     }

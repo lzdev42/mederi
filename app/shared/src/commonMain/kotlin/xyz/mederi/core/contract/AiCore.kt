@@ -134,6 +134,17 @@ interface AiCore {
     suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit> = Result.success(Unit)
     suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> =
         Result.failure(xyz.mederi.api.exception.MederiNotFoundException("Subagent report not found for agent: $agentId"))
+    suspend fun stopSubagent(agentId: String): Result<Unit> = Result.success(Unit)
+
+    // ==========================================
+    // 浏览器设置契约（UI 薄触发，浏览器管理在 core）
+    // ==========================================
+    suspend fun getCamoufoxSettings(): Result<CamoufoxSettings> = Result.success(CamoufoxSettings())
+    suspend fun updateCamoufoxSettings(input: UpdateCamoufoxSettingsInput): Result<CamoufoxSettings> = Result.success(input.settings)
+    suspend fun getCamoufoxStatus(): Result<BrowserStatus> = Result.success(BrowserStatus())
+    suspend fun checkCamoufoxUpdate(): Result<CamoufoxUpdate> = Result.success(CamoufoxUpdate())
+    suspend fun installCamoufox(versionTag: String?): Result<Unit> = Result.failure(IllegalStateException("browser settings 未启用"))
+    suspend fun listInstalledCamoufoxVersions(): Result<List<String>> = Result.success(emptyList())
 
     // ==========================================
     // AGENTS.md 生成契约（API 形态，暂无命令/UI 入口）

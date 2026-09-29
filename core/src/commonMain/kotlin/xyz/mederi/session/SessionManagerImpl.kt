@@ -11,6 +11,7 @@ import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.FileDiff
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
+import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.infrastructure.koog.TurnExecutor
@@ -133,10 +134,6 @@ class SessionManagerImpl(
 
     override suspend fun rollbackToMessage(id: String, messageId: String) {
         DebugLog.event("SessionMgr", "rollbackToMessage: sessionId=$id, messageId=$messageId")
-        // 必须等旧 turn 完全死透（cancel + join）再截断历史：abort() 只发取消信号不等死，
-        // 旧 turn 的收尾落库（ChatMemory store 回写 / 增量持久化）若发生在 replace 之后，
-        // 被删的旧消息会被原样重新落库，与重发消息叠加造成整个会话重复
-        turnExecutor.abortAndJoin(id)
         val msgs = historyStore.load(id)
         val targetIndex = msgs.indexOfFirst { it.id == messageId }
         if (targetIndex < 0) {
@@ -144,7 +141,26 @@ class SessionManagerImpl(
             // 重发，"截断未发生 + 重发"= 历史重复。必须显式失败让调用方感知
             throw NoSuchElementException("Message not found in session $id: $messageId")
         }
-        historyStore.replace(id, msgs.take(targetIndex))
+        val remainingMsgs = msgs.take(targetIndex)
+
+        // 提取保留历史中所有被创建或提及的子代理 ID
+        val keptAgentIds = mutableSetOf<String>()
+        val subagentRegex = Regex("""\bsub_[a-zA-Z0-9]{8}\b""")
+        for (msg in remainingMsgs) {
+            for (part in msg.parts) {
+                when (part) {
+                    is MessagePart.Text -> subagentRegex.findAll(part.text).forEach { keptAgentIds.add(it.value) }
+                    is MessagePart.ToolCall -> subagentRegex.findAll(part.args).forEach { keptAgentIds.add(it.value) }
+                    is MessagePart.ToolResult -> subagentRegex.findAll(part.output).forEach { keptAgentIds.add(it.value) }
+                    else -> {}
+                }
+            }
+        }
+
+        // 必须等旧 turn 完全死透（cancel + join）再截断历史，同时对回滚点时尚未创立的子代理做无感丢弃（不通知 AI）
+        turnExecutor.rollbackAndJoin(id, keptAgentIds)
+
+        historyStore.replace(id, remainingMsgs)
         val now = Instant.now().toString()
         eventBus.emit(
             MederiEvent(
@@ -192,6 +208,9 @@ class SessionManagerImpl(
 
     override fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? =
         turnExecutor.getSubagentReport(agentId)
+
+    override fun stopSubagent(agentId: String, reason: String): String =
+        turnExecutor.stopSubagent(agentId, reason)
 
     override suspend fun getMessage(id: String, messageId: String): Message {
         return historyStore.load(id).firstOrNull { it.id == messageId }

@@ -1,8 +1,12 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -144,6 +148,14 @@ fun ToolActionGroupRow(
     val isSubagentPreparing = group.kind == ToolActionKind.SUBAGENT && isGroupRunning
     val canExpand = !isSubagentPreparing
 
+    // 折叠微条 hover 背景（与 WorkTraceCard 汇总条同模式）；准备中子任务（canExpand=false）不加 hover
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val hoverBg by animateColorAsState(
+        if (isHovered) colors.surfaceHover else Color.Transparent,
+        tween(120)
+    )
+
     // 所有工具动作行严格默认不展开（即使执行失败也保持折叠，需要点击才展开）；用户点击后以用户状态为准；准备中子任务不可展开
     var userChoice by remember(group.calls.map { it.id }) { mutableStateOf(false) }
     val isExpanded = userChoice && canExpand
@@ -235,17 +247,19 @@ fun ToolActionGroupRow(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        // 折叠微条（无卡片背景与硬边框，整行可点击，准备中子任务不可展开）
+        // 折叠微条（无卡片背景与硬边框，整行可点击 + hover surfaceHover，准备中子任务不可展开也不 hover）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
                 .then(
                     if (canExpand) {
-                        Modifier.clickable {
-                            userChoice = !isExpanded
-                            DebugLog.event("UI", "ToolActionGroupRow clicked: kind=${group.kind}, count=${group.calls.size}, isExpanded=$userChoice")
-                        }
+                        Modifier
+                            .background(hoverBg)
+                            .clickable(interactionSource = interactionSource, indication = null) {
+                                userChoice = !isExpanded
+                                DebugLog.event("UI", "ToolActionGroupRow clicked: kind=${group.kind}, count=${group.calls.size}, isExpanded=$userChoice")
+                            }
                     } else Modifier
                 )
                 .padding(vertical = 2.dp, horizontal = 2.dp),
@@ -324,7 +338,7 @@ fun ToolActionGroupRow(
                             if (!call.target.isNullOrBlank()) {
                                 Text(
                                     text = "$ ${call.target}",
-                                    color = if (colors.isDark) Color(0xFFE2E8F0) else Color(0xFF1E293B),
+                                    color = colors.textPrimary,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 12.sp,
                                     lineHeight = 17.sp,
@@ -351,7 +365,7 @@ fun ToolActionGroupRow(
                             if (count > 1 && !call.target.isNullOrBlank()) {
                                 Text(
                                     text = call.target,
-                                    color = if (colors.isDark) Color(0xFFCBD5E1) else colors.textPrimary,
+                                    color = colors.textSecondary,
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 12.sp,
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
@@ -413,7 +427,7 @@ private fun ToolCallOutputBlock(
                 color = if (isFailed) colors.accentDanger else colors.textSecondary,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.Medium,
                 letterSpacing = 0.5.sp,
             )
             ExpandChevron(
@@ -434,7 +448,7 @@ private fun ToolCallOutputBlock(
                         if (isFailed) colors.accentDanger.copy(alpha = 0.4f) else colors.surfaceCardBorder,
                         RoundedCornerShape(6.dp)
                     )
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 SelectionContainer {
                     Text(
@@ -481,7 +495,7 @@ private fun ToolCallReportBlock(
                 color = colors.thoughtAccent,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.Medium,
                 letterSpacing = 0.5.sp,
             )
         },
@@ -490,9 +504,9 @@ private fun ToolCallReportBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(if (colors.isDark) Color(0xFF161822) else Color(0xFFF8FAFC))
+                .background(colors.surfaceCard)
                 .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
-                .padding(10.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             MarkdownView(
                 content = reportMarkdown,

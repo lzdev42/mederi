@@ -8,6 +8,7 @@ import ai.koog.prompt.executor.model.PromptExecutorBuilder
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.project.AgentsFileLoader
 import xyz.mederi.project.ProjectManager
+import xyz.mederi.provider.ApiKeyResolver
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.provider.infrastructure.koog.KoogClientFactory
@@ -42,6 +43,9 @@ class AgentsFileGenerator(
     private val providerManager: ProviderManager
 ) {
 
+    // API Key 唯一真理源解析器（记忆为进程级静态共享，与 TurnExecutor 的实例共享同一份记忆）
+    private val apiKeyResolver = ApiKeyResolver(providerManager)
+
     /**
      * 扫描项目并生成（或改进）项目根的 AGENTS.md。
      *
@@ -61,8 +65,9 @@ class AgentsFileGenerator(
         val provider = providerManager.listWithoutKeys()
             .firstOrNull { p -> p.models.any { it.id == aiModel.id } }
             ?: error("Provider for model ${aiModel.id} not found")
-        val apiKey = providerManager.getDefaultKeyValue(provider.id)
-            ?: error("No API key available for provider: ${provider.id}")
+        // resolve 无 key 时抛 IllegalStateException（文案与原先的 error 一致），
+        // 外层 runCatching 捕获为 Result.failure，行为一致。
+        val apiKey = apiKeyResolver.resolve(provider.id, null).value
 
         // ── mini agent：只读工具扫仓库 ──
         val client = KoogClientFactory.create(provider, apiKey)

@@ -48,9 +48,8 @@ import xyz.mederi.theme.MederiTypeScale
  * 颜色读 [LocalMederiColors] 现有字段保持当前视觉（本轮不迁 Radix 色阶）。
  *
  * 现有色板缺口的近似约定（各变体 KDoc 亦注明）：
- * - border-strong（gray-7）→ [MederiColors.textMuted]（dark 提亮 / light 加深，最接近"强一档"描边）；
- * - accent-bg / accent-text（iris soft）→ 现状 solid accentPrimary + onAccentPrimary；
  * - bg-inverted / on-inverted → textPrimary + surfaceSidebar（dark 下近白/近黑、light 下近黑/近白，天然反色对）。
+ * （border-strong 与 accent-bg/accent-text 等字段已入 [MederiColors]，soft iris 变体直接引用，不再近似。）
  *
  * 组件级尺寸不在全局刻度内（28dp 按钮、22dp 面板图标、11dp 小图标、5dp gap），按标准值直用并注释。
  */
@@ -153,11 +152,12 @@ private fun MederiIconButtonBase(
 }
 
 /**
- * 主操作按钮（02-components §1.1 btn-primary-decision）。
+ * 主操作按钮（02-components §1.1 btn-primary-decision，soft iris）。
  * 高 28dp / padding 0-12dp / 圆角 Control / 12sp-500 / gap 5dp。
- * 现状：QuestionCard 提交、PlanApprovalCard Proceed、Dialog 确认为 solid accentPrimary + onAccentPrimary
- * （标准 soft iris accent-bg/accent-text 待配色迁移时对齐）。hover ≈ iris-4（向 onAccentPrimary 提亮）、
- * active ≈ iris-5（向黑压暗）、disabled = buttonSecondary + textMuted（对齐 PlanApprovalCard disabledContainerColor）。
+ * 常态 bg accentBg + text accentText + border accentBorder（[danger] = true 时切 dangerBg/dangerText +
+ * dangerText 0.35 描边）；hover bg 向 text 色 lerp 0.12、border → accentFocus（danger → dangerText）；
+ * active 向黑压暗（iris-5 等效）；disabled = surfaceHover 底 + textMuted + 透明描边。
+ * 调用点（QuestionCard 提交 / PlanApprovalCard Proceed / Dialog 确认）统一 soft iris，属标准预期。
  */
 @Composable
 fun MederiPrimaryDecisionButton(
@@ -172,20 +172,30 @@ fun MederiPrimaryDecisionButton(
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val pressed by interactionSource.collectIsPressedAsState()
-    // [danger] = true 时主色切 accentDanger（ConfirmDialog 删除确认分支现状：accentDanger 底 + onAccentPrimary 字）
-    val base = if (danger) colors.accentDanger else colors.accentPrimary
+    // soft iris：常态底/字/描边 = accentBg/accentText/accentBorder（danger 变体 = dangerBg/dangerText）
+    val base = if (danger) colors.dangerBg else colors.accentBg
+    val textColor = if (danger) colors.dangerText else colors.accentText
     val bg by animateColorAsState(
         targetValue = when {
-            !enabled -> colors.buttonSecondary
-            pressed -> lerp(base, Color.Black, 0.22f) // ≈ iris-5（Color.Black 为压暗原语，非 hex 字面量）
-            hovered -> lerp(base, colors.onAccentPrimary, 0.12f) // ≈ iris-4
+            !enabled -> colors.surfaceHover
+            pressed -> lerp(base, Color.Black, 0.22f) // active ≈ iris-5（Color.Black 为压暗原语，非 hex 字面量）
+            hovered -> lerp(base, textColor, 0.12f) // hover 向 text 色 lerp（iris-4 等效）
             else -> base
         },
         animationSpec = tween(120),
         label = "primaryDecisionBg",
     )
+    val border by animateColorAsState(
+        targetValue = when {
+            !enabled -> Color.Transparent
+            hovered -> if (danger) colors.dangerText else colors.accentFocus
+            else -> if (danger) colors.dangerText.copy(alpha = 0.35f) else colors.accentBorder
+        },
+        animationSpec = tween(120),
+        label = "primaryDecisionBorder",
+    )
     val contentColor by animateColorAsState(
-        targetValue = if (enabled) colors.onAccentPrimary else colors.textMuted,
+        targetValue = if (enabled) textColor else colors.textMuted,
         animationSpec = tween(120),
         label = "primaryDecisionContent",
     )
@@ -198,7 +208,7 @@ fun MederiPrimaryDecisionButton(
         height = 28.dp, // 标准 §1.1；28 不在全局刻度内，按标准值直用
         shape = RoundedCornerShape(MederiRadius.Control),
         backgroundColor = bg,
-        borderColor = null,
+        borderColor = border,
         contentColor = contentColor,
         labelStyle = DecisionLabel,
         gap = 5.dp, // 标准 §1.1；MederiSpacing 刻度无 5 命名（5 归 Tiny/Tight 按需），按标准值直用
@@ -496,12 +506,10 @@ fun MederiPanelHeaderIconButton(
 
 /**
  * 发送按钮（02-components §1.8 send-round-btn，反色控件）。
- * 28×28 / 圆角 Control / bg textPrimary（dark 近白 / light 近黑）+ icon 反色层 surfaceSidebar
- * （dark 近黑 / light 近白，是现有色板最接近标准 bg-inverted/on-inverted 的一对——
- * onAccentPrimary dark 下为浅色，不满足"textPrimary 上的深色"语义，故不用）；
- * hover bg 提亮（dark: onAccentPrimary 比 textPrimary 更亮 / light: 保持 textPrimary，对齐标准 dark #FFFFFF / light gray-12 语义）；
- * active scale 0.96（80ms）。
- * 现状：ChatInputCard 发送按钮为圆形 accentPrimary（SendButton），本 atom 按标准反色实现，收敛时对齐。
+ * 28×28 / 圆角 Control / bg bgInverted + icon onInverted（dark 近白底深图标 / light 近黑底浅图标，反色对）；
+ * hover bg 提亮为 bgInvertedHover（dark 纯白 / light gray-12，01-tokens §1.2 bg-inverted-hover）；
+ * disabled = buttonSecondary + textMuted；active scale 0.96（80ms）。
+ * 现状：ChatInputCard SendButton 已收敛到本 atom。
  */
 @Composable
 fun MederiSendRoundButton(
@@ -517,13 +525,13 @@ fun MederiSendRoundButton(
     val bg by animateColorAsState(
         targetValue = when {
             !enabled -> colors.buttonSecondary
-            state.hovered -> if (colors.isDark) colors.onAccentPrimary else colors.textPrimary
-            else -> colors.textPrimary
+            state.hovered -> colors.bgInvertedHover
+            else -> colors.bgInverted
         },
         animationSpec = tween(120),
         label = "sendRoundBg",
     )
-    val tint = if (enabled) colors.surfaceSidebar else colors.textMuted
+    val tint = if (enabled) colors.onInverted else colors.textMuted
     val scale by animateFloatAsState(
         targetValue = if (state.pressed && enabled) 0.96f else 1f,
         animationSpec = tween(80),

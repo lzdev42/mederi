@@ -1,17 +1,26 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -19,26 +28,32 @@ import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Copy
+import compose.icons.feathericons.Terminal
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.*
-import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.ui.RawMessagesViewModel
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.MederiColors
-import xyz.mederi.theme.rememberMederiMarkdownTheme
-import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.MederiIconButton
-import xyz.mederi.ui.components.atoms.MederiTabBadge
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.copy_done
-import mederi.app.shared.generated.resources.rawmsg_count
-import mederi.app.shared.generated.resources.rawmsg_title
+import mederi.app.shared.generated.resources.rawmsg_summary
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * 概览下方的原始消息卡片。
+ * 单条原始消息展开后的 JSON 视口**最大**高度：与 UserPastedTextCard(280.dp) / ErrorDetailDialog(280.dp) 对齐。
+ */
+private val RawMessageMaxJsonHeight = 280.dp
+
+/**
+ * 概览下方的原始消息卡片 —— 原型 accordion（.raw-messages-collapsible）。
+ *
+ * 外层 surfaceCard 壳 + divider 描边，默认折叠为一行 summary-bar（共 N 条 ›），
+ * 展开后每条消息是 40dp 高的 .raw-log-item 行（surfaceHover 底、无描边），
+ * 点击行头展开该条 JSON（mono 11.5sp + 复制按钮）。
  *
  * 具备按需懒加载特性：仅当该卡片处于 Composition 中时（右侧面板打开且切到概览 Tab），
  * 协程才会启动拉取与监听事件流；一旦切走或折叠，协程自动 Cancel，零多余消耗。
@@ -66,51 +81,80 @@ fun RawMessagesCard(
         return
     }
 
+    // 外层卡壳 = 原型 .raw-messages-collapsible（gray-2 底 + gray-6 描边 + radius-card，overflow hidden）
     Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.divider, RoundedCornerShape(8.dp))
     ) {
-        // 卡片标题
-        CardHeader(
-            icon = null,
-            title = stringResource(Res.string.rawmsg_title),
-            count = {
-                // 消息计数徽标：收敛为 MederiTabBadge（tab-badge 标准）
-                MederiTabBadge(count = rawMessages.size)
-            }
-        )
+        // summary-bar（默认折叠，点击整行切换）：terminal 图标 + 共 N 条 › + 旋转 chevron
+        var isCollapsed by remember(convId) { mutableStateOf(true) }
+        val summaryInteraction = remember { MutableInteractionSource() }
+        val isSummaryHovered by summaryInteraction.collectIsHoveredAsState()
 
-        if (isLoading && rawMessages.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                contentAlignment = Alignment.Center
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(if (isSummaryHovered) colors.surfaceHover else Color.Transparent)
+                .clickable(interactionSource = summaryInteraction, indication = null) { isCollapsed = !isCollapsed }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = FeatherIcons.Terminal,
+                contentDescription = null,
+                tint = colors.textMuted,
+                modifier = Modifier.size(13.dp)
+            )
+            Text(
+                text = stringResource(Res.string.rawmsg_summary, rawMessages.size),
+                color = if (isSummaryHovered) colors.textPrimary else colors.textSecondary,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f)
+            )
+            ExpandChevron(expanded = !isCollapsed, tint = colors.textMuted, size = 13.dp)
+        }
+
+        AnimatedVisibility(visible = !isCollapsed) {
+            Column(
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    color = colors.accentPrimary,
-                    strokeWidth = 2.dp
-                )
-            }
-        } else {
-            // 倒序展示：最新的一条在最上方
-            val displayList = remember(rawMessages) { rawMessages.reversed() }
+                if (isLoading && rawMessages.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = colors.accentPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    }
+                } else {
+                    // 倒序展示：最新的一条在最上方
+                    val displayList = remember(rawMessages) { rawMessages.reversed() }
 
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                for (item in displayList) {
-                    val isExpanded = item.seq in expandedSeqs
-                    RawMessageItemRow(
-                        rawVm = rawVm,
-                        item = item,
-                        isExpanded = isExpanded,
-                        onToggleExpand = {
-                            expandedSeqs = if (isExpanded) {
-                                expandedSeqs - item.seq
-                            } else {
-                                expandedSeqs + item.seq
-                            }
-                        },
-                        colors = colors
-                    )
+                    for (item in displayList) {
+                        val isExpanded = item.seq in expandedSeqs
+                        RawMessageItemRow(
+                            rawVm = rawVm,
+                            item = item,
+                            isExpanded = isExpanded,
+                            onToggleExpand = {
+                                expandedSeqs = if (isExpanded) {
+                                    expandedSeqs - item.seq
+                                } else {
+                                    expandedSeqs + item.seq
+                                }
+                            },
+                            colors = colors
+                        )
+                    }
                 }
             }
         }
@@ -132,71 +176,56 @@ private fun RawMessageItemRow(
     val tokensText = remember(jsonObj) { rawVm.extractTokens(jsonObj) }
     val timeText = remember(item.createdAt) { rawVm.formatMessageTimestamp(item.createdAt) }
 
+    // 行壳 = 原型 .raw-log-item：6dp 圆角 + surfaceHover 底，无描边（isExpanded 不再换底）
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(if (isExpanded) colors.surfaceCard else colors.surfaceCard.copy(alpha = 0.5f))
-            .border(
-                1.dp,
-                if (isExpanded) colors.accentPrimary.copy(alpha = 0.35f) else colors.divider.copy(alpha = 0.4f),
-                RoundedCornerShape(6.dp)
-            )
+            .background(colors.surfaceHover)
     ) {
-        // 单行预览头
+        // header 行（.raw-log-header）：40dp 高、padding 0/12，点击切换展开
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(40.dp)
                 .clickable { onToggleExpand() }
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .padding(start = 12.dp, end = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // role 名：13sp/500 textPrimary（保留现有 label 派生）
             Text(
                 text = label,
-                color = if (isExpanded) colors.accentPrimary else colors.textPrimary,
-                fontSize = 11.sp,
-                fontWeight = if (isExpanded) FontWeight.Medium else FontWeight.Normal,
+                color = colors.textPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false)
             )
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (!tokensText.isNullOrBlank()) {
-                    Text(
-                        text = tokensText,
-                        color = colors.textMuted,
-                        fontSize = 10.sp
-                    )
-                }
-                if (timeText.isNotBlank()) {
-                    Text(
-                        text = timeText,
-                        color = colors.textMuted,
-                        fontSize = 10.sp
-                    )
-                }
+            if (timeText.isNotBlank()) {
+                Text(
+                    text = timeText,
+                    color = colors.textMuted,
+                    fontSize = 11.sp
+                )
             }
+            if (!tokensText.isNullOrBlank()) {
+                Text(
+                    text = tokensText,
+                    color = colors.textMuted,
+                    fontSize = 12.sp
+                )
+            }
+            ExpandChevron(expanded = isExpanded, tint = colors.textMuted, size = 12.dp)
         }
 
-        // 展开的格式化 JSON 区域
+        // 展开 body（.raw-log-body）：顶部 1dp divider 描边 + padding 8/12，mono JSON + 右上复制
         if (isExpanded) {
-            HorizontalDivider(
-                color = colors.divider.copy(alpha = 0.4f),
-                thickness = 0.5.dp
-            )
+            HorizontalDivider(color = colors.divider, thickness = 1.dp)
 
             val prettyJson = remember(item.payload) {
                 rawVm.prettyPrintJson(item.payload)
-            }
-            val markdownContent = remember(prettyJson) {
-                "```json\n$prettyJson\n```"
             }
             val clipboardManager = LocalClipboardManager.current
             var copied by remember { mutableStateOf(false) }
@@ -211,15 +240,30 @@ private fun RawMessageItemRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(colors.surfaceWorkspace)
-                    .padding(8.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-                MarkdownView(
-                    content = markdownContent,
-                    modifier = Modifier.fillMaxWidth(),
-                    enableScrollOverride = false,
-                    markdownTheme = rememberMederiMarkdownTheme()
-                )
+                SelectionContainer {
+                    Text(
+                        text = prettyJson,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .containScroll()
+                            // heightIn 必须排在 verticalScroll 之前：概览面板本身是
+                            // Column(Modifier.verticalScroll)（InfoPanels），它以 maxHeight=Infinity 度量子内容，
+                            // 内层再挂 verticalScroll 会拿到无界约束并抛
+                            // IllegalStateException("Vertically scrollable component was measured with an
+                            // infinity maximum height constraints, which is disallowed. ... nesting layouts
+                            // like LazyColumn and Column(Modifier.verticalScroll())") —— 展开任一条即崩。
+                            // 先限高把约束变有界，短 JSON 仍按内容收缩（与 UserPastedTextCard/ErrorDetailDialog 同一模式）。
+                            .heightIn(max = RawMessageMaxJsonHeight)
+                            .verticalScroll(rememberScrollState())
+                            .horizontalScroll(rememberScrollState()),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.5.sp,
+                        lineHeight = 17.25.sp,
+                        color = colors.textPrimary,
+                    )
+                }
 
                 // 右上角浮动复制按钮（收敛为 MederiIconButton：copied → active 高亮 + Check，对齐复制反馈语义）
                 Box(modifier = Modifier.align(Alignment.TopEnd)) {

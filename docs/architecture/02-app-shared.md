@@ -77,7 +77,7 @@ interface AiCore {
     // AGENTS.md 生成（API 形态，暂无命令/UI 入口；读取/注入在 core 代码级自动完成，见 01-core.md §7.4）
     suspend fun generateAgentsFile(projectId, modelId: String? = null): Result<String>  // 返回写入内容；modelId 缺省用项目最近会话模型
 
-    // Office 文档预览（.docx/.xlsx/.pptx → HTML，经 DesktopBrowserRuntime KBrowser 渲染 / RemoteServer REST 获取）
+    // Office 文档预览（.docx/.xlsx/.pptx → HTML，经 DesktopBrowserRuntime KBrowser 渲染 / Server REST 获取）
     suspend fun previewOffice(conversationId: String, path: String): Result<String>  // 返回 HTML 字符串
 
     // MCP Server 管理（7 方法契约层带默认实现——成功空值：listMcpServers=emptyList / setMcpServerEnabled、
@@ -96,14 +96,24 @@ interface AiCore {
     suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit>
     suspend fun getSubagentGlobalSettings(): Result<SubagentGlobalSettings>
     suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit>
+
+    // Browser 设置管理（Camoufox，契约 6 方法——默认实现 = 空设置/回显/空状态/空更新/install 拒绝/空列表；
+    // MederiAiCore 直调 core BrowserSettingsApi，ServerAiCore 走 REST /v1/browser/*）
+    suspend fun getCamoufoxSettings(): Result<CamoufoxSettings>
+    suspend fun updateCamoufoxSettings(input: UpdateCamoufoxSettingsInput): Result<CamoufoxSettings>
+    suspend fun getCamoufoxStatus(): Result<BrowserStatus>
+    suspend fun checkCamoufoxUpdate(): Result<CamoufoxUpdate>
+    suspend fun installCamoufox(versionTag: String?): Result<Unit>
+    suspend fun listInstalledCamoufoxVersions(): Result<List<String>>
     // 子代理汇报取数（契约带默认失败实现 failure(MederiNotFoundException)，MederiAiCore/ServerAiCore 覆写）：
     // core SubagentManager.getReport 磁盘读 .mederi/plans/{planId}/reports/NN-executor.md / research.md，
     // 未落盘回退内存 result，agent 丢失/归档走 retired 恢复记录
     suspend fun getSubagentReport(agentId: String): Result<SubagentManager.SubagentReportData>
+    suspend fun stopSubagent(agentId: String): Result<Unit>
 }
 ```
 
-**契约同步硬性规则**：`AiCore.kt → MederiAiCore → ServerAiCore → RemoteServer 路由` 任何变动四处同步，缺一即编译失败或运行期 404；新增 DTO 放 `contract/dto` / `contract/models`（kotlinx-serialization，commonMain）。
+**契约同步硬性规则**：`AiCore.kt → MederiAiCore → ServerAiCore → Server 路由` 任何变动四处同步，缺一即编译失败或运行期 404；新增 DTO 放 `contract/dto` / `contract/models`（kotlinx-serialization，commonMain）。
 
 **配套契约接口**（与 AiCore 并列的平台能力注入）：
 - `Terminal.kt`：`TerminalManager(getOrCreate/find/all)` + `TerminalSession(key/title/isRunning/exitCode/output()/write/resize/kill)` —— 仅本机 jvmMain 实现（PtyTerminalHub），遥控端 null。
@@ -120,9 +130,9 @@ interface AiCore {
 - `ChatMessage(id, conversationId, role, blocks: List<ChatBlock>, createdAt, completedAt?, parentMessageId?, model?, agent?, isStreaming=false, error?=null, modelName?(assistant footer 模型显示名), agentMode?(APPROVAL/AUTONOMOUS), thinkingLevel?(实际推理档位), durationMs?(LLM 耗时), turnDiffSummary: TurnDiffSummaryUi?(本轮文件变更摘要,assistant 消息底部展示))` —— footer 诊断字段由 `MederiModelMapper.toChatMessage` 从 core Message 诊断字段填充（completedAt ≈ createdAt + durationMs 下界估计）；`turnDiffSummary` 由 MESSAGE_COMPLETED 的 `turnDiffSummary`/`diffMessageId` payload 回填（UI `TurnDiffCard` 单轮"N files changed"卡）
 - `FileDiffSummaryUi(path, status, additions, deletions)`（单文件变更统计）；`TurnDiffSummaryUi(files: List<FileDiffSummaryUi>=[], totalAdditions=0, totalDeletions=0)`（单轮全部文件变更聚合摘要）
 - `sealed class ChatBlock(id)`（type 判别多态序列化）：`Text(id, text)` / `Reasoning(id, text)` / `ToolCall(id, name, state: ToolCallState)` / `File(id, name, url, mimeType?)` / `Diff(id, filePath, before, after)` / `Unknown(id, type)`
-- `sealed class ToolCallState`：`Pending` / `Running(input: Map<String,String>)` / `Completed(input, output)` / `Failed(input, error)`
+- `sealed class ToolCallState`：`Pending(input: Map<String,String>)` / `Running(input: Map<String,String>)` / `Completed(input, output)` / `Failed(input, error)`
 - `ToolCallUi(id, name, state, target?=null, isFailed=false)` —— VM 预计算展平展示模型；target = 命令原文 / 文件路径（会话目录内→相对路径，目录外→绝对路径）/ apply_patch 提取的文件清单；工具行展开区显示执行结果（Completed.output / Failed.error）
-- `enum CoreEventType`（与 core EventType 同名一一对应，当前 23 个；`MederiModelMapper.toCoreEvent` 按 `valueOf(name)` 映射）
+- `enum CoreEventType`（与 core EventType 同名一一对应，当前 24 个；新增 `SUBAGENT_DISCARDED`；`MederiModelMapper.toCoreEvent` 按 `valueOf(name)` 映射）
 - `CoreEvent(type, sessionId, messageId?=null, payload: Map<String,String>, timestamp="")`
 - `PastedTextAttachment(id, index, text, lineCount, charCount)`；`ImageAttachment(id, name, mimeType, bytes, base64DataUrl, width=0, height=0)`
 - `QueuedMessage(id, conversationId, text, pastedTexts=[], images=[], model?, thinkingLevel?, agent?, apiKeyId?, createdAt=0L)` —— 排队待发消息项（排队模式 / 引导模式共用）：排队模式 = 会话运行中输入框新消息进 FIFO 队列，Idle 自动出队发送；引导模式 = 队列项经 `steerMessage` 注入运行中 turn（§7.2 WorkspaceViewModel 排队/引导族）
@@ -142,6 +152,7 @@ interface AiCore {
 - **ProcessStatsModels.kt**：`ProcessStats(cpuUsage?, cpuCores=1, heapUsedBytes=0, heapCommittedBytes=0, heapMaxBytes?, rssBytes?, timestampMillis=0)`
 - **McpModels.kt**：`McpServerStatus{UNCHECKED, OK, FAILED}`；`McpServerItem(name, enabled, kind="stdio", summary="", status=UNCHECKED, toolCount?, lastError?)`（MCP 列表展示条目，AppState.mcpStore 管理）
 - **SubagentModels.kt**：`SubagentState`（子代理 UI 缓存对象，§3.1）；`SubagentToolResult`（subagent(STATUS) 结果镜像，§3.1）；`SubagentConfigItem(role, displayName, description, modelId?, modelName?, reasoningLevel?, isInheriting=true)`；`UpdateSubagentConfigInput(modelId?, reasoningLevel?)`
+- **BrowserModels.kt**：`CamoufoxSettings`（browserHome/binaryPath/autoCheckUpdate/headless/humanize(+humanizeMaxSeconds)/blockImages/blockWebgl/blockWebrtc/disableCoop/extraArgs + 指纹覆盖全可空 + proxy/advancedConfig——与 core `browser.CamoufoxSettings` 一一对应同默认值，app/shared 不依赖 core 故自成一份，不带 *Dto 后缀避免 MederiAiCore import 冲突；同 core：默认值 = Camoufox 官方推荐实践，路径不设默认必须手动配置至少其一）；`ProxyConfig(type="none"\|"http"\|"socks", host, port, bypass, username?, password?)`；`UpdateCamoufoxSettingsInput(settings)`（整体替换）；`BrowserStatus(configured, installedVersion?, latestVersion?, hasUpdate, supported, reason)`（不访问网络）；`CamoufoxUpdate`（字段同 BrowserStatus，latestVersion/hasUpdate 由网络查询填充）
 
 ### 2.3 dto/
 
@@ -174,7 +185,7 @@ interface AiCore {
 | QUESTION_REQUESTED / RESOLVED | 写/清 pendingQuestion（REQUESTED 置 status=WaitingUser + 流式消息复位，RESOLVED 回 Working） |
 | PLAN_APPROVAL_REQUESTED / RESOLVED | **planApprovals 是全生命周期投影表**：REQUESTED 解码 `subtasks` payload（List<PlanSubtaskItem>）写入 PENDING 条目（按 id 去重置顶）+ 写/清 pendingPlanApproval + status=WaitingUser；RESOLVED 清 pendingPlanApproval、条目 status 迁 APPROVED/REJECTED + status 回 Working。`PLAN_PROGRESS` 按 `action` 驱动同一张表的 status 迁移（voided→VOIDED / completed→COMPLETED / approved→APPROVED / subtask-started→IN_PROGRESS，且 payload `subtasks` 全量最新子任务同步替换）——概览面板"实施计划卡"（planOverviewList）的真理源 |
 | TODO_UPDATED / PLAN_PROGRESS | 解码 payload["todos"] 整体替换快照 todos；解码失败丢弃事件保留先前快照 |
-| SUBAGENT_*（STARTED/COMPLETED/ERROR/STOPPED） | **不改变会话快照**——子代理状态由独立的 `SubagentTracker` 聚合（VM 持缓存），会话快照只反映主代理视角 |
+| SUBAGENT_*（STARTED/COMPLETED/ERROR/STOPPED/DISCARDED） | **不改变会话快照**——子代理状态由独立的 `SubagentTracker` 聚合（VM 持缓存），会话快照只反映主代理视角；`SUBAGENT_DISCARDED` 在回滚时由 SubagentManager 发射，UI 移出缓存且不改变快照 |
 
 入口：`applyWithRefresh(snapshot, event, refreshPage)`（MESSAGE_COMPLETED 先发"完成状态"快照再回查落库对齐发第二个；SESSION_UPDATED 触发 refreshPage 回查对齐刚落库消息后发一个；MESSAGE_ERROR 回查后只发最终一个）；及不含回查的 `apply(snapshot, event)`。
 
@@ -182,7 +193,7 @@ interface AiCore {
 
 SUBAGENT_* 事件 → 子代理缓存表的纯逻辑（与 SnapshotReducer 同风格，跨平台，无状态；调用方持状态逐事件 apply）：
 
-- `SubagentTracker.apply(states: Map<agentId, SubagentState>, event): Map` —— STARTED 以 agentId 建条目（全量元数据来自 payload），终态覆盖 status；乱序终态（无 STARTED）安全跳过；非子代理事件原样返回
+- `SubagentTracker.apply(states: Map<agentId, SubagentState>, event): Map` —— STARTED 以 agentId 建条目（全量元数据来自 payload），终态覆盖 status；`SUBAGENT_DISCARDED` 从 states 中移除对应 agentId 条目；乱序终态（无 STARTED）安全跳过；非子代理事件原样返回
 - `SubagentState(agentId, parentSessionId, role, modelId, modelName, reasoningLevel?, task, briefing?, status, startedAt)` —— 每个子代理一个 UI 缓存对象（MVVM Model）；"工作中" = status==RUNNING（真实 job 状态；子代理层无独立 watchdog，最终兜底 = LLM 侧 SSE 流式空闲超时 `MederiOpenAILLMClient` 90s 无数据 → SseIdleTimeoutException（transient 走限流重试）→ 子代理终态事件，不会永久假 RUNNING）
 - `SubagentToolResult` —— core `SubagentManager.StatusResult` JSON 的契约镜像（宽松解码），subagent(STATUS) 落库 tool result 的解析用（WAIT 已删 2026-09-25）
 
@@ -198,7 +209,7 @@ flowchart TB
         MOCK["MockAiCore (commonMain)<br/>内存 + MockScenarios 剧本"]
     end
     CORE["core: Mederi 实例<br/>mederi.projects/sessions/providers/models/modelCatalog"]
-    RS["RemoteServer remoteModule()<br/>REST/SSE 路由"]
+    RS["Server serverModule()<br/>REST/SSE 路由"]
     subgraph mappers["jvm 桥 mapper（object 纯函数）"]
         MM["MederiModelMapper<br/>core领域→契约(隐藏块截断/ToolResult吸收/ReasoningMenu.derive)"]
         MI["MederiInputMapper<br/>契约DTO→core请求(图片转base64 dataUrl)"]
@@ -217,7 +228,7 @@ flowchart TB
 `class MederiAiCore(configDir: String, dispatcher = Dispatchers.Default) : AiCore, SandboxHooks`。
 
 **initialize() 流程（顺序）**：
-1. `mederi = Mederi.create { configDir; userAgent = AppInfo.userAgent; BrowserRegistry.register("camoufox", BiDiBrowserControl) }`（出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带 Mederi 身份头；**Camoufox 注册 = 浏览器自动化 headless 可选能力**——未安装/未配置时选择它得到引导错误，注册表默认策略优先内置可见浏览器（JCEF，desktop 侧注册），headless server 无 JCEF 时默认才落到 Camoufox，AI 经 `run_browser_task(browser=...)` 选择）
+1. `mederi = Mederi.create { configDir; userAgent = AppInfo.userAgent }`（出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带 Mederi 身份头）→ **浏览器设置装配（Camoufox 注册已移出 create{} 内联块，紧随其后在 initialize 内完成）**：`browserSettingsManager = BrowserSettingsManager(mederi.settingsStore)`（SettingsStore key `browser.camoufox.settings`，JSON blob）→ `BrowserSettingsApiImpl(browserSettingsManager, installerProvider = { BrowserHome.of(current().browserHome)?.let { CamoufoxInstaller(it) } })` → `get()` 预热缓存 → `BrowserRegistry.register("camoufox", kind=CAMOUFOX, factory={...})`——**工厂读 `browserSettingsManager.current()`**：binary = browserHome 已下载版本 > `settings.binaryPath`（都不存在 → 引导错误"请在设置页 BROWSER 配置…"）、**profileDir = `settings.resolveProfileDir()`（core `CamoufoxSettingsMapping`：browserHome 非空 → `{browserHome}/profiles`；binaryPath 模式 → `{二进制父目录}/profiles` 跟随二进制同级；都空 → error"未配置浏览器路径：请先设置 browserHome 或 binaryPath"。已删除系统临时目录兜底——永不落临时目录）**、`config = settings.toCamoufoxConfig()`、`proxyPrefs = settings.proxy?.toFirefoxPrefs() ?: emptyMap()`。保存路径校验：`BrowserSettingsManager.validate()` 路径必填（browserHome/binaryPath 至少一个），UI 设置面板保存按钮同规则提前拦截（`browser_path_required`）。**JCEF 已整体移除，camoufox 是唯一注册源**（desktop 与 headless server 同源，不经契约），AI 经 `browser(action=RUN, browser=...)` 选择（未安装/未配置时选它得到引导错误）
 2. `cleanupLegacyBuiltinProviders()` —— 删"无 API Key 且名字命中内置预设"的历史垃圾 Provider
 3. `cleanupStaleRunningSessions()` —— 上次崩溃残留的 RUNNING session 逐个 `abortAndJoin` 复位（**必须走 abortAndJoin 而非 abort**：abort 对"无活跃 turn 的残留 RUNNING"整体 no-op，activeJobs 是内存态新建进程后为空，状态永远卡住；abortAndJoin 对陈旧 RUNNING 兜底复位 IDLE）
 4. `syncBuiltinProviders()` —— 内置供应商 baseUrl/reasoningParameter/responseSanitization/modelsDevKey 与代码预设校验、不一致则更新
@@ -227,7 +238,9 @@ flowchart TB
 8. `autoRefreshBuiltinGoogleModels()` —— 后台刷新已配 Key 的内置 Google 供应商模型（只新增不碰存量）
 9. `autotitleService.start()` —— **会话自动命名挂在此处（谁初始化谁生效，desktop/server 天然一致）**
 10. `startSessionStatusSync()` —— 订阅 core 会话事件流，实时把会话状态同步进 `_projects` StateFlow（驱动侧边栏状态点；映射 = SESSION_UPDATED→Working、MESSAGE_COMPLETED→Idle、MESSAGE_ERROR→sessionStore 权威终态经 `mapMessageErrorToStatus`、QUESTION/PLAN_APPROVAL REQUESTED→WaitingUser、RESOLVED→Working；同时维护 lastErrorBySessionId 终态错误注册表）
-11. `startCamoufoxUpdateCheck()` —— 启动时静默检查 Camoufox 是否有更新（仅在配置了 browserHome 且平台支持时；不自动下载——浏览器体积大，结果打日志，后续 UI 可订阅展示）
+11. `startCamoufoxUpdateCheck()` —— 启动时静默检查 Camoufox 是否有更新（**尊重 `browserSettingsManager.current().autoCheckUpdate`**——关闭则直接跳过；未配置 browserHome 或平台不支持同样跳过；不自动下载——浏览器体积大，结果打日志，设置页 BROWSER tab 可手动检查/安装）
+
+**浏览器设置 6 方法**：`getCamoufoxSettings`/`updateCamoufoxSettings`/`getCamoufoxStatus`/`checkCamoufoxUpdate`/`installCamoufox`/`listInstalledCamoufoxVersions` 直调 `browserSettingsApi`（core `BrowserSettingsApiImpl`，进程内不经 REST），契约 DTO 经 `toContract()/toCoreDto()` 映射到 `contract/models/BrowserModels.kt`。
 
 `events()` = `mederi.sessions.events().map { MederiModelMapper.toCoreEvent(it) }`；`observeConversation()` 委托 MederiEventAggregator（初始快照 + SnapshotReducer.applyWithRefresh + refreshPage 回查 + initialTodos hydration：Plan 投影 > session.todos）。
 
@@ -243,7 +256,7 @@ flowchart TB
 - 鉴权：passwordProvider 非空时所有 REST + SSE 带 `Authorization: Bearer <password>`。
 - initialize：校验 baseUrl → 轮询 `GET /v1/ready`（20s 上限、250ms 间隔）→ 拉 presets/agents/models/providers/projects → isReady → `startSessionStatusSync()`（订阅全局 SSE `events()` 流，实时把会话状态同步进 `_projects` StateFlow 驱动侧边栏状态点；映射与 jvm 桥一致：SESSION_UPDATED→Working、MESSAGE_COMPLETED→Idle、MESSAGE_ERROR→Error、QUESTION/PLAN_APPROVAL REQUESTED→WaitingUser、RESOLVED→Working）。
 - SSE：官方 SSE 插件，incoming data 段反序列化为 CoreEvent（失败丢弃），心跳注释帧不投递；两个流：`/v1/events`（全局）与 `/v1/sessions/{id}/events`（会话）。
-- 新增契约方法的 REST 路径：`steerMessage` → `POST /v1/sessions/{id}/steer`（body=ChatPromptInput）；`getSubagentReport` → `GET /v1/subagents/{agentId}/report`（→ SubagentReportData）。
+- 新增契约方法的 REST 路径：`steerMessage` → `POST /v1/sessions/{id}/steer`（body=ChatPromptInput）；`getSubagentReport` → `GET /v1/subagents/{agentId}/report`（→ SubagentReportData）；`stopSubagent` → `POST /v1/subagents/{agentId}/stop`。
 - 错误：非 2xx 抛异常（优先 ApiError.error 文本），方法边界包 Result 失败。
 
 ### 4.3 AppInfo（`…/commonMain/AppInfo.kt`，应用身份唯一真理源）
@@ -253,9 +266,9 @@ flowchart TB
 - `platformInfo(): PlatformInfo(osName, osVersion, arch)`：`expect` 声明，jvm/android/ios/wasmJs 各一个 `actual`（见 00-overview 平台注入矩阵）；`normalizeOsName`/`normalizeArch` 为标准 UA 粒度映射（Windows NT / Mac OS X / Linux / Android / iOS；aarch64→arm64、amd64→x86_64）。
 - 硬性规则：禁止在调用处自行获取版本号 / os / arch 再拼 UA。
 
-## 5. RemoteServer 路由表（`…/jvm/server/RemoteServer.kt`）
+## 5. Server 路由表（`…/jvm/server/Server.kt`）
 
-`RemoteServer.start(aiCore: MederiAiCore, requestedPort=8081, password?, webappDir?): RemoteStartResult`（幂等；**端口策略**=先按请求端口 bind，被占 → port=0 OS 挑空闲，`resolvedConnectors()` 读回实际端口并标记 portFallback）；`stop()` 幂等。
+`Server.start(aiCore: MederiAiCore, requestedPort=8081, password?, webappDir?): RemoteStartResult`（幂等；**端口策略**=先按请求端口 bind，被占 → port=0 OS 挑空闲，`resolvedConnectors()` 读回实际端口并标记 portFallback）；`stop()` 幂等。
 - install：ContentNegotiation(json)/SSE/CORS(anyHost + Authorization 等)；password 非空 → Authentication(bearer "mederi-remote")。
 - webapp：webappDir 非空 → staticFiles("/")；否则 classpath `staticResources("/","static")`（内置 wasm 产物）；SPA fallback + preCompressed(GZIP) + .wasm Content-Type；`/` 与 `/v1/ready` 豁免鉴权。
 - SSE：`respondEventStream(events)` —— 15s 心跳注释帧防代理断连；客户端断开结构化并发取消。
@@ -282,7 +295,9 @@ flowchart TB
 | POST `/v1/projects/{id}/agents-file/generate`（GenerateAgentsFileInput → GenerateAgentsFileResponse） | AGENTS.md 生成：扫描项目生成（已存在则原地改进）项目根 AGENTS.md（暂无 UI 入口，纯 API 形态） |
 | GET `/v1/sessions/{id}/office-preview[?path=]` | Office 文档预览：`.docx/.xlsx/.pptx` → HTML 字符串（供浏览器面板渲染） |
 | GET `/v1/subagents/{agentId}/report` | 子代理汇报取数：`aiCore.getSubagentReport` → `SubagentReportData`（磁盘读 `reports/NN-executor.md`/`research.md`，缺失回退内存/retired 记录，agent 不存在 → 404） |
+| POST `/v1/subagents/{agentId}/stop` | 停止子代理：`aiCore.stopSubagent(agentId)`（向运行中子代理发送取消并标记「被用户关闭」；终态事件正常向上汇报给 AI） |
 | GET `/v1/subagent-configs`；PUT `/v1/subagent-configs/{role}`（UpdateSubagentConfigInput）；GET `/v1/subagent-configs/global`；PUT `/v1/subagent-configs/global`（UpdateSubagentGlobalSettingsInput） | SubagentConfig 组：子代理角色（EXECUTOR/RESEARCHER/BROWSER_OPERATOR/BROWSER_BRAIN）独立模型/推理档配置 CRUD 与全局设置（单会话并发上限） |
+| GET `/v1/browser/settings`；POST `/v1/browser/settings`（UpdateCamoufoxSettingsInput）；GET `/v1/browser/status`；POST `/v1/browser/check-update`；POST `/v1/browser/install[?version=]`；GET `/v1/browser/versions` | Browser 组（Camoufox 设置/状态/更新检查/安装/已装版本，转调 MederiAiCore 6 方法——`getCamoufoxSettings` 等；desktop 直调 core 不经 ServerAiCore） |
 
 响应助手：`respondResult(Result)`（Unit 成功返回 `{}`，失败按 MederiException 子类映射 404/400/409/500 + ApiError）、`respondData(裸值)`、`respondError`。
 
@@ -293,7 +308,7 @@ flowchart TB
 独立 JVM 进程 headless 部署薄启动器：
 1. 读环境变量：`MEDERI_SERVER_PORT`(默认 8081)、`MEDERI_CONFIG_DIR`(默认 ~/.mederi)、`MEDERI_SERVER_PASSWORD`(非空则 /v1 Bearer 鉴权)、`MEDERI_WEBAPP_DIR`(可选外部 wasm UI)、`MEDERI_LLM_RETRY_MAX/MIN_MS/MAX_MS`（写 `LlmRetryConfig`）。
 2. `MederiAiCore(configDir)` + `runBlocking { initialize() }`（失败记录 initError 不阻断启动）。
-3. `embeddedServer(Netty, port, host="0.0.0.0") { remoteModule(aiCore, ReadyInfo(ready = initError==null, configDir), password, webappDir) }.start(wait = true)` —— 复用 shared 的 remoteModule，**路由代码零重复**。
+3. `embeddedServer(Netty, port, host="0.0.0.0") { serverModule(aiCore, ReadyInfo(ready = initError==null, configDir), password, webappDir) }.start(wait = true)` —— 复用 shared 的 serverModule，**路由代码零重复**。
 
 ## 7. AppState 与 ViewModel 层
 
@@ -322,6 +337,7 @@ flowchart TB
 扩展 Store（唯一真理源，生命周期绑定 AppState，供概览快捷卡片与后续市场双向同步）：
 - `skillStore: SkillStore`：管理 `skills: StateFlow<List<SkillItem>>`、`skillsRoot: StateFlow<String>`，提供 `refresh()`、`install(url)`、`uninstall(name)`、`setRootDirectory(path)`。
 - `mcpStore: McpStore`：管理 `mcpServers: StateFlow<List<McpServerItem>>`，提供 `refresh()`、`toggleEnabled(name, enabled)`、`install(json)`、`update(name, json)`、`delete(name)`、`verify(name)`、`getJson(name)`。
+- `browserSettingsStore: BrowserSettingsStore`（`ui/appstate/BrowserSettingsStore.kt`，AppState 构造即建，挂 aiCore 契约 6 方法）：管理 `settings: StateFlow<CamoufoxSettings>`、`status: StateFlow<BrowserStatus?>`、`installedVersions: StateFlow<List<String>>`，提供 `refresh()`（设置+状态+版本并发拉取）、`save(settings)`（整体替换）、`install(versionTag?)`、`checkUpdate()`——设置页 BROWSER tab 数据源。
 
 方法：`persist(key, value)`（异步写、pendingWriteCount 计数）、`flushPreferences()`（退出前同步等待归零，2s 兜底）、`applyConversationDefaults`（补位不覆盖）、`setRemoteControl/startRemoteControl/stopRemoteControl`、`startTunnel/stopTunnel`、`handleProjectDeleted/handleConversationDeleted`（唯一允许偏好与引擎状态对齐的地方）、`hydrate()`（启动恢复，列表就绪后限时 3s 回填）。
 
@@ -350,8 +366,8 @@ classDiagram
         +effectiveThinkingLevel: StateFlow  % 推理档位唯一真理源(ReasoningMenu.resolve)
         +effects: Flow~UiEffect~  % 一次性导航命令通道(Channel 派发: openSettings/openProjectMenu)
         +openSettings() / openProjectMenu()  % 一次性命令, UI collect 消费落本地状态
-        +attach(id) / detach() / send(text) / abort()
-        +rollbackMessage(convId, msgId, text)
+        +attach(id) / detach() / send(text) / abort() / stopSubagent(agentId)
+        +rollbackMessage(convId, msgId, text)  % 本地切片 + 即时从 subagentStates 剔除被回退子代理
         +approvePlan(planId, approved) / replyQuestion(...) 
         +tryAttachImage(...) Boolean  % 图片能力门禁
         +openDiff/closeDiff + toggleDockPanel...
@@ -405,15 +421,15 @@ classDiagram
 flowchart TD
     MA["MederiApp<br/>创建 AppState + LocalAppState 注入<br/>initialize → hydrate（全平台唯一入口）"]
     APP["App<br/>AppTheme(AppState.theme) 包裹"]
-    MS["MainScreen<br/>创建 SidebarViewModel + WorkspaceViewModel<br/>宽 <768dp=全屏 Workspace+Sidebar 抽屉 Overlay<br/>否则 Row: Sidebar + Workspace（Row 底层 surfaceSidebar 防动画露白）<br/>侧边栏开合动画 expandFrom=Start 从左缘展开<br/>外层 InitLoadingOverlay + SettingsDialog"]
+    MS["MainScreen<br/>创建 SidebarViewModel + WorkspaceViewModel<br/>宽 <768dp=全屏 Workspace+Sidebar 抽屉 Overlay<br/>否则：常驻(Pinned) Row 或 自动隐藏浮层抽屉(Overlay+EdgeIndicator+遮罩+防回跳)<br/>Sidebar 顶栏支持 Pin/Unpin 与收起，Workspace 顶栏支持开关侧栏<br/>外层 InitLoadingOverlay + SettingsDialog"]
     SB["Sidebar<br/>项目/会话树 + 主题切换 + 设置入口"]
     WS["Workspace<br/>中央聊天区"]
     HDR["Workspace Header（标题/模型）"]
     LIST["LazyColumn 消息列表<br/>聊天卡片已按领域拆分(2026-09):<br/>ReasoningBlock / ToolCallsBlock(含 ToolActionGroupRow) / SubagentCallsBlock(独立折叠条) / EventMessageCard(系统事件卡) / QuestionCard / PlanApprovalCard<br/>UserMessageCards(含 UserPastedTextCard/UserMessageFooter/AssistantMessageFooter)<br/>DocumentArtifactCard / WorkTraceCard / DiffCards(含 TurnDiffSummaryCard) / ChatCards(类型与工具)"]
     INPUT["ChatInputCard<br/>模型/Agent/推理档位选择器+附件+发送/停止<br/>与欢迎页共用同一 inputDraft<br/>选择器/控件已拆出(2026-09): ChatInputSelectors.kt / ChatInputControls.kt<br/>顶部 ErrorBoard（错误/警告唯一出口）<br/>/skill 命令(2026-09): 输入 /skill 时浮层在输入框顶部展开(SkillCommandPanel, AnimatedVisibility, 数据源 AppState.skillStore.skills), 选中插入 '/skill <name> ' 到草稿末尾且命令前缀经 SkillCommandTransformation(VisualTransformation 仅显示层)高亮, 模型按 description 触发器加载"]
     SBAR["StatusBar（原 TurnStatusBar）<br/>deriveTurnStatus(snapshot) 纯函数<br/>只显示 AI 运转状态（思考/生成/工具/重试），永不显示错误"]
-    DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/ARTIFACTS/TERMINAL/BROWSER<br/>子代理卡片已并入 OVERVIEW 面板(SubAgentManagementCard)<br/>BROWSER 入口由 BROWSER_TASK_STARTED 事件自动展开(VM 监听, 面板无内置浏览器渲染时显示占位)"]
-    REP["RightExtensionPanel(宽度按面板分档)<br/>OVERVIEW 默认 300.dp; 其余面板默认窗口 2/3 宽(下限 340.dp, 上限 = maxPanelWidth = 工作区宽 - 对话区最小宽 conversationMinWidth(360.dp) - Dock 宽)<br/>切到 PLAN 等阅读面板时若当前宽度过小, 自动展开到 2/3 窗口宽; 拖拽调宽(下限 240.dp)<br/>展开动画 expandFrom=End 从右缘展开<br/>按 activePanel 分发面板内容<br/>面板按域拆分(2026-09): InfoPanels.kt / MetricsCards.kt / ViewerTabs.kt / BrowserPanel.kt<br/>含 RawMessagesCard/图片与大文本阅读器；导出 I/O 在 util/DocumentExporter.kt(Composable 层零 I/O)"]
+    DOCK["RightDock<br/>6 入口图标 rail: OVERVIEW/DIFF/PLAN/ARTIFACTS/TERMINAL/BROWSER<br/>子代理卡片已并入 OVERVIEW 面板(SubAgentManagementCard)<br/>BROWSER 入口由 BROWSER_TASK_STARTED 事件自动展开(VM 监听, 面板无网页渲染时显示占位)<br/>面板显示名(2026-09 术语表): 概览 / 文件(DIFF) / 计划 / 文件查看器(ARTIFACTS) / 终端 / 网页(BROWSER)"]
+    REP["RightExtensionPanel(宽度按面板分档)<br/>OVERVIEW 默认 410.dp; 其余面板默认窗口 2/3 宽(下限 340.dp, 上限 = maxPanelWidth = 工作区宽 - 对话区最小宽 conversationMinWidth(360.dp) - Dock 宽)<br/>切到 PLAN 等阅读面板时若当前宽度过小, 自动展开到 2/3 窗口宽; 拖拽调宽(下限 240.dp)<br/>展开动画 expandFrom=End 从右缘展开<br/>按 activePanel 分发面板内容<br/>面板按域拆分(2026-09): InfoPanels.kt / MetricsCards.kt / ViewerTabs.kt / BrowserPanel.kt / FilesPanel.kt（DIFF→文件面板：双 Tab 项目目录/已修改，树 Tab 走 TreePanelContent + 可注入 ProjectFileTreeProvider：commonMain 接口 + jvmMain java.io 实现，桌面宿主注入，非桌面端降级提示）<br/>含 RawMessagesCard/图片与大文本阅读器；导出 I/O 在 util/DocumentExporter.kt(Composable 层零 I/O)"]
     SD["SettingsDialog<br/>桌面端侧栏导航+工作台分栏 / 移动端横向胶囊Tab<br/>6 Tab: PROVIDERS/AGENTS/GENERAL/SANDBOX/REMOTE/SYSTEM<br/>ProviderSettingsPanel(Master-Detail)+SettingsAtoms原子库<br/>Agent面板支持步进器Stepper与模式胶囊切换"]
     MA --> APP --> MS
     MS --> SB
@@ -431,10 +447,11 @@ flowchart TD
 - **AssistantMessageFooter**：assistant 消息轮次底部元数据条（模型名 · 审批/自主 · 推理档 · 耗时 · 完成时间），数据来自 core Message 诊断字段（modelName/agentMode/reasoningLevel/durationMs）经契约 ChatMessage 透传，`computeChatItems` 只挂在轮次最后一个文本块（AssistantFooterInfo）。诊断字段由 `TurnIncrementalPersister.persistAssistant` 增量落库时注入（否则 reconcile 时 assistant 消息被"已存在"识别、字段永不补上）；**durationMs = API 有回应（响应创建）→ 落库**（`withAssistantDuration`），非"从发请求起算"。
 - 其余组件：`InitLoadingOverlay`（备用全屏遮罩）、`HelpCircleTooltip`（InfoTooltip.kt，hover/tap 信息气泡，AgentMode 开关旁）、`SubAgentComponents`（**主体 = `SubAgentManagementCard`：概览面板子代理任务管理卡——折叠列表（最新在上）+ working 动画（SubAgentTaskRow spinner）+ `SubAgentDetailDialog` 详情大弹窗（点开经 `subagentReportMarkdown` 渲染汇报 markdown）；旧 `SubAgentCard`/`SubAgentTabContent` 降级为"兼容旧组件定义"包装**，见 L762/L919 注释）、`TerminalPanelContent`（多 tab 终端渲染，状态机全在 TerminalViewModel）、`TerminalView`（expect：desktop=jediterm+SwingPanel；wasm/移动端=遥控端占位）、`BrowserPanelContent`（右侧 BROWSER 面板：JCEF 宿主已移除，面板显示"当前端不支持内置浏览器"占位）。
 - **对话流子代理卡片（2026-09）**：`SubagentCallsBlock`（`ChatListItem.SubagentCalls` 独立折叠条，与普通工具调用解耦——显示派发的子代理状态与任务，展开查看执行详情；`ui/components/ToolCallsBlock.kt` 尾部 + `chat/ChatListItems.kt` SubagentCalls item）与 `EventMessageCard`（子代理 `<event_message>` 唤醒消息在**对话流内**渲染成系统事件卡：`ChatItemsBuilder.parseEventMessage` 解析 payload → `ChatListItem.EventMessageCard`，`ui/components/EventMessageCard.kt` 渲染，读取落盘报告全文/摘要）。
-- **概览面板（OVERVIEW 入口，`OverviewTabContent` @ InfoPanels.kt）**：卡片自上而下 = `ContextMetricsCard`（上下文占用/参考价/请求数，含 `requestCompaction()` 手动压缩入口）/ `TodoListCard`（仅 todos 非空时；宽屏 ≥600.dp 与 ContextMetricsCard 双列）/ `PlansOverviewCard`（实施计划卡，见下）/ `SubAgentManagementCard`（子代理任务管理）/ `McpManagementCard`（MCP 服务管理，唯一真理源 mcpStore）/ `SkillManagementCard`（技能管理，唯一真理源 skillStore）/ `RawMessagesCard`（原始消息列表，RawMessagesViewModel 驱动）。**`PlansOverviewCard`（实施计划卡）**：数据源 = `planOverviewList`（全生命周期：待批准/执行中/已完成/已作废）；**卡级折叠** = CardHeader 可点击翻转 `isExpanded` + `AnimatedVisibility`（内容区收起/展开）；每步子任务行带 **Spec 按钮**（`openSpecInExtension` 在阅读器打开该子任务执行清单）；待批准计划带 **"批准执行 ⌘↵"按钮**（`approvePlan(id)` 走正常审批链，批准时刻模型/档位随手势传 core）。
-- **共享原子组件库 `ui/components/atoms/`（2026-09 新建）**：ExpandableRow.kt（`ExpandableContent`/`ExpandChevron`/`ExpandableRow` 折叠交互）、Dialogs.kt（`MederiDialog` 基底 + `ConfirmDialog` + `InputDialog`）、MederiCards.kt（`MederiCard` 通用卡片壳——Surface 卡片壳收敛的唯一出口，新卡片一律基于它组装 + `MederiMetricCard` 度量卡）、PanelCard.kt（`PanelCard`/`CardHeader`/`PanelEmptyState`，PanelCard 已基于 MederiCard 组装）、MederiIconButton.kt、CopyButton.kt（`CopyFeedbackState`/`rememberCopyFeedback`/`CopyButton`）、MederiMarkdown.kt（MarkdownView 包裹样板）、MederiButtons.kt（按钮 8 变体：`MederiPrimaryDecisionButton`（含 danger 参数，danger=true 时主色切 accentDanger）/`MederiSurfaceButton`/`MederiGhostButton`/`MederiCompactStrokeButton`/`MederiMinimalIconButton`/`MederiIconSquareButton`（含 active 参数）/`MederiPanelHeaderIconButton`/`MederiSendRoundButton`）、MederiBadges.kt（chip/badge/status：`MederiTabBadge`/`MederiRunningPulseBadge`/`MederiRoleTag`/`MederiCompatBadge`/`MederiProjectPill`/`MederiPlanIdTag`/`MederiStatusDot`/`MederiGitBadge`/`MederiFileTypeIconSquare`）。全局设计 token 另置 `theme/Tokens.kt`（`MederiSpacing`/`MederiRadius`/`MederiTypeScale`，与主题无关 dark/light 共用，取值真理源 = docs/design/standard/01-tokens.md）。回填了 Sidebar 4 对话框、InfoPanels/Skill/Mcp 空态、Skill/Mcp/Metrics/RawMessages 卡片外壳与 Header、ProviderKeyDialogs 确认框等 10+ 处重复；折叠交互统一（ToolCallsBlock/UserMessageCards/WorkTraceCard/ReasoningBlock 7 处）。
+- **对话流时间线保真与计划状态门禁（2026-09）**：`ChatItemsBuilder.computeChatItems` 在执行中（`isActiveAssistant`）按产生先后线性平铺推理、步骤过渡语、工具调用与就地挂载的 `PlanApprovalCard`，彻底杜绝执行过程中新消息置顶、旧计划与卡片垫底的时序倒置；`PlanApprovalCard` 严格以正向 `isPending`（PENDING/PENDING_APPROVAL）作为 Proceed 按钮启用门禁，进入执行中（IN_PROGRESS）、已批准（APPROVED/AUTO_APPROVED）或完成（COMPLETED）后均保持禁用，杜绝二次重复点击批准。
+- **概览面板（OVERVIEW 入口，`OverviewTabContent` @ InfoPanels.kt，2026-09 原型还原）**：按 mederi_ui_prototype 分节 inspector 布局（padding 20/20/12/20，gap 16）：概览标题 + `OverviewSectionHeader` 分节头（会话状态/实施计划/原始消息，右侧状态文字）。自上而下 = 会话状态节（`TokensOverviewCard`：Token 用量 + Compact 手动压缩 + 24sp 主值 + 4dp 进度，`requestCompaction()`；`UsageMetricCard` ×2：交互轮次/参考费用）/ 实施计划节（`PlansOverviewCard`，见下）/ 三张管理卡 `SubAgentManagementCard` / `McpManagementCard`（唯一真理源 mcpStore）/ `SkillManagementCard`（唯一真理源 skillStore）/ `TodoListCard`（仅 todos 非空时，原型未定义但保留防丢功能）/ 原始消息节（`RawMessagesCard` 默认折叠手风琴，RawMessagesViewModel 驱动）。**`PlansOverviewCard`（实施计划卡）**：数据源 = `planOverviewList`（全生命周期：待批准/执行中/已完成/已作废）；每个计划一张原型式计划卡（名称 13.5sp/500 + 待批准时 soft iris `MederiPrimaryDecisionButton` 批准钮 + plan.md 全文链接 + 步骤状态图形列表 `MederiStepStatusIcon`（Done=绿勾划线/Active=accent 实心/Todo=空心）+ Spec 链接 + 默认 3 步展开全部）；批准走 `approvePlan(id)` 正常审批链。
+- **共享原子组件库 `ui/components/atoms/`（2026-09 新建）**：ExpandableRow.kt（`ExpandableContent`/`ExpandChevron`/`ExpandableRow` 折叠交互）、Dialogs.kt（`MederiDialog` 基底 + `ConfirmDialog` + `InputDialog`）、MederiCards.kt（`MederiCard` 通用卡片壳——Surface 卡片壳收敛的唯一出口，新卡片一律基于它组装 + `MederiMetricCard` 度量卡）、PanelCard.kt（`PanelCard`/`CardHeader`/`PanelEmptyState`，PanelCard 已基于 MederiCard 组装）、MederiIconButton.kt、CopyButton.kt（`CopyFeedbackState`/`rememberCopyFeedback`/`CopyButton`）、MederiMarkdown.kt（MarkdownView 包裹样板）、MederiButtons.kt（按钮 8 变体：`MederiPrimaryDecisionButton`（soft iris：accentBg 底 + accentText 字 + accentBorder 描边，含 danger 参数）/`MederiSurfaceButton`/`MederiGhostButton`/`MederiCompactStrokeButton`/`MederiMinimalIconButton`/`MederiIconSquareButton`（含 active 参数）/`MederiPanelHeaderIconButton`/`MederiSendRoundButton`）、MederiBadges.kt（chip/badge/status：`MederiTabBadge`/`MederiRunningPulseBadge`/`MederiRoleTag`/`MederiCompatBadge`/`MederiProjectPill`/`MederiPlanIdTag`/`MederiStatusDot`/`MederiGitBadge`/`MederiFileTypeIconSquare`）、MederiSwitch.kt（`MederiMiniSwitch`：28×16 mini 开关，MCP 行与输入卡迷你开关共用；2026-09 新增）。全局设计 token 另置 `theme/Tokens.kt`（`MederiSpacing`/`MederiRadius`/`MederiTypeScale`，与主题无关 dark/light 共用，取值真理源 = docs/design/standard/01-tokens.md）。回填了 Sidebar 4 对话框、InfoPanels/Skill/Mcp 空态、Skill/Mcp/Metrics/RawMessages 卡片外壳与 Header、ProviderKeyDialogs 确认框等 10+ 处重复；折叠交互统一（ToolCallsBlock/UserMessageCards/WorkTraceCard/ReasoningBlock 7 处）。
 - **层归位（2026-09）**：`TurnStatus`/`RetryHint`/`deriveTurnStatus`/`parseRetryHint` 从 ui/components 移入 `ui/TurnStatus.kt`（VM 不再反向依赖视图层）；`ToolActionKind`/`classifyToolAction`/`ToolActionGroup`/`groupToolCallsByAction` 从 ChatCards.kt 移入 `ui/chat/ToolActions.kt`（数据投影层单一来源）；新增 `ui/ErrorDetailFormatter.kt`（extractErrorCategory/cleanErrorSummary/extractErrorSuggestion/buildBugReportMarkdown 纯函数，ErrorDetailDialog 组合期解析下沉）；`RightDockPanel` 枚举从 ChatListItems.kt 移入 `ui/RightDockPanel.kt`。
-- **重文件拆分（2026-09）**：Sidebar.kt 拆出 `ConversationStatusDot.kt`；ChatInputCard.kt 拆出 `command/SlashCommandTransformation.kt` + `ChatInputAttachments.kt`（附件行）；ChatCards.kt 拆出 `icons.kt`（BrainIcon/TerminalPromptIcon）与 `scroll.kt`（shouldEnableReasoningScroll/ContainNestedScrollConnection/containScroll），ChatCards 只留 format 工具；ChatInputSelectors.kt 抽 `ModelPickerList`（ModelSelectorMenu 与 MobileModelBottomSheet 共用）；ViewerTabs.kt 新增 `ExportActionButton` 原子（导出 5 Boolean 状态机收敛为 Idle/Exporting/Done）；SettingsScreen.kt 拆出 `AgentSettingsPanel` / `GeneralSettingsPanel` / `SandboxSettingsPanel` / `RemoteSettingsPanel` / `SystemSettingsPanel`（各面板独立高内聚），设置公共原子沉淀于 `SettingsAtoms.kt`（SettingsCard/Section/Row/Stepper/PillToggle）。
+- **重文件拆分（2026-09）**：Sidebar.kt 拆出 `ConversationStatusDot.kt`；ChatInputCard.kt 拆出 `command/SlashCommandTransformation.kt` + `ChatInputAttachments.kt`（附件行）；ChatCards.kt 拆出 `icons.kt`（BrainIcon/TerminalPromptIcon）与 `scroll.kt`（shouldEnableReasoningScroll/ContainNestedScrollConnection/containScroll），ChatCards 只留 format 工具；ChatInputSelectors.kt 抽 `ModelPickerList`（ModelSelectorMenu 与 MobileModelBottomSheet 共用）；ViewerTabs.kt 新增 `ExportActionButton` 原子（导出 5 Boolean 状态机收敛为 Idle/Exporting/Done）；SettingsScreen.kt 拆出 `AgentSettingsPanel` / `GeneralSettingsPanel` / `SandboxSettingsPanel` / `RemoteSettingsPanel` / `SystemSettingsPanel` / **`BrowserSettingsPanel`**（各面板独立高内聚；**设置页新增 BROWSER tab**（`SettingsTab.BROWSER`，图标 Globe）= Camoufox 设置面板，5 分区：路径/安装（browserHome/binaryPath/自动检查更新/已装版本/检查更新/安装）、启动行为（headless/humanize(+maxSec)/blockImages/blockWebgl/blockWebrtc/disableCoop/extraArgs）、指纹覆盖（UA/locale/timezone/geo/webgl/webrtc/屏幕/并发/字体等，全可空）、代理（type/host/port/bypass/username/password）、高级（advancedConfig JSON 原样透传）），设置公共原子沉淀于 `SettingsAtoms.kt`（SettingsCard/Section/Row/Stepper/PillToggle）。**保存校验：browserHome 与 binaryPath 均 blank 时显示 `browser_path_required` 错误并禁用保存按钮**（与 core validate 同规则提前拦截）。
 - 渲染 AI 回复使用 `:inkcompose` 的 `MarkdownView`（见 03-inkcompose.md）。
 
 ## 9. 平台入口与特性
@@ -466,9 +483,9 @@ flowchart TD
 
 ### 9.3 desktopApp（`app/desktopApp/src/main/kotlin/xyz/mederi/`）
 
-- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **后台预热 `DesktopBrowserRuntime.ensureInitialized()`**（KBrowser 全局单例，`useOsr=true`，专供 inkcompose mermaid 渲染 / Markdown 导出）；camoufox 在 MederiAiCore 注册（唯一注册源），desktopApp 不再注册 JCEF 浏览器宿主。`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`RemoteServer.stop()` → `terminalHub.shutdown()` → `DesktopBrowserRuntime.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
+- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **后台预热 `DesktopBrowserRuntime.ensureInitialized()`**（KBrowser 全局单例，`useOsr=true`，专供 inkcompose mermaid 渲染 / Markdown 导出）；camoufox 在 MederiAiCore 注册（唯一注册源），desktopApp 不再注册 JCEF 浏览器宿主。`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`Server.stop()` → `terminalHub.shutdown()` → `DesktopBrowserRuntime.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
 - **`DesktopBrowserRuntime`（desktopApp `browser/DesktopBrowserRuntime.kt`，object 全局单例）**：统一管理 KBrowser（JCEF/Chromium）的生命周期——`ensureInitialized()` 幂等线程安全：`JcefChecker.isJcefAvailable` 检查 → `KBrowser.initializeConfig(storageDir, useOsr=true)` + `initializeKBrowser()` → 向 inkcompose 注入单例引用（`SingleMermaidWorker.attachBrowser(KBrowser)` + `MarkdownExporter.setBrowser(KBrowser)`）；`shutdown()` 回收 KBrowser。**职责 = 渲染运行时宿主**（mermaid 离屏 PNG / Markdown→PDF 导出），**非浏览器自动化宿主**（内置 JCEF 浏览器宿主类已整体移除）。`UiBrowserHost`（commonMain）接口与 `AppState.uiBrowserHost` 字段保留但无实现注入（恒 null），保留待清理。desktopApp 依赖 `libs.kbrowser`（与 inkcompose 同版本同源）。
-- `DesktopRemoteControlHooks.kt`：`start(port, password) = RemoteServer.start(...)`；`localAddress` = 枚举 site-local IPv4（10/8、172.16/12、192.168/16）；`isCloudflaredInstalled()` = `cloudflared --version` 探测（未装 UI 提示自行安装，不代装）；`startTunnel(port)` = **pty4j** 真实 pty 拉起 `cloudflared tunnel run`（读 `~/.cloudflared/config.yml`），幂等；**生命周期** = 本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（无需看门狗）；`parseTunnelDomain()` = 解析 config.yml 第一条 ingress hostname 拼 `https://<host>`。
+- `DesktopRemoteControlHooks.kt`：`start(port, password) = Server.start(...)`；`localAddress` = 枚举 site-local IPv4（10/8、172.16/12、192.168/16）；`isCloudflaredInstalled()` = `cloudflared --version` 探测（未装 UI 提示自行安装，不代装）；`startTunnel(port)` = **pty4j** 真实 pty 拉起 `cloudflared tunnel run`（读 `~/.cloudflared/config.yml`），幂等；**生命周期** = 本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（无需看门狗）；`parseTunnelDomain()` = 解析 config.yml 第一条 ingress hostname 拼 `https://<host>`。
 
 ### 9.4 其他入口
 
@@ -495,8 +512,8 @@ flowchart TD
 
 ## 12. theme/Theme.kt
 
-主题机制：`AppThemeMode`（`DARK`, `LIGHT`, `GLASS_DARK`, `GLASS_LIGHT`；属性 `isDark`, `isGlass`；AppState 持久化 `app.theme`）→ `AppTheme(theme)` Composable 统一注入 Material3 ColorScheme 与 `LocalMederiColors`；在毛玻璃模式下自动在根节点铺设 `GlassAmbientBackground`（Apple Aurora 径向高斯光晕）；DiagramTheme/CodeTheme/LatexTheme 由 inkcompose 侧从 colorScheme 派生（`DiagramTheme.material3(colorScheme)`）。
+主题机制：`AppThemeMode`（仅 `DARK`, `LIGHT`；属性 `isDark`；AppState 持久化 `app.theme`；`GLASS_DARK/GLASS_LIGHT` 已于 2026-09-27 移除，`fromString` 未知值回落 DARK）→ `AppTheme(theme)` Composable 统一注入 Material3 ColorScheme 与 `LocalMederiColors`；`MedicalColors` 取值域 = Radix 色阶（docs/design/standard/01-tokens.md §1.1/§1.2 语义别名层，Dark/Light 双套），`bgInverted/bgInvertedHover` 为 send 按钮等反色控件专用；DiagramTheme/CodeTheme/LatexTheme 由 inkcompose 侧从 colorScheme 派生（`DiagramTheme.material3(colorScheme)`）。
 
 - **MederiColors 状态语义 token（2026-09 新增 4 枚）**：`statusWorking`（0xFFF59E0B 琥珀，工作中/流转指示）、`statusWaiting`（0xFF10B981 翠绿，等待用户/空闲）、`statusIdle`（0xFF38BDF8 晴空蓝，正常结束）、`statusError`（0xFFEF4444 玫瑰红，报错）——Dark/Light 双份同值，消费端 = Sidebar ConversationStatusDot、ToolCallsBlock 运行 spinner、DocumentArtifactCard 流式指示。
-- **毛玻璃调色板（2026-09 新增）**：`GlassDarkColors` 与 `GlassLightColors`，采用 50%~75% 丙烯高通透半透明材质 + 1px 晶体白高光描边（`surfaceCardBorder = Color(0x33FFFFFF)`），配合底层的 `GlassAmbientBackground` 呈现苹果风格拟态磨砂玻璃（Glassmorphism）视觉层次。
-- 颜色硬编码收口（2026-09）：ToolCallsBlock 淡灰三元→textSecondary/textMuted、EDIT/SUBAGENT 紫→thoughtAccent、终端输出块→surfaceCode/onSurfaceCode/surfaceCardBorder/accentDanger；SettingsScreen previewBg→surfaceWorkspace 等，ui/ 下断言 hex 零残留。
+- **MederiColors 迁值 Radix + 语义别名（2026-09-27）**：32 字段按 01-tokens §1.4 映射表迁到 Radix 取值，并新增语义别名字段：`accentHover/accentBg/accentText/accentBorder(iris-6)/accentFocus(iris-7)`、`borderStrong(gray-7)`、`successBg/successText`、`warningBg/warningText`、`dangerBg/dangerText`、`bgInverted/onInverted/bgInvertedHover`——组件只消费别名层，禁止直接读写基础色阶（gray-N/iris-N）。
+- 颜色硬编码收口（2026-09）：ToolCallsBlock 淡灰三元→textSecondary/textMuted、EDIT/SUBAGENT 紫→thoughtAccent、终端输出块→surfaceCode/onSurfaceCode/surfaceCardBorder/accentDanger；SettingsScreen previewBg→surfaceWorkspace 等，ui/ 下断言 hex 零残留（`atoms/MederiBadges.kt` 的 KotlinGradient 为唯一登记例外）。

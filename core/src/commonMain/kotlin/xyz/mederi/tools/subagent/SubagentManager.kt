@@ -72,7 +72,9 @@ class SubagentManager(
          *  用于丢失后恢复：executor 据此查 touchedFiles，researcher 据此恢复报告路径认知。 */
         val planId: String? = null,
         val executorSubtaskIndex: Int? = null,
-        val planStore: PlanStore? = null
+        val planStore: PlanStore? = null,
+        @Volatile var stopReason: String? = null,
+        @Volatile var isDiscarded: Boolean = false
     )
 
     @Serializable
@@ -101,7 +103,8 @@ class SubagentManager(
         val reportPath: String? = null,
         val touchedFiles: List<String>,
         val subtaskIndex: Int?,
-        val atMs: Long
+        val atMs: Long,
+        val parentSessionId: String? = null
     )
 
     private val retired = ConcurrentHashMap<String, AgentRecoveryInfo>()
@@ -219,7 +222,13 @@ class SubagentManager(
                 }
                 bg.progress = "completed"
             } catch (e: CancellationException) {
-                bg.result = "[stopped] ${e.message ?: "cancelled"}"
+                if (bg.isDiscarded) {
+                    bg.status = SubagentStatus.STOPPED
+                    bg.progress = "discarded"
+                    throw e
+                }
+                val reason = bg.stopReason ?: e.message?.takeIf { it.isNotBlank() } ?: "cancelled"
+                bg.result = if (reason == "被用户关闭") "被用户关闭" else "[stopped] $reason"
                 bg.status = SubagentStatus.STOPPED
                 bg.progress = "stopped"
                 throw e
@@ -228,43 +237,57 @@ class SubagentManager(
                 bg.status = SubagentStatus.ERROR
                 bg.progress = "error"
             } finally {
-                val reportPath = bg.result?.let { extractReportPath(it) }
-                bg.reportPath = reportPath
+                if (bg.isDiscarded) {
+                    emitEvent(
+                        parentSessionId,
+                        EventType.SUBAGENT_DISCARDED,
+                        mapOf(
+                            "agentId" to agentId,
+                            "role" to role.name
+                        )
+                    )
+                    agents.remove(agentId)
+                    retired.remove(agentId)
+                } else {
+                    val reportPath = bg.result?.let { extractReportPath(it) }
+                    bg.reportPath = reportPath
 
-                val payload = buildMap {
-                    put("agentId", agentId)
-                    put("role", role.name)
-                    put("status", bg.status.name)
-                    reportPath?.let { put("reportPath", it) }
-                    bg.result?.let { put("result", it) }
-                    bg.planId?.let { put("planId", it) }
-                    bg.executorSubtaskIndex?.let { put("subtaskIndex", it.toString()) }
+                    val payload = buildMap {
+                        put("agentId", agentId)
+                        put("role", role.name)
+                        put("status", bg.status.name)
+                        reportPath?.let { put("reportPath", it) }
+                        bg.result?.let { put("result", it) }
+                        bg.planId?.let { put("planId", it) }
+                        bg.executorSubtaskIndex?.let { put("subtaskIndex", it.toString()) }
+                    }
+
+                    // 终态事件（与状态机同分支：runner 报错文本也算 ERROR）
+                    emitEvent(parentSessionId, when (bg.status) {
+                        SubagentStatus.COMPLETED -> EventType.SUBAGENT_COMPLETED
+                        SubagentStatus.STOPPED -> EventType.SUBAGENT_STOPPED
+                        else -> EventType.SUBAGENT_ERROR
+                    }, payload)
+
+                    // 归档恢复记录：agent 丢失/归档后，agent_status 的 NOT_FOUND 也能返回部分认知
+                    val touched = bg.planId?.let { pid ->
+                        bg.planStore?.load(pid)?.subtasks
+                            ?.getOrNull(bg.executorSubtaskIndex ?: -1)
+                            ?.executorTouchedFiles
+                            .orEmpty()
+                    }.orEmpty()
+                    retired[agentId] = AgentRecoveryInfo(
+                        status = bg.status.name,
+                        progress = bg.progress,
+                        result = bg.result,
+                        role = role.name,
+                        reportPath = reportPath,
+                        touchedFiles = touched,
+                        subtaskIndex = bg.executorSubtaskIndex,
+                        atMs = System.currentTimeMillis(),
+                        parentSessionId = parentSessionId
+                    )
                 }
-
-                // 终态事件（与状态机同分支：runner 报错文本也算 ERROR）
-                emitEvent(parentSessionId, when (bg.status) {
-                    SubagentStatus.COMPLETED -> EventType.SUBAGENT_COMPLETED
-                    SubagentStatus.STOPPED -> EventType.SUBAGENT_STOPPED
-                    else -> EventType.SUBAGENT_ERROR
-                }, payload)
-
-                // 归档恢复记录：agent 丢失/归档后，agent_status 的 NOT_FOUND 也能返回部分认知
-                val touched = bg.planId?.let { pid ->
-                    bg.planStore?.load(pid)?.subtasks
-                        ?.getOrNull(bg.executorSubtaskIndex ?: -1)
-                        ?.executorTouchedFiles
-                        .orEmpty()
-                }.orEmpty()
-                retired[agentId] = AgentRecoveryInfo(
-                    status = bg.status.name,
-                    progress = bg.progress,
-                    result = bg.result,
-                    role = role.name,
-                    reportPath = reportPath,
-                    touchedFiles = touched,
-                    subtaskIndex = bg.executorSubtaskIndex,
-                    atMs = System.currentTimeMillis()
-                )
             }
         }
         bg.job = job
@@ -315,16 +338,17 @@ class SubagentManager(
     }
 
     /** 取消子 Agent，返回 JSON（含部分结果）。 */
-    fun stop(agentId: String): String {
+    fun stop(agentId: String, reason: String = "被用户关闭"): String {
         val bg = agents[agentId]
             ?: return Json.encodeToString(StatusResult(agentId = agentId, status = "NOT_FOUND"))
-        bg.job.cancel()
+        bg.stopReason = reason
+        bg.job.cancel(CancellationException(reason))
         return Json.encodeToString(
             StatusResult(
                 agentId = agentId,
                 status = SubagentStatus.STOPPED.name,
                 progress = "stopped",
-                result = bg.result
+                result = bg.result ?: if (reason == "被用户关闭") "被用户关闭" else null
             )
         )
     }
@@ -349,6 +373,61 @@ class SubagentManager(
             }
         }
         return stopped
+    }
+
+    /**
+     * 回滚对话历史时，丢弃在回滚目标消息时尚未创立的子 Agent。
+     *
+     * 对不在 [keptAgentIds] 中的子 Agent：
+     * - 若仍在 RUNNING：标记 [BackgroundAgent.isDiscarded] = true，取消执行协程。
+     *   finally 块检测到 isDiscarded 时发射 SUBAGENT_DISCARDED 事件，通知前端 SubagentTracker 移除，
+     *   **坚决不发射** SUBAGENT_STOPPED 事件，避免 TurnExecutor 产生 <event_message> 派发给 AI。
+     * - 若已处于终态（在 agents 或 retired 中）：发射 SUBAGENT_DISCARDED 并从表中彻底移除。
+     *
+     * @param parentSessionId 父会话 ID
+     * @param keptAgentIds 在回退点之前已经创立（在保留历史中存在）的子代理 ID 集合
+     * @return 实际丢弃的子代理 ID 列表
+     */
+    suspend fun rollbackSubagents(parentSessionId: String, keptAgentIds: Set<String>): List<String> {
+        val discarded = mutableListOf<String>()
+
+        // 1. 处理 agents 活跃/内存表
+        for ((agentId, bg) in agents) {
+            if (bg.parentSessionId == parentSessionId && agentId !in keptAgentIds) {
+                discarded.add(agentId)
+                bg.isDiscarded = true
+                if (bg.status == SubagentStatus.RUNNING) {
+                    bg.job.cancel(CancellationException("SILENT_ROLLBACK"))
+                } else {
+                    emitEvent(
+                        parentSessionId,
+                        EventType.SUBAGENT_DISCARDED,
+                        mapOf(
+                            "agentId" to agentId,
+                            "role" to bg.role.name
+                        )
+                    )
+                    agents.remove(agentId)
+                }
+            }
+        }
+
+        // 2. 处理 retired 表中的历史归档
+        for ((agentId, rec) in retired) {
+            if (rec.parentSessionId == parentSessionId && agentId !in keptAgentIds) {
+                if (agentId !in discarded) discarded.add(agentId)
+                retired.remove(agentId)
+                emitEvent(
+                    parentSessionId,
+                    EventType.SUBAGENT_DISCARDED,
+                    mapOf(
+                        "agentId" to agentId
+                    )
+                )
+            }
+        }
+
+        return discarded
     }
 
     /**

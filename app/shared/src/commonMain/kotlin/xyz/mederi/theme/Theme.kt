@@ -74,95 +74,149 @@ data class MederiColors(
     val thoughtText: Color,
     val userBubbleBackground: Color,
     val userBubbleBorder: Color,
+    // 语义别名 token（01-tokens §1.2）：accent 状态族（hover/bg/text/border/focus）+ 强边框 + 反色灰控件
+    val accentHover: Color,
+    val accentBg: Color,
+    val accentText: Color,
+    val accentBorder: Color,
+    val accentFocus: Color,
+    val borderStrong: Color,
+    val successBg: Color,
+    val successText: Color,
+    val warningBg: Color,
+    val warningText: Color,
+    val dangerBg: Color,
+    val dangerText: Color,
+    val bgInverted: Color,
+    val onInverted: Color,
+    val bgInvertedHover: Color,
     val isDark: Boolean
 )
 
 /**
- * 高级感深色模式配色 (Dark Theme Palette)
+ * 深色模式配色 (Dark Theme Palette)
  *
- * 遵循人体工学规范：
- * 1. 背景采用 #0D1117 ~ #161B22 区间深灰，杜绝纯黑死黑与 OLED 眩光。
- * 2. 正文文字采用 87% 不透明度 (#E6EDF3)，次要信息 60% (#8B949E)，禁用/占位 38% (#6E7681)。
- * 3. 强调色整体降低 10-20% 饱和度，避免暗光过曝。
- * 4. 辅助状态色采用 Okabe-Ito 色盲友好色系。
+ * 取值真理源 = docs/design/standard/01-tokens.md §1.1/§1.2（Radix 色阶），逐字照抄不自创：
+ * 1. 背景三档：bg = gray-1 #111113，surface-1 = gray-2 #18181a，surface-2 = gray-3 #222225。
+ * 2. 文字三档：text-primary = gray-12 #ededef，text-secondary = gray-11 #a09fa6，
+ *    text-muted = #74737d（硬编码）。
+ * 3. 品牌强调：accent = iris-9 #5b5bd6，on-accent = gray-1 #111113；hover = iris-10 #534bc6，
+ *    软底 = iris-3，文字 = iris-11，边框 = iris-6，focus = iris-7。
+ * 4. 状态色：success = green-9 #30a46c，warning = amber-9 #ffb224，danger = red-9 #e5484d。
+ * 5. 保留角色（待裁定）：accentSecondary（Okabe-Ito sky）、status*（Okabe-Ito）、thought*。
  */
 val DarkColors = MederiColors(
-    surfaceSidebar = Color(0xFF090C10),
-    surfaceWorkspace = Color(0xFF0D1117),
-    surfaceCard = Color(0xFF161B22),
-    surfaceCardBorder = Color(0xFF21262D),
-    surfaceHover = Color(0xFF1C2128),
-    surfaceInput = Color(0xFF0D1117),
-    surfaceOverlay = Color(0x99000000),
-    surfaceCode = Color(0xFF0D1117),
-    onSurfaceCode = Color(0xFFC9D1D9),
-    textPrimary = Color(0xFFE6EDF3),     // ~87% opacity white on dark
-    textSecondary = Color(0xFF8B949E),   // ~60% opacity
-    textMuted = Color(0xFF6E7681),       // ~38% opacity
-    accentPrimary = Color(0xFF5E6AD2),   // Restrained Linear indigo
-    onAccentPrimary = Color(0xFFF0F6FC),
-    accentSecondary = Color(0xFF56B4E9), // Okabe-Ito Sky Blue
-    accentDanger = Color(0xFFE5534B),    // Desaturated Soft Red
-    accentWarning = Color(0xFFE69F00),   // Okabe-Ito Amber/Orange
-    accentSuccess = Color(0xFF009E73),   // Okabe-Ito Bluish Green
-    statusWorking = Color(0xFFF59E0B),   // 状态-工作中（琥珀）
-    statusWaiting = Color(0xFF10B981),   // 状态-等待用户（翠绿）
-    statusIdle = Color(0xFF38BDF8),      // 状态-正常结束（晴空蓝）
-    statusError = Color(0xFFEF4444),     // 状态-报错（玫瑰红）
-    buttonSecondary = Color(0xFF21262D),
-    onButtonSecondary = Color(0xFFC9D1D9),
-    iconMuted = Color(0xFF7D8590),
-    divider = Color(0xFF21262D),
-    thoughtAccent = Color(0xFF9D86E9),
-    thoughtBackground = Color(0xFF1E212B),
-    thoughtBorder = Color(0xFF2E3240),
-    thoughtText = Color(0xFFE2E8F0),
-    userBubbleBackground = Color(0x385E6AD2),
-    userBubbleBorder = Color(0x805E6AD2),
+    surfaceSidebar = Color(0xFF111113),        // bg-sidebar = gray-1
+    surfaceWorkspace = Color(0xFF111113),      // bg-workspace = gray-1
+    surfaceCard = Color(0xFF18181A),           // bg-card = gray-2
+    surfaceCardBorder = Color(0xFF3A3A40),     // border = gray-6
+    surfaceHover = Color(0xFF222225),          // bg-hover = gray-3
+    surfaceInput = Color(0xFF18181A),          // bg-input = gray-2
+    surfaceOverlay = Color(0x99000000),        // 遮罩 scrim（半透明黑，保留角色）
+    surfaceCode = Color(0xFF131316),           // bg-code（硬编码，待 token 化）
+    onSurfaceCode = Color(0xFFA09FA6),         // text-secondary = gray-11
+    textPrimary = Color(0xFFEDEDEF),           // text-primary = gray-12
+    textSecondary = Color(0xFFA09FA6),         // text-secondary = gray-11
+    textMuted = Color(0xFF74737D),             // text-muted（硬编码）
+    accentPrimary = Color(0xFF5B5BD6),         // accent = iris-9
+    onAccentPrimary = Color(0xFF111113),       // on-accent = gray-1
+    accentSecondary = Color(0xFF56B4E9),       // Okabe-Ito sky（保留角色，待裁定）
+    accentDanger = Color(0xFFE5484D),          // danger = red-9
+    accentWarning = Color(0xFFFFB224),         // warning = amber-9
+    accentSuccess = Color(0xFF30A46C),         // success = green-9
+    statusWorking = Color(0xFFF59E0B),         // 状态-工作中（保留，待裁定归并 warning）
+    statusWaiting = Color(0xFF10B981),         // 状态-等待用户（保留，待裁定归并 success）
+    statusIdle = Color(0xFF38BDF8),            // 状态-正常结束（保留，待裁定归并 text-muted）
+    statusError = Color(0xFFEF4444),           // 状态-报错（保留，待裁定归并 danger）
+    buttonSecondary = Color(0xFF18181A),       // 按钮次级底 = gray-2
+    onButtonSecondary = Color(0xFFEDEDEF),     // 次级按钮文字 = gray-12
+    iconMuted = Color(0xFF74737D),             // = text-muted
+    divider = Color(0xFF3A3A40),               // border = gray-6
+    thoughtAccent = Color(0xFF9D86E9),         // thought 角色（保留，待裁定）
+    thoughtBackground = Color(0xFF1E212B),     // thought 角色（保留，待裁定）
+    thoughtBorder = Color(0xFF2E3240),         // thought 角色（保留，待裁定）
+    thoughtText = Color(0xFFE2E8F0),           // thought 角色（保留，待裁定）
+    userBubbleBackground = Color(0xFF222225),  // = bg-hover gray-3（裁定：原型实底）
+    userBubbleBorder = Color(0xFF3A3A40),      // = border gray-6（裁定：原型实线）
+    accentHover = Color(0xFF534BC6),           // accent-hover = iris-10
+    accentBg = Color(0xFF201E39),              // accent-bg = iris-3
+    accentText = Color(0xFFA39CF4),            // accent-text = iris-11
+    accentBorder = Color(0xFF3C3673),          // accent-border = iris-6
+    accentFocus = Color(0xFF4E459C),           // accent-focus = iris-7
+    borderStrong = Color(0xFF484851),          // border-strong = gray-7
+    successBg = Color(0xFF13271F),             // success-bg = green-3
+    successText = Color(0xFF55CF8D),           // success-text = green-11
+    warningBg = Color(0xFF2A1F0A),             // warning-bg = amber-3
+    warningText = Color(0xFFFFCA16),           // warning-text = amber-11
+    dangerBg = Color(0xFF291415),              // danger-bg = red-3
+    dangerText = Color(0xFFFF8589),            // danger-text = red-11
+    bgInverted = Color(0xFFEDEDEF),            // bg-inverted = gray-12
+    onInverted = Color(0xFF111113),            // on-inverted = gray-1
+    bgInvertedHover = Color(0xFFFFFFFF),       // bg-inverted-hover = 纯白（比 gray-12 更亮一档）
     isDark = true
 )
 
 /**
- * 高级感浅色模式配色 (Light Theme Palette)
+ * 浅色模式配色 (Light Theme Palette)
  *
- * 遵循人体工学规范：
- * 1. 背景采用 #FAFAFA，消除纯白在屏幕上的反光刺眼感。
- * 2. 正文文字采用 #1F2328，避免纯黑产生生硬边缘对比。
- * 3. 采用 1px 细微描边与极轻视觉分隔。
+ * 取值真理源 = docs/design/standard/01-tokens.md §1.1/§1.2（Radix 色阶），逐字照抄不自创：
+ * 1. 背景三档：bg = gray-1 #fcfcfd（workspace/card/input 硬编码为 #ffffff），
+ *    surface-1/surface-2 = gray-2 #f9f9fb。
+ * 2. 文字三档：text-primary = gray-12 #18181b，text-secondary = gray-11 #646470，
+ *    text-muted = #8c8b94（硬编码）。
+ * 3. 品牌强调：accent = iris-9 #5b5bd6（两主题同值），on-accent = #ffffff；hover = iris-10 #514ec7，
+ *    软底 = iris-3，文字 = iris-11 #534bc6（light 语义反转），边框 = iris-6，focus = iris-7。
+ * 4. 状态色：success = green-9 #2d9d64，warning = amber-9 #e59300，danger = red-9 #e5484d。
+ * 5. 保留角色（待裁定）：accentSecondary（Okabe-Ito sky）、status*（Okabe-Ito）、thought*。
  */
 val LightColors = MederiColors(
-    surfaceSidebar = Color(0xFFF3F4F6),
-    surfaceWorkspace = Color(0xFFFAFAFA),
-    surfaceCard = Color(0xFFFFFFFF),
-    surfaceCardBorder = Color(0xFFE5E7EB),
-    surfaceHover = Color(0xFFECEEF1),
-    surfaceInput = Color(0xFFF3F4F6),
-    surfaceOverlay = Color(0x40000000),
-    surfaceCode = Color(0xFFF6F8FA),
-    onSurfaceCode = Color(0xFF24292F),
-    textPrimary = Color(0xFF1F2328),
-    textSecondary = Color(0xFF656D76),
-    textMuted = Color(0xFF8C959F),
-    accentPrimary = Color(0xFF4C5CD6),
-    onAccentPrimary = Color(0xFFFFFFFF),
-    accentSecondary = Color(0xFF0969DA),
-    accentDanger = Color(0xFFCF222E),
-    accentWarning = Color(0xFF9A6700),
-    accentSuccess = Color(0xFF1A7F37),
-    statusWorking = Color(0xFFF59E0B),   // 状态-工作中（琥珀）
-    statusWaiting = Color(0xFF10B981),   // 状态-等待用户（翠绿）
-    statusIdle = Color(0xFF38BDF8),      // 状态-正常结束（晴空蓝）
-    statusError = Color(0xFFEF4444),     // 状态-报错（玫瑰红）
-    buttonSecondary = Color(0xFFEAECEF),
-    onButtonSecondary = Color(0xFF24292F),
-    iconMuted = Color(0xFF8C959F),
-    divider = Color(0xFFD0D7DE),
-    thoughtAccent = Color(0xFF7C3AED),
-    thoughtBackground = Color(0xFFF1F3F5),
-    thoughtBorder = Color(0xFFE2E5E9),
-    thoughtText = Color(0xFF1F2328),
-    userBubbleBackground = Color(0x1F4C5CD6),
-    userBubbleBorder = Color(0x594C5CD6),
+    surfaceSidebar = Color(0xFFF9F9FB),        // bg-sidebar = gray-2
+    surfaceWorkspace = Color(0xFFFFFFFF),      // bg-workspace（硬编码 #ffffff）
+    surfaceCard = Color(0xFFFFFFFF),           // bg-card（硬编码 #ffffff）
+    surfaceCardBorder = Color(0xFFD9D9DF),     // border = gray-6
+    surfaceHover = Color(0xFFF0F0F3),          // bg-hover = gray-3
+    surfaceInput = Color(0xFFFFFFFF),          // bg-input（硬编码 #ffffff）
+    surfaceOverlay = Color(0x40000000),        // 遮罩 scrim（半透明黑，保留角色）
+    surfaceCode = Color(0xFFF3F3F6),           // bg-code（硬编码，待 token 化）
+    onSurfaceCode = Color(0xFF646470),         // text-secondary = gray-11
+    textPrimary = Color(0xFF18181B),           // text-primary = gray-12
+    textSecondary = Color(0xFF646470),         // text-secondary = gray-11
+    textMuted = Color(0xFF8C8B94),             // text-muted（硬编码）
+    accentPrimary = Color(0xFF5B5BD6),         // accent = iris-9（两主题同值）
+    onAccentPrimary = Color(0xFFFFFFFF),       // on-accent（light = #ffffff）
+    accentSecondary = Color(0xFF0969DA),       // Okabe-Ito sky（保留角色，待裁定）
+    accentDanger = Color(0xFFE5484D),          // danger = red-9（两主题同值）
+    accentWarning = Color(0xFFE59300),         // warning = amber-9
+    accentSuccess = Color(0xFF2D9D64),         // success = green-9
+    statusWorking = Color(0xFFF59E0B),         // 状态-工作中（保留，待裁定归并 warning）
+    statusWaiting = Color(0xFF10B981),         // 状态-等待用户（保留，待裁定归并 success）
+    statusIdle = Color(0xFF38BDF8),            // 状态-正常结束（保留，待裁定归并 text-muted）
+    statusError = Color(0xFFEF4444),           // 状态-报错（保留，待裁定归并 danger）
+    buttonSecondary = Color(0xFFFFFFFF),       // 按钮次级底（硬编码 #ffffff）
+    onButtonSecondary = Color(0xFF18181B),     // 次级按钮文字 = gray-12
+    iconMuted = Color(0xFF8C8B94),             // = text-muted
+    divider = Color(0xFFD9D9DF),               // border = gray-6
+    thoughtAccent = Color(0xFF7C3AED),         // thought 角色（保留，待裁定）
+    thoughtBackground = Color(0xFFF1F3F5),     // thought 角色（保留，待裁定）
+    thoughtBorder = Color(0xFFE2E5E9),         // thought 角色（保留，待裁定）
+    thoughtText = Color(0xFF1F2328),           // thought 角色（保留，待裁定）
+    userBubbleBackground = Color(0xFFF0F0F3),  // = bg-hover gray-3（裁定：原型实底）
+    userBubbleBorder = Color(0xFFD9D9DF),      // = border gray-6（裁定：原型实线）
+    accentHover = Color(0xFF514EC7),           // accent-hover = iris-10
+    accentBg = Color(0xFFF0F0FF),              // accent-bg = iris-3
+    accentText = Color(0xFF534BC6),            // accent-text = iris-11（light 反转为深紫）
+    accentBorder = Color(0xFFCBCAFE),          // accent-border = iris-6
+    accentFocus = Color(0xFFB8B6FC),           // accent-focus = iris-7
+    borderStrong = Color(0xFFCECED6),          // border-strong = gray-7
+    successBg = Color(0xFFE6F6EB),             // success-bg = green-3
+    successText = Color(0xFF218358),           // success-text = green-11
+    warningBg = Color(0xFFFEF3D6),             // warning-bg = amber-3
+    warningText = Color(0xFF9B5A00),           // warning-text = amber-11
+    dangerBg = Color(0xFFFEECEE),              // danger-bg = red-3
+    dangerText = Color(0xFFCE2C31),            // danger-text = red-11
+    bgInverted = Color(0xFF18181B),            // bg-inverted = gray-12
+    onInverted = Color(0xFFFCFCFD),            // on-inverted = gray-1
+    bgInvertedHover = Color(0xFF18181B),       // bg-inverted-hover = gray-12
     isDark = false
 )
 
@@ -247,12 +301,12 @@ fun rememberMederiMarkdownColors(): MarkdownColors {
             textSecondary = colors.textSecondary,
             textMuted = colors.textMuted,
             link = colors.accentPrimary,
-            inlineCodeBackground = if (colors.isDark) Color(0xFF21262D) else Color(0xFFE2E8F0),
-            codeBlockBackground = if (colors.isDark) Color(0xFF14171F) else Color(0xFFF1F5F9),
+            inlineCodeBackground = if (colors.isDark) Color(0xFF222225) else Color(0xFFF0F0F3), // gray-3
+            codeBlockBackground = if (colors.isDark) Color(0xFF131316) else Color(0xFFF3F3F6), // bg-code
             blockQuoteBorder = colors.divider,
             divider = colors.divider,
             tableBorder = colors.divider,
-            tableHeaderBackground = if (colors.isDark) Color(0xFF161B22) else Color(0xFFF8FAFC),
+            tableHeaderBackground = if (colors.isDark) Color(0xFF18181A) else Color(0xFFF9F9FB), // gray-2
             isDark = colors.isDark,
         )
     }

@@ -135,14 +135,31 @@ internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
             metaInfo = filterIsInstance<StreamFrame.End>().firstOrNull()?.metaInfo ?: ai.koog.prompt.message.ResponseMetaInfo.Empty
         )
     }
-    val toolCalls = rebuilt.parts.filterIsInstance<MessagePart.Tool.Call>()
+    // 图边条件兜底：onToolCalls 要求有 Tool.Call，onTextMessage 要求有 Text。
+    // 模型可能返回空响应（只有 End 帧）或纯思考响应（只有 Reasoning），此时 parts 里
+    // 既没有 Text 也没有 Tool.Call，图引擎在 send_tool_results / call_llm 节点无边可走，
+    // 直接抛 AIAgentStuckInTheNodeException 崩溃。
+    // 补入空 Text("") 让 onTextMessage 恒可匹配，Turn 正常结束（空回复），不卡死图引擎。
+    val hasText = rebuilt.parts.any { it is MessagePart.Text }
+    val hasToolCall = rebuilt.parts.any { it is MessagePart.Tool.Call }
+    val guarded = if (!hasText && !hasToolCall) {
+        xyz.mederi.debug.DebugLog.event(
+            "StreamRebuild",
+            "empty-response guard: model returned no Text and no ToolCall (parts=${rebuilt.parts.map { it::class.simpleName }}), " +
+                "injecting empty Text to prevent graph stuck"
+        )
+        rebuilt.copy(parts = rebuilt.parts + MessagePart.Text(""))
+    } else {
+        rebuilt
+    }
+    val toolCalls = guarded.parts.filterIsInstance<MessagePart.Tool.Call>()
     xyz.mederi.debug.DebugLog.event(
         "StreamRebuild",
-        "rebuilt assistant: parts=${rebuilt.parts.map { it::class.simpleName }}, " +
-            "finishReason=${rebuilt.finishReason}, toolCalls=${toolCalls.map { "${it.tool}(${it.args.toString().take(80)})" }}, " +
+        "rebuilt assistant: parts=${guarded.parts.map { it::class.simpleName }}, " +
+            "finishReason=${guarded.finishReason}, toolCalls=${toolCalls.map { "${it.tool}(${it.args.toString().take(80)})" }}, " +
             "tookMs=${(System.nanoTime() - start) / 1_000_000}"
     )
-    return rebuilt
+    return guarded
 }
 
 /**

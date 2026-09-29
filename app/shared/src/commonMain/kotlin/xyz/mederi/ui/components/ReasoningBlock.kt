@@ -13,7 +13,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,8 +36,9 @@ import xyz.mederi.ui.components.atoms.ExpandableContent
 import xyz.mederi.ui.components.atoms.MederiGhostButton
 
 /**
- * 顶层推理块（ReasoningBlock）展开内容的默认固定容器高度：推理内容在容器内独立上下滚动，
- * 容器底部的「展开/收起」按钮固定锚定在容器底，点击可切换为无限高度（展示全量文本），再点缩回固定高度。
+ * 顶层推理块（ReasoningBlock）展开内容的文本视口**最大**高度：推理文本在视口内独立上下滚动，
+ * 内容超出该上限才出现滚动条；短内容按实际高度收缩（不再撑出固定 200.dp 空盒）。
+ * 视口溢出时，容器底部出现「展开/收起」按钮，点击可切换为无限高度（展示全量文本），再点缩回限高。
  */
 private val ReasoningMaxContentHeight = 200.dp
 
@@ -46,8 +46,9 @@ private val ReasoningMaxContentHeight = 200.dp
  * 单独思维链/思考过程折叠面板 (ReasoningBlock)
  * 严格还原极简设计：大脑图标胶囊 + 展开后轻量导轨线。
  *
- * 顶层独立显示（enforceMaxHeight=true）时：展开内容为默认 [ReasoningMaxContentHeight] 固定高度容器，
- * 推理内容在容器内独立滚动，容器底部固定锚定「展开/收起」按钮；点击切换为无限高度全量展示。
+ * 顶层独立显示（enforceMaxHeight=true）时：展开内容高度自适应（wrap content），上限 [ReasoningMaxContentHeight]
+ * 加在可滚动文本视口自己身上——内容短就短，超过上限才在视口内独立滚动，底部「展开/收起」按钮仅在溢出时出现；
+ * 点击切换为无限高度全量展示。
  * 位于 WorkTraceCard 内（enforceMaxHeight=false）时保持无限高——卡整体已限高滚动，子项不再重复限制。
  */
 @Composable
@@ -164,19 +165,22 @@ fun ReasoningBlock(
                 }
         }
 
+        // 文本是否溢出视口（maxValue > 0 等价于内容高度 > 视口上限）：决定底部切换按钮是否出现
+        val hasOverflow = shouldScroll && contentScroll.maxValue > 0
+        val showHeightToggle = shouldShowHeightToggle(enforceMaxHeight, isUnbounded, hasOverflow)
+
         // 展开后的思考旁白内容（左侧细垂直导轨线）。
-        // enforceMaxHeight：默认固定高度容器（200.dp）+ 内部独立滚动，底部「展开/收起」按钮固定在容器底；
-        // 点击切换为无限高度（真实动态高度），再点缩回固定高度容器；WorkTraceCard 内子项（enforceMaxHeight=false）保持无限高。
+        // enforceMaxHeight：容器高度自适应内容（不设固定高），文本视口上限 200.dp 由可滚动子节点自己承担
+        // （与 ToolCallsBlock 输出块同一套写法：.heightIn(max) + .verticalScroll，无 weight）；
+        // 内容溢出时底部出现「展开/收起」按钮，点击切换为无限高度全量展示，再点缩回；
+        // WorkTraceCard 内子项（enforceMaxHeight=false）保持无限高。
         ExpandableContent(expanded = isExpanded && text.isNotBlank()) {
-            val railColor = if (colors.isDark) Color(0xFF2E3240) else Color(0xFFD0D5DD)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
                         if (shouldScroll) {
-                            Modifier
-                                .containScroll()
-                                .height(ReasoningMaxContentHeight)
+                            Modifier.containScroll()
                         } else {
                             Modifier
                         }
@@ -185,7 +189,7 @@ fun ReasoningBlock(
                     .drawBehind {
                         val strokeWidth = 2.dp.toPx()
                         drawLine(
-                            color = railColor,
+                            color = colors.divider,
                             start = Offset(strokeWidth / 2f, 0f),
                             end = Offset(strokeWidth / 2f, size.height),
                             strokeWidth = strokeWidth,
@@ -195,14 +199,17 @@ fun ReasoningBlock(
                     .padding(start = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // 上半部分：在容器内独立滚动的推理文本视口
+                // 推理文本视口：高度自适应内容，上限 ReasoningMaxContentHeight 由本节点自己承担
+                // （不能用 weight(1f)：Column 中带 weight 的子项会被分配满整个最大约束，
+                //   父级换成 heightIn(max) 也会被撑成固定高——这正是之前 200.dp 空盒的成因）
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(
                             if (shouldScroll) {
                                 Modifier
-                                    .weight(1f)
+                                    .containScroll()
+                                    .heightIn(max = ReasoningMaxContentHeight)
                                     .verticalScroll(contentScroll)
                             } else {
                                 Modifier
@@ -217,8 +224,8 @@ fun ReasoningBlock(
                     )
                 }
 
-                if (enforceMaxHeight) {
-                    // 底部切换按钮：固定在容器底部，不随推理内容滚动（收敛为 MederiGhostButton）
+                if (showHeightToggle) {
+                    // 底部切换按钮：仅内容溢出视口时出现（点开摊开后恒显示），不随推理内容滚动
                     MederiGhostButton(
                         text = stringResource(
                             if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand

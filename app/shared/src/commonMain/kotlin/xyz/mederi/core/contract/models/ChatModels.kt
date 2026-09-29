@@ -134,7 +134,9 @@ sealed class ChatBlock {
 @Serializable
 sealed class ToolCallState {
     @Serializable
-    data object Pending : ToolCallState()
+    data class Pending(
+        val input: Map<String, String> = emptyMap(),
+    ) : ToolCallState()
 
     @Serializable
     data class Running(
@@ -216,7 +218,8 @@ enum class CoreEventType {
     SUBAGENT_STARTED,
     SUBAGENT_COMPLETED,
     SUBAGENT_ERROR,
-    SUBAGENT_STOPPED
+    SUBAGENT_STOPPED,
+    SUBAGENT_DISCARDED
 }
 
 /**

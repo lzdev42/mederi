@@ -83,6 +83,10 @@ class WorkspaceViewModel(
     /** 内置浏览器宿主（桌面端注入 UiBrowserHost；遥控端/wasm 为 null，UI 渲染占位） */
     val uiBrowserHost get() = appState.uiBrowserHost
 
+    /** 项目列表与选中项目（窄访问器，供文件树等派生 UI 使用；与 TerminalViewModel 同款转发） */
+    val projects: StateFlow<List<Project>> = appState.projects
+    val selectedProjectId: StateFlow<String?> = appState.selectedProjectId
+
     init {
         // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到项目目录下的 .mederi。
         // android/ios 是遥控端：project.directory 是 server 机器的路径，设备上不存在/无写权限，
@@ -323,7 +327,7 @@ class WorkspaceViewModel(
     suspend fun getMcpServerJson(name: String): Result<String> = mcpStore.getJson(name)
 
 
-    /** 当前展示的实施计划内容。写操作只经 openPlanInExtension（单向数据流） */
+    /** 当前展示的计划内容。写操作只经 openPlanInExtension（单向数据流） */
     var currentPlan by mutableStateOf<PlanItem?>(null); private set
 
     /** 产物与媒体附件集合 */
@@ -377,6 +381,12 @@ class WorkspaceViewModel(
         }
         openDockPanel(RightDockPanel.ARTIFACTS)
         DebugLog.event("UI", "openTextInExtension: title='$title', activeArtifactId=$activeArtifactId, chars=$charCount, isStreaming=$isStreaming")
+    }
+
+    /** 在文件查看器（ARTIFACTS 面板）打开一段文本（如项目文件树点击读取的文件内容）。 */
+    fun openFileViewer(title: String, content: String) {
+        // 复用现有 artifact 通路：追加/更新 ArtifactItem.Text 并置为 active、打开 ARTIFACTS 面板
+        openTextInExtension(title = title, content = content, lineCount = 0, charCount = content.length)
     }
 
     /**
@@ -1568,6 +1578,16 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         viewModelScope.launch { appState.aiCore.abort(id) }
     }
 
+    fun stopSubagent(agentId: String) {
+        viewModelScope.launch {
+            val r = appState.aiCore.stopSubagent(agentId)
+            if (r.isFailure) {
+                val ex = r.exceptionOrNull()
+                DebugLog.error("UI", "stopSubagent failed: ${ex?.message}", ex)
+            }
+        }
+    }
+
     /**
      * 断流"继续"：重发英文 Continue 走正常发消息流程（新 turn），
      * 历史里的半截 assistant 回复让模型自然续写。
@@ -1679,12 +1699,31 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         // 死透再截断）。fire-and-forget 的前置 abort 与回滚请求并发到达服务端时，
         // 滞后的 abort 可能命中刚重发的新 turn 并把它杀掉。
 
-        // 本地快照立即切除该消息及后续所有记录（UI 零等待/防闪烁）
+        // 本地快照立即切除该消息及后续所有记录（UI 零等待/防闪烁），并无感剔除未创立的子 Agent
         if (currentSnap != null) {
             val targetIdx = currentSnap.messages.indexOfFirst { it.id == messageId }
             if (targetIdx >= 0) {
                 val remaining = currentSnap.messages.take(targetIdx)
-                DebugLog.info("UI", "rollbackMessage: locally slicing messages from ${currentSnap.messages.size} down to ${remaining.size}")
+                val subagentRegex = Regex("""\bsub_[a-zA-Z0-9]{8}\b""")
+                val keptIds = remaining.flatMap { it.blocks }.flatMap { block ->
+                    when (block) {
+                        is ChatBlock.Text -> subagentRegex.findAll(block.text).map { it.value }.toList()
+                        is ChatBlock.ToolCall -> {
+                            val values = when (val st = block.state) {
+                                is ToolCallState.Pending -> st.input.values
+                                is ToolCallState.Running -> st.input.values
+                                is ToolCallState.Completed -> st.input.values + st.output
+                                is ToolCallState.Failed -> st.input.values + st.error
+                            }
+                            values.flatMap { subagentRegex.findAll(it).map { m -> m.value } }
+                        }
+                        else -> emptyList()
+                    }
+                }.toSet()
+                val prevCount = subagentStates.size
+                subagentStates = subagentStates.filterKeys { it in keptIds }
+                allSubagents = subagentStates.values.sortedBy { s -> s.startedAt }
+                DebugLog.info("UI", "rollbackMessage: locally slicing messages from ${currentSnap.messages.size} down to ${remaining.size}, subagents from $prevCount to ${subagentStates.size}")
                 snapshot = currentSnap.copy(messages = remaining)
             }
         }

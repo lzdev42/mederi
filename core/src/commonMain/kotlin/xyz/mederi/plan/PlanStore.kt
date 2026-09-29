@@ -350,7 +350,7 @@ class PlanStore(private val projectDirectories: List<String>) {
         val sb = StringBuilder()
         // ===== Part 1: Implementation Plan（给人读，纯 Markdown）=====
         // 段名规范化：用户语言（中文）+ 英文括注；正文内容由 AI 按提示词规则用用户语言撰写
-        sb.appendLine("# 实施计划（Implementation Plan）：${plan.title}")
+        sb.appendLine("# 计划（Plan）：${plan.title}")
         sb.appendLine()
         // 内部状态（Status/Created/AgentMode）由 UI 卡片与侧边栏呈现，不写进文档
         sb.appendLine("## 项目背景（Project Context）")

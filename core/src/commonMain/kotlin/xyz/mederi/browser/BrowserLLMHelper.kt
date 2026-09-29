@@ -7,6 +7,7 @@ import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.provider.ApiKeyResolver
 import xyz.mederi.provider.domain.model.Provider
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.provider.infrastructure.koog.KoogClientFactory
@@ -52,6 +53,9 @@ open class BrowserLLMHelper(
 
     private var client: LLMClient? = null
 
+    // API Key 唯一真理源解析器（记忆为进程级静态共享，与 TurnExecutor 的实例共享同一份记忆）
+    private val apiKeyResolver = ApiKeyResolver(providerManager)
+
     /**
      * 根据当前 [aiModel] 动态解析归属的 Provider 和 API Key 并实例化 LLMClient。
      */
@@ -59,8 +63,9 @@ open class BrowserLLMHelper(
         val p = providerManager.listWithoutKeys()
             .firstOrNull { it.models.any { m -> m.id == aiModel.id } }
             ?: return null
-        val apiKey = apiKeyId?.let { providerManager.getKeyValue(p.id, it) }
-            ?: providerManager.getDefaultKeyValue(p.id)
+        // resolve 无 key 时抛 IllegalStateException，runCatching 兜住 → 返回 null，
+        // 保留 call() 的 "Failed to resolve LLM client" 降级语义。
+        val apiKey = runCatching { apiKeyResolver.resolve(p.id, apiKeyId) }.getOrNull()?.value
             ?: return null
         provider = p
         return KoogClientFactory.create(p, apiKey)

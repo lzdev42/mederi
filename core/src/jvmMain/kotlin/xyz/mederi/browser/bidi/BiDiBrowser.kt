@@ -14,35 +14,74 @@ import xyz.mederi.browser.bidi.BiDiLog
 
 @Serializable
 data class CamoufoxConfig(
-    val os: String = "macos",
-    val locale: String = "en-US",
+    // ── 指纹覆盖组（全可空，null = 不注入，用 Camoufox 默认指纹） ──
+    val userAgent: String? = null,
+    val locale: String? = null,
+    val timezone: String? = null,
+    val geolocationLat: Double? = null,
+    val geolocationLon: Double? = null,
+    val webglVendor: String? = null,
+    val webglRenderer: String? = null,
+    val webrtcIpv4: String? = null,
+    val webrtcIpv6: String? = null,
+    val screenWidth: Int? = null,
+    val screenHeight: Int? = null,
+    val screenAvailWidth: Int? = null,
+    val screenAvailHeight: Int? = null,
+    val windowOuterWidth: Int? = null,
+    val windowOuterHeight: Int? = null,
+    val windowInnerWidth: Int? = null,
+    val windowInnerHeight: Int? = null,
+    val hardwareConcurrency: Int? = null,
+    val maxTouchPoints: Int? = null,
+    val fonts: List<String> = emptyList(),
+
+    // ── 人类化与行为 ──
+    val humanize: Boolean = false,
+    val humanizeMaxSeconds: Double? = null,
+
+    // ── 资源屏蔽 / COOP ──
     val blockWebgl: Boolean = false,
     val blockWebrtc: Boolean = true,
     val disableCoop: Boolean = true,
-    val humanize: Boolean = false,
-    val userAgent: String = "",
-    val webglVendor: String = "",
-    val webglRenderer: String = "",
-    val extraConfig: Map<String, JsonElement> = emptyMap()
+    val blockImages: Boolean = false,
+
+    // ── 高级组（原样透传，优先级最高） ──
+    val advancedConfig: Map<String, JsonElement> = emptyMap()
 ) {
+    /**
+     * 仅注入非空字段。空 config（全默认）产出空 JsonObject——
+     * 不注入 navigator.platform：raw binary 无 browserforge，写死 platform 会与自动 UA 冲突致泄漏。
+     */
     fun toConfigJson(): JsonObject {
         val config = mutableMapOf<String, JsonElement>()
-        if (userAgent.isNotEmpty()) {
-            config["navigator.userAgent"] = JsonPrimitive(userAgent)
+        userAgent?.let { config["navigator.userAgent"] = JsonPrimitive(it) }
+        locale?.let { config["locale:language"] = JsonPrimitive(it) }
+        timezone?.let { config["timezone"] = JsonPrimitive(it) }
+        geolocationLat?.let { config["geolocation:latitude"] = JsonPrimitive(it) }
+        geolocationLon?.let { config["geolocation:longitude"] = JsonPrimitive(it) }
+        webglVendor?.let { config["webGl:vendor"] = JsonPrimitive(it) }
+        webglRenderer?.let { config["webGl:renderer"] = JsonPrimitive(it) }
+        webrtcIpv4?.let { config["webrtc:ipv4"] = JsonPrimitive(it) }
+        webrtcIpv6?.let { config["webrtc:ipv6"] = JsonPrimitive(it) }
+        screenWidth?.let { config["screen.width"] = JsonPrimitive(it) }
+        screenHeight?.let { config["screen.height"] = JsonPrimitive(it) }
+        screenAvailWidth?.let { config["screen.availWidth"] = JsonPrimitive(it) }
+        screenAvailHeight?.let { config["screen.availHeight"] = JsonPrimitive(it) }
+        windowOuterWidth?.let { config["window.outerWidth"] = JsonPrimitive(it) }
+        windowOuterHeight?.let { config["window.outerHeight"] = JsonPrimitive(it) }
+        windowInnerWidth?.let { config["window.innerWidth"] = JsonPrimitive(it) }
+        windowInnerHeight?.let { config["window.innerHeight"] = JsonPrimitive(it) }
+        hardwareConcurrency?.let { config["navigator.hardwareConcurrency"] = JsonPrimitive(it) }
+        maxTouchPoints?.let { config["navigator.maxTouchPoints"] = JsonPrimitive(it) }
+        if (fonts.isNotEmpty()) {
+            config["fonts"] = JsonArray(fonts.map { JsonPrimitive(it) })
         }
-        config["navigator.platform"] = when (os) {
-            "macos" -> JsonPrimitive("MacIntel")
-            "windows" -> JsonPrimitive("Win32")
-            else -> JsonPrimitive("Linux x86_64")
+        if (humanize) {
+            config["humanize"] = JsonPrimitive(true)
         }
-        config["locale:language"] = JsonPrimitive(locale)
-        if (webglVendor.isNotEmpty()) {
-            config["webGl:vendor"] = JsonPrimitive(webglVendor)
-        }
-        if (webglRenderer.isNotEmpty()) {
-            config["webGl:renderer"] = JsonPrimitive(webglRenderer)
-        }
-        config.putAll(extraConfig)
+        humanizeMaxSeconds?.let { config["humanize:maxTime"] = JsonPrimitive(it) }
+        config.putAll(advancedConfig)
         return JsonObject(config)
     }
 
@@ -56,6 +95,9 @@ data class CamoufoxConfig(
         }
         if (blockWebrtc) {
             prefs["media.peerconnection.enabled"] = false
+        }
+        if (blockImages) {
+            prefs["permissions.default.image"] = 2
         }
         return prefs
     }
@@ -80,7 +122,9 @@ class BiDiBrowser(
     val headless: Boolean = true,
     val downloadDir: Path? = null,
     val extraArgs: List<String> = emptyList(),
-    val config: CamoufoxConfig = CamoufoxConfig()
+    val config: CamoufoxConfig = CamoufoxConfig(),
+    // 已展开的 Firefox proxy prefs（由上游把 ProxyConfig 展开成 user_pref 键值对传入，避免类型依赖）
+    val proxyPrefs: Map<String, Any> = emptyMap()
 ) : AutoCloseable {
 
     private val _pages = mutableListOf<BiDiPage>()
@@ -266,13 +310,11 @@ class BiDiBrowser(
         sb.appendLine("""user_pref("remote.http.enabled", true);""")
         sb.appendLine("""user_pref("layout.css.devPixelsPerPx", "1");""")
         config.toFirefoxPrefs().forEach { (key, value) ->
-            val v = when (value) {
-                is Boolean -> if (value) "true" else "false"
-                is Number -> value.toString()
-                is String -> "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
-                else -> value.toString()
-            }
-            sb.appendLine("""user_pref("$key", $v);""")
+            sb.appendLine(prefLine(key, value))
+        }
+        // proxy prefs（已展开的 firefox prefs，来自上游 ProxyConfig 展开；空 Map = 不写代理）
+        proxyPrefs.forEach { (key, value) ->
+            sb.appendLine(prefLine(key, value))
         }
         // 禁用 popup blocker：newPage() 依赖 window.open()，需保证非用户手势触发的 open 不被拦截。
         sb.appendLine("""user_pref("dom.disable_open_during_load", false);""")
@@ -286,6 +328,17 @@ class BiDiBrowser(
             sb.appendLine("""user_pref("browser.download.manager.showWhenStarting", false);""")
         }
         Files.writeString(profilePath.resolve("user.js"), sb.toString())
+    }
+
+    /** 渲染一条 `user_pref("key", value);` 行，照搬原有转义规则。 */
+    private fun prefLine(key: String, value: Any): String {
+        val v = when (value) {
+            is Boolean -> if (value) "true" else "false"
+            is Number -> value.toString()
+            is String -> "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+            else -> value.toString()
+        }
+        return """user_pref("$key", $v);"""
     }
 
     private fun findFreePort(): Int {

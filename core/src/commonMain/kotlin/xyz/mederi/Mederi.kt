@@ -86,6 +86,7 @@ import xyz.mederi.store.sqlite.SqliteSettingsStore
 class Mederi private constructor(
     private val paths: MederiPaths?,
     val historyStore: HistoryStore?,
+    val settingsStore: SettingsStore,
     private val apiKeyStore: ApiKeyStore?,
     private val sessionStore: SessionStore?,
     val providers: ProviderApi,
@@ -276,6 +277,7 @@ class Mederi private constructor(
             return Mederi(
                 paths = paths,
                 historyStore = historyStore,
+                settingsStore = settingsStore,
                 apiKeyStore = apiKeyStore,
                 sessionStore = sessionStore,
                 providers = providerApi,

@@ -29,6 +29,7 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
+import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import io.ktor.server.sse.ServerSSESession
@@ -86,7 +87,7 @@ import java.io.File
  * - `password != null` 时所有 `/v1` 路由要求 `Authorization: Bearer <password>`，
  *   `/` 与 `/v1/ready` 豁免（健康检查不泄露数据）。
  */
-object RemoteServer {
+object Server {
 
     private var server: EmbeddedServer<*, *>? = null
 
@@ -118,7 +119,7 @@ object RemoteServer {
 
         suspend fun tryBind(port: Int): Result<Int> = try {
             val srv = embeddedServer(Netty, port = port, host = "0.0.0.0") {
-                remoteModule(aiCore, ready, password, webappDir)
+                serverModule(aiCore, ready, password, webappDir)
             }
             srv.start(wait = false)
             val bound = srv.engine.resolvedConnectors().first().port
@@ -155,9 +156,9 @@ private val ContentTypeWasm = ContentType("application", "wasm")
 
 /**
  * Ktor Application 配置：REST/SSE + 鉴权 + 可选 wasm UI 静态托管。
- * desktop 内嵌（[RemoteServer]）与独立 server 入口共用同一套配置。
+ * desktop 内嵌（[Server]）与独立 server 入口共用同一套配置。
  */
-fun Application.remoteModule(
+fun Application.serverModule(
     aiCore: MederiAiCore,
     ready: ReadyInfo,
     password: String? = null,
@@ -225,7 +226,7 @@ fun Application.remoteModule(
     }
 }
 
-/** 全部 `/v1` 业务路由（鉴权包裹与否由 [remoteModule] 决定）。 */
+/** 全部 `/v1` 业务路由（鉴权包裹与否由 [serverModule] 决定）。 */
 fun Route.v1Routes(aiCore: MederiAiCore) {
     get("/v1/presets") { call.respondData(aiCore.builtinPresets) }
     get("/v1/agents") { call.respondData(aiCore.availableAgents.value) }
@@ -473,6 +474,31 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
 
     // ------------------------------------------------------------------
+    // 浏览器设置
+    // ------------------------------------------------------------------
+
+    get("/v1/browser/settings") {
+        call.respondResult(aiCore.getCamoufoxSettings())
+    }
+    post("/v1/browser/settings") {
+        val input = call.receive<UpdateCamoufoxSettingsInput>()
+        call.respondResult(aiCore.updateCamoufoxSettings(input))
+    }
+    get("/v1/browser/status") {
+        call.respondResult(aiCore.getCamoufoxStatus())
+    }
+    post("/v1/browser/check-update") {
+        call.respondResult(aiCore.checkCamoufoxUpdate())
+    }
+    post("/v1/browser/install") {
+        val version = call.parameters["version"]
+        call.respondResult(aiCore.installCamoufox(version))
+    }
+    get("/v1/browser/versions") {
+        call.respondResult(aiCore.listInstalledCamoufoxVersions())
+    }
+
+    // ------------------------------------------------------------------
     // 子代理模型配置
     // ------------------------------------------------------------------
 
@@ -501,6 +527,11 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     get("/v1/subagents/{agentId}/report") {
         val agentId = call.parameters["agentId"] ?: return@get call.respond(HttpStatusCode.BadRequest)
         call.respondResult(aiCore.getSubagentReport(agentId))
+    }
+
+    post("/v1/subagents/{agentId}/stop") {
+        val agentId = call.parameters["agentId"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.stopSubagent(agentId))
     }
 }
 

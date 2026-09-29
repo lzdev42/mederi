@@ -12,7 +12,7 @@
 |---|---|
 | 项目分几个模块、依赖方向、宿主入口、平台注入矩阵、硬性规则索引 | [00-overview.md](./00-overview.md) |
 | core 模块：DI 装配、领域模型字段、API/Manager/Store 方法签名、Koog 执行引擎、工具系统、Plan、Provider/Koog 适配、MCP、事件、提示词、存储表结构 | [01-core.md](./01-core.md) |
-| app/shared 与 server：AiCore 契约签名、契约模型字段、三实现（MederiAiCore/ServerAiCore/MockAiCore）、RemoteServer 路由表、AppState/ViewModel、UI 组合树、平台入口、preferences | [02-app-shared.md](./02-app-shared.md) |
+| app/shared 与 server：AiCore 契约签名、契约模型字段、三实现（MederiAiCore/ServerAiCore/MockAiCore）、Server 路由表、AppState/ViewModel、UI 组合树、平台入口、preferences | [02-app-shared.md](./02-app-shared.md) |
 | inkcompose：公共 API、Markdown 解析/渲染管线、LaTeX、语法高亮、Mermaid 图表、竖排文字、平台 actual 矩阵 | [03-inkcompose.md](./03-inkcompose.md) |
 | 核心流程图 + 时序图：发消息全链路、Turn 执行、事件→快照聚合、Plan Loop、上下文压缩、ask_user、审批、子代理、回滚、自动改名、遥控启动、密码门 | [04-flows.md](./04-flows.md) |
 | 业务规则（分诊/并行工具调度/沙盒/推理档位/模型元数据所有权/契约同步） | 仓库根 `mederi/AGENTS.md` |
@@ -24,11 +24,11 @@
 Mederi = Koog(执行引擎) 的应用框架包装
 ├── core（仅 JVM）         领域模型 + Manager(唯一真理源) + Api(DTO/异常) + Store(SQLite) + Koog 适配 + 工具 + Plan
 ├── app/shared（KMP）      跨平台 UI + AiCore 契约桥 + AppState/VM；jvmMain 里 MederiAiCore 直调 core，commonMain 里 ServerAiCore 走 REST/SSE
-├── server（JVM 薄壳）     headless 启动器 = MederiAiCore + RemoteServer 路由，零业务逻辑
+├── server（JVM 薄壳）     headless 启动器 = MederiAiCore + Server 路由，零业务逻辑
 ├── inkcompose（KMP）      富文本渲染库：Markdown/LaTeX/语法高亮/Mermaid 图表/竖排文字
 └── app/{desktop,android,web,ios}App  宿主入口，只做平台注入，禁止挂业务
 ```
 
 - 一切业务行为挂在 **AiCore 层**（contract `AiCore.kt` → `MederiAiCore` → `ServerAiCore` → server 路由，四处同步）。
-- 契约变更四处同步硬规则：**AiCore.kt → MederiAiCore → ServerAiCore → RemoteServer 路由**（+Mock 同步）。
+- 契约变更四处同步硬规则：**AiCore.kt → MederiAiCore → ServerAiCore → Server 路由**（+Mock 同步）。
 - 对外只抛 `MederiException` 子类；Manager 是唯一真理源；Store 只做持久化。

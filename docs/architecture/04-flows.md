@@ -95,8 +95,8 @@ flowchart TD
     BUILD --> RUN["agent.run(MEDERI_INPUT_PERSISTED)"]
     RUN --> OK{"正常结束?"}
     OK -- "是" --> DONE["IDLE + MESSAGE_COMPLETED(warning?; 有文件变更时携 turnDiffSummary/diffMessageId)<br/>diffTracker.captureSnapshot → diffStore.save → 回填最后一条 assistant 消息 turnDiffSummary"]
-    OK -- "异常 e" --> T{"RetryableLLMClient.isTransientError(e)?"}
-    T -- "是" --> IDLE["IDLE + MESSAGE_ERROR(分类 RATE_LIMIT)<br/>(RetryableLLMClient 已在流内重试过 STATUS/RETRYING)"]
+    OK -- "异常 e" --> T{"isTransientError(e)<br/>或 RECOVERABLE?"}
+    T -- "是" --> IDLE["IDLE + MESSAGE_ERROR(可恢复环境态/限流/网络中断)<br/>(首帧前重试/首帧后防重留痕，保持可继续状态)"]
     T -- "否" --> ERR["ERROR + MESSAGE_ERROR<br/>(ErrorCollector rich payload: 简报/errorId/完整诊断)"]
     DONE & IDLE & ERR --> STOP
     ABORT["abort(id): cancel job → stopAllForSession(级联收割本会话 RUNNING 子代理)<br/>+ cancelAll requester<br/>IDLE + MESSAGE_ERROR(ErrorCollector CANCELLED/WARNING)<br/>(abortAndJoin 同链路, cancelAndJoin 后收割)"] --> STOP["结束"]
@@ -340,6 +340,7 @@ sequenceDiagram
 > 订阅后组 `<event_message>` 入 `pendingEventMessages` 队列，父 turn 空闲时
 > `dispatchPendingEventMessages` 批量合并成一条内部消息唤起新 turn；
 > 父代理不再需要 `wait_agent`（已删），用 `subagent(STATUS)` 查询、`subagent(STOP)` 主动停止。
+> **概览面板与详情弹窗用户手动关闭（2026-09）**：UI 针对运行中的子代理提供关闭按钮（`WorkspaceViewModel.stopSubagent` → `AiCore.stopSubagent(agentId)`），SubagentManager 设置 `stopReason = "被用户关闭"` 并取消子代理协程；子代理退出时发射携带 `result = "被用户关闭"` 的 `SUBAGENT_STOPPED` 事件，按正常终态事件进入父会话 `pendingEventMessages` 并唤醒父 turn，与正常结束一样汇报给 AI 说明被用户关闭。
 > agent 丢失/归档（不在内存表）后无超时卡死类通知机制（代码无该实现）——`subagent(STATUS)` 返回
 > NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），
 > AI 据此判断已改动文件、再决定重跑或接受部分成果。
@@ -401,13 +402,18 @@ sequenceDiagram
 flowchart TD
     U["用户点击用户消息上的「退回并重新编辑」"] --> VM["WorkspaceViewModel.rollbackMessage(convId, messageId, messageText)"]
     VM --> V1["先验后切: restoreInputFromMessage 反解该消息内容<br/>(主指令 PromptComposer.parse + 大段文本附件 + data: 图片 base64 还原)"]
-    V1 --> V2["本地切片: messages 截到目标消息之前(UI 零等待)"]
+    VM --> V2["本地切片: messages 截到目标消息之前(UI 零等待)<br/>即时从 subagentStates 剔除被回退子代理(保留消息外全删)"]
     V2 --> AC["AiCore.rollbackToMessage(convId, messageId)"]
     AC --> SM["SessionManager.rollbackToMessage"]
-    SM --> TE["TurnExecutor.abortAndJoin(sessionId)<br/>等旧 turn 完全死透(防收尾落库复活已删消息)"]
-    TE --> HS["historyStore.replace(id, msgs.take(targetIndex))<br/>(目标不存在显式抛错)"]
+    SM --> EXT["计算 keptAgentIds: 从截断后保留消息中提取全部子代理 ID"]
+    EXT --> TE["TurnExecutor.rollbackAndJoin(sessionId, keptAgentIds)"]
+    TE --> RS["SubagentManager.rollbackSubagents(sessionId, keptAgentIds)<br/>遍历会话内未保留的子代理: 标记 isDiscarded=true + cancel 协程<br/>发射 SUBAGENT_DISCARDED(UI 剔除) 坚决不发 STOPPED(无感丢弃不惊动 AI)<br/>从 agents 与 retired 内存表中彻底清理"]
+    RS --> AB["abortAndJoin(sessionId)<br/>等旧 turn 完全死透(防收尾落库复活已删消息)"]
+    AB --> HS["historyStore.replace(id, msgs.take(targetIndex))<br/>(目标不存在显式抛错)"]
     HS --> RE["回退成功 → 内容粘贴回输入框重建待发态:<br/>inputDraft=主指令 + pendingPastedTexts=大段文本 + pendingImages=图片<br/>用户切换模型/模式/Agent、修改后自行发送<br/>(失败 → error 走 ErrorBoard，输入区保持原状)"]
 ```
+
+**回滚子代理无感丢弃（2026-09）**：当用户回滚到某一条消息时，若该消息时尚未创立子 Agent（即子 Agent 是在后续被回退掉的对话轮次中生成的），这些子 Agent 会被静默丢弃。`SessionManager` 从保留的历史消息中提取所有合法的 `keptAgentIds`，通知 `SubagentManager.rollbackSubagents`。未保留的子代理标记为 `isDiscarded = true` 并取消运行，发射 `SUBAGENT_DISCARDED` 事件通知 UI 即时移出缓存；**坚决不发射 `SUBAGENT_STOPPED` 事件**，不生成 `<event_message>`，绝不向 AI 汇报，真正实现无感丢弃。
 
 ## 8.1 浏览器任务（browser，2026-09-14；2026-09 合并为单一入口）
 
@@ -512,7 +518,7 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     subgraph host1["desktop: main.kt"]
-        D1["LaunchedEffect(remoteControlEnabled)"] --> D2["DesktopRemoteControlHooks.start(port, password)<br/>= RemoteServer.start(aiCore, port, password, webappDir)"]
+        D1["LaunchedEffect(remoteControlEnabled)"] --> D2["DesktopRemoteControlHooks.start(port, password)<br/>= Server.start(aiCore, port, password, webappDir)"]
         D2 --> D3{"请求端口可用?"}
         D3 -- "是" --> D4["Running(port)"]
         D3 -- "否(被占)" --> D5["port=0 OS 挑空闲 → Running(actualPort, portFallback)"]
@@ -522,14 +528,14 @@ flowchart TD
         D8 -- "是" --> D10["pty4j 真实 pty 拉起 cloudflared tunnel run<br/>进程退出→OS关pty→SIGHUP→cloudflared 退出"]
     end
     subgraph host2["server: Application.kt"]
-        S1["读环境变量(PORT/CONFIG_DIR/PASSWORD/WEBAPP_DIR/RETRY)"] --> S2["MederiAiCore(configDir) + runBlocking initialize()"] --> S3["embeddedServer(Netty){ remoteModule(...) }.start(wait=true)"]
+        S1["读环境变量(PORT/CONFIG_DIR/PASSWORD/WEBAPP_DIR/RETRY)"] --> S2["MederiAiCore(configDir) + runBlocking initialize()"] --> S3["embeddedServer(Netty){ serverModule(...) }.start(wait=true)"]
     end
     subgraph client["wasmJs 遥控端"]
         W1["ComposeViewport { RemoteGate { MederiApp() } }"] --> W2["探测: GET origin/v1/providers + localStorage 密码 Bearer"]
         W2 -- "200" --> W3["Ready → ServerAiCore.initialize<br/>(轮询 /v1/ready 20s → 拉全局状态)"]
         W2 -- "401" --> W4["密码输入 → 重试 → 写 localStorage"]
     end
-    D4 & S3 --> ROUTE["remoteModule(aiCore):<br/>Bearer 鉴权 / webapp 托管 / SPA fallback<br/>/v1 路由 → AiCore 方法 / SSE /v1/events"]
+    D4 & S3 --> ROUTE["serverModule(aiCore):<br/>Bearer 鉴权 / webapp 托管 / SPA fallback<br/>/v1 路由 → AiCore 方法 / SSE /v1/events"]
 ```
 
 ## 11. 初始化时序（desktop 冷启动全链）
@@ -563,7 +569,7 @@ sequenceDiagram
     MAC->>SVC: startCamoufoxUpdateCheck()(后台 Camoufox 更新检查)
     APP->>ST: hydrate()(恢复偏好, 列表就绪后 3s 内回填选中态)
     APP->>APP: MainScreen 组合 Sidebar+Workspace, WorkspaceViewModel.attach(选中会话)
-    M->>M: 观察 remoteControlEnabled → 自动启停内嵌 RemoteServer
+    M->>M: 观察 remoteControlEnabled → 自动启停内嵌 Server
 ```
 
 ## 12. apply_patch 工具三阶段（已注销，不注册给 AI——实现保留备用）

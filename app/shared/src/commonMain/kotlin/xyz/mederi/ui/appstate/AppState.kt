@@ -120,6 +120,9 @@ class AppState(
     /** MCP 服务状态唯一真理源：概览面板、MCP 市场等全局共享 */
     val mcpStore: McpStore = McpStore(aiCore, scope)
 
+    /** Camoufox 浏览器设置状态唯一真理源：设置页 BROWSER Tab 等共享 */
+    val browserSettingsStore: BrowserSettingsStore = BrowserSettingsStore(aiCore, scope)
+
 
 
     // ───── A. 引擎侧 alias(直接 forward;零缓存) ─────

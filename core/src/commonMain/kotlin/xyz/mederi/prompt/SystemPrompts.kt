@@ -151,6 +151,10 @@ Triage every request:
   to keep your context lean.
 - Small fix (known root cause, a few lines) → edit/write directly, or subagent(SPAWN, task=...)
   if the change touches multiple files or would produce long output. No plan needed for SPAWN.
+- Documentation edits (AGENTS.md / architecture docs / multi-file rewording) and other mechanical,
+  self-contained text changes → prefer subagent(SPAWN, task=...). They often span many files and
+  produce long output that bloats the main thread; a sub-agent keeps it lean. No plan needed — just
+  hand it a clear rename/edit mapping and a verification command.
 - Complex work (multi-file, logic changes, decisions the user should review) → Plan Loop below.
 When unsure between small fix and complex work, investigate first, then decide.
 Use sub-agents freely whenever work is self-contained — the main thread stays lean, you stay

@@ -165,6 +165,8 @@
     <string name="settings_tab_agents">Agents</string>
     <string name="settings_tab_remote">Remote control</string>
     <string name="settings_tab_system">System</string>
+    <string name="settings_tab_browser">Browser</string>
+    <string name="settings_browser_desc">Camoufox browser settings and installation</string>
     <string name="settings_sandbox_title">Execution sandbox</string>
     <string name="settings_sandbox_desc">Always on: AI can only write to the project directory and the whitelist below; everything else is read-only. Commands run in an OS-level sandbox</string>
     <string name="settings_sandbox_querying">Checking sandbox status…</string>
@@ -182,6 +184,63 @@
     <string name="pick_save_file_title">Export file</string>
     <string name="pick_file_filter">%1$s files (*.%2$s)</string>
     <string name="settings_remove">Remove</string>
+    <string name="browser_section_path">Path &amp; installation</string>
+    <string name="browser_section_behavior">Launch behavior</string>
+    <string name="browser_section_fingerprint">Fingerprint overrides</string>
+    <string name="browser_section_proxy">Proxy</string>
+    <string name="browser_section_advanced">Advanced</string>
+    <string name="browser_save">Save settings</string>
+    <string name="browser_path_required">Browser path required: set browserHome or binary path</string>
+    <string name="browser_check_update">Check for updates</string>
+    <string name="browser_install_latest">Install latest</string>
+    <string name="browser_installed_versions">Installed versions</string>
+    <string name="browser_versions_empty">No installed versions yet</string>
+    <string name="browser_not_configured_hint">Browser directory not configured yet. Set browserHome or install Camoufox first.</string>
+    <string name="browser_modify">Change</string>
+    <string name="browser_pick_home_title">Select browser directory</string>
+    <string name="browser_status_installed">Installed: %1$s</string>
+    <string name="browser_status_latest">Latest version: %1$s</string>
+    <string name="browser_status_update_available">A new version is available</string>
+    <string name="browser_status_up_to_date">Up to date</string>
+    <string name="browser_field_home">Browser directory (browserHome)</string>
+    <string name="browser_field_binary_path">Executable path (binaryPath, optional)</string>
+    <string name="browser_field_auto_check_update">Check for updates on startup</string>
+    <string name="browser_field_headless">Headless mode</string>
+    <string name="browser_field_humanize">Humanize actions</string>
+    <string name="browser_field_humanize_max">Max humanize delay seconds (empty = default)</string>
+    <string name="browser_field_block_images">Block images</string>
+    <string name="browser_field_block_webgl">Block WebGL</string>
+    <string name="browser_field_block_webrtc">Block WebRTC</string>
+    <string name="browser_field_disable_coop">Disable COOP (cross-origin isolation)</string>
+    <string name="browser_field_extra_args">Extra launch arguments (space or comma separated)</string>
+    <string name="browser_field_user_agent">User-Agent (empty = don't override)</string>
+    <string name="browser_field_locale">Locale</string>
+    <string name="browser_field_timezone">Timezone</string>
+    <string name="browser_field_webgl_vendor">WebGL vendor</string>
+    <string name="browser_field_webgl_renderer">WebGL renderer</string>
+    <string name="browser_field_webrtc_ipv4">WebRTC IPv4</string>
+    <string name="browser_field_webrtc_ipv6">WebRTC IPv6</string>
+    <string name="browser_field_geolocation_lat">Geolocation latitude</string>
+    <string name="browser_field_geolocation_lon">Geolocation longitude</string>
+    <string name="browser_field_screen_size">Screen size (empty = don't override)</string>
+    <string name="browser_field_window_size">Window size (empty = don't override)</string>
+    <string name="browser_field_hardware_concurrency">Hardware concurrency</string>
+    <string name="browser_field_max_touch_points">Max touch points</string>
+    <string name="browser_field_fonts">Fonts (comma separated)</string>
+    <string name="browser_field_proxy_type">Proxy type</string>
+    <string name="browser_field_proxy_host">Host</string>
+    <string name="browser_field_proxy_port">Port</string>
+    <string name="browser_field_proxy_bypass">Bypass list (comma separated)</string>
+    <string name="browser_field_proxy_username">Username</string>
+    <string name="browser_field_proxy_password">Password</string>
+    <string name="browser_proxy_http_cred_hint">Only SOCKS proxies support credentials; HTTP proxy credentials are not supported yet.</string>
+    <string name="browser_field_advanced_json">Advanced JSON config (advancedConfig)</string>
+    <string name="browser_advanced_invalid_json">Invalid JSON: must be valid JSON parseable as an object (or leave empty).</string>
+    <string name="browser_fingerprint_hint">Empty = don't override; let Camoufox generate them automatically (recommended).</string>
+    <string name="browser_refresh_failed">Failed to refresh browser settings</string>
+    <string name="browser_save_failed">Failed to save browser settings</string>
+    <string name="browser_install_failed">Failed to install Camoufox</string>
+    <string name="browser_check_update_failed">Failed to check Camoufox update</string>
     <string name="settings_remote_title">Remote control</string>
     <string name="settings_remote_desc">Allow phones/browsers to control this machine over the network (embedded server hosts the Web UI)</string>
     <string name="settings_remote_state_idle">Enable to allow phones/browsers to control this machine</string>
@@ -397,14 +456,15 @@
     <string name="sidebar_pin">Pin sidebar</string>
     <string name="sidebar_unpin">Auto-hide sidebar</string>
     <string name="sidebar_edge_handle">Open sidebar</string>
+    <string name="sidebar_version">Mederi v%1$s</string>
     <string name="main_initializing">Initializing...</string>
     <string name="main_ready">Ready</string>
     <string name="sysinfo_cores">" (%1$d cores)"</string>
     <string name="sysinfo_heap">JVM Heap</string>
     <string name="sysinfo_memory_rss">Memory (RSS)</string>
-    <string name="rightdock_artifacts">Artifacts</string>
-    <string name="rightdock_browser">Browser</string>
-    <string name="rightdock_diff">Code review</string>
+    <string name="rightdock_artifacts">Viewer</string>
+    <string name="rightdock_browser">Web</string>
+    <string name="rightdock_diff">Files</string>
     <string name="rightdock_overview">Overview</string>
     <string name="rightdock_plan">Plan</string>
     <string name="rightdock_settings">Settings</string>
@@ -438,6 +498,7 @@
     <string name="subagentui_status_error">Failed</string>
     <string name="subagentui_status_running">Running</string>
     <string name="subagentui_status_stopped">Stopped</string>
+    <string name="subagentui_stop_task">Stop subagent</string>
     <string name="subagentui_tracker_title">Subagent tracker (%1$d)</string>
     <string name="termview_remote_title">Remote terminal</string>
     <string name="termview_remote_unavailable">Coming with the remote WS channel (/v1/terminal/ws)</string>
@@ -458,8 +519,8 @@
     <string name="dock_plan_pending">Plan awaiting approval</string>
     <string name="dock_plan_modify">Modify</string>
     <string name="dock_plan_approve">Approve &amp; run</string>
-    <string name="plan_approval_title">Implementation Plan: %1$s</string>
-    <string name="plan_approval_title_default">Implementation Plan</string>
+    <string name="plan_approval_title">Plan: %1$s</string>
+    <string name="plan_approval_title_default">Plan</string>
     <string name="plan_approval_approved">Approved</string>
     <string name="plan_approval_proceed">Proceed</string>
     <string name="dock_artifact_empty">No artifact or attachment open</string>
@@ -483,16 +544,25 @@
     <string name="dock_exported">Exported</string>
     <string name="dock_export_html">Export HTML</string>
     <string name="dock_export_pdf">Export PDF</string>
-    <string name="dock_browser_unsupported">The built-in browser is not supported on this frontend</string>
-    <string name="dock_browser_desktop_only">Desktop only; on remote/web use browser automation tasks (headless camoufox)</string>
+    <string name="dock_browser_unsupported">The web panel is not supported on this frontend</string>
+    <string name="dock_browser_desktop_only">Desktop only (web panel); on remote/web use browser automation tasks (headless camoufox)</string>
     <string name="browser_new_tab">New tab</string>
-    <string name="browser_empty_hint">Built-in browser: click + at the top right to open a new tab; the AI opens a tab automatically when starting a JCEF task</string>
+    <string name="browser_empty_hint">Web panel: click + at the top right to open a new tab; the AI opens a tab automatically when starting a JCEF task</string>
     <string name="browser_back">Back</string>
     <string name="browser_forward">Forward</string>
     <string name="browser_reload">Reload</string>
     <string name="browser_stop">Stop</string>
     <string name="browser_url_placeholder">Type a URL (http/https auto-completed)</string>
     <string name="browser_go">Go</string>
+    <!-- Files dual tab & file tree (added in S1) -->
+    <string name="files_subtab_tree">Tree</string>
+    <string name="files_subtab_diff">Modified</string>
+    <string name="tree_collapse_all">Collapse All</string>
+    <string name="tree_refresh">Refresh</string>
+    <string name="tree_search_placeholder">Filter files…</string>
+    <string name="tree_unsupported">File tree not supported on this platform</string>
+    <string name="tree_empty_dir">(empty)</string>
+    <string name="tree_read_error">Cannot read file</string>
     <string name="skill_title">Skill management</string>
     <string name="skill_set_root_desc">Set Skill root directory</string>
     <string name="skill_refresh">Refresh Skills</string>
@@ -528,6 +598,7 @@
     <string name="mcp_add_dialog_title">Add MCP server</string>
     <string name="mcp_edit_dialog_title">Edit MCP server - %1$s</string>
     <string name="mcp_status_failed">Failed</string>
+    <string name="mcp_tools_count">%1$d tools</string>
     <string name="mcp_more">More</string>
     <string name="mcp_reverify">Re-check</string>
     <string name="mcp_edit_config">Edit configuration</string>
@@ -593,5 +664,33 @@
     <!-- Model capability tags (ChatInputCard.kt ModelCapabilityTag) -->
     <string name="cap_thinking">Thinking</string>
     <string name="cap_image">Image</string>
+    <!-- Event message card (EventMessageCard.kt) -->
+    <string name="event_message_open_panel">Open in side panel</string>
+    <string name="event_message_collapse">Collapse</string>
+    <string name="event_message_expand">Expand</string>
+    <string name="event_message_report_path">Report Path</string>
+    <string name="event_message_no_content">(No report content available)</string>
+    <string name="event_message_subagent_title">%1$s Subagent</string>
+    <string name="event_message_open_report_title">%1$s Report</string>
+    <!-- Overview panel (OverviewPanel.kt, S7 i18n; status_idle/mcp_tools_count already exist, not duplicated) -->
+    <string name="overview_title">Overview</string>
+    <string name="overview_section_conversation">Conversation</string>
+    <string name="overview_section_plan">Plan</string>
+    <string name="overview_tokens_title">Token Usage</string>
+    <string name="status_working">Working</string>
+    <string name="status_waiting">Waiting</string>
+    <string name="status_error">Error</string>
+    <string name="plan_status_pending">Pending</string>
+    <string name="plan_status_in_progress">In Progress</string>
+    <string name="plan_status_completed">Completed</string>
+    <string name="plan_status_voided">Voided</string>
+    <string name="plan_status_none">No Plan</string>
+    <string name="plan_read_full">Read plan.md</string>
+    <string name="overview_approve_btn">Approve ⌘↵</string>
+    <string name="step_label">Step %1$d</string>
+    <string name="step_spec">Spec ↗</string>
+    <string name="subagent_card_title">Subagents</string>
+    <string name="subagent_running_count">%1$d running</string>
+    <string name="rawmsg_summary">%1$d messages ›</string>
 </resources>
 

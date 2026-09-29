@@ -305,7 +305,8 @@ object SnapshotReducer {
         CoreEventType.SUBAGENT_STARTED,
         CoreEventType.SUBAGENT_COMPLETED,
         CoreEventType.SUBAGENT_ERROR,
-        CoreEventType.SUBAGENT_STOPPED -> snapshot
+        CoreEventType.SUBAGENT_STOPPED,
+        CoreEventType.SUBAGENT_DISCARDED -> snapshot
     }
 
     // ------------------------------------------------------------------
@@ -540,7 +541,7 @@ object SnapshotReducer {
         if (target != null) {
             val prevInput = when (val s = target.state) {
                 is ToolCallState.Running -> s.input
-                is ToolCallState.Pending -> emptyMap()
+                is ToolCallState.Pending -> s.input
                 is ToolCallState.Completed -> s.input
                 is ToolCallState.Failed -> s.input
             }

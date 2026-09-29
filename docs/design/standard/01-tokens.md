@@ -79,6 +79,8 @@
 | `accent-hover` | `iris-10` | `iris-10` |
 | `accent-bg` | `iris-3` | `iris-3` |
 | `accent-text` | `iris-11` | `iris-11` |
+| `accent-border` | `iris-6` `#3c3673` | `iris-6` `#cbcafe` |
+| `accent-focus` | `iris-7` `#4e459c` | `iris-7` `#b8b6fc` |
 | `on-accent` | `gray-1`（accent 实色上的文字） | `#ffffff` |
 | `bg-inverted` | `gray-12`（反色灰控件底，如 send 按钮） | `gray-12` |
 | `on-inverted` | `gray-1`（反色灰控件上的文字） | `gray-1` |

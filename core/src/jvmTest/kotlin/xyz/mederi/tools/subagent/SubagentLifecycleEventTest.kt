@@ -140,4 +140,66 @@ class SubagentLifecycleEventTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `stop carries user closed reason into event result`() = runBlocking {
+        val runner = FakeRunner().apply { mode = FakeRunner.Mode.HANG }
+        val bus = MutableSharedFlow<MederiEvent>(replay = 64)
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val manager = newManager(runner, bus, scope)
+            val agentId = spawn(manager, task = "long running task")
+            withTimeout(5_000) { bus.first { it.type == EventType.SUBAGENT_STARTED && it.payload["agentId"] == agentId } }
+
+            val stopOutput = manager.stop(agentId, reason = "被用户关闭")
+            println("[TEST] stop() return json: $stopOutput")
+
+            val stoppedEvent = withTimeout(5_000) {
+                bus.first { it.type == EventType.SUBAGENT_STOPPED && it.payload["agentId"] == agentId }
+            }
+            println("[TEST] SUBAGENT_STOPPED event payload: ${stoppedEvent.payload}")
+            assertEquals("被用户关闭", stoppedEvent.payload["result"], "payload 中的 result 应为 '被用户关闭'")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `rollbackSubagents silently discards uncreated subagents without stopped event`() = runBlocking {
+        val runner = FakeRunner().apply { mode = FakeRunner.Mode.HANG }
+        val bus = MutableSharedFlow<MederiEvent>(replay = 64)
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val manager = newManager(runner, bus, scope)
+            val keptAgent = spawn(manager, task = "created before rollback point")
+            val discardedAgent = spawn(manager, task = "created after rollback point")
+
+            withTimeout(5_000) { bus.first { it.type == EventType.SUBAGENT_STARTED && it.payload["agentId"] == keptAgent } }
+            withTimeout(5_000) { bus.first { it.type == EventType.SUBAGENT_STARTED && it.payload["agentId"] == discardedAgent } }
+
+            val discardedList = manager.rollbackSubagents("sess_parent", keptAgentIds = setOf(keptAgent))
+            assertEquals(listOf(discardedAgent), discardedList)
+
+            // discardedAgent 必须发出 SUBAGENT_DISCARDED 事件
+            val discardedEvent = withTimeout(5_000) {
+                bus.first { it.type == EventType.SUBAGENT_DISCARDED && it.payload["agentId"] == discardedAgent }
+            }
+            println("[TEST] SUBAGENT_DISCARDED event received: ${discardedEvent.payload}")
+
+            // 等待一小会儿，确保协程全部执行完毕
+            kotlinx.coroutines.delay(100)
+
+            // discardedAgent 坚决不能有 SUBAGENT_STOPPED 事件
+            val hasStoppedEvent = bus.replayCache.any {
+                it.type == EventType.SUBAGENT_STOPPED && it.payload["agentId"] == discardedAgent
+            }
+            assertEquals(false, hasStoppedEvent, "被无感丢弃的子 Agent 坚决不得发射 SUBAGENT_STOPPED 事件")
+
+            // keptAgent 仍保持存活
+            val keptStatus = manager.status(keptAgent)
+            assertTrue(keptStatus.contains("\"status\":\"RUNNING\""), "回退点前的子 Agent 应保持 RUNNING: $keptStatus")
+        } finally {
+            scope.cancel()
+        }
+    }
 }

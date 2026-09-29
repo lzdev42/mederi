@@ -4,15 +4,16 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,6 +34,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.theme.MederiRadius
 import xyz.mederi.ui.components.atoms.MederiIconButton
 import xyz.mederi.ui.components.atoms.MederiSendRoundButton
 
@@ -47,7 +49,7 @@ internal fun AgentModeSelector(viewModel: WorkspaceViewModel) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
-            .height(28.dp)
+            .height(26.dp)
             .clip(RoundedCornerShape(6.dp))
             .clickable {
                 viewModel.selectAgentMode(if (isAutoApprove) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
@@ -77,7 +79,12 @@ internal fun AgentModeSelector(viewModel: WorkspaceViewModel) {
 
 /**
  * 自动审批开关（桌面输入条与移动端设置抽屉共用）。
+ * 真实 mini-switch：28x16 track（r10）+ 12x12 thumb + 2dp inset；
+ * ON: accentPrimary track + onAccentPrimary thumb；OFF: divider track + textPrimary thumb；
+ * thumb 位移 animateDpAsState(120ms) 平滑过渡（对齐原型 .mini-switch）。
  * 唯一真理源 = viewModel.selectedAgentMode，写入走 selectAgentMode。
+ * scale/switchWidth/switchHeight 为历史 Material3 Switch 缩放包装遗留参数（桌面 0.65 / 移动抽屉 0.8），
+ * 当前实现固定真实尺寸，参数不再生效（保留签名兼容移动端调用点）。
  */
 @Composable
 internal fun AutoApproveSwitch(
@@ -88,21 +95,29 @@ internal fun AutoApproveSwitch(
 ) {
     val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
     val colors = LocalMederiColors.current
-    Switch(
-        checked = selectedAgentMode == AgentMode.AUTONOMOUS,
-        onCheckedChange = { checked ->
-            viewModel.selectAgentMode(if (checked) AgentMode.AUTONOMOUS else AgentMode.APPROVAL)
-        },
-        modifier = Modifier
-            .scale(scale)
-            .size(width = switchWidth, height = switchHeight),
-        colors = SwitchDefaults.colors(
-            checkedThumbColor = Color.White,
-            checkedTrackColor = colors.accentPrimary,
-            uncheckedThumbColor = colors.textMuted,
-            uncheckedTrackColor = colors.buttonSecondary
-        )
+    val checked = selectedAgentMode == AgentMode.AUTONOMOUS
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 14.dp else 2.dp,
+        animationSpec = tween(120),
+        label = "autoApproveThumb",
     )
+    Box(
+        modifier = Modifier
+            .size(width = 28.dp, height = 16.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (checked) colors.accentPrimary else colors.divider)
+            .clickable {
+                viewModel.selectAgentMode(if (checked) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .offset(x = thumbOffset, y = 2.dp)
+                .clip(CircleShape)
+                .background(if (checked) colors.onAccentPrimary else colors.textPrimary)
+        )
+    }
 }
 
 /** 发送 / 停止按钮。支持排队模式与中止模式。样式收敛为 MederiSendRoundButton（反色 send，KDoc 已注明）。 */
@@ -131,16 +146,16 @@ internal fun SendButton(
 internal fun ChipSelectorPill(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    height: Dp = 28.dp,
+    height: Dp = 26.dp,
     onClick: () -> Unit = {}
 ) {
     val colors = LocalMederiColors.current
     Row(
         modifier = Modifier
             .height(height)
-            .clip(RoundedCornerShape(8.dp))
-            .background(colors.surfaceInput)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(MederiRadius.Control))
+            .background(colors.surfaceHover)
+            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(MederiRadius.Control))
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -196,13 +211,13 @@ internal fun ContextToolChip(
     val contentColor = if (highlight) colors.accentWarning else colors.textSecondary
     Row(
         modifier = Modifier
-            .height(28.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (highlight) colors.accentWarning.copy(alpha = 0.10f) else Color.Transparent)
+            .height(26.dp)
+            .clip(RoundedCornerShape(MederiRadius.Control))
+            .background(if (highlight) colors.accentWarning.copy(alpha = 0.10f) else colors.surfaceHover)
             .border(
                 1.dp,
                 if (highlight) colors.accentWarning.copy(alpha = 0.5f) else colors.surfaceCardBorder,
-                RoundedCornerShape(8.dp)
+                RoundedCornerShape(MederiRadius.Control)
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp),

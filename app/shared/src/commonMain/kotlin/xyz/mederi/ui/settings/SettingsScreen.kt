@@ -33,6 +33,7 @@ private enum class SettingsTab(val icon: ImageVector) {
     AGENTS(FeatherIcons.Users),
     GENERAL(FeatherIcons.Droplet),
     SANDBOX(FeatherIcons.Shield),
+    BROWSER(FeatherIcons.Globe),
     REMOTE(FeatherIcons.Sliders),
     SYSTEM(FeatherIcons.Activity)
 }
@@ -44,6 +45,7 @@ private fun settingsTabLabel(tab: SettingsTab): String = when (tab) {
     SettingsTab.AGENTS -> stringResource(Res.string.settings_tab_agents)
     SettingsTab.GENERAL -> stringResource(Res.string.settings_tab_general)
     SettingsTab.SANDBOX -> stringResource(Res.string.settings_tab_sandbox)
+    SettingsTab.BROWSER -> stringResource(Res.string.settings_tab_browser)
     SettingsTab.REMOTE -> stringResource(Res.string.settings_tab_remote)
     SettingsTab.SYSTEM -> stringResource(Res.string.settings_tab_system)
 }
@@ -55,6 +57,7 @@ private fun settingsTabSubtitle(tab: SettingsTab): String = when (tab) {
     SettingsTab.AGENTS -> stringResource(Res.string.settings_agents_desc)
     SettingsTab.GENERAL -> stringResource(Res.string.settings_appearance_desc)
     SettingsTab.SANDBOX -> stringResource(Res.string.settings_sandbox_desc)
+    SettingsTab.BROWSER -> stringResource(Res.string.settings_browser_desc)
     SettingsTab.REMOTE -> stringResource(Res.string.settings_remote_desc)
     SettingsTab.SYSTEM -> stringResource(Res.string.settings_system_title)
 }
@@ -246,6 +249,7 @@ private fun DesktopSettingsLayout(
                                 SettingsTab.AGENTS -> AgentSettingsPanel(isCompact = false)
                                 SettingsTab.GENERAL -> GeneralSettingsPanel(isCompact = false)
                                 SettingsTab.SANDBOX -> SandboxSettingsPanel()
+                                SettingsTab.BROWSER -> BrowserSettingsPanel()
                                 SettingsTab.REMOTE -> RemoteSettingsPanel(isCompact = false)
                                 SettingsTab.SYSTEM -> SystemSettingsPanel(isCompact = false)
                                 SettingsTab.PROVIDERS -> {}
@@ -442,6 +446,7 @@ private fun CompactSettingsLayout(
                 SettingsTab.AGENTS -> AgentSettingsPanel(isCompact = true)
                 SettingsTab.GENERAL -> GeneralSettingsPanel(isCompact = true)
                 SettingsTab.SANDBOX -> SandboxSettingsPanel()
+                SettingsTab.BROWSER -> BrowserSettingsPanel()
                 SettingsTab.REMOTE -> RemoteSettingsPanel(isCompact = true)
                 SettingsTab.SYSTEM -> SystemSettingsPanel(isCompact = true)
             }

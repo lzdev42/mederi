@@ -184,6 +184,20 @@ class CamoufoxInstaller(
         return if (binary.exists()) info.binaryPath else null
     }
 
+    /**
+     * 列出已安装的 Camoufox 版本：{home.camoufoxDir} 下每个子目录名 = 版本 tag。
+     * 按 tag 字典序返回；目录不存在或为空返回 emptyList。幂等、不抛。
+     */
+    fun listInstalledVersions(): List<String> {
+        val dir = home.camoufoxDir
+        if (!dir.isDirectory) return emptyList()
+        return dir.listFiles { file -> file.isDirectory }
+            ?.map { it.name }
+            ?.filter { it.isNotBlank() }
+            ?.sorted()
+            ?: emptyList()
+    }
+
     // ── 内部 ──
 
     internal suspend fun download(url: String, target: File) {

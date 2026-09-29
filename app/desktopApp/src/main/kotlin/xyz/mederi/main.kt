@@ -1,5 +1,6 @@
 package xyz.mederi
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -9,9 +10,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.core.bridge.MederiAiCore
-import xyz.mederi.server.RemoteServer
+import xyz.mederi.server.Server
 import xyz.mederi.server.terminal.PtyTerminalHub
 import xyz.mederi.ui.appstate.AppState
+import xyz.mederi.ui.components.LocalProjectFileTreeProvider
+import xyz.mederi.ui.components.ProjectFileTreeProviderJvm
 import java.io.File
 
 /** 终端会话注册表（desktop 全局单例，随进程生命周期）。 */
@@ -42,7 +45,7 @@ fun main() = application {
 
     Window(
         onCloseRequest = {
-            RemoteServer.stop()
+            Server.stop()
             terminalHub.shutdown()
             DesktopBrowserRuntime.shutdown()
             appStateHolder.value?.remoteControl?.stopTunnel()
@@ -51,24 +54,29 @@ fun main() = application {
         },
         title = "Mederi",
     ) {
-        MederiApp(
-            onAppStateReady = { appState ->
-                appStateHolder.value = appState
+        // 注入文件树数据源（desktop 宿主专属）：根 = 当前工作目录（AppState 项目目录在 MederiApp 内
+        // 创建才可得，宿主注入点取不到，按 S3 spec 退路用 user.dir）
+        val fileTreeProvider = remember { ProjectFileTreeProviderJvm(File(System.getProperty("user.dir") ?: ".")) }
+        CompositionLocalProvider(LocalProjectFileTreeProvider provides fileTreeProvider) {
+            MederiApp(
+                onAppStateReady = { appState ->
+                    appStateHolder.value = appState
 
                 // 注入遥控 hooks：desktop 宿主 = 内嵌 server + cloudflared 隧道（共享同一 MederiAiCore 实例）
-                val aiCore = appState.aiCore
-                if (aiCore is MederiAiCore) {
-                    appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)
+                    val aiCore = appState.aiCore
+                    if (aiCore is MederiAiCore) {
+                        appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)
 
-                    // 启动后台预热桌面浏览器全局单例（固定 useOsr = true，专供 inkcompose 结构图与 Markdown 导出）
-                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-                        DesktopBrowserRuntime.ensureInitialized()
+                        // 启动后台预热桌面浏览器全局单例（固定 useOsr = true，专供 inkcompose 结构图与 Markdown 导出）
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+                            DesktopBrowserRuntime.ensureInitialized()
+                        }
                     }
-                }
 
-                // 注入本地终端：pty4j registry（desktop 进程内直连，jediterm 渲染）
-                appState.terminalManager = terminalHub
-            },
-        )
+                    // 注入本地终端：pty4j registry（desktop 进程内直连，jediterm 渲染）
+                    appState.terminalManager = terminalHub
+                },
+            )
+        }
     }
 }

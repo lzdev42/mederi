@@ -45,7 +45,7 @@ fun RightExtensionPanel(
     maxPanelWidth: Dp = Dp.Infinity,
     modifier: Modifier = Modifier
 ) {
-    val defaultOverviewWidthDp = 400f
+    val defaultOverviewWidthDp = 410f
     val defaultReaderWidthDp = remember(screenWidth, maxPanelWidth) {
         (screenWidth.value * (2f / 3f)).coerceAtMost(maxPanelWidth.value).coerceAtLeast(340f)
     }
@@ -61,7 +61,7 @@ fun RightExtensionPanel(
     LaunchedEffect(currentPanel) {
         if (currentPanel != null) {
             panelToDisplay = currentPanel
-            // 切换到实施计划等阅读面板时，若当前宽度较小，默认展开至 2/3 窗口宽度以提供最佳阅读体验
+            // 切换到计划等阅读面板时，若当前宽度较小，默认展开至 2/3 窗口宽度以提供最佳阅读体验
             if (currentPanel == RightDockPanel.PLAN && readerWidthDp < defaultReaderWidthDp) {
                 readerWidthDp = defaultReaderWidthDp
             }
@@ -141,7 +141,7 @@ private fun RightExtensionPanelContent(
 
     val panelIcon = when (panel) {
         RightDockPanel.OVERVIEW -> FeatherIcons.Activity
-        RightDockPanel.DIFF -> FeatherIcons.GitCommit
+        RightDockPanel.DIFF -> FeatherIcons.Folder
         RightDockPanel.PLAN -> FeatherIcons.FileText
         RightDockPanel.ARTIFACTS -> FeatherIcons.File
         RightDockPanel.TERMINAL -> FeatherIcons.Terminal
@@ -215,7 +215,7 @@ private fun RightExtensionPanelContent(
                         rawVm = rawMessagesViewModel,
                         colors = colors
                     )
-                    RightDockPanel.DIFF -> DiffPanelContent(
+                    RightDockPanel.DIFF -> FilesPanelContent(
                         viewModel = viewModel,
                         colors = colors
                     )
@@ -272,7 +272,7 @@ private fun SinglePanelHeader(
                 text = title,
                 color = colors.textPrimary,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.Medium
             )
         }
 

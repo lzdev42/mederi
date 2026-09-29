@@ -5,14 +5,14 @@ import io.ktor.server.netty.Netty
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.core.contract.dto.ReadyInfo
-import xyz.mederi.server.remoteModule
+import xyz.mederi.server.serverModule
 import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 import java.io.File
 
 /**
  * Mederi Server：独立 JVM 进程运行的遥控端点（headless 部署用）。
  *
- * 与 desktop 内嵌 server 共享同一套 Ktor 配置（见 shared jvmMain 的 RemoteServer/remoteModule）。
+ * 与 desktop 内嵌 server 共享同一套 Ktor 配置（见 shared jvmMain 的 Server/serverModule）。
  * 默认自托管内置 wasmJs Web UI（同源访问）；若指定 `MEDERI_WEBAPP_DIR` 则优先从外部目录加载（开发调试用）。
  *
  * 启动参数（环境变量）：
@@ -48,7 +48,7 @@ fun main() {
     }
 
     embeddedServer(Netty, port = port, host = "0.0.0.0") {
-        remoteModule(
+        serverModule(
             aiCore = aiCore,
             ready = ReadyInfo(ready = initError == null, configDir = configDir),
             password = password,

@@ -23,6 +23,10 @@ import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.CreateSessionRequest
 import xyz.mederi.api.RenameSessionRequest
 import xyz.mederi.api.SendMessageRequest
+import xyz.mederi.api.UpdateCamoufoxSettingsInput as CoreUpdateCamoufoxSettingsInput
+import xyz.mederi.browser.resolveProfileDir
+import xyz.mederi.browser.toCamoufoxConfig
+import xyz.mederi.browser.toFirefoxPrefs
 import xyz.mederi.core.autotitle.SessionTitleService
 import xyz.mederi.core.contract.AiCore
 import xyz.mederi.plan.toTodoProjection
@@ -34,6 +38,9 @@ import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.core.contract.dto.CreateProjectInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.models.ApiKeyOption
+import xyz.mederi.core.contract.models.BrowserStatus
+import xyz.mederi.core.contract.models.CamoufoxSettings
+import xyz.mederi.core.contract.models.CamoufoxUpdate
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.ConversationStatus
@@ -52,6 +59,7 @@ import xyz.mederi.core.contract.models.TokenUsage
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
+import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.Session
@@ -134,6 +142,9 @@ class MederiAiCore(
 
     private lateinit var mederi: Mederi
 
+    private lateinit var browserSettingsManager: xyz.mederi.browser.BrowserSettingsManager
+    private lateinit var browserSettingsApi: xyz.mederi.api.BrowserSettingsApi
+
     /**
      * 沙盒全局白名单写穿：设置页改白名单后实时写入进程级 SandboxConfig，
      * 下一个 turn 的 CommandSandbox 即生效，无需重启。
@@ -175,34 +186,44 @@ class MederiAiCore(
                 configDir = this@MederiAiCore.configDir
                 // 出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带上 Mederi 身份头
                 userAgent = AppInfo.userAgent
-                // 浏览器自动化：注册 Camoufox（headless 可选能力；未安装/未配置时选择它会得到引导错误）。
-                // UI 层（desktop）再注册内置 JCEF——注册表默认策略优先内置可见浏览器（JCEF），
-                // headless server 无 JCEF 时默认才落到 Camoufox。
-                // AI 通过 run_browser_task(browser=...) 选择：测自己网页→jcef，第三方自动化→camoufox。
-                xyz.mederi.browser.BrowserRegistry.register(
-                    name = "camoufox",
-                    kind = xyz.mederi.browser.BrowserKind.CAMOUFOX,
-                    factory = {
-                        val browserHome = xyz.mederi.browser.install.BrowserHome.of(
-                            xyz.mederi.browser.BrowserRuntime.browserHome
-                        )
-                        val binary = browserHome
-                            ?.let { home -> xyz.mederi.browser.install.CamoufoxInstaller(home).installedBinaryPath() }
-                            ?: xyz.mederi.browser.BrowserRuntime.camoufoxPath
-                            ?: error(
-                                "未找到 Camoufox：请先在设置里配置浏览器工作目录并下载 Camoufox，" +
-                                    "或手动指定 camoufoxPath"
-                            )
-                        val profileDir = browserHome
-                            ?.profilesDir?.let { it.mkdirs(); it.toPath() }
-                            ?: java.nio.file.Files.createTempDirectory("mederi-camoufox-profile-")
-                        xyz.mederi.browser.BiDiBrowserControl(
-                            binaryPath = binary,
-                            profilePath = profileDir
-                        )
-                    }
-                )
             }
+            // 浏览器自动化：注册 Camoufox（headless 可选能力；未安装/未配置时选择它会得到引导错误）。
+            // UI 层（desktop）再注册内置 JCEF——注册表默认策略优先内置可见浏览器（JCEF），
+            // headless server 无 JCEF 时默认才落到 Camoufox。
+            // AI 通过 run_browser_task(browser=...) 选择：测自己网页→jcef，第三方自动化→camoufox。
+            browserSettingsManager = xyz.mederi.browser.BrowserSettingsManager(mederi.settingsStore)
+            browserSettingsApi = xyz.mederi.api.impl.BrowserSettingsApiImpl(
+                browserSettingsManager,
+                installerProvider = {
+                    xyz.mederi.browser.install.BrowserHome.of(browserSettingsManager.current().browserHome)
+                        ?.let { xyz.mederi.browser.install.CamoufoxInstaller(it) }
+                }
+            )
+            browserSettingsManager.get()  // 预热缓存（挂起）
+            xyz.mederi.browser.BrowserRegistry.register(
+                name = "camoufox",
+                kind = xyz.mederi.browser.BrowserKind.CAMOUFOX,
+                factory = {
+                    val settings = browserSettingsManager.current()
+                    val browserHome = xyz.mederi.browser.install.BrowserHome.of(settings.browserHome)
+                    val binary = browserHome
+                        ?.let { home -> xyz.mederi.browser.install.CamoufoxInstaller(home).installedBinaryPath() }
+                        ?: settings.binaryPath
+                        ?: error("未找到 Camoufox：请在设置页 BROWSER 配置浏览器工作目录并下载，或手动指定二进制路径")
+                    // profile 目录跟随 camoufox 路径：browserHome/profiles 或 binaryPath 同级/profiles，
+                    // 永不落到系统临时目录（临时目录会被系统清理、跨重启丢失登录态）。
+                    val profileDir = settings.resolveProfileDir()
+                        ?: error("未配置浏览器路径：请先设置 browserHome 或 binaryPath")
+                    xyz.mederi.browser.BiDiBrowserControl(
+                        binaryPath = binary,
+                        profilePath = profileDir,
+                        headless = settings.headless,
+                        config = settings.toCamoufoxConfig(),
+                        extraArgs = settings.extraArgs,
+                        proxyPrefs = settings.proxy?.toFirefoxPrefs() ?: emptyMap()
+                    )
+                }
+            )
             cleanupLegacyBuiltinProviders()
             cleanupStaleRunningSessions()
             syncBuiltinProviders()
@@ -228,7 +249,8 @@ class MederiAiCore(
      * 配置时才查，结果打日志；后续 UI 可订阅/展示）。
      */
     private fun startCamoufoxUpdateCheck() {
-        val home = xyz.mederi.browser.install.BrowserHome.of(xyz.mederi.browser.BrowserRuntime.browserHome)
+        if (!browserSettingsManager.current().autoCheckUpdate) return
+        val home = xyz.mederi.browser.install.BrowserHome.of(browserSettingsManager.current().browserHome)
             ?: return  // 未设置浏览器工作目录，跳过
         if (!xyz.mederi.browser.install.CamoufoxPlatform.supported) {
             xyz.mederi.debug.DebugLog.info(
@@ -1168,6 +1190,52 @@ class MederiAiCore(
     }
 
     // ==========================================
+    // 浏览器设置契约（进程内直调 core BrowserSettingsApi）
+    // ==========================================
+
+    override suspend fun getCamoufoxSettings(): Result<CamoufoxSettings> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.getSettings().toContract()
+    }
+
+    override suspend fun updateCamoufoxSettings(input: UpdateCamoufoxSettingsInput): Result<CamoufoxSettings> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.updateSettings(CoreUpdateCamoufoxSettingsInput(input.settings.toCoreDto())).toContract()
+    }
+
+    override suspend fun getCamoufoxStatus(): Result<BrowserStatus> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.getStatus().toContract()
+    }
+
+    override suspend fun checkCamoufoxUpdate(): Result<CamoufoxUpdate> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.checkUpdate().toContract()
+    }
+
+    override suspend fun installCamoufox(versionTag: String?): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.install(versionTag)
+    }
+
+    override suspend fun listInstalledCamoufoxVersions(): Result<List<String>> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.listInstalledVersions()
+    }
+
+    // ==========================================
     // AGENTS.md 生成（进程内直调 core；读取/注入在 TurnExecutor 代码级完成）
     // ==========================================
 
@@ -1248,5 +1316,12 @@ class MederiAiCore(
         }
         mederi.sessions.getSubagentReport(agentId)
             ?: throw xyz.mederi.api.exception.MederiNotFoundException("Subagent report not found for agent: $agentId")
+    }
+
+    override suspend fun stopSubagent(agentId: String): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.sessions.stopSubagent(agentId)
     }
 }

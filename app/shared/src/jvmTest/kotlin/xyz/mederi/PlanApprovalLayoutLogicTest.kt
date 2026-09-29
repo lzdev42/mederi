@@ -38,13 +38,13 @@ class PlanApprovalLayoutLogicTest {
     fun testReaderSymmetricPaddingLogic() {
         // 验证阅读面板与对话流共用单一真理源：ChatLayout.contentMaxWidth
         val maxContentWidth = ChatLayout.contentMaxWidth
-        assertEquals(1000.dp, maxContentWidth, "Content max width must be single source of truth (1000dp)")
+        assertEquals(820.dp, maxContentWidth, "Content max width must be single source of truth (820dp)")
 
         // 验证当面板宽度超大（如 1440dp）时，正文居中后两侧留白严格对称等宽
         val panelWidth = 1440.dp
         val remainingSpace = panelWidth - maxContentWidth
         val sideMargin = remainingSpace / 2
-        assertEquals(220.dp, sideMargin, "Center aligned reader must have equal margins on both sides")
+        assertEquals(310.dp, sideMargin, "Center aligned reader must have equal margins on both sides")
     }
 
     @Test

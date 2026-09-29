@@ -11,7 +11,7 @@ import java.nio.file.Path
 /**
  * [BrowserControl] 的 Camoufox 实现：用 BiDi 协议（从 BrowserPilot 移植）控制 Camoufox。
  *
- * Camoufox 路径由用户在设置中配置（[MederiConfig.camoufoxPath]），不提供下载能力。
+ * Camoufox 路径与 config 由 BrowserSettingsManager 提供，不提供下载能力。
  * 单页模型：启动后使用第一个 page，所有操作都作用在当前页。
  */
 class BiDiBrowserControl(
@@ -19,7 +19,9 @@ class BiDiBrowserControl(
     private val profilePath: Path,
     private val headless: Boolean = true,
     private val config: CamoufoxConfig = CamoufoxConfig(),
-    private val extraArgs: List<String> = emptyList()
+    private val extraArgs: List<String> = emptyList(),
+    // 已展开的 Firefox proxy prefs（透传给 BiDiBrowser，由上游把 ProxyConfig 展开成 Map）
+    private val proxyPrefs: Map<String, Any> = emptyMap()
 ) : BrowserControl {
 
     private var browser: BiDiBrowser? = null
@@ -32,7 +34,8 @@ class BiDiBrowserControl(
             profilePath = profilePath,
             headless = headless,
             extraArgs = extraArgs,
-            config = config
+            config = config,
+            proxyPrefs = proxyPrefs
         )
         b.start()
         browser = b

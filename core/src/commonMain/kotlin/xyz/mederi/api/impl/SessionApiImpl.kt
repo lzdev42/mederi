@@ -103,6 +103,11 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.getSubagentReport(agentId)
     }
 
+    override suspend fun stopSubagent(agentId: String) = mederiCall {
+        sessionManager.stopSubagent(agentId)
+        Unit
+    }
+
     override suspend fun getFileDiffs(sessionId: String, messageId: String?): List<FileDiff> = mederiCall {
         sessionManager.getFileDiffs(sessionId, messageId)
     }

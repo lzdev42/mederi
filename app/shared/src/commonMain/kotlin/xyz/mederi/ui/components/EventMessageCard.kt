@@ -22,6 +22,15 @@ import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.event_message_collapse
+import mederi.app.shared.generated.resources.event_message_expand
+import mederi.app.shared.generated.resources.event_message_no_content
+import mederi.app.shared.generated.resources.event_message_open_panel
+import mederi.app.shared.generated.resources.event_message_open_report_title
+import mederi.app.shared.generated.resources.event_message_report_path
+import mederi.app.shared.generated.resources.event_message_subagent_title
+import org.jetbrains.compose.resources.stringResource
 
 /**
  * 通用事件消息卡片 (EventMessageCard)
@@ -64,7 +73,9 @@ fun EventMessageCard(
         if (!fileText.isNullOrBlank()) fileText else item.summary
     }
 
-    val displayTitle = "${item.role.lowercase().replaceFirstChar { it.uppercase() }} Subagent"
+    val roleLabel = item.role.lowercase().replaceFirstChar { it.uppercase() }
+    val displayTitle = stringResource(Res.string.event_message_subagent_title, roleLabel)
+    val openReportTitle = stringResource(Res.string.event_message_open_report_title, displayTitle)
 
     Column(
         modifier = modifier
@@ -126,15 +137,15 @@ fun EventMessageCard(
                 if (onOpenReport != null && reportContent.isNotBlank()) {
                     MederiMinimalIconButton(
                         icon = FeatherIcons.Maximize2,
-                        onClick = { onOpenReport("$displayTitle Report", reportContent) },
-                        contentDescription = "Open in side panel",
+                        onClick = { onOpenReport(openReportTitle, reportContent) },
+                        contentDescription = stringResource(Res.string.event_message_open_panel),
                     )
                 }
                 // 折叠/展开按钮
                 MederiMinimalIconButton(
                     icon = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
                     onClick = { isExpanded = !isExpanded },
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    contentDescription = if (isExpanded) stringResource(Res.string.event_message_collapse) else stringResource(Res.string.event_message_expand),
                 )
             }
         }
@@ -163,7 +174,7 @@ fun EventMessageCard(
                     ) {
                         Icon(
                             imageVector = FeatherIcons.FileText,
-                            contentDescription = "Report Path",
+                            contentDescription = stringResource(Res.string.event_message_report_path),
                             tint = colors.textMuted,
                             modifier = Modifier.size(11.dp)
                         )
@@ -220,7 +231,7 @@ fun EventMessageCard(
                         )
                     } else {
                         Text(
-                            text = "(No report content available)",
+                            text = stringResource(Res.string.event_message_no_content),
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = colors.textMuted
                         )

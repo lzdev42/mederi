@@ -11,8 +11,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,8 +27,10 @@ import xyz.mederi.ui.appstate.McpStore
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.CardHeader
 import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.ui.components.atoms.MederiMiniSwitch
 import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
 import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
+import xyz.mederi.ui.components.atoms.MederiTabBadge
 import xyz.mederi.ui.components.atoms.PanelCard
 import xyz.mederi.ui.components.atoms.PanelEmptyState
 import mederi.app.shared.generated.resources.Res
@@ -50,6 +50,7 @@ import mederi.app.shared.generated.resources.mcp_save
 import mederi.app.shared.generated.resources.mcp_save_failed
 import mederi.app.shared.generated.resources.mcp_saving
 import mederi.app.shared.generated.resources.mcp_status_failed
+import mederi.app.shared.generated.resources.mcp_tools_count
 import mederi.app.shared.generated.resources.mcp_title
 import org.jetbrains.compose.resources.stringResource
 
@@ -92,12 +93,19 @@ fun McpManagementCard(
                 icon = FeatherIcons.Cpu,
                 title = stringResource(Res.string.mcp_title),
                 count = {
-                    Text(
-                        text = "$enabledCount/${mcpServers.size}",
-                        color = colors.accentPrimary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MederiTabBadge(count = enabledCount)
+                        if (mcpServers.size != enabledCount) {
+                            Text(
+                                text = "/${mcpServers.size}",
+                                color = colors.textMuted,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
                 },
                 actions = {
                     Row(
@@ -235,23 +243,16 @@ private fun McpServerRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .background(colors.surfaceWorkspace)
+            .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         // 微型开关
-        Switch(
+        MederiMiniSwitch(
             checked = server.enabled,
             onCheckedChange = { checked -> mcpStore.toggleEnabled(server.name, checked) },
             modifier = Modifier
-                .scale(0.65f)
-                .size(width = 30.dp, height = 20.dp),
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = colors.accentPrimary,
-                uncheckedThumbColor = colors.textMuted,
-                uncheckedTrackColor = colors.buttonSecondary
-            )
         )
 
         // 服务名称与状态
@@ -290,10 +291,11 @@ private fun McpServerRow(
                         val count = server.toolCount
                         if (count != null && count > 0) {
                             Text(
-                                text = "${count} tools",
-                                color = colors.accentSuccess,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Normal
+                                text = stringResource(Res.string.mcp_tools_count, count),
+                                color = colors.successText,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontFamily = FontFamily.Monospace
                             )
                         }
                     }

@@ -18,6 +18,22 @@ fun shouldEnableReasoningScroll(enforceMaxHeight: Boolean, isUnbounded: Boolean)
 }
 
 /**
+ * 判定底部「展开/收起」高度切换按钮是否渲染（ReasoningBlock / WorkTraceCard 共用）：
+ * - [enforceMaxHeight] = false（WorkTraceCard 内的推理子项）→ 永不渲染：没有属于自己的高度开关。
+ * - [isUnbounded] = true（已点开全部摊开）→ 必渲染：否则没有收回的入口。
+ * - 限高态：仅当内容实际超出视口（[hasOverflow]，即滚动状态 maxValue > 0）才渲染——
+ *   内容本来就装得下时不显示一个"点了没反应"的按钮。
+ */
+fun shouldShowHeightToggle(
+    enforceMaxHeight: Boolean,
+    isUnbounded: Boolean,
+    hasOverflow: Boolean,
+): Boolean {
+    if (!enforceMaxHeight) return false
+    return isUnbounded || hasOverflow
+}
+
+/**
  * 阻断向外层滚动容器（如 LazyColumn）冒泡的嵌套滚动连接器。
  * 消费掉未被子容器消费的所有垂直方向滚动量与滑动速度。
  */

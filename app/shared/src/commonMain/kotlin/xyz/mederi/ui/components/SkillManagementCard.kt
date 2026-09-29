@@ -1,9 +1,14 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -30,6 +35,7 @@ import xyz.mederi.ui.components.atoms.MederiGhostButton
 import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
 import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
 import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
+import xyz.mederi.ui.components.atoms.MederiTabBadge
 import xyz.mederi.ui.components.atoms.PanelCard
 import xyz.mederi.ui.components.atoms.PanelEmptyState
 import xyz.mederi.util.pickDirectory
@@ -114,12 +120,7 @@ fun SkillManagementCard(
                 icon = FeatherIcons.Package,
                 title = stringResource(Res.string.skill_title),
                 count = {
-                    Text(
-                        text = "${skills.size}",
-                        color = colors.accentPrimary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    MederiTabBadge(count = skills.size)
                 },
                 actions = {
                     Row(
@@ -183,13 +184,24 @@ fun SkillManagementCard(
             ) {
                 // 当前目录提示小字（内联保留：folder 图标 + 单行 ellipsis + 整行点击重选目录，MederiProjectPill 无图标/ellipsis/onClick，待配色迁移时对齐）
                 if (skillsRoot.isNotBlank()) {
+                    // hover 状态源：整行可点重选目录；hover 时文字提亮 textPrimary、底色向 surfaceWorkspace 偏移制造反馈
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val isHovered by interactionSource.collectIsHoveredAsState()
+                    val barBg by animateColorAsState(
+                        if (isHovered) colors.surfaceWorkspace else colors.surfaceHover,
+                        tween(120)
+                    )
+                    val barTextColor by animateColorAsState(
+                        if (isHovered) colors.textPrimary else colors.textMuted,
+                        tween(120)
+                    )
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(4.dp))
-                            .background(colors.surfaceWorkspace.copy(alpha = 0.5f))
-                            .clickable { onSelectDirectory() }
-                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                            .background(barBg)
+                            .clickable(interactionSource = interactionSource, indication = null) { onSelectDirectory() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
@@ -201,8 +213,8 @@ fun SkillManagementCard(
                         )
                         Text(
                             text = stringResource(Res.string.skill_root_dir, skillsRoot),
-                            color = colors.textMuted,
-                            fontSize = 10.sp,
+                            color = barTextColor,
+                            fontSize = 10.5.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
@@ -280,6 +292,7 @@ private fun SkillItemRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .background(colors.surfaceWorkspace)
+            .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -297,7 +310,7 @@ private fun SkillItemRow(
                     text = skill.name,
                     color = colors.textPrimary,
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

@@ -70,7 +70,7 @@ object MockScenarios {
 
         // 2. Tool call
         val toolCallId = idGen.next()
-        updateAssistant(sf, assistantMsgId) { it.copy(blocks = it.blocks + ChatBlock.ToolCall(toolCallId, "bash", ToolCallState.Pending)) }
+        updateAssistant(sf, assistantMsgId) { it.copy(blocks = it.blocks + ChatBlock.ToolCall(toolCallId, "bash", ToolCallState.Pending())) }
         delay(300)
         updateAssistant(sf, assistantMsgId) { msg ->
             val newBlocks = msg.blocks.map { if (it.id == toolCallId) ChatBlock.ToolCall(toolCallId, "bash", ToolCallState.Running(mapOf("command" to "ls docs/"))) else it }
@@ -146,7 +146,7 @@ object MockScenarios {
 
         // 2. Tool call 执行演示
         val permToolId = idGen.next()
-        updateAssistant(sf, assistantMsgId) { it.copy(blocks = it.blocks + ChatBlock.ToolCall(permToolId, "bash", ToolCallState.Pending)) }
+        updateAssistant(sf, assistantMsgId) { it.copy(blocks = it.blocks + ChatBlock.ToolCall(permToolId, "bash", ToolCallState.Pending())) }
         delay(400)
         updateAssistant(sf, assistantMsgId) { msg ->
             msg.copy(blocks = msg.blocks.map { if (it.id == permToolId) ChatBlock.ToolCall(permToolId, "bash", ToolCallState.Running(mapOf("command" to "rm -rf build/"))) else it })

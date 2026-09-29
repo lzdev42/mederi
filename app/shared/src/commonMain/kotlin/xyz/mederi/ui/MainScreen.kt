@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
@@ -176,19 +177,32 @@ fun MainScreen() {
             var isHoverRevealed by remember { mutableStateOf(false) }
             var isMouseInsideSidebar by remember { mutableStateOf(false) }
             var isSidebarInteracting by remember { mutableStateOf(false) }
+            var suppressHoverUntilExit by remember { mutableStateOf(false) }
             var hideJob by remember { mutableStateOf<Job?>(null) }
 
             fun showHoverSidebar(source: String) {
+                if (suppressHoverUntilExit) {
+                    DebugLog.info("SidebarHover", "showHoverSidebar ($source) SUPPRESSED: waiting for mouse to leave edge")
+                    return
+                }
                 DebugLog.info("SidebarHover", "showHoverSidebar ($source): cancelling hideJob, isHoverRevealed=$isHoverRevealed")
                 hideJob?.cancel()
                 isMouseInsideSidebar = true
                 isHoverRevealed = true
             }
 
+            fun closeDrawer(source: String) {
+                DebugLog.info("SidebarHover", "closeDrawer ($source): closing and setting suppressHoverUntilExit=true")
+                hideJob?.cancel()
+                isHoverRevealed = false
+                isMouseInsideSidebar = false
+                suppressHoverUntilExit = true
+            }
+
             fun checkShouldRetract(source: String) {
                 DebugLog.info("SidebarHover", "checkShouldRetract ($source): isMouseInside=$isMouseInsideSidebar, isInteracting=$isSidebarInteracting")
                 hideJob?.cancel()
-                if (!isMouseInsideSidebar && !isSidebarInteracting) {
+                if (!isMouseInsideSidebar && !isSidebarInteracting && isHoverRevealed) {
                     hideJob = coroutineScope.launch {
                         delay(350)
                         if (!isMouseInsideSidebar && !isSidebarInteracting) {
@@ -198,6 +212,13 @@ fun MainScreen() {
                             DebugLog.info("SidebarHover", "Retract cancelled: isMouseInside=$isMouseInsideSidebar, isInteracting=$isSidebarInteracting")
                         }
                     }
+                }
+            }
+
+            fun onMouseLeftEdgeZone() {
+                if (suppressHoverUntilExit) {
+                    DebugLog.info("SidebarHover", "onMouseLeftEdgeZone: resetting suppressHoverUntilExit to false")
+                    suppressHoverUntilExit = false
                 }
             }
 
@@ -232,16 +253,65 @@ fun MainScreen() {
                 }
             } else {
                 // 自动隐藏模式 (Auto-hide overlay with hover reveal & edge indicator)
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val pos = event.changes.firstOrNull()?.position
+                                    if (pos != null && pos.x > 50.dp.toPx()) {
+                                        onMouseLeftEdgeZone()
+                                    }
+                                }
+                            }
+                        }
+                ) {
                     Workspace(
                         modifier = Modifier.fillMaxSize(),
                         viewModel = workspaceViewModel,
                         isCompact = false,
-                        isLeftSidebarOpen = false,
+                        isLeftSidebarOpen = isHoverRevealed,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(true) },
                         onOpenProjectPicker = openProjectPicker,
                         onOpenSettings = { workspaceViewModel.openSettings() }
                     )
+
+                    // 屏幕左边缘指示把手（鼠标移过去自动弹出来，未常驻时常驻底层渲染避免重挂载抖动）
+                    SidebarEdgeIndicator(
+                        isVisible = !isPinned,
+                        isDrawerOpen = isHoverRevealed,
+                        modifier = Modifier.align(Alignment.CenterStart),
+                        onClick = {
+                            suppressHoverUntilExit = false
+                            showHoverSidebar("EdgeIndicator:Click")
+                        },
+                        onHoverChange = { hovered ->
+                            if (hovered) {
+                                showHoverSidebar("EdgeIndicator:HoverEnter")
+                            } else {
+                                onMouseLeftEdgeZone()
+                                if (!isHoverRevealed) {
+                                    isMouseInsideSidebar = false
+                                }
+                            }
+                        }
+                    )
+
+                    // 浮层抽屉展开时的点击外部遮罩（Click outside to dismiss）
+                    if (isHoverRevealed) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    closeDrawer("Scrim:Click")
+                                }
+                        )
+                    }
 
                     // 悬停滑出的浮层抽屉
                     AnimatedVisibility(
@@ -256,7 +326,7 @@ fun MainScreen() {
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                .width(260.dp)
+                                .width(245.dp)
                                 .pointerInput(Unit) {
                                     awaitPointerEventScope {
                                         while (true) {
@@ -290,31 +360,17 @@ fun MainScreen() {
                                     appState.setLeftSidebarPinned(true)
                                     isHoverRevealed = false
                                 },
-                                onRequestClose = { isHoverRevealed = false },
+                                onRequestClose = {
+                                    closeDrawer("Drawer:onRequestClose")
+                                },
                                 onOpenSettings = {
                                     workspaceViewModel.openSettings()
-                                    isHoverRevealed = false
+                                    closeDrawer("Drawer:onOpenSettings")
                                 },
                                 onOpenProjectPicker = openProjectPicker
                             )
                         }
                     }
-
-                    // 屏幕左边缘指示把手（鼠标移过去自动弹出来）
-                    SidebarEdgeIndicator(
-                        isVisible = !isHoverRevealed,
-                        isHovered = isHoverRevealed,
-                        modifier = Modifier.align(Alignment.CenterStart),
-                        onClick = { showHoverSidebar("EdgeIndicator:Click") },
-                        onHoverChange = { hovered ->
-                            if (hovered) {
-                                showHoverSidebar("EdgeIndicator:HoverEnter")
-                            } else {
-                                isMouseInsideSidebar = false
-                                checkShouldRetract("EdgeIndicator:HoverExit")
-                            }
-                        }
-                    )
                 }
             }
         }
@@ -343,7 +399,7 @@ fun MainScreen() {
 private fun SidebarEdgeIndicator(
     isVisible: Boolean,
     modifier: Modifier = Modifier,
-    isHovered: Boolean = false,
+    isDrawerOpen: Boolean = false,
     onClick: () -> Unit = {},
     onHoverChange: (Boolean) -> Unit = {}
 ) {
@@ -351,7 +407,7 @@ private fun SidebarEdgeIndicator(
 
     val colors = LocalMederiColors.current
     var isSelfHovered by remember { mutableStateOf(false) }
-    val active = isHovered || isSelfHovered
+    val active = isSelfHovered && !isDrawerOpen
 
     val animatedWidth by animateDpAsState(
         targetValue = if (active) 8.dp else 5.dp,
@@ -370,45 +426,49 @@ private fun SidebarEdgeIndicator(
         modifier = modifier
             .fillMaxHeight()
             .width(24.dp)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        when (event.type) {
-                            PointerEventType.Enter, PointerEventType.Move -> {
-                                isSelfHovered = true
-                                onHoverChange(true)
-                            }
-                            PointerEventType.Exit -> {
-                                isSelfHovered = false
-                                onHoverChange(false)
+            .then(if (!isDrawerOpen) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+            .pointerInput(isDrawerOpen) {
+                if (!isDrawerOpen) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            when (event.type) {
+                                PointerEventType.Enter, PointerEventType.Move -> {
+                                    isSelfHovered = true
+                                    onHoverChange(true)
+                                }
+                                PointerEventType.Exit -> {
+                                    isSelfHovered = false
+                                    onHoverChange(false)
+                                }
                             }
                         }
                     }
                 }
             }
-            .clickable { onClick() },
+            .then(if (!isDrawerOpen) Modifier.clickable { onClick() } else Modifier),
         contentAlignment = Alignment.CenterStart
     ) {
-        // 悬停呼吸微光晕
-        if (active) {
+        if (!isDrawerOpen) {
+            // 悬停呼吸微光晕
+            if (active) {
+                Box(
+                    modifier = Modifier
+                        .width(animatedWidth + 6.dp)
+                        .height(animatedHeight + 12.dp)
+                        .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+                        .background(colors.accentPrimary.copy(alpha = 0.2f))
+                )
+            }
+
+            // 核心微胶囊指示条
             Box(
                 modifier = Modifier
-                    .width(animatedWidth + 6.dp)
-                    .height(animatedHeight + 12.dp)
-                    .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
-                    .background(colors.accentPrimary.copy(alpha = 0.2f))
+                    .width(animatedWidth)
+                    .height(animatedHeight)
+                    .clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                    .background(indicatorColor)
             )
         }
-
-        // 核心微胶囊指示条
-        Box(
-            modifier = Modifier
-                .width(animatedWidth)
-                .height(animatedHeight)
-                .clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
-                .background(indicatorColor)
-        )
     }
 }

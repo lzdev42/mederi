@@ -316,7 +316,7 @@ object MederiModelMapper {
             val input = parseArgsJson(part.args)
             val result = part.id?.let { toolResultsById[it] }
             val state = when {
-                result == null -> ToolCallState.Pending
+                result == null -> ToolCallState.Pending(input)
                 result.isError -> ToolCallState.Failed(input, result.output)
                 else -> ToolCallState.Completed(input, result.output)
             }

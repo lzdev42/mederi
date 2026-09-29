@@ -54,7 +54,13 @@ enum class EventType {
     SUBAGENT_STARTED,
     SUBAGENT_COMPLETED,
     SUBAGENT_ERROR,
-    SUBAGENT_STOPPED
+    SUBAGENT_STOPPED,
+
+    /**
+     * 子代理无感丢弃事件（对话回退时，目标消息之后创立的子代理被关闭且无感丢弃）。
+     * payload: agentId。UI 从缓存列表中移除，主会话不转化 event_message、不通知 AI。
+     */
+    SUBAGENT_DISCARDED
 }
 
 /**

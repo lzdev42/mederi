@@ -70,11 +70,15 @@
 |---|---|
 | `bg` | = `surface-0`，页面底色 |
 | `surface-1` / `surface-2` | 卡片背景 / 弹出层与嵌套区块 |
-| `border` / `border-strong` | 默认 / hover 边框 |
+| `border` / `border-strong` | 默认 / hover 边框（= gray-6 / gray-7） |
 | `text-primary` / `text-secondary` / `text-muted` | 主 / 次 / 辅助文字 |
 | `accent` / `accent-hover` / `accent-bg` / `accent-text` | 实心 accent 及其 hover / 软底 / 软文字 |
+| `accent-border` / `accent-focus` | accent 细边框 / focus ring（= iris-6 / iris-7） |
 | `on-accent` | accent 实心底色上的文字色 |
-| `success` / `success-bg` / `success-text` | 状态三组：主色 / 底 / 文字（`warning`、`danger` 同构） |
+| `success` / `success-bg` / `success-text` | 状态三组：主色 / 底 / 文字（= green-9 / green-3 / green-11） |
+| `warning` / `warning-bg` / `warning-text` | 状态三组：主色 / 底 / 文字（= amber-9 / amber-3 / amber-11） |
+| `danger` / `danger-bg` / `danger-text` | 状态三组：主色 / 底 / 文字（= red-9 / red-3 / red-11） |
+| `bg-inverted` / `on-inverted` | 反色灰控件底（如 send 按钮）/ 其上文字（= gray-12 / gray-1） |
 
 ### 便利别名（场景级，仍属别名层）
 

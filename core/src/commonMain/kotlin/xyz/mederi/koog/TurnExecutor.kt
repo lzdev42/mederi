@@ -31,6 +31,7 @@ import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.debug.ErrorCollector
 import xyz.mederi.debug.ErrorContext
+import xyz.mederi.debug.ErrorSeverity
 import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
@@ -55,6 +56,7 @@ import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.prompt.SystemPrompts
+import xyz.mederi.provider.ApiKeyResolver
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.provider.infrastructure.koog.KoogClientFactory
@@ -139,6 +141,13 @@ class TurnExecutor(
     private val subagentConfigManager: SubagentConfigManager? = null
 ) {
 
+    /**
+     * API Key 统一解析器（唯一真理源）。记忆为进程级静态共享（见 ApiKeyResolver），
+     * 故本实例与子代理 TurnExecutor / BrowserLLMHelper 等实例记忆互通。
+     * 内部消息轮构造 SendMessageRequest 时用 [ApiKeyResolver.currentKeyId] 填当前选定 key。
+     */
+    private val apiKeyResolver = ApiKeyResolver(providerManager)
+
     private val subagentRunner = SubagentRunnerImpl(
         providerManager = providerManager,
         projectManager = projectManager,
@@ -184,7 +193,7 @@ class TurnExecutor(
     // 主代理获得 run_browser_task / browser_task_status / stop_browser_task 三个工具；
     // 注册表为空时 runTask 返回明确错误引导用户配置。
     // TODO(ST3+)：真实 browserHome 接线（workingDir=reportsDir / recipeStore=skillsDir / llmCallerProvider）
-    //   属 app 层装配职责——在 MederiAiCore 装配处从 BrowserRuntime/settings 解析 reportsDir/skillsDir 后传参。
+    //   属 app 层装配职责——在 MederiAiCore 装配处从 BrowserSettingsManager/settings 解析 reportsDir/skillsDir 后传参。
     //   当前保持默认 null（= ST2 行为：BrowserLLMHelper 真路径、无 recipe/drill 面板装配），不在此强接。
     private val browserTaskManager: xyz.mederi.browser.BrowserTaskService? =
         xyz.mederi.browser.BrowserTaskManager(
@@ -609,6 +618,30 @@ class TurnExecutor(
         }
     }
 
+    /**
+     * 回滚时中止当前 turn，等待其完全终止，并对在目标回滚点时尚未创立的子代理做无感丢弃。
+     *
+     * @param sessionId 会话 ID
+     * @param keptAgentIds 回滚点之前已经创立的子代理 ID 集合
+     */
+    suspend fun rollbackAndJoin(sessionId: String, keptAgentIds: Set<String>) {
+        activeJobs[sessionId]?.cancelAndJoin()
+        // 丢弃在回滚目标消息时尚未创立的子 Agent（不发射 SUBAGENT_STOPPED，不进 pendingEventMessages）
+        val discarded = subagentManager.rollbackSubagents(sessionId, keptAgentIds)
+        if (discarded.isNotEmpty()) {
+            DebugLog.event("TurnExec", "rollbackAndJoin: silently discarded ${discarded.size} subagent(s) of session $sessionId: $discarded")
+        }
+        questionRequesters[sessionId]?.cancelAll()
+        planApprovalRequesters[sessionId]?.cancelAll()
+        pendingEventMessages.remove(sessionId)
+        pendingSteerings.remove(sessionId)
+        runCatching {
+            sessionStore.update(sessionId, SessionStatus.IDLE)
+        }.onFailure {
+            DebugLog.error("TurnExec", "rollbackAndJoin: failed to reset session status: ${it.message}", it)
+        }
+    }
+
     suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>): Boolean {
         val requester = questionRequesters[sessionId] ?: return false
         return requester.resolve(questionId, answers)
@@ -616,6 +649,9 @@ class TurnExecutor(
 
     fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? =
         subagentManager.getReport(agentId)
+
+    fun stopSubagent(agentId: String, reason: String = "被用户关闭"): String =
+        subagentManager.stop(agentId, reason)
 
     suspend fun resolvePlanApproval(
         sessionId: String,
@@ -688,16 +724,21 @@ class TurnExecutor(
                 "Plan '$approvedPlan.title' (id=$planId) has been approved by the user. " +
                 "Execute it now: for each pending subtask, call generate_spec then subagent(SPAWN, planId=$planId, ...), " +
                 "then verify_subtask. Do not re-create or re-ask for approval."
+        val effectiveModel = aiModel ?: session.aiModel
+        val providerId = effectiveModel?.let { model ->
+            providerManager.listWithoutKeys().firstOrNull { p -> p.models.any { it.id == model.id } }?.id
+        }
         sendMessageInternal(
             sessionId,
             SendMessageRequest(
                 agentConfig = xyz.mederi.api.AgentConfig(
                     agentMode = session.agentMode,
-                    aiModel = aiModel ?: session.aiModel,
+                    aiModel = effectiveModel,
                     reasoningLevel = reasoningLevel ?: session.reasoningLevel
                 ),
                 parts = listOf(MessagePart.Text(internalPrompt)),
-                apiKeyId = null
+                // 内部消息轮沿用会话当前模型所属供应商记忆中的选定 key（无记忆则 null → 回落默认 key）
+                apiKeyId = providerId?.let { apiKeyResolver.currentKeyId(it) }
             )
         )
         return true
@@ -793,9 +834,7 @@ class TurnExecutor(
         systemPrompt: String,
         apiKeyId: String? = null
     ) {
-        val apiKey = apiKeyId?.let { providerManager.getKeyValue(provider.id, it) }
-            ?: providerManager.getDefaultKeyValue(provider.id)
-            ?: throw IllegalStateException("No API key available for provider: ${provider.id}")
+        val apiKey = apiKeyResolver.resolve(provider.id, apiKeyId).value
 
         val client = retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
         val executor = PromptExecutorBuilder()
@@ -923,10 +962,9 @@ class TurnExecutor(
         } else null
 
         try {
-            // 选定 key 优先，未选回退默认 key
-            val apiKey = apiKeyId?.let { providerManager.getKeyValue(provider.id, it) }
-                ?: providerManager.getDefaultKeyValue(provider.id)
-                ?: throw IllegalStateException("No API key available for provider: ${provider.id}")
+            // 统一经 ApiKeyResolver 解析（显式归属命中→写记忆 / 记忆 / 默认 key 三级兜底；
+            // 全无则抛 IllegalStateException，不静默伪装成功）
+            val apiKey = apiKeyResolver.resolve(provider.id, apiKeyId).value
 
             DebugLog.section("TurnExec", "TurnExecutor.runTurn")
             DebugLog.data("TurnExec", "apiKey", "${apiKey.take(4)}****${apiKey.takeLast(4)}")
@@ -1103,9 +1141,9 @@ class TurnExecutor(
                 modelName = model.name
             )
             val record = ErrorCollector.collect(e, errorContext)
-            if (RetryableLLMClient.isTransientError(e)) {
-                // 限流/网关过载 = 环境态：重试已耗尽但供应商是暂时不可用，session 保持 IDLE
-                // （可恢复状态，用户稍后重发即可），不把会话标成 ERROR
+            if (RetryableLLMClient.isTransientError(e) || record.severity == ErrorSeverity.RECOVERABLE) {
+                // 限流/网关过载/网络中断 = 环境态：重试已耗尽或流中途中断，属于可恢复状态，session 保持 IDLE
+                // （用户稍后重发即可），不把会话标成 ERROR
                 sessionStore.update(sessionId, SessionStatus.IDLE)
                 emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             } else {
@@ -1619,6 +1657,8 @@ class TurnExecutor(
                 DebugLog.error("TurnExec", "dispatchPendingEventMessages failed: no aiModel configured for session $sessionId")
                 return
             }
+            val providerId = providerManager.listWithoutKeys()
+                .firstOrNull { p -> p.models.any { it.id == effectiveModel.id } }?.id
 
             val request = SendMessageRequest(
                 agentConfig = AgentConfig(
@@ -1627,7 +1667,8 @@ class TurnExecutor(
                     reasoningLevel = session.reasoningLevel
                 ),
                 parts = listOf(MessagePart.Text(combinedText)),
-                apiKeyId = null
+                // 事件唤醒续轮沿用会话当前模型所属供应商记忆中的选定 key（无记忆则 null → 回落默认 key）
+                apiKeyId = providerId?.let { apiKeyResolver.currentKeyId(it) }
             )
 
             try {

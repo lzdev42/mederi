@@ -117,14 +117,6 @@ class MederiConfig {
      */
     var userAgent: String = "Mederi/dev"
 
-    /**
-     * Camoufox 浏览器二进制路径（内核浏览器自动化的默认实现）。
-     *
-     * 用户在设置中配置 Camoufox 所在目录，不提供下载能力。
-     * 为 null 时浏览器任务报错（引导用户先配置）。
-     */
-    var camoufoxPath: String? = null
-
     // 预留扩展点，例如：
     // var eventStore: EventStore? = null
     // var clock: Clock = Clock.System

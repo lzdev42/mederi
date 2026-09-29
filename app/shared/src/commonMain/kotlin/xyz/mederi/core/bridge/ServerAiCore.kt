@@ -56,10 +56,14 @@ import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.core.contract.dto.ReadyInfo
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ApiKeyOption
+import xyz.mederi.core.contract.models.BrowserStatus
+import xyz.mederi.core.contract.models.CamoufoxSettings
+import xyz.mederi.core.contract.models.CamoufoxUpdate
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
+import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import xyz.mederi.core.contract.models.ConversationStatus
@@ -620,6 +624,34 @@ class ServerAiCore(
     }
 
     // ------------------------------------------------------------------
+    // 浏览器设置（遥控 REST 桥）
+    // ------------------------------------------------------------------
+
+    override suspend fun getCamoufoxSettings(): Result<CamoufoxSettings> = runCatching {
+        httpGet("/v1/browser/settings")
+    }
+
+    override suspend fun updateCamoufoxSettings(input: UpdateCamoufoxSettingsInput): Result<CamoufoxSettings> = runCatching {
+        httpSend("/v1/browser/settings", requestBody = input)
+    }
+
+    override suspend fun getCamoufoxStatus(): Result<BrowserStatus> = runCatching {
+        httpGet("/v1/browser/status")
+    }
+
+    override suspend fun checkCamoufoxUpdate(): Result<CamoufoxUpdate> = runCatching {
+        httpSend("/v1/browser/check-update")
+    }
+
+    override suspend fun installCamoufox(versionTag: String?): Result<Unit> = runCatching {
+        httpCall(if (versionTag != null) "/v1/browser/install?version=${versionTag.encodeURLParameter()}" else "/v1/browser/install")
+    }
+
+    override suspend fun listInstalledCamoufoxVersions(): Result<List<String>> = runCatching {
+        httpGet("/v1/browser/versions")
+    }
+
+    // ------------------------------------------------------------------
     // AGENTS.md 生成（遥控 REST 桥）
     // ------------------------------------------------------------------
 
@@ -660,5 +692,9 @@ class ServerAiCore(
 
     override suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> = runCatching {
         httpGet("/v1/subagents/${agentId.encodeURLParameter()}/report")
+    }
+
+    override suspend fun stopSubagent(agentId: String): Result<Unit> = runCatching {
+        httpCall("/v1/subagents/${agentId.encodeURLParameter()}/stop")
     }
 }

@@ -13,7 +13,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │       ├── store/ + store/sqlite/       ← Store 层（纯持久化，InMemory + Sqlite 双实现）
 │       ├── koog/ + infrastructure/koog/ ← Koog 执行引擎适配（TurnExecutor 等）
 │       ├── tools/                       ← 工具系统（FS/Shell/Plan/Verify/Subagent/Sandbox/Diff/Office/Process(list_processes, stop_process)/Browser 单入口）
-│       ├── browser/ + browser/bidi/ + browser/install/  ← 浏览器自动化模块（BrowserControl/BrowserOperator/BrowserBrain/BrowserTaskManager + BiDi 层 + Camoufox 下载安装）
+│       ├── browser/ + browser/bidi/ + browser/install/  ← 浏览器自动化模块（BrowserControl/BrowserOperator/BrowserBrain/BrowserTaskManager + BrowserSettingsManager/CamoufoxSettingsMapping 设置链 + BiDi 层 + Camoufox 下载安装）
 │       ├── office/                      ← Office 工具（OfficeTools/OfficeConverter，docx/xlsx/pptx ↔ markdown）
 │       ├── skills/ + skills/domain/     ← 技能发现/解析（SkillManager/SkillDiscovery/SkillFrontmatterParser + 领域模型）
 │       ├── http/                        ← HTTP 客户端工厂（MederiHttpClientFactory/SseIdleTimeoutException）
@@ -37,7 +37,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │   │   │   └── theme/ util/             ← 主题；平台工具 expect/actual
 │   │   ├── jvmMain/.../core/
 │   │   │   ├── bridge/MederiAiCore.kt   ← core 的唯一封装（进程内直调）
-│   │   │   ├── remote/RemoteServer.kt   ← 内嵌遥控 server（desktop 与 server 共用）
+│   │   │   ├── server/Server.kt         ← 内嵌遥控 server（desktop 与 server 共用）
 │   │   │   ├── remote/terminal/PtyTerminalHub.kt ← pty 终端（JVM-only）
 │   │   │   └── autotitle/SessionTitleService.kt  ← 会话自动命名
 │   │   └── {androidMain,iosMain,wasmJsMain}/ ← 平台 actual（ServerAiCore 接线、preferences、剪贴板等）
@@ -72,7 +72,7 @@ flowchart TB
         contract["core/contract/AiCore.kt<br/>（唯一契约接口）"]
         mac["MederiAiCore (jvmMain)<br/>进程内直调 core"]
         sac["ServerAiCore (commonMain)<br/>REST + SSE 遥控"]
-        rs["RemoteServer (jvmMain)<br/>内嵌遥控 server 路由"]
+        rs["Server (jvmMain)<br/>内嵌遥控 server 路由"]
         ui["ui/ + AppState + VMs<br/>+ SnapshotReducer"]
         mock["MockAiCore"]
     end
@@ -106,7 +106,7 @@ flowchart TB
 ```
 
 **关键事实**：
-- desktop 与 server **共享同一个 `MederiAiCore` 实例语义**：desktop 进程直调 + 内嵌 RemoteServer；server 进程创建 MederiAiCore + 同一套 `remoteModule()` 路由。二者只是两个 interface（宿主入口）。
+- desktop 与 server **共享同一个 `MederiAiCore` 实例语义**：desktop 进程直调 + 内嵌 Server；server 进程创建 MederiAiCore + 同一套 `serverModule()` 路由。二者只是两个 interface（宿主入口）。
 - android/ios/wasm 的 `AiCoreProvider` 默认返回 **ServerAiCore**（遥控端），不直连 core（core 当前仅声明 jvm 目标）。
 - core 的实际实现（Koog/JDBC SQLite/java.io）是 JVM 侧逻辑；core 真正 KMP 化前不假设其跨平台。
 
@@ -117,9 +117,9 @@ flowchart TB
 | `AiCoreProvider.default()` | `MederiAiCore("~/.mederi")` | （main 直接 new MederiAiCore） | `ServerAiCore`（baseUrl/密码读 SharedPrefs） | `ServerAiCore`（暂硬编码 127.0.0.1:8081） | `ServerAiCore`（origin 自身，密码 localStorage，dev 可 `?server=`） |
 | preferences 实现 | `JsonFilePreferencesStore(~/.mederi/preferences.json)` | —（headless） | `SharedPrefsPreferencesStore` | 沙盒 Documents `preferences.json` | `WasmJsPreferencesStore`（localStorage，前缀 `mederi.pref.`，禁用时降级内存） |
 | 终端 TerminalManager | `PtyTerminalHub`（pty4j） | `PtyTerminalHub` | null（遥控） | null（遥控） | null（遥控） |
-| 浏览器自动化 BrowserControl | **`Camoufox`（core 注册，`BiDiBrowserControl`，唯一注册源）** | 同 desktop（core 注册） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） |
+| 浏览器自动化 BrowserControl | **`Camoufox`（core 注册，`BiDiBrowserControl`，唯一注册源；设置走 `BrowserSettingsManager`/SettingsStore key `browser.camoufox.settings`，设置页 BROWSER tab 配置）** | 同 desktop（core 注册） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） |
 | inkcompose 渲染运行时（KBrowser） | **`DesktopBrowserRuntime` 全局单例（`useOsr=true`；供 mermaid 渲染 / Markdown 导出，非浏览器自动化宿主）** | null | null | null | null |
-| RemoteControlHooks | `DesktopRemoteControlHooks`（RemoteServer + cloudflared 隧道） | 本身即 server | — | — | — |
+| RemoteControlHooks | `DesktopRemoteControlHooks`（Server + cloudflared 隧道） | 本身即 server | — | — | — |
 | Mermaid 缓存目录 | `~/.mederi/mermaid/` | — | `cacheDir`（MainActivity 注入） | NSCachesDirectory | no-op（同文档 DOM 渲染） |
 | RemoteGate 密码门 | 无 | 无 | 无 | 无 | **有**（包在 MederiApp 外层） |
 | `AppInfo.platformInfo()`（UA 平台信息） | `System.getProperty(os.name/version/arch)` | 同 desktop | `Build.VERSION.RELEASE` + `SUPPORTED_ABIS` | `UIDevice.systemVersion` + `kotlin.native.Platform.cpuArchitecture` | 解析 `navigator.userAgent` |
@@ -162,7 +162,7 @@ flowchart TD
 
 | 规则 | 一句话 | 违反后果示例 |
 |---|---|---|
-| 契约四处同步 | AiCore.kt → MederiAiCore → ServerAiCore → RemoteServer 路由（+Mock） | 编译失败或运行期 404 |
+| 契约四处同步 | AiCore.kt → MederiAiCore → ServerAiCore → Server 路由（+Mock） | 编译失败或运行期 404 |
 | Manager=唯一真理源 | 业务状态只有 Manager 一处写 | 状态分叉 |
 | 推理档位唯一真理源 | 显示与发送都走 `ReasoningMenu.resolve(effectiveThinkingLevel)` | "显示高实际没推理"（真实事故） |
 | 模型元数据唯一写路径 | FETCHED 模型元数据只经 `ModelMerge.mergeFetched`，用户数据进存量模型唯一通道=`autoSetupProviderModels` | 用户开关被目录洗掉（真实事故） |

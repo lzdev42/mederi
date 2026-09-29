@@ -145,10 +145,10 @@
 
 ### 3.4 后续代码任务清单（衔接，待起计划，非本次执行）
 
-1. 新建 `MederiSpacing` / `MederiRadius` / `MederiTypeScale` 全局 token 对象（命名见 §2.5）。
-2. `MederiColors` 迁值到 Radix + 补新字段（`accent-hover` / `accent-bg` / `accent-text` / `on-accent` / `success-bg` 等，见 01 §1.2 别名层）。
+1. 新建 `MederiSpacing` / `MederiRadius` / `MederiTypeScale` 全局 token 对象（命名见 §2.5）。 —— ✅ 已存在（`xyz.mederi.theme`，settings 等已消费）
+2. `MederiColors` 迁值到 Radix + 补新字段（`accent-hover` / `accent-bg` / `accent-text` / `on-accent` / `success-bg` 等，见 01 §1.2 别名层）。 —— ✅ 已完成（本计划 S0：32 字段按 01 §1.4 迁值 + 14 个语义别名字段）
 3. ~~删 GLASS_*~~ —— ✅ 已完成（§3.2）。
-4. 现有组件字重 `SemiBold`/`Bold` 降级为 `Medium`（§2.7）。
+4. 现有组件字重 `SemiBold`/`Bold` 降级为 `Medium`（§2.7）。 —— 对话流组件已随 S2-S4 降级，其余区域待办
 5. Chip / Badge 原子化进 `ui/components/atoms/`（§2.2）。
 6. `ProviderTokens` 提升为全局 token 或并入 `MederiSpacing`/`MederiRadius`，消除 panel-local 取值。
 

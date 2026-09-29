@@ -391,25 +391,35 @@ object ErrorCollector {
         )
     }
 
-    private fun isNetworkException(e: Throwable): Boolean =
-        e is xyz.mederi.http.SseIdleTimeoutException || e::class.simpleName == "SseIdleTimeoutException" ||
+    internal fun isNetworkException(e: Throwable): Boolean {
+        if (e is xyz.mederi.http.SseIdleTimeoutException || e::class.simpleName == "SseIdleTimeoutException" ||
             e is SocketException || e is SocketTimeoutException || e is ConnectException ||
             e is UnknownHostException || e is SSLException || e is SSLHandshakeException
+        ) return true
+        val className = e::class.simpleName ?: e.javaClass.simpleName
+        if (className.contains("StreamReset") || className.contains("Http2") || className.contains("H2Stream")) return true
+        val msg = (e.message ?: "").lowercase()
+        return msg.contains("stream reset") || msg.contains("connection reset") || msg.contains("broken pipe")
+    }
 
-    private fun networkExceptionType(e: Throwable): String = when (e) {
-        is xyz.mederi.http.SseIdleTimeoutException -> "SseIdleTimeout"
-        is SocketTimeoutException -> "SocketTimeout"
-        is ConnectException -> "ConnectionRefused"
-        is UnknownHostException -> "DNS解析失败"
-        is SSLHandshakeException -> "TLS握手失败"
-        is SSLException -> "TLS错误"
-        is SocketException -> when {
+    internal fun networkExceptionType(e: Throwable): String = when {
+        e is xyz.mederi.http.SseIdleTimeoutException || e::class.simpleName == "SseIdleTimeoutException" -> "SseIdleTimeout"
+        e is SocketTimeoutException -> "SocketTimeout"
+        e is ConnectException -> "ConnectionRefused"
+        e is UnknownHostException -> "DNS解析失败"
+        e is SSLHandshakeException -> "TLS握手失败"
+        e is SSLException -> "TLS错误"
+        e is SocketException -> when {
             e.message?.lowercase()?.contains("reset") == true -> "连接被重置"
             e.message?.lowercase()?.contains("closed") == true -> "连接已关闭"
             e.message?.lowercase()?.contains("broken") == true -> "连接断裂"
             else -> "Socket异常"
         }
-        else -> if (e::class.simpleName == "SseIdleTimeoutException") "SseIdleTimeout" else e::class.simpleName ?: "网络异常"
+        (e::class.simpleName ?: e.javaClass.simpleName).contains("StreamReset") ||
+            (e.message ?: "").lowercase().contains("stream reset") -> "HTTP/2流被重置"
+        (e.message ?: "").lowercase().contains("connection reset") -> "连接被重置"
+        (e.message ?: "").lowercase().contains("broken pipe") -> "连接断裂"
+        else -> e::class.simpleName ?: "网络异常"
     }
 
     // ==================================================================

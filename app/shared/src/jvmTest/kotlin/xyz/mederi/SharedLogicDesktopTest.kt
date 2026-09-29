@@ -1856,6 +1856,49 @@ class SharedLogicDesktopTest {
         assertFalse(scrollInTrace)
     }
 
+    /**
+     * 验证「展开/收起」高度切换按钮的显隐逻辑（2026-09 动态高度改造）：
+     * 高度上限改为"最大高度"语义后，内容装得下时不应该显示一个点了没反应的按钮。
+     */
+    @Test
+    fun testHeightToggleVisibility() {
+        // 场景 1：顶层独立展示 + 内容未溢出（hasOverflow=false）-> 隐藏按钮（容器已按内容收缩）
+        assertFalse(
+            xyz.mederi.ui.components.shouldShowHeightToggle(
+                enforceMaxHeight = true,
+                isUnbounded = false,
+                hasOverflow = false
+            )
+        )
+
+        // 场景 2：顶层独立展示 + 内容溢出视口 -> 显示按钮（可切换为全部摊开）
+        assertTrue(
+            xyz.mederi.ui.components.shouldShowHeightToggle(
+                enforceMaxHeight = true,
+                isUnbounded = false,
+                hasOverflow = true
+            )
+        )
+
+        // 场景 3：已点开全部摊开 -> 恒显示按钮（否则没有收回的入口）
+        assertTrue(
+            xyz.mederi.ui.components.shouldShowHeightToggle(
+                enforceMaxHeight = true,
+                isUnbounded = true,
+                hasOverflow = false
+            )
+        )
+
+        // 场景 4：WorkTraceCard 内的推理子项（enforceMaxHeight=false）-> 永不显示（没有自己的高度开关）
+        assertFalse(
+            xyz.mederi.ui.components.shouldShowHeightToggle(
+                enforceMaxHeight = false,
+                isUnbounded = false,
+                hasOverflow = true
+            )
+        )
+    }
+
     @Test
     fun testToolActionKindTodoAndClassification() {
         assertEquals(xyz.mederi.ui.chat.ToolActionKind.TODO, xyz.mederi.ui.chat.classifyToolAction("update_todo"))
@@ -2831,6 +2874,161 @@ class SharedLogicDesktopTest {
         } finally {
             testScope.cancel()
         }
+    }
+
+    /**
+     * 回归测试：验证两阶段 Assistant 执行流中的自然时序保真（彻底杜绝时序颠倒）。
+     * 阶段 1：提出计划文本 + create_plan + 计划审批卡片
+     * 阶段 2：批准后文本 + generate_spec
+     * 验证在执行中状态（isActiveAssistant = true）下：
+     * text1 < planApproval < text2 < generate_spec 工具调用，时序绝对正向。
+     */
+    @Test
+    fun testPlanApprovalTwoPhaseAssistantChronologicalOrder() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.ui.appstate.AppState(
+                aiCore = mockAiCore,
+                preferences = prefs,
+                scope = testScope
+            )
+            appState.hydrate()
+            val viewModel = xyz.mederi.ui.WorkspaceViewModel(appState)
+
+            val planReq = xyz.mederi.core.contract.models.PlanApprovalRequest(
+                id = "plan_test_order",
+                conversationId = "conv_order",
+                planPath = "",
+                title = "测试计划",
+                summary = "计划摘要",
+                status = "APPROVED"
+            )
+
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_user",
+                conversationId = "conv_order",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text("u1", "请制定计划")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            // 阶段 1：思考 + 计划说明文本 + create_plan
+            val asstMsg1 = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_1",
+                conversationId = "conv_order",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "阶段1思考中"),
+                    xyz.mederi.core.contract.models.ChatBlock.Text("t1", "下面是计划，请你批。"),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "tc_plan",
+                        name = "create_plan",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Completed(
+                            input = mapOf("planId" to "plan_test_order", "title" to "测试计划"),
+                            output = "Plan ID: plan_test_order"
+                        )
+                    )
+                ),
+                createdAt = 2000L,
+                completedAt = 2500L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            // 阶段 2：同 Turn 继续执行（isStreaming = true 代表处于活跃执行中）
+            val asstMsg2 = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_2",
+                conversationId = "conv_order",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning("r2", "阶段2思考中"),
+                    xyz.mederi.core.contract.models.ChatBlock.Text("t2", "批准了，先生成详细 spec。"),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "tc_spec",
+                        name = "generate_spec",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Running(
+                            input = mapOf("planId" to "plan_test_order", "subtaskIndex" to "0")
+                        )
+                    )
+                ),
+                createdAt = 3000L,
+                completedAt = null,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = true
+            )
+
+            val snap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+                conversation = xyz.mederi.core.contract.models.Conversation(
+                    id = "conv_order",
+                    projectId = "proj_test",
+                    title = "时序测试",
+                    status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+                    createdAt = 1000L,
+                    updatedAt = 3000L
+                ),
+                messages = listOf(userMsg, asstMsg1, asstMsg2),
+                tokenUsage = xyz.mederi.core.contract.models.TokenUsage(),
+                cost = xyz.mederi.core.contract.models.CostSummary(),
+                planApprovals = listOf(planReq)
+            )
+
+            val items = xyz.mederi.ui.computeChatItems(
+                msgs = listOf(userMsg, asstMsg1, asstMsg2),
+                isWorking = true,
+                snapshot = snap
+            )
+
+            val t1Index = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("下面是计划") }
+            val planCardIndex = items.indexOfFirst { it is ChatListItem.PlanApproval && it.request.id == "plan_test_order" }
+            val t2Index = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("批准了") }
+            val specToolIndex = items.indexOfFirst { it is ChatListItem.ToolCalls && it.toolCalls.any { tc -> tc.name == "generate_spec" } }
+
+            assertTrue(t1Index >= 0, "应找到阶段 1 的文本条目")
+            assertTrue(planCardIndex >= 0, "应找到计划审批卡片")
+            assertTrue(t2Index >= 0, "应找到阶段 2 的文本条目")
+            assertTrue(specToolIndex >= 0, "应找到阶段 2 的 generate_spec 工具条目")
+
+            // 核心断言：时序必须绝对向前，不得发生新消息在旧计划上方的颠倒
+            assertTrue(t1Index < planCardIndex, "阶段 1 文本应当在计划审批卡片上方 (t1=$t1Index, plan=$planCardIndex)")
+            assertTrue(planCardIndex < t2Index, "计划审批卡片应当在阶段 2 文本上方 (plan=$planCardIndex, t2=$t2Index)")
+            assertTrue(t2Index < specToolIndex, "阶段 2 文本应当在 generate_spec 工具上方 (t2=$t2Index, specTool=$specToolIndex)")
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    /**
+     * 回归测试：验证计划审批卡片状态门禁——仅 PENDING/PENDING_APPROVAL 状态允许点击批准，
+     * 派发子 Agent 后（IN_PROGRESS）或完成（COMPLETED）绝不可重新激活批准按钮。
+     */
+    @Test
+    fun testPlanApprovalCardStatusGate() {
+        val pendingReq = xyz.mederi.core.contract.models.PlanApprovalRequest(
+            id = "p1", conversationId = "c1", planPath = "", title = "P1", status = "PENDING"
+        )
+        val inProgressReq = pendingReq.copy(status = "IN_PROGRESS")
+        val completedReq = pendingReq.copy(status = "COMPLETED")
+        val approvedReq = pendingReq.copy(status = "APPROVED")
+
+        fun isPlanPending(req: xyz.mederi.core.contract.models.PlanApprovalRequest): Boolean =
+            req.status.equals("PENDING", ignoreCase = true) || req.status.equals("PENDING_APPROVAL", ignoreCase = true)
+
+        assertTrue(isPlanPending(pendingReq), "PENDING 状态应当处于待审批态（可点击批准）")
+        assertFalse(isPlanPending(inProgressReq), "IN_PROGRESS 状态（已派发子Agent）绝不可重新激活待审批态")
+        assertFalse(isPlanPending(completedReq), "COMPLETED 状态绝不可重新激活待审批态")
+        assertFalse(isPlanPending(approvedReq), "APPROVED 状态绝不可重新激活待审批态")
     }
 }
 

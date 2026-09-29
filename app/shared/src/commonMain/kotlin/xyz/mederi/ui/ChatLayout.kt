@@ -8,7 +8,7 @@ import androidx.compose.ui.unit.dp
  */
 object ChatLayout {
     /** 消息列 / 输入框内容最大宽度（WorkspaceViewModel.contentMaxWidth 引用） */
-    val contentMaxWidth: Dp = 1000.dp
+    val contentMaxWidth: Dp = 820.dp
 
     /** 用户消息气泡最大宽度 */
     val userBubbleMaxWidth: Dp = 680.dp
@@ -17,7 +17,7 @@ object ChatLayout {
     val userBubbleCompactMaxWidth: Dp = 320.dp
 
     /** 高危授权 / 计划审批 / 问询卡片的最大宽度 */
-    val actionCardMaxWidth: Dp = 640.dp
+    val actionCardMaxWidth: Dp = 560.dp
 
     /** 对话视图最小宽度（手机宽度下限）：右侧扩展面板 + Dock 不得把对话区压缩到小于此宽度 */
     val conversationMinWidth: Dp = 360.dp

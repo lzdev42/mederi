@@ -182,6 +182,7 @@ class RetryableLLMClient(
         while (cur != null && depth < 6) {
             if (cur is xyz.mederi.http.SseIdleTimeoutException || cur::class.simpleName == "SseIdleTimeoutException") return true
             if (cur is java.net.SocketTimeoutException) return true
+            if (ErrorCollector.isNetworkException(cur)) return true
             val lower = ((cur.message ?: "") + " " + cur.javaClass.simpleName).lowercase()
             if (TRANSIENT_MARKERS.any { lower.contains(it) }) return true
             cur = cur.cause
@@ -202,8 +203,8 @@ class RetryableLLMClient(
 
     companion object {
         /**
-         * 判断异常是否为环境态临时故障（限流/网关过载）。
-         * 供 TurnExecutor 在重试耗尽后分类错误用途：限流型失败 session 保持 IDLE（环境态，
+         * 判断异常是否为环境态临时故障（限流/网关过载/网络中断）。
+         * 供 TurnExecutor 在重试耗尽后分类错误用途：限流/网络抖动型失败 session 保持 IDLE（环境态，
          * 用户稍后重发即可），不把会话标成 ERROR。
          */
         fun isTransientError(e: Throwable): Boolean {
@@ -212,6 +213,7 @@ class RetryableLLMClient(
             while (cur != null && depth < 6) {
                 if (cur is xyz.mederi.http.SseIdleTimeoutException || cur::class.simpleName == "SseIdleTimeoutException") return true
                 if (cur is java.net.SocketTimeoutException) return true
+                if (ErrorCollector.isNetworkException(cur)) return true
                 val lower = ((cur.message ?: "") + " " + cur.javaClass.simpleName).lowercase()
                 if (TRANSIENT_MARKERS.any { lower.contains(it) }) return true
                 cur = cur.cause
@@ -226,7 +228,9 @@ class RetryableLLMClient(
             "quota_exceeded", "too many requests", "overloaded", "overload",
             "temporarily unavailable", "service unavailable",
             "502", "503", "504", "bad gateway", "gateway timeout",
-            "sse idle timeout", "idle timeout", "sockettimeoutexception"
+            "sse idle timeout", "idle timeout", "sockettimeoutexception",
+            "stream reset", "streamreset", "h2streamreset",
+            "connection reset", "broken pipe"
         )
     }
 }

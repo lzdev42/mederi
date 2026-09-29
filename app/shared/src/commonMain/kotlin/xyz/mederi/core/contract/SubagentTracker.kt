@@ -40,6 +40,8 @@ object SubagentTracker {
                 states.updated(agentId) { it.copy(status = "ERROR") }
             CoreEventType.SUBAGENT_STOPPED ->
                 states.updated(agentId) { it.copy(status = "STOPPED") }
+            CoreEventType.SUBAGENT_DISCARDED ->
+                states - agentId
             else -> states
         }
     }

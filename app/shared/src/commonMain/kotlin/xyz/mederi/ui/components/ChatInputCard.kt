@@ -91,6 +91,8 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.theme.MederiRadius
+import androidx.compose.ui.focus.onFocusChanged
 
 
 /** 推理档位显示名（唯一映射点，桌面下拉与移动端抽屉共用；未知档位回显原始值）。 */
@@ -140,6 +142,8 @@ fun ChatInputCard(
     // 欢迎页/消息列表两个调用点共享，分支切换不丢字；选区菜单追加直接写 VM
     val textValue = viewModel.inputDraft
     var isMobileSheetOpen by remember { mutableStateOf(false) }
+    // 聚焦态（原型 focus-within）：TextField 聚焦 → 卡片自身 border 与外圈 ring 切 accentFocus
+    var focused by remember { mutableStateOf(false) }
 
     val selectedModel by appState.selectedModel.collectAsState()
     // 图片能力唯一推导（VM 派生流）：按钮显隐/警告/门禁全同源，UI 禁止手写 supportsImages 判断
@@ -390,16 +394,28 @@ fun ChatInputCard(
             )
         }
 
-        // 输入卡片
-        Card(
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = colors.surfaceCard),
-            border = androidx.compose.foundation.BorderStroke(1.dp, colors.surfaceCardBorder)
+        // 输入卡片（聚焦 ring：常驻 1dp 透明外环预留避免聚焦抖动；聚焦时外环 accentFocus + 卡片自身 border 同步切换）
+        Box(
+            modifier = Modifier
+                .border(
+                    1.dp,
+                    if (focused) colors.accentFocus else Color.Transparent,
+                    RoundedCornerShape(MederiRadius.Card)
+                )
+                .padding(1.dp)
         ) {
+            Card(
+                shape = RoundedCornerShape(MederiRadius.Card),
+                colors = CardDefaults.cardColors(containerColor = colors.surfaceCard),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (focused) colors.accentFocus else colors.surfaceCardBorder
+                )
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 10.dp)
+                    .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp)
             ) {
                 // 第一层：输入框顶部附件缩略图/卡片区（对标设计图，置于 TextField 正上方）
                 if (pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()) {
@@ -479,14 +495,14 @@ fun ChatInputCard(
                     textStyle = TextStyle(
                         color = colors.textPrimary,
                         fontSize = 13.5.sp,
-                        lineHeight = 21.sp
+                        lineHeight = 20.sp
                     ),
                     placeholder = {
                         Text(
                             text = stringResource(Res.string.input_placeholder),
-                            color = colors.textMuted,
+                            color = colors.textSecondary,
                             fontSize = 13.5.sp,
-                            lineHeight = 21.sp
+                            lineHeight = 20.sp
                         )
                     },
                     colors = TextFieldDefaults.colors(
@@ -500,7 +516,8 @@ fun ChatInputCard(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 44.dp, max = 150.dp)
+                        .heightIn(min = 48.dp, max = 160.dp)
+                        .onFocusChanged { focused = it.isFocused }
                         .onPreviewKeyEvent { keyEvent ->
                             // 在 KeyDown 阶段处理：此时修饰键状态可靠（KeyUp 时 macOS 的 isMetaPressed 不可靠）
                             if (keyEvent.type == KeyEventType.KeyDown) {
@@ -694,6 +711,7 @@ fun ChatInputCard(
                         }
                     }
                 }
+            }
             }
         }
     }

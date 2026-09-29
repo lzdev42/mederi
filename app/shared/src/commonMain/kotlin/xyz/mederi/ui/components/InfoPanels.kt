@@ -7,7 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -18,32 +17,53 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.dock_artifact_empty
 import mederi.app.shared.generated.resources.dock_artifact_empty_hint
+import mederi.app.shared.generated.resources.dock_compact_context
+import mederi.app.shared.generated.resources.dock_context_max
+import mederi.app.shared.generated.resources.dock_context_unset
+import mederi.app.shared.generated.resources.overview_tokens_title
+import mederi.app.shared.generated.resources.dock_cost_title
 import mederi.app.shared.generated.resources.dock_diff_empty
 import mederi.app.shared.generated.resources.dock_diff_empty_hint
 import mederi.app.shared.generated.resources.dock_plan_empty
 import mederi.app.shared.generated.resources.dock_plan_empty_hint
 import mederi.app.shared.generated.resources.dock_refresh_changes
+import mederi.app.shared.generated.resources.dock_requests_title
+import mederi.app.shared.generated.resources.overview_approve_btn
+import mederi.app.shared.generated.resources.overview_section_plan
+import mederi.app.shared.generated.resources.overview_title
+import mederi.app.shared.generated.resources.plan_read_full
+import mederi.app.shared.generated.resources.plan_status_none
+import mederi.app.shared.generated.resources.plan_status_pending
+import mederi.app.shared.generated.resources.rawmsg_title
+import mederi.app.shared.generated.resources.step_label
+import mederi.app.shared.generated.resources.step_spec
+import mederi.app.shared.generated.resources.worktrace_collapse
+import mederi.app.shared.generated.resources.worktrace_expand
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.DiffView
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.emuci.inkcompose.RenderStyle
 import xyz.mederi.ui.ArtifactItem
 import xyz.mederi.ui.ChatLayout
+import xyz.mederi.ui.PlanOverviewItem
+import xyz.mederi.ui.PlanOverviewStatus
 import xyz.mederi.ui.RawMessagesViewModel
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
-import xyz.mederi.ui.PlanOverviewItem
-import xyz.mederi.ui.PlanOverviewStatus
 import xyz.mederi.ui.components.atoms.CardHeader
+import xyz.mederi.ui.components.atoms.MederiCompactStrokeButton
+import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 import xyz.mederi.ui.components.atoms.MederiStepStatusIcon
 import xyz.mederi.ui.components.atoms.MederiSurfaceButton
 import xyz.mederi.ui.components.atoms.MederiTabBadge
@@ -243,6 +263,189 @@ internal fun ArtifactsPanelContent(
     }
 }
 
+/**
+ * 概览面板 Section 标题行（原型 .overview-section-header）。
+ * 11sp/500 textMuted + 0.05em 字距；右侧状态字可空（statusColor 缺省回落到 textMuted）。
+ */
+@Composable
+private fun OverviewSectionHeader(
+    label: String,
+    statusText: String?,
+    statusColor: Color?,
+    colors: MederiColors
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = colors.textMuted,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 0.05f.em
+        )
+        if (statusText != null) {
+            Text(
+                text = statusText,
+                color = statusColor ?: colors.textMuted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+/**
+ * Token 用量卡（原型 .overview-tokens-card）：标题行（+ 压缩按钮）+ 主值/副文本 + 4dp 进度条。
+ * 无 contextWindow 时不伪造占比：主值 "--"、副文本提示未设置、进度条不渲染。
+ */
+@Composable
+private fun TokensOverviewCard(
+    usedTokens: Long,
+    maxTokens: Int,
+    onCompact: () -> Unit,
+    colors: MederiColors
+) {
+    val hasWindow = maxTokens > 0
+    val progressRatio = if (hasWindow) (usedTokens.toFloat() / maxTokens.toFloat()).coerceIn(0f, 1f) else 0f
+    val percentText = if (hasWindow) "${(progressRatio * 100).toInt()}%" else "--"
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.divider, RoundedCornerShape(8.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // ① 标题 + Compact 按钮
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(Res.string.overview_tokens_title),
+                color = colors.textSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+            MederiCompactStrokeButton(
+                text = stringResource(Res.string.dock_compact_context),
+                onClick = onCompact,
+                icon = FeatherIcons.Minimize2
+            )
+        }
+
+        // ② 主值（短格式如 42.8k） + 副文本（占比 · 上限 / 未设置提示）
+        // 原型 .tokens-val-row 为 baseline 对齐：CMP 1.12 无 Alignment 伴生 baseline 常量，
+        // 用子项 Modifier.alignByBaseline() 实现基线对齐
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = if (hasWindow) formatTokenShort(usedTokens) else "--",
+                modifier = Modifier.alignByBaseline(),
+                color = colors.textPrimary,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = (-0.02f).em,
+                lineHeight = 24.sp
+            )
+            Text(
+                text = if (hasWindow) {
+                    "$percentText · ${stringResource(Res.string.dock_context_max, maxTokens)}"
+                } else {
+                    stringResource(Res.string.dock_context_unset)
+                },
+                modifier = Modifier.alignByBaseline(),
+                color = colors.textSecondary,
+                fontSize = 11.5.sp
+            )
+        }
+
+        // ③ 进度条（无 contextWindow 时不渲染，避免误读为 0% 已用）
+        if (hasWindow) {
+            LinearProgressIndicator(
+                progress = { progressRatio },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = colors.accentPrimary,
+                trackColor = colors.buttonSecondary
+            )
+        }
+    }
+}
+
+/**
+ * 用量数字小卡（原型 .usage-col-card）：标题 + 主值 + 可选副文本，weight(1f) 参与 2 列并排。
+ */
+@Composable
+private fun UsageMetricCard(
+    title: String,
+    value: String,
+    sub: String?,
+    colors: MederiColors
+) {
+    // 注意：weight 不在本组件内声明——CMP 不向命名 composable 传播 @LayoutScopeMarker
+    // scope receiver（RowScope/ColumnScope 只作用于字面 lambda），由调用方在 Row 内
+    // 以 Box(Modifier.weight(1f)) 包裹（同旧用量双列调用点同构）。
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = title,
+            color = colors.textSecondary,
+            fontSize = 11.5.sp
+        )
+        Text(
+            text = value,
+            color = colors.textPrimary,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Medium,
+            lineHeight = 24.sp
+        )
+        if (sub != null) {
+            Text(
+                text = sub,
+                color = colors.textSecondary,
+                fontSize = 11.sp
+            )
+        }
+    }
+}
+
+/**
+ * Token 短格式：≥1000 显示一位小数 k（42800 → 42.8k），否则原值。
+ */
+private fun formatTokenShort(tokens: Long): String {
+    return if (tokens >= 1000) {
+        val k = tokens / 1000
+        val dec = (tokens % 1000) / 100
+        "${k}.${dec}k"
+    } else {
+        tokens.toString()
+    }
+}
+
+/** 参考费用展示（三位小数收敛）；与 MetricsCards.kt 内同名 private 函数互不冲突（文件私有）。 */
+private fun formatCost(cost: Double): String {
+    return if (cost < 0.001) "0.000" else (kotlin.math.round(cost * 1000) / 1000.0).toString()
+}
 
 @Composable
 internal fun OverviewTabContent(
@@ -263,68 +466,59 @@ internal fun OverviewTabContent(
     // 参考价估算（models.dev 目录价 × token 用量），非真实账单
     val costUsd = viewModel.referenceCostUsd
     val todoList = viewModel.todos
+    // null = 模型未配置 contextWindow：映射为 0，TokensOverviewCard 据此显示 "--" 而非伪造 0% 已用
+    val maxTokensValue = maxTokens ?: 0
+
+    val plans = viewModel.planOverviewList
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-    // 响应式判断：只有当宽度 >= 600dp 时才切换双列 Dashboard，窄屏时紧凑单列
-    val isWide = panelWidthDp >= 600f
-    // null = 模型未配置 contextWindow：映射为 0，ContextMetricsCard 据此显示 "--" 而非伪造 0% 已用
-    val maxTokensValue = maxTokens ?: 0
+        // 顶部标题（原型 .overview-title-heading）
+        Text(
+            text = stringResource(Res.string.overview_title),
+            color = colors.textPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium
+        )
 
-    if (isWide) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                ContextMetricsCard(
-                    usedTokens = usedTokens,
-                    maxTokens = maxTokensValue,
-                    requestCount = requestCount,
-                    costUsd = costUsd,
-                    onCompact = { viewModel.requestCompaction() },
-                    colors = colors
-                )
-            }
-
-            // 仅当 todoList 有内容时展示 TodoList 板块
-            if (todoList.isNotEmpty()) {
-                Box(modifier = Modifier.weight(1f)) {
-                    TodoListCard(
-                        todoList = todoList,
-                        colors = colors
-                    )
-                }
-            }
-        }
-    } else {
-        // 紧凑单列布局
-        ContextMetricsCard(
+        // 会话状态区（原型分节头已按用户要求移除，仅保留卡片）
+        TokensOverviewCard(
             usedTokens = usedTokens,
             maxTokens = maxTokensValue,
-            requestCount = requestCount,
-            costUsd = costUsd,
             onCompact = { viewModel.requestCompaction() },
             colors = colors
         )
-
-            // 仅当 todoList 有内容时展示 TodoList 板块
-            if (todoList.isNotEmpty()) {
-                TodoListCard(
-                    todoList = todoList,
+        // 用量 2 列（weight 在 RowScope 字面 lambda 内声明，见 UsageMetricCard 注释）
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                UsageMetricCard(
+                    title = stringResource(Res.string.dock_requests_title),
+                    value = requestCount.toString(),
+                    sub = null,
+                    colors = colors
+                )
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                UsageMetricCard(
+                    title = stringResource(Res.string.dock_cost_title),
+                    value = "$${formatCost(costUsd)}",
+                    sub = null,
                     colors = colors
                 )
             }
         }
 
-        // 实施计划列表卡片（当前会话制定过的所有计划、状态、批准动作与关联 Spec）
+        // 计划区（原型分节头已按用户要求移除，仅保留卡片）
         PlansOverviewCard(
-            plans = viewModel.planOverviewList,
+            plans = plans,
             viewModel = viewModel,
             colors = colors
         )
@@ -348,7 +542,21 @@ internal fun OverviewTabContent(
             colors = colors
         )
 
-        // 原始消息列表（概览下方展示）
+        // 仅当 todoList 有内容时展示 TodoList 板块（管理卡组之后）
+        if (todoList.isNotEmpty()) {
+            TodoListCard(
+                todoList = todoList,
+                colors = colors
+            )
+        }
+
+        // ===== 分节：原始消息 =====
+        OverviewSectionHeader(
+            label = stringResource(Res.string.rawmsg_title),
+            statusText = null,
+            statusColor = null,
+            colors = colors
+        )
         RawMessagesCard(
             viewModel = viewModel,
             rawVm = rawVm,
@@ -358,9 +566,8 @@ internal fun OverviewTabContent(
 }
 
 /**
- * 概览面板 - 实施计划列表卡片
- * 展示当前会话制定过的全部计划（待批准、执行中、已完成、已作废），
- * 待批准支持直接点击批准执行，支持直接打开阅读 plan.md 全文与各步骤的 Spec。
+ * 概览面板 - 计划卡片（用户要求：所有计划——待批准/执行中/已完成/已作废——收进
+ * 一张可折叠卡片；默认折叠，展开后才显示逐个 [PlanOverviewItemCard]）。
  */
 @Composable
 internal fun PlansOverviewCard(
@@ -368,11 +575,11 @@ internal fun PlansOverviewCard(
     viewModel: WorkspaceViewModel,
     colors: MederiColors
 ) {
-    var isExpanded by remember { mutableStateOf(true) }
+    var isExpanded by remember { mutableStateOf(false) }
 
     PanelCard(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // 卡片 Header：支持点击折叠/展开
+            // 卡片 Header：整行可点击展开/折叠
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -381,9 +588,9 @@ internal fun PlansOverviewCard(
             ) {
                 CardHeader(
                     icon = FeatherIcons.FileText,
-                    title = "实施计划 (Plans)",
+                    title = stringResource(Res.string.overview_section_plan),
                     count = {
-                        // 计划数徽标：收敛为 MederiTabBadge（tab-badge 标准）
+                        // 计划总数徽标（含全部状态）
                         MederiTabBadge(count = plans.size)
                     },
                     actions = {
@@ -395,7 +602,7 @@ internal fun PlansOverviewCard(
                         ) {
                             Icon(
                                 imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                                contentDescription = if (isExpanded) "折叠实施计划" else "展开实施计划",
+                                contentDescription = null,
                                 tint = colors.textMuted,
                                 modifier = Modifier.size(14.dp)
                             )
@@ -409,24 +616,22 @@ internal fun PlansOverviewCard(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(colors.surfaceWorkspace)
-                            .padding(vertical = 16.dp, horizontal = 12.dp),
+                            .padding(16.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "当前会话尚未制定计划，AI 产出计划时将在此沉淀留痕",
-                            color = colors.textMuted,
+                            text = stringResource(Res.string.plan_status_none),
+                            color = colors.textSecondary,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
                         )
                     }
                 } else {
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        for (plan in plans) {
+                        plans.forEach { plan ->
                             PlanOverviewItemCard(
                                 item = plan,
                                 viewModel = viewModel,
@@ -446,246 +651,110 @@ private fun PlanOverviewItemCard(
     viewModel: WorkspaceViewModel,
     colors: MederiColors
 ) {
-    val statusBg: Color
-    val statusBorder: Color
-    val statusDotColor: Color
-    val statusText: String
-
-    when (item.status) {
-        PlanOverviewStatus.PendingApproval -> {
-            statusBg = Color(0xFFF59E0B).copy(alpha = 0.15f)
-            statusBorder = Color(0xFFF59E0B).copy(alpha = 0.4f)
-            statusDotColor = Color(0xFFF59E0B)
-            statusText = "待批准"
-        }
-        PlanOverviewStatus.InProgress -> {
-            statusBg = Color(0xFF0284C7).copy(alpha = 0.15f)
-            statusBorder = Color(0xFF0284C7).copy(alpha = 0.4f)
-            statusDotColor = Color(0xFF38BDF8)
-            statusText = "执行中"
-        }
-        PlanOverviewStatus.Completed -> {
-            statusBg = Color(0xFF10B981).copy(alpha = 0.15f)
-            statusBorder = Color(0xFF10B981).copy(alpha = 0.4f)
-            statusDotColor = Color(0xFF34D399)
-            statusText = "已完成"
-        }
-        PlanOverviewStatus.Voided -> {
-            statusBg = colors.surfaceCardBorder.copy(alpha = 0.3f)
-            statusBorder = colors.surfaceCardBorder
-            statusDotColor = colors.textMuted
-            statusText = "已作废"
-        }
-    }
+    // 步骤列表默认折叠到前 3 步，可展开全部
+    var isSubtasksExpanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(colors.surfaceWorkspace)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(6.dp))
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.divider, RoundedCornerShape(8.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // 头部：状态 Badge + 计划标题 + 批准按钮（若待批准）
+        // plan-main-row：标题 + 待批准钮（soft iris）
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f, fill = false)
-            ) {
-                // 状态胶囊
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(statusBg)
-                        .border(1.dp, statusBorder, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(statusDotColor)
-                    )
-                    Text(
-                        text = statusText,
-                        color = statusDotColor,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                Text(
-                    text = item.title,
-                    color = colors.textPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            // 待批准时展示「批准执行 ⌘↵」黄色微型操作按钮
-            if (item.status == PlanOverviewStatus.PendingApproval) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xFFEAB308))
-                        .clickable { viewModel.approvePlan(item.id) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "批准执行 ⌘↵",
-                        color = Color.Black,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        // 摘要说明（如果有）
-        if (item.summary.isNotBlank()) {
             Text(
-                text = item.summary,
-                color = colors.textSecondary,
-                fontSize = 12.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                lineHeight = 16.sp
+                text = item.title,
+                modifier = Modifier.weight(1f, fill = false),
+                color = colors.textPrimary,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-        }
-
-        // 快捷操作条：直接阅读 plan.md 全文
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End
-        ) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(colors.surfaceCard)
-                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(4.dp))
-                    .clickable { viewModel.openPlanFile(item) }
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.ExternalLink,
-                    contentDescription = null,
-                    tint = colors.accentPrimary,
-                    modifier = Modifier.size(11.dp)
-                )
-                Text(
-                    text = "阅读 plan.md 全文",
-                    color = colors.accentPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
+            if (item.status == PlanOverviewStatus.PendingApproval) {
+                MederiPrimaryDecisionButton(
+                    text = stringResource(Res.string.overview_approve_btn),
+                    onClick = { viewModel.approvePlan(item.id) },
+                    icon = FeatherIcons.Check
                 )
             }
         }
 
-        // 子任务清单
-        if (item.subtasks.isNotEmpty()) {
-            HorizontalDivider(
-                color = colors.surfaceCardBorder.copy(alpha = 0.5f),
-                thickness = 0.5.dp
+        // plan-doc-link：阅读 plan.md 全文
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { viewModel.openPlanFile(item) }
+                .padding(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = FeatherIcons.FileText,
+                contentDescription = null,
+                tint = colors.accentText,
+                modifier = Modifier.size(12.dp)
             )
+            Text(
+                text = stringResource(Res.string.plan_read_full),
+                color = colors.accentText,
+                fontSize = 12.sp
+            )
+        }
 
-            var isSubtasksExpanded by remember { mutableStateOf(true) }
-
-            Row(
+        // 步骤图形化列表（已完成 = 绿勾划线 / 进行中 = accent 高亮 / 待处理 = 灰）
+        if (item.subtasks.isNotEmpty()) {
+            HorizontalDivider(color = colors.divider, thickness = 1.dp)
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable { isSubtasksExpanded = !isSubtasksExpanded }
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "执行步骤 (${item.subtasks.size})",
-                    fontSize = 11.sp,
-                    color = colors.textSecondary,
-                    fontWeight = FontWeight.Medium
-                )
-                Icon(
-                    imageVector = if (isSubtasksExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
+                val visible = if (isSubtasksExpanded) item.subtasks else item.subtasks.take(3)
+                for (st in visible) {
+                    val stDone = st.status.equals("COMPLETED", ignoreCase = true)
+                    val stRunning = st.status.equals("IN_PROGRESS", ignoreCase = true)
 
-            AnimatedVisibility(visible = isSubtasksExpanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    for (st in item.subtasks) {
-                        val stDone = st.status.equals("COMPLETED", ignoreCase = true)
-                        val stRunning = st.status.equals("IN_PROGRESS", ignoreCase = true)
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(colors.surfaceCard.copy(alpha = 0.6f))
-                                .padding(horizontal = 8.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.weight(1f, fill = false)
-                            ) {
-                                // 步骤状态点：收敛为 MederiStepStatusIcon（Done=绿勾 / Active=accent 实心 / Todo=空心环）
-                                MederiStepStatusIcon(
-                                    status = when {
-                                        stDone -> StepStatus.Done
-                                        stRunning -> StepStatus.Active
-                                        else -> StepStatus.Todo
-                                    }
-                                )
-                                // 步骤 1, 步骤 2 胶囊
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(colors.surfaceCardBorder.copy(alpha = 0.4f))
-                                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                                ) {
-                                    Text(
-                                        text = "步骤 ${st.index + 1}",
-                                        color = colors.textSecondary,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                                Text(
-                                    text = st.name,
-                                    color = if (stDone) colors.textMuted else colors.textPrimary,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MederiStepStatusIcon(
+                            status = when {
+                                stDone -> StepStatus.Done
+                                stRunning -> StepStatus.Active
+                                else -> StepStatus.Todo
                             }
-
-                            // 如果有关联 spec，展示 [Spec ↗] 按钮
-                            if (!st.spec.isNullOrBlank()) {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(colors.accentPrimary.copy(alpha = 0.12f))
-                                        .border(0.5.dp, colors.accentPrimary.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
+                        )
+                        Text(
+                            text = "${stringResource(Res.string.step_label, st.index + 1)}: ${st.name}",
+                            modifier = Modifier.weight(1f, fill = false),
+                            fontSize = if (stRunning) 13.sp else 12.5.sp,
+                            fontWeight = if (stRunning) FontWeight.Medium else FontWeight.Normal,
+                            color = when {
+                                stDone -> colors.textMuted
+                                stRunning -> colors.textPrimary
+                                else -> colors.textSecondary
+                            },
+                            textDecoration = if (stDone) TextDecoration.LineThrough else TextDecoration.None,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        // 有关联 spec → [Spec ↗] 链接
+                        if (!st.spec.isNullOrBlank()) {
+                            Text(
+                                text = stringResource(Res.string.step_spec),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
                                     .clickable {
                                         viewModel.openSpecInExtension(
                                             planId = item.id,
@@ -695,22 +764,32 @@ private fun PlanOverviewItemCard(
                                             specContent = st.spec
                                         )
                                     }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    text = "Spec ↗",
-                                    color = colors.accentPrimary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                color = colors.accentText,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                 }
+
+                // 步数 > 3：展开/收起全部
+                if (item.subtasks.size > 3) {
+                    Text(
+                        text = stringResource(
+                            if (isSubtasksExpanded) Res.string.worktrace_collapse else Res.string.worktrace_expand
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { isSubtasksExpanded = !isSubtasksExpanded }
+                            .padding(vertical = 4.dp),
+                        color = colors.textSecondary,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
-    }
     }
 }

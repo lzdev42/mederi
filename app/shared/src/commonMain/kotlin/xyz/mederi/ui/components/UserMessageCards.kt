@@ -179,7 +179,7 @@ fun UserMessageFooter(
     }
 
     Row(
-        modifier = modifier.padding(top = 2.dp),
+        modifier = modifier.padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -276,7 +276,7 @@ fun AssistantMessageFooter(
     if (segments.isEmpty() && lastMessageText.isBlank() && fullTurnText.isBlank()) return
 
     Row(
-        modifier = modifier.padding(top = 4.dp),
+        modifier = modifier.padding(start = 2.dp, end = 2.dp, top = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -306,7 +306,7 @@ fun AssistantMessageFooter(
 
         // 右侧：复制按钮
         Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (lastMessageText.isNotBlank()) {

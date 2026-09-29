@@ -1,9 +1,9 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -11,6 +11,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -36,7 +40,7 @@ import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 import xyz.mederi.ui.components.atoms.MederiSurfaceButton
 
 /**
- * 3. 选择题/问询交互卡片 (QuestionCard)
+ * 3. 选择题/问询交互块 (QuestionCard，02-components §2.4 question：去壳 + 2dp 左 rail)
  *
  * 无状态组件：当前选中答案经 [selectedAnswers] 由调用方传入（唯一真理源 =
  * WorkspaceViewModel.questionAnswers），点击经 [onAnswer] 单向写回，卡片内不持有副本。
@@ -63,14 +67,20 @@ fun QuestionCard(
     val qList = question.questions
     val qInfo = qList.getOrNull(currentIndex) ?: qList.firstOrNull() ?: return
 
+    // 去壳：无卡片底/描边，仅 2dp 左 rail（accentPrimary 0.55）+ 12/2/2 内边距，宽度受限 max 560
     Column(
         modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.accentPrimary, RoundedCornerShape(10.dp))
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .widthIn(max = 560.dp)
+            .drawBehind {
+                val rail = 2.dp.toPx()
+                drawRect(
+                    color = colors.accentPrimary.copy(alpha = 0.55f),
+                    topLeft = Offset(0f, 0f),
+                    size = Size(rail, size.height)
+                )
+            }
+            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -83,17 +93,19 @@ fun QuestionCard(
                 else -> stringResource(Res.string.question_single_tag)
             }
             Text(
-                text = stringResource(Res.string.question_title, currentIndex + 1, qList.size) + " · $typeTag",
-                color = colors.accentPrimary,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
+                text = (stringResource(Res.string.question_title, currentIndex + 1, qList.size) + " · $typeTag").uppercase(),
+                color = colors.accentText,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.6.sp
             )
         }
 
         Text(
             text = qInfo.prompt,
             color = colors.textPrimary,
-            fontSize = 12.sp,
+            fontSize = 12.5.sp,
+            lineHeight = 18.75.sp,
             fontWeight = FontWeight.Medium
         )
 
@@ -121,13 +133,20 @@ fun QuestionCard(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 qInfo.options.forEach { opt ->
                     val isSelected = selectedAnswers.contains(opt)
+                    val optionSource = remember { MutableInteractionSource() }
+                    val optionHovered by optionSource.collectIsHoveredAsState()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(6.dp))
-                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.15f) else colors.surfaceWorkspace)
-                            .border(1.dp, if (isSelected) colors.accentPrimary else colors.divider, RoundedCornerShape(6.dp))
-                            .clickable {
+                            .background(
+                                when {
+                                    isSelected -> colors.accentBg
+                                    optionHovered -> colors.surfaceHover
+                                    else -> Color.Transparent
+                                }
+                            )
+                            .clickable(interactionSource = optionSource) {
                                 if (qInfo.multiSelect) {
                                     onAnswer(if (isSelected) selectedAnswers - opt else selectedAnswers + opt)
                                 } else {
@@ -135,7 +154,7 @@ fun QuestionCard(
                                     onAnswer(listOf(opt) + nonOptions)
                                 }
                             }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -156,7 +175,12 @@ fun QuestionCard(
                                 colors = RadioButtonDefaults.colors(selectedColor = colors.accentPrimary)
                             )
                         }
-                        Text(text = opt, color = colors.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            text = opt,
+                            color = if (isSelected || optionHovered) colors.textPrimary else colors.textSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
 

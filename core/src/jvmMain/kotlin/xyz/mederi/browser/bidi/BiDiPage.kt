@@ -278,7 +278,11 @@ class BiDiPage internal constructor(
     suspend fun clickByCoordinates(x: Int, y: Int): OperationResult {
 
         val vp = smartScrollIntoView(x, y)
-        performPointerClick(vp.first, vp.second)
+        if (browser.config.humanize) {
+            performHumanClick(vp.first, vp.second)
+        } else {
+            performPointerClick(vp.first, vp.second)
+        }
         delay(200)
         return OperationResult.Acknowledged
     }
@@ -286,7 +290,11 @@ class BiDiPage internal constructor(
     suspend fun hoverByCoordinates(x: Int, y: Int) {
 
         val vp = ensureInViewport(x, y)
-        performPointerHover(vp.first, vp.second)
+        if (browser.config.humanize) {
+            performHumanHover(vp.first, vp.second)
+        } else {
+            performPointerHover(vp.first, vp.second)
+        }
     }
 
     suspend fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int): OperationResult {
@@ -614,6 +622,64 @@ class BiDiPage internal constructor(
                     put("parameters", buildJsonObject { put("pointerType", JsonPrimitive("mouse")) })
                     put("actions", buildJsonArray {
                         add(buildJsonObject { put("type", JsonPrimitive("pointerMove")); put("x", JsonPrimitive(vx)); put("y", JsonPrimitive(vy)); put("duration", JsonPrimitive(120)) })
+                        add(buildJsonObject { put("type", JsonPrimitive("pause")); put("duration", JsonPrimitive(100)) })
+                    })
+                })
+            })
+        })
+        transport.send("input.releaseActions", buildJsonObject { put("context", JsonPrimitive(contextId)) })
+    }
+
+    // humanize=true 时的拟人化点击：从目标附近抖动起点沿贝塞尔曲线移动到 (vx, vy) 再按下/释放。
+    private suspend fun performHumanClick(vx: Int, vy: Int) {
+        val (sx, sy) = HumanMouse.microJitter(25)
+        val path = HumanMouse.bezierPath(sx.toDouble(), sy.toDouble(), vx.toDouble(), vy.toDouble(), steps = 25)
+        transport.send("input.performActions", buildJsonObject {
+            put("context", JsonPrimitive(contextId))
+            put("actions", buildJsonArray {
+                add(buildJsonObject {
+                    put("type", JsonPrimitive("pointer"))
+                    put("id", JsonPrimitive("p1"))
+                    put("parameters", buildJsonObject { put("pointerType", JsonPrimitive("mouse")) })
+                    put("actions", buildJsonArray {
+                        for (p in path) {
+                            add(buildJsonObject {
+                                put("type", JsonPrimitive("pointerMove"))
+                                put("x", JsonPrimitive(p.x))
+                                put("y", JsonPrimitive(p.y))
+                                put("duration", JsonPrimitive(p.durationMs))
+                            })
+                        }
+                        add(buildJsonObject { put("type", JsonPrimitive("pointerDown")); put("button", JsonPrimitive(0)) })
+                        add(buildJsonObject { put("type", JsonPrimitive("pause")); put("duration", JsonPrimitive(50)) })
+                        add(buildJsonObject { put("type", JsonPrimitive("pointerUp")); put("button", JsonPrimitive(0)) })
+                    })
+                })
+            })
+        })
+        transport.send("input.releaseActions", buildJsonObject { put("context", JsonPrimitive(contextId)) })
+    }
+
+    // humanize=true 时的拟人化悬停：沿贝塞尔曲线移动到目标点再停留。
+    private suspend fun performHumanHover(vx: Int, vy: Int) {
+        val (sx, sy) = HumanMouse.microJitter(25)
+        val path = HumanMouse.bezierPath(sx.toDouble(), sy.toDouble(), vx.toDouble(), vy.toDouble(), steps = 25)
+        transport.send("input.performActions", buildJsonObject {
+            put("context", JsonPrimitive(contextId))
+            put("actions", buildJsonArray {
+                add(buildJsonObject {
+                    put("type", JsonPrimitive("pointer"))
+                    put("id", JsonPrimitive("p1"))
+                    put("parameters", buildJsonObject { put("pointerType", JsonPrimitive("mouse")) })
+                    put("actions", buildJsonArray {
+                        for (p in path) {
+                            add(buildJsonObject {
+                                put("type", JsonPrimitive("pointerMove"))
+                                put("x", JsonPrimitive(p.x))
+                                put("y", JsonPrimitive(p.y))
+                                put("duration", JsonPrimitive(p.durationMs))
+                            })
+                        }
                         add(buildJsonObject { put("type", JsonPrimitive("pause")); put("duration", JsonPrimitive(100)) })
                     })
                 })
