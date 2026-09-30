@@ -9,20 +9,22 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -30,8 +32,8 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.main_initializing
 import mederi.app.shared.generated.resources.main_ready
 import mederi.app.shared.generated.resources.pick_directory_title
+import mederi.app.shared.generated.resources.sidebar_edge_handle
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.ui.DebugLog
 import xyz.mederi.ui.SidebarViewModel
 import xyz.mederi.ui.UiEffect
 import xyz.mederi.ui.WorkspaceViewModel
@@ -167,6 +169,7 @@ fun MainScreen() {
                 SidebarEdgeIndicator(
                     isVisible = !isMobileDrawerOpen,
                     modifier = Modifier.align(Alignment.CenterStart),
+                    interactionSource = remember { MutableInteractionSource() },
                     onClick = { isMobileDrawerOpen = true }
                 )
             }
@@ -175,56 +178,38 @@ fun MainScreen() {
             // 桌面端布局 (Desktop: Side-by-side 常驻 OR 自动隐藏浮层)
             // ==========================================
             var isHoverRevealed by remember { mutableStateOf(false) }
-            var isMouseInsideSidebar by remember { mutableStateOf(false) }
             var isSidebarInteracting by remember { mutableStateOf(false) }
-            var suppressHoverUntilExit by remember { mutableStateOf(false) }
-            var hideJob by remember { mutableStateOf<Job?>(null) }
 
-            fun showHoverSidebar(source: String) {
-                if (suppressHoverUntilExit) {
-                    DebugLog.info("SidebarHover", "showHoverSidebar ($source) SUPPRESSED: waiting for mouse to leave edge")
-                    return
-                }
-                DebugLog.info("SidebarHover", "showHoverSidebar ($source): cancelling hideJob, isHoverRevealed=$isHoverRevealed")
-                hideJob?.cancel()
-                isMouseInsideSidebar = true
-                isHoverRevealed = true
-            }
+            // 自动隐藏抽屉唤出/收起：只有边缘条能唤出，抽屉自身 hover 只维持开启（纯逻辑见 SidebarReveal）
+            val edgeInteraction = remember { MutableInteractionSource() }
+            val isEdgeHovered by edgeInteraction.collectIsHoveredAsState()
+            val drawerInteraction = remember { MutableInteractionSource() }
+            val isDrawerHovered by drawerInteraction.collectIsHoveredAsState()
+            var isExplicitlyClosed by remember { mutableStateOf(false) }
 
-            fun closeDrawer(source: String) {
-                DebugLog.info("SidebarHover", "closeDrawer ($source): closing and setting suppressHoverUntilExit=true")
-                hideJob?.cancel()
+            fun closeDrawer() {
+                isExplicitlyClosed = true
+                isSidebarInteracting = false
                 isHoverRevealed = false
-                isMouseInsideSidebar = false
-                suppressHoverUntilExit = true
             }
 
-            fun checkShouldRetract(source: String) {
-                DebugLog.info("SidebarHover", "checkShouldRetract ($source): isMouseInside=$isMouseInsideSidebar, isInteracting=$isSidebarInteracting")
-                hideJob?.cancel()
-                if (!isMouseInsideSidebar && !isSidebarInteracting && isHoverRevealed) {
-                    hideJob = coroutineScope.launch {
-                        delay(350)
-                        if (!isMouseInsideSidebar && !isSidebarInteracting) {
-                            DebugLog.info("SidebarHover", "Retracting sidebar: both mouse and interaction are clear!")
-                            isHoverRevealed = false
-                        } else {
-                            DebugLog.info("SidebarHover", "Retract cancelled: isMouseInside=$isMouseInsideSidebar, isInteracting=$isSidebarInteracting")
-                        }
+            // 显式关闭 latch 重新武装：重新贴边，或指针已离开抽屉且无菜单/弹窗交互
+            LaunchedEffect(isEdgeHovered, isDrawerHovered, isSidebarInteracting) {
+                if (isExplicitlyClosed && SidebarReveal.shouldRearm(isEdgeHovered, isDrawerHovered, isSidebarInteracting)) {
+                    isExplicitlyClosed = false
+                }
+            }
+
+            // 展开/收起：显式关闭立即收起；失去全部 hover/交互后宽限 HIDE_DELAY_MILLIS 再收起
+            LaunchedEffect(isEdgeHovered, isDrawerHovered, isSidebarInteracting, isExplicitlyClosed) {
+                val wantReveal = SidebarReveal.shouldReveal(isEdgeHovered, isDrawerHovered, isSidebarInteracting, isExplicitlyClosed)
+                when {
+                    wantReveal -> isHoverRevealed = true
+                    isExplicitlyClosed -> isHoverRevealed = false
+                    else -> {
+                        delay(SidebarReveal.HIDE_DELAY_MILLIS)
+                        isHoverRevealed = false
                     }
-                }
-            }
-
-            fun onMouseLeftEdgeZone() {
-                if (suppressHoverUntilExit) {
-                    DebugLog.info("SidebarHover", "onMouseLeftEdgeZone: resetting suppressHoverUntilExit to false")
-                    suppressHoverUntilExit = false
-                }
-            }
-
-            LaunchedEffect(isSidebarInteracting) {
-                if (!isSidebarInteracting && isHoverRevealed) {
-                    checkShouldRetract("isSidebarInteractingBecameFalse")
                 }
             }
 
@@ -256,17 +241,6 @@ fun MainScreen() {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val pos = event.changes.firstOrNull()?.position
-                                    if (pos != null && pos.x > 50.dp.toPx()) {
-                                        onMouseLeftEdgeZone()
-                                    }
-                                }
-                            }
-                        }
                 ) {
                     Workspace(
                         modifier = Modifier.fillMaxSize(),
@@ -280,22 +254,13 @@ fun MainScreen() {
 
                     // 屏幕左边缘指示把手（鼠标移过去自动弹出来，未常驻时常驻底层渲染避免重挂载抖动）
                     SidebarEdgeIndicator(
-                        isVisible = !isPinned,
+                        isVisible = true,
                         isDrawerOpen = isHoverRevealed,
                         modifier = Modifier.align(Alignment.CenterStart),
+                        interactionSource = edgeInteraction,
                         onClick = {
-                            suppressHoverUntilExit = false
-                            showHoverSidebar("EdgeIndicator:Click")
-                        },
-                        onHoverChange = { hovered ->
-                            if (hovered) {
-                                showHoverSidebar("EdgeIndicator:HoverEnter")
-                            } else {
-                                onMouseLeftEdgeZone()
-                                if (!isHoverRevealed) {
-                                    isMouseInsideSidebar = false
-                                }
-                            }
+                            isExplicitlyClosed = false
+                            isHoverRevealed = true
                         }
                     )
 
@@ -308,7 +273,7 @@ fun MainScreen() {
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null
                                 ) {
-                                    closeDrawer("Scrim:Click")
+                                    closeDrawer()
                                 }
                         )
                     }
@@ -327,21 +292,7 @@ fun MainScreen() {
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .width(245.dp)
-                                .pointerInput(Unit) {
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            val event = awaitPointerEvent()
-                                            when (event.type) {
-                                                PointerEventType.Enter -> showHoverSidebar("SidebarBox:Enter")
-                                                PointerEventType.Move -> showHoverSidebar("SidebarBox:Move")
-                                                PointerEventType.Exit -> {
-                                                    isMouseInsideSidebar = false
-                                                    checkShouldRetract("SidebarBox:Exit")
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                .hoverable(drawerInteraction)
                                 .background(colors.surfaceSidebar)
                                 .border(BorderStroke(1.dp, colors.divider))
                         ) {
@@ -350,24 +301,17 @@ fun MainScreen() {
                                 isCompact = false,
                                 isDrawer = true,
                                 isPinned = false,
-                                onActiveInteractionChange = { interacting ->
-                                    isSidebarInteracting = interacting
-                                    if (interacting) {
-                                        hideJob?.cancel()
-                                    }
-                                },
+                                onActiveInteractionChange = { isSidebarInteracting = it },
                                 onTogglePin = {
                                     appState.setLeftSidebarPinned(true)
                                     isHoverRevealed = false
                                 },
-                                onRequestClose = {
-                                    closeDrawer("Drawer:onRequestClose")
-                                },
+                                onRequestClose = { closeDrawer() },
                                 onOpenSettings = {
                                     workspaceViewModel.openSettings()
-                                    closeDrawer("Drawer:onOpenSettings")
+                                    closeDrawer()
                                 },
-                                onOpenProjectPicker = openProjectPicker
+                                onOpenProjectPicker = { openProjectPicker(); closeDrawer() }
                             )
                         }
                     }
@@ -400,14 +344,15 @@ private fun SidebarEdgeIndicator(
     isVisible: Boolean,
     modifier: Modifier = Modifier,
     isDrawerOpen: Boolean = false,
+    interactionSource: MutableInteractionSource,
     onClick: () -> Unit = {},
-    onHoverChange: (Boolean) -> Unit = {}
 ) {
     if (!isVisible) return
 
     val colors = LocalMederiColors.current
-    var isSelfHovered by remember { mutableStateOf(false) }
-    val active = isSelfHovered && !isDrawerOpen
+    val edgeHandleLabel = stringResource(Res.string.sidebar_edge_handle)
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val active = isHovered && !isDrawerOpen
 
     val animatedWidth by animateDpAsState(
         targetValue = if (active) 8.dp else 5.dp,
@@ -427,26 +372,9 @@ private fun SidebarEdgeIndicator(
             .fillMaxHeight()
             .width(24.dp)
             .then(if (!isDrawerOpen) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
-            .pointerInput(isDrawerOpen) {
-                if (!isDrawerOpen) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            when (event.type) {
-                                PointerEventType.Enter, PointerEventType.Move -> {
-                                    isSelfHovered = true
-                                    onHoverChange(true)
-                                }
-                                PointerEventType.Exit -> {
-                                    isSelfHovered = false
-                                    onHoverChange(false)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .then(if (!isDrawerOpen) Modifier.clickable { onClick() } else Modifier),
+            .hoverable(interactionSource)
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .semantics { contentDescription = edgeHandleLabel },
         contentAlignment = Alignment.CenterStart
     ) {
         if (!isDrawerOpen) {

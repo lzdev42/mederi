@@ -433,6 +433,7 @@
     <string name="settings_agents_custom_action">Customize model</string>
     <string name="sidebar_automation">Automation</string>
     <string name="sidebar_cancel">Cancel</string>
+    <string name="sidebar_close">Close sidebar</string>
     <string name="sidebar_confirm_delete">Delete</string>
     <string name="sidebar_confirm_rename">Rename</string>
     <string name="sidebar_conversation_menu">Conversation menu</string>
@@ -442,6 +443,7 @@
     <string name="sidebar_delete_project">Delete project</string>
     <string name="sidebar_delete_project_message">The project %1$s and its conversation records will be removed.</string>
     <string name="sidebar_delete_project_title">Delete this project?</string>
+    <string name="sidebar_dismiss">Dismiss</string>
     <string name="sidebar_new_conversation">New conversation</string>
     <string name="sidebar_new_task">New task</string>
     <string name="sidebar_open_project_directory">Open project folder</string>

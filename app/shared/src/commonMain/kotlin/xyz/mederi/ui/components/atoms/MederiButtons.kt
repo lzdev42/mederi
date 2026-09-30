@@ -360,6 +360,7 @@ fun MederiCompactStrokeButton(
 /**
  * 极简图标按钮（02-components §1.5 icon-btn-minimal）。
  * 28×28 / 圆角 4dp（MederiRadius.Square）/ 透明 bg / icon textSecondary；hover bg surfaceHover + icon textPrimary（120ms）。
+ * [active] = 高亮态（accent 底 + accent 图标），Sidebar 顶栏固定/收起按钮在用。
  * 与 [MederiIconButton]（CircleShape + buttonSecondary solid bg + active 高亮）互补而非重复——
  * 本变体为透明方形 + hover 反馈；标准建议给 MederiIconButton 加 shape 参数，收敛时按需统一。
  */
@@ -370,18 +371,25 @@ fun MederiMinimalIconButton(
     contentDescription: String? = null,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    active: Boolean = false,
     colors: MederiColors = LocalMederiColors.current,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val state = rememberIconButtonState(interactionSource)
     val bg by animateColorAsState(
-        targetValue = if (state.hovered && enabled) colors.surfaceHover else Color.Transparent,
+        targetValue = when {
+            !enabled -> Color.Transparent
+            active -> colors.accentPrimary.copy(alpha = 0.15f)
+            state.hovered -> colors.surfaceHover
+            else -> Color.Transparent
+        },
         animationSpec = tween(120),
         label = "minimalIconBg",
     )
     val tint by animateColorAsState(
         targetValue = when {
             !enabled -> colors.textMuted
+            active -> colors.accentPrimary
             state.hovered -> colors.textPrimary
             else -> colors.textSecondary
         },

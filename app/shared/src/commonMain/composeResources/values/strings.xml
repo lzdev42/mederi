@@ -443,6 +443,7 @@
     <string name="settings_agents_custom_action">指定独立模型</string>
     <string name="sidebar_automation">自动化</string>
     <string name="sidebar_cancel">取消</string>
+    <string name="sidebar_close">关闭侧边栏</string>
     <string name="sidebar_confirm_delete">确认删除</string>
     <string name="sidebar_confirm_rename">确认重命名</string>
     <string name="sidebar_conversation_menu">会话菜单</string>
@@ -452,6 +453,7 @@
     <string name="sidebar_delete_project">删除项目</string>
     <string name="sidebar_delete_project_message">删除后将移除项目 %1$s 及关联会话记录。</string>
     <string name="sidebar_delete_project_title">确认删除项目？</string>
+    <string name="sidebar_dismiss">关闭提示</string>
     <string name="sidebar_new_conversation">新建对话</string>
     <string name="sidebar_new_task">新建任务</string>
     <string name="sidebar_open_project_directory">打开项目目录</string>

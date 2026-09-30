@@ -29,6 +29,7 @@ import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.sidebar_automation
 import mederi.app.shared.generated.resources.sidebar_cancel
+import mederi.app.shared.generated.resources.sidebar_close
 import mederi.app.shared.generated.resources.sidebar_confirm_delete
 import mederi.app.shared.generated.resources.sidebar_confirm_rename
 import mederi.app.shared.generated.resources.sidebar_conversation_menu
@@ -38,13 +39,13 @@ import mederi.app.shared.generated.resources.sidebar_delete_conversation_title
 import mederi.app.shared.generated.resources.sidebar_delete_project
 import mederi.app.shared.generated.resources.sidebar_delete_project_message
 import mederi.app.shared.generated.resources.sidebar_delete_project_title
+import mederi.app.shared.generated.resources.sidebar_dismiss
 import mederi.app.shared.generated.resources.sidebar_new_conversation
 import mederi.app.shared.generated.resources.sidebar_new_task
 import mederi.app.shared.generated.resources.sidebar_open_project_directory
 import mederi.app.shared.generated.resources.sidebar_plugin_market
 import mederi.app.shared.generated.resources.sidebar_project_menu
 import mederi.app.shared.generated.resources.language_system
-import mederi.app.shared.generated.resources.sidebar_edge_handle
 import mederi.app.shared.generated.resources.sidebar_language
 import mederi.app.shared.generated.resources.sidebar_pin
 import mederi.app.shared.generated.resources.sidebar_projects
@@ -132,6 +133,11 @@ fun Sidebar(
         onActiveInteractionChange(interacting)
     }
 
+    // 抽屉销毁时必须回落交互态：父层唤出判定是派生式的，脏 true 会让抽屉立刻重新弹出
+    DisposableEffect(Unit) {
+        onDispose { onActiveInteractionChange(false) }
+    }
+
     // 抽屉模式下，改变会话/项目选择的操作同时收起抽屉（桌面常驻侧栏不收起）
     val navigate: () -> Unit = { if (isDrawer) onRequestClose() }
 
@@ -165,7 +171,12 @@ fun Sidebar(
                     }
                     Text("Mederi", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
-                SidebarIconButton(imageVector = FeatherIcons.X, colors = colors, onClick = onRequestClose)
+                MederiMinimalIconButton(
+                    icon = FeatherIcons.X,
+                    onClick = onRequestClose,
+                    contentDescription = stringResource(Res.string.sidebar_close),
+                    colors = colors
+                )
             }
         } else {
             Row(
@@ -179,6 +190,7 @@ fun Sidebar(
                 MederiMinimalIconButton(
                     icon = FeatherIcons.Search,
                     onClick = {},
+                    enabled = false,
                     colors = colors
                 )
 
@@ -187,24 +199,53 @@ fun Sidebar(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     if (onTogglePin != null) {
-                        SidebarIconButton(
-                            imageVector = FeatherIcons.Sidebar,
+                        MederiMinimalIconButton(
+                            icon = FeatherIcons.Sidebar,
+                            onClick = onTogglePin,
                             contentDescription = stringResource(if (isPinned) Res.string.sidebar_unpin else Res.string.sidebar_pin),
                             active = isPinned,
-                            colors = colors,
-                            onClick = onTogglePin
+                            colors = colors
                         )
                     }
                     if (isDrawer) {
-                        SidebarIconButton(
-                            imageVector = FeatherIcons.ChevronLeft,
-                            contentDescription = stringResource(Res.string.sidebar_cancel),
-                            colors = colors,
-                            onClick = onRequestClose
+                        MederiMinimalIconButton(
+                            icon = FeatherIcons.ChevronLeft,
+                            onClick = onRequestClose,
+                            contentDescription = stringResource(Res.string.sidebar_close),
+                            colors = colors
                         )
                     }
                 }
             }
+        }
+
+        // 操作失败提示（rename/delete 等）：侧边栏唯一的错误出口，可关闭（不再静默失败）
+        val errorMessage = viewModel.uiState.error
+        if (errorMessage != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(MederiRadius.Control))
+                    .background(colors.accentDanger.copy(alpha = 0.12f))
+                    .padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = errorMessage,
+                    color = colors.accentDanger,
+                    fontSize = 11.5.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                MederiMinimalIconButton(
+                    icon = FeatherIcons.X,
+                    contentDescription = stringResource(Res.string.sidebar_dismiss),
+                    onClick = { viewModel.clearError() },
+                    colors = colors
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
         }
 
         // 顶层三大固定菜单 (新建任务、插件市场、自动化 - 对齐图 2)
@@ -225,13 +266,15 @@ fun Sidebar(
                 icon = FeatherIcons.Grid,
                 title = stringResource(Res.string.sidebar_plugin_market),
                 isSelected = false,
-                colors = colors
+                colors = colors,
+                enabled = false
             )
             SidebarMenuItem(
                 icon = FeatherIcons.Clock,
                 title = stringResource(Res.string.sidebar_automation),
                 isSelected = false,
-                colors = colors
+                colors = colors,
+                enabled = false
             )
         }
 
@@ -419,15 +462,9 @@ fun Sidebar(
 
                     // Theme Switch Button（主题写操作唯一通道：AppState；02 §1.6 icon-square-btn）
                     MederiIconSquareButton(
-                        icon = if (colors.isDark) FeatherIcons.Moon else FeatherIcons.Sun,
+                        icon = if (theme.isDark) FeatherIcons.Moon else FeatherIcons.Sun,
                         contentDescription = stringResource(Res.string.sidebar_toggle_theme),
-                        onClick = {
-                            val nextTheme = when (theme) {
-                                AppThemeMode.DARK -> AppThemeMode.LIGHT
-                                AppThemeMode.LIGHT -> AppThemeMode.DARK
-                            }
-                            viewModel.setTheme(nextTheme)
-                        },
+                        onClick = { viewModel.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK) },
                         colors = colors
                     )
                 }
@@ -459,6 +496,7 @@ private fun SidebarMenuItem(
     title: String,
     isSelected: Boolean,
     colors: MederiColors,
+    enabled: Boolean = true,
     onClick: () -> Unit = {}
 ) {
     // 02 §1.9：高 36 / padding 0-12 / gap 10 / icon 16 / 13.5sp；active 用 iris 族（accentBg/accentText/accentBorder），
@@ -467,6 +505,7 @@ private fun SidebarMenuItem(
     val hovered by interactionSource.collectIsHoveredAsState()
     val bg by animateColorAsState(
         targetValue = when {
+            !enabled -> Color.Transparent
             isSelected -> colors.accentBg
             hovered -> colors.surfaceHover
             else -> Color.Transparent
@@ -476,6 +515,7 @@ private fun SidebarMenuItem(
     )
     val contentColor by animateColorAsState(
         targetValue = when {
+            !enabled -> colors.textMuted
             isSelected -> colors.accentText
             hovered -> colors.textPrimary
             else -> colors.textSecondary
@@ -491,11 +531,11 @@ private fun SidebarMenuItem(
             .background(bg)
             .border(
                 width = 1.dp,
-                color = if (isSelected) colors.accentBorder else Color.Transparent,
+                color = if (isSelected && enabled) colors.accentBorder else Color.Transparent,
                 shape = RoundedCornerShape(MederiRadius.Control)
             )
-            .hoverable(interactionSource)
-            .clickable(interactionSource = interactionSource, onClick = onClick)
+            .then(if (enabled) Modifier.hoverable(interactionSource) else Modifier)
+            .clickable(interactionSource = interactionSource, enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -514,31 +554,6 @@ private fun SidebarMenuItem(
             ),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun SidebarIconButton(
-    imageVector: ImageVector,
-    colors: MederiColors,
-    contentDescription: String? = null,
-    active: Boolean = false,
-    onClick: () -> Unit = {}
-) {
-    Box(
-        modifier = Modifier
-            .size(28.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (active) colors.accentPrimary.copy(alpha = 0.15f) else Color.Transparent)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = imageVector,
-            contentDescription = contentDescription,
-            tint = if (active) colors.accentPrimary else colors.textSecondary,
-            modifier = Modifier.size(15.dp)
         )
     }
 }
@@ -652,7 +667,6 @@ private fun ProjectTreeRow(
                         .background(plusBg)
                         .hoverable(plusInteraction)
                         .clickable(interactionSource = plusInteraction) {
-                            appState.selectProject(project.id)
                             viewModel.createConversation(project.id)
                             navigate()
                         },
