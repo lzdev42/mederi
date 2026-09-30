@@ -58,44 +58,26 @@ mederi-started processes, so it is the only reliable way to stop your servers.
     val MARKDOWN_FORMAT: String = """
 # Markdown & Formatting
 
-GitHub-flavored markdown. Preserve all existing comments/docstrings unrelated to your
-changes unless the user says otherwise.
-
-## Code, Paths & Local Links
-- Backticks for code, identifiers, paths, flags, shell variables in inline text.
-- Clickable `file://` links for ALL referenced local files/dirs/symbols:
-  `[name](file:///abs/path)` / `[name#L10-L20](file:///abs/path#L10-L20)` / `[dir/](file:///abs/dir/)`.
-  Windows: forward slashes.
-- Embed images/videos with `![caption](/abs/path.jpg)`. Absolute paths; caption shows below.
+## Local Links & Media
+- Clickable `file://` links for ALL referenced files/symbols:
+  `[name](file:///abs/path)` / `[name#L10-L20](file:///abs/path#L10-L20)`.
+- Embed images/videos: `![caption](/abs/path.jpg)`.
 
 ## Vertical Text (`vlr`)
-- A fenced block with info string `vlr` renders its body as vertical text (top-to-bottom,
-  left-to-right columns) for vertical scripts — Mongolian, Manchu, Xibe only.
-- Attributes in the info string, `key=value` space-separated in braces:
-  height (alias `h`, dp/px, default = content-adaptive) · fontSize (aliases `font-size`,
-  `size`, sp/px) · wrap (aliases `autowrap`, `auto-wrap`, true/false, only effective with height).
-- Layout: no height → columns break ONLY at explicit newlines, horizontal scroll if too wide;
-  height+wrap=true → text auto-wraps into the next column at the given height;
-  height+wrap=false → one column may extend past the height, two-way scrolling.
-- Inside an artifact, vlr blocks are preserved on HTML/PDF export (font embedded, no page split).
+- A fenced block with info string `vlr` renders vertical text (top-to-bottom, left-to-right)
+  for Mongolian, Manchu, Xibe scripts.
+- Attributes: height (alias `h`, dp/px) · fontSize (aliases `font-size`, `size`, sp/px) ·
+  wrap (aliases `autowrap`, `auto-wrap`, true/false, effective only with height).
+- No height → columns break at newlines only; height+wrap=true → auto-wrap; height+wrap=false → scroll.
+- Inside an artifact, vlr blocks are preserved on HTML/PDF export (font embedded).
 
-## LaTeX / Math
-- Inline `\(...\)` or `${'$'}...${'$'}`; display `\[...\]` or `${'$'}${'$'}...${'$'}${'$'}` on its own line.
-- Use math only for genuine mathematical content.
-- `${'$'}` opens inline math: write a literal dollar as `\${'$'}` or backticks. Two unescaped
-  `${'$'}` in one paragraph turn everything between them into math (bites prices, `${'$'}HOME`, awk `${'$'}1`).
-
-## Horizontal Rules (`---`)
-- `---` separates DISTINCT narrative blocks only (e.g. between two unrelated large sections of a
-  reply) — it is NOT decoration. Do not use it between a heading and its own content, and never
-  jam it right after a paragraph line.
-- Keep at least THREE blank lines above AND below the `---` line. A `---` placed directly under a
-  heading or paragraph mis-renders (setext underline / stray visual line) and looks like noise.
-- Prefer headings + spacing over `---`; the bar is the exception for breaking up long replies.
+## Horizontal Rules
+- `---` separates DISTINCT narrative blocks only — NOT decoration. Three blank lines above AND
+  below. Never directly under a heading (mis-renders as setext underline).
 
 ## Alerts
-GitHub-style alerts for critical information; text inside must be in the user's input language;
-don't place consecutively or nest: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]` `[!CAUTION]`.
+GitHub-style: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]` `[!CAUTION]`. Text in the user's
+language; don't stack consecutively or nest.
 """.trimIndent()
 
     /**

@@ -292,11 +292,12 @@ flowchart TD
     B["触发2: graphStrategy 节点内<br/>isHistoryTooBig(prompt) > 70%"]
     C["触发3: 用户手动 compressHistory()"]
     A & B & C --> D["MederiCompressionStrategy.compress(llmSession, memory)"]
-    D --> E["压缩源 = llmSession.prompt.messages<br/>保留最近 30%(最少5条)原文"]
-    E --> F["更早非 system 消息 → requestLLMWithoutTools(压缩 mini agent maxAgentIterations=10)<br/>生成 TLDR(五节: 关键决策/用户讨论/未完成讨论/当前阶段/关键记忆)"]
-    F --> G["新历史 = system + TLDR:... + recent"]
+    D --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner: 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim"]
+    E --> F["逐批 requestLLMWithoutTools 生成小结 → combineBatchSummaries 合并为单条 TLDR:(五节)"]
+    F --> G["新历史 = system + TLDR:... + recent<br/>(head-trim 仅影响 AI 视图, HistoryStore 全量不删)"]
     G --> H["ChatMemory 回写 store → HistoryStoreChatHistoryProvider.reconcile<br/>检测首条 TLDR 未落库 → 按内容指纹对齐<br/>→ 插入 SUMMARY 标记消息(不删任何已有消息)"]
     H --> I["效果: message_history 全量保留(UI 可见/回滚可用)<br/>aiViewWindow = 最后一条 SUMMARY 及其后 → AI 视图变小"]
+    A -. preflight 压缩失败(不阻塞).-> W["自动压缩失败(原因回灌 streamWarning)<br/>MESSAGE_COMPLETED/MESSAGE_ERROR.warning 对用户可见"]
 ```
 
 ## 6. ask_user 问询时序

@@ -870,7 +870,7 @@ class TurnExecutor(
         val agent = AIAgent.builder()
             .promptExecutor(executor)
             .agentConfig(agentConfig)
-            .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy()))
+            .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy(model.contextWindow)))
             .install(ChatMemory.Feature) { config ->
                 config.chatHistoryProvider = historyProvider
             }
@@ -973,7 +973,8 @@ class TurnExecutor(
             DebugLog.data("TurnExec", "provider.type", provider.type)
             DebugLog.data("TurnExec", "provider.baseUrl", provider.baseUrl)
 
-            preflightCompressionIfNeeded(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
+            val preflightWarning = preflightCompressionIfNeeded(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
+            if (preflightWarning != null) streamWarning.compareAndSet(null, preflightWarning)
 
             val questionRequester = xyz.mederi.question.QuestionRequester(sessionId, eventBus)
             questionRequesters[sessionId] = questionRequester
@@ -1141,14 +1142,17 @@ class TurnExecutor(
                 modelName = model.name
             )
             val record = ErrorCollector.collect(e, errorContext)
+            val errorPayload = record.toPayload().toMutableMap().apply {
+                streamWarning.get()?.let { put("warning", it) }
+            }
             if (RetryableLLMClient.isTransientError(e) || record.severity == ErrorSeverity.RECOVERABLE) {
                 // 限流/网关过载/网络中断 = 环境态：重试已耗尽或流中途中断，属于可恢复状态，session 保持 IDLE
                 // （用户稍后重发即可），不把会话标成 ERROR
                 sessionStore.update(sessionId, SessionStatus.IDLE)
-                emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
+                emit(sessionId, EventType.MESSAGE_ERROR, payload = errorPayload)
             } else {
                 sessionStore.update(sessionId, SessionStatus.ERROR)
-                emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
+                emit(sessionId, EventType.MESSAGE_ERROR, payload = errorPayload)
             }
         } finally {
             activeJobs.remove(sessionId)
@@ -1321,7 +1325,10 @@ class TurnExecutor(
      * 臃肿历史——压缩发生在请求之前，而不是超限请求发出之后。
      * durable-first 后用户消息已在 [HistoryStoreChatHistoryProvider.aiViewWindow] 窗口内，
      * 直接按窗口估算即可，不再单独累加新消息 token。
-     * 压缩失败不阻塞本轮对话（安全兜底）：照常发送，运行期检查仍会兜底。
+     * 压缩失败不阻塞本轮对话（安全兜底）：照常发送，运行期检查仍会兜底；
+     * 但失败原因回灌 streamWarning 对用户可见。
+     *
+     * @return 压缩失败原因（人类可读，非空=压缩失败）；null=未触发压缩或压缩成功
      */
     private suspend fun preflightCompressionIfNeeded(
         session: xyz.mederi.domain.model.Session,
@@ -1330,10 +1337,10 @@ class TurnExecutor(
         reasoningLevel: ReasoningLevel,
         systemPrompt: String,
         apiKeyId: String? = null
-    ) {
-        val contextWindow = model.contextWindow ?: return
+    ): String? {
+        val contextWindow = model.contextWindow ?: return null
         val window = HistoryStoreChatHistoryProvider.aiViewWindow(historyStore, session.id)
-        if (window.isEmpty()) return
+        if (window.isEmpty()) return null
 
         // 估算与实际发送一致：图片按当前模型能力剔除
         val koogWindow = KoogMessageMapper.toKoogMessages(window, includeImages = model.supportsImages)
@@ -1345,17 +1352,21 @@ class TurnExecutor(
             contextUsedTokens(koogWindow)
         }
         val budget = (contextWindow * 0.70).toInt()
-        if (usedTokens <= budget) return
+        if (usedTokens <= budget) return null
 
         DebugLog.event(
             "TurnExec",
             "pre-flight compression triggered: used=$usedTokens > budget=$budget"
         )
-        runCatching {
+        return runCatching {
             compressOnce(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
-        }.onFailure {
-            DebugLog.error("TurnExec", "pre-flight compression failed: ${it.message}", it)
-        }
+        }.fold(
+            onSuccess = { null },
+            onFailure = { e ->
+                DebugLog.error("TurnExec", "pre-flight compression failed: ${e.message}", e)
+                "自动压缩失败：${(e.message?.take(200)?.ifBlank { null } ?: e::class.simpleName) ?: "未知错误"}。上下文可能过长，请尝试手动压缩或切换更大窗口的模型。"
+            }
+        )
     }
 
     /**
@@ -1452,7 +1463,7 @@ class TurnExecutor(
                     // 70%：上下文越满注意力越分散，且留出发送前压缩的判定余量
                     usedTokens > (contextWindow * 0.70).toInt()
                 },
-                compressionStrategy = MederiCompressionStrategy(),
+                compressionStrategy = MederiCompressionStrategy(contextWindow),
                 retrievalModel = null
             )
         }
