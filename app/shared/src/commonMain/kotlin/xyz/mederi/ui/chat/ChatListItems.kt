@@ -119,7 +119,6 @@ sealed interface ChatListItem {
         val subtaskInfo: String?,
         val reportPath: String?,
         val summary: String,
-        val fullContent: String,
         override val isTurnStart: Boolean = false,
         val messageId: String = "",
         val createdAt: Long = 0L,

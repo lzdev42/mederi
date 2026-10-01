@@ -3,6 +3,7 @@ package xyz.mederi.ui.components
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -124,6 +126,9 @@ fun StatusBar(
         else -> ""
     }
 
+    val shape = RoundedCornerShape(6.dp)
+    val indicatorColor = if (slowResponse) colors.accentWarning else tint
+
     AnimatedVisibility(
         visible = status.shouldDisplayInStatusBar,
         enter = fadeIn() + expandVertically(),
@@ -131,84 +136,74 @@ fun StatusBar(
     ) {
         Column(
             modifier = modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(colors.surfaceCard.copy(alpha = 0.6f))
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .clip(shape)
+                .background(colors.surfaceCode.copy(alpha = 0.88f))
+                .border(
+                    1.dp,
+                    if (slowResponse) colors.accentWarning.copy(alpha = 0.5f) else colors.divider,
+                    shape
+                )
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            // 主行：图标 + 状态文案 + 耗时/倒计时
+            // 主行：极简线性/呼吸指示器 + 状态文案 + 等宽耗时微标
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // 左侧图标 + 动画
+                // 左侧状态指示器（Option 3：极简线性呼吸微标）
                 when (status) {
                     TurnStatus.Preparing, TurnStatus.Sending -> {
-                        // 闪烁圆点
                         val transition = rememberInfiniteTransition(label = "prep")
                         val alpha by transition.animateFloat(
-                            initialValue = 0.3f,
+                            initialValue = 0.35f,
                             targetValue = 1f,
                             animationSpec = infiniteRepeatable(
-                                animation = tween(600, easing = LinearEasing),
+                                animation = tween(650, easing = LinearEasing),
                                 repeatMode = RepeatMode.Reverse,
                             ),
                             label = "prepAlpha",
                         )
                         Box(
                             modifier = Modifier
-                                .size(8.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(tint.copy(alpha = alpha)),
+                                .size(width = 3.dp, height = 11.dp)
+                                .clip(RoundedCornerShape(1.5.dp))
+                                .background(indicatorColor.copy(alpha = alpha)),
                         )
                     }
                     TurnStatus.Retrying, TurnStatus.WaitingAnswer -> {
-                        icon?.let { Icon(it, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp)) }
+                        icon?.let { Icon(it, contentDescription = null, tint = indicatorColor, modifier = Modifier.size(13.dp)) }
                     }
                     else -> {
                         CircularProgressIndicator(
-                            color = tint,
+                            color = indicatorColor,
                             strokeWidth = 1.5.dp,
-                            modifier = Modifier.size(12.dp),
+                            modifier = Modifier.size(11.dp),
                         )
                     }
                 }
 
                 Text(
                     text = labelText,
-                    color = if (slowResponse) colors.accentWarning else tint,
+                    color = if (slowResponse) colors.accentWarning else colors.textPrimary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                 )
 
-                // 倒计时或耗时
+                // 右侧等宽耗时微标（Monospace Badge）
                 if (timerText.isNotBlank()) {
-                    Text(
-                        text = timerText,
-                        color = if (slowResponse) colors.accentWarning else colors.textMuted,
-                        fontSize = 11.sp,
-                    )
-                }
-
-                // Preparing/Sending 额外显示动态省略号
-                if (status == TurnStatus.Preparing || status == TurnStatus.Sending) {
-                    val transition = rememberInfiniteTransition(label = "dots")
-                    val dotAlphas = (0..2).map { index ->
-                        transition.animateFloat(
-                            initialValue = 0.2f,
-                            targetValue = 1f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(600, delayMillis = index * 200, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse,
-                            ),
-                            label = "dot$index",
-                        )
-                    }
-                    dotAlphas.forEach { alpha ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(colors.surfaceCard.copy(alpha = 0.6f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
                         Text(
-                            text = "·",
-                            color = tint.copy(alpha = alpha.value),
-                            fontSize = 16.sp,
+                            text = timerText,
+                            color = if (slowResponse) colors.accentWarning else colors.textMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
                         )
                     }
                 }
@@ -223,7 +218,7 @@ fun StatusBar(
                     fontSize = 11.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 20.dp),
+                    modifier = Modifier.padding(start = 11.dp),
                 )
             }
         }
@@ -234,8 +229,8 @@ private fun statusIconAndColor(
     status: TurnStatus,
     colors: xyz.mederi.theme.MederiColors,
 ): Pair<ImageVector?, Color> = when (status) {
-    TurnStatus.Sending -> null to colors.textMuted
-    TurnStatus.Preparing -> null to colors.textMuted
+    TurnStatus.Sending -> null to colors.accentPrimary
+    TurnStatus.Preparing -> null to colors.accentPrimary
     TurnStatus.Retrying -> FeatherIcons.RefreshCw to colors.accentWarning
     TurnStatus.Thinking -> FeatherIcons.Zap to colors.accentPrimary
     TurnStatus.CallingTool -> FeatherIcons.Terminal to colors.accentSecondary

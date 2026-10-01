@@ -797,6 +797,35 @@ class WorkspaceViewModel(
         computeChatItems(messages)
     }
 
+    /** 用户手动关闭的子代理浮动通知 key 集合（切会话自动重置） */
+    var dismissedSubagentCallKeys by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    fun dismissSubagentCall(key: String) {
+        dismissedSubagentCallKeys = dismissedSubagentCallKeys + key
+    }
+
+    /**
+     * 当前会话最新派发、且未被手动关闭的子任务浮动通知。
+     * 当有正在运行的子代理，或者属于当前轮次刚派发的调用时在顶层浮动展示。
+     */
+    val activeSubagentCalls: ChatListItem.SubagentCalls? by derivedStateOf {
+        val calls = chatItems.flatMap { item ->
+            when (item) {
+                is ChatListItem.SubagentCalls -> listOf(item)
+                is ChatListItem.WorkTraceBlock -> item.items.filterIsInstance<ChatListItem.SubagentCalls>()
+                else -> emptyList()
+            }
+        }
+        val last = calls.lastOrNull()
+        if (last != null && !dismissedSubagentCallKeys.contains(last.key)) {
+            val hasRunningSubagent = subagents.any { it.status.equals("RUNNING", ignoreCase = true) }
+            if (hasRunningSubagent || last.isRunning || last.isStreaming) {
+                last
+            } else null
+        } else null
+    }
+
     // ==========================================
     // 派生展示状态（View 直接读取，零业务逻辑）
     // ==========================================
@@ -975,6 +1004,29 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 }
         }
 
+        // 手动压缩预检旁路：core 判定"没有可压缩内容"时只发 STATUS 事件（scope=compaction），
+        // 不翻会话状态机 → 没有 SESSION_UPDATED，onSnapshot 那条清锚点路径不会触发。
+        // 这里收尾：清掉 requestCompaction 事先设的 turnStart 锚点（否则 StatusBar 计时挂着一个
+        // "已耗时 0"），再派发一次性提示 effect。按会话过滤，避免别的会话的压缩事件串到当前弹窗。
+        viewModelScope.launch {
+            appState.aiCore.isReady.first { it }
+            appState.aiCore.events()
+                .filter { it.type == xyz.mederi.core.contract.models.CoreEventType.STATUS &&
+                    it.payload["scope"] == "compaction" &&
+                    it.sessionId == conversationId }
+                .collect { e ->
+                    // 预检命中：core 没翻状态机，turnStart 锚点是 requestCompaction 设的，
+                    // 这里收尾清掉，否则 StatusBar 计时会挂着一个"已耗时 0"不清。
+                    sessionCache.turnStartByConv.remove(e.sessionId)
+                    _effects.trySend(
+                        UiEffect.ShowCompactionNotice(
+                            code = e.payload["code"] ?: "SKIPPED",
+                            reason = e.payload["reason"]
+                        )
+                    )
+                }
+        }
+
         // 子代理生命周期监听（app 级，不绑定会话）：SUBAGENT_* 事件 → SubagentTracker 聚合进
         // MVVM 缓存（每个子代理一个 SubagentState）。UI（未来）读 [allSubagents] / [subagents]
         // 渲染子代理追踪器与详情——"正在干活"的真实状态 + 主代理派发的命令 + 实际使用的模型。
@@ -993,6 +1045,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         DebugLog.event("UI", "attach: id=$id")
         selectionHydrated = false
         resetQuestionState()
+        dismissedSubagentCallKeys = emptySet()
         if (id == null) {
             conversationId = null
             snapshot = null

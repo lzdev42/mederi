@@ -21,4 +21,15 @@ sealed interface UiEffect {
 
     /** 打开项目选择菜单（一次性命令，原 ChatInputCard projectMenuOpenRequest 计数器） */
     data object OpenProjectMenu : UiEffect
+
+    /**
+     * 显示"手动压缩被跳过"的一次性提示。
+     *
+     * 来源：core 预检判定手动压缩没有可压缩内容时（token 数不足 / 可压缩轮次太少），
+     * core 不翻会话状态机、只经 STATUS 事件（payload: scope=compaction / code=SKIPPED /
+     * reason=low_tokens|too_few）报事实，由 [WorkspaceViewModel] 的裸事件旁路收集器
+     * 转成本 effect——core 不需要知道 UI 有没有模态/提示。
+     * UI 据 [reason] 选本地化文案（[code] 预留其他预检结果）。
+     */
+    data class ShowCompactionNotice(val code: String, val reason: String?) : UiEffect
 }

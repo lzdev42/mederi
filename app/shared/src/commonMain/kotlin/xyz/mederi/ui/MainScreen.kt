@@ -14,6 +14,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,12 +25,21 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
+import compose.icons.FeatherIcons
+import compose.icons.feathericons.Info
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.compaction_ok
+import mederi.app.shared.generated.resources.compaction_skipped_low_tokens
+import mederi.app.shared.generated.resources.compaction_skipped_title
+import mederi.app.shared.generated.resources.compaction_skipped_too_few
 import mederi.app.shared.generated.resources.main_initializing
 import mederi.app.shared.generated.resources.main_ready
 import mederi.app.shared.generated.resources.pick_directory_title
@@ -40,6 +51,8 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.InitLoadingOverlay
+import xyz.mederi.ui.components.atoms.MederiCard
+import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 import xyz.mederi.ui.settings.SettingsDialog
 import xyz.mederi.util.pickDirectory
 
@@ -54,6 +67,10 @@ fun MainScreen() {
 
     var isSettingsVisible by remember { mutableStateOf(false) }
 
+    // 手动压缩被 core 预检跳过的一次性提示（ST1 派发的 effect）→ 落为本地状态后渲染模态；
+    // 「确定」关闭是纯本地 UI 动作（compactionNotice = null），不走效果通道，与 isSettingsVisible 同构。
+    var compactionNotice by remember { mutableStateOf<UiEffect.ShowCompactionNotice?>(null) }
+
     // 一次性导航命令"打开设置"经 VM effects Channel 派发，这里 collect 后落为本地
     // isSettingsVisible=true（effect → state 宿主）；关闭设置对话框的 onRequestClose 仍直接
     // 置 false——关闭是纯本地 UI 动作，不走效果通道。
@@ -61,6 +78,7 @@ fun MainScreen() {
         workspaceViewModel.effects.collect { effect ->
             when (effect) {
                 is UiEffect.OpenSettings -> isSettingsVisible = true
+                is UiEffect.ShowCompactionNotice -> compactionNotice = effect
                 else -> {}
             }
         }
@@ -328,6 +346,69 @@ fun MainScreen() {
             isVisible = isSettingsVisible,
             onClose = { isSettingsVisible = false }
         )
+
+        // 手动压缩被跳过的一次性提示（"确定" 单按钮关闭）
+        compactionNotice?.let { notice ->
+            val title = stringResource(Res.string.compaction_skipped_title)
+            val body = when (notice.reason) {
+                "low_tokens" -> stringResource(Res.string.compaction_skipped_low_tokens)
+                "too_few" -> stringResource(Res.string.compaction_skipped_too_few)
+                // 未知 reason 兜底到最常见文案，不崩
+                else -> stringResource(Res.string.compaction_skipped_low_tokens)
+            }
+            val okLabel = stringResource(Res.string.compaction_ok)
+            Dialog(onDismissRequest = { compactionNotice = null }) {
+                MederiCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 420.dp),
+                    padding = PaddingValues(20.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = FeatherIcons.Info,
+                                    contentDescription = null,
+                                    tint = colors.accentPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = title,
+                                    color = colors.textPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                        Text(
+                            text = body,
+                            color = colors.textSecondary,
+                            fontSize = 13.sp
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            MederiPrimaryDecisionButton(
+                                text = okLabel,
+                                onClick = { compactionNotice = null }
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

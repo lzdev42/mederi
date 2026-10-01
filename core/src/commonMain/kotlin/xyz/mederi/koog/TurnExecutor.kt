@@ -54,6 +54,7 @@ import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.domain.model.MessageStatus
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.SubagentRole
+import xyz.mederi.koog.compactionSkipReason
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.prompt.SystemPrompts
 import xyz.mederi.provider.ApiKeyResolver
@@ -801,6 +802,22 @@ class TurnExecutor(
             ?: throw NoSuchElementException("Provider for model ${effectiveModel.id} not found")
         val model = provider.getModel(effectiveModel.id)
             ?: throw NoSuchElementException("Model not found: ${effectiveModel.id}")
+
+        // 空转预检：在翻状态机（Working→Idle）之前判定「根本没有值得压的旧消息」。
+        // 命中则直接返回——不发 Working 不再回 Idle，UI 不会闪一下，只收到一条 STATUS 事实。
+        // 窗口口径与实际压缩一致（图片按当前模型能力剔除），判定逻辑与策略共用 planCompression。
+        val window = HistoryStoreChatHistoryProvider.aiViewWindow(historyStore, session.id)
+        val koogWindow = KoogMessageMapper.toKoogMessages(window, includeImages = model.supportsImages)
+        val skipReason = compactionSkipReason(koogWindow, model.contextWindow)
+        if (skipReason != null) {
+            DebugLog.event("TurnExec", "manual compaction skipped: reason=$skipReason")
+            emit(sessionId, EventType.STATUS, payload = mapOf(
+                "scope" to "compaction",
+                "code" to "SKIPPED",
+                "reason" to skipReason
+            ))
+            return
+        }
 
         sessionStore.update(sessionId, SessionStatus.RUNNING)
         emit(sessionId, EventType.SESSION_UPDATED)

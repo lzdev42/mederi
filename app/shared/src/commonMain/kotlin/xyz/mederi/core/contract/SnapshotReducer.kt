@@ -206,10 +206,21 @@ object SnapshotReducer {
             )
         }
 
-        CoreEventType.QUESTION_RESOLVED -> snapshot.copy(
-            conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
-            pendingQuestion = null
-        )
+        CoreEventType.QUESTION_RESOLVED -> {
+            val lastMsg = snapshot.messages.lastOrNull()
+            val updatedMessages = if (lastMsg != null && lastMsg.role == ChatRole.Assistant && !lastMsg.isStreaming) {
+                val msgs = snapshot.messages.toMutableList()
+                msgs[msgs.lastIndex] = lastMsg.copy(isStreaming = true)
+                msgs
+            } else {
+                snapshot.messages
+            }
+            snapshot.copy(
+                conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
+                messages = updatedMessages,
+                pendingQuestion = null
+            )
+        }
 
         CoreEventType.PLAN_APPROVAL_REQUESTED -> {
             val subtasksJson = event.payload["subtasks"]
@@ -286,8 +297,17 @@ object SnapshotReducer {
             val updatedList = snapshot.planApprovals.map {
                 if (it.id == planId) it.copy(status = if (approved) "APPROVED" else "REJECTED") else it
             }
+            val lastMsg = snapshot.messages.lastOrNull()
+            val updatedMessages = if (approved && lastMsg != null && lastMsg.role == ChatRole.Assistant && !lastMsg.isStreaming) {
+                val msgs = snapshot.messages.toMutableList()
+                msgs[msgs.lastIndex] = lastMsg.copy(isStreaming = true)
+                msgs
+            } else {
+                snapshot.messages
+            }
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
+                messages = updatedMessages,
                 pendingPlanApproval = null,
                 planApprovals = updatedList
             )
@@ -528,32 +548,66 @@ object SnapshotReducer {
         isError: Boolean
     ): ConversationSnapshot {
         val currentMessages = this.messages.toMutableList()
-        val placeholder = ensureStreamingPlaceholder(currentMessages)
-        val updatedBlocks = placeholder.blocks.toMutableList()
 
-        val target = (if (toolCallId.isNotBlank()) {
-            updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
-                .firstOrNull { it.id == "tool_$toolCallId" }
-        } else null)
-            ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
-                .lastOrNull { it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
+        // 优先在已有消息中倒序查找匹配的目标 ToolCall
+        var found = false
+        for (i in currentMessages.indices.reversed()) {
+            val msg = currentMessages[i]
+            if (msg.role != ChatRole.Assistant) continue
+            val blocks = msg.blocks.toMutableList()
+            val target = (if (toolCallId.isNotBlank()) {
+                blocks.filterIsInstance<ChatBlock.ToolCall>()
+                    .firstOrNull { it.id == "tool_$toolCallId" }
+            } else null)
+                ?: blocks.filterIsInstance<ChatBlock.ToolCall>()
+                    .lastOrNull { it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
 
-        if (target != null) {
-            val prevInput = when (val s = target.state) {
-                is ToolCallState.Running -> s.input
-                is ToolCallState.Pending -> s.input
-                is ToolCallState.Completed -> s.input
-                is ToolCallState.Failed -> s.input
+            if (target != null) {
+                val prevInput = when (val s = target.state) {
+                    is ToolCallState.Running -> s.input
+                    is ToolCallState.Pending -> s.input
+                    is ToolCallState.Completed -> s.input
+                    is ToolCallState.Failed -> s.input
+                }
+                val state = if (isError) {
+                    ToolCallState.Failed(input = prevInput, error = output)
+                } else {
+                    ToolCallState.Completed(input = prevInput, output = output)
+                }
+                blocks[blocks.lastIndexOf(target)] = target.copy(state = state)
+                currentMessages[i] = msg.copy(blocks = blocks)
+                found = true
+                break
             }
-            val state = if (isError) {
-                ToolCallState.Failed(input = prevInput, error = output)
-            } else {
-                ToolCallState.Completed(input = prevInput, output = output)
-            }
-            updatedBlocks[updatedBlocks.lastIndexOf(target)] = target.copy(state = state)
         }
 
-        currentMessages.add(placeholder.copy(blocks = updatedBlocks))
+        if (!found) {
+            val placeholder = ensureStreamingPlaceholder(currentMessages)
+            val updatedBlocks = placeholder.blocks.toMutableList()
+            val target = (if (toolCallId.isNotBlank()) {
+                updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
+                    .firstOrNull { it.id == "tool_$toolCallId" }
+            } else null)
+                ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
+                    .lastOrNull { it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
+
+            if (target != null) {
+                val prevInput = when (val s = target.state) {
+                    is ToolCallState.Running -> s.input
+                    is ToolCallState.Pending -> s.input
+                    is ToolCallState.Completed -> s.input
+                    is ToolCallState.Failed -> s.input
+                }
+                val state = if (isError) {
+                    ToolCallState.Failed(input = prevInput, error = output)
+                } else {
+                    ToolCallState.Completed(input = prevInput, output = output)
+                }
+                updatedBlocks[updatedBlocks.lastIndexOf(target)] = target.copy(state = state)
+            }
+            currentMessages.add(placeholder.copy(blocks = updatedBlocks))
+        }
+
         val targetStatus = if (this.conversation.status == ConversationStatus.WaitingUser) {
             ConversationStatus.WaitingUser
         } else {

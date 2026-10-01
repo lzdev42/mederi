@@ -70,6 +70,8 @@ import xyz.mederi.ui.components.QuestionCard
 import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
 import xyz.mederi.ui.components.StatusBar
+import xyz.mederi.ui.components.WorkspaceFloatingOverlay
+import androidx.compose.ui.zIndex
 import xyz.mederi.ui.components.ErrorDetailDialog
 import xyz.mederi.ui.components.UserPastedTextCard
 import xyz.mederi.ui.components.UserMessageFooter
@@ -303,13 +305,26 @@ fun Workspace(
                                         letterSpacing = (-0.5).sp
                                     )
                                     Spacer(modifier = Modifier.height(16.dp))
-                                    ChatInputCard(
-                                        viewModel = viewModel,
+                                    Column(
                                         modifier = Modifier
                                             .widthIn(max = if (isCompact) Dp.Unspecified else 700.dp)
                                             .fillMaxWidth(),
-                                        onOpenProjectPicker = onOpenProjectPicker
-                                    )
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                    ) {
+                                        WorkspaceFloatingOverlay(
+                                            viewModel = viewModel,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .zIndex(10f)
+                                                .padding(bottom = 6.dp)
+                                        )
+
+                                        ChatInputCard(
+                                            viewModel = viewModel,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            onOpenProjectPicker = onOpenProjectPicker
+                                        )
+                                    }
                                 }
                             }
                             else -> {
@@ -329,13 +344,27 @@ fun Workspace(
                                         .padding(bottom = if (isCompact) 8.dp else 24.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    ChatInputCard(
-                                        viewModel = viewModel,
+                                    Column(
                                         modifier = Modifier
                                             .widthIn(max = contentMaxWidth)
                                             .fillMaxWidth(),
-                                        onOpenProjectPicker = onOpenProjectPicker
-                                    )
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                    ) {
+                                        // 顶层浮动状态栈 (Floating Overlay Stack, zIndex 顶层)
+                                        WorkspaceFloatingOverlay(
+                                            viewModel = viewModel,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .zIndex(10f)
+                                                .padding(bottom = 6.dp)
+                                        )
+
+                                        ChatInputCard(
+                                            viewModel = viewModel,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            onOpenProjectPicker = onOpenProjectPicker
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -358,7 +387,8 @@ fun Workspace(
                     RightDock(
                         activePanel = viewModel.activeDockPanel,
                         onSelectPanel = { panel -> viewModel.toggleDockPanel(panel) },
-                        onOpenSettings = onOpenSettings
+                        onOpenSettings = onOpenSettings,
+                        hasRunningSubagents = viewModel.subagents.any { it.status.equals("RUNNING", ignoreCase = true) }
                     )
                 }
             }
@@ -555,7 +585,7 @@ private fun MessageList(
                                 onOpenReport = { title, content ->
                                     viewModel.openPlanInExtension(item.agentId, title, content)
                                 },
-                                modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
                     }
@@ -653,6 +683,7 @@ private fun MessageList(
                                             isStreaming = stepItem.isStreaming,
                                             isRunning = stepItem.isRunning,
                                             hasFailed = stepItem.hasFailed,
+                                            onOpenOverview = { viewModel.openDockPanel(RightDockPanel.OVERVIEW) },
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
                                         )
                                     }
@@ -723,18 +754,7 @@ private fun MessageList(
                     }
 
                     is ChatListItem.SubagentCalls -> {
-                        SubagentCallsBlock(
-                            subagents = item.subagents,
-                            isStreaming = item.isStreaming,
-                            isRunning = item.isRunning,
-                            hasFailed = item.hasFailed,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = ChatLayout.thoughtBottomSpacing
-                                )
-                        )
+                        // 子任务派发与运行态已提升至输入框顶部顶层浮层 (WorkspaceFloatingOverlay)，不在聊天流平铺
                     }
 
                     is ChatListItem.TurnDiffCard -> {
@@ -889,33 +909,7 @@ private fun MessageList(
             }
         }
 
-        // 2. 对话轮次状态栏：仅在等待响应或重试时展示，收到推理/消息输出时自动隐藏
-        val turnStatus = viewModel.turnStatus
-        if (turnStatus.shouldDisplayInStatusBar) {
-            item {
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = contentMaxWidth)
-                        .fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start
-                    ) {
-                        // 轮次过程状态栏：只显示运转状态（思考中、生成中、调用工具等）
-                        // 计时锚定发送请求时刻（turnStartedAt），每秒重算，切会话回来不重置
-                        StatusBar(
-                            status = turnStatus,
-                            startedAtMillis = viewModel.turnStartedAt,
-                            statusHint = viewModel.statusHint,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            }
-        }
-
-        // 3. 动态选择题卡片（答案收集/翻页状态机在 WorkspaceViewModel）
+        // 2. 动态选择题卡片（答案收集/翻页状态机在 WorkspaceViewModel）
         viewModel.pendingQuestion?.let { question ->
             item {
                 Box(
@@ -937,6 +931,11 @@ private fun MessageList(
                     )
                 }
             }
+        }
+
+        // 底部安全留白（与输入框保持呼吸间距）
+        item {
+            Spacer(modifier = Modifier.height(12.dp))
         }
     }
 }

@@ -6,6 +6,7 @@ import ai.koog.prompt.message.ResponseMetaInfo
 import xyz.mederi.tools.estimateTokens
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -153,6 +154,44 @@ class CompressionPlannerTest {
         // 结果里 TLDR: 只能出现一次（仅首行），正文内的前缀已被剥掉
         val occurrences = Regex(Regex.escape("TLDR:")).findAll(combined).count()
         assertEquals(1, occurrences, "结果中 TLDR: 应只出现一次，实际 $occurrences")
+    }
+
+    // ── compactionSkipReason：空转预检（与 MederiCompressionStrategy 的两条早退判定同源） ──
+
+    @Test
+    fun testCompactionSkipReasonLowTokens() {
+        // 大窗口：保留预算 = 1_000_000 × 0.3 = 300_000 token，几条小消息（每条 ≈ 1_000 token）
+        // 全部落在保留段里，没有任何可压缩的旧消息 → low_tokens
+        val messages = (0 until 5).map { user(4_000) }
+        val plan = planCompression(messages, 1_000_000)
+        assertTrue(plan.olderBatches.isEmpty(), "前置条件：5 条小消息在大窗口下应全在保留段")
+
+        assertEquals("low_tokens", compactionSkipReason(messages, 1_000_000))
+    }
+
+    @Test
+    fun testCompactionSkipReasonTooFew() {
+        // 窗口 100_000 → 保留预算 30_000；1 条 40_000 字符（≈ 10_000 token）+ 30 条 4_000 字符（≈ 1_000 token）
+        // 保留段刚好吃掉后面 30 条（30 × 1_000 = 30_000），older 只剩最早那 1 条 → 不值得压一次 LLM
+        val messages = buildList {
+            add(user(40_000))
+            repeat(30) { add(user(4_000)) }
+        }
+        val plan = planCompression(messages, 100_000)
+        assertEquals(1, plan.olderBatches.sumOf { it.size }, "前置条件：older 应恰好只剩 1 条")
+
+        assertEquals("too_few", compactionSkipReason(messages, 100_000))
+    }
+
+    @Test
+    fun testCompactionSkipReasonNullWhenEnoughOlderMessages() {
+        // 窗口 100_000 → 保留预算 30_000；10 条 20_000 字符（≈ 5_000 token）共 50_000 token，
+        // 保留段吃掉最近 6 条，older 剩 4 条 ≥ 2 → 值得压，预检放行
+        val messages = (0 until 10).map { user(20_000) }
+        val plan = planCompression(messages, 100_000)
+        assertTrue(plan.olderBatches.sumOf { it.size } >= 2, "前置条件：older 应 ≥ 2 条")
+
+        assertNull(compactionSkipReason(messages, 100_000), "旧消息足量时不应判定为空转")
     }
 
     // ── 空输入 ─────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,11 +26,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.tool_detail_failed_output
 import mederi.app.shared.generated.resources.tool_detail_output
 import mederi.app.shared.generated.resources.tool_detail_report
+import mederi.app.shared.generated.resources.tool_action_ask_answered
+import mederi.app.shared.generated.resources.tool_action_ask_answered_many
+import mederi.app.shared.generated.resources.tool_action_ask_declined
 import mederi.app.shared.generated.resources.tool_action_ask_many
 import mederi.app.shared.generated.resources.tool_action_ask_one
 import mederi.app.shared.generated.resources.tool_action_ask_running
@@ -80,6 +88,11 @@ import mederi.app.shared.generated.resources.tool_action_verify_one
 import mederi.app.shared.generated.resources.tool_action_verify_running
 import mederi.app.shared.generated.resources.tool_action_verify_running_target
 import mederi.app.shared.generated.resources.tool_action_verify_target
+import mederi.app.shared.generated.resources.subagent_strip_completed_one
+import mederi.app.shared.generated.resources.subagent_strip_dispatched_one
+import mederi.app.shared.generated.resources.subagent_strip_failed_one
+import mederi.app.shared.generated.resources.subagent_strip_running_one
+import mederi.app.shared.generated.resources.subagent_strip_view_overview
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.ui.DebugLog
@@ -94,6 +107,7 @@ import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent
 import xyz.mederi.ui.components.atoms.ExpandableRow
+import xyz.mederi.ui.components.atoms.StatusStrip
 
 /**
  * 工具调用时间线 (ToolCallsBlock)：按动作类别连续聚合为极简动作行。
@@ -166,6 +180,15 @@ fun ToolActionGroupRow(
 
     val defaultMutedColor = colors.textSecondary
 
+    val isAskDeclined = group.kind == ToolActionKind.ASK && group.calls.any { call ->
+        val output = when (val s = call.state) {
+            is ToolCallState.Completed -> s.output
+            is ToolCallState.Failed -> s.error
+            else -> null
+        }
+        output?.contains("declined", ignoreCase = true) == true
+    }
+
     // 图标与颜色
     val (iconVector, iconTint) = when {
         isFailed -> Pair(FeatherIcons.AlertCircle, colors.accentDanger)
@@ -176,7 +199,11 @@ fun ToolActionGroupRow(
         group.kind == ToolActionKind.LIST -> Pair(FeatherIcons.Folder, defaultMutedColor)
         group.kind == ToolActionKind.SUBAGENT -> Pair(FeatherIcons.Users, colors.thoughtAccent)
         group.kind == ToolActionKind.MCP -> Pair(FeatherIcons.Cpu, defaultMutedColor)
-        group.kind == ToolActionKind.ASK -> Pair(FeatherIcons.HelpCircle, defaultMutedColor)
+        group.kind == ToolActionKind.ASK -> if (!isGroupRunning && !isAskDeclined) {
+            Pair(FeatherIcons.HelpCircle, colors.thoughtAccent)
+        } else {
+            Pair(FeatherIcons.HelpCircle, defaultMutedColor)
+        }
         group.kind == ToolActionKind.TODO -> Pair(FeatherIcons.CheckSquare, defaultMutedColor)
         group.kind == ToolActionKind.VERIFY -> Pair(FeatherIcons.CheckCircle, colors.thoughtAccent)
         else -> Pair(FeatherIcons.Zap, defaultMutedColor)
@@ -219,7 +246,11 @@ fun ToolActionGroupRow(
                 ToolActionKind.SUBAGENT -> singleTarget?.let { stringResource(Res.string.tool_action_subagent_target, it) }
                     ?: stringResource(Res.string.tool_action_subagent_one)
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_target, singleTarget ?: firstCall.name)
-                ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_one)
+                ToolActionKind.ASK -> if (isAskDeclined) {
+                    stringResource(Res.string.tool_action_ask_declined)
+                } else {
+                    stringResource(Res.string.tool_action_ask_answered)
+                }
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_one)
                 ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_target, it) }
                     ?: stringResource(Res.string.tool_action_verify_one)
@@ -233,7 +264,11 @@ fun ToolActionGroupRow(
                 ToolActionKind.LIST -> stringResource(Res.string.tool_action_list_many, count)
                 ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_many, count)
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_many, count)
-                ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_many, count)
+                ToolActionKind.ASK -> if (isAskDeclined) {
+                    stringResource(Res.string.tool_action_ask_declined)
+                } else {
+                    stringResource(Res.string.tool_action_ask_answered_many, count)
+                }
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_many, count)
                 ToolActionKind.VERIFY -> stringResource(Res.string.tool_action_verify_many, count)
                 else -> stringResource(Res.string.tool_action_other_many, count)
@@ -327,6 +362,14 @@ fun ToolActionGroupRow(
                         ToolCallReportBlock(
                             callId = call.id,
                             reportMarkdown = reportMarkdown,
+                            colors = colors,
+                        )
+                    } else if (group.kind == ToolActionKind.ASK) {
+                        // 问询明细展开：展示问题问了什么、用户回答了什么
+                        ToolCallAskBlock(
+                            call = call,
+                            output = output,
+                            isFailed = isCallFailed,
                             colors = colors,
                         )
                     } else if (group.kind == ToolActionKind.COMMAND) {
@@ -519,24 +562,311 @@ private fun ToolCallReportBlock(
 }
 
 /**
- * 结构化子 Agent 调用追踪微栏 (SubagentCallsBlock)
- * 独立折叠条：与普通工具调用解耦，显示派发的子 Agent 状态与任务，展开可查看执行详情。
+ * 问询解析结果：记录单个问题的内容与用户回答。
  */
+data class ParsedAskItem(
+    val id: String,
+    val prompt: String,
+    val options: List<String> = emptyList(),
+    val answer: String? = null,
+    val isDeclined: Boolean = false,
+)
 
+/**
+ * 从 ask_user 的入参 (input) 与工具出参 (output) 中解析结构化问答项。
+ */
+fun parseAskItems(input: Map<String, String>, output: String?): List<ParsedAskItem> {
+    val answersMap = mutableMapOf<String, String>()
+    var generalAnswer: String? = null
+    var isDeclined = false
+
+    if (!output.isNullOrBlank()) {
+        val trimmed = output.trim()
+        if (trimmed.contains("declined", ignoreCase = true)) {
+            isDeclined = true
+        } else {
+            try {
+                val json = Json { ignoreUnknownKeys = true; isLenient = true }
+                val root = json.parseToJsonElement(trimmed)
+                if (root is JsonObject) {
+                    val answersArray = root["answers"] as? JsonArray
+                    answersArray?.forEach { elem ->
+                        if (elem is JsonObject) {
+                            val qId = (elem["questionId"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                            val ansList = (elem["answers"] as? JsonArray)?.mapNotNull {
+                                (it as? JsonPrimitive)?.contentOrNull
+                            }
+                            if (qId.isNotBlank() && !ansList.isNullOrEmpty()) {
+                                answersMap[qId] = ansList.joinToString(", ")
+                            }
+                        }
+                    }
+                }
+                if (answersMap.isEmpty()) {
+                    generalAnswer = trimmed
+                }
+            } catch (_: Exception) {
+                generalAnswer = trimmed
+            }
+        }
+    }
+
+    val questions = mutableListOf<ParsedAskItem>()
+    val rawQuestions = input["questions"]
+    if (!rawQuestions.isNullOrBlank()) {
+        try {
+            val json = Json { ignoreUnknownKeys = true; isLenient = true }
+            var elem = json.parseToJsonElement(rawQuestions)
+            if (elem is JsonPrimitive && elem.isString) {
+                try {
+                    elem = json.parseToJsonElement(elem.content)
+                } catch (_: Exception) {}
+            }
+            if (elem is JsonArray) {
+                elem.forEachIndexed { idx, item ->
+                    if (item is JsonObject) {
+                        val id = (item["id"] as? JsonPrimitive)?.contentOrNull ?: "q_$idx"
+                        val prompt = (item["prompt"] as? JsonPrimitive)?.contentOrNull
+                            ?: (item["question"] as? JsonPrimitive)?.contentOrNull
+                            ?: ""
+                        val options = (item["options"] as? JsonArray)?.mapNotNull {
+                            (it as? JsonPrimitive)?.contentOrNull
+                        } ?: emptyList()
+                        if (prompt.isNotBlank()) {
+                            questions.add(ParsedAskItem(id = id, prompt = prompt, options = options))
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    if (questions.isEmpty()) {
+        val singlePrompt = input["prompt"] ?: input["question"] ?: input["query"]
+        if (!singlePrompt.isNullOrBlank()) {
+            questions.add(ParsedAskItem(id = "q_0", prompt = singlePrompt))
+        }
+    }
+
+    if (questions.isEmpty()) {
+        val fallbackPrompt = input.values.firstOrNull { it.isNotBlank() && !it.startsWith("{") && !it.startsWith("[") }
+            ?: "提问"
+        questions.add(ParsedAskItem(id = "q_0", prompt = fallbackPrompt))
+    }
+
+    return questions.mapIndexed { idx, q ->
+        val ans = when {
+            isDeclined -> null
+            answersMap.containsKey(q.id) -> answersMap[q.id]
+            questions.size == 1 && answersMap.isNotEmpty() -> answersMap.values.first()
+            questions.size == 1 && generalAnswer != null -> generalAnswer
+            idx == 0 && generalAnswer != null -> generalAnswer
+            else -> null
+        }
+        q.copy(answer = ans, isDeclined = isDeclined)
+    }
+}
+
+/**
+ * 问询交互明细展开块：清晰呈现“问题问了什么，回答了什么”。
+ */
+@Composable
+private fun ToolCallAskBlock(
+    call: ToolCallUi,
+    output: String?,
+    isFailed: Boolean,
+    colors: xyz.mederi.theme.MederiColors,
+    modifier: Modifier = Modifier,
+) {
+    val input = when (val s = call.state) {
+        is ToolCallState.Completed -> s.input
+        is ToolCallState.Failed -> s.input
+        is ToolCallState.Running -> s.input
+        is ToolCallState.Pending -> s.input
+    }
+    val items = remember(call.id, input, output) {
+        parseAskItems(input, output)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(colors.surfaceCode)
+            .border(
+                1.dp,
+                if (isFailed) colors.accentDanger.copy(alpha = 0.4f) else colors.surfaceCardBorder,
+                RoundedCornerShape(6.dp)
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items.forEachIndexed { index, item ->
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                // 问题行
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        text = if (items.size > 1) "Q${index + 1}:" else "Q:",
+                        color = colors.thoughtAccent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    SelectionContainer(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.prompt,
+                            color = colors.textPrimary,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                        )
+                    }
+                }
+
+                // 回答行
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        text = if (items.size > 1) "A${index + 1}:" else "A:",
+                        color = if (item.isDeclined) colors.accentDanger else colors.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    val answerText = when {
+                        isFailed && !output.isNullOrBlank() -> output
+                        item.answer != null -> item.answer
+                        item.isDeclined -> stringResource(Res.string.tool_action_ask_declined)
+                        else -> stringResource(Res.string.tool_action_ask_running)
+                    }
+                    val answerColor = when {
+                        isFailed -> colors.accentDanger
+                        item.answer != null -> colors.textPrimary
+                        item.isDeclined -> colors.textMuted
+                        else -> colors.textMuted
+                    }
+                    SelectionContainer(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = answerText,
+                            color = answerColor,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            fontWeight = if (item.answer != null) FontWeight.Medium else FontWeight.Normal,
+                            fontStyle = if (item.answer == null) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 结构化子 Agent 调用通知微条 (SubagentCallsBlock)
+ * 极简单行通知胶囊：显示派发的子 Agent 状态与任务名，带有微光动画指示与呼吸角标联动，
+ * 点击整行直接滑开右侧概览（Overview）查看完整日志与多代理执行进度。
+ *
+ * 微条的外观壳（圆角 / 底色 / hover 底色 / 边框 / 流光动效 / 前置图标 / 单行文本 / 右侧胶囊 /
+ * 整行点击）统一由 `atoms/StatusStrip.kt` 提供，本文件只负责四态（失败 / 运行中 / 已派发 /
+ * 已完成）的判定与状态文案（含任务名）拼接。
+ */
 @Composable
 fun SubagentCallsBlock(
     subagents: List<ToolCallUi>,
     isStreaming: Boolean = false,
     isRunning: Boolean = false,
     hasFailed: Boolean = false,
+    onOpenOverview: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     if (subagents.isEmpty()) return
-    ToolCallsBlock(
-        toolCalls = subagents,
-        isStreaming = isStreaming,
-        isRunning = isRunning,
-        hasFailedTool = hasFailed,
-        modifier = modifier,
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        subagents.forEach { subagent ->
+            SubagentCallStrip(
+                subagent = subagent,
+                isStreaming = isStreaming,
+                isRunning = isRunning,
+                onOpenOverview = onOpenOverview
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubagentCallStrip(
+    subagent: ToolCallUi,
+    isStreaming: Boolean,
+    isRunning: Boolean,
+    onOpenOverview: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
+    val isItemRunning = (isRunning || isStreaming) && (subagent.state is ToolCallState.Running || subagent.state is ToolCallState.Pending)
+    val isItemFailed = subagent.state is ToolCallState.Failed || subagent.isFailed
+
+    val input = when (val s = subagent.state) {
+        is ToolCallState.Running -> s.input
+        is ToolCallState.Completed -> s.input
+        is ToolCallState.Failed -> s.input
+        is ToolCallState.Pending -> s.input
+    }
+
+    val isSpawnAction = input["action"]?.equals("SPAWN", ignoreCase = true) == true ||
+        subagent.name == "spawn_agent"
+
+    // 角色名走共用的 roleLabelOf（本地化角色名 + 统一兜底），与终态卡 EventMessageCard 同一真理源
+    val roleLabel = roleLabelOf(input["role"]?.trim().orEmpty())
+    val rawTask = subagent.target ?: input["task"] ?: input["briefing"] ?: ""
+    val taskClean = rawTask.lines().firstOrNull { it.isNotBlank() } ?: "Task"
+
+    val statusText = when {
+        isItemFailed -> stringResource(Res.string.subagent_strip_failed_one, roleLabel, taskClean)
+        isItemRunning -> stringResource(Res.string.subagent_strip_running_one, roleLabel, taskClean)
+        isSpawnAction -> stringResource(Res.string.subagent_strip_dispatched_one, roleLabel, taskClean)
+        else -> stringResource(Res.string.subagent_strip_completed_one, roleLabel, taskClean)
+    }
+
+    // 外观壳（圆角 / 底色 / hover / 边框 / 流光 / 前置图标 / 单行文本 / 右侧胶囊 / 整行点击）
+    // 由 atoms/StatusStrip.kt 统一提供；这里只负责四态判定与文案。
+    StatusStrip(
+        text = statusText,
+        // 四态图标：运行中（旋转 Loader）> 失败 > 已派发 > 已完成
+        icon = when {
+            isItemRunning -> FeatherIcons.Loader
+            isItemFailed -> FeatherIcons.AlertCircle
+            // 已派发子任务：异步后台执行中，使用派发/执行指示器而非 Check
+            isSpawnAction -> FeatherIcons.Play
+            else -> FeatherIcons.Check
+        },
+        iconTint = when {
+            isItemRunning -> colors.accentSecondary
+            isItemFailed -> colors.accentDanger
+            isSpawnAction -> colors.accentSecondary
+            else -> colors.accentSuccess
+        },
+        textColor = if (isItemFailed) colors.accentDanger else colors.textPrimary,
+        // 失败态保持中性分隔线边框（不染红），仅运行态高亮
+        borderColor = if (isItemRunning) colors.accentSecondary.copy(alpha = 0.35f) else colors.divider,
+        spinning = isItemRunning,
+        animated = isItemRunning,
+        actionLabel = if (onOpenOverview != null) {
+            stringResource(Res.string.subagent_strip_view_overview)
+        } else null,
+        onAction = onOpenOverview,
+        modifier = modifier
     )
 }
+

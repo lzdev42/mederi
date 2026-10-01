@@ -138,6 +138,32 @@ fun planCompression(messages: List<Message>, contextWindow: Int?): CompressionPl
 }
 
 /**
+ * 判定「这次压缩是否注定空转」，即 [planCompression] 的结果里根本没有值得花一次 LLM 的旧消息。
+ *
+ * 判定与 `MederiCompressionStrategy.compress` 里的两条早退判定字面同源
+ * （`olderBatches` 为空 → 没有可压缩的旧消息；旧消息总条数 < 2 → 不值得花一次 LLM），
+ * 这里只是把它抽成纯函数，供调用方在真正发起压缩**之前**预检：
+ * - 返回 `null` → 值得压，正常继续；
+ * - 返回 `"low_tokens"` → 消息量太小，全落在保留段里，没有可压缩的旧消息；
+ * - 返回 `"too_few"` → 可压缩的旧消息只有 1 条，压缩收益不值得一次 LLM 调用。
+ *
+ * 为什么与策略共用 [planCompression]：预检和实际压缩必须对「什么是可压缩内容」有同一个答案，
+ * 否则预检放行而策略空转（或反之）。两者都走同一个规划器，改预算阈值（[RECENT_KEEP_BUDGET_RATIO] 等）
+ * 两处自动一致。
+ *
+ * @param messages 准备送入压缩的消息列表（应与实际压缩所见一致，含 system）。
+ * @param contextWindow 模型上下文窗口 token 数；为 null 时按 [DEFAULT_COMPRESS_WINDOW_TOKENS] 兜底。
+ */
+fun compactionSkipReason(messages: List<Message>, contextWindow: Int?): String? {
+    val plan = planCompression(messages, contextWindow)
+    // 没有可压缩的旧消息（都落在保留段）→ 空转
+    if (plan.olderBatches.isEmpty()) return "low_tokens"
+    // 旧消息太少不值得花一次 LLM（与策略同阈值：< 2 条不压）
+    if (plan.olderBatches.sumOf { it.size } < 2) return "too_few"
+    return null
+}
+
+/**
  * 把多批小结文本合并成一条总结。
  *
  * 结果首行必须是 `TLDR:`——[HistoryStoreChatHistoryProvider] 据此识别 SUMMARY 标记：

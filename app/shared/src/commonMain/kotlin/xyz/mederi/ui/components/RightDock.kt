@@ -1,8 +1,10 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -10,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -55,6 +58,7 @@ fun RightDock(
     activePanel: RightDockPanel?,
     onSelectPanel: (RightDockPanel) -> Unit,
     onOpenSettings: () -> Unit,
+    hasRunningSubagents: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMederiColors.current
@@ -88,10 +92,12 @@ fun RightDock(
                 RightDockPanel.TERMINAL -> stringResource(Res.string.rightdock_terminal)
                 RightDockPanel.BROWSER -> stringResource(Res.string.rightdock_browser)
             }
+            val hasBadge = item.panel == RightDockPanel.OVERVIEW && hasRunningSubagents
             DockIconButton(
                 icon = item.icon,
                 label = label,
                 isActive = isActive,
+                hasBadge = hasBadge,
                 colors = colors,
                 onClick = { onSelectPanel(item.panel) }
             )
@@ -105,6 +111,7 @@ fun RightDock(
             icon = FeatherIcons.Sliders,
             label = stringResource(Res.string.rightdock_settings),
             isActive = false,
+            hasBadge = false,
             colors = colors,
             onClick = onOpenSettings
         )
@@ -116,6 +123,7 @@ private fun DockIconButton(
     icon: ImageVector,
     label: String,
     isActive: Boolean,
+    hasBadge: Boolean = false,
     colors: MederiColors,
     onClick: () -> Unit
 ) {
@@ -169,6 +177,42 @@ private fun DockIconButton(
             active = isActive,
             colors = colors,
         )
+
+        // 概览子任务运行中脉冲呼吸微光角标（Pulse Badge）
+        if (hasBadge) {
+            val infiniteTransition = rememberInfiniteTransition(label = "pulse_badge")
+            val alpha by infiniteTransition.animateFloat(
+                initialValue = 0.45f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(800, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "pulse_alpha"
+            )
+            val scale by infiniteTransition.animateFloat(
+                initialValue = 0.85f,
+                targetValue = 1.15f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(800, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "pulse_scale"
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 1.dp, y = (-1).dp)
+                    .size(6.dp)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        this.alpha = alpha
+                    }
+                    .clip(CircleShape)
+                    .background(colors.accentSecondary)
+            )
+        }
 
         if (showTooltip) {
             Popup(

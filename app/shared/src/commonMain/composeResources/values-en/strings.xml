@@ -50,9 +50,23 @@
     <string name="tool_action_subagent_target">Ran subagent %1$s</string>
     <string name="tool_action_subagent_running">Preparing sub-agent task…</string>
     <string name="tool_action_subagent_running_target">Running subagent %1$s</string>
+    <string name="subagent_strip_running_one">Subagent %1$s is working on the task: %2$s</string>
+    <string name="subagent_strip_running_many">%1$d subagents running</string>
+    <string name="subagent_strip_dispatched_one">Dispatched subagent %1$s task: %2$s</string>
+    <string name="subagent_strip_completed_one">Subagent %1$s completed the task: %2$s</string>
+    <string name="subagent_strip_completed_many">%1$d subagents finished</string>
+    <string name="subagent_strip_failed_one">Subagent %1$s failed the task: %2$s</string>
+    <string name="subagent_strip_failed_many">%1$d subagents failed</string>
+    <string name="subagent_strip_view_overview">View Overview ↗</string>
+    <string name="subagent_role_executor">Executor</string>
+    <string name="subagent_role_researcher">Researcher</string>
+    <string name="subagent_role_generic">Subagent</string>
     <string name="tool_action_mcp_target">Called MCP tool %1$s</string>
     <string name="tool_action_mcp_running_target">Calling MCP tool %1$s…</string>
     <string name="tool_action_ask_running">Waiting for answer…</string>
+    <string name="tool_action_ask_answered">Answered</string>
+    <string name="tool_action_ask_answered_many">Answered %1$d questions</string>
+    <string name="tool_action_ask_declined">Declined</string>
     <string name="tool_action_todo_running">Updating todo list…</string>
     <string name="tool_action_other_target">Called %1$s</string>
     <string name="tool_action_other_running">Running tools…</string>
@@ -535,6 +549,11 @@
     <string name="dock_requests_count">%1$s requests</string>
     <string name="dock_cost_title">Estimated cost (reference)</string>
     <string name="dock_compact_context">Compact context</string>
+    <!-- One-shot notice when a manual compaction is skipped by the core pre-check (reason=low_tokens|too_few) -->
+    <string name="compaction_skipped_title">No compaction needed</string>
+    <string name="compaction_skipped_low_tokens">The current context is short and within the retention budget; no compaction is needed.</string>
+    <string name="compaction_skipped_too_few">There are fewer than two older messages to compress; no compaction is needed.</string>
+    <string name="compaction_ok">OK</string>
     <string name="dock_fit_window">Fit window</string>
     <string name="dock_original_ratio">Original ratio</string>
     <string name="dock_generating">Generating...</string>
@@ -674,6 +693,10 @@
     <string name="event_message_no_content">(No report content available)</string>
     <string name="event_message_subagent_title">%1$s Subagent</string>
     <string name="event_message_open_report_title">%1$s Report</string>
+    <string name="event_message_view_detail">Details ↗</string>
+    <string name="event_message_strip_completed">Subagent %1$s completed the task</string>
+    <string name="event_message_strip_failed">Subagent %1$s failed the task</string>
+    <string name="event_message_strip_stopped">Subagent %1$s had its task cancelled</string>
     <!-- Overview panel (OverviewPanel.kt, S7 i18n; status_idle/mcp_tools_count already exist, not duplicated) -->
     <string name="overview_title">Overview</string>
     <string name="overview_section_conversation">Conversation</string>

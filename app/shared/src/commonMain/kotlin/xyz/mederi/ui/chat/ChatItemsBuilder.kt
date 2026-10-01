@@ -88,7 +88,6 @@ fun computeChatItems(
                                     subtaskInfo = parsedEvent.subtaskInfo,
                                     reportPath = parsedEvent.reportPath,
                                     summary = parsedEvent.summary,
-                                    fullContent = parsedEvent.fullContent,
                                     isTurnStart = true,
                                     messageId = msg.id,
                                     createdAt = msg.createdAt,
@@ -630,8 +629,7 @@ data class ParsedEventMessage(
     val role: String,
     val subtaskInfo: String?,
     val reportPath: String?,
-    val summary: String,
-    val fullContent: String
+    val summary: String
 )
 
 private val EVENT_MESSAGE_REGEX = Regex(
@@ -674,8 +672,7 @@ fun parseEventMessage(text: String): ParsedEventMessage? {
         role = role,
         subtaskInfo = subtaskInfo,
         reportPath = reportPath,
-        summary = summary,
-        fullContent = trimmed
+        summary = summary
     )
 }
 

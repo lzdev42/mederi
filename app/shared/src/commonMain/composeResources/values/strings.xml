@@ -59,9 +59,23 @@
     <string name="tool_action_subagent_target">派发子任务 %1$s</string>
     <string name="tool_action_subagent_running">正在准备子agent任务</string>
     <string name="tool_action_subagent_running_target">正在派发子任务 %1$s</string>
+    <string name="subagent_strip_running_one">子智能体 %1$s 任务执行中：%2$s</string>
+    <string name="subagent_strip_running_many">%1$d 个子任务运行中</string>
+    <string name="subagent_strip_dispatched_one">已派发子智能体 %1$s 任务：%2$s</string>
+    <string name="subagent_strip_completed_one">子智能体 %1$s 任务完成：%2$s</string>
+    <string name="subagent_strip_completed_many">%1$d 个子任务已完成</string>
+    <string name="subagent_strip_failed_one">子智能体 %1$s 任务失败：%2$s</string>
+    <string name="subagent_strip_failed_many">%1$d 个子任务失败</string>
+    <string name="subagent_strip_view_overview">查看概览 ↗</string>
+    <string name="subagent_role_executor">执行者</string>
+    <string name="subagent_role_researcher">研究员</string>
+    <string name="subagent_role_generic">子代理</string>
     <string name="tool_action_mcp_target">调用 MCP 工具 %1$s</string>
     <string name="tool_action_mcp_running_target">正在调用 MCP 工具 %1$s…</string>
     <string name="tool_action_ask_running">等待用户回答…</string>
+    <string name="tool_action_ask_answered">已回答</string>
+    <string name="tool_action_ask_answered_many">已回答 %1$d 个提问</string>
+    <string name="tool_action_ask_declined">已拒绝回答</string>
     <string name="tool_action_todo_running">正在更新待办清单…</string>
     <string name="tool_action_other_target">调用 %1$s</string>
     <string name="tool_action_other_running">正在调用工具…</string>
@@ -545,6 +559,11 @@
     <string name="dock_requests_count">%1$s 次</string>
     <string name="dock_cost_title">预估成本(参考)</string>
     <string name="dock_compact_context">压缩 Context</string>
+    <!-- 手动压缩被 core 预检跳过时的一次性提示（reason=low_tokens|too_few） -->
+    <string name="compaction_skipped_title">无需压缩</string>
+    <string name="compaction_skipped_low_tokens">当前上下文较短，尚在保留预算内，无需压缩。</string>
+    <string name="compaction_skipped_too_few">可压缩的历史消息不足两条，无需压缩。</string>
+    <string name="compaction_ok">确定</string>
     <string name="dock_fit_window">适应窗口</string>
     <string name="dock_original_ratio">原始比例</string>
     <string name="dock_generating">生成中...</string>
@@ -684,6 +703,10 @@
     <string name="event_message_no_content">（暂无报告内容）</string>
     <string name="event_message_subagent_title">%1$s 子代理</string>
     <string name="event_message_open_report_title">%1$s 报告</string>
+    <string name="event_message_view_detail">查看详情 ↗</string>
+    <string name="event_message_strip_completed">子智能体 %1$s 任务完成</string>
+    <string name="event_message_strip_failed">子智能体 %1$s 任务失败</string>
+    <string name="event_message_strip_stopped">子智能体 %1$s 被手动取消任务</string>
     <!-- 概览面板（OverviewPanel.kt，S7 i18n 收口；status_idle/mcp_tools_count 已有，不重复） -->
     <string name="overview_title">概览</string>
     <string name="overview_section_conversation">会话状态</string>

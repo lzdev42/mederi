@@ -2402,6 +2402,123 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testSnapshotReducerQuestionResolvedThenToolResult() {
+        val initialSnap = testSnapshot("conv_q_flow").copy(
+            conversation = testSnapshot("conv_q_flow").conversation.copy(status = ConversationStatus.Working)
+        )
+
+        // 1. MESSAGE_DELTA
+        val deltaEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_DELTA,
+            sessionId = "conv_q_flow",
+            payload = mapOf("type" to "tool_call", "name" to "ask_user", "content" to "")
+        )
+        val snap1 = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, deltaEvent)
+
+        // 2. TOOL_CALLED
+        val toolCalledEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.TOOL_CALLED,
+            sessionId = "conv_q_flow",
+            payload = mapOf(
+                "toolCallId" to "call_1",
+                "tool" to "ask_user",
+                "args" to """{"questions":"[{\"id\":\"q1\",\"prompt\":\"提交范围\",\"options\":[\"全部\",\"部分\"]}]"}"""
+            )
+        )
+        val snap2 = xyz.mederi.core.contract.SnapshotReducer.apply(snap1, toolCalledEvent)
+
+        // 3. QUESTION_REQUESTED
+        val questionEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_REQUESTED,
+            sessionId = "conv_q_flow",
+            payload = mapOf(
+                "questionId" to "q_ask_1",
+                "questions" to """[{"id":"q1","prompt":"提交范围","options":["全部","部分"]}]"""
+            )
+        )
+        val snap3 = xyz.mederi.core.contract.SnapshotReducer.apply(snap2, questionEvent)
+        println("=== PROBE 1: After QUESTION_REQUESTED ===")
+        println("status: ${snap3.conversation.status}")
+        println("messages.size: ${snap3.messages.size}")
+        println("messages[0].isStreaming: ${snap3.messages.first().isStreaming}")
+        println("messages[0].blocks[0].state: ${(snap3.messages.first().blocks.first() as ChatBlock.ToolCall).state}")
+
+        // 4. 用户提交回答 -> QUESTION_RESOLVED
+        val resolveEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_RESOLVED,
+            sessionId = "conv_q_flow",
+            payload = mapOf("questionId" to "q_ask_1")
+        )
+        val snap4 = xyz.mederi.core.contract.SnapshotReducer.apply(snap3, resolveEvent)
+        println("=== PROBE 2: After QUESTION_RESOLVED ===")
+        println("status: ${snap4.conversation.status}")
+        println("messages.size: ${snap4.messages.size}")
+        println("messages[0].isStreaming: ${snap4.messages.first().isStreaming}")
+
+        // 5. 工具执行结束 -> TOOL_RESULT
+        val resultEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.TOOL_RESULT,
+            sessionId = "conv_q_flow",
+            payload = mapOf(
+                "toolCallId" to "call_1",
+                "tool" to "ask_user",
+                "output" to """{"answers":[{"questionId":"q1","answers":["全部"]}]}""",
+                "isError" to "false"
+            )
+        )
+        val snap5 = xyz.mederi.core.contract.SnapshotReducer.apply(snap4, resultEvent)
+        // 严格断言：绝不产生多余 Assistant 消息，且 ToolCall 原地转为 Completed 并携带真实答案
+        assertEquals(1, snap5.messages.size, "绝不得产生多余的空 Assistant 占位消息")
+        val finalMsg = snap5.messages.first()
+        assertTrue(finalMsg.isStreaming, "QUESTION_RESOLVED 后恢复执行，isStreaming 必须为 true")
+        assertEquals(1, finalMsg.blocks.size)
+        val finalTool = finalMsg.blocks.first() as ChatBlock.ToolCall
+        assertEquals("tool_call_1", finalTool.id)
+        assertTrue(finalTool.state is ToolCallState.Completed, "ToolCall 状态必须由 Running 迁为 Completed")
+        val completedState = finalTool.state as ToolCallState.Completed
+        assertEquals("""{"answers":[{"questionId":"q1","answers":["全部"]}]}""", completedState.output)
+    }
+
+    @Test
+    fun testParseAskItems() {
+        // 1. 单问题单答案
+        val singleInput = mapOf("questions" to """[{"id":"q1","prompt":"是否提交改动？","options":["是","否"]}]""")
+        val singleOutput = """{"answers":[{"questionId":"q1","answers":["是"]}]}"""
+        val items1 = xyz.mederi.ui.components.parseAskItems(singleInput, singleOutput)
+        assertEquals(1, items1.size)
+        assertEquals("是否提交改动？", items1[0].prompt)
+        assertEquals("是", items1[0].answer)
+        assertFalse(items1[0].isDeclined)
+
+        // 2. 多问题与多选答案
+        val multiInput = mapOf(
+            "questions" to """[{"id":"q1","prompt":"范围？"},{"id":"q2","prompt":"附加操作？"}]"""
+        )
+        val multiOutput = """{"answers":[{"questionId":"q1","answers":["全选"]}, {"questionId":"q2","answers":["测试","提交"]}]}"""
+        val items2 = xyz.mederi.ui.components.parseAskItems(multiInput, multiOutput)
+        assertEquals(2, items2.size)
+        assertEquals("范围？", items2[0].prompt)
+        assertEquals("全选", items2[0].answer)
+        assertEquals("附加操作？", items2[1].prompt)
+        assertEquals("测试, 提交", items2[1].answer)
+
+        // 3. 用户拒绝回答
+        val declinedOutput = "User declined to answer the questions."
+        val items3 = xyz.mederi.ui.components.parseAskItems(singleInput, declinedOutput)
+        assertEquals(1, items3.size)
+        assertEquals("是否提交改动？", items3[0].prompt)
+        assertNull(items3[0].answer)
+        assertTrue(items3[0].isDeclined)
+
+        // 4. 等待回答中（output 为 null）
+        val pendingItems = xyz.mederi.ui.components.parseAskItems(singleInput, null)
+        assertEquals(1, pendingItems.size)
+        assertEquals("是否提交改动？", pendingItems[0].prompt)
+        assertNull(pendingItems[0].answer)
+        assertFalse(pendingItems[0].isDeclined)
+    }
+
+    @Test
     fun testStatusBarTurnStartPreservedWhenIdleBeforeWorking() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {

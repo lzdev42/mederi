@@ -1,44 +1,40 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.*
-import xyz.emuci.inkcompose.MarkdownView
+import compose.icons.feathericons.AlertCircle
+import compose.icons.feathericons.Check
+import compose.icons.feathericons.Info
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.event_message_no_content
+import mederi.app.shared.generated.resources.event_message_open_report_title
+import mederi.app.shared.generated.resources.event_message_strip_completed
+import mederi.app.shared.generated.resources.event_message_strip_failed
+import mederi.app.shared.generated.resources.event_message_strip_stopped
+import mederi.app.shared.generated.resources.event_message_subagent_title
+import mederi.app.shared.generated.resources.event_message_view_detail
+import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.ChatListItem
-import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
-import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.event_message_collapse
-import mederi.app.shared.generated.resources.event_message_expand
-import mederi.app.shared.generated.resources.event_message_no_content
-import mederi.app.shared.generated.resources.event_message_open_panel
-import mederi.app.shared.generated.resources.event_message_open_report_title
-import mederi.app.shared.generated.resources.event_message_report_path
-import mederi.app.shared.generated.resources.event_message_subagent_title
-import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.ui.components.atoms.StatusStrip
 
 /**
  * 通用事件消息卡片 (EventMessageCard)
  *
- * 渲染系统主动上报事件（如子代理执行结束/报错等）：
- * - 顶部：状态图标、角色与状态徽章、在新窗口打开操作
- * - 中部：关联子任务与落盘报告路径（若有）
- * - 汇报正文：支持就地展开/折叠，直接通过 inkcompose (MarkdownView) 渲染完整的 Markdown 汇报。
+ * 极简单行微条：单行显示子代理终态（完成 / 失败 / 被手动取消）+ 角色名，低空间占用。
+ * 报告摘要不再塞进状态行——点击整行直接滑开右侧阅读器（RightDockPanel.PLAN / Reader）查看完整 Markdown 汇报。
+ *
+ * 职责边界：本组件**只负责三件事**——
+ * ① 终态判定（三档语义色映射）、② 报告正文取数（注入的文件树 provider，失败回落 summary）、
+ * ③ 点击开阅读器（把标题与正文交给调用方）。
+ * 单行微条的**外观壳**（容器圆角 / 底色 / hover 底色 / 边框 / 前置图标 / 单行省略文本 / 右侧胶囊 /
+ * 整行可点与 pointer 手型光标）统一由 [StatusStrip] 提供，本文件不再自绘任何壳代码，
+ * 只把「文案 + 图标 + 颜色」三组决策交给它。
+ *
+ * 终态判定的**唯一真理源**在 `SubagentLabels.subagentTerminalKind`：历史事故 = 只判 ERROR/FAILED 二值、
+ * 其余一律走 else，导致 STOPPED（手动取消）被显示成「已完成」。STOPPED 必须单独命中自己的分支。
  */
 @Composable
 fun EventMessageCard(
@@ -47,197 +43,70 @@ fun EventMessageCard(
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMederiColors.current
-    var isExpanded by remember { mutableStateOf(false) }
 
-    val isCompleted = item.status.equals("COMPLETED", ignoreCase = true)
-    val isError = item.status.equals("ERROR", ignoreCase = true) || item.status.equals("FAILED", ignoreCase = true)
+    // 终态判定的**唯一真理源**在 SubagentLabels.subagentTerminalKind：
+    // 历史事故 = 这里只判 ERROR/FAILED 二值、其余一律走 else，导致 STOPPED（手动取消）
+    // 被显示成「已完成」。STOPPED 必须单独命中自己的分支。
+    val terminalKind = subagentTerminalKind(item.status)
+    // 错误色语义：ERROR + OTHER（未知/非终态兜底，不得回落成「已完成」）
+    val useErrorStyle = terminalKind == SubagentTerminalKind.ERROR || terminalKind == SubagentTerminalKind.OTHER
+    // 中性色语义：STOPPED（被取消不是成功，不用成功绿）
+    val useNeutralStyle = terminalKind == SubagentTerminalKind.STOPPED
 
-    val statusColor = when {
-        isCompleted -> colors.accentSuccess
-        isError -> colors.statusError
-        else -> colors.textMuted
-    }
-
-    val statusIcon = when {
-        isCompleted -> FeatherIcons.CheckCircle
-        isError -> FeatherIcons.AlertTriangle
-        else -> FeatherIcons.Info
-    }
-
-    // 尝试读取完整报告正文：若有落盘路径且能读出内容则使用文件，否则使用 summary
-    val reportContent = remember(item.reportPath, item.summary) {
-        val path = item.reportPath
-        val fileText = if (!path.isNullOrBlank()) {
-            runCatching { java.io.File(path).takeIf { it.exists() }?.readText() }.getOrNull()
-        } else null
+    // 读取完整报告正文：优先走注入的 LocalProjectFileTreeProvider（commonMain 禁用 JVM 文件 API，
+    // KMP 硬性约束）；provider 为 null（未注入的平台）或读不出内容时回落 item.summary 原文。
+    // 注意：CompositionLocal.current 是 @Composable 读，必须在 composable 作用域内取出，
+    // 再作为 remember 的 key 传进计算块（不能写进 remember lambda 内部）。
+    val fileTreeProvider = LocalProjectFileTreeProvider.current
+    val reportContent = remember(item.reportPath, item.summary, fileTreeProvider) {
+        val fileText = item.reportPath?.takeIf { it.isNotBlank() }
+            ?.let { path -> fileTreeProvider?.readText(path) }
         if (!fileText.isNullOrBlank()) fileText else item.summary
     }
 
-    val roleLabel = item.role.lowercase().replaceFirstChar { it.uppercase() }
+    val roleLabel = roleLabelOf(item.role)
     val displayTitle = stringResource(Res.string.event_message_subagent_title, roleLabel)
     val openReportTitle = stringResource(Res.string.event_message_open_report_title, displayTitle)
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // 1. 顶栏：图标 + 角色标题 + 状态 Badge + 操作区
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f, fill = false)
-            ) {
-                Icon(
-                    imageVector = statusIcon,
-                    contentDescription = item.status,
-                    tint = statusColor,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = displayTitle,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    color = colors.textPrimary
-                )
-                // 状态 Badge
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(statusColor.copy(alpha = 0.12f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = item.status.uppercase(),
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = statusColor
-                    )
-                }
-            }
-
-            // 右侧操作
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                if (onOpenReport != null && reportContent.isNotBlank()) {
-                    MederiMinimalIconButton(
-                        icon = FeatherIcons.Maximize2,
-                        onClick = { onOpenReport(openReportTitle, reportContent) },
-                        contentDescription = stringResource(Res.string.event_message_open_panel),
-                    )
-                }
-                // 折叠/展开按钮
-                MederiMinimalIconButton(
-                    icon = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                    onClick = { isExpanded = !isExpanded },
-                    contentDescription = if (isExpanded) stringResource(Res.string.event_message_collapse) else stringResource(Res.string.event_message_expand),
-                )
-            }
-        }
-
-        // 2. 元数据行（子任务与报告路径）
-        if (!item.subtaskInfo.isNullOrBlank() || !item.reportPath.isNullOrBlank()) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                if (!item.subtaskInfo.isNullOrBlank()) {
-                    Text(
-                        text = item.subtaskInfo,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                        color = colors.textSecondary
-                    )
-                }
-                if (!item.reportPath.isNullOrBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(colors.surfaceWorkspace)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.FileText,
-                            contentDescription = stringResource(Res.string.event_message_report_path),
-                            tint = colors.textMuted,
-                            modifier = Modifier.size(11.dp)
-                        )
-                        Text(
-                            text = item.reportPath,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace
-                            ),
-                            color = colors.textSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        }
-
-        // 3. 摘要预览（未展开时展示简要单行）
-        if (!isExpanded && item.summary.isNotBlank()) {
-            Text(
-                text = item.summary.lines().firstOrNull { it.isNotBlank() } ?: item.summary,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                color = colors.textSecondary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isExpanded = true }
-                    .padding(vertical = 2.dp)
-            )
-        }
-
-        // 4. 就地展开的 Markdown 汇报正文 (使用 inkcompose 原生渲染)
-        AnimatedVisibility(visible = isExpanded) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(colors.surfaceWorkspace)
-                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(6.dp))
-                        .padding(12.dp)
-                ) {
-                    if (reportContent.isNotBlank()) {
-                        MarkdownView(
-                            content = reportContent,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else {
-                        Text(
-                            text = stringResource(Res.string.event_message_no_content),
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                            color = colors.textMuted
-                        )
-                    }
-                }
-            }
-        }
+    // 状态行 = 纯状态文案（三档，不再拼报告摘要/方括号）；摘要只在右侧阅读器里看
+    val statusText = when (terminalKind) {
+        SubagentTerminalKind.COMPLETED -> stringResource(Res.string.event_message_strip_completed, roleLabel)
+        SubagentTerminalKind.ERROR -> stringResource(Res.string.event_message_strip_failed, roleLabel)
+        SubagentTerminalKind.STOPPED -> stringResource(Res.string.event_message_strip_stopped, roleLabel)
+        // 兜底按失败展示，绝不回落成「已完成」
+        SubagentTerminalKind.OTHER -> stringResource(Res.string.event_message_strip_failed, roleLabel)
     }
+
+    val contentToOpen = reportContent.ifBlank { stringResource(Res.string.event_message_no_content) }
+
+    StatusStrip(
+        text = statusText,
+        // 1. 左侧状态图标：COMPLETED=对勾(绿) / STOPPED=Info(中性灰) / ERROR+OTHER=AlertCircle(红)
+        icon = when {
+            useErrorStyle -> FeatherIcons.AlertCircle
+            useNeutralStyle -> FeatherIcons.Info
+            else -> FeatherIcons.Check
+        },
+        iconTint = when {
+            useErrorStyle -> colors.statusError
+            useNeutralStyle -> colors.textSecondary
+            else -> colors.accentSuccess
+        },
+        // TODO(i18n)：这里仍是 core 的原始英文枚举（COMPLETED/ERROR/STOPPED），
+        // 只在无障碍树朗读，本次不引入新的 event_message_status_* 资源键。
+        iconContentDescription = item.status,
+        // 2. 状态单行文本（STOPPED 用次要色中性呈现，不染成功绿也不染错误红）
+        textColor = when {
+            useErrorStyle -> colors.statusError
+            useNeutralStyle -> colors.textSecondary
+            else -> colors.textPrimary
+        },
+        borderColor = if (useErrorStyle) colors.statusError.copy(alpha = 0.35f) else colors.divider,
+        // 3. 右侧 "查看详情 ↗" 胶囊链接：仅在有阅读器回调时出现
+        actionLabel = if (onOpenReport != null) stringResource(Res.string.event_message_view_detail) else null,
+        // onOpenReport 是 (title, content) -> Unit，与 StatusStrip 的 (() -> Unit) 不是同一类型，
+        // 必须包一层把标题与正文固定住再交给壳；为 null 时整行不可点。
+        onAction = onOpenReport?.let { open -> { open(openReportTitle, contentToOpen) } },
+        modifier = modifier
+    )
 }

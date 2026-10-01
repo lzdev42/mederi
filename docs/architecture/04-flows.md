@@ -291,7 +291,13 @@ flowchart TD
     A["触发1: runTurn 前 preflight<br/>contextUsedTokens(estimate) > 70% 窗口"]
     B["触发2: graphStrategy 节点内<br/>isHistoryTooBig(prompt) > 70%"]
     C["触发3: 用户手动 compressHistory()"]
-    A & B & C --> D["MederiCompressionStrategy.compress(llmSession, memory)"]
+    A & B --> D["MederiCompressionStrategy.compress(llmSession, memory)"]
+    C --> P["手动压缩预检(在翻状态机之前)<br/>window = HistoryStoreChatHistoryProvider.aiViewWindow(...)<br/>→ KoogMessageMapper.toKoogMessages(includeImages=model.supportsImages)<br/>→ compactionSkipReason(koogWindow, model.contextWindow)<br/>(与 MederiCompressionStrategy.compress 共用 planCompression 判定口径)"]
+    P --> S{"skipReason != null?"}
+    S -- "否(值得压)" --> D
+    S -- "是 low_tokens / too_few" --> X["emit STATUS{scope=compaction, code=SKIPPED, reason} 后直接 return<br/>不翻 RUNNING、不发 SESSION_UPDATED / MESSAGE_COMPLETED → UI 无闪屏"]
+    X -. 裸事件旁路.-> U["WorkspaceViewModel.init 收集器(仿 BROWSER_TASK_STARTED, 不经快照)<br/>filter: STATUS && payload.scope==compaction && sessionId==当前会话<br/>→ 清 sessionCache.turnStartByConv 锚点(StatusBar 计时不留'已耗时 0')<br/>→ trySend(UiEffect.ShowCompactionNotice(code, reason))"]
+    U -.-> V["MainScreen effects.collect → 本地 compactionNotice 状态 → 模态<br/>文案 composeResources: compaction_skipped_title +<br/>compaction_skipped_low_tokens / _too_few(values/ 与 values-en/ 双份)"]
     D --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner: 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim"]
     E --> F["逐批 requestLLMWithoutTools 生成小结 → combineBatchSummaries 合并为单条 TLDR:(五节)"]
     F --> G["新历史 = system + TLDR:... + recent<br/>(head-trim 仅影响 AI 视图, HistoryStore 全量不删)"]
@@ -299,6 +305,15 @@ flowchart TD
     H --> I["效果: message_history 全量保留(UI 可见/回滚可用)<br/>aiViewWindow = 最后一条 SUMMARY 及其后 → AI 视图变小"]
     A -. preflight 压缩失败(不阻塞).-> W["自动压缩失败(原因回灌 streamWarning)<br/>MESSAGE_COMPLETED/MESSAGE_ERROR.warning 对用户可见"]
 ```
+
+**手动压缩预检（2026-09，"无需压缩"提醒，触发3 专属）**：手动 `compressHistory` 在**翻状态机之前**先用 `compactionSkipReason(aiViewWindow → KoogMessages, model.contextWindow)` 预检，判定口径与 `MederiCompressionStrategy.compress` 完全同源（共用 `planCompression`：`olderBatches` 为空 → `low_tokens`；旧消息总条数 < 2 → `too_few`；预算阈值改一处两处自动一致）。窗口取 `HistoryStoreChatHistoryProvider.aiViewWindow`（即"最后一条 SUMMARY 及其后"，与实际压缩所见一致），图片按当前模型 `supportsImages` 能力剔除。
+
+- **命中空转**（`low_tokens` / `too_few`）：只发一条机器码事实 `STATUS{scope=compaction, code=SKIPPED, reason}` 后直接 `return`——**不翻 RUNNING、不发 SESSION_UPDATED / MESSAGE_COMPLETED**，UI 完全不闪屏（老行为会 Working→Idle 闪一下再说明失败）；
+- **未命中**：照旧 `compressOnce` 全流程（RUNNING → compressOnce → IDLE → MESSAGE_COMPLETED）。
+
+UI 侧走**裸事件旁路**（core 只发事实，不认识模态）：`WorkspaceViewModel.init` 里仿 `BROWSER_TASK_STARTED` 的收集器直接订阅 `aiCore.events()`，按 `type==STATUS && payload["scope"]=="compaction" && sessionId==当前会话` 过滤（按会话过滤防串台），先清 `sessionCache.turnStartByConv` 里 `requestCompaction` 事先设的锚点（否则 StatusBar 计时挂着一个"已耗时 0"），再 `trySend(UiEffect.ShowCompactionNotice(code, reason))`；`MainScreen` 的 `effects.collect` 收该 effect 落成本地 `compactionNotice` 状态渲染**本地化模态**（`compaction_skipped_title` + 按 `reason` 选 `compaction_skipped_low_tokens` / `compaction_skipped_too_few`，values/ 与 values-en/ 双份），"确定"关闭是纯本地 UI 动作不走效果通道。
+
+**快照零污染**：`SnapshotReducer` 对非 provider scope 的 STATUS 一律返回快照不变（该分支只认 `scope=provider && code=RETRYING`），故 compaction STATUS 既不写 `statusHint` 也不碰状态机——"core 发机器码事实 / UI 渲染"的解耦是这条链路的设计要点（core 不需要知道 UI 有没有模态；UI 不靠快照而靠裸事件旁路接事实）。自动触发1/2 的 preflight(70%) 与 streamWarning 那条老路径不受本次改动影响。
 
 ## 6. ask_user 问询时序
 
