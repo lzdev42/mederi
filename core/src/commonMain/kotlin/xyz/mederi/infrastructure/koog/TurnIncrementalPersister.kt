@@ -82,11 +82,12 @@ class TurnIncrementalPersister(
     }
 
     /** 用户中途引导（Steering）消息落库 */
-    suspend fun persistSteeringUserMessage(text: String) {
+    suspend fun persistSteeringUserMessage(text: String, id: String? = null) {
         runCatching {
             val koogUser = KoogMessage.User(
                 content = text,
-                metaInfo = RequestMetaInfo.create(KoogClock.System)
+                metaInfo = RequestMetaInfo.create(KoogClock.System),
+                id = id
             )
             val msg = KoogMessageMapper.fromKoogUserMessage(sessionId, koogUser)
                 .withDiagnostics(diagnostics)

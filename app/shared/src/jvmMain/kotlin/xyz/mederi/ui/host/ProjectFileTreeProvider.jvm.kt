@@ -1,4 +1,4 @@
-package xyz.mederi.ui.components
+package xyz.mederi.ui.host
 
 import java.io.File
 

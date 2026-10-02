@@ -1,16 +1,19 @@
 package xyz.mederi.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,17 +33,20 @@ import xyz.mederi.ui.components.atoms.MederiPlanIdTag
 import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 
 /**
- * 4.5. 计划审批块 (PlanApprovalCard，02-components §2.5 plan-approval-block：去壳 + 2dp 左 rail)
+ * 4.5. 计划审批块 (PlanApprovalCard，02-components §2.5 plan-approval-block：待办层卡片)
  *
- * 对标 Proceed 极简设计：
- * - 标题行：FileText 14dp accentPrimary + Implementation Plan（hover → accentText，
- *   点击在右侧扩展窗口打开完整文档）+ MederiPlanIdTag 徽标；
+ * 属于「需要用户操作」的待办层，与 QuestionCard / ErrorBoard 同规格：
+ * accentBg 淡底 + accentBorder 描边 + 8dp 圆角 + 12dp 内边距（此前为去壳 + 2dp 左 rail，
+ * 有壳后不再叠加左 rail，避免框套框）。
+ * 内容：
+ * - 标题行：FileText 14dp accentPrimary + Implementation Plan（整卡 hover → accentText，
+ *   整卡点击在右侧扩展窗口打开完整文档）+ MederiPlanIdTag 徽标；
  * - 正文：AI 生成的 1-2 句精炼摘要（12sp / lh 1.55 textSecondary）；
  * - 底部：单只 Proceed 按钮（soft iris primary-decision，不批准直接在输入框继续对话）
  *
  * @param request 计划审批请求数据
  * @param onApprove 批准并开始执行回调
- * @param onOpenInExtension 在右侧扩展窗口打开完整 Markdown 计划
+ * @param onOpenInExtension 在右侧扩展窗口打开完整 Markdown 计划（整卡热区）
  */
 @Composable
 fun PlanApprovalCard(
@@ -56,28 +62,29 @@ fun PlanApprovalCard(
 
     DebugLog.debug("UI", "PlanApprovalCard: rendering planId=${request.id}, title='${request.title.take(30)}', isPending=$isPending, status=${request.status}")
 
-    // 去壳：无卡片底/描边，仅 2dp 左 rail（divider hairline）+ 12/2/2 内边距，宽度受限 max 560
+    // 待办层卡片壳：8dp 圆角（clip / border 共用同一 shape，避免重复字面量）
+    val shellShape = RoundedCornerShape(8.dp)
+
+    // 整卡可点开计划文档：interactionSource 挂在整卡上，hover 同时驱动标题转 accentText
+    val cardSource = remember { MutableInteractionSource() }
+    val cardHovered by cardSource.collectIsHoveredAsState()
+
+    // accentBg 淡底 + accentBorder 描边 + 12dp 内边距，宽度受限 max 560（无左 rail，避免框套框）
     Column(
         modifier = modifier
             .widthIn(max = 560.dp)
-            .drawBehind {
-                val rail = 2.dp.toPx()
-                drawRect(
-                    color = colors.divider,
-                    topLeft = Offset(0f, 0f),
-                    size = Size(rail, size.height)
-                )
-            }
-            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+            .clip(shellShape)
+            .background(colors.accentBg)
+            .border(1.dp, colors.accentBorder, shellShape)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(interactionSource = cardSource) { onOpenInExtension() }
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 1. 标题行（点击在右侧扩展窗口打开完整文档，hover 标题转 accentText）
-        val titleSource = remember { MutableInteractionSource() }
-        val titleHovered by titleSource.collectIsHoveredAsState()
+        // 1. 标题行（点击热区已提到整卡，此处只保留排版；hover 由整卡 interactionSource 驱动）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(interactionSource = titleSource, onClick = { onOpenInExtension() })
                 .padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -99,14 +106,13 @@ fun PlanApprovalCard(
                     } else {
                         stringResource(Res.string.plan_approval_title_default)
                     },
-                    color = if (titleHovered) colors.accentText else colors.textPrimary,
+                    color = if (cardHovered) colors.accentText else colors.textPrimary,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
             if (request.id.isNotBlank()) {
-                Spacer(modifier = Modifier.width(8.dp))
                 MederiPlanIdTag(request.id)
             }
         }

@@ -60,6 +60,9 @@ import xyz.mederi.core.contract.models.Project
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.components.atoms.FileType
+import xyz.mederi.ui.host.FileNode
+import xyz.mederi.ui.host.LocalProjectFileTreeProvider
+import xyz.mederi.ui.host.ProjectFileTreeProvider
 import xyz.mederi.ui.components.atoms.MederiFileTypeIconSquare
 import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
 import xyz.mederi.ui.components.atoms.PanelEmptyState
@@ -185,7 +188,6 @@ internal fun TreePanelContent(
                 .verticalScroll(rememberScrollState())
                 .padding(end = 8.dp),
         ) {
-            val readErrorText = stringResource(Res.string.tree_read_error)
             val query = filterQuery.trim()
             val rootChildren = provider.listChildren(root.path)
             val rootNodes =
@@ -219,10 +221,9 @@ internal fun TreePanelContent(
                         },
                         onOpen = { n ->
                             activePath = n.path
-                            viewModel.openFileViewer(
-                                title = n.name,
-                                content = provider.readText(n.path) ?: readErrorText,
-                            )
+                            // 走 openFile 统一路由：读盘 + 二进制守卫都在路由内部，
+                            // 内部能看的开 ARTIFACTS，其余弹外部打开/揭示目录确认框
+                            viewModel.openFile(n.path)
                         },
                     )
                 }

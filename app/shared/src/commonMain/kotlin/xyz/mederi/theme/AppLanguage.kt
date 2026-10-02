@@ -11,7 +11,15 @@ package xyz.mederi.theme
 enum class AppLanguage(val tag: String?, val nativeName: String) {
     SYSTEM(null, ""),
     ZH("zh", "简体中文"),
+    ZH_TW("zh-TW", "繁體中文"),
     EN("en", "English"),
+    JA("ja", "日本語"),
+    KO("ko", "한국어"),
+    FR("fr", "Français"),
+    DE("de", "Deutsch"),
+    ES("es", "Español"),
+    PT_BR("pt-BR", "Português (Brasil)"),
+    ID("id", "Bahasa Indonesia"),
     MNC("mnc", "Manchu");
 
     companion object {

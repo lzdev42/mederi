@@ -52,9 +52,9 @@ fun ErrorBoard(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(colors.accentDanger.copy(alpha = 0.12f))
-            .border(1.dp, colors.accentDanger.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+            .border(1.dp, colors.accentDanger.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
             .clickable { onShowDetail() }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

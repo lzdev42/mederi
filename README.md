@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi is a Kotlin Multiplatform framework for building AI agent applications, built on top of the Koog execution engine. It provides provider configuration, project and session management, persistence, a plan-driven execution workflow, an execution sandbox, and a cross-platform UI — so you can assemble an LLM-driven, tool-using agent without stitching these layers yourself.
+Mederi™ is a Kotlin Multiplatform framework for building AI agent applications, built on top of the Koog execution engine. It provides provider configuration, project and session management, persistence, a plan-driven execution workflow, an execution sandbox, and a cross-platform UI — so you can assemble an LLM-driven, tool-using agent without stitching these layers yourself.
 
 > **Development Status:** Mederi is under active development. Both the UI and core functionality may change at any time.
 
@@ -48,6 +48,17 @@ This project includes third-party open-source software or derivative implementat
   - [latex](https://github.com/huarangmeng/latex) (MIT License)
   - [codehigh](https://github.com/huarangmeng/codehigh) (MIT License)
   - Copyright (c) 2026 huarangmeng
+
+## Trademark
+
+"Mederi" and the Mederi logo are trademarks of lzdev42 in the United States and other countries.
+
+While our source code is licensed under the Apache License 2.0, the open source license does not grant permission to use the Mederi™ trademark, trade name, or logo.
+
+- **Fair Use**: You may use the name to truthfully refer to this project or indicate compatibility (e.g., "Mederi™ plugin").
+- **Restrictions**: You may not distribute modified versions of this software under the "Mederi" name, nor imply endorsement, sponsorship, or official affiliation without prior written permission.
+
+For detailed guidelines, permitted uses, and fork policies, please refer to our [Trademark Policy (TRADEMARK.md)](./TRADEMARK.md).
 
 ## Languages
 

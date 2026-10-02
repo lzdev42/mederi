@@ -11,14 +11,19 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.event_message_no_content
 import mederi.app.shared.generated.resources.event_message_open_report_title
 import mederi.app.shared.generated.resources.event_message_strip_completed
+import mederi.app.shared.generated.resources.event_message_strip_completed_role
 import mederi.app.shared.generated.resources.event_message_strip_failed
+import mederi.app.shared.generated.resources.event_message_strip_failed_role
 import mederi.app.shared.generated.resources.event_message_strip_stopped
+import mederi.app.shared.generated.resources.event_message_strip_stopped_role
 import mederi.app.shared.generated.resources.event_message_subagent_title
+import mederi.app.shared.generated.resources.event_message_subagent_title_role
 import mederi.app.shared.generated.resources.event_message_view_detail
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.components.atoms.StatusStrip
+import xyz.mederi.ui.host.LocalProjectFileTreeProvider
 
 /**
  * 通用事件消息卡片 (EventMessageCard)
@@ -29,9 +34,10 @@ import xyz.mederi.ui.components.atoms.StatusStrip
  * 职责边界：本组件**只负责三件事**——
  * ① 终态判定（三档语义色映射）、② 报告正文取数（注入的文件树 provider，失败回落 summary）、
  * ③ 点击开阅读器（把标题与正文交给调用方）。
- * 单行微条的**外观壳**（容器圆角 / 底色 / hover 底色 / 边框 / 前置图标 / 单行省略文本 / 右侧胶囊 /
- * 整行可点与 pointer 手型光标）统一由 [StatusStrip] 提供，本文件不再自绘任何壳代码，
- * 只把「文案 + 图标 + 颜色」三组决策交给它。
+ * 单行微条的**外观壳**（8dp 圆角 / surfaceCard 底 / hover 边框 / 前置图标 / 单行省略文本 /
+ * 右侧「文字 + 箭头」入口 / 整行可点与 pointer 手型光标）统一由 [StatusStrip] 提供，
+ * 本文件不再自绘任何壳代码，只把「文案 + 图标 + 颜色」三组决策交给它。
+ * 注意：状态**不再染色文字**（错误态红字已删），只保留图标色与 35% 边框色。
  *
  * 终态判定的**唯一真理源**在 `SubagentLabels.subagentTerminalKind`：历史事故 = 只判 ERROR/FAILED 二值、
  * 其余一律走 else，导致 STOPPED（手动取消）被显示成「已完成」。STOPPED 必须单独命中自己的分支。
@@ -64,17 +70,38 @@ fun EventMessageCard(
         if (!fileText.isNullOrBlank()) fileText else item.summary
     }
 
+    val hasRole = hasSpecificRole(item.role)
     val roleLabel = roleLabelOf(item.role)
-    val displayTitle = stringResource(Res.string.event_message_subagent_title, roleLabel)
+    val displayTitle = if (hasRole) {
+        stringResource(Res.string.event_message_subagent_title_role, roleLabel)
+    } else {
+        stringResource(Res.string.event_message_subagent_title)
+    }
     val openReportTitle = stringResource(Res.string.event_message_open_report_title, displayTitle)
 
     // 状态行 = 纯状态文案（三档，不再拼报告摘要/方括号）；摘要只在右侧阅读器里看
     val statusText = when (terminalKind) {
-        SubagentTerminalKind.COMPLETED -> stringResource(Res.string.event_message_strip_completed, roleLabel)
-        SubagentTerminalKind.ERROR -> stringResource(Res.string.event_message_strip_failed, roleLabel)
-        SubagentTerminalKind.STOPPED -> stringResource(Res.string.event_message_strip_stopped, roleLabel)
+        SubagentTerminalKind.COMPLETED -> if (hasRole) {
+            stringResource(Res.string.event_message_strip_completed_role, roleLabel)
+        } else {
+            stringResource(Res.string.event_message_strip_completed)
+        }
+        SubagentTerminalKind.ERROR -> if (hasRole) {
+            stringResource(Res.string.event_message_strip_failed_role, roleLabel)
+        } else {
+            stringResource(Res.string.event_message_strip_failed)
+        }
+        SubagentTerminalKind.STOPPED -> if (hasRole) {
+            stringResource(Res.string.event_message_strip_stopped_role, roleLabel)
+        } else {
+            stringResource(Res.string.event_message_strip_stopped)
+        }
         // 兜底按失败展示，绝不回落成「已完成」
-        SubagentTerminalKind.OTHER -> stringResource(Res.string.event_message_strip_failed, roleLabel)
+        SubagentTerminalKind.OTHER -> if (hasRole) {
+            stringResource(Res.string.event_message_strip_failed_role, roleLabel)
+        } else {
+            stringResource(Res.string.event_message_strip_failed)
+        }
     }
 
     val contentToOpen = reportContent.ifBlank { stringResource(Res.string.event_message_no_content) }
@@ -95,14 +122,9 @@ fun EventMessageCard(
         // TODO(i18n)：这里仍是 core 的原始英文枚举（COMPLETED/ERROR/STOPPED），
         // 只在无障碍树朗读，本次不引入新的 event_message_status_* 资源键。
         iconContentDescription = item.status,
-        // 2. 状态单行文本（STOPPED 用次要色中性呈现，不染成功绿也不染错误红）
-        textColor = when {
-            useErrorStyle -> colors.statusError
-            useNeutralStyle -> colors.textSecondary
-            else -> colors.textPrimary
-        },
+        // 2. 状态表达只在图标色与边框色上：文字一律主文字色（STOPPED/ERROR 都不染色）
         borderColor = if (useErrorStyle) colors.statusError.copy(alpha = 0.35f) else colors.divider,
-        // 3. 右侧 "查看详情 ↗" 胶囊链接：仅在有阅读器回调时出现
+        // 3. 右侧「查看详情 + 箭头」入口：仅在有阅读器回调时出现
         actionLabel = if (onOpenReport != null) stringResource(Res.string.event_message_view_detail) else null,
         // onOpenReport 是 (title, content) -> Unit，与 StatusStrip 的 (() -> Unit) 不是同一类型，
         // 必须包一层把标题与正文固定住再交给壳；为 null 时整行不可点。

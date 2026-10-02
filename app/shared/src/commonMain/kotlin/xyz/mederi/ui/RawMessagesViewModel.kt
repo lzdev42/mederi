@@ -8,9 +8,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Instant
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
+import xyz.mederi.util.TimeFormatter
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -85,17 +83,8 @@ class RawMessagesViewModel(
     /**
      * 格式化 ISO-8601 时间戳为 "M/d HH:mm"（按系统本地时区展示）。
      */
-    fun formatMessageTimestamp(rawIso: String): String {
-        if (rawIso.isBlank()) return ""
-        return try {
-            // 兼容原实现的空格分隔输入（如 "2026-09-20 16:12:28"），Instant 解析要求 'T' 分隔
-            val normalized = if ('T' in rawIso) rawIso else rawIso.replace(' ', 'T')
-            val dt = Instant.parse(normalized).toLocalDateTime(TimeZone.currentSystemDefault())
-            "${dt.monthNumber}/${dt.dayOfMonth} ${dt.hour.toString().padStart(2, '0')}:${dt.minute.toString().padStart(2, '0')}"
-        } catch (_: Throwable) {
-            rawIso.take(16)
-        }
-    }
+    fun formatMessageTimestamp(rawIso: String): String =
+        TimeFormatter.formatMonthDayTime(rawIso)
 
     /**
      * 提取摘要标签（如 "text"、"bash"、"compose-hot-reload_*"、"reasoning + text + bash" 或 "user: ..."）。
@@ -113,7 +102,7 @@ class RawMessagesViewModel(
             }
             val text = textPart?.get("text")?.jsonPrimitive?.contentOrNull
             if (!text.isNullOrBlank()) {
-                val clean = text.substringBefore("<<<NOT_FOR_UI>>>").trim()
+                val clean = xyz.mederi.util.PromptComposer.sanitizeUserVisibleText(text).trim()
                 val firstLine = clean.lines().firstOrNull()?.trim().orEmpty()
                 return "user: " + (if (firstLine.length > 50) firstLine.take(50) + "..." else firstLine)
             }

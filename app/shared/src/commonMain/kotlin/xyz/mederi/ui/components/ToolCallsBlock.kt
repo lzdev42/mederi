@@ -1,12 +1,8 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -17,10 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -89,8 +83,11 @@ import mederi.app.shared.generated.resources.tool_action_verify_running
 import mederi.app.shared.generated.resources.tool_action_verify_running_target
 import mederi.app.shared.generated.resources.tool_action_verify_target
 import mederi.app.shared.generated.resources.subagent_strip_completed_one
+import mederi.app.shared.generated.resources.subagent_strip_dispatched_many
 import mederi.app.shared.generated.resources.subagent_strip_dispatched_one
+import mederi.app.shared.generated.resources.subagent_strip_failed_many
 import mederi.app.shared.generated.resources.subagent_strip_failed_one
+import mederi.app.shared.generated.resources.subagent_strip_running_many
 import mederi.app.shared.generated.resources.subagent_strip_running_one
 import mederi.app.shared.generated.resources.subagent_strip_view_overview
 import org.jetbrains.compose.resources.stringResource
@@ -107,6 +104,7 @@ import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.ExpandableContent
 import xyz.mederi.ui.components.atoms.ExpandableRow
+import xyz.mederi.ui.components.atoms.ProcessRow
 import xyz.mederi.ui.components.atoms.StatusStrip
 
 /**
@@ -161,14 +159,6 @@ fun ToolActionGroupRow(
     val isGroupRunning = (isRunning || isStreaming) && group.calls.any { it.state is ToolCallState.Running }
     val isSubagentPreparing = group.kind == ToolActionKind.SUBAGENT && isGroupRunning
     val canExpand = !isSubagentPreparing
-
-    // 折叠微条 hover 背景（与 WorkTraceCard 汇总条同模式）；准备中子任务（canExpand=false）不加 hover
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-    val hoverBg by animateColorAsState(
-        if (isHovered) colors.surfaceHover else Color.Transparent,
-        tween(120)
-    )
 
     // 所有工具动作行严格默认不展开（即使执行失败也保持折叠，需要点击才展开）；用户点击后以用户状态为准；准备中子任务不可展开
     var userChoice by remember(group.calls.map { it.id }) { mutableStateOf(false) }
@@ -278,158 +268,127 @@ fun ToolActionGroupRow(
         if (isFailed) "$base ${stringResource(Res.string.tool_action_failed_suffix)}" else base
     }
 
-    Column(
+    // 折叠微条（无卡片背景与硬边框，整行可点击 + hover surfaceHover，准备中子任务不可展开也不 hover）。
+    // 外观壳（行高 / 圆角 / hover / 箭头 / 展开区导轨线）统一由 atoms/ProcessRow 提供，
+    // 这里只负责「图标（分类 / 失败 / 运行中指示器）+ 文案 + 状态色 + 展开明细」。
+    ProcessRow(
+        expanded = isExpanded,
+        onExpandedChange = { newExpanded ->
+            userChoice = newExpanded
+            DebugLog.event("UI", "ToolActionGroupRow clicked: kind=${group.kind}, count=${group.calls.size}, isExpanded=$userChoice")
+        },
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        // 折叠微条（无卡片背景与硬边框，整行可点击 + hover surfaceHover，准备中子任务不可展开也不 hover）
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(4.dp))
-                .then(
-                    if (canExpand) {
-                        Modifier
-                            .background(hoverBg)
-                            .clickable(interactionSource = interactionSource, indication = null) {
-                                userChoice = !isExpanded
-                                DebugLog.event("UI", "ToolActionGroupRow clicked: kind=${group.kind}, count=${group.calls.size}, isExpanded=$userChoice")
-                            }
-                    } else Modifier
-                )
-                .padding(vertical = 2.dp, horizontal = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            if (isGroupRunning) {
+        icon = iconVector,
+        iconTint = iconTint,
+        label = titleText,
+        labelColor = if (isFailed) colors.accentDanger else defaultMutedColor,
+        // 准备中的子代理动作行（canExpand=false）：仍显示该行，但不可点、无 hover、无箭头
+        clickable = canExpand,
+        // 运行中的动作组以旋转指示器取代静态分类图标（运行中指示信息不丢）
+        leading = if (isGroupRunning) {
+            {
                 CircularProgressIndicator(
                     color = colors.statusWorking,
                     strokeWidth = 1.4.dp,
                     modifier = Modifier.size(12.dp)
                 )
-            } else {
-                Icon(
-                    imageVector = iconVector,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(13.dp)
-                )
             }
+        } else {
+            null
+        },
+    ) {
+        // 展开后的具体执行明细（不可展开时 ProcessRow 不进入展开态，明细不会被组合）
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            group.calls.forEach { call ->
+                val isCallFailed = call.isFailed
+                val completedState = call.state as? ToolCallState.Completed
+                val isReportTool = call.name in SubagentReportMarkdown.REPORT_TOOL_NAMES
+                // 组合期 JSON 解码（SubagentToolResult 解析）用 remember 缓存，避免重组时重复解析
+                val reportMarkdown = remember(call.id, completedState) {
+                    if (isReportTool && completedState != null) {
+                        SubagentReportMarkdown.fromToolResult(call.name, completedState.output)
+                    } else null
+                }
+                val output = when (val s = call.state) {
+                    is ToolCallState.Completed -> s.output
+                    is ToolCallState.Failed -> s.error
+                    else -> null
+                }?.trim()
 
-            Text(
-                text = titleText,
-                color = if (isFailed) colors.accentDanger else defaultMutedColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-
-            if (canExpand) {
-                Spacer(modifier = Modifier.width(2.dp))
-                ExpandChevron(expanded = isExpanded, tint = defaultMutedColor, size = 11.dp)
-            }
-        }
-
-        // 展开后的具体执行明细（可展开时才渲染）
-        if (canExpand) {
-            ExpandableContent(expanded = isExpanded) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 12.dp, top = 2.dp, bottom = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                group.calls.forEach { call ->
-                    val isCallFailed = call.isFailed
-                    val completedState = call.state as? ToolCallState.Completed
-                    val isReportTool = call.name in SubagentReportMarkdown.REPORT_TOOL_NAMES
-                    // 组合期 JSON 解码（SubagentToolResult 解析）用 remember 缓存，避免重组时重复解析
-                    val reportMarkdown = remember(call.id, completedState) {
-                        if (isReportTool && completedState != null) {
-                            SubagentReportMarkdown.fromToolResult(call.name, completedState.output)
-                        } else null
-                    }
-                    val output = when (val s = call.state) {
-                        is ToolCallState.Completed -> s.output
-                        is ToolCallState.Failed -> s.error
-                        else -> null
-                    }?.trim()
-
-                    if (reportMarkdown != null) {
-                        // 子代理任务报告 Markdown（默认不展开，点击 REPORT 展开）
-                        ToolCallReportBlock(
-                            callId = call.id,
-                            reportMarkdown = reportMarkdown,
-                            colors = colors,
-                        )
-                    } else if (group.kind == ToolActionKind.ASK) {
-                        // 问询明细展开：展示问题问了什么、用户回答了什么
-                        ToolCallAskBlock(
-                            call = call,
-                            output = output,
-                            isFailed = isCallFailed,
-                            colors = colors,
-                        )
-                    } else if (group.kind == ToolActionKind.COMMAND) {
-                        // 命令行展开：命令行展示 + 输出点击展开（默认不展开）
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            if (!call.target.isNullOrBlank()) {
-                                Text(
-                                    text = "$ ${call.target}",
-                                    color = colors.textPrimary,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    lineHeight = 17.sp,
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
-                                )
-                            }
-                            if (!output.isNullOrBlank()) {
-                                ToolCallOutputBlock(
-                                    callId = call.id,
-                                    output = output,
-                                    isFailed = isCallFailed,
-                                    colors = colors,
-                                    maxHeight = 280.dp,
-                                )
-                            }
+                if (reportMarkdown != null) {
+                    // 子代理任务报告 Markdown（默认不展开，点击 REPORT 展开）
+                    ToolCallReportBlock(
+                        callId = call.id,
+                        reportMarkdown = reportMarkdown,
+                        colors = colors,
+                    )
+                } else if (group.kind == ToolActionKind.ASK) {
+                    // 问询明细展开：展示问题问了什么、用户回答了什么
+                    ToolCallAskBlock(
+                        call = call,
+                        output = output,
+                        isFailed = isCallFailed,
+                        colors = colors,
+                    )
+                } else if (group.kind == ToolActionKind.COMMAND) {
+                    // 命令行展开：命令行展示 + 输出点击展开（默认不展开）
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (!call.target.isNullOrBlank()) {
+                            Text(
+                                text = "$ ${call.target}",
+                                color = colors.textPrimary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+                            )
                         }
-                    } else {
-                        // 通用工具调用（读取/编辑/检索等）：目标显示 + 输出点击展开（默认不展开）
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            // 仅多条聚合时在明细项中展示各自目标；单条调用时标题已展示目标，避免垂直重复
-                            if (count > 1 && !call.target.isNullOrBlank()) {
-                                Text(
-                                    text = call.target,
-                                    color = colors.textSecondary,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
-                                )
-                            }
-                            if (!output.isNullOrBlank()) {
-                                ToolCallOutputBlock(
-                                    callId = call.id,
-                                    output = output,
-                                    isFailed = isCallFailed,
-                                    colors = colors,
-                                    maxHeight = 240.dp,
-                                )
-                            }
+                        if (!output.isNullOrBlank()) {
+                            ToolCallOutputBlock(
+                                callId = call.id,
+                                output = output,
+                                isFailed = isCallFailed,
+                                colors = colors,
+                                maxHeight = 280.dp,
+                            )
+                        }
+                    }
+                } else {
+                    // 通用工具调用（读取/编辑/检索等）：目标显示 + 输出点击展开（默认不展开）
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        // 仅多条聚合时在明细项中展示各自目标；单条调用时标题已展示目标，避免垂直重复
+                        if (count > 1 && !call.target.isNullOrBlank()) {
+                            Text(
+                                text = call.target,
+                                color = colors.textSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+                            )
+                        }
+                        if (!output.isNullOrBlank()) {
+                            ToolCallOutputBlock(
+                                callId = call.id,
+                                output = output,
+                                isFailed = isCallFailed,
+                                colors = colors,
+                                maxHeight = 240.dp,
+                            )
                         }
                     }
                 }
             }
         }
     }
-}
 }
 
 /**
@@ -772,12 +731,11 @@ private fun ToolCallAskBlock(
 
 /**
  * 结构化子 Agent 调用通知微条 (SubagentCallsBlock)
- * 极简单行通知胶囊：显示派发的子 Agent 状态与任务名，带有微光动画指示与呼吸角标联动，
+ * 极简单行通知胶囊：显示派发的子 Agent 状态，
  * 点击整行直接滑开右侧概览（Overview）查看完整日志与多代理执行进度。
  *
- * 微条的外观壳（圆角 / 底色 / hover 底色 / 边框 / 流光动效 / 前置图标 / 单行文本 / 右侧胶囊 /
- * 整行点击）统一由 `atoms/StatusStrip.kt` 提供，本文件只负责四态（失败 / 运行中 / 已派发 /
- * 已完成）的判定与状态文案（含任务名）拼接。
+ * 微条的外观壳（8dp 圆角 / surfaceCard 底 / hover 边框 / 流光动效 / 前置图标 / 单行文本 /
+ * 右侧「文字 + 箭头」入口 / 整行点击）统一由 `atoms/StatusStrip.kt` 提供。
  */
 @Composable
 fun SubagentCallsBlock(
@@ -790,83 +748,56 @@ fun SubagentCallsBlock(
 ) {
     if (subagents.isEmpty()) return
 
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        subagents.forEach { subagent ->
-            SubagentCallStrip(
-                subagent = subagent,
-                isStreaming = isStreaming,
-                isRunning = isRunning,
-                onOpenOverview = onOpenOverview
-            )
-        }
-    }
-}
-
-@Composable
-private fun SubagentCallStrip(
-    subagent: ToolCallUi,
-    isStreaming: Boolean,
-    isRunning: Boolean,
-    onOpenOverview: (() -> Unit)?,
-    modifier: Modifier = Modifier,
-) {
     val colors = LocalMederiColors.current
-    val isItemRunning = (isRunning || isStreaming) && (subagent.state is ToolCallState.Running || subagent.state is ToolCallState.Pending)
-    val isItemFailed = subagent.state is ToolCallState.Failed || subagent.isFailed
+    val count = subagents.size
 
-    val input = when (val s = subagent.state) {
-        is ToolCallState.Running -> s.input
-        is ToolCallState.Completed -> s.input
-        is ToolCallState.Failed -> s.input
-        is ToolCallState.Pending -> s.input
+    val anyFailed = hasFailed || subagents.any { it.isFailed || it.state is ToolCallState.Failed }
+    val anyRunning = (isRunning || isStreaming) && subagents.any {
+        it.state is ToolCallState.Running || it.state is ToolCallState.Pending
     }
-
-    val isSpawnAction = input["action"]?.equals("SPAWN", ignoreCase = true) == true ||
-        subagent.name == "spawn_agent"
-
-    // 角色名走共用的 roleLabelOf（本地化角色名 + 统一兜底），与终态卡 EventMessageCard 同一真理源
-    val roleLabel = roleLabelOf(input["role"]?.trim().orEmpty())
-    val rawTask = subagent.target ?: input["task"] ?: input["briefing"] ?: ""
-    val taskClean = rawTask.lines().firstOrNull { it.isNotBlank() } ?: "Task"
 
     val statusText = when {
-        isItemFailed -> stringResource(Res.string.subagent_strip_failed_one, roleLabel, taskClean)
-        isItemRunning -> stringResource(Res.string.subagent_strip_running_one, roleLabel, taskClean)
-        isSpawnAction -> stringResource(Res.string.subagent_strip_dispatched_one, roleLabel, taskClean)
-        else -> stringResource(Res.string.subagent_strip_completed_one, roleLabel, taskClean)
+        anyFailed -> if (count > 1) {
+            stringResource(Res.string.subagent_strip_failed_many, count)
+        } else {
+            stringResource(Res.string.subagent_strip_failed_one)
+        }
+        anyRunning -> if (count > 1) {
+            stringResource(Res.string.subagent_strip_running_many, count)
+        } else {
+            stringResource(Res.string.subagent_strip_running_one)
+        }
+        else -> if (count > 1) {
+            stringResource(Res.string.subagent_strip_dispatched_many, count)
+        } else {
+            stringResource(Res.string.subagent_strip_dispatched_one)
+        }
     }
 
-    // 外观壳（圆角 / 底色 / hover / 边框 / 流光 / 前置图标 / 单行文本 / 右侧胶囊 / 整行点击）
-    // 由 atoms/StatusStrip.kt 统一提供；这里只负责四态判定与文案。
+    val icon = when {
+        anyRunning -> FeatherIcons.Loader
+        anyFailed -> FeatherIcons.AlertCircle
+        else -> FeatherIcons.Play
+    }
+
+    val iconTint = when {
+        anyRunning -> colors.accentSecondary
+        anyFailed -> colors.accentDanger
+        else -> colors.accentSecondary
+    }
+
     StatusStrip(
         text = statusText,
-        // 四态图标：运行中（旋转 Loader）> 失败 > 已派发 > 已完成
-        icon = when {
-            isItemRunning -> FeatherIcons.Loader
-            isItemFailed -> FeatherIcons.AlertCircle
-            // 已派发子任务：异步后台执行中，使用派发/执行指示器而非 Check
-            isSpawnAction -> FeatherIcons.Play
-            else -> FeatherIcons.Check
-        },
-        iconTint = when {
-            isItemRunning -> colors.accentSecondary
-            isItemFailed -> colors.accentDanger
-            isSpawnAction -> colors.accentSecondary
-            else -> colors.accentSuccess
-        },
-        textColor = if (isItemFailed) colors.accentDanger else colors.textPrimary,
-        // 失败态保持中性分隔线边框（不染红），仅运行态高亮
-        borderColor = if (isItemRunning) colors.accentSecondary.copy(alpha = 0.35f) else colors.divider,
-        spinning = isItemRunning,
-        animated = isItemRunning,
+        icon = icon,
+        iconTint = iconTint,
+        borderColor = if (anyRunning) colors.accentSecondary.copy(alpha = 0.35f) else colors.divider,
+        spinning = anyRunning,
+        animated = anyRunning,
         actionLabel = if (onOpenOverview != null) {
             stringResource(Res.string.subagent_strip_view_overview)
         } else null,
         onAction = onOpenOverview,
-        modifier = modifier
+        modifier = modifier.fillMaxWidth()
     )
 }
 

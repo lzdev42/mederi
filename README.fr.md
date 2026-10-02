@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi est un framework Kotlin Multiplatform de construction d'applications à agents IA, bâti sur le moteur d'exécution Koog. Il fournit la configuration des fournisseurs, la gestion des projets et sessions, la persistance, un flux d'exécution piloté par plan, un bac à sable d'exécution et une UI multiplateforme — pour assembler un agent piloté par LLM et utilisant des outils sans avoir à assembler ces couches vous-même.
+Mederi™ est un framework Kotlin Multiplatform de construction d'applications à agents IA, bâti sur le moteur d'exécution Koog. Il fournit la configuration des fournisseurs, la gestion des projets et sessions, la persistance, un flux d'exécution piloté par plan, un bac à sable d'exécution et une UI multiplateforme — pour assembler un agent piloté par LLM et utilisant des outils sans avoir à assembler ces couches vous-même.
 
 > **État du développement :** Mederi est en cours de développement. L'UI et les fonctionnalités principales peuvent changer à tout moment.
 
@@ -48,6 +48,17 @@ Ce projet inclut des logiciels open source tiers ou leurs implémentations déri
   - [latex](https://github.com/huarangmeng/latex) (MIT License)
   - [codehigh](https://github.com/huarangmeng/codehigh) (MIT License)
   - Copyright (c) 2026 huarangmeng
+
+## Marque déposée
+
+"Mederi" et le logo Mederi sont des marques de lzdev42 aux États-Unis et dans d'autres pays.
+
+Bien que notre code source soit sous licence Apache License 2.0, cette licence n'accorde pas la permission d'utiliser la marque, le nom commercial ou le logo Mederi™.
+
+- **Usage loyal (Fair Use)** : Vous pouvez utiliser le nom pour faire référence à ce projet ou indiquer une compatibilité (par exemple, "plugin Mederi™").
+- **Restrictions** : Vous ne pouvez pas distribuer de versions modifiées de ce logiciel sous le nom "Mederi", ni laisser entendre une approbation, un parrainage ou une affiliation officielle sans autorisation écrite préalable.
+
+Pour consulter l'intégralité des directives sur la marque, les usages autorisés et la politique de nommage des forks, veuillez vous référer à notre [Politique des marques (TRADEMARK.md)](./TRADEMARK.md).
 
 ## Langues
 

@@ -38,7 +38,7 @@ import xyz.mederi.theme.LocalMederiColors
  * 独立长文 Markdown 产物行（DocumentArtifactCard，02-components §2.7 document-artifact-card：chip 非 card）
  *
  * 遵循 Mederi 设计语言：
- * - 内容自适应 Row chip：圆角 6dp、surfaceCard 底 + divider 描边、padding 4/10dp、
+ * - 内容自适应 Row chip：圆角 8dp、surfaceCard 底 + divider 描边、padding 4/10dp、
  *   hover 底 surfaceHover + 描边 borderStrong（120ms 过渡）；
  * - 图标 FileText 13dp accentText（生成中换 10dp statusWorking 细圈状态指示，替代原 34dp 图标盒与 shimmer）；
  * - 中间两行：主标题（12sp/500 textPrimary，maxLines 1）+ 元信息（时间 / 行数与字符数，11sp textSecondary）；
@@ -74,9 +74,9 @@ fun DocumentArtifactCard(
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(bg)
-            .border(1.dp, border, RoundedCornerShape(6.dp))
+            .border(1.dp, border, RoundedCornerShape(8.dp))
             .clickable(interactionSource = interactionSource, onClick = { onOpenInExtension() })
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,

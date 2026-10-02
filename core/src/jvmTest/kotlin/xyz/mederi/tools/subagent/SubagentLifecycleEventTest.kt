@@ -34,7 +34,8 @@ class SubagentLifecycleEventTest {
             directories: List<String>, aiModel: AIModel,
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
             apiKeyId: String?, planId: String?, executorSubtaskIndex: Int?,
-            planStore: xyz.mederi.plan.PlanStore?
+            planStore: xyz.mederi.plan.PlanStore?,
+            agentId: String?, onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)?
         ): String = when (mode) {
             Mode.COMPLETE -> "done: $task"
             Mode.HANG -> { kotlinx.coroutines.delay(Long.MAX_VALUE); "" }

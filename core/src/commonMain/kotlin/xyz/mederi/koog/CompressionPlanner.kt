@@ -51,6 +51,24 @@ const val COMPRESS_HARD_CAP_RATIO = 0.9
 const val DEFAULT_COMPRESS_WINDOW_TOKENS = 128_000
 
 /**
+ * 手动压缩的绝对最小可压缩尺寸（token）。
+ *
+ * 用户主动点「压缩」时，唯一能当场回答的问题是「这次到底值不值花一次 LLM」。
+ * 低于这个量级时，压缩产出的 TLDR 本身可能就和原文一样长，压缩只会白白丢掉细节。
+ * 该门槛是**绝对值**（与 contextWindow 无关）：小的对话不管窗口多大都不值得压，
+ * 大的对话就算窗口很大也值得压——这与自动压缩按窗口比例触发的逻辑刻意不同。
+ */
+const val MIN_COMPRESSIBLE_TOKENS = 16_000
+
+/**
+ * 手动压缩时保留原文的最近消息条数（"最后两三句"）。
+ *
+ * 手动压缩的语义是「把长篇历史收成一段总结，但最近这几轮别动」：
+ * recent = 最后 K 条原文，其余全部进 [CompressionPlan.olderBatches] 走压缩。
+ */
+const val MANUAL_KEEP_LAST_MESSAGES = 3
+
+/**
  * 复用 [HistoryStoreChatHistoryProvider] 的 TLDR 前缀定义（唯一真理源，避免字符串重复）。
  *
  * 该前缀是压缩总结与系统识别的约定：总结首行必须是它，HistoryStoreChatHistoryProvider
@@ -74,10 +92,23 @@ data class CompressionPlan(
 /**
  * 按 token 预算规划压缩：切分「保留原文的最近段」与「待压缩的多批更早消息」，并丢弃无法发送的超大单条。
  *
+ * 两种切分模式：
+ * - [keepLastMessages] 为 null（默认，自动压缩路径）：从尾部按 token 预算（[RECENT_KEEP_BUDGET_RATIO]）
+ *   累积保留段，装满即止——保留多少由窗口大小决定。
+ * - [keepLastMessages] 非 null（手动压缩路径）：**按条数**切分，recent = 最后 K 条原文，
+ *   其余消息**全部**进 olderBatches 走压缩（不设 token 保留预算）——保留多少由用户意图决定。
+ *
+ * 两种模式共用工具配对守卫、older 分批与硬上限丢弃逻辑，只有「start 怎么算」不同。
+ *
  * @param messages 完整消息列表（可含 system；system 不参与压缩，由调用方单独保留）。
  * @param contextWindow 模型上下文窗口 token 数；为 null 时用 [DEFAULT_COMPRESS_WINDOW_TOKENS] 兜底。
+ * @param keepLastMessages 手动压缩模式：保留原文的最近消息条数；null 表示按 token 预算自动决定（见上）。
  */
-fun planCompression(messages: List<Message>, contextWindow: Int?): CompressionPlan {
+fun planCompression(
+    messages: List<Message>,
+    contextWindow: Int?,
+    keepLastMessages: Int? = null
+): CompressionPlan {
     // a. 预算窗口：contextWindow 缺失时用防御性兜底窗口。
     val window = contextWindow ?: DEFAULT_COMPRESS_WINDOW_TOKENS
 
@@ -89,18 +120,26 @@ fun planCompression(messages: List<Message>, contextWindow: Int?): CompressionPl
     // c. system 消息不参与压缩（它是 Prompt 配置的一部分，由调用方单独保留）。
     val nonSystem = messages.filter { it !is Message.System }
 
-    // d. 从尾部累积「保留段」：acc>0 保证至少保留最后 1 条；
-    //    单条自身就超过 recentBudget 时也只保留它自己，不会退化成空 recent。
-    var start = nonSystem.size
-    var acc = 0
-    while (start > 0) {
-        val t = estimateTokens(listOf(nonSystem[start - 1]))
-        if (acc > 0 && acc + t > recentBudget) break
-        acc += t
-        start--
+    // d. 计算保留段起点 start：两种模式在此分叉。
+    //    d1. keepLastMessages != null（手动压缩）：按条数切，recent = 最后 K 条原文，其余全压。
+    //    d2. keepLastMessages == null（自动压缩）：从尾部累积「保留段」，acc>0 保证至少保留最后 1 条；
+    //        单条自身就超过 recentBudget 时也只保留它自己，不会退化成空 recent。
+    var start: Int
+    if (keepLastMessages != null) {
+        start = (nonSystem.size - keepLastMessages).coerceAtLeast(0)
+    } else {
+        start = nonSystem.size
+        var acc = 0
+        while (start > 0) {
+            val t = estimateTokens(listOf(nonSystem[start - 1]))
+            if (acc > 0 && acc + t > recentBudget) break
+            acc += t
+            start--
+        }
     }
 
     // e. 工具配对守卫：recent 首条不能是孤立的 tool result，否则连同其前面的 tool call 一起留在 recent。
+    //    两种切分模式共用（放在 start 计算之后）：按条数切分同样可能把 tool result 切在 recent 首条。
     //    注意：Koog 中 tool result 是 User 消息里的 part、tool call 是 Assistant 消息里的 part，
     //    并非独立的「消息类型」，因此这里检查消息的 parts 而非消息本身。
     while (start > 0 && nonSystem[start].parts.any { it is MessagePart.Tool.Result }) {
@@ -159,6 +198,38 @@ fun compactionSkipReason(messages: List<Message>, contextWindow: Int?): String? 
     // 没有可压缩的旧消息（都落在保留段）→ 空转
     if (plan.olderBatches.isEmpty()) return "low_tokens"
     // 旧消息太少不值得花一次 LLM（与策略同阈值：< 2 条不压）
+    if (plan.olderBatches.sumOf { it.size } < 2) return "too_few"
+    return null
+}
+
+/**
+ * 判定「用户手动点的这次压缩是否注定空转」，供 UI 在**发起之前**预检、给出可解释的反馈。
+ *
+ * 与 [compactionSkipReason] 的区别：自动压缩按窗口比例触发，剩余量本身就是收益；手动压缩是
+ * 用户主动行为，唯一能当场回答的问题是「这次到底值不值花一次 LLM」。因此这里加一条与窗口无关的
+ * **绝对门槛** [MIN_COMPRESSIBLE_TOKENS]：总量高于它才可能值得压（"高于 16k 即可压"），
+ * 低于它一律判 `low_tokens`，不进入按条数切分的规划。
+ *
+ * `too_few` 守卫的由来：压缩本身要花一次 LLM 产出 TLDR，若可压缩的旧内容只剩 1 条，
+ * 生成的总结极可能比那一条原文还长——压完上下文反而变大，用户会认为"压缩把内容搞坏了"。
+ * 与自动路径的 < 2 条守卫同源，只是手动模式更容易撞上（按条数切分不看 token 预算）。
+ *
+ * 与手动策略共用 [planCompression]：预检必须和实际压缩对「什么是可压缩内容」有同一个答案
+ * （同一 [MANUAL_KEEP_LAST_MESSAGES] 口径），否则预检放行而策略空转（或反之）。
+ *
+ * @param messages 准备送入压缩的消息列表（应与实际压缩所见一致，含 system）。
+ * @param contextWindow 模型上下文窗口 token 数；为 null 时按 [DEFAULT_COMPRESS_WINDOW_TOKENS] 兜底。
+ * @return `null` → 值得压；`"low_tokens"` → 总量不足 [MIN_COMPRESSIBLE_TOKENS] 或没有可压缩的旧消息；
+ *         `"too_few"` → 可压缩的旧消息只有 1 条，不值得一次 LLM。
+ */
+fun manualCompactionSkipReason(messages: List<Message>, contextWindow: Int?): String? {
+    // 绝对门槛先判：与窗口无关的小对话（哪怕窗口巨大）压了也是负收益。
+    if (estimateTokens(messages) < MIN_COMPRESSIBLE_TOKENS) return "low_tokens"
+    // 手动模式口径：recent = 最后 K 条原文，其余全压。
+    val plan = planCompression(messages, contextWindow, keepLastMessages = MANUAL_KEEP_LAST_MESSAGES)
+    // 消息条数不足以切出任何 older 段（全被 K 条 recent 吃掉了）→ 空转
+    if (plan.olderBatches.isEmpty()) return "low_tokens"
+    // 可压缩的旧消息只有 1 条 → 压完反而可能更大，不值得花一次 LLM
     if (plan.olderBatches.sumOf { it.size } < 2) return "too_few"
     return null
 }

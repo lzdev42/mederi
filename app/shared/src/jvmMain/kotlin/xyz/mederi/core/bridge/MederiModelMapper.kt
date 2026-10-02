@@ -25,7 +25,6 @@ import xyz.mederi.domain.model.FileDiff as CoreFileDiff
 import xyz.mederi.domain.model.Message as CoreMessage
 import xyz.mederi.domain.model.MessagePart as CoreMessagePart
 import xyz.mederi.domain.model.MessageRole as CoreMessageRole
-import xyz.mederi.domain.model.UI_HIDDEN_MARKER
 import xyz.mederi.domain.model.Project as CoreProject
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
@@ -305,8 +304,8 @@ object MederiModelMapper {
     ): ChatBlock? = when (part) {
         is CoreMessagePart.Text -> ChatBlock.Text(
             id = blockId(message, index),
-            // `<<<NOT_FOR_UI>>>` 标记之后的元数据（发送时间等）只发给 AI，不渲染给用户
-            text = part.text.substringBefore(UI_HIDDEN_MARKER).removeSuffix("\n")
+            // 剥离 `<<<NOT_FOR_UI>>>` 环境标记与 `<user_intervention>` 系统干预包装，只渲染真实正文
+            text = xyz.mederi.util.PromptComposer.sanitizeUserVisibleText(part.text).removeSuffix("\n")
         )
         is CoreMessagePart.Reasoning -> ChatBlock.Reasoning(
             id = blockId(message, index),

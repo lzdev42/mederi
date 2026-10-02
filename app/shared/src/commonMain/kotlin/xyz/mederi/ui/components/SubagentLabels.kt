@@ -2,6 +2,8 @@ package xyz.mederi.ui.components
 
 import androidx.compose.runtime.Composable
 import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.subagent_role_browser_brain
+import mederi.app.shared.generated.resources.subagent_role_browser_operator
 import mederi.app.shared.generated.resources.subagent_role_executor
 import mederi.app.shared.generated.resources.subagent_role_generic
 import mederi.app.shared.generated.resources.subagent_role_researcher
@@ -39,17 +41,28 @@ internal fun subagentTerminalKind(status: String): SubagentTerminalKind =
     }
 
 /**
+ * 判断是否传入了明确的具体业务角色（非空、非通用兜底词）。
+ */
+internal fun hasSpecificRole(role: String): Boolean {
+    val trimmed = role.trim()
+    return trimmed.isNotBlank() &&
+        !trimmed.equals("GENERIC", ignoreCase = true) &&
+        !trimmed.equals("SUBAGENT", ignoreCase = true)
+}
+
+/**
  * 子代理角色名 → 本地化展示名。
  *
- * - EXECUTOR / RESEARCHER 走本地化资源（[Res.string.subagent_role_executor] /
- *   [Res.string.subagent_role_researcher]）
- * - 其他非空值：「首字母大写 + 其余小写」（与既有 `role.lowercase().replaceFirstChar { it.uppercase() }` 一致）
- * - 空串 / 纯空白：兜底走 [Res.string.subagent_role_generic]（子代理 / Subagent）
+ * - EXECUTOR / RESEARCHER / BROWSER_* 走本地化资源
+ * - 其他非空值：「首字母大写 + 其余小写」
+ * - 空串 / 纯空白：兜底走 [Res.string.subagent_role_generic]（子智能体 / Subagent）
  */
 @Composable
 internal fun roleLabelOf(role: String): String = when {
     role.equals("EXECUTOR", ignoreCase = true) -> stringResource(Res.string.subagent_role_executor)
     role.equals("RESEARCHER", ignoreCase = true) -> stringResource(Res.string.subagent_role_researcher)
+    role.equals("BROWSER_OPERATOR", ignoreCase = true) -> stringResource(Res.string.subagent_role_browser_operator)
+    role.equals("BROWSER_BRAIN", ignoreCase = true) -> stringResource(Res.string.subagent_role_browser_brain)
     role.isNotBlank() -> role.lowercase().replaceFirstChar { it.uppercase() }
     else -> stringResource(Res.string.subagent_role_generic)
 }

@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi は、Koog 実行エンジンの上に構築された Kotlin Multiplatform 向け AI エージェントアプリケーションフレームワークです。プロバイダ設定、プロジェクトおよびセッション管理、永続化、計画駆動の実行フロー、実行サンドボックス、クロスプラットフォーム UI を提供し、これらの層を自前で縫い合わせることなく、LLM 駆動でツールを利用するエージェントを組み立てられます。
+Mederi™ は、Koog 実行エンジンの上に構築された Kotlin Multiplatform 向け AI エージェントアプリケーションフレームワークです。プロバイダ設定、プロジェクトおよびセッション管理、永続化、計画駆動の実行フロー、実行サンドボックス、クロスプラットフォーム UI を提供し、これらの層を自前で縫い合わせることなく、LLM 駆動でツールを利用するエージェントを組み立てられます。
 
 > **開発状態：** Mederi は開発中であり、UI およびコア機能は随時変更される可能性があります。
 
@@ -48,6 +48,17 @@ Unless required by applicable law or agreed to in writing, software distributed 
   - [latex](https://github.com/huarangmeng/latex)（MIT License）
   - [codehigh](https://github.com/huarangmeng/codehigh)（MIT License）
   - Copyright (c) 2026 huarangmeng
+
+## 商標
+
+"Mederi" および Mederi ロゴは、米国およびその他の国における lzdev42 の商標です。
+
+本プロジェクトのソースコードは Apache License 2.0 の下でライセンスされていますが、このライセンスは Mederi™ の商標、商号、またはロゴを使用する権利を許諾するものではありません。
+
+- **公正な利用（フェアユース）**：本プロジェクトを事実に基づいて言及したり、互換性を示すために名称を使用したりすることができます（例: "Mederi™ プラグイン"）。
+- **利用制限**：事前の書面による許可なく、改変されたソフトウェアを "Mederi" という名称で配布すること、または公式な推奨、後援、提携を示唆するような方法で使用することはできません。
+
+商標ガイドライン、許諾範囲、フォーク時の命名ポリシーの詳細については、[商標ポリシー (TRADEMARK.md)](./TRADEMARK.md) をご参照ください。
 
 ## 言語
 

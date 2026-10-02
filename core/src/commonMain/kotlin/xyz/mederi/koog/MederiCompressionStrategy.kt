@@ -25,13 +25,24 @@ import xyz.mederi.koog.planCompression
  *
  * @param contextWindow 模型上下文窗口 token 数；为 null 时由规划器用防御性兜底窗口
  *   （默认窗口按条数不可知时也能工作）。既有 `MederiCompressionStrategy()` 调用点仍可编译。
+ * @param keepLastMessages 两种压缩模式的唯一开关：
+ *   - **非 null = 手动压缩模式**：recent = 最后 K 条原文，其余消息全部压成 TLDR，不看 token 预算
+ *     （保留多少由用户意图决定——"最后两三句别动"）。
+ *   - **null = 自动压缩模式**（默认）：token 预算驱动，保留段 ≤ 窗口 × `RECENT_KEEP_BUDGET_RATIO`。
+ *
+ *   自动路径（TurnExecutor.buildTurnAgent）不传该参数，行为与本参数引入前完全一致；
+ *   手动路径由用户点「压缩」时以 `MANUAL_KEEP_LAST_MESSAGES` 构造本类。
  */
-class MederiCompressionStrategy(private val contextWindow: Int? = null) : HistoryCompressionStrategy() {
+class MederiCompressionStrategy(
+    private val contextWindow: Int? = null,
+    private val keepLastMessages: Int? = null
+) : HistoryCompressionStrategy() {
 
     /**
-     * 供单测验证 contextWindow 是否正确流入规划（构造函数 → 规划器接线点）。
+     * 供单测验证 contextWindow / keepLastMessages 是否正确流入规划（构造函数 → 规划器接线点）。
      */
-    internal fun planFor(messages: List<Message>): CompressionPlan = planCompression(messages, contextWindow)
+    internal fun planFor(messages: List<Message>): CompressionPlan =
+        planCompression(messages, contextWindow, keepLastMessages)
 
     override suspend fun compress(
         llmSession: AIAgentLLMWriteSession,

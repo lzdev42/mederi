@@ -153,4 +153,25 @@ After approval, per subtask: generate_spec(planId, subtaskIndex, spec) as an ord
 then subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background, END YOUR TURN —
 you will be auto-woken with the result), then verify_subtask(planId, subtaskIndex, status, evidence).
 """.trimIndent()
+
+    /**
+     * 子代理汇报核验纪律（静态指令）。
+     *
+     * 归位说明（2026-10）：这段语义原先由 `TurnExecutor` 在组装 `<event_message>` 时**动态追加**，
+     * 违反「动态注入只挂状态、不挂指令」（AGENTS §5.6 审计备忘第 5 条）。现改为静态素材，
+     * 由 [SystemPrompts] 拼进主代理系统提示词；`<event_message>` 只保留 role/reportPath/summary 等状态事实。
+     */
+    val SUBAGENT_REPORT_VERIFICATION: String = """
+# Subagent Report Verification
+
+A subagent <event_message> reports what the subagent claimed, not what is verified. When you are
+woken by a SUBAGENT_COMPLETED / SUBAGENT_ERROR event: Inspect the summary critically before
+assuming success.
+
+- Check the report against the task you dispatched, and that quoted verification evidence exists.
+- Treat missing evidence, hidden SPEC_FEEDBACK, or a summary that does not match the task as
+  unfinished work.
+- If in doubt, read the report file (ReportPath, e.g. `.mederi/plans/{planId}/reports/NN-executor.md`)
+  or the touched files before continuing the plan.
+""".trimIndent()
 }

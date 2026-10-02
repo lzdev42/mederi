@@ -109,14 +109,14 @@ flowchart TD
 用户在 turn RUNNING 时插话的两条 UI 路径（共用 `QueuedMessage` 模型，输入框上方队列横幅展示 `currentQueuedMessages`）：
 
 - **排队模式**：`WorkspaceViewModel.enqueueCurrentInput` 把当前输入框文本/粘贴/图片压入会话队列 `queuedMessagesByConv`（`removeQueuedMessage` 可移除）；turn 结束恢复 Idle 时**自动出队** `sendQueuedMessage`（即普通 sendMessage，携带入队时的模型/推理档/agent/apiKeyId）。
-- **引导模式**：`steerQueuedMessage` 取出排队项，经 `AiCore.steerMessage`（契约 → `MederiAiCore` 直调 / `POST /v1/sessions/{id}/steer` 遥控路由）**立即注入**运行中的 turn。
+- **引导模式**：`steerQueuedMessage` 取出排队项，构造乐观消息存入 `pendingUserMessages`（UI 即时展示用户气泡），并经 `AiCore.steerMessage`（契约 → `MederiAiCore` 直调 / `POST /v1/sessions/{id}/steer` 遥控路由）**立即注入**运行中的 turn。工具边界注入的 `<user_intervention>` 系统标签在 UI 映射层（`MederiModelMapper`）与回退反解层（`InputRestorer` / `PromptComposer`）统一做标签剥离与清洗，保证 UI 界面与回退重新编辑时均呈现为纯净用户正文。
 
 Core 侧链路（`TurnExecutor`）：
 
 | 链路环节 | 行为 |
 |---|---|
 | `steerMessage` | 会话 RUNNING 且 activeJobs 活跃 → `SteeringItem` 入 `pendingSteerings` 队列 + 发 `STATUS(status=steering_queued)`（SnapshotReducer 忽略该事件，见 §3）；非 RUNNING → 安全降级 `sendMessage` |
-| 工具边界注入 | `graphStrategy`（`mederiSingleRunStrategy*`）的 `nodeSendToolResult` 调 `pollSteering` 出队，有项则把插话追加进本轮工具结果消息，LLM 下一步即可见并据此调整 |
+| 工具边界注入 | `graphStrategy`（`mederiSingleRunStrategy*`）的 `nodeSendToolResult` 调 `pollSteering` 出队，有项则生成确定性 ID 并把插话包成 `<user_intervention>` 追加进本轮工具结果消息，LLM 下一步即可见并据此调整，增量落库与 ChatMemory store 避免重复 |
 | turn 收尾冲刷 | turn 结束 finally 冲刷未被工具边界消费的残留 `pendingSteerings`（逐条降级 `sendMessage` 开新 turn，撞 RUNNING 冲突放回队列） |
 
 ```mermaid
@@ -130,10 +130,12 @@ sequenceDiagram
     Note over VM,K: 当前 turn RUNNING，用户输入插话
     VM->>VM: enqueueCurrentInput 压入会话队列(队列横幅可见)
     alt 引导模式(立即注入运行中 turn)
+        VM->>VM: 乐观消息入 pendingUserMessages (UI 立即呈现用户气泡)
         VM->>AC: steerMessage(convId, input)
         AC->>TE: steerMessage
         TE->>TE: RUNNING → pendingSteerings 入队<br/>+ STATUS(steering_queued)
-        K->>K: 工具边界 (nodeSendToolResult) pollSteering 出队<br/>→ 注入工具结果消息，LLM 下一步可见
+        K->>K: 工具边界 (nodeSendToolResult) pollSteering 出队<br/>→ 确定性 ID 注入 <user_intervention> 工具结果消息，LLM 下一步可见
+        Note over VM: 快照对账: 真实消息落库后移除乐观消息<br/>UI/回退层剥离 <user_intervention> 标签
     else 排队模式(turn 先结束)
         Note over TE: turn 结束 finally: 未消费的残留 steering<br/>降级 sendMessage 开新 turn
         VM->>VM: Idle → 自动出队 sendQueuedMessage(普通 sendMessage)
@@ -267,15 +269,20 @@ sequenceDiagram
     Note over EB: sessionId=父会话；UI SubagentTracker 聚合进<br/>SubagentState 缓存(每个子代理一个 MVVM 对象)
     SM-->>M: 返回 agentId（立即，不阻塞父 turn）
     M->>M: END TURN（父代理结束 turn，期间可自由对话）
-    SM->>SR: 后台协程 run(内存 store + 独立 TurnExecutor)
+    SM->>SR: 后台协程 run(内存 store + 独立 TurnExecutor, 挂载 onProgress)
+    loop 流式执行
+        SR->>SM: onProgress(activity, tool?, delta?, isMessage?)（120ms 窗口聚合）
+        SM->>EB: SUBAGENT_PROGRESS(agentId, activity, tool?, delta?, isMessage?)
+        Note over EB: UI 实时蹦字视窗 + 最新一句话(现场死因)
+    end
     alt 正常完成/出错/停止
         SR-->>SM: 汇报全文（executor 报告落盘 {planId}/reports/NN-executor.md）
-        SM->>EB: SUBAGENT_COMPLETED / ERROR / STOPPED(agentId/role/status/result/reportPath/planId/subtaskIndex)<br/>(NonCancellable emit, sessionId=父会话)
+        SM->>EB: SUBAGENT_COMPLETED / ERROR / STOPPED(agentId/role/status/result/reportPath/planId/subtaskIndex/completedAt)<br/>(NonCancellable emit, sessionId=父会话)
         Note over SM: finally 同步写 retired[agentId]=AgentRecoveryInfo<br/>(agent 丢失/归档后 STATUS 仍能返回部分认知)
     else agent 丢失/归档(不在内存表)
         M->>SM: subagent(STATUS, agentId) → NOT_FOUND + recovery<br/>(AgentRecoveryInfo: 末次状态/result/报告路径/touchedFiles 部分认知)
     end
-    EB->>TE: SUBAGENT_* 终态事件 → handleSubagentTerminalEvent<br/>组 <event_message> (type/agentId/status/ReportPath/Summary)
+    EB->>TE: SUBAGENT_* 终态事件 → handleSubagentTerminalEvent<br/>组 <event_message> (type/agentId/status/ReportPath/Summary + 批判性核验Note)
     TE->>TE: pendingEventMessages 入队(按父会话分组)<br/>父 turn 空闲 → dispatchPendingEventMessages 批量合并成一条内部消息<br/>→ sendMessageInternal 唤起新 turn（同会话多通知合并成一次 turn）
     Note over TE: 竞态：唤起时父会话正忙 → 放回队列，等 turn 收尾 finally 再冲刷<br/>abortAndJoin → 清空该会话队列
 ```
@@ -292,13 +299,13 @@ flowchart TD
     B["触发2: graphStrategy 节点内<br/>isHistoryTooBig(prompt) > 70%"]
     C["触发3: 用户手动 compressHistory()"]
     A & B --> D["MederiCompressionStrategy.compress(llmSession, memory)"]
-    C --> P["手动压缩预检(在翻状态机之前)<br/>window = HistoryStoreChatHistoryProvider.aiViewWindow(...)<br/>→ KoogMessageMapper.toKoogMessages(includeImages=model.supportsImages)<br/>→ compactionSkipReason(koogWindow, model.contextWindow)<br/>(与 MederiCompressionStrategy.compress 共用 planCompression 判定口径)"]
+    C --> P["手动压缩预检(在翻状态机之前)<br/>window = HistoryStoreChatHistoryProvider.aiViewWindow(...)<br/>→ KoogMessageMapper.toKoogMessages(includeImages=model.supportsImages)<br/>→ manualCompactionSkipReason(koogWindow, model.contextWindow)<br/>(手动模式: keepLastMessages 条数切分 + 16k 绝对门槛)"]
     P --> S{"skipReason != null?"}
     S -- "否(值得压)" --> D
     S -- "是 low_tokens / too_few" --> X["emit STATUS{scope=compaction, code=SKIPPED, reason} 后直接 return<br/>不翻 RUNNING、不发 SESSION_UPDATED / MESSAGE_COMPLETED → UI 无闪屏"]
     X -. 裸事件旁路.-> U["WorkspaceViewModel.init 收集器(仿 BROWSER_TASK_STARTED, 不经快照)<br/>filter: STATUS && payload.scope==compaction && sessionId==当前会话<br/>→ 清 sessionCache.turnStartByConv 锚点(StatusBar 计时不留'已耗时 0')<br/>→ trySend(UiEffect.ShowCompactionNotice(code, reason))"]
     U -.-> V["MainScreen effects.collect → 本地 compactionNotice 状态 → 模态<br/>文案 composeResources: compaction_skipped_title +<br/>compaction_skipped_low_tokens / _too_few(values/ 与 values-en/ 双份)"]
-    D --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner: 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim"]
+    D --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner(自动模式): 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim<br/>CompressionPlanner(手动模式 keepLastMessages): 保留段 = 最后 3 条消息原文, 其余全部旧消息压成 TLDR"]
     E --> F["逐批 requestLLMWithoutTools 生成小结 → combineBatchSummaries 合并为单条 TLDR:(五节)"]
     F --> G["新历史 = system + TLDR:... + recent<br/>(head-trim 仅影响 AI 视图, HistoryStore 全量不删)"]
     G --> H["ChatMemory 回写 store → HistoryStoreChatHistoryProvider.reconcile<br/>检测首条 TLDR 未落库 → 按内容指纹对齐<br/>→ 插入 SUMMARY 标记消息(不删任何已有消息)"]
@@ -306,7 +313,13 @@ flowchart TD
     A -. preflight 压缩失败(不阻塞).-> W["自动压缩失败(原因回灌 streamWarning)<br/>MESSAGE_COMPLETED/MESSAGE_ERROR.warning 对用户可见"]
 ```
 
-**手动压缩预检（2026-09，"无需压缩"提醒，触发3 专属）**：手动 `compressHistory` 在**翻状态机之前**先用 `compactionSkipReason(aiViewWindow → KoogMessages, model.contextWindow)` 预检，判定口径与 `MederiCompressionStrategy.compress` 完全同源（共用 `planCompression`：`olderBatches` 为空 → `low_tokens`；旧消息总条数 < 2 → `too_few`；预算阈值改一处两处自动一致）。窗口取 `HistoryStoreChatHistoryProvider.aiViewWindow`（即"最后一条 SUMMARY 及其后"，与实际压缩所见一致），图片按当前模型 `supportsImages` 能力剔除。
+**手动压缩预检（2026-09，"无需压缩"提醒，触发3 专属）**：手动 `compressHistory` 在**翻状态机之前**先用 `manualCompactionSkipReason(aiViewWindow → KoogMessages, model.contextWindow)` 预检，判定口径为：
+- a. `aiViewWindow` 估算总 tokens 低于 **16k 绝对门槛** → `low_tokens`（手动是"按需一次压到位"，不跟随窗口大小浮动）；
+- b. 按 `keepLastMessages=3` 条数切分后 `olderBatches` 为空 → `low_tokens`；旧消息总条数 < 2 → `too_few`；
+- 与 `MederiCompressionStrategy`（`keepLastMessages` 模式）共用 `planCompression` 同一口径——手动与自动的"切分/保留"逻辑同源，**但手动不再与自动共用窗口×30% 保留预算**（手动只受 16k 绝对门槛约束）；
+- **自动路径仍为窗口相对口径**（70% 触发 preflight / 保留段 ≤ 窗口×0.3），不受手动改动影响。
+
+窗口取 `HistoryStoreChatHistoryProvider.aiViewWindow`（即"最后一条 SUMMARY 及其后"，与实际压缩所见一致），图片按当前模型 `supportsImages` 能力剔除。
 
 - **命中空转**（`low_tokens` / `too_few`）：只发一条机器码事实 `STATUS{scope=compaction, code=SKIPPED, reason}` 后直接 `return`——**不翻 RUNNING、不发 SESSION_UPDATED / MESSAGE_COMPLETED**，UI 完全不闪屏（老行为会 Working→Idle 闪一下再说明失败）；
 - **未命中**：照旧 `compressOnce` 全流程（RUNNING → compressOnce → IDLE → MESSAGE_COMPLETED）。
@@ -395,13 +408,17 @@ sequenceDiagram
     Note over ITE: 继承策略=中心化 AgentCapabilities 表<br/>MCP: 主/执行/研究都继承(每子代理 turn 独立现连现断)<br/>Skills: 主/执行注入提示词, 研究不注入
     loop 子 turn 内
         ITE->>ITE: 正常 TurnExecutor 流程(事件走独立 eventBus)
+        ITE-->>SR: MESSAGE_DELTA / TOOL_CALLED
+        SR->>SM: onProgress(activity, tool?, delta?, isMessage?)（120ms 窗口聚合）
+        SM->>EB: SUBAGENT_PROGRESS(agentId, activity, tool?, delta?, isMessage?)
+        Note over EB: UI 详情弹窗消费: 实时蹦字流与最新输出/死因现场
     end
     SR->>SR: 等 MESSAGE_COMPLETED/MESSAGE_ERROR 终态事件
     SR->>SR: 取最后一条 ASSISTANT 消息文本 → persistReportAndReturnSummary<br/>EXECUTOR: 落盘 {planId}/reports/NN-executor.md, 返回尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>RESEARCHER: 报告始终落盘——有活跃 plan → PlanStore.writeResearchReport 写 {planId}/research.md<br/>无活跃 plan → PlanStore.writeStandaloneResearchReport 写 .mederi/research/{timestamp}.md<br/>(两种均返回头部800字符+路径, 全量报告不再回灌父上下文)
     SR->>SM: 更新状态 COMPLETED/ERROR, 返回摘要
     Note over SM,SR: scope 继承调用方协程上下文: subagent(STOP) 取消可级联取消内部 turn
-    SM->>EB: SUBAGENT_COMPLETED/ERROR/STOPPED (payload agentId/role/status/result/reportPath/planId/subtaskIndex)<br/>NonCancellable emit, sessionId=父会话, 同时写 retired[agentId]=AgentRecoveryInfo
-    EB->>PTE: SUBAGENT_* 终态事件 → handleSubagentTerminalEvent<br/>组 <event_message> (type/agentId/status/ReportPath/Summary)
+    SM->>EB: SUBAGENT_COMPLETED/ERROR/STOPPED (payload agentId/role/status/result/reportPath/planId/subtaskIndex/completedAt)<br/>NonCancellable emit, sessionId=父会话, 同时写 retired[agentId]=AgentRecoveryInfo
+    EB->>PTE: SUBAGENT_* 终态事件 → handleSubagentTerminalEvent<br/>组 <event_message> (type/agentId/status/ReportPath/Summary + 批判性核验Note)
     PTE->>PTE: pendingEventMessages 入队(按父会话分组)<br/>父 turn 空闲 → dispatchPendingEventMessages 批量合并成一条内部消息<br/>→ sendMessageInternal 唤起新 turn<br/>竞态(父会话正忙) → 放回队列, 等 turn 收尾 finally 冲刷<br/>abortAndJoin → 清空该会话队列
     PTE->>M: (被唤醒的新 turn) verify_subtask / converge_plan / 下一个 subagent(SPAWN)
     Note over M: 独立子任务可同消息并行: 多个 subagent(SPAWN/SPAWN_RESEARCHER) 各自后台跑,<br/>单会话受并发上限控制(默认 2, 达上限原子拒绝), 完成事件合并唤醒后逐个 verify_subtask

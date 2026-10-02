@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi es un framework Kotlin Multiplatform para construir aplicaciones de agentes de IA, construido sobre el motor de ejecución Koog. Proporciona configuración de proveedores, gestión de proyectos y sesiones, persistencia, un flujo de ejecución guiado por planes, una sandbox de ejecución y una UI multiplataforma — para que puedas ensamblar un agent impulsado por LLM y que usa herramientas sin tener que coser estas capas tú mismo.
+Mederi™ es un framework Kotlin Multiplatform para construir aplicaciones de agentes de IA, construido sobre el motor de ejecución Koog. Proporciona configuración de proveedores, gestión de proyectos y sesiones, persistencia, un flujo de ejecución guiado por planes, una sandbox de ejecución y una UI multiplataforma — para que puedas ensamblar un agent impulsado por LLM y que usa herramientas sin tener que coser estas capas tú mismo.
 
 > **Estado de desarrollo:** Mederi está en desarrollo. Tanto la UI como la funcionalidad principal pueden cambiar en cualquier momento.
 
@@ -48,6 +48,17 @@ Este proyecto incluye software de código abierto de terceros o implementaciones
   - [latex](https://github.com/huarangmeng/latex) (MIT License)
   - [codehigh](https://github.com/huarangmeng/codehigh) (MIT License)
   - Copyright (c) 2026 huarangmeng
+
+## Marca registrada
+
+"Mederi" y el logotipo de Mederi son marcas comerciales de lzdev42 en los Estados Unidos y otros países.
+
+Aunque nuestro código fuente está licenciado bajo la Apache License 2.0, esta licencia no otorga permiso para usar la marca comercial, el nombre comercial o el logotipo de Mederi™.
+
+- **Uso legítimo (Fair Use)**: Puede usar el nombre para referirse con veracidad a este proyecto o indicar compatibilidad (por ejemplo, "plugin de Mederi™").
+- **Restricciones**: No puede distribuir versiones modificadas de este software bajo el nombre "Mederi", ni insinuar respaldo, patrocinio o afiliación oficial sin autorización previa por escrito.
+
+Para consultar las directrices completas sobre marcas, los usos permitidos y las políticas de nomenclatura de bifurcaciones (forks), consulte nuestra [Política de marcas (TRADEMARK.md)](./TRADEMARK.md).
 
 ## Idiomas
 

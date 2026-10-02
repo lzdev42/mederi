@@ -90,4 +90,36 @@ class PromptComposerTest {
         assertEquals("这是普通的一句提问", parsed.instruction)
         assertTrue(parsed.pastedTexts.isEmpty())
     }
+
+    @Test
+    fun testStripUserIntervention() {
+        val rawIntervention = """
+            <user_intervention>
+            [System Note: The user submitted the following guidance while you were executing tools. Incorporate this guidance into your ongoing task without restarting from scratch]:
+            任务卡死了，你重调一下
+            </user_intervention>
+        """.trimIndent()
+
+        println("[Test-Log] rawIntervention:\n$rawIntervention")
+        val stripped = PromptComposer.stripUserIntervention(rawIntervention)
+        println("[Test-Log] stripped: '$stripped'")
+        assertEquals("任务卡死了，你重调一下", stripped)
+
+        val mixedWithHidden = """
+            <user_intervention>
+            [System Note: The user submitted the following guidance while you were executing tools. Incorporate this guidance into your ongoing task without restarting from scratch]:
+            换个目录重试
+            </user_intervention>
+            <<<NOT_FOR_UI>>>
+            [2026-10-02 11:00:00 UTC]
+        """.trimIndent()
+
+        val sanitized = PromptComposer.sanitizeUserVisibleText(mixedWithHidden)
+        println("[Test-Log] sanitized: '$sanitized'")
+        assertEquals("换个目录重试", sanitized)
+
+        val parsed = PromptComposer.parse(rawIntervention)
+        println("[Test-Log] parsed instruction: '${parsed.instruction}'")
+        assertEquals("任务卡死了，你重调一下", parsed.instruction)
+    }
 }

@@ -34,16 +34,58 @@ object SubagentTracker {
                     startedAt = event.timestamp
                 ))
             }
-            CoreEventType.SUBAGENT_COMPLETED ->
-                states.updated(agentId) { it.copy(status = "COMPLETED") }
-            CoreEventType.SUBAGENT_ERROR ->
-                states.updated(agentId) { it.copy(status = "ERROR") }
-            CoreEventType.SUBAGENT_STOPPED ->
-                states.updated(agentId) { it.copy(status = "STOPPED") }
+            CoreEventType.SUBAGENT_PROGRESS -> {
+                val activity = event.payload["activity"]
+                val tool = event.payload["tool"]
+                val delta = event.payload["delta"].orEmpty()
+                val isMessage = event.payload["isMessage"] == "true"
+                states.updated(agentId) { current ->
+                    val newRecent = if (delta.isNotBlank()) {
+                        val combined = (current.recentOutput.orEmpty() + delta)
+                        if (combined.length > 1000) combined.takeLast(1000) else combined
+                    } else current.recentOutput
+
+                    val newLastMsg = if (isMessage && delta.isNotBlank()) {
+                        extractLastSentence(current.lastMessage, delta)
+                    } else current.lastMessage
+
+                    current.copy(
+                        currentActivity = activity ?: current.currentActivity,
+                        // 活动切出工具调用（进入 THINKING/OUTPUT/终态）时清掉上次的工具名，
+                        // 避免「正在调用工具: X」徽标在生成阶段残留上一个工具。
+                        currentTool = when {
+                            activity != null && activity != xyz.mederi.core.contract.models.SubagentActivity.TOOL_CALL -> null
+                            tool != null -> tool
+                            else -> current.currentTool
+                        },
+                        recentOutput = newRecent,
+                        lastMessage = newLastMsg
+                    )
+                }
+            }
+            CoreEventType.SUBAGENT_COMPLETED -> {
+                val completedAt = event.payload["completedAt"] ?: event.timestamp
+                states.updated(agentId) { it.copy(status = "COMPLETED", currentActivity = null, completedAt = completedAt) }
+            }
+            CoreEventType.SUBAGENT_ERROR -> {
+                val completedAt = event.payload["completedAt"] ?: event.timestamp
+                states.updated(agentId) { it.copy(status = "ERROR", currentActivity = null, completedAt = completedAt) }
+            }
+            CoreEventType.SUBAGENT_STOPPED -> {
+                val completedAt = event.payload["completedAt"] ?: event.timestamp
+                states.updated(agentId) { it.copy(status = "STOPPED", currentActivity = null, completedAt = completedAt) }
+            }
             CoreEventType.SUBAGENT_DISCARDED ->
                 states - agentId
             else -> states
         }
+    }
+
+    private fun extractLastSentence(prev: String?, delta: String): String {
+        val combined = (prev.orEmpty() + delta)
+        val lines = combined.lines().filter { it.isNotBlank() }
+        val lastLine = lines.lastOrNull().orEmpty().trim()
+        return if (lastLine.length > 200) lastLine.takeLast(200) else lastLine
     }
 
     /** 终态事件先于 STARTED 到达（理论上不该发生）时安全跳过。 */

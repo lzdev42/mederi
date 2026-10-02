@@ -12,10 +12,12 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -45,6 +47,15 @@ import mederi.app.shared.generated.resources.err_send_failed
 import xyz.mederi.isDesktopPlatform
 import xyz.emuci.inkcompose.MermaidCacheConfig
 import xyz.mederi.util.PromptComposer
+import xyz.mederi.util.FileOpenTarget
+import xyz.mederi.util.classifyFilePath
+import xyz.mederi.util.defaultAppNameFor
+import xyz.mederi.util.revealInFolder
+// ⚠️ 关键陷阱：PlatformUtils.openFile（打开给系统应用）与本类的 openFile（路由）同名，
+// 必须用别名导入，否则 confirmPendingFileOpen 里调用会递归回自己的路由方法。
+import xyz.mederi.util.LinkTargetClassifier
+import xyz.mederi.util.openFile as openFileInOs
+import xyz.mederi.util.openUrl
 
 /**
  * 聊天工作区 ViewModel（首页主会话区的数据层）。
@@ -383,10 +394,103 @@ class WorkspaceViewModel(
         DebugLog.event("UI", "openTextInExtension: title='$title', activeArtifactId=$activeArtifactId, chars=$charCount, isStreaming=$isStreaming")
     }
 
-    /** 在文件查看器（ARTIFACTS 面板）打开一段文本（如项目文件树点击读取的文件内容）。 */
-    fun openFileViewer(title: String, content: String) {
-        // 复用现有 artifact 通路：追加/更新 ArtifactItem.Text 并置为 active、打开 ARTIFACTS 面板
-        openTextInExtension(title = title, content = content, lineCount = 0, charCount = content.length)
+    /** 文件打开确认态（EXTERNAL / REVEAL 档），非 null 时 Workspace 渲染 ConfirmDialog。 */
+    var pendingFileOpen by mutableStateOf<PendingFileOpen?>(null); private set
+
+    /**
+     * 文件打开请求序号：异步解析（读盘 / 查默认应用名）期间用户又点了别的文件时，
+     * 只有序号仍是当前值的请求才允许写 [pendingFileOpen]，防止旧请求覆盖新请求。
+     */
+    private var fileOpenRequestSeq = 0
+
+    /**
+     * 对话流文件点击的**唯一路由**：按扩展名分级——内部能看的直接在右侧 dock 打开，
+     * 其余写入 [pendingFileOpen] 由 UI 弹确认框（用 XXX 打开 / 打开所在目录）。
+     *
+     * 注意同名陷阱：这里调的是路由本身；真正「打开给系统」的那一步在 [confirmPendingFileOpen]
+     * 里经别名导入的 `openFileInOs`（= `xyz.mederi.util.openFile` / PlatformUtils）执行。
+     *
+     * 平台 I/O（读盘、查默认应用名）一律移出组合线程：在 viewModelScope 内异步执行，
+     * 命令等待带超时（PlatformUtils 侧），绝不在点击回调里同步起进程。
+     */
+    fun openFile(path: String) {
+        val fileName = path.substringAfterLast('/').ifBlank { path }
+        when (classifyFilePath(path)) {
+            FileOpenTarget.INTERNAL_IMAGE -> openImageInExtension(title = fileName, imageUrl = path)
+            FileOpenTarget.INTERNAL_TEXT -> {
+                val requestId = ++fileOpenRequestSeq
+                viewModelScope.launch {
+                    val content = withContext(Dispatchers.Default) { appState.fileTreeProvider?.readText(path) }
+                    if (requestId != fileOpenRequestSeq) return@launch // 已被更新的点击取代
+                    if (content == null || content.contains('\u0000')) {
+                        // 二进制 / 读不到 → 降级走外部打开或揭示目录（不塞进 MarkdownView）
+                        // 判二进制只能用 NUL 扫描：readText 对二进制返回 U+FFFD 乱码而非 null，
+                        // ==null 只表示「不存在 / IO 异常」。
+                        routeExternalOrReveal(path, requestId)
+                    } else {
+                        openTextInExtension(title = fileName, content = content, charCount = content.length)
+                    }
+                }
+            }
+            FileOpenTarget.EXTERNAL -> routeExternalOrReveal(path, ++fileOpenRequestSeq)
+            FileOpenTarget.REVEAL_IN_FOLDER -> pendingFileOpen = PendingFileOpen.RevealInFolder(path)
+        }
+    }
+
+    /** EXTERNAL 档：查系统默认应用名，有则「用 XXX 打开」，查不到降级「打开所在目录」。 */
+    private fun routeExternalOrReveal(path: String, requestId: Int) {
+        viewModelScope.launch {
+            val appName = withContext(Dispatchers.Default) { defaultAppNameFor(path) } // mac 恒 null → 走泛称
+            if (requestId != fileOpenRequestSeq) return@launch // 已被更新的点击取代
+            pendingFileOpen = if (appName != null) {
+                PendingFileOpen.OpenExternally(path, appName)
+            } else {
+                // 查不到默认程序名：用户语义 = 问是否打开所在目录（而不是盲目丢给系统挑应用）
+                PendingFileOpen.RevealInFolder(path)
+            }
+        }
+    }
+
+    /**
+     * 链接点击路由：本地路径（file:// / file: / 绝对路径 / Windows 盘符）走 [openFile] 统一路由，
+     * 其余（http/https/mailto…）交系统浏览器。纯字符串判定，commonMain 禁用 java.net.URI。
+     */
+    fun openLink(url: String) {
+        val localPath = LinkTargetClassifier.localPathOrNull(url)
+        if (localPath != null) {
+            openFile(localPath)
+        } else {
+            openUrl(url)
+        }
+    }
+
+    /**
+     * 计划全文打开路由（平台分流）：桌面端（有本地文件树 provider 且 planPath 在盘上）
+     * 走 [openFile]（md → INTERNAL_TEXT → ARTIFACTS 阅读器）；遥控端/wasm 文件在 server 机器上，
+     * 盲走 openFile 只会弹无用的「打开所在目录」，故保留 [openPlanFile] 走内存 planContent 兜底。
+     */
+    fun openPlanItem(item: PlanOverviewItem) {
+        if (item.planPath.isNotBlank() && appState.fileTreeProvider != null) {
+            openFile(item.planPath)
+        } else {
+            openPlanFile(item)
+        }
+    }
+
+    /** 用户确认：执行打开 / 揭示，并清态。 */
+    fun confirmPendingFileOpen() {
+        val pending = pendingFileOpen ?: return
+        when (pending) {
+            // openFileInOs = PlatformUtils.openFile（Desktop.open），**不是** this.openFile（路由，会递归）
+            is PendingFileOpen.OpenExternally -> openFileInOs(pending.path)
+            is PendingFileOpen.RevealInFolder -> revealInFolder(pending.path)
+        }
+        pendingFileOpen = null
+    }
+
+    /** 用户取消：清态。 */
+    fun cancelPendingFileOpen() {
+        pendingFileOpen = null
     }
 
     /**
@@ -588,7 +692,7 @@ class WorkspaceViewModel(
     // 已收敛进 [sessionCache]（SessionUiCache，见文件底部），语义与文档随成员迁移。
 
     /** 当前会话的乐观消息（兼容旧引用/测试） */
-    val optimisticUserMessage: ChatMessage? get() = conversationId?.let { sessionCache.pendingUserMessages[it] }
+    val optimisticUserMessage: ChatMessage? get() = conversationId?.let { sessionCache.pendingUserMessages[it]?.lastOrNull() }
 
     /** 当前会话的排队消息列表（排队模式 / 引导模式） */
     val currentQueuedMessages: List<QueuedMessage> get() = conversationId?.let { sessionCache.queuedMessagesByConv[it] } ?: emptyList()
@@ -703,15 +807,20 @@ class WorkspaceViewModel(
     val isWorking: Boolean get() = snapshot?.conversation?.status == ConversationStatus.Working
     val messages: List<ChatMessage> get() {
         val base = snapshot?.messages ?: emptyList()
-        val opt = conversationId?.let { sessionCache.pendingUserMessages[it] } ?: return base
-        // 因果时序防护：只有在 base 中存在"时间戳在 opt 之后且正在流式中"的回复（即确由 opt 触发的流式响应），
-        // 才能把 opt 插在它前面；早于 opt 的历史消息（无论是否残留流式标记）绝对不可被 opt 抢占前面。
-        val streamingIndex = base.indexOfFirst { it.isStreaming && it.createdAt >= opt.createdAt }
-        return if (streamingIndex >= 0) {
-            base.toMutableList().apply { add(streamingIndex, opt) }
-        } else {
-            base + opt
+        val opts = conversationId?.let { sessionCache.pendingUserMessages[it] }?.toList() ?: emptyList()
+        if (opts.isEmpty()) return base
+        val result = base.toMutableList()
+        for (opt in opts) {
+            // 因果时序防护：只有在 base 中存在"时间戳在 opt 之后且正在流式中"的回复（即确由 opt 触发的流式响应），
+            // 才能把 opt 插在它前面；早于 opt 的历史消息（无论是否残留流式标记）绝对不可被 opt 抢占前面。
+            val streamingIndex = result.indexOfFirst { it.isStreaming && it.createdAt >= opt.createdAt }
+            if (streamingIndex >= 0) {
+                result.add(streamingIndex, opt)
+            } else {
+                result.add(opt)
+            }
         }
+        return result
     }
     val pendingQuestion: QuestionRequest? get() = snapshot?.pendingQuestion
     val tokenUsage: TokenUsage get() = snapshot?.tokenUsage ?: TokenUsage()
@@ -797,34 +906,35 @@ class WorkspaceViewModel(
         computeChatItems(messages)
     }
 
-    /** 用户手动关闭的子代理浮动通知 key 集合（切会话自动重置） */
-    var dismissedSubagentCallKeys by mutableStateOf<Set<String>>(emptySet())
+    /** 用户是否手动点击了关闭子智能体工作浮条 */
+    var isSubagentBannerDismissed by mutableStateOf(false)
         private set
 
-    fun dismissSubagentCall(key: String) {
-        dismissedSubagentCallKeys = dismissedSubagentCallKeys + key
-    }
-
     /**
-     * 当前会话最新派发、且未被手动关闭的子任务浮动通知。
-     * 当有正在运行的子代理，或者属于当前轮次刚派发的调用时在顶层浮动展示。
+     * 是否有子智能体正在工作（当前会话存在 RUNNING 状态的子代理，或有正在运行/流式的子代理工具调用）。
+     * 状态判定复用 `ui/SubagentLifecycleNotification.kt` 的纯函数 [hasRunningSubagents]（同一谓词单一真理源），
+     * 这里只叠加 chatItems 层的「流式/运行中工具调用」判定。
      */
-    val activeSubagentCalls: ChatListItem.SubagentCalls? by derivedStateOf {
-        val calls = chatItems.flatMap { item ->
+    val hasRunningSubagents: Boolean by derivedStateOf {
+        hasRunningSubagents(subagents) || chatItems.any { item ->
             when (item) {
-                is ChatListItem.SubagentCalls -> listOf(item)
-                is ChatListItem.WorkTraceBlock -> item.items.filterIsInstance<ChatListItem.SubagentCalls>()
-                else -> emptyList()
+                is ChatListItem.SubagentCalls -> item.isRunning || item.isStreaming
+                is ChatListItem.WorkTraceBlock -> item.items.filterIsInstance<ChatListItem.SubagentCalls>().any { it.isRunning || it.isStreaming }
+                else -> false
             }
         }
-        val last = calls.lastOrNull()
-        if (last != null && !dismissedSubagentCallKeys.contains(last.key)) {
-            val hasRunningSubagent = subagents.any { it.status.equals("RUNNING", ignoreCase = true) }
-            if (hasRunningSubagent || last.isRunning || last.isStreaming) {
-                last
-            } else null
-        } else null
     }
+
+    /** 是否应当展示子智能体正在工作的浮条：有在工作的子智能体，且用户未手动关闭 */
+    val showSubagentRunningBanner: Boolean by derivedStateOf {
+        hasRunningSubagents && !isSubagentBannerDismissed
+    }
+
+    /** 用户手动关闭子智能体工作浮条 */
+    fun dismissSubagentRunningBanner() {
+        isSubagentBannerDismissed = true
+    }
+
 
     // ==========================================
     // 派生展示状态（View 直接读取，零业务逻辑）
@@ -958,6 +1068,7 @@ class WorkspaceViewModel(
 /** 子代理生命周期事件集（init 订阅过滤用；SubagentTracker 消费）。 */
 private val SUBAGENT_EVENT_TYPES = setOf(
     xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STARTED,
+    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_PROGRESS,
     xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_COMPLETED,
     xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_ERROR,
     xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STOPPED
@@ -1037,6 +1148,9 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 .collect {
                     subagentStates = xyz.mederi.core.contract.SubagentTracker.apply(subagentStates, it)
                     allSubagents = subagentStates.values.sortedBy { s -> s.startedAt }
+                    if (subagents.none { s -> s.status.equals("RUNNING", ignoreCase = true) }) {
+                        isSubagentBannerDismissed = false
+                    }
                 }
         }
     }
@@ -1045,7 +1159,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         DebugLog.event("UI", "attach: id=$id")
         selectionHydrated = false
         resetQuestionState()
-        dismissedSubagentCallKeys = emptySet()
+        isSubagentBannerDismissed = false
         if (id == null) {
             conversationId = null
             snapshot = null
@@ -1133,28 +1247,30 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             )
         }
         // 乐观消息与快照对账：真实消息已落库（turn 结束/出错兜底时 core 写入）→ 移除乐观消息
-        val pendingOpt = sessionCache.pendingUserMessages[id]
-        if (pendingOpt != null) {
-            val optText = pendingOpt.blocks
-                .filterIsInstance<ChatBlock.Text>()
-                .joinToString("") { it.text }
-            val hasReal = snap.messages.any { msg ->
-                if (msg.role == ChatRole.User) {
-                    val realText = msg.blocks.filterIsInstance<ChatBlock.Text>()
-                        .joinToString("") { it.text }
-                    realText == optText || (optText.isNotBlank() && realText.trim() == optText.trim())
-                } else false
-            }
-            if (hasReal) {
-                if (!pendingOptReconciled.contains(id)) {
-                    pendingOptReconciled.add(id)
-                    DebugLog.info("UI", "optimistic user message matched real message in snapshot, clearing optimistic message (id=${pendingOpt.id})")
+        val pendingList = sessionCache.pendingUserMessages[id]
+        if (!pendingList.isNullOrEmpty()) {
+            val toRemove = mutableListOf<ChatMessage>()
+            for (pendingOpt in pendingList) {
+                val optText = pendingOpt.blocks
+                    .filterIsInstance<ChatBlock.Text>()
+                    .joinToString("") { it.text }
+                val hasReal = snap.messages.any { msg ->
+                    if (msg.role == ChatRole.User) {
+                        val realText = msg.blocks.filterIsInstance<ChatBlock.Text>()
+                            .joinToString("") { it.text }
+                        realText == optText || (optText.isNotBlank() && realText.trim() == optText.trim())
+                    } else false
                 }
-                sessionCache.pendingUserMessages.remove(id)
-                pendingOptReconciled.remove(id)
-            } else if (!pendingOptReconciled.contains(id)) {
-                pendingOptReconciled.add(id)
-                DebugLog.debug("UI", "optimistic user message NOT matched in snapshot, keeping optimistic (id=${pendingOpt.id}, optText='$optText')")
+                if (hasReal) {
+                    toRemove.add(pendingOpt)
+                    DebugLog.info("UI", "optimistic user message matched real message in snapshot, clearing optimistic message (id=${pendingOpt.id}, text='$optText')")
+                }
+            }
+            if (toRemove.isNotEmpty()) {
+                pendingList.removeAll(toRemove)
+                if (pendingList.isEmpty()) {
+                    sessionCache.pendingUserMessages.remove(id)
+                }
             }
         }
         val prevSnap = sessionCache.snapshotCache[id]
@@ -1387,7 +1503,8 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             isStreaming = false,
             error = null
         )
-        sessionCache.pendingUserMessages[pendingKey] = optMsg
+        sessionCache.clearPendingUserMessages(pendingKey)
+        sessionCache.addPendingUserMessage(pendingKey, optMsg)
         clearPendingAttachments()
         DebugLog.info("UI", "set optimistic user message: key=$pendingKey, id=${optMsg.id}, text='$finalPrompt', images=${imageAttachments.size}")
 
@@ -1432,13 +1549,15 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                         message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                             ?: UiMessage(Res.string.err_create_conversation_failed)
                     )
-                    sessionCache.pendingUserMessages.remove(pendingKey)
+                    sessionCache.clearPendingUserMessages(pendingKey)
                     return@launch
                 }
                 val conv = created.getOrThrow()
                 // 乐观消息归属从 pending_xxx re-key 到真实会话 id
-                sessionCache.pendingUserMessages.remove(pendingKey)
-                sessionCache.pendingUserMessages[conv.id] = optMsg.copy(conversationId = conv.id)
+                val pendingOpts = sessionCache.pendingUserMessages.remove(pendingKey)?.toList()
+                if (!pendingOpts.isNullOrEmpty()) {
+                    pendingOpts.forEach { sessionCache.addPendingUserMessage(conv.id, it.copy(conversationId = conv.id)) }
+                }
                 appState.selectProject(pid)
                 appState.selectConversation(conv.id)
                 conv.id
@@ -1467,7 +1586,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                         ?: UiMessage(Res.string.err_send_failed)
                 )
-                sessionCache.pendingUserMessages.remove(targetConvId)
+                sessionCache.clearPendingUserMessages(targetConvId)
                 sessionCache.turnStartByConv.remove(targetConvId)
             }
         }
@@ -1526,6 +1645,40 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         queue?.removeAll { it.id == queuedMsg.id }
 
         val finalPrompt = PromptComposer.compose(queuedMsg.text, queuedMsg.pastedTexts)
+        val imageAttachments = queuedMsg.images
+        val now = xyz.mederi.currentTimeMillis()
+
+        val optBlocks = mutableListOf<ChatBlock>()
+        imageAttachments.forEachIndexed { i, img ->
+            optBlocks.add(
+                ChatBlock.File(
+                    id = "optimistic_img_${now}_$i",
+                    name = img.name,
+                    url = img.base64DataUrl,
+                    mimeType = img.mimeType
+                )
+            )
+        }
+        if (finalPrompt.isNotEmpty()) {
+            optBlocks.add(ChatBlock.Text(id = "optimistic_text_$now", text = finalPrompt))
+        }
+
+        val optMsg = ChatMessage(
+            id = "optimistic_steer_$now",
+            conversationId = convId,
+            role = ChatRole.User,
+            blocks = optBlocks,
+            createdAt = now,
+            completedAt = now,
+            parentMessageId = null,
+            model = null,
+            agent = null,
+            isStreaming = false,
+            error = null
+        )
+        sessionCache.addPendingUserMessage(convId, optMsg)
+        DebugLog.info("UI", "set optimistic steering user message: convId=$convId, id=${optMsg.id}, text='$finalPrompt', images=${imageAttachments.size}")
+
         val input = ChatPromptInput(
             text = finalPrompt,
             model = queuedMsg.model,
@@ -1547,6 +1700,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             if (r.isFailure) {
                 val ex = r.exceptionOrNull()
                 DebugLog.error("UI", "steerMessage failed: ${ex?.message}", ex)
+                sessionCache.removePendingUserMessage(convId, optMsg.id)
                 errorState = errorState.copy(
                     message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                         ?: UiMessage(Res.string.err_send_failed)
@@ -1591,7 +1745,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             isStreaming = false,
             error = null
         )
-        sessionCache.pendingUserMessages[convId] = optMsg
+        sessionCache.addPendingUserMessage(convId, optMsg)
         DebugLog.info("UI", "sendQueuedMessage: convId=$convId, text='$finalPrompt', images=${imageAttachments.size}")
 
         val model = queuedMsg.model ?: appState.selectedModel.value
@@ -1620,7 +1774,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                         ?: UiMessage(Res.string.err_send_failed)
                 )
-                sessionCache.pendingUserMessages.remove(convId)
+                sessionCache.removePendingUserMessage(convId, optMsg.id)
                 sessionCache.turnStartByConv.remove(convId)
             }
         }
@@ -1833,8 +1987,24 @@ private val SUBAGENT_EVENT_TYPES = setOf(
  *   销毁，观察流抛异常时移除并清缓存。
  */
 private class SessionUiCache {
-    /** 乐观用户消息（按会话归档） */
-    val pendingUserMessages = mutableStateMapOf<String, ChatMessage>()
+    /** 乐观用户消息列表（按会话归档，支持常规发送与运行中 Steering 插入多条插话） */
+    val pendingUserMessages = mutableStateMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessage>>()
+
+    fun addPendingUserMessage(convId: String, msg: ChatMessage) {
+        val list = pendingUserMessages.getOrPut(convId) { androidx.compose.runtime.mutableStateListOf() }
+        list.add(msg)
+    }
+
+    fun removePendingUserMessage(convId: String, msgId: String) {
+        pendingUserMessages[convId]?.removeAll { it.id == msgId }
+        if (pendingUserMessages[convId]?.isEmpty() == true) {
+            pendingUserMessages.remove(convId)
+        }
+    }
+
+    fun clearPendingUserMessages(convId: String) {
+        pendingUserMessages.remove(convId)
+    }
 
     /** StatusBar 计时锚点：conversationId → 发送请求时刻（epoch ms） */
     val turnStartByConv = mutableMapOf<String, Long>()

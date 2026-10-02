@@ -39,6 +39,36 @@ object PromptComposer {
         return builder.toString().trim()
     }
 
+    /** 环境注入标记（core `xyz.mederi.domain.model.UI_HIDDEN_MARKER` 的镜像，同值由 TextProtocolContractTest 锁定）。 */
+    const val UI_HIDDEN_MARKER = "<<<NOT_FOR_UI>>>"
+
+    /** 工具边界 steering 包装标签（镜像 core `xyz.mederi.prompt.SteeringPrompt`，契约由 TextProtocolContractTest 锁定）。 */
+    const val USER_INTERVENTION_OPEN_TAG = "<user_intervention>"
+    const val USER_INTERVENTION_CLOSE_TAG = "</user_intervention>"
+
+    private val USER_INTERVENTION_REGEX = Regex(
+        Regex.escape(USER_INTERVENTION_OPEN_TAG) +
+            """\s*(?:\[System Note:[^\]]*\]:?)?\s*([\s\S]*?)\s*""" +
+            Regex.escape(USER_INTERVENTION_CLOSE_TAG),
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * 剥离 <user_intervention> 标签及内部的系统说明，提取用户真实正文。
+     */
+    fun stripUserIntervention(text: String): String {
+        val match = USER_INTERVENTION_REGEX.find(text) ?: return text
+        return match.groupValues[1].trim()
+    }
+
+    /**
+     * 净化对用户可见的正文：统一剔除 <<<NOT_FOR_UI>>> 环境信息与 <user_intervention> 标签。
+     */
+    fun sanitizeUserVisibleText(text: String): String {
+        val withoutHidden = text.substringBefore(UI_HIDDEN_MARKER).trimEnd()
+        return stripUserIntervention(withoutHidden)
+    }
+
     data class ParsedPrompt(
         val instruction: String,
         val pastedTexts: List<PastedTextAttachment>
@@ -53,14 +83,17 @@ object PromptComposer {
      * 解析完整消息文本，分离出主指令与底部粘贴文本列表。
      */
     fun parse(fullText: String): ParsedPrompt {
-        val matches = PASTED_TAG_REGEX.findAll(fullText).toList()
+        val cleaned = sanitizeUserVisibleText(fullText)
+        val matches = PASTED_TAG_REGEX.findAll(cleaned).toList()
         if (matches.isEmpty()) {
-            return ParsedPrompt(instruction = fullText, pastedTexts = emptyList())
+            return ParsedPrompt(instruction = cleaned, pastedTexts = emptyList())
         }
 
         val firstMatchStart = matches.first().range.first
-        // 取标签之前的内容作为主指令（去掉分隔线和提示说明）
-        var rawInstruction = fullText.substring(0, firstMatchStart).trim()
+        // 取标签之前的内容作为主指令（去掉分隔线和提示说明）。
+        // 注意：matches 是在 cleaned（sanitize 后）上 find 的，索引必须作用在同一文本上，
+        // 否则 <user_intervention> 前缀被剥离后，未清洗文本的偏移会错位甚至越界。
+        var rawInstruction = cleaned.substring(0, firstMatchStart).trim()
         val separatorIndex = rawInstruction.indexOf("----------------------------------------")
         if (separatorIndex >= 0) {
             rawInstruction = rawInstruction.substring(0, separatorIndex).trim()

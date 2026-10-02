@@ -54,7 +54,8 @@ import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.domain.model.MessageStatus
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.koog.compactionSkipReason
+import xyz.mederi.koog.MANUAL_KEEP_LAST_MESSAGES
+import xyz.mederi.koog.manualCompactionSkipReason
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.prompt.SystemPrompts
 import xyz.mederi.provider.ApiKeyResolver
@@ -808,7 +809,7 @@ class TurnExecutor(
         // 窗口口径与实际压缩一致（图片按当前模型能力剔除），判定逻辑与策略共用 planCompression。
         val window = HistoryStoreChatHistoryProvider.aiViewWindow(historyStore, session.id)
         val koogWindow = KoogMessageMapper.toKoogMessages(window, includeImages = model.supportsImages)
-        val skipReason = compactionSkipReason(koogWindow, model.contextWindow)
+        val skipReason = manualCompactionSkipReason(koogWindow, model.contextWindow)
         if (skipReason != null) {
             DebugLog.event("TurnExec", "manual compaction skipped: reason=$skipReason")
             emit(sessionId, EventType.STATUS, payload = mapOf(
@@ -887,7 +888,7 @@ class TurnExecutor(
         val agent = AIAgent.builder()
             .promptExecutor(executor)
             .agentConfig(agentConfig)
-            .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy(model.contextWindow)))
+            .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy(model.contextWindow, keepLastMessages = MANUAL_KEEP_LAST_MESSAGES)))
             .install(ChatMemory.Feature) { config ->
                 config.chatHistoryProvider = historyProvider
             }
@@ -1657,6 +1658,9 @@ class TurnExecutor(
                 appendLine("Summary:")
                 appendLine(result)
             }
+            // 注意：这里只写状态事实（role/reportPath/summary），不得追加任何指令/警告行——
+            // 指令统一由静态系统提示词承载（PromptGuides.SUBAGENT_REPORT_VERIFICATION），
+            // 动态注入只挂状态（AGENTS §5.6）。
             append("</event_message>")
         }
     }

@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi 是一个基于 Kotlin Multiplatform 的 AI Agent 应用框架，构建于 Koog 执行引擎之上。它提供供应商配置、项目与会话管理、持久化、计划驱动的执行流程、执行沙箱以及跨平台 UI——无需自行拼接这些层即可组装出由 LLM 驱动、可调用工具的 Agent。
+Mederi™ 是一个基于 Kotlin Multiplatform 的 AI Agent 应用框架，构建于 Koog 执行引擎之上。它提供供应商配置、项目与会话管理、持久化、计划驱动的执行流程、执行沙箱以及跨平台 UI——无需自行拼接这些层即可组装出由 LLM 驱动、可调用工具的 Agent。
 
 > **开发状态：** Mederi 处于开发中，UI 与核心功能随时可能变动。
 
@@ -48,6 +48,17 @@ Unless required by applicable law or agreed to in writing, software distributed 
   - [latex](https://github.com/huarangmeng/latex)（MIT License）
   - [codehigh](https://github.com/huarangmeng/codehigh)（MIT License）
   - Copyright (c) 2026 huarangmeng
+
+## 商标
+
+"Mederi" 及 Mederi 徽标是 lzdev42 在美国及其他国家/地区的商标。
+
+尽管本项目源代码基于 Apache License 2.0 开源，但该许可证并未授予使用 Mederi™ 商标、商业名称或徽标的权利。
+
+- **合理使用**：您可以使用该名称如实引用本项目或表明兼容性（例如 "Mederi™ 插件"）。
+- **使用限制**：未经事先书面许可，不得以 "Mederi" 名称分发本软件的修改版本，亦不得以此暗示存在官方背书、赞助或附属关系。
+
+关于商标使用准则、许可范围及分支命名政策的完整细则，请参阅 [商标政策文件 (TRADEMARK.md)](./TRADEMARK.md)。
 
 ## 语言
 

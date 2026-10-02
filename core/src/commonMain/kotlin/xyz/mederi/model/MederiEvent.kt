@@ -49,9 +49,13 @@ enum class EventType {
      * sessionId = 父会话 ID；payload 约定（key 统一 camelCase）：
      * - STARTED: agentId, role(EXECUTOR/RESEARCHER), modelId, modelName, reasoningLevel,
      *   task(主代理派发的命令), briefing?(可选)
-     * - COMPLETED / ERROR / STOPPED: agentId, role, status, reportPath?, result?, planId?, subtaskIndex?
+     * - PROGRESS（子代理流式动态）: agentId, role, activity(THINKING/TOOL_CALL/OUTPUT，取值见
+     *   SubagentActivity 词表，契约层有镜像 + 契约测试锁死), tool?(工具名，工具活动时),
+     *   delta?(文本增量，流式视窗用), isMessage?(是否正文帧)
+     * - COMPLETED / ERROR / STOPPED: agentId, role, status, reportPath?, result?, planId?, subtaskIndex?, completedAt?
      */
     SUBAGENT_STARTED,
+    SUBAGENT_PROGRESS,
     SUBAGENT_COMPLETED,
     SUBAGENT_ERROR,
     SUBAGENT_STOPPED,

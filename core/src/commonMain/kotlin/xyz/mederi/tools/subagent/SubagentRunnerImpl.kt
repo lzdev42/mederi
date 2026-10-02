@@ -3,6 +3,7 @@ package xyz.mederi.tools.subagent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -44,7 +45,6 @@ class SubagentRunnerImpl(
     private val mcpConnector: McpConnector? = null,
     private val skills: SkillManager? = null
 ) : SubagentRunner {
-
     override suspend fun run(
         task: String,
         briefing: String?,
@@ -58,9 +58,11 @@ class SubagentRunnerImpl(
         apiKeyId: String?,
         planId: String?,
         executorSubtaskIndex: Int?,
-        planStore: PlanStore?
+        planStore: PlanStore?,
+        agentId: String?,
+        onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)?
     ): String {
-        val sessionId = "sub_${UUID.randomUUID().toString().take(8)}"
+        val sessionId = agentId ?: "sub_${UUID.randomUUID().toString().take(8)}"
         val now = Instant.now().toString()
 
         val sessionStore = InMemorySessionStore()
@@ -144,6 +146,38 @@ class SubagentRunnerImpl(
                 throw IllegalStateException("BROWSER_* roles are configuration-only: browser tasks run via BrowserTaskManager, not SubagentRunner")
         }
 
+        // 窗口聚合：高频 MESSAGE_DELTA → 低频 SUBAGENT_PROGRESS（≥throttle 才 emit 一帧），
+        // tool_call 帧只带工具名、参数分片不进 delta（聚合器规则，见 SubagentProgressBatch）。
+        val progressBatch = SubagentProgressBatch()
+        val progressJob = CoroutineScope(coroutineContext + SupervisorJob()).launch {
+            eventBus.filter { it.sessionId == sessionId }.collect { ev ->
+                when (ev.type) {
+                    EventType.MESSAGE_DELTA -> {
+                        val deltaType = ev.payload["type"] ?: "text"
+                        val content = ev.payload["content"].orEmpty()
+                        val activity = when (deltaType) {
+                            "reasoning" -> SubagentActivity.THINKING
+                            "tool_call" -> SubagentActivity.TOOL_CALL
+                            else -> SubagentActivity.OUTPUT
+                        }
+                        // 正文/推理帧都进输出视窗；工具参数分片（type=tool_call）不累积
+                        progressBatch.add(
+                            activity, content, ev.payload["name"],
+                            isMessage = deltaType == "text",
+                            accumulateDelta = deltaType != "tool_call"
+                        )
+                    }
+                    EventType.TOOL_CALLED -> {
+                        progressBatch.add(SubagentActivity.TOOL_CALL, "", ev.payload["tool"], false)
+                    }
+                    else -> {}
+                }
+                progressBatch.flushIfDue()?.let { frame ->
+                    onProgress?.invoke(frame.activity, frame.delta, frame.toolName, frame.isMessage)
+                }
+            }
+        }
+
         return try {
             turnExecutor.sendMessage(
                 sessionId = sessionId,
@@ -188,6 +222,11 @@ class SubagentRunnerImpl(
         } catch (e: Throwable) {
             "[subagent error] ${e.message ?: e.javaClass.simpleName}"
         } finally {
+            // 尾部冲刷：把窗口内残留的文本增量在取消前补发一次（不丢最后一段流式输出）
+            progressBatch.flushNow()?.let { frame ->
+                onProgress?.invoke(frame.activity, frame.delta, frame.toolName, frame.isMessage)
+            }
+            progressJob.cancel()
             // 无论成功/失败/取消，都把已写入的文件清单 flush 回 PlanStore——agent 丢失后父代理可据此恢复/查越界。
             if (planId != null && executorSubtaskIndex != null && planStore != null && touchedFiles.isNotEmpty()) {
                 val files = touchedFiles.toList()

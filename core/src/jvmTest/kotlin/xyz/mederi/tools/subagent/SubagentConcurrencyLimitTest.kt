@@ -32,7 +32,8 @@ class SubagentConcurrencyLimitTest {
             directories: List<String>, aiModel: AIModel,
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
             apiKeyId: String?, planId: String?, executorSubtaskIndex: Int?,
-            planStore: xyz.mederi.plan.PlanStore?
+            planStore: xyz.mederi.plan.PlanStore?,
+            agentId: String?, onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)?
         ): String {
             if (hang) delay(Long.MAX_VALUE) // 挂起直到被 cancel
             return "done: $task"

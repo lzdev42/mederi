@@ -212,7 +212,22 @@ class SubagentManager(
                     apiKeyId = apiKeyId,
                     planId = planId,
                     executorSubtaskIndex = executorSubtaskIndex,
-                    planStore = planStore
+                    planStore = planStore,
+                    agentId = agentId,
+                    onProgress = { activity, delta, toolName, isMessage ->
+                        emitEvent(
+                            parentSessionId,
+                            EventType.SUBAGENT_PROGRESS,
+                            buildMap {
+                                put("agentId", agentId)
+                                put("role", role.name)
+                                put("activity", activity)
+                                if (toolName != null) put("tool", toolName)
+                                if (delta.isNotBlank()) put("delta", delta)
+                                if (isMessage) put("isMessage", "true")
+                            }
+                        )
+                    }
                 )
                 bg.result = result
                 bg.status = if (result.startsWith("[subagent error]")) {
@@ -251,11 +266,13 @@ class SubagentManager(
                 } else {
                     val reportPath = bg.result?.let { extractReportPath(it) }
                     bg.reportPath = reportPath
+                    val completedAt = java.time.Instant.now().toString()
 
                     val payload = buildMap {
                         put("agentId", agentId)
                         put("role", role.name)
                         put("status", bg.status.name)
+                        put("completedAt", completedAt)
                         reportPath?.let { put("reportPath", it) }
                         bg.result?.let { put("result", it) }
                         bg.planId?.let { put("planId", it) }

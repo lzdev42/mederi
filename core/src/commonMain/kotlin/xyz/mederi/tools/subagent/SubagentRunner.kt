@@ -49,6 +49,16 @@ interface SubagentRunner {
          */
         planId: String? = null,
         executorSubtaskIndex: Int? = null,
-        planStore: PlanStore? = null
+        planStore: PlanStore? = null,
+        /**
+         * 复用已有 agentId（SubagentManager 派发前生成并注册后台任务时传入）；null 则内部生成。
+         * 传入非 null 时子代理会话 id = agentId，进度事件按该 id 过滤。
+         */
+        agentId: String? = null,
+        /**
+         * 子代理流式执行回调：activity 取值见 [SubagentActivity]（契约层有镜像），
+         * 工具活动只回传工具名、不回传参数分片（参数 JSON 碎片会污染 UI 输出视窗）。
+         */
+        onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)? = null
     ): String
 }

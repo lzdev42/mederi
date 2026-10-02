@@ -163,6 +163,28 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testUserInterventionToChatMessageTextMapping() {
+        val interventionPrompt = """
+            <user_intervention>
+            [System Note: The user submitted the following guidance while you were executing tools. Incorporate this guidance into your ongoing task without restarting from scratch]:
+            任务卡死了，你重调一下
+            </user_intervention>
+        """.trimIndent()
+        val coreMsg = xyz.mederi.domain.model.Message(
+            id = "msg_steer_1",
+            sessionId = "conv_1",
+            role = xyz.mederi.domain.model.MessageRole.USER,
+            parts = listOf(xyz.mederi.domain.model.MessagePart.Text(interventionPrompt)),
+            status = xyz.mederi.domain.model.MessageStatus.COMPLETED,
+            createdAt = "2026-09-08T12:00:00Z"
+        )
+        val chatMsg = xyz.mederi.core.bridge.MederiModelMapper.toChatMessage(coreMsg)
+        val textBlock = chatMsg.blocks.filterIsInstance<xyz.mederi.core.contract.models.ChatBlock.Text>().first()
+        println("[Test-Log] toChatMessage stripped text: '${textBlock.text}'")
+        assertEquals("任务卡死了，你重调一下", textBlock.text, "引导消息渲染时应剥离 user_intervention 标签和系统提示")
+    }
+
+    @Test
     fun testFragmentedReasoningPartsMergedToSingleBlock() {
         val coreMsg = xyz.mederi.domain.model.Message(
             id = "msg_a7c1c280",
@@ -377,6 +399,17 @@ class SharedLogicDesktopTest {
         assertEquals("just text", plain.instruction)
         assertTrue(plain.pastedTexts.isEmpty())
         assertTrue(plain.images.isEmpty())
+
+        // 带有 user_intervention 的消息回退（标签应完全剥离，还原为普通用户指令）
+        val interventionFallback = """
+            <user_intervention>
+            [System Note: The user submitted the following guidance while you were executing tools. Incorporate this guidance into your ongoing task without restarting from scratch]:
+            任务卡死了，你重调一下
+            </user_intervention>
+        """.trimIndent()
+        val restoredIntervention = xyz.mederi.ui.restoreInputFromMessage(null, interventionFallback)
+        println("[Test-Log] restoredIntervention instruction: '${restoredIntervention.instruction}'")
+        assertEquals("任务卡死了，你重调一下", restoredIntervention.instruction, "回退到引导消息时，标签必须完全剥离")
     }
 
     @Test

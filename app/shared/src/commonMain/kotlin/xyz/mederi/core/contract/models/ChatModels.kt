@@ -216,6 +216,7 @@ enum class CoreEventType {
      * COMPLETED/ERROR/STOPPED = agentId。UI 子代理面板消费。
      */
     SUBAGENT_STARTED,
+    SUBAGENT_PROGRESS,
     SUBAGENT_COMPLETED,
     SUBAGENT_ERROR,
     SUBAGENT_STOPPED,

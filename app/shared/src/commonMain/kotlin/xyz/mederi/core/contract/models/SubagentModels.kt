@@ -28,7 +28,17 @@ data class SubagentState(
     /** RUNNING / COMPLETED / ERROR / STOPPED。 */
     val status: String,
     /** 事件时间戳（ISO 8601），列表排序键。 */
-    val startedAt: String
+    val startedAt: String,
+    /** 当前执行动作（THINKING / TOOL_CALL / OUTPUT / null）。 */
+    val currentActivity: String? = null,
+    /** 当前调用的工具名称（若有）。 */
+    val currentTool: String? = null,
+    /** 提取的最新一句话 / 最后一句话。 */
+    val lastMessage: String? = null,
+    /** 最近尾部输出内容（流式蹦字视窗用，上限 1000 字符）。 */
+    val recentOutput: String? = null,
+    /** 终态时间戳（ISO 8601），用于计算最终工作总耗时。 */
+    val completedAt: String? = null
 )
 
 /**
@@ -99,4 +109,24 @@ data class SubagentGlobalSettings(
 data class UpdateSubagentGlobalSettingsInput(
     val maxConcurrentAgents: Int
 )
+
+/**
+ * 子代理执行动作词表（SUBAGENT_PROGRESS 事件 payload["activity"]）——**core
+ * `xyz.mederi.tools.subagent.SubagentActivity` 的契约镜像**。
+ *
+ * core 是 JVM 侧引擎、不能依赖 app/shared，故此处只能镜像一份；两侧逐值相等由
+ * app/shared jvmTest 的 `SubagentActivityContractTest` 机器锁定——core 改词表而契约没跟上时该测试必须失败。
+ *
+ * 消费方（UI 活动徽标等）**只允许引用本常量**，禁止再写 `"THINKING"` / `"TOOL_CALL"` / `"OUTPUT"` 字面量。
+ */
+object SubagentActivity {
+    /** 模型正在输出推理（思考）内容。 */
+    const val THINKING = "THINKING"
+
+    /** 模型正在发起 / 流式输出工具调用。 */
+    const val TOOL_CALL = "TOOL_CALL"
+
+    /** 模型正在输出正文（含工具轮之后的最终回复）。 */
+    const val OUTPUT = "OUTPUT"
+}
 

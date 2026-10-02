@@ -326,6 +326,7 @@ object SnapshotReducer {
         CoreEventType.SUBAGENT_COMPLETED,
         CoreEventType.SUBAGENT_ERROR,
         CoreEventType.SUBAGENT_STOPPED,
+        CoreEventType.SUBAGENT_PROGRESS,
         CoreEventType.SUBAGENT_DISCARDED -> snapshot
     }
 

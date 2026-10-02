@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -83,6 +82,13 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
 import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.markdown.renderer.SelectionMenuAction
+import xyz.mederi.ui.components.atoms.ConfirmDialog
+
+import mederi.app.shared.generated.resources.cancel
+import mederi.app.shared.generated.resources.file_open_confirm_generic
+import mederi.app.shared.generated.resources.file_open_confirm_reveal
+import mederi.app.shared.generated.resources.file_open_confirm_with_app
+import mederi.app.shared.generated.resources.file_open_open
 
 import compose.icons.feathericons.Menu
 import androidx.compose.ui.text.style.TextOverflow
@@ -388,7 +394,7 @@ fun Workspace(
                         activePanel = viewModel.activeDockPanel,
                         onSelectPanel = { panel -> viewModel.toggleDockPanel(panel) },
                         onOpenSettings = onOpenSettings,
-                        hasRunningSubagents = viewModel.subagents.any { it.status.equals("RUNNING", ignoreCase = true) }
+                        hasRunningSubagents = viewModel.hasRunningSubagents
                     )
                 }
             }
@@ -444,6 +450,30 @@ fun Workspace(
                 errorSummary = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }.orEmpty(),
                 errorDiagnostic = viewModel.errorDiagnostic.orEmpty(),
                 onDismiss = viewModel::dismissErrorDetail
+            )
+        }
+
+        // 文件打开确认框（openFile 路由落在 EXTERNAL / REVEAL 档时弹出）
+        viewModel.pendingFileOpen?.let { pending ->
+            val fileName = pending.path.substringAfterLast('/').ifBlank { pending.path }
+            val message = when (pending) {
+                is PendingFileOpen.OpenExternally -> {
+                    val app = pending.appName
+                    if (app != null) {
+                        stringResource(Res.string.file_open_confirm_with_app, app)
+                    } else {
+                        stringResource(Res.string.file_open_confirm_generic)
+                    }
+                }
+                is PendingFileOpen.RevealInFolder -> stringResource(Res.string.file_open_confirm_reveal)
+            }
+            ConfirmDialog(
+                title = fileName,
+                message = message,
+                confirmLabel = stringResource(Res.string.file_open_open),
+                cancelLabel = stringResource(Res.string.cancel),
+                onConfirm = { viewModel.confirmPendingFileOpen() },
+                onDismiss = { viewModel.cancelPendingFileOpen() },
             )
         }
     }
@@ -693,7 +723,6 @@ private fun MessageList(
                                                 text = stepItem.text.trim(),
                                                 color = colors.textMuted,
                                                 fontSize = 12.sp,
-                                                fontStyle = FontStyle.Italic,
                                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
                                             )
                                         }
@@ -763,8 +792,10 @@ private fun MessageList(
                             onReviewClick = {
                                 viewModel.openDiff(item.messageId, null)
                             },
+                            // 文件行点击 = 打开文件本身（走 viewModel.openFile 统一路由：内部能看的直接开，
+                            // 其余弹「用 XXX 打开 / 打开所在目录」）；审阅按钮才看 diff
                             onFileClick = { filePath ->
-                                viewModel.openDiff(item.messageId, filePath)
+                                viewModel.openFile(filePath)
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -879,6 +910,9 @@ private fun MessageList(
                                                 selectionMenuActions = selectionMenuActions,
                                                 enableScrollOverride = false,
                                                 markdownTheme = appMarkdownTheme,
+                                                // 链接点击分流下沉到 VM：LinkTargetClassifier 纯函数分档（本地路径 vs 外部链接），
+                                                // View 只发意图（viewModel.openLink）
+                                                onLinkClick = { url -> viewModel.openLink(url) },
                                             )
                                         }
                                         if (item.images.isNotEmpty()) {

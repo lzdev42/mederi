@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi adalah framework Kotlin Multiplatform untuk membangun aplikasi agen AI, dibangun di atas mesin eksekusi Koog. Ia menyediakan konfigurasi provider, manajemen proyek dan sesi, persistensi, alur eksekusi berbasis plan, sandbox eksekusi, dan UI lintas platform — sehingga Anda dapat merakit agen yang digerakkan LLM dan menggunakan tools tanpa harus menjahit lapisan-lapisan ini sendiri.
+Mederi™ adalah framework Kotlin Multiplatform untuk membangun aplikasi agen AI, dibangun di atas mesin eksekusi Koog. Ia menyediakan konfigurasi provider, manajemen proyek dan sesi, persistensi, alur eksekusi berbasis plan, sandbox eksekusi, dan UI lintas platform — sehingga Anda dapat merakit agen yang digerakkan LLM dan menggunakan tools tanpa harus menjahit lapisan-lapisan ini sendiri.
 
 > **Status pengembangan:** Mederi sedang dalam pengembangan. Baik UI maupun fungsionalitas inti dapat berubah kapan saja.
 
@@ -48,6 +48,17 @@ Proyek ini mencakup perangkat lunak sumber terbuka pihak ketiga atau implementas
   - [latex](https://github.com/huarangmeng/latex) (MIT License)
   - [codehigh](https://github.com/huarangmeng/codehigh) (MIT License)
   - Copyright (c) 2026 huarangmeng
+
+## Merek Dagang
+
+"Mederi" dan logo Mederi adalah merek dagang dari lzdev42 di Amerika Serikat dan negara lainnya.
+
+Meskipun kode sumber kami dilisensikan di bawah Apache License 2.0, lisensi ini tidak memberikan izin untuk menggunakan merek dagang, nama dagang, atau logo Mederi™.
+
+- **Penggunaan Wajar (Fair Use)**: Anda dapat menggunakan nama ini untuk merujuk pada proyek ini secara jujur atau menunjukkan kompatibilitas (misalnya, "plugin Mederi™").
+- **Batasan**: Anda tidak boleh mendistribusikan versi modifikasi dari perangkat lunak ini dengan nama "Mederi", atau menggunakannya dengan cara yang menyiratkan dukungan, sponsor, atau afiliasi resmi tanpa izin tertulis sebelumnya.
+
+Untuk pedoman merek lengkap, izin penggunaan, dan kebijakan penamaan fork, silakan merujuk ke [Kebijakan Merek Dagang (TRADEMARK.md)](./TRADEMARK.md).
 
 ## Bahasa
 

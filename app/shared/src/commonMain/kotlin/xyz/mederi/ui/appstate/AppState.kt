@@ -111,6 +111,9 @@ class AppState(
     /** 宿主启动后注入；null = 当前端不渲染内置浏览器（遥控/wasm 端为 null，见 canRenderJcef） */
     var uiBrowserHost: xyz.mederi.ui.browser.UiBrowserHost? = null
 
+    /** 宿主启动后注入；null = 当前端无本地文件树（遥控端文件不在本地）。供 WorkspaceViewModel.openFile 读文本。 */
+    var fileTreeProvider: xyz.mederi.ui.host.ProjectFileTreeProvider? = null
+
     /** 是否可渲染内置 JCEF 浏览器（仅 desktop + 已注入宿主时为 true；遥控端/wasm 恒 false） */
     val canRenderJcef: Boolean get() = uiBrowserHost != null
 

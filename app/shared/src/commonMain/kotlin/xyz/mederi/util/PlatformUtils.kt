@@ -6,6 +6,25 @@ expect fun openUrl(url: String)
 expect fun openFile(path: String)
 
 /**
+ * 查询系统为 [path] 注册的默认打开程序的**人类可读名**（用于「是否用 XXX 打开？」对话框）。
+ * 查不到/平台不支持时返回 null，调用方据此降级为泛称「系统默认应用」或「打开所在目录」。
+ *
+ * 平台能力差异（详见调研报告第二部分）：
+ * - Linux：`xdg-mime` → `.desktop` 的 `Name=`，可直出人类可读名；
+ * - Windows：`assoc`+`ftype` 取 exe 路径，再查友好名表；
+ * - macOS：纯命令拿不到精确应用名，**返回 null**（不引 JNA），调用方走泛称。
+ */
+expect fun defaultAppNameFor(path: String): String?
+
+/**
+ * 在文件管理器里揭示（选中）[path] 所在文件。无注册可打开程序时改用此动作。
+ * 成功返回 true；平台不支持 / 命令缺失 / 失败返回 false（调用方可再降级为打开父目录）。
+ *
+ * 平台实现：mac `open -R` / Windows `explorer /select,` / Linux DE select（dolphin --select）失败回落开父目录。
+ */
+expect fun revealInFolder(path: String): Boolean
+
+/**
  * 格式化 Token / 上下文窗口规格（例如 1048576/1000000 -> "1M", 512000 -> "512K", 262144 -> "256K", 200000 -> "200K", 131072 -> "128K", 8192 -> "8K"）。
  */
 fun formatContextWindow(tokens: Int?): String? {

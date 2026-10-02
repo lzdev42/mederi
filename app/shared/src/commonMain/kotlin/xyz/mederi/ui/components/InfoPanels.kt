@@ -691,7 +691,9 @@ private fun PlanOverviewItemCard(
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { viewModel.openPlanFile(item) }
+                // 平台分流归 VM（viewModel.openPlanItem 按 fileTreeProvider 是否存在决定
+                // openFile 统一路由 / openPlanFile 内存兜底）；View 只发意图，不读 CompositionLocal。
+                .clickable { viewModel.openPlanItem(item) }
                 .padding(2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)

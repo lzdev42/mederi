@@ -1,6 +1,7 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -11,9 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -40,7 +38,7 @@ import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 import xyz.mederi.ui.components.atoms.MederiSurfaceButton
 
 /**
- * 3. 选择题/问询交互块 (QuestionCard，02-components §2.4 question：去壳 + 2dp 左 rail)
+ * 3. 选择题/问询交互块 (QuestionCard，02-components §2.4 question：待办层卡片)
  *
  * 无状态组件：当前选中答案经 [selectedAnswers] 由调用方传入（唯一真理源 =
  * WorkspaceViewModel.questionAnswers），点击经 [onAnswer] 单向写回，卡片内不持有副本。
@@ -67,19 +65,17 @@ fun QuestionCard(
     val qList = question.questions
     val qInfo = qList.getOrNull(currentIndex) ?: qList.firstOrNull() ?: return
 
-    // 去壳：无卡片底/描边，仅 2dp 左 rail（accentPrimary 0.55）+ 12/2/2 内边距，宽度受限 max 560
+    // 待办层卡片壳：8dp 圆角（clip / border 共用同一 shape，避免重复字面量）
+    val shellShape = RoundedCornerShape(8.dp)
+
+    // accentBg 淡底 + accentBorder 描边 + 12dp 内边距，宽度受限 max 560（无左 rail，避免框套框）
     Column(
         modifier = modifier
             .widthIn(max = 560.dp)
-            .drawBehind {
-                val rail = 2.dp.toPx()
-                drawRect(
-                    color = colors.accentPrimary.copy(alpha = 0.55f),
-                    topLeft = Offset(0f, 0f),
-                    size = Size(rail, size.height)
-                )
-            }
-            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+            .clip(shellShape)
+            .background(colors.accentBg)
+            .border(1.dp, colors.accentBorder, shellShape)
+            .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
@@ -140,8 +136,9 @@ fun QuestionCard(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(6.dp))
                             .background(
+                                // 选中态用比卡片壳（accentBg）更实一档的 accent 淡底，否则与壳同色看不出选中
                                 when {
-                                    isSelected -> colors.accentBg
+                                    isSelected -> colors.accentPrimary.copy(alpha = 0.15f)
                                     optionHovered -> colors.surfaceHover
                                     else -> Color.Transparent
                                 }

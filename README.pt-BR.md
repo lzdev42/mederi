@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi é um framework Kotlin Multiplatform para construção de aplicações de agentes de IA, construído sobre o motor de execução Koog. Ele oferece configuração de provedores, gestão de projetos e sessões, persistência, um fluxo de execução orientado por planos, uma sandbox de execução e uma UI multiplataforma — para que você monte um agent orientado por LLM e que usa ferramentas sem precisar costurar essas camadas você mesmo.
+Mederi™ é um framework Kotlin Multiplatform para construção de aplicações de agentes de IA, construído sobre o motor de execução Koog. Ele oferece configuração de provedores, gestão de projetos e sessões, persistência, um fluxo de execução orientado por planos, uma sandbox de execução e uma UI multiplataforma — para que você monte um agent orientado por LLM e que usa ferramentas sem precisar costurar essas camadas você mesmo.
 
 > **Estado de desenvolvimento:** Mederi está em desenvolvimento. Tanto a UI quanto a funcionalidade principal podem mudar a qualquer momento.
 
@@ -48,6 +48,17 @@ Este projeto inclui software de código aberto de terceiros ou implementações 
   - [latex](https://github.com/huarangmeng/latex) (MIT License)
   - [codehigh](https://github.com/huarangmeng/codehigh) (MIT License)
   - Copyright (c) 2026 huarangmeng
+
+## Marca registrada
+
+"Mederi" e o logotipo do Mederi são marcas comerciais de lzdev42 nos Estados Unidos e em outros países.
+
+Embora nosso código-fonte seja licenciado sob a Apache License 2.0, esta licença não concede permissão para usar a marca comercial, nome comercial ou logotipo do Mederi™.
+
+- **Uso legítimo (Fair Use)**: Você pode usar o nome para se referir com veracidade a este projeto ou indicar compatibilidade (por exemplo, "plugin do Mederi™").
+- **Restrições**: Você não pode distribuir versões modificadas deste software sob o nome "Mederi", nem sugerir endosso, patrocínio ou afiliação oficial sem permissão prévia por escrito.
+
+Para obter diretrizes detalhadas sobre a marca, usos permitidos e políticas de nomenclatura de forks, consulte nossa [Política de Marcas (TRADEMARK.md)](./TRADEMARK.md).
 
 ## Idiomas
 

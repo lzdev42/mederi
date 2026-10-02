@@ -32,6 +32,7 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.copy_done
 import mederi.app.shared.generated.resources.subagent_card_title
+import mederi.app.shared.generated.resources.subagent_dialog_detail_title
 import mederi.app.shared.generated.resources.subagent_running_count
 import mederi.app.shared.generated.resources.subagentui_agent_id
 import mederi.app.shared.generated.resources.subagentui_briefing
@@ -46,9 +47,25 @@ import mederi.app.shared.generated.resources.subagentui_stop_task
 import mederi.app.shared.generated.resources.subagentui_tracker_title
 import mederi.app.shared.generated.resources.worktrace_collapse
 import mederi.app.shared.generated.resources.worktrace_expand
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlin.time.Instant
+import xyz.mederi.util.TimeFormatter
+import xyz.mederi.currentTimeMillis
+import mederi.app.shared.generated.resources.subagent_activity_idle
+import mederi.app.shared.generated.resources.subagent_activity_output
+import mederi.app.shared.generated.resources.subagent_activity_thinking
+import mederi.app.shared.generated.resources.subagent_activity_tool
+import mederi.app.shared.generated.resources.subagent_duration_label
+import mederi.app.shared.generated.resources.subagent_duration_total_label
+import mederi.app.shared.generated.resources.subagent_live_empty
+import mederi.app.shared.generated.resources.subagent_live_last_message
+import mederi.app.shared.generated.resources.subagent_live_title
+import mederi.app.shared.generated.resources.subagent_live_waiting
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.core.contract.models.ChatBlock
+import xyz.mederi.core.contract.models.SubagentActivity
 import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.core.contract.models.SubagentToolResult
 import xyz.mederi.core.contract.models.ToolCallState
@@ -65,18 +82,6 @@ import xyz.mederi.ui.components.atoms.WorkingAnimationStyle
 import xyz.mederi.ui.components.atoms.workingAnimation
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
-
-/**
- * 格式化 ISO 8601 时间戳为简洁的时间展示（如 "14:25:30"）
- */
-private fun formatCompactTime(isoTime: String): String {
-    if (isoTime.isBlank()) return ""
-    val tIndex = isoTime.indexOf('T')
-    if (tIndex >= 0 && tIndex + 8 < isoTime.length) {
-        return isoTime.substring(tIndex + 1, tIndex + 9)
-    }
-    return isoTime.take(19)
-}
 
 /**
  * 运行中动态微视觉指示器（平滑顺畅旋转的 Loader，精致且低能耗）
@@ -133,7 +138,7 @@ private fun SubAgentTaskRow(
         }
     }
 
-    val timeLabel = remember(subagent.startedAt) { formatCompactTime(subagent.startedAt) }
+    val timeLabel = remember(subagent.startedAt) { TimeFormatter.formatTimeWithSeconds(subagent.startedAt) }
     val isRunning = subagent.status.equals("RUNNING", ignoreCase = true)
 
     Row(
@@ -142,13 +147,6 @@ private fun SubAgentTaskRow(
             .clip(RoundedCornerShape(6.dp))
             .background(colors.surfaceCard)
             .border(1.dp, colors.divider.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-            .workingAnimation(
-                style = WorkingAnimationStyle.BorderBeam,
-                enabled = isRunning,
-                shape = RoundedCornerShape(6.dp),
-                primaryColor = colors.accentPrimary,
-                secondaryColor = colors.accentSecondary
-            )
             .clickable { onClick() }
             .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -278,6 +276,19 @@ private fun SubAgentTaskRow(
     }
 }
 
+private fun formatSubagentDuration(durationMs: Long): String {
+    if (durationMs < 0) return "0s"
+    val totalSeconds = durationMs / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
+}
+
 /**
  * 点击子 Agent 弹出的大窗详情展示 (Modal Dialog)
  */
@@ -292,6 +303,31 @@ fun SubAgentDetailDialog(
     val clipboardManager = LocalClipboardManager.current
     var isCommandCopied by remember { mutableStateOf(false) }
     var isAgentIdCopied by remember { mutableStateOf(false) }
+
+    val isRunning = subagent.status.equals("RUNNING", ignoreCase = true)
+    var currentTimeMs by remember { mutableStateOf(currentTimeMillis()) }
+
+    LaunchedEffect(isRunning) {
+        if (isRunning) {
+            while (isActive) {
+                currentTimeMs = currentTimeMillis()
+                delay(1000)
+            }
+        }
+    }
+
+    val durationDisplay = remember(subagent.startedAt, subagent.completedAt, currentTimeMs, isRunning) {
+        val startMs = runCatching { Instant.parse(subagent.startedAt).toEpochMilliseconds() }.getOrNull()
+        if (startMs == null) null
+        else {
+            val endMs = if (isRunning) {
+                currentTimeMs
+            } else {
+                subagent.completedAt?.let { runCatching { Instant.parse(it).toEpochMilliseconds() }.getOrNull() } ?: currentTimeMs
+            }
+            formatSubagentDuration((endMs - startMs).coerceAtLeast(0))
+        }
+    }
 
     val isResearcher = subagent.role.equals("RESEARCHER", ignoreCase = true)
     val roleIcon = if (isResearcher) FeatherIcons.Search else FeatherIcons.Cpu
@@ -355,7 +391,7 @@ fun SubAgentDetailDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "子 Agent 任务详情",
+                            text = stringResource(Res.string.subagent_dialog_detail_title),
                             color = colors.textPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
@@ -519,7 +555,29 @@ fun SubAgentDetailDialog(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(text = "启动时刻", color = colors.textMuted, fontSize = 11.sp)
-                                Text(text = subagent.startedAt, color = colors.textPrimary, fontSize = 11.sp)
+                                Text(text = TimeFormatter.formatFullDateTime(subagent.startedAt), color = colors.textPrimary, fontSize = 11.sp)
+                            }
+                        }
+
+                        // 耗时 / 工作时长
+                        if (durationDisplay != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (isRunning) stringResource(Res.string.subagent_duration_label) else stringResource(Res.string.subagent_duration_total_label),
+                                    color = colors.textMuted,
+                                    fontSize = 11.sp
+                                )
+                                Text(
+                                    text = durationDisplay,
+                                    color = if (isRunning) colors.accentPrimary else colors.textPrimary,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = if (isRunning) FontWeight.Medium else FontWeight.Normal
+                                )
                             }
                         }
                     }
@@ -637,6 +695,133 @@ fun SubAgentDetailDialog(
                             }
                         }
                     }
+
+                    // 实时执行动态与蹦字流视窗
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(Res.string.subagent_live_title),
+                                    color = colors.textSecondary,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (isRunning) {
+                                    RunningStatusIndicator(color = colors.accentPrimary, modifier = Modifier.size(10.dp))
+                                }
+                            }
+
+                            // 活动状态徽标
+                            // 词表唯一真理源 = 契约层 SubagentActivity（core 侧同值，契约测试锁定）；
+                            // 分支必须与 SUBAGENT_PROGRESS payload["activity"] 逐字对齐，禁止手写小写字面量。
+                            val activityText = when {
+                                subagent.currentActivity == SubagentActivity.TOOL_CALL && !subagent.currentTool.isNullOrBlank() ->
+                                    stringResource(Res.string.subagent_activity_tool, subagent.currentTool.orEmpty())
+                                subagent.currentActivity == SubagentActivity.THINKING ->
+                                    stringResource(Res.string.subagent_activity_thinking)
+                                subagent.currentActivity == SubagentActivity.OUTPUT ->
+                                    stringResource(Res.string.subagent_activity_output)
+                                isRunning ->
+                                    stringResource(Res.string.subagent_activity_thinking)
+                                else ->
+                                    stringResource(Res.string.subagent_activity_idle)
+                            }
+                            val activityBg = if (isRunning) colors.accentPrimary.copy(alpha = 0.12f) else colors.surfaceHover
+                            val activityColor = if (isRunning) colors.accentPrimary else colors.textMuted
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(activityBg)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = activityText,
+                                    color = activityColor,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        // 最后一句话高亮卡片
+                        if (!subagent.lastMessage.isNullOrBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(colors.surfaceWorkspace)
+                                    .border(1.dp, colors.accentPrimary.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(
+                                        text = stringResource(Res.string.subagent_live_last_message),
+                                        color = colors.accentPrimary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    SelectionContainer {
+                                        Text(
+                                            text = subagent.lastMessage.orEmpty(),
+                                            color = colors.textPrimary,
+                                            fontSize = 11.5.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            lineHeight = 16.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 实时流滚动视窗
+                        val liveScrollState = rememberScrollState()
+                        val recentText = subagent.recentOutput.orEmpty()
+
+                        LaunchedEffect(recentText) {
+                            if (recentText.isNotEmpty()) {
+                                liveScrollState.scrollTo(liveScrollState.maxValue)
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 70.dp, max = 150.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(colors.surfaceWorkspace)
+                                .border(1.dp, colors.divider, RoundedCornerShape(8.dp))
+                                .padding(10.dp)
+                        ) {
+                            if (recentText.isNotBlank()) {
+                                SelectionContainer {
+                                    Text(
+                                        text = recentText,
+                                        color = colors.textSecondary,
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        lineHeight = 16.sp,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .verticalScroll(liveScrollState)
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = if (isRunning) stringResource(Res.string.subagent_live_waiting) else stringResource(Res.string.subagent_live_empty),
+                                    color = colors.textMuted,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -658,7 +843,17 @@ fun SubAgentManagementCard(
 
     val runningCount = subagents.count { it.status.equals("RUNNING", ignoreCase = true) }
 
-    PanelCard(modifier = modifier.fillMaxWidth()) {
+    PanelCard(
+        modifier = modifier
+            .fillMaxWidth()
+            .workingAnimation(
+                style = WorkingAnimationStyle.BorderBeam,
+                enabled = runningCount > 0,
+                shape = RoundedCornerShape(8.dp),
+                primaryColor = colors.accentPrimary,
+                secondaryColor = colors.accentSecondary
+            )
+    ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // 卡片 Header（整行可点击折叠）
             Box(
@@ -890,7 +1085,7 @@ fun SubAgentCard(
                     )
                     if (subagent.startedAt.isNotBlank()) {
                         Text(
-                            text = subagent.startedAt,
+                            text = TimeFormatter.formatTimeWithSeconds(subagent.startedAt),
                             color = colors.textMuted,
                             fontSize = 10.sp
                         )

@@ -14,8 +14,10 @@ import ai.koog.agents.core.environment.ReceivedToolResult
 import ai.koog.agents.ext.agent.HistoryCompressionConfig
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
+import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.prompt.streaming.toMessageResponse
+import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.flow.toList
 
 /**
@@ -215,16 +217,18 @@ private fun nodeLLMSendToolResultsPersistable(
             // 工具边界检查引导注入
             var steer = pollSteering?.invoke()
             while (steer != null) {
-                val steerMeta = """
-                    <user_intervention>
-                    [System Note: The user submitted the following guidance while you were executing tools. Incorporate this guidance into your ongoing task without restarting from scratch]:
-                    ${steer.text}
-                    </user_intervention>
-                """.trimIndent()
+                // 包装文本唯一生成点 = SteeringPrompt（剥离侧 PromptComposer 与其有跨模块契约测试）
+                val steerMeta = xyz.mederi.prompt.SteeringPrompt.wrap(steer.text)
+                val steerId = "msg_${java.util.UUID.randomUUID().toString().take(8)}"
+                val steerUserMsg = Message.User(
+                    content = steerMeta,
+                    id = steerId,
+                    metaInfo = RequestMetaInfo.create(KoogClock.System)
+                )
                 appendPrompt {
-                    user(steerMeta)
+                    message(steerUserMsg)
                 }
-                persister?.persistSteeringUserMessage(steer.text)
+                persister?.persistSteeringUserMessage(steer.text, id = steerId)
                 steer = pollSteering?.invoke()
             }
             // 流式与 nodeCallLLM 对齐：requestLLM() 是非流式——工具轮之后的

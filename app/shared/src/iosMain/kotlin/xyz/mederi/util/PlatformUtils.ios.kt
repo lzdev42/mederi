@@ -7,3 +7,7 @@ actual fun openUrl(url: String) {
 actual fun openFile(path: String) {
     // iOS: 本地文件打开需要 UIDocumentInteractionController；暂无场景，stub
 }
+
+// 遥控端：文件不在本地，不实现；desktop jvm 是唯一实际消费方
+actual fun defaultAppNameFor(path: String): String? = null
+actual fun revealInFolder(path: String): Boolean = false

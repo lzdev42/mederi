@@ -13,8 +13,8 @@ import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.server.Server
 import xyz.mederi.server.terminal.PtyTerminalHub
 import xyz.mederi.ui.appstate.AppState
-import xyz.mederi.ui.components.LocalProjectFileTreeProvider
-import xyz.mederi.ui.components.ProjectFileTreeProviderJvm
+import xyz.mederi.ui.host.LocalProjectFileTreeProvider
+import xyz.mederi.ui.host.ProjectFileTreeProviderJvm
 import java.io.File
 
 /** 终端会话注册表（desktop 全局单例，随进程生命周期）。 */
@@ -75,6 +75,9 @@ fun main() = application {
 
                     // 注入本地终端：pty4j registry（desktop 进程内直连，jediterm 渲染）
                     appState.terminalManager = terminalHub
+
+                    // 注入文件树数据源到 AppState（VM 层读取用；CompositionLocal 同源实例，树面板继续用它）
+                    appState.fileTreeProvider = fileTreeProvider
                 },
             )
         }

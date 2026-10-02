@@ -1,6 +1,6 @@
-# Mederi
+# Mederi™
 
-Mederi ist ein Kotlin-Multiplatform-Framework zum Bauen von KI-Agent-Anwendungen, das auf der Koog-Ausführungsengine aufsetzt. Es bietet Anbieterkonfiguration, Projekt- und Sitzungsverwaltung, Persistenz, einen plangetriebenen Ausführungsworkflow, eine Ausführungs-Sandbox und eine plattformübergreifende UI — sodass Sie einen LLM-gesteuerten, werkzeugnutzenden Agent zusammenstellen können, ohne diese Schichten selbst zusammenzufügen.
+Mederi™ ist ein Kotlin-Multiplatform-Framework zum Bauen von KI-Agent-Anwendungen, das auf der Koog-Ausführungsengine aufsetzt. Es bietet Anbieterkonfiguration, Projekt- und Sitzungsverwaltung, Persistenz, einen plangetriebenen Ausführungsworkflow, eine Ausführungs-Sandbox und eine plattformübergreifende UI — sodass Sie einen LLM-gesteuerten, werkzeugnutzenden Agent zusammenstellen können, ohne diese Schichten selbst zusammenzufügen.
 
 > **Entwicklungsstatus:** Mederi befindet sich in Entwicklung. Sowohl die UI als auch Kernfunktionen können sich jederzeit ändern.
 
@@ -48,6 +48,17 @@ Dieses Projekt enthält Drittanbieter-Open-Source-Software oder abgeleitete Impl
   - [latex](https://github.com/huarangmeng/latex) (MIT License)
   - [codehigh](https://github.com/huarangmeng/codehigh) (MIT License)
   - Copyright (c) 2026 huarangmeng
+
+## Marken
+
+"Mederi" und das Mederi-Logo sind Marken von lzdev42 in den Vereinigten Staaten und anderen Ländern.
+
+Obwohl unser Quellcode unter der Apache License 2.0 lizenziert ist, gewährt diese Lizenz keine Erlaubnis zur Nutzung der Mederi™-Marke, des Handelsnamens oder des Logos.
+
+- **Faire Nutzung (Fair Use)**: Sie dürfen den Namen verwenden, um wahrheitsgemäß auf dieses Projekt hinzuweisen oder Kompatibilität anzugeben (z. B. "Mederi™-Plugin").
+- **Einschränkungen**: Sie dürfen modifizierte Versionen dieser Software nicht unter dem Namen "Mederi" vertreiben und dürfen ohne vorherige schriftliche Genehmigung keine offizielle Unterstützung, kein Sponsoring oder keine offizielle Zugehörigkeit implizieren.
+
+Ausführliche Markenrichtlinien, zulässige Verwendungen und Benennungsregeln für Forks finden Sie in unserer [Markenrichtlinie (TRADEMARK.md)](./TRADEMARK.md).
 
 ## Sprachen
 
