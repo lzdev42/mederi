@@ -235,12 +235,15 @@ fun ChatInputCard(
     val isOverBudget = totalInputChars > maxSafeChars
 
     val isWaitingPlanApproval = viewModel.pendingPlanApproval != null
-    val isStreaming = viewModel.isWorking && !isWaitingPlanApproval
+    // 压缩进行中：输入框禁用、发送按钮禁用（isStreaming 排除 isCompacting，
+    // 使按钮显示发送图标而非停止图标——压缩中不应允许 abort）
+    val isCompacting = viewModel.isCompacting
+    val isStreaming = viewModel.isWorking && !isWaitingPlanApproval && !isCompacting
     val errorMessage = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }
     // 一次性轻提示：发送时图片被剔除放行（值为模型名，null=不显示），非错误走 error
     val imageStrippedNotice = viewModel.imageStrippedNotice
     val hasContent = textValue.text.trim().isNotEmpty() || pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()
-    val canSend = hasContent && !isStreaming && !isOverBudget
+    val canSend = hasContent && !isStreaming && !isOverBudget && !isCompacting
 
     // 未挂会话且未选项目：发送必被拦，提前把要求摆到明面上（醒目引导条 + 高亮项目选择器）
     val needProjectGuide = viewModel.conversationId == null && selectedProjectId == null
@@ -490,6 +493,7 @@ fun ChatInputCard(
                 TextField(
                     value = textValue,
                     onValueChange = onSlashCommandTextChange,
+                    enabled = !isCompacting,
                     visualTransformation = remember(colors) {
                         SlashCommandTransformation(
                             highlightColor = colors.accentPrimary,

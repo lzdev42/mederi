@@ -49,6 +49,7 @@ import xyz.emuci.inkcompose.MermaidCacheConfig
 import xyz.mederi.util.PromptComposer
 import xyz.mederi.util.FileOpenTarget
 import xyz.mederi.util.classifyFilePath
+import xyz.mederi.util.codeFenceLanguageFor
 import xyz.mederi.util.defaultAppNameFor
 import xyz.mederi.util.revealInFolder
 // ⚠️ 关键陷阱：PlatformUtils.openFile（打开给系统应用）与本类的 openFile（路由）同名，
@@ -428,7 +429,23 @@ class WorkspaceViewModel(
                         // ==null 只表示「不存在 / IO 异常」。
                         routeExternalOrReveal(path, requestId)
                     } else {
-                        openTextInExtension(title = fileName, content = content, charCount = content.length)
+                        // md/markdown 原样直出（查看器按 Markdown 渲染）；其余按词法器语言标签
+                        // 包进代码围栏（有标签 → ```lang 高亮；无标签 → 裸 ``` 等宽不高亮）。
+                        // 只包 content 本身，不改 lineCount/charCount —— 信息条按文件真实行列。
+                        val ext = path.substringAfterLast('.', "").lowercase().trim()
+                        val fence = codeFenceLanguageFor(path)
+                        val rendered = if (ext == "md" || ext == "markdown") {
+                            content
+                        } else {
+                            (if (fence != null) "```$fence\n" else "```\n") + content + "\n```"
+                        }
+                        // lineCount 必须一起给：查看器信息条按 (行 · 字符) 渲染，缺省 0 会显示「0 行 · N 字符」
+                        openTextInExtension(
+                            title = fileName,
+                            content = rendered,
+                            lineCount = content.count { it == '\n' } + 1,
+                            charCount = content.length
+                        )
                     }
                 }
             }
@@ -442,12 +459,10 @@ class WorkspaceViewModel(
         viewModelScope.launch {
             val appName = withContext(Dispatchers.Default) { defaultAppNameFor(path) } // mac 恒 null → 走泛称
             if (requestId != fileOpenRequestSeq) return@launch // 已被更新的点击取代
-            pendingFileOpen = if (appName != null) {
-                PendingFileOpen.OpenExternally(path, appName)
-            } else {
-                // 查不到默认程序名：用户语义 = 问是否打开所在目录（而不是盲目丢给系统挑应用）
-                PendingFileOpen.RevealInFolder(path)
-            }
+            // 查不到应用名**不等于**不打开：macOS 上 defaultAppNameFor 恒 null（拿不到精确应用名），
+            // 若在此降级成 RevealInFolder，mac 用户就永远拿不到「打开」这一档——只能揭示目录。
+            // 故 null 一律保留为 OpenExternally(path, null)，由 UI 用泛称文案问「用系统默认应用打开？」。
+            pendingFileOpen = PendingFileOpen.OpenExternally(path, appName)
         }
     }
 
@@ -481,8 +496,18 @@ class WorkspaceViewModel(
     fun confirmPendingFileOpen() {
         val pending = pendingFileOpen ?: return
         when (pending) {
-            // openFileInOs = PlatformUtils.openFile（Desktop.open），**不是** this.openFile（路由，会递归）
-            is PendingFileOpen.OpenExternally -> openFileInOs(pending.path)
+            // openFileInOs = PlatformUtils.openFile（open 命令 / Desktop.open），**不是** this.openFile（路由，会递归）
+            is PendingFileOpen.OpenExternally -> {
+                if (!openFileInOs(pending.path)) {
+                    // 打开失败必须显性化：macOS 沙箱会拦 LaunchServices（错误 -54/256），
+                    // 静默吞异常 = 用户点「打开」毫无反应（历史 bug）。
+                    fileOpenErrorNotice = true
+                    viewModelScope.launch {
+                        delay(5000)
+                        fileOpenErrorNotice = false
+                    }
+                }
+            }
             is PendingFileOpen.RevealInFolder -> revealInFolder(pending.path)
         }
         pendingFileOpen = null
@@ -919,6 +944,22 @@ class WorkspaceViewModel(
         private set
 
     /**
+     * 压缩完成的一次性轻提示（秒级自动消失）。false = 不显示。
+     * IDLE 事件（压缩成功）时置位 true，3 秒后自动清除。
+     */
+    var compactionCompletedNotice by mutableStateOf(false)
+        private set
+
+    /**
+     * 「用默认程序打开文件失败」的一次性提示（5 秒自动消失）。false = 不显示。
+     * `confirmPendingFileOpen` 收到 openFile 返回 false 时置位——打开失败绝不静默
+     * （历史教训：PlatformUtils.openFile 曾吞异常，macOS 沙箱拦截 LaunchServices 时
+     * 用户点「打开」毫无反应）。
+     */
+    var fileOpenErrorNotice by mutableStateOf(false)
+        private set
+
+    /**
      * 是否有子智能体正在工作（当前会话存在 RUNNING 状态的子代理，或有正在运行/流式的子代理工具调用）。
      * 状态判定复用 `ui/SubagentLifecycleNotification.kt` 的纯函数 [hasRunningSubagents]（同一谓词单一真理源），
      * 这里只叠加 chatItems 层的「流式/运行中工具调用」判定。
@@ -1139,7 +1180,14 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                         // （压缩中 StatusBar 计时仍从 turnStart 算，属同一 turn），不派提示。
                         "RUNNING" -> isCompacting = true
                         // IDLE：压缩结束，复位本地态。
-                        "IDLE" -> isCompacting = false
+                        "IDLE" -> {
+                            isCompacting = false
+                            compactionCompletedNotice = true
+                            viewModelScope.launch {
+                                delay(3000)
+                                compactionCompletedNotice = false
+                            }
+                        }
                         // SKIPPED（或其它）：预检命中，core 没翻状态机，turnStart 锚点是
                         // requestCompaction 设的，这里收尾清掉，否则 StatusBar 计时会挂着
                         // 一个"已耗时 0"不清；再派一次性提示 effect。
@@ -1180,6 +1228,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         isSubagentBannerDismissed = false
         // compaction 本地态不随会话走：切会话复位，防别的会话压缩事件串台
         isCompacting = false
+        compactionCompletedNotice = false
         if (id == null) {
             conversationId = null
             snapshot = null
@@ -2046,4 +2095,3 @@ private class SessionUiCache {
     /** 各会话的排队待发消息（按会话归档，FIFO 队列） */
     val queuedMessagesByConv = mutableStateMapOf<String, SnapshotStateList<QueuedMessage>>()
 }
-

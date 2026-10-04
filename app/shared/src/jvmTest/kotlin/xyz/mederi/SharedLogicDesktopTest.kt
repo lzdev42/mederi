@@ -3279,6 +3279,148 @@ class SharedLogicDesktopTest {
         assertFalse(isPlanPending(completedReq), "COMPLETED 状态绝不可重新激活待审批态")
         assertFalse(isPlanPending(approvedReq), "APPROVED 状态绝不可重新激活待审批态")
     }
+
+    @Test
+    fun testNonFinalMessagesFoldedIntoWorkTrace() {
+        val convId = "conv_fold_test"
+        val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+            id = "u_1",
+            conversationId = convId,
+            role = xyz.mederi.core.contract.models.ChatRole.User,
+            blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text("ut_1", "开始执行计划")),
+            createdAt = 1000L,
+            completedAt = 1000L,
+            parentMessageId = null,
+            model = null,
+            agent = null,
+            isStreaming = false,
+        )
+
+        // Assistant Turn 1: 生成 spec -> 派发子任务 0 -> 尾随过渡文本 "子任务 0 已派发，等待完成。"
+        val asstTurn1 = xyz.mederi.core.contract.models.ChatMessage(
+            id = "a_1",
+            conversationId = convId,
+            role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+            blocks = listOf(
+                xyz.mederi.core.contract.models.ChatBlock.Reasoning("r_1", "准备派发子任务 0"),
+                xyz.mederi.core.contract.models.ChatBlock.Text("t_pre_spec", "先生成子任务 0 的 spec："),
+                xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                    "tc_spec",
+                    "generate_spec",
+                    xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("subtaskIndex" to "0"), "ok"),
+                ),
+                xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                    "tc_spawn",
+                    "subagent",
+                    xyz.mederi.core.contract.models.ToolCallState.Completed(
+                        mapOf("action" to "SPAWN", "subtaskIndex" to "0"),
+                        "Subagent spawned: agent_0",
+                    ),
+                ),
+                xyz.mederi.core.contract.models.ChatBlock.Text("t_handoff_0", "子任务 0 已派发，等待完成。"),
+            ),
+            createdAt = 2000L,
+            completedAt = 3000L,
+            parentMessageId = "u_1",
+            model = "glm-5.1",
+            agent = null,
+            isStreaming = false,
+        )
+
+        // Event message: 子任务 0 完成唤醒
+        val eventMsg = xyz.mederi.core.contract.models.ChatMessage(
+            id = "ev_1",
+            conversationId = convId,
+            role = xyz.mederi.core.contract.models.ChatRole.User,
+            blocks = listOf(
+                xyz.mederi.core.contract.models.ChatBlock.Text(
+                    "evt_1",
+                    """<event_message type="subagent" agentId="agent_0" status="COMPLETED">
+Role: EXECUTOR
+Subtask: 0
+Summary: 子任务 0 执行完毕
+</event_message>""",
+                )
+            ),
+            createdAt = 4000L,
+            completedAt = 4000L,
+            parentMessageId = null,
+            model = null,
+            agent = null,
+            isStreaming = false,
+        )
+
+        // Assistant Turn 2 (最终轮次): 工具前碎碎念 "验证：" -> verify_subtask -> 工具前碎碎念 "记录完成：" -> write_log -> 最终回复
+        val asstTurn2 = xyz.mederi.core.contract.models.ChatMessage(
+            id = "a_2",
+            conversationId = convId,
+            role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+            blocks = listOf(
+                xyz.mederi.core.contract.models.ChatBlock.Reasoning("r_2", "开始验证子任务 0"),
+                xyz.mederi.core.contract.models.ChatBlock.Text("t_pre_verify", "验证："),
+                xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                    "tc_verify",
+                    "verify_subtask",
+                    xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("subtaskIndex" to "0"), "PASS"),
+                ),
+                xyz.mederi.core.contract.models.ChatBlock.Reasoning("r_3", "验证通过，写日志"),
+                xyz.mederi.core.contract.models.ChatBlock.Text("t_pre_log", "记录完成："),
+                xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                    "tc_log",
+                    "write_log",
+                    xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("action" to "complete"), "ok"),
+                ),
+                xyz.mederi.core.contract.models.ChatBlock.Reasoning("r_4", "汇总最终结果"),
+                xyz.mederi.core.contract.models.ChatBlock.Text("t_final", "完成。所有子任务均已验证通过！"),
+            ),
+            createdAt = 5000L,
+            completedAt = 6000L,
+            parentMessageId = "ev_1",
+            model = "glm-5.1",
+            agent = null,
+            isStreaming = false,
+        )
+
+        val items = xyz.mederi.ui.computeChatItems(
+            msgs = listOf(userMsg, asstTurn1, eventMsg, asstTurn2),
+            isWorking = false,
+            snapshot = null,
+        )
+
+        // 1. 顶层 AI TextMessage 只能有最后一条最终回复（"完成。所有子任务均已验证通过！"）
+        val topLevelAssistantTexts = items.filterIsInstance<ChatListItem.TextMessage>().filter { !it.isUser }
+        assertEquals(
+            listOf("完成。所有子任务均已验证通过！"),
+            topLevelAssistantTexts.map { it.text },
+            "顶层对话流应仅保留整个用户周期的最后一条最终回复，其余中间碎碎念全部折叠进 WorkTraceBlock"
+        )
+
+        // 2. 第一轮（中间轮次）的 WorkTraceBlock 应按时序包含工具前过渡语和派发后等待语
+        val workTraces = items.filterIsInstance<ChatListItem.WorkTraceBlock>()
+        assertEquals(2, workTraces.size)
+        val wt1Texts = workTraces[0].items.filterIsInstance<ChatListItem.TextMessage>().map { it.text }
+        assertEquals(
+            listOf("先生成子任务 0 的 spec：", "子任务 0 已派发，等待完成。"),
+            wt1Texts,
+            "中间轮次的所有过渡消息（含子代理派发尾随语）均应按时序收起进 WorkTraceBlock"
+        )
+        assertEquals(
+            listOf("Reasoning", "TextMessage", "ToolCalls", "SubagentCalls", "TextMessage"),
+            workTraces[0].items.map { it::class.simpleName },
+            "第一轮 WorkTraceBlock 内部子项必须严格保持原始发生时序"
+        )
+
+        // 3. 第二轮（最终轮次）的 WorkTraceBlock 应按时序包含工具前过渡语（"验证："、"记录完成："），不含最终回复
+        val wt2Texts = workTraces[1].items.filterIsInstance<ChatListItem.TextMessage>().map { it.text }
+        assertEquals(
+            listOf("验证：", "记录完成："),
+            wt2Texts,
+            "最终轮次中穿插在工具调用前的过渡语应按时序收起进 WorkTraceBlock"
+        )
+        assertEquals(
+            listOf("Reasoning", "TextMessage", "ToolCalls", "Reasoning", "TextMessage", "ToolCalls", "Reasoning"),
+            workTraces[1].items.map { it::class.simpleName },
+            "第二轮 WorkTraceBlock 内部子项必须严格保持原始发生时序"
+        )
+    }
 }
-
-

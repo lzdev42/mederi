@@ -13,10 +13,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.AlertTriangle
+import compose.icons.feathericons.Archive
 import compose.icons.feathericons.Play
 import compose.icons.feathericons.X
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
+import mederi.app.shared.generated.resources.compaction_completed_notice
+import mederi.app.shared.generated.resources.file_open_failed
 import mederi.app.shared.generated.resources.subagent_strip_view_overview
 import mederi.app.shared.generated.resources.subagent_strip_working
 import org.jetbrains.compose.resources.stringResource
@@ -32,10 +36,11 @@ import xyz.mederi.ui.components.atoms.StatusStrip
  * 永远处于 Z 轴最顶层（z-index 顶层），悬浮挂载在对话框（ChatInputCard）正上方，
  * 不推挤消息列表周围布局。
  *
- * 承载两类非消息正文的运转与通知态：
+ * 承载三类非消息正文的运转与通知态：
  * 1. 子智能体工作态单一浮动条：当前有子智能体在工作时显示一行固定通知，
  *    支持 [查看概览 ↗] 跳转查看详情，支持用户手动点 [✕] 关闭，无子智能体工作时自动关闭。
- * 2. 对话轮次状态栏 (StatusBar)：Option 3 Linear Tech Capsule 极简胶囊，
+ * 2. 压缩完成一次性提示条：压缩成功结束后短暂显示"已压缩会话"（复用 StatusStrip 样式）。
+ * 3. 对话轮次状态栏 (StatusBar)：Option 3 Linear Tech Capsule 极简胶囊，
  *    实时指示当前 AI 运转态（排队/思考中/工具调用/生成中/重试中）。
  */
 @Composable
@@ -45,13 +50,15 @@ fun WorkspaceFloatingOverlay(
 ) {
     val turnStatus = viewModel.turnStatus
     val showSubagentBanner = viewModel.showSubagentRunningBanner
+    val showCompactionNotice = viewModel.compactionCompletedNotice
+    val showFileOpenError = viewModel.fileOpenErrorNotice
     val colors = LocalMederiColors.current
 
     // 压缩进行中：用 isCompacting 覆盖派生状态，状态栏显示"压缩中"而非 Prepare 等通用态
     val status = if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus
     val showStatusBar = status.shouldDisplayInStatusBar
 
-    if (!showStatusBar && !showSubagentBanner) return
+    if (!showStatusBar && !showSubagentBanner && !showCompactionNotice && !showFileOpenError) return
 
     Column(
         modifier = modifier,
@@ -96,7 +103,51 @@ fun WorkspaceFloatingOverlay(
             }
         }
 
-        // 2. 对话轮次状态栏（Option 3 极简胶囊，靠左悬浮贴近输入框）
+        // 2. 压缩完成一次性提示条（复用 StatusStrip 样式，3 秒自动消失）
+        AnimatedVisibility(
+            visible = showCompactionNotice,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+            ) {
+                StatusStrip(
+                    text = stringResource(Res.string.compaction_completed_notice),
+                    icon = FeatherIcons.Archive,
+                    iconTint = colors.accentSecondary,
+                    borderColor = colors.accentSecondary.copy(alpha = 0.35f),
+                    spinning = false,
+                    animated = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        // 2.5 文件打开失败一次性提示条（错误样式，5 秒自动消失）
+        AnimatedVisibility(
+            visible = showFileOpenError,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+            ) {
+                StatusStrip(
+                    text = stringResource(Res.string.file_open_failed),
+                    icon = FeatherIcons.AlertTriangle,
+                    iconTint = colors.accentDanger,
+                    borderColor = colors.accentDanger.copy(alpha = 0.35f),
+                    spinning = false,
+                    animated = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        // 3. 对话轮次状态栏（Option 3 极简胶囊，靠左悬浮贴近输入框）
         AnimatedVisibility(
             visible = showStatusBar,
             enter = fadeIn() + expandVertically(),

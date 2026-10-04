@@ -2,8 +2,13 @@ package xyz.mederi.util
 
 expect fun openUrl(url: String)
 
-/** 用系统默认应用打开本地文件（如 .md 计划文件）。 */
-expect fun openFile(path: String)
+/**
+ * 用系统默认应用打开本地文件（如 .md 计划文件）。
+ * 成功返回 true；失败（文件不存在 / 无默认应用 / 平台被沙箱拦截 / 命令失败）返回 false，
+ * 调用方据此向用户显性报错——**禁止静默**（历史教训：macOS 沙箱下 Desktop.open 抛异常被
+ * `catch (_: Exception) {}` 吞掉，用户点击「打开」后毫无反应）。
+ */
+expect fun openFile(path: String): Boolean
 
 /**
  * 查询系统为 [path] 注册的默认打开程序的**人类可读名**（用于「是否用 XXX 打开？」对话框）。

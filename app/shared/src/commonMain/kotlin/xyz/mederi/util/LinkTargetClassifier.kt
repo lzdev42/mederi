@@ -14,12 +14,20 @@ object LinkTargetClassifier {
      * - `file:` 前缀 → 剥前缀
      * - `/` 开头 → 绝对路径原样返回
      * - `X:` 盘符形式（Windows `C:\...`）→ 原样返回
+     *
+     * 行锚点（`...#L10-L20`）一律剥掉再返回：链接目标是 URL，`#` 只会是 fragment
+     * （真实文件路径里的 `#` 在 URL 里必须写成 `%23`）。不剥的话 `Foo.kt#L10-L20` 的扩展名
+     * 会算成 `kt#l10-l20` → 分档落到 REVEAL_IN_FOLDER（既不开内部查看器，`open -R` 又因
+     * 路径不存在而静默失败）——AI 生成的代码引用链接几乎都带行锚点，故这里是常态而不是边角。
      */
-    fun localPathOrNull(url: String): String? = when {
-        url.startsWith("file://") -> url.removePrefix("file://")
-        url.startsWith("file:") -> url.removePrefix("file:")
-        url.startsWith("/") -> url
-        url.length > 2 && url[1] == ':' -> url // Windows 盘符路径 C:\...
-        else -> null
+    fun localPathOrNull(url: String): String? {
+        val path = when {
+            url.startsWith("file://") -> url.removePrefix("file://")
+            url.startsWith("file:") -> url.removePrefix("file:")
+            url.startsWith("/") -> url
+            url.length > 2 && url[1] == ':' -> url // Windows 盘符路径 C:\...
+            else -> return null
+        }
+        return path.substringBefore('#').ifEmpty { null }
     }
 }

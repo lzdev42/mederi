@@ -28,13 +28,25 @@ actual fun openUrl(url: String) {
     }
 }
 
-actual fun openFile(path: String) {
-    try {
-        val file = File(path)
-        if (file.exists() && Desktop.isDesktopSupported()) {
-            Desktop.getDesktop().open(file)
-        }
-    } catch (_: Exception) {
+/**
+ * 用系统默认应用打开本地文件。
+ *
+ * macOS：用 `open` 命令（LaunchServices，与用户双击行为一致），exit 0 = 成功。
+ * 不用 `Desktop.open`：JDK 的 mac 实现经 LSOpenFSRef 也可能抛 IOException（错误码 256），
+ * 且**拿不到失败原因**——`open` 命令能显式拿 exit code，失败时可向用户报错。
+ * Windows / Linux：保留 Desktop.open，包 try-catch 转 Boolean（这两平台无 Seatbelt 类 IPC 拦截）。
+ */
+actual fun openFile(path: String): Boolean {
+    val file = File(path)
+    if (!file.exists()) return false
+    return when {
+        isMacOs -> runCommandExitCode("open", path) == 0
+        else -> runCatching {
+            Desktop.isDesktopSupported() && run {
+                Desktop.getDesktop().open(file)
+                true
+            }
+        }.getOrDefault(false)
     }
 }
 

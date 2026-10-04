@@ -32,6 +32,14 @@ class PlatformUtilsSmokeTest {
     }
 
     @Test
+    fun openFile_nonexistentPath_returnsFalseWithoutThrowing() {
+        // 不存在的路径触发失败分支，避免测试真的弹出默认应用窗口
+        val result = runCatching { openFile("/nonexistent-file-xyz") }
+        assertTrue(result.isSuccess, "openFile 不应抛异常：${result.exceptionOrNull()}")
+        assertEquals(false, result.getOrNull(), "openFile 对不存在的路径必须返回 false（调用方据此报错，绝不静默）")
+    }
+
+    @Test
     fun revealInFolder_nonexistentPath_doesNotThrow() {
         // 用不存在的路径触发失败分支，避免测试真的弹出 Finder / 资源管理器窗口
         val result = runCatching { revealInFolder("/nonexistent-file-xyz") }

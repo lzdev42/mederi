@@ -336,6 +336,11 @@ UI 侧走**裸事件旁路**（core 只发事实，不认识模态）：`Workspa
 
 **压缩中状态栏（2026-10）**：压缩进行中（`STATUS{scope=compaction, code=RUNNING}` → `WorkspaceViewModel.isCompacting=true`）UI StatusBar 经**裸事件旁路**显示"压缩中"（`TurnStatus.Compacting`）：`WorkspaceFloatingOverlay` 渲染期 `if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus` 优先覆盖派生状态，`shouldDisplayInStatusBar=true` 持续显示压缩耗时，文案 `status_compacting`（"压缩中"/"Compacting"）+ 图标 FeatherIcons.Archive——**零快照污染**（SnapshotReducer 不认 compaction STATUS，快照只随 SESSION_UPDATED 走 Working，不额外闪烁）。`isCompacting` 三重复位：IDLE 事件 / 切会话（`attach` 复位，防别的会话压缩事件串台）/ snapshot 已 Idle/Error（IDLE 事件丢失时按快照状态兜底复位）。
 
+**SUMMARY 不渲染 + 压缩完成提示条（2026-10）**：
+- **SUMMARY 不在聊天流渲染**：`computeChatItems` 遇 `ChatRole.Summary` 只切断 Assistant 轮次边界、不再生成聊天项——SUMMARY 留库（存储位置不变：压缩点之前）、AI 视图正常取用（`aiViewWindow` 不变），仅 UI 隐藏其内容；
+- **压缩中输入框禁用**：`ChatInputCard` 读 `viewModel.isCompacting`——`TextField(enabled=!isCompacting)` 禁输入、`canSend` 加 `&& !isCompacting`、`isStreaming` 计算排除 `isCompacting`（按钮显示发送图标而非停止图标，压缩中不允许 abort）；
+- **压缩完成浮动提示条**：`STATUS{scope=compaction, code=IDLE}` → `isCompacting=false` 的同时置 `WorkspaceViewModel.compactionCompletedNotice=true`，`WorkspaceFloatingOverlay` 渲染期读该标志显示 `StatusStrip` 提示条（`compaction_completed_notice`："已压缩会话"/"Conversation compressed"，FeatherIcons.Archive），3 秒后自动清除；`attach` 切会话一并复位。SKIPPED 路径不变（仍走 `ShowCompactionNotice` 模态）。
+
 ## 6. ask_user 问询时序
 
 ```mermaid

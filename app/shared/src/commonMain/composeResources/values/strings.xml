@@ -573,6 +573,8 @@
     <string name="compaction_skipped_low_tokens">当前上下文较短，低于最小可压缩尺寸，无需压缩。</string>
     <string name="compaction_skipped_too_few">可压缩的历史消息不足两条，无需压缩。</string>
     <string name="compaction_ok">确定</string>
+    <string name="compaction_completed_notice">已压缩会话</string>
+
     <string name="dock_fit_window">适应窗口</string>
     <string name="dock_original_ratio">原始比例</string>
     <string name="dock_generating">生成中...</string>
@@ -744,6 +746,7 @@
     <string name="file_open_confirm_generic">用系统默认应用打开？</string>
     <string name="file_open_confirm_reveal">打开所在目录？</string>
     <string name="file_open_open">打开</string>
+    <string name="file_open_failed">无法用默认程序打开该文件。若桌面应用由命令行启动，macOS 沙箱会拦截系统打开，请改用 IDE 启动后重试。</string>
     <!-- 子智能体详情计时器与实时流展示 -->
     <string name="subagent_duration_label">已工作时长</string>
     <string name="subagent_duration_total_label">执行耗时</string>

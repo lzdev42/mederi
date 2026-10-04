@@ -564,6 +564,8 @@
     <string name="compaction_skipped_low_tokens">The context is below the minimum compressible size; no compaction is needed.</string>
     <string name="compaction_skipped_too_few">There are fewer than two older messages to compress; no compaction is needed.</string>
     <string name="compaction_ok">OK</string>
+    <string name="compaction_completed_notice">Conversation compressed</string>
+
     <string name="dock_fit_window">Fit window</string>
     <string name="dock_original_ratio">Original ratio</string>
     <string name="dock_generating">Generating...</string>
@@ -735,6 +737,7 @@
     <string name="file_open_confirm_generic">Open with the default app?</string>
     <string name="file_open_confirm_reveal">Reveal in folder?</string>
     <string name="file_open_open">Open</string>
+    <string name="file_open_failed">Failed to open with the default app. If the desktop app was launched from a shell, macOS sandbox blocks system open; launch from the IDE and retry.</string>
     <!-- Subagent detail timer and live stream -->
     <string name="subagent_duration_label">Running Duration</string>
     <string name="subagent_duration_total_label">Execution Time</string>

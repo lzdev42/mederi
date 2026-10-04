@@ -130,6 +130,9 @@ fi
 # ==========================================
 cd "$PROJECT_DIR"
 
+echo "🛑 关闭现有 Gradle Daemon..."
+./gradlew --stop
+
 if [[ "$CLEAN_BUILD" == "true" ]]; then
     echo "🧹 清理旧构建..."
     ./gradlew :app:desktopApp:clean --no-configuration-cache

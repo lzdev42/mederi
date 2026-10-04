@@ -37,6 +37,8 @@ fun classifyFilePath(path: String): FileOpenTarget {
         "c", "h", "cpp", "hpp", "cc", "cs", "go", "rs", "rb", "swift", "php", "lua",
         "css", "scss", "less",
         "properties", "ini", "conf", "cfg", "env",
+        // 纯代码（有词法器、能进查看器；围栏语言见 [codeFenceLanguageFor]）
+        "dart", "scala", "sc", "hs", "ex", "exs", "r", "diff", "patch",
         "dockerfile", "makefile" -> FileOpenTarget.INTERNAL_TEXT
 
         // ---- 内部图片查看器（InkImage / Coil3 支持的本地路径格式）----
@@ -60,5 +62,55 @@ fun classifyFilePath(path: String): FileOpenTarget {
 
         // 未知扩展名（含 .gitignore → "gitignore" 这类隐藏文件特例）
         else -> FileOpenTarget.REVEAL_IN_FOLDER
+    }
+}
+
+/**
+ * 按扩展名返回代码围栏（```lang）用的语言标签，供 `openFile` 把纯文本文件
+ * 包进 MarkdownView 的代码围栏时使用。
+ *
+ * - 返回标签与 inkcompose `LanguageRegistry` 注册的语言一一对应——有词法器的
+ *   后缀才能拿到非 null 标签，确保围栏内能正确高亮；
+ * - 返回 `null` 表示该后缀没有对应词法器，调用方自行决定：用裸围栏（``` 不带
+ *   语言）还是直接按纯文本渲染（不包围栏）。
+ *
+ * 与 [classifyFilePath] 同口径取后缀：`path.substringAfterLast('.', "").lowercase().trim()`，
+ * 大小写不敏感、忽略两端空白；空串（无扩展名）返回 null。
+ *
+ * @param path 任意文件路径（纯字符串运算，零 I/O，不做任何系统调用）。
+ * @return 围栏语言标签；无词法器对应时返回 null。
+ */
+fun codeFenceLanguageFor(path: String): String? {
+    val ext = path.substringAfterLast('.', "").lowercase().trim()
+    if (ext.isEmpty()) return null
+    return when (ext) {
+        "kt", "kts" -> "kotlin"
+        "java" -> "java"
+        "py" -> "python"
+        "js", "jsx" -> "javascript"
+        "ts", "tsx" -> "typescript"
+        "json" -> "json"
+        "xml" -> "xml"
+        "yaml", "yml" -> "yaml"
+        "toml" -> "toml"
+        "sql" -> "sql"
+        "sh", "bash", "zsh" -> "bash"
+        "c", "h" -> "c"
+        "cpp", "hpp", "cc" -> "cpp"
+        "go" -> "go"
+        "rs" -> "rust"
+        "rb" -> "ruby"
+        "swift" -> "swift"
+        "php" -> "php"
+        "lua" -> "lua"
+        "css" -> "css"
+        "dockerfile" -> "dockerfile"
+        "dart" -> "dart"
+        "scala", "sc" -> "scala"
+        "hs" -> "haskell"
+        "ex", "exs" -> "elixir"
+        "r" -> "r"
+        "diff", "patch" -> "diff"
+        else -> null
     }
 }

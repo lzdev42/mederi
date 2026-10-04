@@ -30,14 +30,12 @@ fun computeChatItems(
     var currentAssistant = mutableListOf<ChatMessage>()
     for (msg in msgs) {
         if (msg.role == ChatRole.Summary) {
+            // SUMMARY（压缩标记）留库不动、AI 视图正常取用，但 UI 不渲染其内容。
+            // 仍切断 Assistant 轮次边界（防止前后轮次合并）。
             if (currentAssistant.isNotEmpty()) {
                 turns.add(ChatRole.Assistant to currentAssistant.toList())
                 currentAssistant = mutableListOf()
             }
-            // 压缩总结（TLDR）：按 AI 消息渲染（走正常 MarkdownView 管线），不特殊卡片。
-            // 独立成 turn（不与后续 assistant 合并——合并后若后续轮次含工具调用，
-            // TLDR 会被误判为步骤叙述折叠进工作过程栏）。
-            turns.add(ChatRole.Assistant to listOf(msg))
             continue
         }
         // 真实用户消息（含有用户文本或文件）：纯中间工具结果消息（blocks 为空）绝不切断 Assistant 轮次
@@ -59,7 +57,8 @@ fun computeChatItems(
     }
 
     val lastAssistantTurn = turns.lastOrNull { it.first == ChatRole.Assistant }?.second
-    for ((role, turnMessages) in turns) {
+    for ((turnIndex, turnPair) in turns.withIndex()) {
+        val (role, turnMessages) = turnPair
         val isUser = role == ChatRole.User
         if (isUser) {
             for (msg in turnMessages) {
@@ -381,27 +380,45 @@ fun computeChatItems(
                 turnHasFirstItem = true
             }
         } else {
-            // Turn 已完成
-            if (!hasAnyToolCallInTurn) {
-                // 无工具调用：全时序输出
+            // Turn 已完成：判定本轮是否为用户指令周期内的中间轮次（紧随其后的是同一用户周期内的 <event_message> 唤醒消息）
+            val isIntermediateTurnInCycle = hasLaterTurnInSameCycle(turns, turnIndex)
+
+            if (!hasAnyToolCallInTurn && !isIntermediateTurnInCycle) {
+                // 无工具调用且为最终轮次：全时序输出
                 rawChronologicalItems.forEachIndexed { idx, item ->
                     val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) item.withTurnStart(true) else item
                     result.add(itemWithTurnStart)
                     turnHasFirstItem = true
                 }
             } else {
-                // 有工具调用：非 Message 项（思考、工具调用、子代理）全部折叠进顶部的 WorkTraceBlock，外部留 Message 交付项
+                // 有工具调用或处于周期中间轮次：思考、工具调用、子代理及非最终过渡文本全部按时序折叠进 WorkTraceBlock，外部仅保留最终交付项
                 val workItems = mutableListOf<ChatListItem>()
                 val deliverableItems = mutableListOf<ChatListItem>()
                 var planApprovalItem: ChatListItem.PlanApproval? = null
 
-                for (item in rawChronologicalItems) {
+                val lastToolIdx = rawChronologicalItems.indexOfLast {
+                    it is ChatListItem.ToolCalls || it is ChatListItem.SubagentCalls
+                }
+                val lastTextIdx = rawChronologicalItems.indexOfLast { it is ChatListItem.TextMessage }
+
+                for ((idx, item) in rawChronologicalItems.withIndex()) {
                     when (item) {
                         is ChatListItem.Reasoning,
                         is ChatListItem.ToolCalls,
                         is ChatListItem.SubagentCalls -> workItems.add(item)
 
                         is ChatListItem.PlanApproval -> planApprovalItem = item
+
+                        is ChatListItem.TextMessage -> {
+                            val isFinalDeliverableText = !isIntermediateTurnInCycle &&
+                                idx > lastToolIdx &&
+                                (idx == lastTextIdx || rawChronologicalItems.getOrNull(idx + 1) is ChatListItem.DocumentCard)
+                            if (isFinalDeliverableText) {
+                                deliverableItems.add(item)
+                            } else {
+                                workItems.add(item)
+                            }
+                        }
 
                         else -> deliverableItems.add(item)
                     }
@@ -635,6 +652,23 @@ fun parseEventMessage(text: String): ParsedEventMessage? {
     )
 }
 
+/** 判定一条 User 消息是否纯由 <event_message> 组成（后台子代理唤醒事件，非人类用户消息）。 */
+private fun isEventOnlyUserMessage(msg: ChatMessage): Boolean {
+    if (msg.role != ChatRole.User) return false
+    if (msg.blocks.any { it is ChatBlock.File }) return false
+    val textBlocks = msg.blocks.filterIsInstance<ChatBlock.Text>().filter { it.text.isNotBlank() }
+    return textBlocks.isNotEmpty() && textBlocks.all { parseEventMessage(it.text) != null }
+}
+
+/** 判定当前 Assistant 轮次之后是否紧随同一用户周期内的 <event_message> 唤醒事件（即本轮尚未结束整个用户指令周期）。 */
+private fun hasLaterTurnInSameCycle(
+    turns: List<Pair<ChatRole?, List<ChatMessage>>>,
+    currentTurnIndex: Int,
+): Boolean {
+    val (nextRole, nextMsgs) = turns.getOrNull(currentTurnIndex + 1) ?: return false
+    return nextRole == ChatRole.User && nextMsgs.isNotEmpty() && nextMsgs.all { isEventOnlyUserMessage(it) }
+}
+
 /** 辅助扩展：设置或更新 ChatListItem 的 isTurnStart 标志 */
 internal fun ChatListItem.withTurnStart(isStart: Boolean): ChatListItem = when (this) {
     is ChatListItem.Reasoning -> copy(isTurnStart = isStart)
@@ -649,3 +683,4 @@ internal fun ChatListItem.withTurnStart(isStart: Boolean): ChatListItem = when (
     is ChatListItem.TurnDiffCard -> copy(isTurnStart = isStart)
     is ChatListItem.EventMessageCard -> copy(isTurnStart = isStart)
 }
+
