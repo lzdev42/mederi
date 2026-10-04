@@ -22,6 +22,7 @@ import mederi.app.shared.generated.resources.subagent_strip_working
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.RightDockPanel
+import xyz.mederi.ui.TurnStatus
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.components.atoms.StatusStrip
 
@@ -46,7 +47,9 @@ fun WorkspaceFloatingOverlay(
     val showSubagentBanner = viewModel.showSubagentRunningBanner
     val colors = LocalMederiColors.current
 
-    val showStatusBar = turnStatus.shouldDisplayInStatusBar
+    // 压缩进行中：用 isCompacting 覆盖派生状态，状态栏显示"压缩中"而非 Prepare 等通用态
+    val status = if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus
+    val showStatusBar = status.shouldDisplayInStatusBar
 
     if (!showStatusBar && !showSubagentBanner) return
 
@@ -104,7 +107,7 @@ fun WorkspaceFloatingOverlay(
                 horizontalArrangement = Arrangement.Start,
             ) {
                 StatusBar(
-                    status = turnStatus,
+                    status = status,
                     startedAtMillis = viewModel.turnStartedAt,
                     statusHint = viewModel.statusHint,
                 )

@@ -31,6 +31,7 @@ import mederi.app.shared.generated.resources.settings_panel_edit
 import mederi.app.shared.generated.resources.settings_panel_spec_context
 import mederi.app.shared.generated.resources.settings_panel_spec_output
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.util.formatContextWindow
 
@@ -65,80 +66,106 @@ internal fun ModelItemRow(
             .background(if (isEnabled) Color.Transparent else colors.surfaceSidebar.copy(alpha = 0.3f))
             .padding(horizontal = ProviderTokens.SpacingMedium, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)
     ) {
-        // 左段：模型标识与上下文规格
-        Column(modifier = Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
+        // 左段：模型标识与上下文规格（自适应占满剩余空间）
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
+            ) {
                 Text(
                     text = model.name,
                     color = colors.textPrimary.copy(alpha = textAlpha),
                     fontSize = ProviderTokens.FontValue,
                     fontWeight = if (isEnabled) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 if (model.isFree) {
                     MetaBadge(text = stringResource(Res.string.settings_panel_badge_free), colors = colors)
                 }
             }
-            Text(text = specText, color = colors.textMuted.copy(alpha = textAlpha), fontSize = ProviderTokens.FontLabel)
+            Text(
+                text = specText,
+                color = colors.textMuted.copy(alpha = textAlpha),
+                fontSize = ProviderTokens.FontLabel,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
 
-        // 中段：统一中性风格的能力标签 (去饱和度，统一容器)
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.Start,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)) {
-                if (model.supportsImages) UnifiedCapabilityTag(stringResource(Res.string.settings_panel_capability_image), FeatherIcons.Image, colors, textAlpha)
-                if (model.supportsThinking) {
-                    val label = if (model.reasoningLevels.isNotEmpty()) {
-                        stringResource(Res.string.settings_panel_capability_thinking_levels, model.reasoningLevels.joinToString(","))
-                    } else {
-                        stringResource(Res.string.settings_panel_capability_thinking)
-                    }
-                    UnifiedCapabilityTag(label, FeatherIcons.Cpu, colors, textAlpha)
-                }
-            }
-        }
-
-        // 右段：操作控件组（与中段保持充足间距）
+        // 右段：能力标签（单行紧凑） + 操作控件组靠右对齐
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
+            horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingLarge)
         ) {
-            // 启用状态开关
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(ProviderTokens.RadiusBadge)
-                    .background(if (isEnabled) colors.surfaceHover else colors.surfaceInput)
-                    .clickable { onToggleEnabled() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = if (isEnabled) FeatherIcons.Eye else FeatherIcons.EyeOff,
-                    contentDescription = null,
-                    tint = if (isEnabled) colors.textPrimary else colors.textMuted,
-                    modifier = Modifier.size(12.dp)
-                )
+            if (model.supportsImages || model.supportsThinking) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (model.supportsImages) {
+                        UnifiedCapabilityTag(
+                            text = stringResource(Res.string.settings_panel_capability_image),
+                            icon = FeatherIcons.Image,
+                            colors = colors,
+                            alpha = textAlpha
+                        )
+                    }
+                    if (model.supportsThinking) {
+                        val activeLevelCount = model.reasoningLevels.count { ReasoningLevels.isActiveLevel(it) }
+                        val label = if (activeLevelCount > 0) {
+                            stringResource(Res.string.settings_panel_capability_thinking_levels, activeLevelCount.toString())
+                        } else {
+                            stringResource(Res.string.settings_panel_capability_thinking)
+                        }
+                        UnifiedCapabilityTag(
+                            text = label,
+                            icon = FeatherIcons.Cpu,
+                            colors = colors,
+                            alpha = textAlpha
+                        )
+                    }
+                }
             }
 
-            Icon(
-                imageVector = FeatherIcons.Edit2,
-                contentDescription = stringResource(Res.string.settings_panel_edit),
-                tint = colors.textMuted,
-                modifier = Modifier.size(13.dp).clickable { onEdit() }
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
+            ) {
+                // 启用状态开关
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(ProviderTokens.RadiusBadge)
+                        .background(if (isEnabled) colors.surfaceHover else colors.surfaceInput)
+                        .clickable { onToggleEnabled() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isEnabled) FeatherIcons.Eye else FeatherIcons.EyeOff,
+                        contentDescription = null,
+                        tint = if (isEnabled) colors.textPrimary else colors.textMuted,
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
 
-            Icon(
-                imageVector = FeatherIcons.Trash2,
-                contentDescription = stringResource(Res.string.settings_panel_delete),
-                tint = colors.textMuted.copy(alpha = 0.6f),
-                modifier = Modifier.size(13.dp).clickable { onDelete() }
-            )
+                Icon(
+                    imageVector = FeatherIcons.Edit2,
+                    contentDescription = stringResource(Res.string.settings_panel_edit),
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(13.dp).clickable { onEdit() }
+                )
+
+                Icon(
+                    imageVector = FeatherIcons.Trash2,
+                    contentDescription = stringResource(Res.string.settings_panel_delete),
+                    tint = colors.textMuted.copy(alpha = 0.6f),
+                    modifier = Modifier.size(13.dp).clickable { onDelete() }
+                )
+            }
         }
     }
 }

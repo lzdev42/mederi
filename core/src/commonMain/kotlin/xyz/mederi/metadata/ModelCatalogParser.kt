@@ -142,8 +142,8 @@ internal fun parseModelsDevResponse(raw: String): CatalogIndex {
  *
  * 推理档位映射规则：
  * - reasoning=false → supportsReasoning=false，无档位
- * - reasoning=true + effort values → 逐值映射 NONE/LOW/MEDIUM/HIGH/MAX（去重保序）：
- *   none→NONE、minimal→LOW、low→LOW、medium→MEDIUM、high→HIGH、xhigh/max→MAX
+ * - reasoning=true + effort values → 逐值映射 NONE/MINIMAL/LOW/MEDIUM/HIGH/XHIGH/MAX（去重保序）：
+ *   none→NONE、minimal→MINIMAL、low→LOW、medium→MEDIUM、high→HIGH、xhigh→XHIGH、max→MAX
  * - reasoning=true + toggle → [NONE, HIGH]（开关型：NONE=关，HIGH=开，与 Agnes 内置语义一致）
  * - reasoning=true + budget_tokens → 支持推理但无命名档位（菜单由供应商参数兜底）
  */
@@ -198,9 +198,11 @@ internal fun toModelMetadata(model: CatalogModel): ModelMetadata {
  */
 internal fun String.toReasoningLevelOrNull(): ReasoningLevel? = when (lowercase()) {
     "none" -> ReasoningLevel.NONE
-    "minimal", "low" -> ReasoningLevel.LOW
+    "minimal" -> ReasoningLevel.MINIMAL
+    "low" -> ReasoningLevel.LOW
     "medium" -> ReasoningLevel.MEDIUM
     "high" -> ReasoningLevel.HIGH
-    "xhigh", "max" -> ReasoningLevel.MAX
+    "xhigh" -> ReasoningLevel.XHIGH
+    "max" -> ReasoningLevel.MAX
     else -> null
 }

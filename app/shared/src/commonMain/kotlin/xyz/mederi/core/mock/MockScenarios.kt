@@ -191,7 +191,7 @@ object MockScenarios {
         sf.value = sf.value.copy(
             pendingQuestion = QuestionRequest(
                 reqId, sf.value.conversation.id,
-                listOf(QuestionRequest.Question("q1", "你想把 warning 改成 error 还是静默?", listOf("改error", "静默"), allowCustom = true))
+                listOf(QuestionRequest.Question("q1", "你想把 warning 改成 error 还是静默?", listOf("改error", "静默")))
             ),
         )
 

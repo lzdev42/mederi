@@ -81,7 +81,7 @@ object ToolFactory {
     ): ToolRegistry {
         val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched)
         val shellTools = ShellTools(directories, commandSandbox)
-        val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester, planStore)
+        val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester)
 
         // 主代理：全量工具（Triage Flow——是否建计划由 AI 判断，无代码门禁）。子代理按角色裁剪：
         // - EXECUTOR：执行计划内子任务——全量写/执行工具，但无 plan/spawn/verify/ask_user。

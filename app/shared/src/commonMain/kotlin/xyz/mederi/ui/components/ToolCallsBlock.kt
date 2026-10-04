@@ -27,8 +27,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
-import mederi.app.shared.generated.resources.tool_detail_failed_output
-import mederi.app.shared.generated.resources.tool_detail_output
 import mederi.app.shared.generated.resources.tool_detail_report
 import mederi.app.shared.generated.resources.tool_action_ask_answered
 import mederi.app.shared.generated.resources.tool_action_ask_answered_many
@@ -101,8 +99,6 @@ import xyz.mederi.ui.chat.ToolActionKind
 import xyz.mederi.ui.chat.groupToolCallsByAction
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.rememberMederiMarkdownTheme
-import xyz.mederi.ui.components.atoms.ExpandChevron
-import xyz.mederi.ui.components.atoms.ExpandableContent
 import xyz.mederi.ui.components.atoms.ExpandableRow
 import xyz.mederi.ui.components.atoms.ProcessRow
 import xyz.mederi.ui.components.atoms.StatusStrip
@@ -392,10 +388,8 @@ fun ToolActionGroupRow(
 }
 
 /**
- * 工具调用输出块：严格按要求默认不展开，用户点击 "OUTPUT" 或 "FAILED" 才展开，
- * 内部带有终端/代码输出框，支持滚动与长输出保护。
+ * 工具调用输出块：直接呈现终端/代码输出框，支持滚动与长输出保护。
  */
-
 @Composable
 private fun ToolCallOutputBlock(
     callId: String,
@@ -403,70 +397,32 @@ private fun ToolCallOutputBlock(
     isFailed: Boolean,
     colors: xyz.mederi.theme.MederiColors,
     maxHeight: Dp = 280.dp,
-    defaultExpanded: Boolean = true,
 ) {
-    var isOutputExpanded by remember(callId) { mutableStateOf(defaultExpanded) }
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(3.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(colors.surfaceCode)
+            .border(
+                1.dp,
+                if (isFailed) colors.accentDanger.copy(alpha = 0.4f) else colors.surfaceCardBorder,
+                RoundedCornerShape(6.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        // 待配色迁移时对齐标准 badge：OUTPUT/FAILED 标签为 mono 终端风格且 FAILED 态需 danger 色，
-        // 原子（MederiGhostButton/TabBadge）无等价表达，暂保留内联折叠条
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .clickable {
-                    isOutputExpanded = !isOutputExpanded
-                    DebugLog.event("UI", "ToolCallOutputBlock clicked: callId=$callId, isExpanded=$isOutputExpanded, isFailed=$isFailed")
-                }
-                .padding(vertical = 2.dp, horizontal = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
+        SelectionContainer {
             Text(
-                text = stringResource(if (isFailed) Res.string.tool_detail_failed_output else Res.string.tool_detail_output),
-                color = if (isFailed) colors.accentDanger else colors.textSecondary,
+                text = output,
+                color = if (isFailed) colors.accentDanger else colors.onSurfaceCode,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 0.5.sp,
-            )
-            ExpandChevron(
-                expanded = isOutputExpanded,
-                tint = if (isFailed) colors.accentDanger else colors.textSecondary,
-                size = 10.dp,
-            )
-        }
-
-        ExpandableContent(expanded = isOutputExpanded) {
-            Box(
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(colors.surfaceCode)
-                    .border(
-                        1.dp,
-                        if (isFailed) colors.accentDanger.copy(alpha = 0.4f) else colors.surfaceCardBorder,
-                        RoundedCornerShape(6.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                SelectionContainer {
-                    Text(
-                        text = output,
-                        color = if (isFailed) colors.accentDanger else colors.onSurfaceCode,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.5.sp,
-                        lineHeight = 16.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .containScroll()
-                            .heightIn(max = maxHeight)
-                            .verticalScroll(rememberScrollState())
-                    )
-                }
-            }
+                    .containScroll()
+                    .heightIn(max = maxHeight)
+                    .verticalScroll(rememberScrollState())
+            )
         }
     }
 }
@@ -533,9 +489,21 @@ data class ParsedAskItem(
 
 /**
  * 从 ask_user 的入参 (input) 与工具出参 (output) 中解析结构化问答项。
+ *
+ * output 形态：
+ * - `{"answers":[{"questionId":"q1","answers":[...]},...]}`（ask_user 的 AskUserResult 标准形态）
+ * - 裸数组 `[{"questionId":...,"answers":[...]},...]`（同样按 questionId 归位）
+ * - 非 JSON 纯文本（自定义工具的自由文本返回）→ 回退 generalAnswer
+ *
+ * 硬化（ask_user 已回答显示根因修复的 UI 侧配套）：
+ * - 合法 JSON 但没提取出任何 answer 时，**不再**把原始 JSON 回退塞进问题（generalAnswer 保持 null）；
+ * - Koog 引号包裹的遗留脏数据（`"{"answers":...}"`，JSONLiteral.toString() 包引号不转义）
+ *   解析失败后同样不进 generalAnswer——整串原始 JSON 绝不显示为答案。
  */
 fun parseAskItems(input: Map<String, String>, output: String?): List<ParsedAskItem> {
     val answersMap = mutableMapOf<String, String>()
+    // 输出顺序的答案列表（questionId 缺失/不匹配时按序 1:1 回退用）
+    val orderedAnswers = mutableListOf<String>()
     var generalAnswer: String? = null
     var isDeclined = false
 
@@ -547,25 +515,41 @@ fun parseAskItems(input: Map<String, String>, output: String?): List<ParsedAskIt
             try {
                 val json = Json { ignoreUnknownKeys = true; isLenient = true }
                 val root = json.parseToJsonElement(trimmed)
-                if (root is JsonObject) {
-                    val answersArray = root["answers"] as? JsonArray
-                    answersArray?.forEach { elem ->
-                        if (elem is JsonObject) {
+                // 兼容 `{"answers":[...]}` 对象形态与裸数组形态
+                val answersArray: JsonArray? = when (root) {
+                    is JsonObject -> root["answers"] as? JsonArray
+                    is JsonArray -> root
+                    else -> null
+                }
+                answersArray?.forEach { elem ->
+                    when (elem) {
+                        is JsonObject -> {
                             val qId = (elem["questionId"] as? JsonPrimitive)?.contentOrNull.orEmpty()
                             val ansList = (elem["answers"] as? JsonArray)?.mapNotNull {
                                 (it as? JsonPrimitive)?.contentOrNull
                             }
-                            if (qId.isNotBlank() && !ansList.isNullOrEmpty()) {
-                                answersMap[qId] = ansList.joinToString(", ")
+                            if (ansList.isNullOrEmpty()) return@forEach
+                            val answerText = ansList.joinToString(", ")
+                            orderedAnswers.add(answerText)
+                            if (qId.isNotBlank()) {
+                                answersMap[qId] = answerText
                             }
                         }
+                        is JsonPrimitive -> {
+                            // 裸字符串数组 ["A", "B"]：无 questionId，只进顺序列表
+                            val text = elem.contentOrNull
+                            if (!text.isNullOrBlank()) orderedAnswers.add(text)
+                        }
+                        else -> Unit
                     }
                 }
-                if (answersMap.isEmpty()) {
+                // 合法 JSON 但未提取出任何 answer（空 answers 数组 / 无关 JSON）→ 不回退原始 JSON
+            } catch (_: Exception) {
+                // 回退仅保留给非 JSON 纯文本输出（如自定义工具返回的自由文本）；
+                // Koog 引号包裹的 JSON 字符串（遗留脏数据）不是纯文本，不进 generalAnswer
+                if (!isQuotedLegacyJson(trimmed)) {
                     generalAnswer = trimmed
                 }
-            } catch (_: Exception) {
-                generalAnswer = trimmed
             }
         }
     }
@@ -613,17 +597,34 @@ fun parseAskItems(input: Map<String, String>, output: String?): List<ParsedAskIt
         questions.add(ParsedAskItem(id = "q_0", prompt = fallbackPrompt))
     }
 
+    // questionId 是否全部不匹配（答案里虽有 questionId，但没有一个对应当前问题的 id）
+    val anyIdMatched = questions.any { answersMap.containsKey(it.id) }
+
     return questions.mapIndexed { idx, q ->
         val ans = when {
             isDeclined -> null
             answersMap.containsKey(q.id) -> answersMap[q.id]
             questions.size == 1 && answersMap.isNotEmpty() -> answersMap.values.first()
             questions.size == 1 && generalAnswer != null -> generalAnswer
+            // 多问且 questionId 全部不匹配、但答案数与问题数一致 → 按序一一对应（最后回退）
+            !anyIdMatched && orderedAnswers.size == questions.size -> orderedAnswers[idx]
             idx == 0 && generalAnswer != null -> generalAnswer
             else -> null
         }
         q.copy(answer = ans, isDeclined = isDeclined)
     }
+}
+
+/**
+ * 判定 [text] 是否为 Koog 引号包裹的 JSON 字符串遗留脏数据：
+ * 首尾各一个 `"`、内部以 `{` / `[` 开头——`JSONLiteral.toString()` 对字符串
+ * 包引号且不转义内部引号的根因形态（如 `"{"answers":[...]}"`）。
+ * 这类内容绝不是"自由文本答案"，不允许回退显示为答案。
+ */
+private fun isQuotedLegacyJson(text: String): Boolean {
+    if (text.length < 4 || !text.startsWith("\"") || !text.endsWith("\"")) return false
+    val inner = text.substring(1, text.length - 1).trimStart()
+    return inner.startsWith("{") || inner.startsWith("[")
 }
 
 /**

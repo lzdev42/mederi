@@ -21,7 +21,14 @@ enum class ProtocolType(val displayName: String, val placeholderUrl: String) {
  * 推理级别常量。名称与 core 的 ReasoningLevel 枚举一一对应。
  */
 object ReasoningLevels {
-    val SELECTABLE = listOf("LOW", "MEDIUM", "HIGH", "MAX")
+    /** 全序列唯一真理源（含 NONE 关闭档，按显示顺序） */
+    val ORDER = listOf("NONE", "MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH", "MAX")
+
+    /** 可选档位（去 NONE），派生自 [ORDER] */
+    val SELECTABLE = ORDER.filter { it != "NONE" }
+
+    /** 是否为激活档位（非 NONE）。NONE 是"关闭"语义，不算有效档位。 */
+    fun isActiveLevel(level: String): Boolean = !level.equals("NONE", ignoreCase = true)
 }
 
 enum class ProviderType { Builtin, Custom }

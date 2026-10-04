@@ -57,6 +57,9 @@ interface SessionManager {
     suspend fun listMessages(id: String): List<Message>
     suspend fun getMessage(id: String, messageId: String): Message
 
+    /** 当前上下文占用（token），口径与压缩判定同源（AI 视图窗口：压缩后走估算，否则用 API 报告的真实 inputTokens）。 */
+    suspend fun contextUsedTokens(id: String): Int
+
     /** 原始消息直读（调试用）：落库时的原始 JSON payload，不解析不映射。 */
     suspend fun listRawMessages(id: String): List<RawMessageRecord>
 

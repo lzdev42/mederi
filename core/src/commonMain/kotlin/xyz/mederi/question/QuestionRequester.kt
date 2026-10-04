@@ -17,7 +17,6 @@ data class Question(
     val id: String,
     val prompt: String,
     val options: List<String> = emptyList(),
-    val allowCustom: Boolean = false,
     val multiSelect: Boolean = false
 )
 

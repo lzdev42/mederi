@@ -18,17 +18,19 @@ enum class TurnStatus {
     Generating,
     WaitingAnswer,
     Retrying,
+    Compacting,
     Aborted;
 
     /**
      * 该状态是否需要在状态栏（StatusBar）中展示。
      * - 等待响应阶段（Sending, Preparing）：展示状态栏以消除用户焦虑；
+     * - 压缩进行中（Compacting）：状态栏持续显示，展示压缩耗时；
      * - 收到推理/正文/工具等内容时（Thinking, Generating, CallingTool...）：卡片内已有对应内容在渲染，状态栏隐藏；
      * - 仅在异常重试时（Retrying）：状态栏重新出现，展示重试轮次与真实错误信息。
      */
     val shouldDisplayInStatusBar: Boolean
         get() = when (this) {
-            Sending, Preparing, Retrying -> true
+            Sending, Preparing, Retrying, Compacting -> true
             Thinking, Generating, CallingTool, WaitingAnswer, Aborted, Idle -> false
         }
 }

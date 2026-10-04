@@ -80,18 +80,26 @@ class MarkdownParser(
      * AST 可能滞后最多该字符数（碰到 `\n` 必定 flush，所以已写完的行不受影响）。
      */
     val appendCoalesceThreshold: Int = 0,
+    /** 是否启用 ==highlight== 语法。null 时由 [flavour] 的 enableHighlight 决定。 */
+    val enableHighlight: Boolean? = null,
 ) {
+    val effectiveEnableHighlight: Boolean = enableHighlight ?: flavour.enableHighlight
     private val lintingProcessor: LintingPostProcessor? = if (enableLinting) LintingPostProcessor() else null
     private val streamingParser = StreamingParser(
         flavour, customEmojiMap, enableAsciiEmoticons, lintingProcessor,
         appendCoalesceThreshold = appendCoalesceThreshold,
+        enableHighlight = effectiveEnableHighlight,
     )
     /**
      * Edit engine 仅在编辑 API（applyEdit / replace 等）首次被调用时才构造。
      * 大多数 LLM 流式场景不会触碰编辑路径，可省去一次 IncrementalEngine + FlavourCache 构造。
      */
     private val editEngine: IncrementalEngine by lazy {
-        IncrementalEngine(flavour, customEmojiMap, enableAsciiEmoticons, lintingProcessor = lintingProcessor)
+        IncrementalEngine(
+            flavour, customEmojiMap, enableAsciiEmoticons,
+            lintingProcessor = lintingProcessor,
+            enableHighlight = effectiveEnableHighlight,
+        )
     }
 
     /**

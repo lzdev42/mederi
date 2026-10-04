@@ -82,8 +82,6 @@
     <string name="tool_action_verify_target">Sous-tâche vérifiée %1$s</string>
     <string name="tool_action_verify_running">Vérification de la sous-tâche…</string>
     <string name="tool_action_verify_running_target">Vérification de la sous-tâche %1$s…</string>
-    <string name="tool_detail_output">SORTIE</string>
-    <string name="tool_detail_failed_output">ÉCHEC</string>
     <string name="tool_detail_report">RAPPORT</string>
     <string name="worktrace_summary_title">Activité</string>
     <string name="worktrace_steps_count">%1$d étapes</string>
@@ -93,9 +91,11 @@
     <string name="reasoning_thought">Réfléchi</string>
     <string name="reasoning_thinking">Réflexion en cours...</string>
     <string name="reasoning_thinking_for">Réflexion en cours (%1$s)...</string>
+    <string name="reasoning_level_minimal">Minimal</string>
     <string name="reasoning_level_low">Faible</string>
     <string name="reasoning_level_medium">Moyen</string>
     <string name="reasoning_level_high">Élevé</string>
+    <string name="reasoning_level_xhigh">X-Élevé</string>
     <string name="reasoning_level_max">Maximum</string>
     <string name="reasoning_level_none">Désactivé</string>
     <string name="footer_reasoning">Raisonnement %1$s</string>
@@ -163,6 +163,7 @@
     <string name="status_idle">Inactif</string>
     <string name="status_sending">Envoi en cours</string>
     <string name="status_preparing">Envoyé, en attente de réponse</string>
+    <string name="status_compacting">Compression en cours</string>
     <string name="status_thinking">L'IA réfléchit</string>
     <string name="status_calling_tool">Appel d'outils en cours</string>
     <string name="status_generating">Génération de la réponse</string>
@@ -345,7 +346,7 @@
     <string name="settings_panel_badge_free">Gratuit</string>
     <string name="settings_panel_capability_image">Image</string>
     <string name="settings_panel_capability_thinking">Raisonnement</string>
-    <string name="settings_panel_capability_thinking_levels">Raisonnement (%1$s)</string>
+    <string name="settings_panel_capability_thinking_levels">Raisonnement · %1$s</string>
     <string name="settings_panel_reasoning_edit_hint">Paramètres de raisonnement (un fragment JSON de corps de requête par niveau, fusionné tel quel ; les niveaux vides n'envoient rien)</string>
     <string name="settings_panel_save_reconnect">Enregistrer et reconnecter</string>
     <string name="settings_panel_save_config">Enregistrer la configuration</string>
@@ -416,9 +417,11 @@
     <string name="model_deleted">Modèle supprimé</string>
     <string name="model_delete_failed">Échec de la suppression : %1$s</string>
     <string name="settings_panel_level_none_hint">Désactivé / paramètre permanent (généralement vide)</string>
+    <string name="settings_panel_level_minimal_hint">Minimal</string>
     <string name="settings_panel_level_low_hint">Faible</string>
     <string name="settings_panel_level_medium_hint">Moyen</string>
     <string name="settings_panel_level_high_hint">Élevé</string>
+    <string name="settings_panel_level_xhigh_hint">X-Élevé</string>
     <string name="settings_panel_level_max_hint">Max</string>
     <string name="settings_panel_level_none_placeholder">Laisser vide ; pour forcer la désactivation, ex. {"enable_thinking":false}</string>
     <string name="settings_agents_title">Configuration des agents</string>
@@ -546,12 +549,9 @@
     <string name="plan_approval_proceed">Continuer</string>
     <string name="dock_artifact_empty">Aucun artefact ou pièce jointe ouverte</string>
     <string name="dock_artifact_empty_hint">Cliquez sur une image ou pièce jointe dans le chat, ou ouvrez un artefact pour l'afficher ici</string>
-    <string name="dock_context_metrics">Indicateurs CONTEXT</string>
-    <string name="dock_context_used">%1$s utilisé</string>
     <string name="dock_context_max">Max %1$s</string>
     <string name="dock_context_unset">contextWindow non défini</string>
     <string name="dock_requests_title">Requêtes</string>
-    <string name="dock_requests_count">%1$s requêtes</string>
     <string name="dock_cost_title">Coût estimé (indicatif)</string>
     <string name="dock_compact_context">Compacter le contexte</string>
     <string name="compaction_skipped_title">Aucune compression requise</string>
@@ -668,7 +668,6 @@
     <string name="diff_files_changed">%1$d fichier(s) modifié(s) +%2$d -%3$d</string>
     <string name="diff_review">Révision</string>
     <string name="rp_todo_list_title">LISTE DE TÂCHES</string>
-    <string name="rp_tokens_used">%1$d jetons</string>
     <string name="sys_cpu">CPU</string>
     <string name="provider_api_key">Clé API</string>
     <string name="provider_base_url">Base URL</string>
@@ -698,7 +697,7 @@
     <string name="overview_title">Aperçu</string>
     <string name="overview_section_conversation">Conversation</string>
     <string name="overview_section_plan">Plan</string>
-    <string name="overview_tokens_title">Utilisation des jetons</string>
+    <string name="overview_context_usage_title">Utilisation du contexte</string>
     <string name="status_working">En cours</string>
     <string name="status_waiting">En attente</string>
     <string name="status_error">Erreur</string>

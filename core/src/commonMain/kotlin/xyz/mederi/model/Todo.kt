@@ -8,8 +8,8 @@ import kotlinx.serialization.json.Json
 /**
  * Todo 条目状态。
  *
- * [FAILED] 仅由 Plan 子任务投影产生（verify_subtask 判 FAIL）；
- * update_todo 工具参数不接受它——模型 todo 没有"失败"语义。
+ * [FAILED] 预留给 Plan 验证结果语义（verify_subtask 判 FAIL）；update_todo 工具参数不接受它——
+ * 模型 todo 没有"失败"语义。
  */
 @Serializable
 enum class TodoStatus {
@@ -23,9 +23,8 @@ enum class TodoStatus {
 /**
  * 轻量 todo 条目（无 Plan 任务的工作进度跟踪）。
  *
- * 唯一序列化形状：sessions.todos 列落库与 TODO_UPDATED / PLAN_PROGRESS 事件 payload
- * 共用本类型，payload key 统一为 "todos"。禁止任何其他 JSON 形状（防真理源碎片）。
- * Plan 子任务投影复用本类型（content = "Subtask {n}: {name}"，见 PlanProjection.kt）。
+ * 唯一序列化形状：sessions.todos 列落库与 TODO_UPDATED 事件 payload 共用本类型，
+ * payload key 统一为 "todos"。禁止任何其他 JSON 形状（防真理源碎片）。
  */
 @Serializable
 data class TodoItem(

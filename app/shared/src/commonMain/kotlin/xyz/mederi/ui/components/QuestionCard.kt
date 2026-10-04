@@ -46,7 +46,8 @@ import xyz.mederi.ui.components.atoms.MederiSurfaceButton
  * 1. options 为空 -> 自由文本输入框（OutlinedTextField）
  * 2. options 非空且 multiSelect = false -> 单选列表（RadioButton）
  * 3. options 非空且 multiSelect = true -> 多选列表（Checkbox）
- * 额外支持 allowCustom = true 时的自定义输入框。
+ * 选项题（options 非空）恒定附带自定义输入框：无论单选/多选，用户都可提交非选项的自定义回答
+ * （自定义输入恒可用，该门禁协议字段已删除，不再作为门禁）。
  */
 @Composable
 fun QuestionCard(
@@ -147,7 +148,7 @@ fun QuestionCard(
                                 if (qInfo.multiSelect) {
                                     onAnswer(if (isSelected) selectedAnswers - opt else selectedAnswers + opt)
                                 } else {
-                                    val nonOptions = if (qInfo.allowCustom) selectedAnswers.filter { it !in qInfo.options } else emptyList()
+                                    val nonOptions = selectedAnswers.filter { it !in qInfo.options }
                                     onAnswer(listOf(opt) + nonOptions)
                                 }
                             }
@@ -181,31 +182,29 @@ fun QuestionCard(
                     }
                 }
 
-                if (qInfo.allowCustom) {
-                    val customValue = selectedAnswers.firstOrNull { it !in qInfo.options } ?: ""
-                    OutlinedTextField(
-                        value = customValue,
-                        onValueChange = { newCustom ->
-                            val currentOptions = selectedAnswers.filter { it in qInfo.options }
-                            val next = if (newCustom.isBlank()) currentOptions else currentOptions + newCustom
-                            onAnswer(next)
-                        },
-                        placeholder = { Text(stringResource(Res.string.question_custom_placeholder), fontSize = 11.sp, color = colors.textMuted) },
-                        modifier = Modifier.fillMaxWidth(),
-                        textStyle = TextStyle(fontSize = 11.sp, color = colors.textPrimary),
-                        shape = RoundedCornerShape(6.dp),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = colors.surfaceWorkspace,
-                            unfocusedContainerColor = colors.surfaceWorkspace,
-                            focusedBorderColor = colors.accentPrimary,
-                            unfocusedBorderColor = colors.divider,
-                            focusedTextColor = colors.textPrimary,
-                            unfocusedTextColor = colors.textPrimary,
-                            cursorColor = colors.accentPrimary
-                        )
+                val customValue = selectedAnswers.firstOrNull { it !in qInfo.options } ?: ""
+                OutlinedTextField(
+                    value = customValue,
+                    onValueChange = { newCustom ->
+                        val currentOptions = selectedAnswers.filter { it in qInfo.options }
+                        val next = if (newCustom.isBlank()) currentOptions else currentOptions + newCustom
+                        onAnswer(next)
+                    },
+                    placeholder = { Text(stringResource(Res.string.question_custom_placeholder), fontSize = 11.sp, color = colors.textMuted) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = TextStyle(fontSize = 11.sp, color = colors.textPrimary),
+                    shape = RoundedCornerShape(6.dp),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = colors.surfaceWorkspace,
+                        unfocusedContainerColor = colors.surfaceWorkspace,
+                        focusedBorderColor = colors.accentPrimary,
+                        unfocusedBorderColor = colors.divider,
+                        focusedTextColor = colors.textPrimary,
+                        unfocusedTextColor = colors.textPrimary,
+                        cursorColor = colors.accentPrimary
                     )
-                }
+                )
             }
         }
 

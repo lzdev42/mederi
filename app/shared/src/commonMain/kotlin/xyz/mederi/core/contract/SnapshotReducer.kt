@@ -259,7 +259,6 @@ object SnapshotReducer {
         }
 
         CoreEventType.PLAN_PROGRESS -> {
-            val todos = event.payload["todos"]?.let(::decodeTodoProjection)
             val planId = event.payload["planId"]
             val action = event.payload["action"]
             val subtasksJson = event.payload["subtasks"]
@@ -287,8 +286,7 @@ object SnapshotReducer {
                 }
             } else snapshot.planApprovals
 
-            val withTodos = if (todos != null) snapshot.copy(todos = todos) else snapshot
-            withTodos.copy(planApprovals = updatedApprovals)
+            snapshot.copy(planApprovals = updatedApprovals)
         }
 
         CoreEventType.PLAN_APPROVAL_RESOLVED -> {
@@ -331,7 +329,7 @@ object SnapshotReducer {
     }
 
     // ------------------------------------------------------------------
-    // 私有：Todo 投影解码（TODO_UPDATED / PLAN_PROGRESS 共用，无状态整体替换）
+    // 私有：Todo 投影解码（TODO_UPDATED 使用，无状态整体替换；todo-list 与 plan 已解耦）
     // ------------------------------------------------------------------
 
     private val todoWireJson = Json { ignoreUnknownKeys = true }

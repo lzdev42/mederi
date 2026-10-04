@@ -30,7 +30,7 @@ import mederi.app.shared.generated.resources.dock_artifact_empty_hint
 import mederi.app.shared.generated.resources.dock_compact_context
 import mederi.app.shared.generated.resources.dock_context_max
 import mederi.app.shared.generated.resources.dock_context_unset
-import mederi.app.shared.generated.resources.overview_tokens_title
+import mederi.app.shared.generated.resources.overview_context_usage_title
 import mederi.app.shared.generated.resources.dock_cost_title
 import mederi.app.shared.generated.resources.dock_diff_empty
 import mederi.app.shared.generated.resources.dock_diff_empty_hint
@@ -300,18 +300,20 @@ private fun OverviewSectionHeader(
 }
 
 /**
- * Token 用量卡（原型 .overview-tokens-card）：标题行（+ 压缩按钮）+ 主值/副文本 + 4dp 进度条。
+ * 上下文占用卡（原型 .overview-tokens-card）：标题行（+ 压缩按钮）+ 主值/副文本 + 4dp 进度条。
+ * 口径：显示的是当前 AI 视图窗口的占用（压缩后按窗口估算，否则用 API 报告的最近一次请求
+ * prompt 大小），不是累计 token 消耗。
  * 无 contextWindow 时不伪造占比：主值 "--"、副文本提示未设置、进度条不渲染。
  */
 @Composable
-private fun TokensOverviewCard(
-    usedTokens: Long,
-    maxTokens: Int,
+private fun ContextUsageCard(
+    contextUsedTokens: Long,
+    contextWindow: Int,
     onCompact: () -> Unit,
     colors: MederiColors
 ) {
-    val hasWindow = maxTokens > 0
-    val progressRatio = if (hasWindow) (usedTokens.toFloat() / maxTokens.toFloat()).coerceIn(0f, 1f) else 0f
+    val hasWindow = contextWindow > 0
+    val progressRatio = if (hasWindow) (contextUsedTokens.toFloat() / contextWindow.toFloat()).coerceIn(0f, 1f) else 0f
     val percentText = if (hasWindow) "${(progressRatio * 100).toInt()}%" else "--"
 
     Column(
@@ -330,7 +332,7 @@ private fun TokensOverviewCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = stringResource(Res.string.overview_tokens_title),
+                text = stringResource(Res.string.overview_context_usage_title),
                 color = colors.textSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
@@ -350,7 +352,7 @@ private fun TokensOverviewCard(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = if (hasWindow) formatTokenShort(usedTokens) else "--",
+                text = if (hasWindow) formatTokenShort(contextUsedTokens) else "--",
                 modifier = Modifier.alignByBaseline(),
                 color = colors.textPrimary,
                 fontSize = 24.sp,
@@ -360,7 +362,7 @@ private fun TokensOverviewCard(
             )
             Text(
                 text = if (hasWindow) {
-                    "$percentText · ${stringResource(Res.string.dock_context_max, maxTokens)}"
+                    "$percentText · ${stringResource(Res.string.dock_context_max, contextWindow)}"
                 } else {
                     stringResource(Res.string.dock_context_unset)
                 },
@@ -442,7 +444,7 @@ private fun formatTokenShort(tokens: Long): String {
     }
 }
 
-/** 参考费用展示（三位小数收敛）；与 MetricsCards.kt 内同名 private 函数互不冲突（文件私有）。 */
+/** 参考费用展示（三位小数收敛），文件私有。 */
 private fun formatCost(cost: Double): String {
     return if (cost < 0.001) "0.000" else (kotlin.math.round(cost * 1000) / 1000.0).toString()
 }
@@ -466,7 +468,7 @@ internal fun OverviewTabContent(
     // 参考价估算（models.dev 目录价 × token 用量），非真实账单
     val costUsd = viewModel.referenceCostUsd
     val todoList = viewModel.todos
-    // null = 模型未配置 contextWindow：映射为 0，TokensOverviewCard 据此显示 "--" 而非伪造 0% 已用
+    // null = 模型未配置 contextWindow：映射为 0，ContextUsageCard 据此显示 "--" 而非伪造 0% 已用
     val maxTokensValue = maxTokens ?: 0
 
     val plans = viewModel.planOverviewList
@@ -487,9 +489,9 @@ internal fun OverviewTabContent(
         )
 
         // 会话状态区（原型分节头已按用户要求移除，仅保留卡片）
-        TokensOverviewCard(
-            usedTokens = usedTokens,
-            maxTokens = maxTokensValue,
+        ContextUsageCard(
+            contextUsedTokens = usedTokens,
+            contextWindow = maxTokensValue,
             onCompact = { viewModel.requestCompaction() },
             colors = colors
         )

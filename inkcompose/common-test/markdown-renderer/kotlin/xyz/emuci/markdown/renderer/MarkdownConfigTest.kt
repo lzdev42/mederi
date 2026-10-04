@@ -139,4 +139,19 @@ class MarkdownConfigTest {
     fun should_default_singleton_not_have_heading_numbering() {
         assertFalse(MarkdownConfig.Default.enableHeadingNumbering)
     }
+
+    @Test
+    fun should_default_enable_highlight_to_null() {
+        val config = MarkdownConfig()
+        assertEquals(null, config.enableHighlight)
+    }
+
+    @Test
+    fun should_override_enable_highlight() {
+        val disabled = MarkdownConfig(enableHighlight = false)
+        assertEquals(false, disabled.enableHighlight)
+        val enabled = MarkdownConfig(enableHighlight = true)
+        assertEquals(true, enabled.enableHighlight)
+        assertNotEquals(disabled, enabled)
+    }
 }

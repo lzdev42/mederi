@@ -82,8 +82,6 @@
     <string name="tool_action_verify_target">Memverifikasi sub-tugas %1$s</string>
     <string name="tool_action_verify_running">Memverifikasi sub-tugas…</string>
     <string name="tool_action_verify_running_target">Memverifikasi sub-tugas %1$s…</string>
-    <string name="tool_detail_output">OUTPUT</string>
-    <string name="tool_detail_failed_output">GAGAL</string>
     <string name="tool_detail_report">LAPORAN</string>
     <string name="worktrace_summary_title">Proses Kerja</string>
     <string name="worktrace_steps_count">%1$d langkah</string>
@@ -93,9 +91,11 @@
     <string name="reasoning_thought">Pemikiran</string>
     <string name="reasoning_thinking">Sedang berpikir...</string>
     <string name="reasoning_thinking_for">Sedang berpikir (%1$s)...</string>
+    <string name="reasoning_level_minimal">Minimal</string>
     <string name="reasoning_level_low">Rendah</string>
     <string name="reasoning_level_medium">Sedang</string>
     <string name="reasoning_level_high">Tinggi</string>
+    <string name="reasoning_level_xhigh">X-Tinggi</string>
     <string name="reasoning_level_max">Maks</string>
     <string name="reasoning_level_none">Nonaktif</string>
     <string name="footer_reasoning">Penalaran %1$s</string>
@@ -163,6 +163,7 @@
     <string name="status_idle">Siaga</string>
     <string name="status_sending">Mengirim</string>
     <string name="status_preparing">Terkirim, menunggu respons</string>
+    <string name="status_compacting">Mengompres</string>
     <string name="status_thinking">AI sedang berpikir</string>
     <string name="status_calling_tool">Memanggil alat</string>
     <string name="status_generating">Menghasilkan balasan</string>
@@ -345,7 +346,7 @@
     <string name="settings_panel_badge_free">Gratis</string>
     <string name="settings_panel_capability_image">Gambar</string>
     <string name="settings_panel_capability_thinking">Penalaran</string>
-    <string name="settings_panel_capability_thinking_levels">Penalaran (%1$s)</string>
+    <string name="settings_panel_capability_thinking_levels">Penalaran · %1$s</string>
     <string name="settings_panel_reasoning_edit_hint">Parameter penalaran (fragmen body JSON per level, digabungkan apa adanya; level kosong tidak dikirim)</string>
     <string name="settings_panel_save_reconnect">Simpan &amp; hubungkan ulang</string>
     <string name="settings_panel_save_config">Simpan konfigurasi</string>
@@ -416,9 +417,11 @@
     <string name="model_deleted">Model dihapus</string>
     <string name="model_delete_failed">Gagal menghapus: %1$s</string>
     <string name="settings_panel_level_none_hint">Parameter mati / selalu aktif (biasanya kosong)</string>
+    <string name="settings_panel_level_minimal_hint">Minimal</string>
     <string name="settings_panel_level_low_hint">Rendah</string>
     <string name="settings_panel_level_medium_hint">Sedang</string>
     <string name="settings_panel_level_high_hint">Tinggi</string>
+    <string name="settings_panel_level_xhigh_hint">X-Tinggi</string>
     <string name="settings_panel_level_max_hint">Maks</string>
     <string name="settings_panel_level_none_placeholder">Kosongkan; untuk menonaktifkan paksa gunakan {"enable_thinking":false}</string>
     <string name="settings_agents_title">Konfigurasi agen</string>
@@ -546,12 +549,9 @@
     <string name="plan_approval_proceed">Lanjutkan</string>
     <string name="dock_artifact_empty">Tidak ada artefak atau lampiran yang terbuka</string>
     <string name="dock_artifact_empty_hint">Klik gambar atau lampiran teks di obrolan, atau buka artefak yang dihasilkan, untuk menampilkannya di sini</string>
-    <string name="dock_context_metrics">Metrik KONTEKS</string>
-    <string name="dock_context_used">%1$s digunakan</string>
     <string name="dock_context_max">Maks %1$s</string>
     <string name="dock_context_unset">contextWindow belum diatur</string>
     <string name="dock_requests_title">Permintaan</string>
-    <string name="dock_requests_count">%1$s permintaan</string>
     <string name="dock_cost_title">Estimasi biaya (referensi)</string>
     <string name="dock_compact_context">Padatkan konteks</string>
     <string name="compaction_skipped_title">Tidak perlu pemadatan</string>
@@ -668,7 +668,6 @@
     <string name="diff_files_changed">%1$d file diubah +%2$d -%3$d</string>
     <string name="diff_review">Tinjauan</string>
     <string name="rp_todo_list_title">DAFTAR TUGAS</string>
-    <string name="rp_tokens_used">%1$d Token</string>
     <string name="sys_cpu">CPU</string>
     <string name="provider_api_key">API Key</string>
     <string name="provider_base_url">Base URL</string>
@@ -698,7 +697,7 @@
     <string name="overview_title">Ringkasan</string>
     <string name="overview_section_conversation">Percakapan</string>
     <string name="overview_section_plan">Rencana</string>
-    <string name="overview_tokens_title">Penggunaan Token</string>
+    <string name="overview_context_usage_title">Penggunaan Konteks</string>
     <string name="status_working">Bekerja</string>
     <string name="status_waiting">Menunggu</string>
     <string name="status_error">Kesalahan</string>

@@ -100,7 +100,7 @@ classDiagram
 | `SubagentRole` | `EXECUTOR, RESEARCHER, BROWSER_OPERATOR, BROWSER_BRAIN` | EXECUTOR=全工具（无 plan/spawn/verify/ask_user/todo）；RESEARCHER=只读 read_file/list_directory；**BROWSER_OPERATOR/BROWSER_BRAIN=浏览器操作配置专属角色（2026-09-23）**：仅用于设置页为其配独立模型/推理档（AgentConfigCard 图标 Globe），BrowserTaskManager 后台派发时按角色解析（operator/brain 各建 llmCaller）；实际执行走 BrowserTaskManager 后台，不经 turn 子代理路径（SystemPrompts.forSubagent/SubagentRunnerImpl 对这两角色抛 IllegalStateException） |
 | `AgentCapabilities` | `MAIN, EXECUTOR, RESEARCHER, BROWSER`（每值含 `inheritMcp` / `inheritSkills`） | **中心化继承策略唯一表**：MAIN(true,true) / EXECUTOR(true,true) / RESEARCHER(true,false) / **BROWSER(true,true)**（2026-09-23：浏览器操作角色，of() 映射 BROWSER_OPERATOR/BROWSER_BRAIN，实际不经 turn 执行）。`of(subagentRole?)` 映射；TurnExecutor 开 MCP 会话与注入 skills 提示词都只读此表。**新增子代理=SubagentRole 加值 + 本表加一行 + of 加一个分支** |
 | `ModelOrigin` | `FETCHED, MANUAL` | FETCHED=端点/目录权威（唯一写路径 ModelMerge）；MANUAL=用户权威 |
-| `TodoStatus` | `PENDING, IN_PROGRESS, COMPLETED, CANCELLED, FAILED`（wire 小写；FAILED 仅 Plan 投影产生） | |
+| `TodoStatus` | `PENDING, IN_PROGRESS, COMPLETED, CANCELLED, FAILED`（wire 小写；FAILED 预留给 Plan 验证结果语义——verify_subtask 产生于 `Subtask.status`，不投影进 todos） | |
 | `PlanStatus` | `PENDING_APPROVAL, APPROVED, IN_PROGRESS, COMPLETED, VOIDED` | VOIDED = 作废（voidActivePlans，双文件移入 plans-voided/）；终态 = COMPLETED 或 VOIDED |
 | `SubtaskStatus` | `PENDING, IN_PROGRESS, COMPLETED, FAILED` | |
 | `VerifyStatus` | `PASS, PARTIAL, FAIL` | |
@@ -108,7 +108,7 @@ classDiagram
 | `ProjectContextType` | `GREENFIELD, BROWNFIELD` | |
 | `FileChangeStatus` | `ADDED, MODIFIED, DELETED` | diff 用 |
 | `ProviderType` | `OPENAI_CHAT, OPENAI_RESPONSES, GOOGLE` | |
-| `ReasoningLevel` | `NONE, LOW, MEDIUM, HIGH, MAX` | |
+| `ReasoningLevel` | `NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX` | |
 
 ### 2.3 关键 data class 字段（穷尽）
 
@@ -155,6 +155,8 @@ suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean, a
 % AI 读到 Active Plan=APPROVED 自行走执行链；拒绝 → 直接 false，计划保持 PENDING_APPROVAL
 fun getSubagentReport(agentId: String): SubagentReportData?   // 子代理汇报直读（优先落盘文件，供 Server/UI）
 suspend fun compressHistory(id: String)
+suspend fun contextUsedTokens(id: String): Int   // 当前上下文占用唯一入口 = aiViewContextUsedTokens(historyStore, id, session.aiModel?.supportsImages ?: true)
+% UI 概览 / getSnapshot / listMessagesPage / GetContextRemainingTool 取「当前上下文占用」统一走这里；SessionApi 同名方法转发（SessionApiImpl → sessionManager.contextUsedTokens）
 suspend fun listMessages(id: String): List<Message>
 suspend fun getMessage(id: String, messageId: String): Message
 suspend fun listRawMessages(id: String): List<RawMessageRecord>  // payload 原文直读，调试用
@@ -307,6 +309,7 @@ classDiagram
         +resolveQuestion(id, qid, answers)
         +resolvePlanApproval(id, planId, approved)
         +compressHistory(id)
+        +contextUsedTokens(id) Int   % 当前上下文占用唯一入口(aiViewContextUsedTokens,与压缩判定同源)
         +events() Flow
     }
     class TurnExecutor {
@@ -421,7 +424,7 @@ classDiagram
   4. 解析 effectiveModel/effectiveReasoningLevel → 回写 `sessionStore.updateAgentConfig`
   5. **durable-first**：`buildUserMessage`（在最后 Text part 追加 `<<<NOT_FOR_UI>>>` + UTC/Local 时间 + CommandSandbox.environmentNote + 项目目录 + 白名单 + `.mederi` 路径）→ `historyStore.append`（用户消息先落库）
   6. 置 RUNNING → PlanApprovalRequester 入 map → `scope.launch { runTurn(...) }`
-- **runTurn**：`ParentDiffRegistry.register(sessionId, diffTracker)`（主 turn 注册 tracker，供子代理 turn 结束时把改动合并进来）→ `preflightCompressionIfNeeded`（contextUsedTokens > 70% 窗口先 compressOnce，失败不阻塞但原因回灌 streamWarning → MESSAGE_COMPLETED/MESSAGE_ERROR 的 warning 字段对用户可见）→ 建 QuestionRequester → 组装 `AgentsSubtreeDiscovery`（AgentsFileLoader.discoverSubtree + 会话级去重 registry `agentsDiscovered[sessionId]`，v1 内存态）→ `ToolFactory.build`（透传 agentsDiscovery 给 FileSystemTools 做 AGENTS.md 子树懒发现，见 §7.4）→ `buildTurnAgent` → `agent.run(MEDERI_INPUT_PERSISTED, sessionId)`（哨兵输入：用户消息已落库，LLM 节点不再追加）→ newContextFlag 消费（insertMarker）→ 置 IDLE + MESSAGE_COMPLETED（断流时带 ErrorRecord payload：`error/errorId/fullDiagnostic/errorSeverity=WARNING` → 客户端 ErrorBoard 展示+可展开详细报告，另带 `warning` 人类提示文本；HTTP 状态码/网络异常/提前关闭+已收帧数字符数）→ diffTracker.captureSnapshot + diffStore.save（finally 里 `ParentDiffRegistry.unregister(sessionId)`；若构造时传入 `onTurnDiff` 回调，则把最终 TurnDiff 经回调上交——子代理 turn 用此机制把改动合并进父 turn 的 diffTracker，修复"turn 改动摘要不含子代理改动"）。错误分类：`RetryableLLMClient.isTransientError` 或 `record.severity == ErrorSeverity.RECOVERABLE`（含限流/网络中断/HTTP2流重置） → IDLE + MESSAGE_ERROR（环境态可恢复，不标 ERROR）；否则 ERROR + MESSAGE_ERROR。所有错误路径统一经 `ErrorCollector.collect` 生成 MESSAGE_ERROR 的 rich payload（见 §11 事件表）。
+- **runTurn**：`ParentDiffRegistry.register(sessionId, diffTracker)`（主 turn 注册 tracker，供子代理 turn 结束时把改动合并进来）→ `preflightCompressionIfNeeded`（`aiViewContextUsedTokens` > 70% 窗口先 compressOnce，与 UI 显示同源；失败不阻塞但原因回灌 streamWarning → MESSAGE_COMPLETED/MESSAGE_ERROR 的 warning 字段对用户可见）→ 建 QuestionRequester → 组装 `AgentsSubtreeDiscovery`（AgentsFileLoader.discoverSubtree + 会话级去重 registry `agentsDiscovered[sessionId]`，v1 内存态）→ `ToolFactory.build`（透传 agentsDiscovery 给 FileSystemTools 做 AGENTS.md 子树懒发现，见 §7.4）→ `buildTurnAgent` → `agent.run(MEDERI_INPUT_PERSISTED, sessionId)`（哨兵输入：用户消息已落库，LLM 节点不再追加）→ newContextFlag 消费（insertMarker）→ 置 IDLE + MESSAGE_COMPLETED（断流时带 ErrorRecord payload：`error/errorId/fullDiagnostic/errorSeverity=WARNING` → 客户端 ErrorBoard 展示+可展开详细报告，另带 `warning` 人类提示文本；HTTP 状态码/网络异常/提前关闭+已收帧数字符数）→ diffTracker.captureSnapshot + diffStore.save（finally 里 `ParentDiffRegistry.unregister(sessionId)`；若构造时传入 `onTurnDiff` 回调，则把最终 TurnDiff 经回调上交——子代理 turn 用此机制把改动合并进父 turn 的 diffTracker，修复"turn 改动摘要不含子代理改动"）。错误分类：`RetryableLLMClient.isTransientError` 或 `record.severity == ErrorSeverity.RECOVERABLE`（含限流/网络中断/HTTP2流重置） → IDLE + MESSAGE_ERROR（环境态可恢复，不标 ERROR）；否则 ERROR + MESSAGE_ERROR。所有错误路径统一经 `ErrorCollector.collect` 生成 MESSAGE_ERROR 的 rich payload（见 §11 事件表）。
 - **buildTurnAgent**：`KoogClientFactory.create`（可包 RetryableLLMClient）→ `KoogModelBuilder.build` → `KoogParamsBuilder.build` → `prompt(sessionId, params){ system(...) }` → AIAgentConfig（maxAgentIterations=3000 + KotlinxSerializer ignoreUnknownKeys/coerceInputValues/explicitNulls=false）→ 安装 ChatMemory.Feature（HistoryStoreChatHistoryProvider + system 前置 PreProcessor 保缓存）与 EventHandler.Feature（onLLMStreamingFrameReceived→frameChannel；onToolCallStarting/Completed/Failed→TOOL_CALLED/TOOL_RESULT + toolTimings）→ graphStrategy：有 contextWindow 时 `mederiSingleRunStrategyWithCompression(HistoryCompressionConfig(isHistoryTooBig = used>70%, MederiCompressionStrategy(contextWindow)), incrementalPersister, pollSteering)`，否则 `mederiSingleRunStrategy(incrementalPersister, pollSteering)`（pollSteering = 工具边界 Steering 注入钩子，传 `{ pollSteering(sessionId) }`，见下）。
 - **abort**：cancel job、cancelAll requester、置 IDLE、经 `ErrorCollector.collect(CancellationException)` 发 MESSAGE_ERROR（分类 CANCELLED / 严重级 WARNING）。**abortAndJoin**：cancelAndJoin 等旧 turn 死透（rollback 必须用，防收尾落库复活已删消息）；同时 `stopAllForSession` 级联收割子代理 + 清掉本会话的 `pendingEventMessages` / `pendingSteerings` 队列。
 - **Steering（引导消息 / turn 运行时插话）**：`steerMessage(sessionId, request)`——会话 RUNNING（或有活跃 job）时把 Text parts 拼成 `SteeringItem{text, request, timestamp}` 排队进 `pendingSteerings[sessionId]`（ConcurrentLinkedQueue）并发 STATUS（`status=steering_queued` + `message`=插话文本）供 UI 提示；非 RUNNING 则降级走普通 `sendMessage`。两个消费点：①**工具边界**——graph 策略 `nodeSendToolResult`（send_tool_results 节点）在每次工具结果发送后调 `pollSteering(sessionId)`，有队列项即分配确定性 ID 并把插话文本包成 `<user_intervention>` user 消息注入同一步 prompt（while 循环连注入多条）并经 `persistSteeringUserMessage(text, id)` 落库，ChatMemory store 按 id 去重防重复写入；②**父 turn 收尾 finally 冲刷残留**——未被工具边界消费的队列项降级 `sendMessage` 启新 turn（撞 RUNNING 时放回队列等下次冲刷，不丢消息）。
@@ -446,7 +449,7 @@ classDiagram
 
 ### 6.5 压缩（MederiCompressionStrategy，`…/koog/MederiCompressionStrategy.kt`）
 
-`compress(llmSession, memoryMessages)`：压缩源 = `llmSession.prompt.messages`（ChatMemory preprocessor 在 compress 节点前已把 load 的历史装进 prompt；`memoryMessages` 参数在该 Koog 版本实测为空，不可用作压缩源）。构造函数接收 `contextWindow` 与 `keepLastMessages`——token 预算的唯一真理源，与 UI 上下文概览同源；`contextWindow` 为 null 时由规划器用防御性默认窗口兜底；`keepLastMessages` 为 null 是自动压缩模式（预算切分），非 null 是手动压缩模式（按条数切分，见下段），两者都直接透传给 `planCompression`。压缩由 `CompressionPlanner`（`…/koog/CompressionPlanner.kt`）规划：`planCompression(messages, contextWindow)` 按预算切分——保留最近原文 ≤ 窗口×0.3（至少 1 条）、更早消息按窗口×0.5 的批预算分批、单条超窗口×0.9 最旧优先丢弃（head-trim，仅影响 AI 视图，HistoryStore 全量历史不删）。逐批 `requestLLMWithoutTools()` 生成小结（批内 prompt 换为该批 + SUMMARY_PROMPT），`combineBatchSummaries(summaries)` 合并为一条以 `TLDR:` 开头的总结（多条用 `---` 分隔并剥掉重复前缀，维持单 SUMMARY 标记语义）；结果 = `system + TLDR + recent`。SUMMARY_PROMPT 要求首行 `TLDR:`，五节：关键决策/用户讨论情况/未完成讨论/当前阶段/关键记忆。预算判定用的 token 估算由 §6.6 `TokenEstimator` 提供（`estimateTokens` 单条计费、`contextUsedTokens` 判定 >70%）。
+`compress(llmSession, memoryMessages)`：压缩源 = `llmSession.prompt.messages`（ChatMemory preprocessor 在 compress 节点前已把 load 的历史装进 prompt；`memoryMessages` 参数在该 Koog 版本实测为空，不可用作压缩源）。构造函数接收 `contextWindow` 与 `keepLastMessages`——token 预算的唯一真理源，与 UI 上下文概览同源；`contextWindow` 为 null 时由规划器用防御性默认窗口兜底；`keepLastMessages` 为 null 是自动压缩模式（预算切分），非 null 是手动压缩模式（按条数切分，见下段），两者都直接透传给 `planCompression`。压缩由 `CompressionPlanner`（`…/koog/CompressionPlanner.kt`）规划：`planCompression(messages, contextWindow)` 按预算切分——保留最近原文 ≤ 窗口×0.3（至少 1 条）、更早消息按窗口×0.5 的批预算分批、单条超窗口×0.9 最旧优先丢弃（head-trim，仅影响 AI 视图，HistoryStore 全量历史不删）。逐批 `requestLLMWithoutTools()` 生成小结（批内 prompt 换为该批 + SUMMARY_PROMPT），`combineBatchSummaries(summaries)` 合并为一条以 `TLDR:` 开头的总结（多条用 `---` 分隔并剥掉重复前缀，维持单 SUMMARY 标记语义）；结果 = `system + TLDR + recent`。SUMMARY_PROMPT 要求首行 `TLDR:`，五节：关键决策/用户讨论情况/未完成讨论/当前阶段/关键记忆。预算判定与 UI 显示共用的 token 口径由 §6.6 `aiViewContextUsedTokens` 给出（内部按窗口首条是否 SUMMARY 在 `estimateTokens` / `contextUsedTokens` 间二选一）。
 
 `planCompression(messages, contextWindow, keepLastMessages = null)` 两种切分模式：`keepLastMessages == null`（自动压缩）按 token 预算从尾部累积保留段 ≤ 窗口×0.3；非 null（手动压缩）**按条数**切分——recent = 最后 K 条原文、其余全压，不再看窗口×0.3 预算。两种模式共用工具配对守卫（recent 首条不得是孤立 tool result）、older 按窗口×0.5 分批、单条超窗口×0.9 head-trim。
 
@@ -455,6 +458,8 @@ classDiagram
 ### 6.6 TokenEstimator（`…/tools/TokenEstimator.kt`）
 
 token 估算统一入口（真实值优先，估算兜底）：`estimateTokens/contextUsedTokens`（domain 消息与 Koog 消息双重载）；`weightedTokens`：ASCII 4 字符/token、CJK 1.1 字/token、图 2000、其他 50。
+
+**`aiViewContextUsedTokens`（`…/koog/ContextUsage.kt`，package `xyz.mederi.infrastructure.koog`）=「当前上下文占用」唯一真理源**：读 `HistoryStoreChatHistoryProvider.aiViewWindow`（最后一条 SUMMARY 及其后）→ 窗口首条是 SUMMARY（已压缩）时走 `estimateTokens` 按窗口实际内容加权估算（压缩后 Assistant 消息的 inputTokens 反映的是压缩前的大上下文，拿它当基线会严重高估占用）；否则走 `contextUsedTokens`（最近一条 Assistant 的 API 报告真值）；空窗口返回 0。**压缩判定（`preflightCompressionIfNeeded`）与 UI 上下文显示（`SessionManager.contextUsedTokens`）共用这一个函数，不得另写一份**——这正是本次修复的根因（原先显示侧取全量历史最后一条 Assistant 的旧 inputTokens，压缩后不更新）。
 
 ## 7. 工具系统（`…/tools/`）
 
@@ -483,8 +488,8 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 | `FileSystemTools.kt` | read_file(path, offset=0, max_lines=2000) / write_file / edit_file(original 唯一匹配，多处报错；replace_all 全量替换) / list_directory / apply_patch(patch)（**已注销，不注册给 AI**） | `resolveForRead` **全盘可读**（相对路径在项目目录解析）；`resolveForWrite` **必须在项目目录内**（containment 白名单，代码强制）；write/edit→diffTracker.recordWrite；**write/edit 落盘前经 `FileWriteRegistry` try-lock**（同文件并发写硬拒绝，见 §7.2 FileWriteRegistry 行）；**read_file 支持 offset（0-based 分页）**：返回区间 `[start, end)` 前闭后开，end 即续读的下一 offset，超界/空文件有明确返回；apply_patch 三阶段=PatchParser.parse → verifyHunks（dry-run 全部校验，失败磁盘零改动）→ applyHunks（产出 A/M/D + `List<PatchChange>` → diffTracker.trackPatch）；**read/list 成功后触发 `AgentsSubtreeDiscovery` 回调**（构造参数，AGENTS.md 子树懒发现，见 §7.4） |
 | `ShellTools.kt` | execute_command(command, cwd="", timeout_seconds=120) → `CommandResult(output, exitCode)` | `runCommand`：sandbox.wrap 包装、**cwd 可指定**（空=项目主目录，底层 runCommand 本就支持、2026-09 工具层补暴露）、**启动即注册 ProcessRegistry**（进程组回收）、超时 destroyForcibly **+ 整组 SIGKILL**、警告前缀 |
 | `ProcessTools.kt` | list_processes(filter?) / stop_process(pid, force=false) | **宿主侧进程回收**（沙箱外）：list 惰性剔除已死组、输出 pid/命令/工作目录/启动时间；stop 只按 ProcessRegistry 定向 kill -- -pgid（TERM→轮询→force 时 SIGKILL），**查不到 pid 即拒绝**，只杀 mederi 自己启动的进程 |
-| `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：**硬门禁**（APPROVED/IN_PROGRESS 计划存在即拒）；校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
-| `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan / update_verification | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：先 `voidActivePlans` 作废该会话全部非终态旧计划（逐一发 PLAN_PROGRESS(action=voided)）→ validatePlan 聚合校验 → PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（subtasksJson 全量 Subtask JSON 随事件）（superseded/approved/rejected）→ notebook.append → emitPlanTodos（PLAN_PROGRESS + todos 投影 + subtasks）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）；覆盖既有 spec 必须给 reason——完整旧 spec 文本追加进 Subtask.specChanges（append-only 审计，零销毁）；发 PLAN_PROGRESS("spec-generated", subtasks)。converge_plan：append-only 追加补救子任务（同 SubtaskArg 结构，含验证契约 6 字段）；update_verification：对非 COMPLETED 子任务原子编辑**全契约**（command/cwd/timeoutSeconds/expected/expectStdoutContains/expectStdoutNotContains，null 字段=保留现值，reason 必填）+ 追加 VerificationChange（完整旧/新契约）到 Subtask.verificationChanges（审计留痕）；发 PLAN_PROGRESS("verification-updated", oldCommand/newCommand/reason)。**Args 数据类**：`CreatePlanArgs`：`userReviewRequired` / `openQuestions` / `researchNotes`；`SubtaskArg`（create_plan 与 converge_plan 共用）：`name/planDetail/targetFiles/decisions/verification(命令)` + 验证契约 5 个扩展参数 `verificationCwd` / `verificationTimeoutSeconds` / `verificationExpected`（人类可读预期，必填，审批卡片可见）/ `verificationExpectStdoutContains` / `verificationExpectStdoutNotContains`（机器硬校验字面量，LenientStringList 容错）；`GenerateSpecArgs`：`spec` + `reason`（修正既有 spec 时必填） |
+| `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED（与 Plan 解耦，plan 期间也可记录 plan 之外事项）。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
+| `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan / update_verification | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：先 `voidActivePlans` 作废该会话全部非终态旧计划（逐一发 PLAN_PROGRESS(action=voided)）→ validatePlan 聚合校验 → PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（subtasksJson 全量 Subtask JSON 随事件）（superseded/approved/rejected）→ notebook.append → emitPlanProgress（PLAN_PROGRESS：planId/action/subtasks，不携带 todos）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）；覆盖既有 spec 必须给 reason——完整旧 spec 文本追加进 Subtask.specChanges（append-only 审计，零销毁）；发 PLAN_PROGRESS("spec-generated", subtasks)。converge_plan：append-only 追加补救子任务（同 SubtaskArg 结构，含验证契约 6 字段）；update_verification：对非 COMPLETED 子任务原子编辑**全契约**（command/cwd/timeoutSeconds/expected/expectStdoutContains/expectStdoutNotContains，null 字段=保留现值，reason 必填）+ 追加 VerificationChange（完整旧/新契约）到 Subtask.verificationChanges（审计留痕）；发 PLAN_PROGRESS("verification-updated", oldCommand/newCommand/reason)。**Args 数据类**：`CreatePlanArgs`：`userReviewRequired` / `openQuestions` / `researchNotes`；`SubtaskArg`（create_plan 与 converge_plan 共用）：`name/planDetail/targetFiles/decisions/verification(命令)` + 验证契约 5 个扩展参数 `verificationCwd` / `verificationTimeoutSeconds` / `verificationExpected`（人类可读预期，必填，审批卡片可见）/ `verificationExpectStdoutContains` / `verificationExpectStdoutNotContains`（机器硬校验字面量，LenientStringList 容错）；`GenerateSpecArgs`：`spec` + `reason`（修正既有 spec 时必填） |
 | `VerifyTools.kt` | verify_subtask(planId, subtaskIndex, status: PASS/PARTIAL/FAIL, evidence, rootCause?: IMPLEMENTATION/PLAN, remediation?) | **机器硬校验（2026-09-24）**：子任务存了 verification 命令即**无条件执行**（shellTools.runCommand，timeoutSeconds 默认 30、cwd 可配）——exit 0 且 `expectStdoutContains` 全部命中、`expectStdoutNotContains` 全未命中 = 机器 PASS；exit 非零 / 必须字面量缺失 / 命中禁止字面量 = 机器 FAIL（声明 PASS 时**拒绝存储**，把真实输出摆到桌面要求重判）；超时 = inconclusive（不存 PASS 也不硬拒，暖缓存重验）。PARTIAL/FAIL 必须给 rootCause（判定顺序硬性：先核实现再核计划）——IMPLEMENTATION → `converge_plan` 追加补救；PLAN → append-only 修订（update_verification / generate_spec reason=，见 §8）。机器 PASS 而模型坚持未通过 → 记非 PASS + `machineMismatch=true`（异常态，返回文本强制主代理如实告知用户）。真实证据落盘：`commandOutput`（截断 4000 字符）/ `commandExitCode`（超时 null）与模型自述 evidence 分开存。同时读 Subtask.executorTouchedFiles vs targetFiles 报告 scope 越界（追加 evidence，非硬拒）；PASS→COMPLETED、PARTIAL/FAIL→FAILED；**updatePlan 原子写入**验证结果+状态；全部 COMPLETED → plan 置 COMPLETED + `writeWalkthrough` + `planStore.archive`；发 PLAN_PROGRESS("verified", subtasks/lastSubtaskIndex/lastSubtaskStatus/lastSubtaskRootCause) |
 | `subagent/SubagentTool.kt` | subagent(action: SPAWN/SPAWN_RESEARCHER/STATUS/STOP, task?, briefing?, planId?, subtaskIndex?, agentId?) → JSON | **6→1 单一入口（2026-09）**，action 分流：SPAWN=委托 `SpawnAgentTool`——**planId 可选**：带 planId+subtaskIndex = 计划路径（硬校验 spec 存在性→`updatePlan` 原子置计划与子任务 IN_PROGRESS→PLAN_PROGRESS("subtask-started", subtasks 投影)→派 executor 执行存储的 spec，返回 `{agentId,status,modelName}`）；**无 planId = ad-hoc 执行路径**（task+briefing 直接派 executor，无 spec 门禁、不要求 subtaskIndex，用于小改动/自包含任务）；模型/推理档位动态读 session（批准时用户可能切了模型），角色独立配置时 SubagentConfigManager 优先（§3.5）；SPAWN_RESEARCHER=委托 `SpawnResearcherTool`（只读，无计划门禁）；STATUS/STOP=委托 `SubagentManager.status/stop`（agentId 空返回 Error 文本）。无 WAIT——子代理完成经事件链自动唤醒父 turn（§13）。仅主代理注册（canSpawn） |
 | `subagent/SubagentManager.kt` | spawn / status / stop(agentId, reason="被用户关闭") / stopAllForSession / rollbackSubagents(parentSessionId, keptAgentIds) / getReport | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态（含 parentSessionId/aiModel/reasoningLevel/task/briefing/planId/executorSubtaskIndex/planStore/stopReason/isDiscarded 元数据）；stop = cancel job（支持携带 reason="被用户关闭"，在协程捕获时写入 result，发 SUBAGENT_STOPPED 汇报给主 AI）；**rollbackSubagents(parentSessionId, keptAgentIds)** = 回退历史时静默丢弃在目标回滚点时尚未创立的子代理（标记 isDiscarded 并 cancel，发 SUBAGENT_DISCARDED 通知前端移除，**坚决不发** SUBAGENT_STOPPED，不进 pendingEventMessages，不告知 AI）；**stopAllForSession(parentSessionId)** = abort/abortAndJoin 级联收割本会话 RUNNING 子代理（幂等）；`getReport(agentId)` = SubagentReportData{agentId, role, status, reportPath?, content}；agent 已不在内存表时 status/getReport 经 `retired` 恢复部分认知；**生命周期事件**（可选注入 eventBus）：spawn 发 SUBAGENT_STARTED → 终态发 SUBAGENT_COMPLETED/ERROR/STOPPED（驱动父 turn 自动唤醒）/ SUBAGENT_DISCARDED（无感丢弃） |
@@ -629,10 +634,6 @@ classDiagram
     class Notebook {
         +append(entry)  % .mederi/notebook.md，写路径自愈
     }
-    class PlanProjection {
-        {static} toTodoProjection(plan) List~TodoItem~
-        % 唯一投影函数，content = "Subtask {n}: {name}"
-    }
     Plan "1" --> "*" Subtask
     Subtask --> SpecChange : specChanges
     Subtask --> VerificationSpec : verification
@@ -640,7 +641,6 @@ classDiagram
     Subtask --> VerificationChange : verificationChanges
     PlanStore --> Plan
     PlanApprovalRequester --> Plan : 审批事件桥
-    PlanProjection --> Plan
 ```
 
 - **PlanStore 存储**（`…/plan/PlanStore.kt`，2026-09-24 目录重组）：项目主目录 `.mederi/plans/{planId}/` 一个计划一个目录，下挂 `plan.json`（机器真理源）+ `plan.md`（人读 Markdown，`buildMarkdown` 渲染含 `#### Verification` 段——验证标准在批准时即对用户可见）+ 可选 `research.md`（researcher 报告）+ 可选 `reports/NN-executor.md`（executor 报告 per-subtask）+ 完成时 `walkthrough.md`。归档到 `.mederi/plans-done/{planId}/`（整目录复制），作废到 `.mederi/plans-voided/{planId}/`（整目录移动，`copyRecursively`+`deleteRecursively`）。模块级函数 `findMederiDir`（只读）/`ensureMederiDir`（自愈建 plans/plans-done/notebook.md）。**`buildMarkdown` 渲染段名改中文+英文括注**（如 `## 概览（Overview）`、`## 关键决策（Key Decisions）`），置顶两个可选段：`## 需要你确认（User Review Required）`（渲染 Plan.userReviewRequired）与 `## 默认决策（Open Questions）`（渲染 Plan.openQuestions），非空才输出。**`writeWalkthrough(plan)`**：计划完成（全子任务 COMPLETED）时自动装配 Walkthrough 文档 → 写 `plans/{planId}/walkthrough.md`（archive 随之移动）；`buildWalkthrough(plan)` 负责组装内容（聚合 plan/subtask/spec/verification/changes 等）。
@@ -772,7 +772,7 @@ classDiagram
 - 任何路径不允许假流式（禁止"非流式拿全量再转帧"）。
 - 系统永不自动写存量模型元数据（refresh 只同步列表）；两处同步（refresh 与 autoSetup）只能喂不同输入（endpoint 有无），合并规则改 ModelMerge 一处 + ModelMergeTest 穷举组合。
 
-**跨包相关类**：`…/http/SseIdleTimeoutException`（SSE 空闲超时异常类型，`MederiOpenAILLMClient` 自计 10 分钟无数据时抛出）；`…/metadata/ModelCatalogParser.kt`（models.dev 目录解析：`parseModelsDevResponse` → CatalogIndex、`toModelMetadata` / `toReasoningLevelOrNull` 等，供 ModelCatalog 刷新）；`…/provider/domain/model/ReasoningEffort`（常量对象 NONE/LOW/MEDIUM/HIGH/MAX——推理档位 wire 值字符串常量）。
+**跨包相关类**：`…/http/SseIdleTimeoutException`（SSE 空闲超时异常类型，`MederiOpenAILLMClient` 自计 10 分钟无数据时抛出）；`…/metadata/ModelCatalogParser.kt`（models.dev 目录解析：`parseModelsDevResponse` → CatalogIndex、`toModelMetadata` / `toReasoningLevelOrNull` 等，供 ModelCatalog 刷新）；`…/provider/domain/model/ReasoningEffort`（常量对象 NONE/MINIMAL/LOW/MEDIUM/HIGH/XHIGH/MAX——推理档位 wire 值字符串常量）。
 
 ## 10. MCP（`…/mcp/`）
 
@@ -877,7 +877,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 | `QUESTION_RESOLVED` | `questionId`、`answers`(JSON) |
 | `PLAN_APPROVAL_REQUESTED` | `planId`、`planPath`、`title`、`summary`、`subtaskCount`、`planContent`、`subtasks?`（全量 Subtask JSON 数组，subtasksJson 非空才发——UI 审批卡片子任务视图） |
 | `PLAN_APPROVAL_RESOLVED` | `planId`、`approved` |
-| `PLAN_PROGRESS` | `planId`、`action`(created/approved/subtask-started/spec-generated/verified/converged/completed/**voided**/verification-updated；voided = 新 create_plan 作废旧非终态计划时逐计划发，verification-updated = update_verification 修订契约)、计数（passed/failed/pending）与 `todos`（`Plan.toTodoProjection().encodeTodos()`，todo 面板 Plan 投影唯一来源）、`subtasks`（全量 Subtask JSON 数组；verify 时另带 `lastSubtaskIndex`/`lastSubtaskStatus`/`lastSubtaskRootCause`） |
+| `PLAN_PROGRESS` | `planId`、`action`(created/approved/subtask-started/spec-generated/verified/converged/completed/**voided**/verification-updated；voided = 新 create_plan 作废旧非终态计划时逐计划发，verification-updated = update_verification 修订契约)、计数（passed/failed/pending）、`subtasks`（全量 Subtask JSON 数组；verify 时另带 `lastSubtaskIndex`/`lastSubtaskStatus`/`lastSubtaskRootCause`）。**不再携带 `todos`**——todo 唯一来源 = session.todos（TODO_UPDATED） |
 | `TODO_UPDATED` | `todos`(JSON)、可选 `explanation` |
 | `STATUS` | 环境态（不落库不改状态机）：①LLM 重试——`scope=provider`、`code=RETRYING`、`message`、`attempt`、`maxAttempts`、`delayMs?`(重试延迟毫秒，可选)；②Steering 插话排队——`status=steering_queued` + `message`（插话文本，无 scope/attempt，`TurnExecutor.steerMessage` 入队 pendingSteerings 时发，见 §6.2） |
 | `BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` | 浏览器任务生命周期（异步，UI 浏览器任务面板消费；主代理只经 `browser`(STATUS) 查 status）：`taskId`、`status`(STARTED/RUNNING/COMPLETED/ERROR/STOPPED)、`step?`、`thought?`、`results?`、`message?`。sessionId 为空字符串（任务不属于某 session 对话，UI 用 taskId 过滤） |
@@ -888,7 +888,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 
 ## 12. QuestionRequester（`…/question/QuestionRequester.kt`）
 
-挂起-恢复机制：`Question(id, prompt, options=[], allowCustom=false, multiSelect=false)`；`QuestionResult(answers: List<List<String>>, rejected=false)`（answers 与 questions 顺序一致，多选内层多个）。
+挂起-恢复机制：`Question(id, prompt, options=[], multiSelect=false)`；`QuestionResult(answers: List<List<String>>, rejected=false)`（answers 与 questions 顺序一致，多选内层多个）。
 - `request(questions)`：生成 `q_xxxxxxxx` → 注册 CompletableDeferred → 发 QUESTION_REQUESTED → await。
 - `resolve(questionId, answers)`：complete → 发 QUESTION_RESOLVED。`reject(questionId)`（rejected=true）。`cancelAll()`（turn 中止时 TurnExecutor 调，全部以 rejected 完成）。
 
@@ -904,7 +904,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 flowchart LR
     subgraph SP["SystemPrompts（骨架）"]
         C["configSection(agentMode)<br/>一行显式配置声明(最前)"]
-        COMMON["COMMON = IDENTITY + CORE_PRINCIPLES<br/>+ TOOL_GUIDELINES + PromptGuides.PLAN_TOOL_GUIDE<br/>+ WORKING_DIRECTORY + PromptGuides.SANDBOX_USAGE<br/>+ PLANNING_DISCIPLINE(Triage+PlanLoop七步)<br/>+ OUTPUT_FORMAT + PromptGuides.MARKDOWN_FORMAT"]
+        COMMON["COMMON = IDENTITY + CORE_PRINCIPLES<br/>(GeneralPrompts + CodingPrompts + 冲突处理)<br/>+ TOOL_GUIDELINES + PromptGuides.PLAN_TOOL_GUIDE<br/>+ WORKING_DIRECTORY + PromptGuides.SANDBOX_USAGE<br/>+ PLANNING_DISCIPLINE(Triage+PlanLoop七步)<br/>+ OUTPUT_FORMAT + PromptGuides.MARKDOWN_FORMAT"]
         W["workflowSection(agentMode)<br/>APPROVAL/AUTONOMOUS 唯一差异=计划批准者"]
         MODE["AGENT_MODE_SECTION（# Your Mode）"]
         PLAN["# Active Plan 段(如有活跃计划)<br/>Current: Subtask N 指针 + Progress + 活跃spec"]
@@ -916,6 +916,11 @@ flowchart LR
         G3["MERMAID_GUIDELINES(语法安全+结构图拆分,唯一一份)"]
         G4["PLAN_TOOL_GUIDE(计划工具硬规则+create_plan字段清单+精简JSON范例)"]
     end
+    subgraph CP["独立原则库（SSOT 单一真理源）"]
+        GP["GeneralPrompts.PRINCIPLES<br/>通用底线: 简洁/事实核查/静默执行/禁旁白/保密/语言规则(SSOT)"]
+        CDP["CodingPrompts.PRINCIPLES<br/>编码底线: 根因优先/严禁掩耳盗铃/最小外科手术修改/遵循既有规范"]
+    end
+    CP --> SP
     PG --> COMMON
     C --> OUT["build(agentMode, activePlan?, activeTodo?)"]
     COMMON --> OUT
@@ -923,14 +928,21 @@ flowchart LR
     W --> OUT
     PLAN --> OUT
     TODO --> OUT
-    OUT2["forSubagent(role)"] --> EXEC["Executor: Config+SUBAGENT_IDENTITY+CORE_PRINCIPLES<br/>+EXECUTOR_TOOL_GUIDELINES+WORKING_DIRECTORY+SANDBOX_USAGE<br/>+OUTPUT_FORMAT"]
-    OUT2 --> RES["Researcher: Config+SUBAGENT_IDENTITY+CORE_PRINCIPLES<br/>+RESEARCHER_TOOL_GUIDELINES+RESEARCH_DISCIPLINE<br/>+OUTPUT_FORMAT+MERMAID_GUIDELINES"]
+    OUT2["forSubagent(role)"] --> EXEC["Executor: Config+SUBAGENT_IDENTITY<br/>+GeneralPrompts+CodingPrompts<br/>+EXECUTOR_TOOL_GUIDELINES+WORKING_DIRECTORY+SANDBOX_USAGE<br/>+OUTPUT_FORMAT"]
+    OUT2 --> RES["Researcher: Config+SUBAGENT_IDENTITY<br/>+GeneralPrompts(无编码原则)<br/>+RESEARCHER_TOOL_GUIDELINES+RESEARCH_DISCIPLINE<br/>+OUTPUT_FORMAT+MERMAID_GUIDELINES"]
 ```
+
+**提示词分层拼装与强化（2026-10-02）**：
+- **原则分层与 SSOT**：抽取 `GeneralPrompts.kt`（通用纪律）与 `CodingPrompts.kt`（编码纪律），消除主代理与子代理（Executor/Researcher）之间的提示词文字重复与漂移。
+- **编码硬纪律强化**：
+  - **根因优先，严禁掩耳盗铃**：`Fix root causes, never suppress symptoms`，明确禁止吞异常（swallow exceptions）、盲加空检查/降级兜底、压制警告、弱化断言或修改测试来虚假通过（fake pass）。
+  - **最小化修改**：`Minimal surgical edits`，强制最小 blast radius，严禁无关重构与格式化干扰。
+- **角色差异化挂载**：主代理挂载通用 + 编码 + 需求冲突处理；Executor 挂载通用 + 编码；Researcher 仅挂载通用原则（只读探查，不注入编码规则）。
 
 **提示词变更（2026-09-23）**：
 - **工具描述**：`create_plan` / `generate_spec` 工具描述更新——`create_plan` 描述 `userReviewRequired` / `openQuestions` / `researchNotes` 字段语义；`generate_spec` 描述过摘录列表参数与 `AppendixEntryArg` 结构（后续 2026-09-24 方案A 重构删除，见下）。
 - **Plan Loop 七步指引**：第 2/4/7 步新增指引——第 2 步（create_plan）要求填 `userReviewRequired`/`openQuestions`/`researchNotes`；第 4 步（generate_spec）历史要求带关键文件摘录（2026-09-24 起删除：executor 自己 `read_file`，spec 只写路径引用）；第 7 步（计划完成）提示自动生成 walkthrough（`writeWalkthrough`）。
-- **计划内容语言规范**：计划正文用用户语言撰写，专业术语保留英文括注（如"概览（Overview）"），与 `PlanStore.buildMarkdown` 渲染段名一致。
+- **计划内容语言规范**：语言规则 SSOT 统一在 `GeneralPrompts.PRINCIPLES` #6（用用户 input 语言、技术术语括注英文、代码/命令/路径保持 ASCII），`IDENTITY`/`PLANNING_DISCIPLINE`/`MARKDOWN_FORMAT` 中的重复叮嘱已清除。`PlanStore.buildMarkdown` 渲染段名保持中英双语括注（如"概览（Overview）"）。
 
 **方案A 重构（2026-09-24，减 token / 主↔子代理交互只传简介+路径）**：
 - **删除** Subtask 摘录列表字段（`AppendixEntry` 类、`PlanTools.AppendixEntryArg` 类、`GenerateSpecArgs` 对应参数一并删除）。executor 直接 `read_file` 原文件，不再要求模型在 generate_spec 时手工转录文件摘录（消除输出 token 浪费）。

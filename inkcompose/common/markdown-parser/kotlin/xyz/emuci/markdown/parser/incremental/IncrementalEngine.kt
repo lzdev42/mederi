@@ -53,6 +53,7 @@ class IncrementalEngine(
      * 推荐值：32-64（基本无可见延迟，且消除大部分 dirty region 重复启动开销）。
      */
     private val appendCoalesceThreshold: Int = 0,
+    private val enableHighlight: Boolean = flavour.enableHighlight,
 ) {
     companion object {
     }
@@ -207,7 +208,7 @@ class IncrementalEngine(
             registry = buildRegistry(newSource),
             inlineParserFactory = { doc ->
                 doc.linkDefinitions.putAll(_document.linkDefinitions)
-                InlineParser(doc, customEmojiMap, enableAsciiEmoticons, flavour.enableGfmAutolinks, flavour.enableExtendedInline, flavour.enableEmphasisCoalescing, flavour.enableStrikethrough)
+                InlineParser(doc, customEmojiMap, enableAsciiEmoticons, flavour, enableHighlight)
             }
         )
 
@@ -276,7 +277,7 @@ class IncrementalEngine(
         val parser = BlockParser(
             source = _sourceText,
             registry = buildRegistry(_sourceText),
-            inlineParserFactory = { doc -> InlineParser(doc, customEmojiMap, enableAsciiEmoticons, flavour.enableGfmAutolinks, flavour.enableExtendedInline, flavour.enableEmphasisCoalescing, flavour.enableStrikethrough) }
+            inlineParserFactory = { doc -> InlineParser(doc, customEmojiMap, enableAsciiEmoticons, flavour, enableHighlight) }
         )
         _document = parser.parse()
 
@@ -330,7 +331,7 @@ class IncrementalEngine(
             registry = buildRegistry(newSource),
             inlineParserFactory = { doc ->
                 doc.linkDefinitions.putAll(_document.linkDefinitions)
-                InlineParser(doc, customEmojiMap, enableAsciiEmoticons, flavour.enableGfmAutolinks, flavour.enableExtendedInline, flavour.enableEmphasisCoalescing, flavour.enableStrikethrough)
+                InlineParser(doc, customEmojiMap, enableAsciiEmoticons, flavour, enableHighlight)
             }
         )
 
@@ -627,10 +628,8 @@ class IncrementalEngine(
                 tempDoc,
                 customEmojiMap,
                 enableAsciiEmoticons,
-                flavour.enableGfmAutolinks,
-                flavour.enableExtendedInline,
-                flavour.enableEmphasisCoalescing,
-                flavour.enableStrikethrough
+                flavour,
+                enableHighlight,
             )
             inlineParser.parseInlines(content, paragraph)
         }
@@ -641,11 +640,17 @@ class IncrementalEngine(
         val inlineText = currentInlineSource(node, source)
         if (inlineText.isEmpty()) return
 
-        val repairSuffix = InlineAutoCloser.buildRepairSuffix(inlineText)
+        val repairSuffix = InlineAutoCloser.buildRepairSuffix(inlineText, enableHighlight)
         val repairedContent = inlineText + repairSuffix
         val tempDoc = Document()
         tempDoc.linkDefinitions.putAll(_document.linkDefinitions)
-        val inlineParser = InlineParser(tempDoc, customEmojiMap, enableAsciiEmoticons, flavour.enableGfmAutolinks, flavour.enableExtendedInline, flavour.enableEmphasisCoalescing, flavour.enableStrikethrough)
+        val inlineParser = InlineParser(
+            tempDoc,
+            customEmojiMap,
+            enableAsciiEmoticons,
+            flavour,
+            enableHighlight,
+        )
         node.clearChildren()
         inlineParser.parseInlines(repairedContent, node)
     }

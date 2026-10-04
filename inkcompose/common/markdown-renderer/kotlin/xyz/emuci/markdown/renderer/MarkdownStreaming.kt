@@ -17,19 +17,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * 全局解析文档缓存（keyed by markdown 原文）。
+ * 全局解析文档缓存（keyed by (markdown 原文, [MarkdownConfig])）。
  *
  * 防止 LazyColumn 回收重建 item 时重新异步解析 Markdown → 首帧渲染 loading 占位
  * → 解析完成高度跳变 → 回弹/塌方。
  * 非流式消息（聊天已完成消息）内容不可变，缓存安全。
+ *
+ * key 必须包含 config：同一文本在不同解析配置下产出不同 Document
+ * （如聊天正文关 `==高亮==` vs 其他场景默认开），只按 markdown 取会拿到错误 doc。
+ * [MarkdownConfig] 是 data class，equals/hashCode 覆盖全部字段，可直接入 Pair 作键。
  */
 private val parsedDocumentCache = object {
-    private val map = LinkedHashMap<String, Document>()
+    private val map = LinkedHashMap<Pair<String, MarkdownConfig>, Document>()
     private val maxEntries = 256
 
-    operator fun get(key: String): Document? = map[key]
+    operator fun get(key: Pair<String, MarkdownConfig>): Document? = map[key]
 
-    operator fun set(key: String, value: Document) {
+    operator fun set(key: Pair<String, MarkdownConfig>, value: Document) {
         if (map.size >= maxEntries) {
             val it = map.iterator()
             if (it.hasNext()) {
@@ -59,11 +63,13 @@ internal fun rememberStreamingDocument(
             customEmojiMap = config.customEmojiMap,
             enableAsciiEmoticons = config.enableAsciiEmoticons,
             enableLinting = config.enableLinting,
+            enableHighlight = config.enableHighlight,
             appendCoalesceThreshold = config.appendCoalesceThreshold,
         )
     }
     // 非流式时查全局缓存，作为 item 重建后的初始状态（首帧即真实内容，无 loading 占位）。
-    val cachedDocument = if (!isStreaming) parsedDocumentCache[markdown] else null
+    val cacheKey = markdown to config
+    val cachedDocument = if (!isStreaming) parsedDocumentCache[cacheKey] else null
     var state by remember(parser, runtimePipeline) {
         mutableStateOf(
             if (cachedDocument != null) {
@@ -94,7 +100,7 @@ internal fun rememberStreamingDocument(
             )
         }
         if (!isStreaming && newState.document != null) {
-            parsedDocumentCache[markdown] = newState.document
+            parsedDocumentCache[cacheKey] = newState.document
         }
         state = newState
     }

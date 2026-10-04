@@ -9,7 +9,6 @@ import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.PlanApprovalRequest
-import xyz.mederi.core.contract.models.TodoItem
 import xyz.mederi.debug.DebugLog
 
 /**
@@ -25,8 +24,6 @@ import xyz.mederi.debug.DebugLog
 object MederiEventAggregator {
 
     /**
-     * @param planTodos 会话重开时的 Plan 子任务投影 hydration（MederiAiCore 提供，
-     * 内部走 PlanStore 同一投影函数）；优先级：Plan 投影 > session.todos（与提示词挂载规则同构）。
      * @param planApproval 会话重开时的计划审批展示项 hydration（重启/翻历史恢复待批准卡片）。
      * 仅决定"填进快照的数据"，不决定卡片渲染位置（UI 层自决）。
      */
@@ -34,7 +31,6 @@ object MederiEventAggregator {
         conversationId: String,
         sessions: SessionApi,
         modelToProvider: (String) -> String?,
-        planTodos: suspend (String) -> List<TodoItem> = { emptyList() },
         planApproval: suspend (String) -> PlanApprovalRequest? = { null },
         planApprovals: suspend (String) -> List<PlanApprovalRequest> = { emptyList() },
         lastError: (String) -> LastSessionError? = { null }
@@ -51,9 +47,9 @@ object MederiEventAggregator {
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let(modelToProvider)),
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
-            contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages),
+            contextUsedTokens = sessions.contextUsedTokens(conversationId).toLong(),
             cost = MederiModelMapper.toCostSummary(),
-            todos = planTodos(conversationId).ifEmpty { MederiModelMapper.toTodos(session.todos) },
+            todos = MederiModelMapper.toTodos(session.todos),
             pendingPlanApproval = planApproval(conversationId),
             planApprovals = planApprovals(conversationId)
         )
@@ -69,7 +65,7 @@ object MederiEventAggregator {
             return MessagesPage(
                 messages = refreshed.map { MederiModelMapper.toChatMessage(it, refreshedToolResults) },
                 tokenUsage = MederiModelMapper.toTokenUsage(refreshed),
-                contextUsedTokens = MederiModelMapper.toContextUsedTokens(refreshed)
+                contextUsedTokens = sessions.contextUsedTokens(conversationId).toLong()
             )
         }
 

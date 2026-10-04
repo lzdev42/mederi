@@ -16,7 +16,7 @@ object InlineAutoCloser {
      * 分析内容中未关闭的行内结构，返回需要追加的修复后缀。
      * 如果内容完整（无未关闭结构），返回空字符串。
      */
-    fun buildRepairSuffix(content: String): String {
+    fun buildRepairSuffix(content: String, enableHighlight: Boolean = true): String {
         if (content.isEmpty()) return ""
 
         val state = ScanState()
@@ -89,7 +89,7 @@ object InlineAutoCloser {
                     continue
                 }
                 // == 高亮
-                c == '=' && i + 1 < content.length && content[i + 1] == '=' -> {
+                c == '=' && enableHighlight && i + 1 < content.length && content[i + 1] == '=' -> {
                     state.handlePairedDelim('=', 2)
                     i += 2
                     continue

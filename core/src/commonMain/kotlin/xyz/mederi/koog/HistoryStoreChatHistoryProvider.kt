@@ -169,25 +169,36 @@ class HistoryStoreChatHistoryProvider(
         val tldrLike = first.role == MessageRole.ASSISTANT && firstText.startsWith(TLDR_PREFIX)
 
         if (tldrLike) {
+            // 对齐用 id 过滤前的完整 incoming（recent 携带库中同 id，见下方注释）
+            val incomingSigs = incoming.map { signature(it) }
             val alreadyMarked = existing.any {
                 it.role == MessageRole.SUMMARY &&
                     it.parts.filterIsInstance<MessagePart.Text>().firstOrNull()?.text == firstText
             }
             if (!alreadyMarked) {
-                // 本次新生成的压缩：freshIncoming[1..] 只有未落库的新消息（回显已按 id 过滤），
-                // 若其前缀与已有历史尾部重合（内容恰好相同的罕见场景）则视为对齐，
-                // 在对齐点插入 SUMMARY 标记，再追加未落库的新消息；已有历史一条不删。
-                var k = minOf(freshIncoming.size - 1, existing.size)
+                // 本次新生成的压缩：与库尾的指纹对齐必须用 id 过滤前的 incoming。
+                // Koog ChatMemory 在 strategy 完成时把压缩后的历史（[TLDR, recent...]）
+                // 整体交给 store，recent 携带与库中一致的 id——若用 freshIncoming
+                // （id 去重后只剩 TLDR）做对齐，k 恒为 0，SUMMARY 会插到历史末尾、
+                // 保留的 recent 退出 AI 视图窗口（压缩后模型看不到保留的最近原文）。
+                // 现在只把 TLDR 之后的头部与库尾做最长指纹匹配，k = recent 条数，
+                // SUMMARY 插在 recent 起点（压缩点）；recent 取库中版，
+                // 新消息仅追加未落库（id 不在库、内容不在 recent 段）的部分。
+                var k = minOf(incoming.size - 1, existing.size)
                 while (k > 0) {
-                    val head = freshIncomingSigs.subList(1, 1 + k)
+                    val head = incomingSigs.subList(1, 1 + k)
                     val tail = existingSigs.takeLast(k)
                     if (head == tail) break
                     k--
                 }
                 val markerAt = existing.size - k
                 val marker = summaryMarker(conversationId, firstText)
+                val recentSigs = existing.drop(markerAt).mapTo(java.util.HashSet()) { signature(it) }
+                val fresh = incoming.drop(1 + k).filter {
+                    it.id !in existingIds && signature(it) !in recentSigs
+                }
                 val merged = existing.take(markerAt) + marker +
-                    existing.drop(markerAt) + freshIncoming.drop(1 + k)
+                    existing.drop(markerAt) + fresh
                 historyStore.replace(conversationId, merged)
                 return
             }

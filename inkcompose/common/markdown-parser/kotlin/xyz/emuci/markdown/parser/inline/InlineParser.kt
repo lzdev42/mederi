@@ -4,6 +4,8 @@ import xyz.emuci.markdown.parser.ast.*
 import xyz.emuci.markdown.parser.core.CharacterUtils
 import xyz.emuci.markdown.parser.core.HtmlEntities
 import xyz.emuci.markdown.parser.block.BlockParser
+import xyz.emuci.markdown.parser.flavour.ExtendedFlavour
+import xyz.emuci.markdown.parser.flavour.MarkdownFlavour
 
 /**
  * 高性能行内解析器，实现 CommonMark 分隔符算法。
@@ -17,20 +19,23 @@ class InlineParser(
     private val customEmojiMap: Map<String, String> = emptyMap(),
     /** 是否启用 ASCII 表情自动转换 */
     private val enableAsciiEmoticons: Boolean = false,
-    private val enableGfmAutolinks: Boolean = true,
-    private val enableExtendedInline: Boolean = true,
-    private val enableEmphasisCoalescing: Boolean = false,
-    private val enableStrikethrough: Boolean = true,
+    /** Markdown 方言：行内扩展开关（自动链接 / 扩展行内 / 删除线 / 强调合并）由 flavour 统一提供 */
+    private val flavour: MarkdownFlavour = ExtendedFlavour,
+    /**
+     * `==高亮==` 开关。默认跟随 [flavour]，但保留为独立参数：
+     * 渲染层（如主题配置）可以只覆盖高亮而不改方言。
+     */
+    private val enableHighlight: Boolean = flavour.enableHighlight,
 ) : BlockParser.InlineParserInterface {
 
     override fun parseInlines(content: String, parent: ContainerNode) {
         if (content.isEmpty()) return
-        val parser = InlineParserInstance(content, document, customEmojiMap, enableAsciiEmoticons, enableGfmAutolinks, enableExtendedInline, enableStrikethrough)
+        val parser = InlineParserInstance(content, document, customEmojiMap, enableAsciiEmoticons, flavour, enableHighlight)
         val nodes = parser.parse()
         for (node in nodes) {
             parent.appendChild(node)
         }
-        if (enableEmphasisCoalescing) {
+        if (flavour.enableEmphasisCoalescing) {
             coalesceEmphasis(parent)
         }
     }
@@ -201,10 +206,15 @@ private class InlineParserInstance(
     private val document: Document,
     private val customEmojiMap: Map<String, String> = emptyMap(),
     private val enableAsciiEmoticons: Boolean = false,
-    private val enableGfmAutolinks: Boolean = true,
-    private val enableExtendedInline: Boolean = true,
-    private val enableStrikethrough: Boolean = true,
+    private val flavour: MarkdownFlavour = ExtendedFlavour,
+    /** 高亮开关独立于 flavour（见 [InlineParser] 构造说明） */
+    private val enableHighlight: Boolean = true,
 ) {
+    // 行内扩展开关：统一从 flavour 取值（唯一真理源 = [MarkdownFlavour]）
+    private val enableGfmAutolinks: Boolean get() = flavour.enableGfmAutolinks
+    private val enableExtendedInline: Boolean get() = flavour.enableExtendedInline
+    private val enableStrikethrough: Boolean get() = flavour.enableStrikethrough
+
     // 链表包装 AST 节点
     private class LLNode(var astNode: Node) {
         var prev: LLNode? = null
@@ -274,7 +284,7 @@ private class InlineParserInstance(
                 c == ']' -> appendCloseBracket()
                 c == '*' || c == '_' -> appendDelimiterRun(c)
                 c == '~' && (enableExtendedInline || enableStrikethrough) -> appendTildeRun()
-                c == '=' && scanner.peek(1) == '=' && enableExtendedInline -> appendPairedDelim('=', 2)
+                c == '=' && scanner.peek(1) == '=' && enableExtendedInline && enableHighlight -> appendPairedDelim('=', 2)
                 c == '+' && scanner.peek(1) == '+' && enableExtendedInline -> appendPairedDelim('+', 2)
                 c == '^' && enableExtendedInline -> appendPairedDelim('^', 1)
                 c == '$' && enableExtendedInline -> appendDollar()
@@ -1054,7 +1064,9 @@ private class InlineParserInstance(
                 break
             }
             if (c == '!' && scanner.peek(1) == '[') break
-            if (enableExtendedInline && c == '=' && scanner.peek(1) == '=') break
+            // 与主循环的高亮配对条件保持完全一致：enableHighlight=false 时 == 只是普通文本，
+            // 必须继续消费，否则此处 break 而不消费字符会导致主循环死循环
+            if (enableExtendedInline && enableHighlight && c == '=' && scanner.peek(1) == '=') break
             if (enableExtendedInline && c == '+' && scanner.peek(1) == '+') break
             if (enableExtendedInline && c == '{' && scanner.peek(1) == '%') break
             if (enableExtendedInline && c == '{' && scanner.peek(1) != '%') break

@@ -37,7 +37,7 @@ internal val LocalRendererDocument = compositionLocalOf { Document() }
 /**
  * Markdown 渲染配置，通过 CompositionLocal 传递。
  */
-internal val LocalMarkdownConfig = compositionLocalOf { MarkdownConfig.Default }
+val LocalMarkdownConfig = compositionLocalOf { MarkdownConfig.Default }
 internal val LocalFootnoteNavigationState = compositionLocalOf<FootnoteNavigationState?> { null }
 
 internal val LocalCodeHighlightTheme = compositionLocalOf<CodeTheme?> { null }

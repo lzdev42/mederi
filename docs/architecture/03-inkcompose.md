@@ -11,7 +11,8 @@
 | `MarkdownView(...)` | `common/entry/kotlin/xyz/emuci/inkcompose/MarkdownView.kt` | 统一渲染入口 Composable |
 | `RenderStyle` | `common/entry/kotlin/xyz/emuci/inkcompose/RenderStyleExport.kt` | 排版版式配置（纯几何与结构规则，提供 `RenderStyle.Chat` 与 `RenderStyle.Github` 两套预设） |
 | `MarkdownColors` | `common/entry/kotlin/xyz/emuci/inkcompose/RenderStyleExport.kt` | 色彩皮肤配置（纯颜色系统，解耦排版版式，提供 `light` / `dark` / `fromMaterial3` / `auto`） |
-| `LocalRenderStyle` / `LocalMarkdownColors` | 同目录 RenderStyleExport.kt | 排版风格与色彩皮肤的 CompositionLocal 注入 |
+| `MarkdownConfig` | `common/entry/kotlin/xyz/emuci/inkcompose/RenderStyleExport.kt` | Markdown 解析与渲染配置（方言、表情、标题编号、`enableHighlight` 高亮开关、流式合并阈值等） |
+| `LocalRenderStyle` / `LocalMarkdownColors` / `LocalMarkdownConfig` | 同目录 RenderStyleExport.kt | 排版风格、色彩皮肤与解析配置的 CompositionLocal 注入 |
 | `RenderType` | 同目录 RenderType.kt | `AUTO / TEXT / MARKDOWN / LATEX / MERMAID / VLR / CODE` |
 | `MermaidCacheConfig` | 同目录（expect object） | `setBaseDirectory(path)` / `getBaseDirectory()` / `clearSessionCache(sessionKey)` |
 | `LocalSessionKey` | 同目录 | `compositionLocalOf<String?>`，会话标识用于图表缓存前缀 |
@@ -31,7 +32,7 @@ fun MarkdownView(
     colors: MarkdownColors? = null,          // 色彩皮肤：null 时由 MaterialTheme.colorScheme 自动推导
     markdownTheme: MarkdownTheme? = null,    // 传统主题兼容覆盖（若传入则优先使用）
     codeTheme: CodeTheme? = null,
-    markdownConfig: MarkdownConfig = MarkdownConfig.Default,
+    markdownConfig: MarkdownConfig = LocalMarkdownConfig.current,
     latexConfig: LatexConfig = LatexConfig(),
     diagramTheme: DiagramTheme = DiagramTheme.Default,
     onLinkClick: ((String) -> Unit)? = null,
@@ -42,7 +43,7 @@ fun MarkdownView(
 )
 ```
 
-分发：`AUTO`→`MARKDOWN`；MARKDOWN 内 `BoxWithConstraints.hasBoundedHeight` 自动选 StaticColumn/LazyColumn；`LATEX`→`Latex`，`MERMAID`→`DiagramBlockView`，`VLR`→`VTextView`，`CODE`→`CodeBlock`；外层 `CompositionLocalProvider(LocalSessionKey, LocalRenderStyle, LocalMarkdownColors)`。
+分发：`AUTO`→`MARKDOWN`；MARKDOWN 内 `BoxWithConstraints.hasBoundedHeight` 自动选 StaticColumn/LazyColumn；`LATEX`→`Latex`，`MERMAID`→`DiagramBlockView`，`VLR`→`VTextView`，`CODE`→`CodeBlock`；外层 `CompositionLocalProvider(LocalSessionKey, LocalRenderStyle, LocalMarkdownColors, LocalMarkdownConfig)`。
 
 ## 2. MarkdownExporter（HTML / PDF 导出）
 
@@ -84,8 +85,8 @@ flowchart TD
 
 ### 3.2 解析器要点（`common/markdown-parser/kotlin/xyz/emuci/markdown/parser/`）
 
-- **入口** `MarkdownParser.kt`：`MarkdownParser(flavour=ExtendedFlavour, customEmojiMap, enableAsciiEmoticons, enableLinting, appendCoalesceThreshold=0)`；完整 `parse()` / 流式 `beginStream+append+endStream` / 编辑 `insert/delete/replace`；暴露 `document`、`sourceText`、`diagnostics`。
-- **Flavour 体系**（`flavour/`）：`MarkdownFlavour`（接口：blockStarters + postProcessors 定义方言）→ `CommonMarkFlavour`（零扩展）→ `GFMFlavour`（+表格/任务列表/删除线/自动链接）→ `MarkdownExtraFlavour`（PHP Extra，明确排除 math/emoji/directive）→ `ExtendedFlavour`（默认全集）；`FlavourCache`：内置单例方言全局共享、预构建冻结 `BlockStarterRegistry`。
+- **入口** `MarkdownParser.kt`：`MarkdownParser(flavour=ExtendedFlavour, customEmojiMap, enableAsciiEmoticons, enableLinting, appendCoalesceThreshold=0, enableHighlight=null)`（`enableHighlight: Boolean?` null=跟随 flavour 默认；`InlineParser` 行内扩展开关（自动链接/扩展行内/强调合并/删除线）统一由 `MarkdownFlavour` 单源提供，`enableHighlight` 保留独立覆盖参数）；完整 `parse()` / 流式 `beginStream+append+endStream` / 编辑 `insert/delete/replace`；暴露 `document`、`sourceText`、`diagnostics`。
+- **Flavour 体系**（`flavour/`）：`MarkdownFlavour`（接口：blockStarters + postProcessors 定义方言；行内开关 `enableGfmAutolinks/enableExtendedInline/enableEmphasisCoalescing/enableStrikethrough/enableHighlight` 默认值）→ `CommonMarkFlavour`（零扩展，`enableHighlight=false`）→ `GFMFlavour`（+表格/任务列表/删除线/自动链接，`enableHighlight=false`）→ `MarkdownExtraFlavour`（PHP Extra，明确排除 math/emoji/directive，`enableHighlight=false`）→ `ExtendedFlavour`（默认全集，`enableHighlight=true`）；`FlavourCache`：内置单例方言全局共享、预构建冻结 `BlockStarterRegistry`。
 - **BlockStarter 体系**（`block/starters/`）：接口 `priority`（越小越先）+ `canInterruptParagraph` + `tryStart(cursor, lineIdx, tip)`；17 个实现：Heading/SetextHeading/FencedCodeBlock/IndentedCodeBlock/BlockQuote/ListItem/Table/ThematicBreak/HtmlBlock/FrontMatter/CustomContainer/MathBlock/FootnoteDefinition/DefinitionDescription/DirectiveBlock/PageBreak/TabBlock。辅助：`BlockParser`（块级主循环）、`OpenBlock`（栈节点）、`TableParser`。
 - **PostProcessor 体系**（`block/postprocessors/`）：接口 `priority + process(document)`；`PostProcessorRegistry`（Copy-on-Write 原子注册表，`withDefaults()`）；9 个：HeadingIdProcessor、HtmlFilterProcessor、AbbreviationProcessor、VerticalTextProcessor（```vlr→VerticalTextBlock）、ColumnsLayoutProcessor、DiagramProcessor（mermaid 围栏→DiagramBlock）、FigureProcessor、BlockAttributeProcessor、BibliographyProcessor。
 - **AST**（`ast/`）：`Node`→`ContainerNode`/`LeafNode`。块级 38 个（Document/Heading/SetextHeading/Paragraph/ThematicBreak/FencedCodeBlock/IndentedCodeBlock/BlockQuote/ListBlock/ListItem/HtmlBlock/LinkReferenceDefinition/Table*/FootnoteDefinition/MathBlock/DefinitionList*/Admonition/FrontMatter/BlankLine/TocPlaceholder/AbbreviationDefinition/CustomContainer/DiagramBlock/VerticalTextBlock/ColumnsLayout*/PageBreak/DirectiveBlock/TabBlock*/BibliographyDefinition/Figure；`BlockNodes.kt` 另含非节点 `BibEntry` data class）；行内约 28 个（Text/Soft|HardLineBreak/Emphasis/StrongEmphasis/Strikethrough/InlineCode/Link/Image/Autolink/InlineHtml/HtmlEntity/EscapedChar/FootnoteReference/InlineMath/Highlight/Superscript/Subscript/InsertedText/Emoji/StyledText/Abbreviation/KeyboardInput/DirectiveInline/CitationReference/Spoiler/WikiLink/RubyText）。`inline/InlineParser`（CommonMark 分隔符算法链表实现）+ `InlineScanner`。
@@ -93,7 +94,7 @@ flowchart TD
 
 ### 3.3 渲染器要点（`common/markdown-renderer/kotlin/xyz/emuci/markdown/renderer/`）
 
-- **管线层次**：`Markdown.kt`（顶层 Composable：异步解析+文档缓存，Static/Lazy 双模式）→ `internal/RendererFacadeState`（门面状态）→ `internal/MarkdownEngineHost`（三段管线宿主，持有 InlineLayoutRuntime + 全局共享块布局缓存）→ `MarkdownDocumentRenderer`（按 Document 隔离 + viewportWidth 有界 LRU 防 LazyColumn 高度 thrash）→ `internal/compose/`（`MarkdownComposePainter` 绘制接口 + `DefaultMarkdownComposePainter` + `ComposeRenderEnvironment` + `InlineLayoutContent`）。
+- **管线层次**：`Markdown.kt`（顶层 Composable：异步解析+文档缓存，Static/Lazy 双模式；`MarkdownStreaming.kt` 全局 `parsedDocumentCache` key=(markdown, MarkdownConfig) 防跨配置污染，`MarkdownConfig.enableHighlight: Boolean?=null` 透传 `MarkdownParser`（null=跟随 flavour））→ `internal/RendererFacadeState`（门面状态）→ `internal/MarkdownEngineHost`（三段管线宿主，持有 InlineLayoutRuntime + 全局共享块布局缓存）→ `MarkdownDocumentRenderer`（按 Document 隔离 + viewportWidth 有界 LRU 防 LazyColumn 高度 thrash）→ `internal/compose/`（`MarkdownComposePainter` 绘制接口 + `DefaultMarkdownComposePainter` + `ComposeRenderEnvironment` + `InlineLayoutContent`）。
 - **顶层包文件**（除 `Markdown.kt` 入口、`MarkdownConfig`/`MarkdownTheme`/`MarkdownColors`/`RenderStyle` 预设与上文各 internal 组件外）：`MarkdownImage.kt` / `MarkdownLayouts.kt` / `MarkdownNavigationController.kt` / `MarkdownRenderMode.kt` / `MarkdownStreaming.kt` / `RendererContext.kt` / `FootnoteNavigation.kt` / `SelectionMenuAction.kt`。
 - **Render model 编译**（`internal/core/`）：`compile/RenderModelCompiler`（接口）→ `DefaultRenderModelCompiler`（唯一实现，AST→纯数据）；`RenderCompileEnvironment`；`compile/InlineCompiler`；`compile/RenderCompileCache`；`identity/RenderIdentity`（四元组 revision，FNV-1a 内容寻址）；`model/`（RenderDocumentModel/RenderBlockModel(sealed)/InlineModel(InlineAtom=TextAtom+WidgetAtom)/WidgetModel(sealed Inline+Block 两族)）。
 - **布局引擎**（`internal/layout/`）：`engine/MarkdownLayoutEngine`(接口)→`DefaultMarkdownLayoutEngine`(object)；`LayoutEnvironment`（viewportWidth/blockSpacing/theme/density/textMeasurer/latexMeasurer/epoch…）；`BlockMeasurementKernel`；`engine/MarkdownLayoutSource` / `engine/TableLayoutMetrics`；`inline/InlineFlowLayoutEngine.computeInlineFlowLayout` + 缓存三件（`InlineFlowLayoutCache`/`InlineRenderResultCache`/`InlineLayoutEpoch` 跨回收稳定环境身份）+ `InlineLayoutRuntime`（每 Host 运行时）+ `InlineFlowInput`/`InlineFlowModels`/`InlineLayoutBlockSupport`/`InlineLayoutMetrics`/`LayoutInlineRunGeometry`；`table/TableLayoutAlgorithm`；`list/ListLayoutMetrics`；输出 `model/LayoutBlockModel/LayoutDocumentModel/LayoutGeometry`；`widget/BlockWidgetLayoutProtocol`（图/表/竖排测量摆放协议）。

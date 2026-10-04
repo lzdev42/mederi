@@ -87,6 +87,10 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.getMessage(sessionId, messageId)
     }
 
+    override suspend fun contextUsedTokens(sessionId: String): Int = mederiCall {
+        sessionManager.contextUsedTokens(sessionId)
+    }
+
     override suspend fun listRawMessages(sessionId: String): List<RawMessageDto> = mederiCall {
         sessionManager.listRawMessages(sessionId).map {
             RawMessageDto(

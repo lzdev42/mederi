@@ -643,6 +643,30 @@ private fun MessageList(
                         }
                     }
 
+                    is ChatListItem.QuestionCard -> {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = contentMaxWidth)
+                                .fillMaxWidth()
+                                .padding(
+                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
+                                    bottom = ChatLayout.thoughtBottomSpacing
+                                )
+                        ) {
+                            QuestionCard(
+                                question = item.request,
+                                currentIndex = viewModel.questionPage,
+                                selectedAnswers = viewModel.questionAnswers[viewModel.questionPage] ?: emptyList(),
+                                onAnswer = { ans -> viewModel.answerQuestion(viewModel.questionPage, ans) },
+                                onNextPage = viewModel::nextQuestionPage,
+                                onPrevPage = viewModel::prevQuestionPage,
+                                onSubmit = viewModel::submitQuestion,
+                                onCancel = { viewModel.rejectQuestion(item.request.id) },
+                                modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
+                            )
+                        }
+                    }
+
                     is ChatListItem.DocumentCard -> {
                         Box(
                             modifier = Modifier
@@ -742,6 +766,7 @@ private fun MessageList(
                                     is ChatListItem.EventMessageCard -> {}
                                     is ChatListItem.Footer -> {}
                                     is ChatListItem.PlanApproval -> {}
+                                    is ChatListItem.QuestionCard -> {}
                                     is ChatListItem.TurnDiffCard -> {}
                                     is ChatListItem.WorkTraceBlock -> {}
                                 }
@@ -896,12 +921,10 @@ private fun MessageList(
                                     }
                                 }
                             } else {
-                                // 助手消息：步骤过渡语使用紧凑说明样式，交付正文保留完整 Markdown 与视觉锚点
+                                // 助手消息：渲染交付正文
                                 val assistantContent: @Composable (Modifier) -> Unit = { contentModifier ->
                                     Column(modifier = contentModifier) {
                                         if (item.text.isNotBlank()) {
-                                            // narration item 全部进 WorkTraceBlock，顶层不可能出现，
-                                            // 因此这里无条件渲染 Markdown（原 isStepNarration 弱化分支为不可达死代码）
                                             MarkdownView(
                                                 content = item.text,
                                                 sessionKey = item.conversationId,
@@ -943,29 +966,8 @@ private fun MessageList(
             }
         }
 
-        // 2. 动态选择题卡片（答案收集/翻页状态机在 WorkspaceViewModel）
-        viewModel.pendingQuestion?.let { question ->
-            item {
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = contentMaxWidth)
-                        .fillMaxWidth()
-                ) {
-                    QuestionCard(
-                        question = question,
-                        currentIndex = viewModel.questionPage,
-                        // 唯一真理源：viewModel.questionAnswers（卡片无状态，交互经 onAnswer 单向写回）
-                        selectedAnswers = viewModel.questionAnswers[viewModel.questionPage] ?: emptyList(),
-                        onAnswer = { ans -> viewModel.answerQuestion(viewModel.questionPage, ans) },
-                        onNextPage = viewModel::nextQuestionPage,
-                        onPrevPage = viewModel::prevQuestionPage,
-                        onSubmit = viewModel::submitQuestion,
-                        onCancel = { viewModel.rejectQuestion(question.id) },
-                        modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
-                    )
-                }
-            }
-        }
+        // 2. 动态选择题卡片已内联进 chatItems（ChatListItem.QuestionCard，挂在 ask_user 工具行位置）；
+        //    此处保留 pendingQuestion 仅作为滚底信号源（见上方 LaunchedEffect 的触发键）
 
         // 底部安全留白（与输入框保持呼吸间距）
         item {

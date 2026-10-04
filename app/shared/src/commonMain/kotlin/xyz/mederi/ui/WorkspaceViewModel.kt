@@ -911,6 +911,14 @@ class WorkspaceViewModel(
         private set
 
     /**
+     * 当前会话是否正在手动压缩中（compaction RUNNING/IDLE STATUS 事件维护的 VM 本地态）。
+     * 不写快照、不动契约：仅供 UI（Workspace）读取覆盖 TurnStatus，压缩结束由 IDLE 事件 /
+     * 切会话 / snapshot status 三重复位。
+     */
+    var isCompacting by mutableStateOf(false)
+        private set
+
+    /**
      * 是否有子智能体正在工作（当前会话存在 RUNNING 状态的子代理，或有正在运行/流式的子代理工具调用）。
      * 状态判定复用 `ui/SubagentLifecycleNotification.kt` 的纯函数 [hasRunningSubagents]（同一谓词单一真理源），
      * 这里只叠加 chatItems 层的「流式/运行中工具调用」判定。
@@ -1126,15 +1134,25 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     it.payload["scope"] == "compaction" &&
                     it.sessionId == conversationId }
                 .collect { e ->
-                    // 预检命中：core 没翻状态机，turnStart 锚点是 requestCompaction 设的，
-                    // 这里收尾清掉，否则 StatusBar 计时会挂着一个"已耗时 0"不清。
-                    sessionCache.turnStartByConv.remove(e.sessionId)
-                    _effects.trySend(
-                        UiEffect.ShowCompactionNotice(
-                            code = e.payload["code"] ?: "SKIPPED",
-                            reason = e.payload["reason"]
-                        )
-                    )
+                    when (e.payload["code"]) {
+                        // RUNNING：压缩进行中，仅置位本地 isCompacting。不清 turnStart 锚点
+                        // （压缩中 StatusBar 计时仍从 turnStart 算，属同一 turn），不派提示。
+                        "RUNNING" -> isCompacting = true
+                        // IDLE：压缩结束，复位本地态。
+                        "IDLE" -> isCompacting = false
+                        // SKIPPED（或其它）：预检命中，core 没翻状态机，turnStart 锚点是
+                        // requestCompaction 设的，这里收尾清掉，否则 StatusBar 计时会挂着
+                        // 一个"已耗时 0"不清；再派一次性提示 effect。
+                        else -> {
+                            sessionCache.turnStartByConv.remove(e.sessionId)
+                            _effects.trySend(
+                                UiEffect.ShowCompactionNotice(
+                                    code = e.payload["code"] ?: "SKIPPED",
+                                    reason = e.payload["reason"]
+                                )
+                            )
+                        }
+                    }
                 }
         }
 
@@ -1160,6 +1178,8 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         selectionHydrated = false
         resetQuestionState()
         isSubagentBannerDismissed = false
+        // compaction 本地态不随会话走：切会话复位，防别的会话压缩事件串台
+        isCompacting = false
         if (id == null) {
             conversationId = null
             snapshot = null
@@ -1285,6 +1305,11 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 id = snap.errorId,
                 isStreamInterrupted = snap.errorIsStreamInterrupted,
             )
+            // compaction 兜底复位：当前会话快照已 Idle/Error（MESSAGE_COMPLETED/ERROR）而
+            // compaction IDLE 事件丢失时，isCompacting 可能卡 true——按快照状态复位。
+            if (snap.conversation.status == ConversationStatus.Idle || snap.conversation.status == ConversationStatus.Error) {
+                isCompacting = false
+            }
             checkAndTriggerAutoContinue(id, snap)
         }
         // 仅在真实离开 Working 状态（turn 结束）时清除 StatusBar 计时锚点 + 快照缓存

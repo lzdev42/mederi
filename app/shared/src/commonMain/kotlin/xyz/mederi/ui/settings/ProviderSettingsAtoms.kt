@@ -20,6 +20,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import mederi.app.shared.generated.resources.Res
@@ -41,7 +42,13 @@ internal fun MetaBadge(text: String, colors: MederiColors) {
             .border(1.dp, colors.divider, ProviderTokens.RadiusBadge)
             .padding(horizontal = 5.dp, vertical = 1.5.dp)
     ) {
-        Text(text = text, color = colors.textSecondary, fontSize = 10.sp)
+        Text(
+            text = text,
+            color = colors.textSecondary,
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -57,12 +64,18 @@ internal fun UnifiedCapabilityTag(
             .clip(ProviderTokens.RadiusBadge)
             .background(colors.surfaceInput.copy(alpha = alpha))
             .border(1.dp, colors.divider.copy(alpha = alpha), ProviderTokens.RadiusBadge)
-            .padding(horizontal = 5.dp, vertical = 2.dp),
+            .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Icon(icon, null, tint = colors.textSecondary.copy(alpha = alpha), modifier = Modifier.size(10.dp))
-        Text(text = text, color = colors.textSecondary.copy(alpha = alpha), fontSize = ProviderTokens.FontBadge)
+        Text(
+            text = text,
+            color = colors.textSecondary.copy(alpha = alpha),
+            fontSize = ProviderTokens.FontBadge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

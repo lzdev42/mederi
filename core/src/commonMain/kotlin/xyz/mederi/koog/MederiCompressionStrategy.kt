@@ -4,6 +4,11 @@ import ai.koog.agents.core.agent.session.AIAgentLLMWriteSession
 import ai.koog.agents.core.dsl.extension.HistoryCompressionStrategy
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.ResponseMetaInfo
+import java.time.Instant
+import kotlinx.coroutines.flow.MutableSharedFlow
+import xyz.mederi.debug.DebugLog
+import xyz.mederi.domain.model.EventType
+import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.koog.CompressionPlan
 import xyz.mederi.koog.combineBatchSummaries
 import xyz.mederi.koog.planCompression
@@ -32,10 +37,17 @@ import xyz.mederi.koog.planCompression
  *
  *   自动路径（TurnExecutor.buildTurnAgent）不传该参数，行为与本参数引入前完全一致；
  *   手动路径由用户点「压缩」时以 `MANUAL_KEEP_LAST_MESSAGES` 构造本类。
+ *
+ * @param eventBus 事件总线：compress() 进入/结束（含异常/早退）时发
+ *   STATUS{scope=compaction, code=RUNNING/IDLE}。默认空总线 + 空 sessionId（单测兼容），
+ *   真实路径（TurnExecutor 两处构造）必须传 eventBus 与 sessionId。
+ * @param sessionId 压缩所属会话 ID，随 STATUS 事件上报。
  */
 class MederiCompressionStrategy(
     private val contextWindow: Int? = null,
-    private val keepLastMessages: Int? = null
+    private val keepLastMessages: Int? = null,
+    private val eventBus: MutableSharedFlow<MederiEvent> = MutableSharedFlow(),
+    private val sessionId: String = ""
 ) : HistoryCompressionStrategy() {
 
     /**
@@ -48,39 +60,66 @@ class MederiCompressionStrategy(
         llmSession: AIAgentLLMWriteSession,
         memoryMessages: List<Message>
     ) {
-        // 压缩源 = prompt.messages（ChatMemory preprocessor 在 compress 节点执行前
-        // 把 load 的历史装进了 prompt）。memoryMessages 参数在此 Koog 版本里实测为空，
-        // 不可用作压缩源。
-        val originalMessages = llmSession.prompt.messages
-        // 保留 system 消息（它们不参与压缩）
-        val systemMessages = originalMessages.filter { it is Message.System }
+        // 压缩是三种触发（手动 compressHistory / preflight / turn 中 isHistoryTooBig 节点）的
+        // 唯一共同终点：进入即发 RUNNING，结束（含异常/早退）由 finally 保证发 IDLE。
+        emitCompaction("RUNNING")
+        try {
+            // 压缩源 = prompt.messages（ChatMemory preprocessor 在 compress 节点执行前
+            // 把 load 的历史装进了 prompt）。memoryMessages 参数在此 Koog 版本里实测为空，
+            // 不可用作压缩源。
+            val originalMessages = llmSession.prompt.messages
+            // 保留 system 消息（它们不参与压缩）
+            val systemMessages = originalMessages.filter { it is Message.System }
 
-        // 按 token 预算规划：保留段 + 旧消息多批 + 丢弃计数
-        val plan = planFor(originalMessages)
+            // 按 token 预算规划：保留段 + 旧消息多批 + 丢弃计数
+            val plan = planFor(originalMessages)
 
-        // 没有可压缩的旧消息（都落在保留段）→ no-op
-        if (plan.olderBatches.isEmpty()) return
-        // 旧消息太少不值得花一次 LLM（沿用旧行为：< 2 条不压）
-        if (plan.olderBatches.sumOf { it.size } < 2) return
+            // 没有可压缩的旧消息（都落在保留段）→ no-op
+            if (plan.olderBatches.isEmpty()) return
+            // 旧消息太少不值得花一次 LLM（沿用旧行为：< 2 条不压）
+            if (plan.olderBatches.sumOf { it.size } < 2) return
 
-        // 逐批压缩：每批把 prompt 换成该批 + 追加 SUMMARY_PROMPT，调 LLM 取文本
-        val summaries = plan.olderBatches.map { batch ->
-            llmSession.prompt = llmSession.prompt.withMessages { _ -> batch }
-            llmSession.appendPrompt { user(SUMMARY_PROMPT) }
-            llmSession.requestLLMWithoutTools().textContent()
+            // 逐批压缩：每批把 prompt 换成该批 + 追加 SUMMARY_PROMPT，调 LLM 取文本
+            val summaries = plan.olderBatches.map { batch ->
+                llmSession.prompt = llmSession.prompt.withMessages { _ -> batch }
+                llmSession.appendPrompt { user(SUMMARY_PROMPT) }
+                llmSession.requestLLMWithoutTools().textContent()
+            }
+
+            // 多批小结合并为一条（保证首行以 TLDR: 开头）
+            val tldrText = combineBatchSummaries(summaries)
+            val tldrMessage = Message.Assistant(tldrText, ResponseMetaInfo.Empty)
+
+            // 最终 = system + TLDR + 保留的最近原文
+            val compressedMessages = buildList {
+                addAll(systemMessages)
+                add(tldrMessage)
+                addAll(plan.recentMessages)
+            }
+            llmSession.prompt = llmSession.prompt.withMessages { _ -> compressedMessages }
+        } finally {
+            // 含异常/早退（olderBatches 空、旧消息 < 2）一律发 IDLE，靠 finally 覆盖
+            emitCompaction("IDLE")
         }
+    }
 
-        // 多批小结合并为一条（保证首行以 TLDR: 开头）
-        val tldrText = combineBatchSummaries(summaries)
-        val tldrMessage = Message.Assistant(tldrText, ResponseMetaInfo.Empty)
-
-        // 最终 = system + TLDR + 保留的最近原文
-        val compressedMessages = buildList {
-            addAll(systemMessages)
-            add(tldrMessage)
-            addAll(plan.recentMessages)
+    /**
+     * 压缩生命周期 STATUS 事件发射。try-catch 兜底：eventBus.emit 是 suspend，
+     * 背压/异常不得中断压缩主流程。
+     */
+    private suspend fun emitCompaction(code: String) {
+        try {
+            eventBus.emit(
+                MederiEvent(
+                    type = EventType.STATUS,
+                    sessionId = sessionId,
+                    payload = mapOf("scope" to "compaction", "code" to code),
+                    timestamp = Instant.now().toString()
+                )
+            )
+        } catch (e: Throwable) {
+            DebugLog.error("Compression", "Failed to emit compaction $code event: ${e.message}", e)
         }
-        llmSession.prompt = llmSession.prompt.withMessages { _ -> compressedMessages }
     }
 
     companion object {

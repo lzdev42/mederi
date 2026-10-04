@@ -68,7 +68,7 @@ fun MarkdownView(
     colors: MarkdownColors? = null,
     markdownTheme: MarkdownTheme? = null,
     codeTheme: CodeTheme? = null,
-    markdownConfig: MarkdownConfig = MarkdownConfig.Default,
+    markdownConfig: MarkdownConfig = LocalMarkdownConfig.current,
     latexConfig: LatexConfig = LatexConfig(),
     diagramTheme: DiagramTheme = DiagramTheme.Default,
     onLinkClick: ((String) -> Unit)? = null,
@@ -193,6 +193,7 @@ fun MarkdownView(
         LocalSessionKey provides effectiveSessionKey,
         LocalRenderStyle provides style,
         LocalMarkdownColors provides effectiveColors,
+        LocalMarkdownConfig provides markdownConfig,
     ) {
         contentComposable()
     }

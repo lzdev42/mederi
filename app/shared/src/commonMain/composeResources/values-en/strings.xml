@@ -83,8 +83,6 @@
     <string name="tool_action_verify_target">Verified subtask %1$s</string>
     <string name="tool_action_verify_running">Verifying subtask…</string>
     <string name="tool_action_verify_running_target">Verifying subtask %1$s…</string>
-    <string name="tool_detail_output">OUTPUT</string>
-    <string name="tool_detail_failed_output">FAILED</string>
     <string name="tool_detail_report">REPORT</string>
     <string name="worktrace_summary_title">Work</string>
     <string name="worktrace_steps_count">%1$d steps</string>
@@ -94,9 +92,11 @@
     <string name="reasoning_thought">Thought</string>
     <string name="reasoning_thinking">Thinking...</string>
     <string name="reasoning_thinking_for">Thinking (%1$s)...</string>
+    <string name="reasoning_level_minimal">Minimal</string>
     <string name="reasoning_level_low">Low</string>
     <string name="reasoning_level_medium">Medium</string>
     <string name="reasoning_level_high">High</string>
+    <string name="reasoning_level_xhigh">X-High</string>
     <string name="reasoning_level_max">Max</string>
     <string name="reasoning_level_none">Off</string>
     <string name="footer_reasoning">Reasoning %1$s</string>
@@ -164,6 +164,7 @@
     <string name="status_idle">Idle</string>
     <string name="status_sending">Sending</string>
     <string name="status_preparing">Sent, waiting for response</string>
+    <string name="status_compacting">Compacting</string>
     <string name="status_thinking">Thinking</string>
     <string name="status_calling_tool">Calling tools</string>
     <string name="status_generating">Generating reply</string>
@@ -348,7 +349,7 @@
     <string name="settings_panel_badge_free">Free</string>
     <string name="settings_panel_capability_image">Image</string>
     <string name="settings_panel_capability_thinking">Thinking</string>
-    <string name="settings_panel_capability_thinking_levels">Thinking (%1$s)</string>
+    <string name="settings_panel_capability_thinking_levels">Thinking · %1$s</string>
     <string name="settings_panel_reasoning_edit_hint">Reasoning parameters (a JSON request-body fragment per level, merged verbatim; blank levels are not sent)</string>
     <string name="settings_panel_save_reconnect">Save &amp; reconnect</string>
     <string name="settings_panel_save_config">Save configuration</string>
@@ -421,9 +422,11 @@
     <string name="model_delete_failed">Delete failed: %1$s</string>
     <!-- Reasoning level row hints (ReasoningLevelsEditor) -->
     <string name="settings_panel_level_none_hint">Off / always-on parameter (usually blank)</string>
+    <string name="settings_panel_level_minimal_hint">Minimal</string>
     <string name="settings_panel_level_low_hint">Low</string>
     <string name="settings_panel_level_medium_hint">Medium</string>
     <string name="settings_panel_level_high_hint">High</string>
+    <string name="settings_panel_level_xhigh_hint">X-High</string>
     <string name="settings_panel_level_max_hint">Max</string>
     <string name="settings_panel_level_none_placeholder">Leave blank; to force off use {"enable_thinking":false}</string>
     <string name="settings_agents_title">Agent configuration</string>
@@ -551,12 +554,9 @@
     <string name="plan_approval_proceed">Proceed</string>
     <string name="dock_artifact_empty">No artifact or attachment open</string>
     <string name="dock_artifact_empty_hint">Click an image or text attachment in the chat, or open a generated artifact, to show it here</string>
-    <string name="dock_context_metrics">CONTEXT metrics</string>
-    <string name="dock_context_used">%1$s used</string>
     <string name="dock_context_max">Max %1$s</string>
     <string name="dock_context_unset">contextWindow not set</string>
     <string name="dock_requests_title">Requests</string>
-    <string name="dock_requests_count">%1$s requests</string>
     <string name="dock_cost_title">Estimated cost (reference)</string>
     <string name="dock_compact_context">Compact context</string>
     <!-- One-shot notice when a manual compaction is skipped by the core pre-check (reason=low_tokens|too_few) -->
@@ -681,7 +681,6 @@
     <string name="diff_review">Review</string>
     <!-- Right extension panel (RightExtensionPanel.kt) -->
     <string name="rp_todo_list_title">TODO-LIST</string>
-    <string name="rp_tokens_used">%1$d Tokens</string>
     <!-- System info bar (SystemInfoBar.kt) -->
     <string name="sys_cpu">CPU</string>
     <!-- Provider settings panel (ProviderSettingsPanel.kt) -->
@@ -716,7 +715,7 @@
     <string name="overview_title">Overview</string>
     <string name="overview_section_conversation">Conversation</string>
     <string name="overview_section_plan">Plan</string>
-    <string name="overview_tokens_title">Token Usage</string>
+    <string name="overview_context_usage_title">Context Usage</string>
     <string name="status_working">Working</string>
     <string name="status_waiting">Waiting</string>
     <string name="status_error">Error</string>

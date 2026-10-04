@@ -67,6 +67,7 @@ import mederi.app.shared.generated.resources.settings_panel_sync_idle_hint
 import mederi.app.shared.generated.resources.settings_panel_sync_unsupported
 import mederi.app.shared.generated.resources.settings_panel_syncing
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.ConfirmDialog
 import xyz.mederi.ui.components.atoms.MederiCard
@@ -198,7 +199,14 @@ internal fun ProviderDetailWorkspace(
                     )
 
                     if (!isCompact && provider.reasoningLevels.isNotEmpty()) {
-                        val configuredLevels = provider.reasoningLevels.keys.joinToString("/")
+                        val activeLevels = provider.reasoningLevels.keys
+                            .filter { ReasoningLevels.isActiveLevel(it) }
+                            .ifEmpty { provider.reasoningLevels.keys.toList() }
+                        val configuredLevels = if (activeLevels.size > 3) {
+                            "${activeLevels.first()} - ${activeLevels.last()} (${activeLevels.size})"
+                        } else {
+                            activeLevels.joinToString(" / ")
+                        }
                         CredentialFieldItem(
                             label = stringResource(Res.string.provider_reasoning_label),
                             value = configuredLevels,

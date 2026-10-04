@@ -143,22 +143,24 @@ fun ProcessRow(
         }
 
         // 展开内容容器：左侧一条导轨线（贯通）标出「这是本行的下级内容」，
-        // 内边距只作用在可见态（挂在 ExpandableContent 上），折叠时不占位。
+        // 导轨线对齐上方 Header 图标正中心 (horizontal 6dp + 14dp/2 = 13dp)，
+        // 内边距 padding(start=22.dp, end=12.dp) 给内容和导轨线之间留出 9dp 留白，右侧留出 12dp 边距防止顶边。
         ExpandableContent(
             expanded = expanded,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, top = 2.dp, bottom = 6.dp)
                 .drawBehind {
+                    val lineX = 13.dp.toPx()
                     val strokeWidth = 2.dp.toPx()
                     drawLine(
                         color = colors.divider,
-                        start = Offset(strokeWidth / 2f, 0f),
-                        end = Offset(strokeWidth / 2f, size.height),
+                        start = Offset(lineX, 0f),
+                        end = Offset(lineX, size.height),
                         strokeWidth = strokeWidth,
                         cap = StrokeCap.Round,
                     )
                 }
+                .padding(start = 22.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
         ) {
             content()
         }

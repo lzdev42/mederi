@@ -10,5 +10,5 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 enum class ReasoningLevel {
-    NONE, LOW, MEDIUM, HIGH, MAX
+    NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX
 }

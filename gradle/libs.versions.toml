@@ -30,7 +30,7 @@ pty4j = "0.13.13"
 jediterm = "3.74"
 kbrowser = "0.1.0-beta1"
 poi = "5.5.1"
-mammoth = "1.12.2"
+mammoth = "1.13.0"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }

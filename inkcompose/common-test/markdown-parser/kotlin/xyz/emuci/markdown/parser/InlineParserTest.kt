@@ -2,6 +2,8 @@ package xyz.emuci.markdown.parser
 
 import xyz.emuci.markdown.parser.ast.*
 import xyz.emuci.markdown.parser.core.CharacterUtils
+import xyz.emuci.markdown.parser.flavour.ExtendedFlavour
+import xyz.emuci.markdown.parser.flavour.MarkdownFlavour
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -400,6 +402,31 @@ class InlineParserTest {
         assertIs<Paragraph>(para)
         val hl = para.children.first()
         assertIs<Highlight>(hl)
+    }
+
+    @Test
+    fun should_not_parse_highlight_when_disabled() {
+        val disabledParser = MarkdownParser(enableHighlight = false)
+        val text = "若遇到 ask_user 工具且其 state==Running 且 snapshot.pendingQuestion!=null...按 question.id==viewModel.pendingQuestion?.id 取数"
+        val doc = disabledParser.parse(text)
+        val para = doc.children.first()
+        assertIs<Paragraph>(para)
+        assertTrue(para.children.none { it is Highlight }, "Should not contain Highlight node when disabled")
+        val combinedText = para.children.filterIsInstance<Text>().joinToString("") { it.literal }
+        assertTrue(combinedText.contains("state==Running"), "Should preserve state==Running as literal text")
+        assertTrue(combinedText.contains("question.id==viewModel"), "Should preserve question.id==viewModel as literal text")
+    }
+
+    @Test
+    fun should_respect_flavour_enable_highlight() {
+        val disabledFlavour = object : MarkdownFlavour by ExtendedFlavour {
+            override val enableHighlight: Boolean = false
+        }
+        val customParser = MarkdownParser(flavour = disabledFlavour)
+        val doc = customParser.parse("==text==")
+        val para = doc.children.first()
+        assertIs<Paragraph>(para)
+        assertTrue(para.children.none { it is Highlight })
     }
 
     // ────── Emoji ──────

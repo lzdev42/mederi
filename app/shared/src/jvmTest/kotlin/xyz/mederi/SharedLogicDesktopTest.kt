@@ -430,20 +430,39 @@ class SharedLogicDesktopTest {
     }
 
     @Test
-    fun testSnapshotReducerPlanProgressProjectsSubtasks() {
-        val initialSnap = testSnapshot("conv_plan")
+    fun testSnapshotReducerPlanProgressDoesNotChangeTodos() {
+        // 初始快照 todos 为空（testSnapshot 默认）；种子一条已 APPROVED 的 plan 审批用于验证 planApprovals 迁移
+        val initialSnap = testSnapshot("conv_plan").copy(
+            planApprovals = listOf(
+                xyz.mederi.core.contract.models.PlanApprovalRequest(
+                    id = "plan_x",
+                    conversationId = "conv_plan",
+                    planPath = "",
+                    title = "Test Plan",
+                    summary = "summary",
+                    subtaskCount = 3,
+                    planContent = null,
+                    status = "APPROVED",
+                    subtasks = emptyList()
+                )
+            )
+        )
         val event = xyz.mederi.core.contract.models.CoreEvent(
             type = xyz.mederi.core.contract.models.CoreEventType.PLAN_PROGRESS,
             sessionId = "conv_plan",
             payload = mapOf(
                 "planId" to "plan_x",
                 "action" to "subtask-started",
+                // 保留 todos 字段以证明 reducer 不再消费它（todo-list 与 plan 解耦）
                 "todos" to """[{"content":"Subtask 1: bootstrap","status":"completed"},{"content":"Subtask 2: implement","status":"in_progress"},{"content":"Subtask 3: cleanup","status":"pending"}]"""
             )
         )
         val updated = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, event)
-        assertEquals(3, updated.todos.size, "PLAN_PROGRESS 的 todos 投影必须进入快照")
-        assertEquals("Subtask 2: implement", updated.todos[1].content)
+        assertEquals(0, updated.todos.size, "PLAN_PROGRESS 不再改变快照 todos（todo-list 与 plan 解耦）")
+        // planApprovals 投影路径未受损：subtask-started → IN_PROGRESS 迁移仍然生效
+        assertEquals(1, updated.planApprovals.size)
+        assertEquals("plan_x", updated.planApprovals[0].id)
+        assertEquals("IN_PROGRESS", updated.planApprovals[0].status)
     }
 
     @Test
@@ -702,7 +721,7 @@ class SharedLogicDesktopTest {
         val jsonPayload = """[
             {"id":"q1","prompt":"选择端口","options":["8080","3000"]},
             {"id":"q2","prompt":"请输入你的名字","options":[]},
-            {"id":"q3","prompt":"选择功能","options":["A","B"],"multiSelect":true,"allowCustom":true}
+            {"id":"q3","prompt":"选择功能","options":["A","B"],"multiSelect":true}
         ]"""
 
         val conv = xyz.mederi.core.contract.models.Conversation(
@@ -733,21 +752,19 @@ class SharedLogicDesktopTest {
         assertEquals("q_1", pq.id)
         assertEquals(3, pq.questions.size)
 
-        // 第一题：默认 allowCustom = false, multiSelect = false
+        // 第一题：默认 multiSelect = false
         assertEquals("q1", pq.questions[0].id)
         assertEquals("选择端口", pq.questions[0].prompt)
         assertEquals(listOf("8080", "3000"), pq.questions[0].options)
-        assertEquals(false, pq.questions[0].allowCustom)
         assertEquals(false, pq.questions[0].multiSelect)
 
         // 第二题：自由输入（options 为空）
         assertEquals("q2", pq.questions[1].id)
         assertEquals(emptyList(), pq.questions[1].options)
 
-        // 第三题：多选且允许自定义
+        // 第三题：多选
         assertEquals("q3", pq.questions[2].id)
         assertEquals(true, pq.questions[2].multiSelect)
-        assertEquals(true, pq.questions[2].allowCustom)
 
         // SESSION_UPDATED 应自动清理 pendingQuestion
         val sessionUpdatedEvent = xyz.mederi.core.contract.models.CoreEvent(
@@ -1172,7 +1189,6 @@ class SharedLogicDesktopTest {
             val textItem = items[2] as ChatListItem.TextMessage
             assertEquals("这是最终的清晰回答。", textItem.text)
             assertEquals(false, textItem.isUser)
-            assertEquals(false, textItem.isStepNarration)
 
             val footerItem = items[3] as ChatListItem.Footer
             assertNotNull(footerItem.footer)
@@ -1182,6 +1198,98 @@ class SharedLogicDesktopTest {
         } finally {
             testScope.cancel()
         }
+    }
+
+    /**
+     * ask_user 挂起内联化：Running + pendingQuestion 非空 → computeChatItems 在 ask 工具行位置
+     * 改发内联 ChatListItem.QuestionCard（不再发该工具的 ToolCalls 行）；
+     * 回答后（Completed + pendingQuestion 清空）→ 工具行回归 ToolCalls，无 QuestionCard。
+     */
+    @Test
+    fun testComputeChatItemsInlinesQuestionCardWhileAskUserRunning() {
+        val pendingQuestion = xyz.mederi.core.contract.models.QuestionRequest(
+            id = "q3",
+            conversationId = "conv_qcard",
+            questions = listOf(
+                xyz.mederi.core.contract.models.QuestionRequest.Question(
+                    id = "q3",
+                    prompt = "选择功能",
+                    options = listOf("A", "B"),
+                    multiSelect = true
+                )
+            )
+        )
+
+        fun buildAssistantMsg(state: xyz.mederi.core.contract.models.ToolCallState) =
+            xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_asst_ask",
+                conversationId = "conv_qcard",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Text(id = "txt_intro", text = "我需要先确认一下"),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "t_ask",
+                        name = "ask_user",
+                        state = state
+                    )
+                ),
+                createdAt = 2000L,
+                completedAt = if (state is xyz.mederi.core.contract.models.ToolCallState.Completed) 3000L else null,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+        fun buildSnapshot(pending: xyz.mederi.core.contract.models.QuestionRequest?) =
+            xyz.mederi.core.contract.dto.ConversationSnapshot(
+                conversation = xyz.mederi.core.contract.models.Conversation(
+                    id = "conv_qcard",
+                    projectId = "proj_1",
+                    title = "Question Card",
+                    status = xyz.mederi.core.contract.models.ConversationStatus.WaitingUser,
+                    createdAt = 1000L,
+                    updatedAt = 2000L
+                ),
+                messages = emptyList(),
+                tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+                cost = xyz.mederi.core.contract.models.CostSummary(0.0),
+                pendingQuestion = pending
+            )
+
+        // 状态 A：ask_user 处于 Running + pendingQuestion 非空 → 内联 QuestionCard，ask 的 ToolCalls 行被取代
+        val itemsA = xyz.mederi.ui.computeChatItems(
+            msgs = listOf(buildAssistantMsg(xyz.mederi.core.contract.models.ToolCallState.Running())),
+            isWorking = true,
+            snapshot = buildSnapshot(pendingQuestion)
+        )
+        val questionCardsA = itemsA.filterIsInstance<ChatListItem.QuestionCard>()
+        assertEquals(1, questionCardsA.size, "挂起状态必须恰好有一个内联 QuestionCard")
+        assertEquals("q3", questionCardsA[0].request.id)
+        assertTrue(
+            itemsA.none { it is ChatListItem.ToolCalls && it.toolCalls.any { tc -> tc.name == "ask_user" } },
+            "挂起状态不得再发 ask 工具的 ToolCalls 行（消除等待回答的重复标签）"
+        )
+
+        // 状态 B：ask_user 已完成（出参含答案）+ pendingQuestion 清空 → 工具行回归 ToolCalls，无 QuestionCard
+        val itemsB = xyz.mederi.ui.computeChatItems(
+            msgs = listOf(
+                buildAssistantMsg(
+                    xyz.mederi.core.contract.models.ToolCallState.Completed(
+                        input = mapOf("questions" to """[{"id":"q3","prompt":"选择功能","options":["A","B"]}]"""),
+                        // 真实 AskUserResult JSON（ask_user 工具经 Json.encodeToString 返回，
+                        // 此前用非真实 output 掩盖了 parseAskItems 对真实形态的解析问题）
+                        output = """{"answers":[{"questionId":"q3","answers":["A","B"]}]}"""
+                    )
+                )
+            ),
+            isWorking = true,
+            snapshot = buildSnapshot(null)
+        )
+        assertTrue(itemsB.none { it is ChatListItem.QuestionCard }, "回答后不应再出现 QuestionCard")
+        val askToolLine = itemsB.filterIsInstance<ChatListItem.ToolCalls>()
+            .firstOrNull { item -> item.toolCalls.any { it.name == "ask_user" } }
+        assertNotNull(askToolLine, "回答后 ask 工具的 ToolCalls 行必须回归")
     }
 
     @Test
@@ -1216,7 +1324,6 @@ class SharedLogicDesktopTest {
                 role = xyz.mederi.core.contract.models.ChatRole.Assistant,
                 blocks = listOf(
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "先阅读代码..."),
-                    xyz.mederi.core.contract.models.ChatBlock.Text("t1", "先读现有代码："),
                     xyz.mederi.core.contract.models.ChatBlock.ToolCall("call_1", "read_file", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("path" to "file.kt"), "content"))
                 ),
                 createdAt = 2000L,
@@ -1244,8 +1351,8 @@ class SharedLogicDesktopTest {
                 role = xyz.mederi.core.contract.models.ChatRole.Assistant,
                 blocks = listOf(
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r2", "派发子代理执行..."),
-                    xyz.mederi.core.contract.models.ChatBlock.Text("t2", "派子代理执行任务："),
-                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("call_2", "subagent", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("action" to "SPAWN", "task" to "子任务0"), "done report"))
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("call_2", "subagent", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("action" to "SPAWN", "task" to "子任务0"), "done report")),
+                    xyz.mederi.core.contract.models.ChatBlock.Text("t2", "修复完成，子代理汇报成功。")
                 ),
                 createdAt = 4000L,
                 completedAt = 5000L,
@@ -1258,56 +1365,49 @@ class SharedLogicDesktopTest {
             val rawMessages = listOf(userMsg, asst1, toolResultUser1, asst2)
             val currentItems = viewModel.computeChatItems(rawMessages)
 
-            // 预期分为：1用户文本 + 1工作过程汇总栏 + 1Footer = 3项
-            assertEquals(3, currentItems.size, "多步轮次的所有工作步骤应汇聚为一个 WorkTraceBlock 汇总栏")
+            // 预期分为：1用户文本 + 1工作过程汇总栏 + 1助手正文 + 1Footer = 4项
+            assertEquals(4, currentItems.size, "多步轮次的所有非 Message 工作步骤应汇聚为一个 WorkTraceBlock 汇总栏")
 
             assertTrue(currentItems[0] is ChatListItem.TextMessage)
             assertEquals("请修复并验证", (currentItems[0] as ChatListItem.TextMessage).text)
-            assertEquals(false, (currentItems[0] as ChatListItem.TextMessage).isStepNarration)
 
             assertTrue(currentItems[1] is ChatListItem.WorkTraceBlock)
             val workTrace = currentItems[1] as ChatListItem.WorkTraceBlock
             assertEquals(2, workTrace.totalToolsCount)
             assertEquals(2000L, workTrace.totalDurationMs)
-            assertEquals(6, workTrace.items.size)
+            assertEquals(4, workTrace.items.size)
 
-            // 检查 WorkTrace 内部的 6 个时序步骤
+            // 检查 WorkTrace 内部的 4 个工作步骤（Reasoning, ToolCalls, Reasoning, SubagentCalls）
             assertTrue(workTrace.items[0] is ChatListItem.Reasoning)
             assertEquals("先阅读代码...", (workTrace.items[0] as ChatListItem.Reasoning).text)
 
-            assertTrue(workTrace.items[1] is ChatListItem.TextMessage)
-            val asst1Text = workTrace.items[1] as ChatListItem.TextMessage
-            assertEquals("先读现有代码：", asst1Text.text)
-            assertTrue(asst1Text.isStepNarration, "伴随工具调用的文本应被标记为步骤过渡语")
-
-            assertTrue(workTrace.items[2] is ChatListItem.ToolCalls)
-            val toolCalls = (workTrace.items[2] as ChatListItem.ToolCalls).toolCalls
+            assertTrue(workTrace.items[1] is ChatListItem.ToolCalls)
+            val toolCalls = (workTrace.items[1] as ChatListItem.ToolCalls).toolCalls
             assertEquals(1, toolCalls.size)
             assertEquals("read_file", toolCalls.first().name)
 
-            assertTrue(workTrace.items[3] is ChatListItem.Reasoning)
-            assertEquals("派发子代理执行...", (workTrace.items[3] as ChatListItem.Reasoning).text)
+            assertTrue(workTrace.items[2] is ChatListItem.Reasoning)
+            assertEquals("派发子代理执行...", (workTrace.items[2] as ChatListItem.Reasoning).text)
 
-            assertTrue(workTrace.items[4] is ChatListItem.TextMessage)
-            val asst2Text = workTrace.items[4] as ChatListItem.TextMessage
-            assertEquals("派子代理执行任务：", asst2Text.text)
-            assertTrue(asst2Text.isStepNarration, "伴随子代理调用的文本应被标记为步骤过渡语")
-
-            assertTrue(workTrace.items[5] is ChatListItem.SubagentCalls)
-            val subagents = (workTrace.items[5] as ChatListItem.SubagentCalls).subagents
+            assertTrue(workTrace.items[3] is ChatListItem.SubagentCalls)
+            val subagents = (workTrace.items[3] as ChatListItem.SubagentCalls).subagents
             assertEquals(1, subagents.size)
             assertEquals("subagent", subagents.first().name)
             assertEquals("子任务0", subagents.first().target)
 
+            // 交付正文留在外部
+            assertTrue(currentItems[2] is ChatListItem.TextMessage)
+            assertEquals("修复完成，子代理汇报成功。", (currentItems[2] as ChatListItem.TextMessage).text)
+
             // 沉底 Footer
-            assertTrue(currentItems[2] is ChatListItem.Footer)
+            assertTrue(currentItems[3] is ChatListItem.Footer)
         } finally {
             testScope.cancel()
         }
     }
 
     @Test
-    fun testFinalResponseVsStepNarrationDistinction() = kotlinx.coroutines.runBlocking {
+    fun testNonMessageItemsFoldedIntoWorkTrace() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {
             val mockAiCore = xyz.mederi.core.mock.MockAiCore()
@@ -1321,13 +1421,13 @@ class SharedLogicDesktopTest {
             appState.hydrate()
             val viewModel = xyz.mederi.ui.WorkspaceViewModel(appState)
 
-            // 构造多步调试后最终回答的场景（类似真实 sess_ac33d9f8）
+            // 构造包含推理、工具调用及最终回答的多步轮次
             val step1 = xyz.mederi.core.contract.models.ChatMessage(
                 id = "msg_step_1",
                 conversationId = "conv_test",
                 role = xyz.mederi.core.contract.models.ChatRole.Assistant,
                 blocks = listOf(
-                    xyz.mederi.core.contract.models.ChatBlock.Text(id = "t_step", text = "我先调研这两个 UI 问题的相关代码。"),
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning(id = "r_step", text = "我先调研这两个 UI 问题的相关代码。"),
                     xyz.mederi.core.contract.models.ChatBlock.ToolCall(
                         id = "tc_step",
                         name = "read_file",
@@ -1364,17 +1464,16 @@ class SharedLogicDesktopTest {
             // 包含 WorkTraceBlock、最终交付正文 TextMessage 和 Footer
             val workTraceItem = items.filterIsInstance<ChatListItem.WorkTraceBlock>().first()
 
-            // 第一条文本伴随工具调用，必须收入 WorkTraceBlock 且 isStepNarration = true
-            val narrationItem = workTraceItem.items.filterIsInstance<ChatListItem.TextMessage>().first { it.partId == "t_step" }
-            assertTrue(narrationItem.isStepNarration, "中间过渡语必须被识别为 isStepNarration=true")
+            // 验证非 Message 项（推理和工具调用）全部收入 WorkTraceBlock 内部
+            val reasoningItem = workTraceItem.items.filterIsInstance<ChatListItem.Reasoning>().first { it.key == "msg_step_1_r_step" }
+            assertEquals("我先调研这两个 UI 问题的相关代码。", reasoningItem.text)
 
-            // 最终答复不含工具调用，必须留在外部主流中且 isStepNarration = false
-            val finalItem = items.filterIsInstance<ChatListItem.TextMessage>().first { it.partId == "t_final" }
-            assertFalse(finalItem.isStepNarration, "最终交付回答必须为 isStepNarration=false")
-
-            // 验证工具调用就地挂载在 WorkTraceBlock 内部
             val toolCallItem = workTraceItem.items.filterIsInstance<ChatListItem.ToolCalls>().first()
             assertEquals("msg_step_1_tc_step", toolCallItem.key, "工具调用必须就地关联到触发它的 step1 消息及工具块 id")
+
+            // 最终答复 Message 留在外部主流中
+            val finalItem = items.filterIsInstance<ChatListItem.TextMessage>().first { it.partId == "t_final" }
+            assertEquals("两个问题都已修复，编译通过。", finalItem.text)
         } finally {
             testScope.cancel()
         }
@@ -2285,7 +2384,7 @@ class SharedLogicDesktopTest {
             appState.hydrate()
             val viewModel = xyz.mederi.ui.WorkspaceViewModel(appState)
 
-            // 构造交替块：Reasoning1 -> ToolCall1 -> Reasoning2 -> ToolCall2 -> Text (step narration) -> ToolCall3 -> FinalText
+            // 构造交替块：Reasoning1 -> ToolCall1 -> Reasoning2 -> ToolCall2 -> Reasoning3 -> ToolCall3 -> FinalText
             val interleavedMsg = xyz.mederi.core.contract.models.ChatMessage(
                 id = "msg_interleaved",
                 conversationId = "conv_order",
@@ -2301,7 +2400,7 @@ class SharedLogicDesktopTest {
                         "tc2", "execute_command",
                         xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git diff"), "")
                     ),
-                    xyz.mederi.core.contract.models.ChatBlock.Text("t_step", "正在读取配置文件..."),
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning("r3", "思考步骤3"),
                     xyz.mederi.core.contract.models.ChatBlock.ToolCall(
                         "tc3", "read_file",
                         xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("path" to "build.gradle.kts"), "...")
@@ -2321,9 +2420,9 @@ class SharedLogicDesktopTest {
             val activeItemTypes = activeItems.map { it::class.simpleName }
             println("TEST_DEBUG_activeItemTypes: $activeItemTypes")
 
-            // 预期顺序：Reasoning -> ToolCalls -> Reasoning -> ToolCalls -> TextMessage -> ToolCalls -> TextMessage
+            // 预期顺序：Reasoning -> ToolCalls -> Reasoning -> ToolCalls -> Reasoning -> ToolCalls -> TextMessage
             assertEquals(
-                listOf("Reasoning", "ToolCalls", "Reasoning", "ToolCalls", "TextMessage", "ToolCalls", "TextMessage"),
+                listOf("Reasoning", "ToolCalls", "Reasoning", "ToolCalls", "Reasoning", "ToolCalls", "TextMessage"),
                 activeItemTypes,
                 "流式活跃状态下，工具调用必须按发生时序就地交错排列，绝不沉底汇聚"
             )
@@ -2346,11 +2445,11 @@ class SharedLogicDesktopTest {
             assertEquals(3, wt.totalToolsCount)
 
             // WorkTraceBlock 展开后的内部子项也必须严格保持交替时序：
-            // Reasoning -> ToolCalls -> Reasoning -> ToolCalls -> TextMessage -> ToolCalls
+            // Reasoning -> ToolCalls -> Reasoning -> ToolCalls -> Reasoning -> ToolCalls
             val wtItemTypes = wt.items.map { it::class.simpleName }
             println("TEST_DEBUG_wtItemTypes: $wtItemTypes")
             assertEquals(
-                listOf("Reasoning", "ToolCalls", "Reasoning", "ToolCalls", "TextMessage", "ToolCalls"),
+                listOf("Reasoning", "ToolCalls", "Reasoning", "ToolCalls", "Reasoning", "ToolCalls"),
                 wtItemTypes,
                 "WorkTraceBlock 内部各步骤必须严格保持时序，禁止把工具调用后置沉底"
             )

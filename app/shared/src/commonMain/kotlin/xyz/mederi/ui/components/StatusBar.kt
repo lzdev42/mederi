@@ -31,6 +31,7 @@ import kotlinx.coroutines.delay
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.status_aborted
 import mederi.app.shared.generated.resources.status_calling_tool
+import mederi.app.shared.generated.resources.status_compacting
 import mederi.app.shared.generated.resources.status_elapsed
 import mederi.app.shared.generated.resources.status_generating
 import mederi.app.shared.generated.resources.status_idle
@@ -59,6 +60,7 @@ private fun turnStatusLabel(status: TurnStatus): String = when (status) {
     TurnStatus.Generating -> stringResource(Res.string.status_generating)
     TurnStatus.WaitingAnswer -> stringResource(Res.string.status_waiting_answer)
     TurnStatus.Retrying -> stringResource(Res.string.status_retrying)
+    TurnStatus.Compacting -> stringResource(Res.string.status_compacting)
     TurnStatus.Aborted -> stringResource(Res.string.status_aborted)
 }
 
@@ -67,7 +69,7 @@ private fun turnStatusLabel(status: TurnStatus): String = when (status) {
  *
  * 职能专一：只显示轮次运转过程状态（status），不展示报错信息（报错由专属错误组件承载）。
  * - status == Idle 时不渲染（完全消失）
- * - Preparing/Sending/Retrying 显示已耗时；Preparing 超过 20s 变警示色并改为"排队较长"文案
+ * - Preparing/Sending/Retrying/Compacting 显示已耗时；Preparing 超过 20s 变警示色并改为"排队较长"文案
  * - Retrying 显示供应商真实错误信息（serverMsg）+ 轮次计数，信息来自 [statusHint]
  *
  * 计时锚定 [startedAtMillis]（发送请求时刻）：每秒用 `now - startedAtMillis` 重算，
@@ -107,7 +109,7 @@ fun StatusBar(
         (now - startedAtMillis).coerceAtLeast(0L)
     } else 0L
 
-    val showElapsed = status == TurnStatus.Sending || status == TurnStatus.Preparing
+    val showElapsed = status == TurnStatus.Sending || status == TurnStatus.Preparing || status == TurnStatus.Compacting
     val slowResponse = status == TurnStatus.Preparing && elapsedMs >= 20_000
 
     // 主标签文案
@@ -171,7 +173,7 @@ fun StatusBar(
                                 .background(indicatorColor.copy(alpha = alpha)),
                         )
                     }
-                    TurnStatus.Retrying, TurnStatus.WaitingAnswer -> {
+                    TurnStatus.Retrying, TurnStatus.WaitingAnswer, TurnStatus.Compacting -> {
                         icon?.let { Icon(it, contentDescription = null, tint = indicatorColor, modifier = Modifier.size(13.dp)) }
                     }
                     else -> {
@@ -232,6 +234,7 @@ private fun statusIconAndColor(
     TurnStatus.Sending -> null to colors.accentPrimary
     TurnStatus.Preparing -> null to colors.accentPrimary
     TurnStatus.Retrying -> FeatherIcons.RefreshCw to colors.accentWarning
+    TurnStatus.Compacting -> FeatherIcons.Archive to colors.accentSecondary
     TurnStatus.Thinking -> FeatherIcons.Zap to colors.accentPrimary
     TurnStatus.CallingTool -> FeatherIcons.Terminal to colors.accentSecondary
     TurnStatus.Generating -> FeatherIcons.Edit2 to colors.accentPrimary

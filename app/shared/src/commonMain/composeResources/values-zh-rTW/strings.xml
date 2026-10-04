@@ -82,8 +82,6 @@
     <string name="tool_action_verify_target">驗證子任務 %1$s</string>
     <string name="tool_action_verify_running">正在驗證子任務…</string>
     <string name="tool_action_verify_running_target">正在驗證子任務 %1$s…</string>
-    <string name="tool_detail_output">輸出</string>
-    <string name="tool_detail_failed_output">執行失敗</string>
     <string name="tool_detail_report">任務報告</string>
     <string name="worktrace_summary_title">工作流程</string>
     <string name="worktrace_steps_count">%1$d 個步驟</string>
@@ -93,9 +91,11 @@
     <string name="reasoning_thought">已深度思考</string>
     <string name="reasoning_thinking">深度思考中...</string>
     <string name="reasoning_thinking_for">深度思考中 (%1$s)...</string>
+    <string name="reasoning_level_minimal">極簡</string>
     <string name="reasoning_level_low">低</string>
     <string name="reasoning_level_medium">中</string>
     <string name="reasoning_level_high">高</string>
+    <string name="reasoning_level_xhigh">超高</string>
     <string name="reasoning_level_max">最大</string>
     <string name="reasoning_level_none">關閉</string>
     <string name="footer_reasoning">推理 %1$s</string>
@@ -163,6 +163,7 @@
     <string name="status_idle">閒置</string>
     <string name="status_sending">正在傳送</string>
     <string name="status_preparing">已送達，等待回應</string>
+    <string name="status_compacting">壓縮中</string>
     <string name="status_thinking">AI 思考中</string>
     <string name="status_calling_tool">呼叫工具中</string>
     <string name="status_generating">正在生成回覆</string>
@@ -345,7 +346,7 @@
     <string name="settings_panel_badge_free">免費</string>
     <string name="settings_panel_capability_image">圖片</string>
     <string name="settings_panel_capability_thinking">推理</string>
-    <string name="settings_panel_capability_thinking_levels">推理 (%1$s)</string>
+    <string name="settings_panel_capability_thinking_levels">推理 · %1$s檔</string>
     <string name="settings_panel_reasoning_edit_hint">推理參數（每等級一段請求體 JSON，請求時原樣合併；留空的等級不發送參數）</string>
     <string name="settings_panel_save_reconnect">儲存並重新連線</string>
     <string name="settings_panel_save_config">儲存設定</string>
@@ -416,9 +417,11 @@
     <string name="model_deleted">已刪除模型</string>
     <string name="model_delete_failed">刪除失敗: %1$s</string>
     <string name="settings_panel_level_none_hint">關閉 / 常開參數（一般留空）</string>
+    <string name="settings_panel_level_minimal_hint">minimal 檔</string>
     <string name="settings_panel_level_low_hint">低檔</string>
     <string name="settings_panel_level_medium_hint">中檔</string>
     <string name="settings_panel_level_high_hint">高檔</string>
+    <string name="settings_panel_level_xhigh_hint">xhigh 檔</string>
     <string name="settings_panel_level_max_hint">max 檔</string>
     <string name="settings_panel_level_none_placeholder">留空；顯式關閉如 {"enable_thinking":false}</string>
     <string name="settings_agents_title">Agent 設定</string>
@@ -546,12 +549,9 @@
     <string name="plan_approval_proceed">繼續執行</string>
     <string name="dock_artifact_empty">目前暫無開啟的成品或附件</string>
     <string name="dock_artifact_empty_hint">點擊聊天中的大圖、長文字附件或檢視生成成品時在此顯示</string>
-    <string name="dock_context_metrics">CONTEXT 指標</string>
-    <string name="dock_context_used">%1$s 已用</string>
     <string name="dock_context_max">最大 %1$s</string>
     <string name="dock_context_unset">未設定 contextWindow</string>
     <string name="dock_requests_title">請求次數</string>
-    <string name="dock_requests_count">%1$s 次</string>
     <string name="dock_cost_title">預估成本 (參考)</string>
     <string name="dock_compact_context">壓縮 Context</string>
     <string name="compaction_skipped_title">無需壓縮</string>
@@ -668,7 +668,6 @@
     <string name="diff_files_changed">%1$d 個檔案變更 +%2$d -%3$d</string>
     <string name="diff_review">Review</string>
     <string name="rp_todo_list_title">TODO-LIST</string>
-    <string name="rp_tokens_used">%1$d Tokens</string>
     <string name="sys_cpu">CPU</string>
     <string name="provider_api_key">API Key</string>
     <string name="provider_base_url">Base URL</string>
@@ -698,7 +697,7 @@
     <string name="overview_title">概覽</string>
     <string name="overview_section_conversation">工作階段狀態</string>
     <string name="overview_section_plan">計畫</string>
-    <string name="overview_tokens_title">Token 用量</string>
+    <string name="overview_context_usage_title">上下文佔用</string>
     <string name="status_working">工作中</string>
     <string name="status_waiting">等待輸入</string>
     <string name="status_error">錯誤</string>

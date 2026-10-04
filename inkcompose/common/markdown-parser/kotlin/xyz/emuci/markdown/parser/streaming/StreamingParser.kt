@@ -42,6 +42,7 @@ class StreamingParser(
     lintingProcessor: LintingPostProcessor? = null,
     /** 流式 append 合并阈值。详见 [IncrementalEngine.appendCoalesceThreshold]。 */
     appendCoalesceThreshold: Int = 0,
+    enableHighlight: Boolean = flavour.enableHighlight,
 ) {
     companion object {
     }
@@ -52,6 +53,7 @@ class StreamingParser(
         enableAsciiEmoticons,
         lintingProcessor = lintingProcessor,
         appendCoalesceThreshold = appendCoalesceThreshold,
+        enableHighlight = enableHighlight,
     )
 
     /** 当前文档 AST */

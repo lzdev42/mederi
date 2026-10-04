@@ -13,8 +13,8 @@ package xyz.mederi.core.contract.models
  */
 object ReasoningMenu {
 
-    /** 级别显示顺序 */
-    private val ORDER = listOf("NONE", "LOW", "MEDIUM", "HIGH", "MAX")
+    /** 级别显示顺序（唯一真理源 = ReasoningLevels.ORDER） */
+    private val ORDER get() = ReasoningLevels.ORDER
 
     /**
      * 推导聊天菜单的级别选项（含关闭档）。

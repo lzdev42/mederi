@@ -13,8 +13,7 @@ import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.domain.model.TodoItem
 import xyz.mederi.domain.model.TodoStatus
 import xyz.mederi.domain.model.encodeTodos
-import xyz.mederi.plan.PlanStatus
-import xyz.mederi.plan.PlanStore
+import xyz.mederi.infrastructure.koog.aiViewContextUsedTokens
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
 import java.time.Instant
@@ -35,7 +34,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * @param modelContextWindow 模型上下文窗口大小（token 数），用于计算剩余量。
  * @param newContextWindowFlag 开新上下文窗口请求标志（execute 只置标志，TurnExecutor 在 agent.run 结束后消费）。
  * @param questionRequester 问题请求器（ask_user 工具需要）。
- * @param planStore 计划存储（todo 硬门禁：Plan 执行期禁止模型维护第二份 todo）。
  */
 class AgentTools(
     private val sessionId: String,
@@ -44,8 +42,7 @@ class AgentTools(
     private val eventBus: MutableSharedFlow<MederiEvent>,
     private val modelContextWindow: Int?,
     private val newContextWindowFlag: AtomicBoolean,
-    private val questionRequester: xyz.mederi.question.QuestionRequester? = null,
-    private val planStore: PlanStore? = null
+    private val questionRequester: xyz.mederi.question.QuestionRequester? = null
 ) {
 
     // ==================== update_todo ====================
@@ -70,22 +67,11 @@ class AgentTools(
         argsType = typeToken<UpdateTodoArgs>(),
         name = "update_todo",
         description = "Replace the entire current todo list. One call sets the whole list (passing an empty " +
-            "list clears it); at most one item may be in_progress. Disabled while an Active Plan is " +
-            "executing — the plan's subtask statuses are the tracker then."
+            "list clears it); at most one item may be in_progress."
     ) {
         override suspend fun execute(args: UpdateTodoArgs): String {
             if (sessionStore == null) {
                 return "Error: todo persistence is not available in this context."
-            }
-            // 硬门禁（代码强制，非提示词）：Plan 执行期（APPROVED/IN_PROGRESS）plan 子任务即 tracker，
-            // 禁止模型维护第二份 todo——确保 todo 面板在 Plan 期只显示 Plan 子任务投影。
-            // PENDING_APPROVAL（含被拒）不算执行期，小改动仍可轻量 todo。
-            val executingPlan = planStore?.loadBySession(sessionId)
-                ?.takeIf { it.status == PlanStatus.APPROVED || it.status == PlanStatus.IN_PROGRESS }
-            if (executingPlan != null) {
-                return "Error: an Active Plan (${executingPlan.id}) is being executed — its subtask " +
-                    "statuses are the tracker. Do NOT maintain a separate todo list; continue the " +
-                    "Plan Loop (generate_spec / subagent(SPAWN) / verify_subtask) instead."
             }
             // 聚合校验：一轮列出全部问题（逐条报错实测爬不完）
             val errors = mutableListOf<String>()
@@ -141,11 +127,13 @@ class AgentTools(
         description = "Get the remaining tokens in the current context window."
     ) {
         override suspend fun execute(args: GetContextRemainingArgs): String {
-            // 与 AI 实际收到的视图一致：只统计最后一条压缩标记及其之后的内容；
-            // 真实 inputTokens 优先，端点不报告时回退加权估算（统一走 TokenEstimator）
-            val messages = xyz.mederi.infrastructure.koog.HistoryStoreChatHistoryProvider
-                .aiViewWindow(historyStore, sessionId)
-            val estimatedTokens = contextUsedTokens(messages)
+            // 与 AI 实际收到的视图一致（压缩判定同源唯一真理源：AI 视图窗口，
+            // 压缩后走估算，否则用 API 报告的真实 inputTokens）
+            val estimatedTokens = aiViewContextUsedTokens(
+                historyStore,
+                sessionId,
+                sessionStore?.get(sessionId)?.aiModel?.supportsImages ?: true
+            )
             val remaining = modelContextWindow?.let { limit ->
                 (limit - estimatedTokens).coerceAtLeast(0)
             }
@@ -201,8 +189,6 @@ class AgentTools(
         val prompt: String,
         @LLMDescription("List of options. Empty = free-text input.")
         val options: List<String> = emptyList(),
-        @LLMDescription("true = allow a custom answer outside the options.")
-        val allowCustom: Boolean = false,
         @LLMDescription("true = allow selecting multiple answers.")
         val multiSelect: Boolean = false
     )
@@ -230,7 +216,6 @@ class AgentTools(
                     id = q.id,
                     prompt = q.prompt,
                     options = q.options,
-                    allowCustom = q.allowCustom,
                     multiSelect = q.multiSelect
                 )
             }

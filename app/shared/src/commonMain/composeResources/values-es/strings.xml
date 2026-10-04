@@ -82,8 +82,6 @@
     <string name="tool_action_verify_target">Subtarea %1$s verificada</string>
     <string name="tool_action_verify_running">Verificando subtarea…</string>
     <string name="tool_action_verify_running_target">Verificando subtarea %1$s…</string>
-    <string name="tool_detail_output">SALIDA</string>
-    <string name="tool_detail_failed_output">FALLIDO</string>
     <string name="tool_detail_report">INFORME</string>
     <string name="worktrace_summary_title">Proceso de trabajo</string>
     <string name="worktrace_steps_count">%1$d pasos</string>
@@ -93,9 +91,11 @@
     <string name="reasoning_thought">Pensó</string>
     <string name="reasoning_thinking">Pensando...</string>
     <string name="reasoning_thinking_for">Pensando (%1$s)...</string>
+    <string name="reasoning_level_minimal">Mínimo</string>
     <string name="reasoning_level_low">Bajo</string>
     <string name="reasoning_level_medium">Medio</string>
     <string name="reasoning_level_high">Alto</string>
+    <string name="reasoning_level_xhigh">X-Alto</string>
     <string name="reasoning_level_max">Máximo</string>
     <string name="reasoning_level_none">Desactivado</string>
     <string name="footer_reasoning">Razonamiento %1$s</string>
@@ -163,6 +163,7 @@
     <string name="status_idle">Inactivo</string>
     <string name="status_sending">Enviando</string>
     <string name="status_preparing">Enviado, esperando respuesta</string>
+    <string name="status_compacting">Comprimiendo</string>
     <string name="status_thinking">IA pensando</string>
     <string name="status_calling_tool">Llamando herramientas</string>
     <string name="status_generating">Generando respuesta</string>
@@ -345,7 +346,7 @@
     <string name="settings_panel_badge_free">Gratis</string>
     <string name="settings_panel_capability_image">Imagen</string>
     <string name="settings_panel_capability_thinking">Razonamiento</string>
-    <string name="settings_panel_capability_thinking_levels">Razonamiento (%1$s)</string>
+    <string name="settings_panel_capability_thinking_levels">Razonamiento · %1$s</string>
     <string name="settings_panel_reasoning_edit_hint">Parámetros de razonamiento (un fragmento JSON por nivel, combinado sin cambios; los niveles vacíos no se envían)</string>
     <string name="settings_panel_save_reconnect">Guardar y reconectar</string>
     <string name="settings_panel_save_config">Guardar configuración</string>
@@ -416,9 +417,11 @@
     <string name="model_deleted">Modelo eliminado</string>
     <string name="model_delete_failed">Error al eliminar: %1$s</string>
     <string name="settings_panel_level_none_hint">Desactivado / parámetro siempre activo (generalmente en blanco)</string>
+    <string name="settings_panel_level_minimal_hint">Mínimo</string>
     <string name="settings_panel_level_low_hint">Bajo</string>
     <string name="settings_panel_level_medium_hint">Medio</string>
     <string name="settings_panel_level_high_hint">Alto</string>
+    <string name="settings_panel_level_xhigh_hint">X-Alto</string>
     <string name="settings_panel_level_max_hint">Máximo</string>
     <string name="settings_panel_level_none_placeholder">Dejar en blanco; para forzar apagado use {"enable_thinking":false}</string>
     <string name="settings_agents_title">Configuración de agentes</string>
@@ -546,12 +549,9 @@
     <string name="plan_approval_proceed">Continuar</string>
     <string name="dock_artifact_empty">Ningún artefacto ni adjunto abierto</string>
     <string name="dock_artifact_empty_hint">Haga clic en una imagen o archivo adjunto en el chat, o abra un artefacto para mostrarlo aquí</string>
-    <string name="dock_context_metrics">Métricas de CONTEXT</string>
-    <string name="dock_context_used">%1$s usado</string>
     <string name="dock_context_max">Máx. %1$s</string>
     <string name="dock_context_unset">contextWindow no establecido</string>
     <string name="dock_requests_title">Solicitudes</string>
-    <string name="dock_requests_count">%1$s solicitudes</string>
     <string name="dock_cost_title">Coste estimado (referencia)</string>
     <string name="dock_compact_context">Compactar contexto</string>
     <string name="compaction_skipped_title">No se requiere compactación</string>
@@ -668,7 +668,6 @@
     <string name="diff_files_changed">%1$d archivo(s) modificado(s) +%2$d -%3$d</string>
     <string name="diff_review">Revisión</string>
     <string name="rp_todo_list_title">LISTA DE TAREAS</string>
-    <string name="rp_tokens_used">%1$d Tokens</string>
     <string name="sys_cpu">CPU</string>
     <string name="provider_api_key">Clave de API</string>
     <string name="provider_base_url">URL base</string>
@@ -698,7 +697,7 @@
     <string name="overview_title">Resumen</string>
     <string name="overview_section_conversation">Conversación</string>
     <string name="overview_section_plan">Plan</string>
-    <string name="overview_tokens_title">Uso de tokens</string>
+    <string name="overview_context_usage_title">Uso de contexto</string>
     <string name="status_working">Trabajando</string>
     <string name="status_waiting">Esperando</string>
     <string name="status_error">Error</string>

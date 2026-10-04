@@ -151,7 +151,7 @@ flowchart TD
     MAP --> CH2["GET /v1/events SSE<br/>(15s 心跳注释帧, Bearer 鉴权)"]
     CH1 & CH2 --> CLIENT["客户端 (commonMain)"]
     CLIENT --> OB["observeConversation(id)"]
-    OB --> INIT["初始: getSnapshot 构建完整快照<br/>(Aggregator: Session+历史Message+initialTodos hydration<br/>Plan投影 > session.todos; planContent 磁盘读取增强)"]
+    OB --> INIT["初始: getSnapshot 构建完整快照<br/>(Aggregator: Session+历史Message+initialTodos hydration: session.todos; planContent 磁盘读取增强)"]
     INIT --> LOOP
     LOOP["事件循环"] --> SR["SnapshotReducer.applyWithRefresh(snapshot, event, refreshPage)"]
     SR --> SW{"event type"}
@@ -161,12 +161,14 @@ flowchart TD
     SW -- "MESSAGE_ERROR" --> ER["写 errorMessage/errorId/errorDiagnostic,<br/>回查后发最终快照(status=Error)"]
     SW -- "TOOL_CALLED/RESULT" --> TO["按 toolCallId 精确匹配更新 ToolCall block"]
     SW -- "QUESTION_*/PLAN_APPROVAL_*" --> PE["写/清 pendingQuestion / pendingPlanApproval"]
-    SW -- "TODO_UPDATED/PLAN_PROGRESS" --> TD["解码 payload.todos 整体替换(失败丢弃事件)"]
+    SW -- "TODO_UPDATED" --> TD["解码 payload.todos 整体替换(失败丢弃事件)"]
     SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max|serverMsg|retryAt'(serverMsg=供应商真实报错; retryAt=delayMs+当前时间)<br/>UI StatusBar 重试态第二行渲染"]
     SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage<br/>+ refreshPage 即时回查 listMessagesPage(新 turn 用户消息立即可见)"]
     SW -- "STATUS(steering_queued 引导)" --> SIG["忽略: payload 形状与 RETRYING 约定 key 不符(代码现状)<br/>steering 提示仅入队侧日志, 不渲染 StatusBar"]
     D & C2 & ER & TO & PE & TD & ST & SU --> UI["WorkspaceViewModel.snapshot<br/>→ chatItems(derivedStateOf 展平渲染)"]
 ```
+
+**`contextUsedTokens` 口径（与自动压缩同源）**：refreshPage 回查落库的 `contextUsedTokens` 现走 `SessionManager.contextUsedTokens`（→ `aiViewContextUsedTokens`），口径 = AI 视图窗口（首条 SUMMARY 走估算、否则最近一条 Assistant inputTokens 真值）——故手动压缩结尾的 MESSAGE_COMPLETED 触发 refreshPage 时，界面当场拿到压缩后的小值，不再滞后一轮。
 
 **BROWSER_TASK_* 事件**：`BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` 不经 `SnapshotReducer` 聚合，由 `WorkspaceViewModel` 侧直接消费（展开浏览器面板 / 更新步骤列表）。
 
@@ -185,7 +187,7 @@ flowchart TD
     WAIT -- "拒绝" --> REJ["告知用户结束/修改"]
     WAIT -- "批准" --> GEN
     AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变<br/>不转录文件摘录:executor 自己 read_file 原文件"]
-    GEN --> SPAWN["subagent(action=SPAWN, planId?, subtaskIndex?)<br/>planId 非空 → 硬校验 subtaskIndex/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>planId 为空 → ad-hoc 路径: task+briefing 直接派 executor(跳过 spec/IN_PROGRESS)<br/>PLAN_PROGRESS('subtask-started'+todos投影+subtasks 全量 JSON 列表)<br/>briefing 简化注入: 只 task + planDetail(意图)<br/>(researchNotes/appendix 不再注入,executor 自己 read_file research.md/原文件)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
+    GEN --> SPAWN["subagent(action=SPAWN, planId?, subtaskIndex?)<br/>planId 非空 → 硬校验 subtaskIndex/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>planId 为空 → ad-hoc 路径: task+briefing 直接派 executor(跳过 spec/IN_PROGRESS)<br/>PLAN_PROGRESS('subtask-started'+subtasks 全量 JSON 列表)<br/>briefing 简化注入: 只 task + planDetail(意图)<br/>(researchNotes/appendix 不再注入,executor 自己 read_file research.md/原文件)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
     SPAWN --> ENDTURN["END TURN（父代理 turn 结束,不阻塞）"]
     ENDTURN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>完成时报告落盘 {planId}/reports/NN-executor.md, 父上下文只收尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
     SUB --> WAKE["子代理终态 → SUBAGENT_COMPLETED/ERROR/STOPPED 事件(eventBus, NonCancellable emit)<br/>→ handleSubagentTerminalEvent 组 &lt;event_message&gt; → pendingEventMessages 入队<br/>→ 父 turn 空闲 dispatchPendingEventMessages 批量合并唤醒<br/>(同会话多个完成合并成一条内部消息,一次 turn)"]
@@ -295,7 +297,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A["触发1: runTurn 前 preflight<br/>contextUsedTokens(estimate) > 70% 窗口"]
+    A["触发1: runTurn 前 preflight<br/>aiViewContextUsedTokens > 70% 窗口(与 UI 同源)"]
     B["触发2: graphStrategy 节点内<br/>isHistoryTooBig(prompt) > 70%"]
     C["触发3: 用户手动 compressHistory()"]
     A & B --> D["MederiCompressionStrategy.compress(llmSession, memory)"]
@@ -305,11 +307,13 @@ flowchart TD
     S -- "是 low_tokens / too_few" --> X["emit STATUS{scope=compaction, code=SKIPPED, reason} 后直接 return<br/>不翻 RUNNING、不发 SESSION_UPDATED / MESSAGE_COMPLETED → UI 无闪屏"]
     X -. 裸事件旁路.-> U["WorkspaceViewModel.init 收集器(仿 BROWSER_TASK_STARTED, 不经快照)<br/>filter: STATUS && payload.scope==compaction && sessionId==当前会话<br/>→ 清 sessionCache.turnStartByConv 锚点(StatusBar 计时不留'已耗时 0')<br/>→ trySend(UiEffect.ShowCompactionNotice(code, reason))"]
     U -.-> V["MainScreen effects.collect → 本地 compactionNotice 状态 → 模态<br/>文案 composeResources: compaction_skipped_title +<br/>compaction_skipped_low_tokens / _too_few(values/ 与 values-en/ 双份)"]
-    D --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner(自动模式): 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim<br/>CompressionPlanner(手动模式 keepLastMessages): 保留段 = 最后 3 条消息原文, 其余全部旧消息压成 TLDR"]
+    D --> D1["STATUS{scope=compaction, code=RUNNING}<br/>(compress 进入即发; TurnExecutor 两处构造注入 eventBus+sessionId)"]
+    D1 --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner(自动模式): 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim<br/>CompressionPlanner(手动模式 keepLastMessages): 保留段 = 最后 3 条消息原文, 其余全部旧消息压成 TLDR"]
     E --> F["逐批 requestLLMWithoutTools 生成小结 → combineBatchSummaries 合并为单条 TLDR:(五节)"]
     F --> G["新历史 = system + TLDR:... + recent<br/>(head-trim 仅影响 AI 视图, HistoryStore 全量不删)"]
-    G --> H["ChatMemory 回写 store → HistoryStoreChatHistoryProvider.reconcile<br/>检测首条 TLDR 未落库 → 按内容指纹对齐<br/>→ 插入 SUMMARY 标记消息(不删任何已有消息)"]
-    H --> I["效果: message_history 全量保留(UI 可见/回滚可用)<br/>aiViewWindow = 最后一条 SUMMARY 及其后 → AI 视图变小"]
+    G --> H1["STATUS{scope=compaction, code=IDLE}<br/>(try-finally 兜底: 正常/异常/早退一律发)"]
+    H1 --> H["ChatMemory 回写 store → HistoryStoreChatHistoryProvider.reconcile<br/>检测首条 TLDR 未落库 → TLDR 之后的保留段与库尾指纹对齐(用 id 过滤前的全量 incoming)<br/>→ SUMMARY 插在保留段起点(压缩点)之前, 不删任何已有消息"]
+    H --> I["效果: message_history 全量保留(UI 可见/回滚可用)<br/>aiViewWindow = SUMMARY + 保留段原文 + 之后新消息 → AI 视图变小"]
     A -. preflight 压缩失败(不阻塞).-> W["自动压缩失败(原因回灌 streamWarning)<br/>MESSAGE_COMPLETED/MESSAGE_ERROR.warning 对用户可见"]
 ```
 
@@ -321,12 +325,16 @@ flowchart TD
 
 窗口取 `HistoryStoreChatHistoryProvider.aiViewWindow`（即"最后一条 SUMMARY 及其后"，与实际压缩所见一致），图片按当前模型 `supportsImages` 能力剔除。
 
+**SUMMARY 插入位置与 AI 视图（2026-10 修复）**：压缩回写时 SUMMARY 标记插在**保留段（recent）起点之前**——库里顺序为 `...被压掉的旧消息 | SUMMARY | 保留段原文 | 之后新消息`，AI 视图 = SUMMARY + 保留段 + 新消息，模型既看到摘要又看到压缩点前保留的最后几句原文。对齐必须用 **id 过滤前的完整 incoming**：Koog ChatMemory 在 strategy 完成时把压缩后的历史 `[TLDR, recent...]` 整体交给 store，recent 携带与库中一致的 id，若先按 id 过滤（`existingIds`）再对齐，recent 会被全部剔除、k 恒为 0，SUMMARY 会追加到历史末尾、保留段退出 AI 视图（压缩后模型只看到摘要、看不到保留原文——历史上该 bug 真实存在，修复 + 回归测试见 `CompressionSummaryPositionTest`）。
+
 - **命中空转**（`low_tokens` / `too_few`）：只发一条机器码事实 `STATUS{scope=compaction, code=SKIPPED, reason}` 后直接 `return`——**不翻 RUNNING、不发 SESSION_UPDATED / MESSAGE_COMPLETED**，UI 完全不闪屏（老行为会 Working→Idle 闪一下再说明失败）；
-- **未命中**：照旧 `compressOnce` 全流程（RUNNING → compressOnce → IDLE → MESSAGE_COMPLETED）。
+- **未命中**：照旧 `compressOnce` 全流程（session RUNNING → compressOnce → IDLE）——`MederiCompressionStrategy.compress` 进入发 `STATUS{scope=compaction, code=RUNNING}`、try-finally 结束（含异常/早退）发 `code=IDLE`（三种触发的手动/自动构造均注入 eventBus+sessionId）；结尾 `MESSAGE_COMPLETED` 触发的 `refreshPage` 取到的 `contextUsedTokens` 即为压缩后窗口口径（`aiViewContextUsedTokens`），概览「上下文占用」当场下降，不用等下一轮回复。
 
-UI 侧走**裸事件旁路**（core 只发事实，不认识模态）：`WorkspaceViewModel.init` 里仿 `BROWSER_TASK_STARTED` 的收集器直接订阅 `aiCore.events()`，按 `type==STATUS && payload["scope"]=="compaction" && sessionId==当前会话` 过滤（按会话过滤防串台），先清 `sessionCache.turnStartByConv` 里 `requestCompaction` 事先设的锚点（否则 StatusBar 计时挂着一个"已耗时 0"），再 `trySend(UiEffect.ShowCompactionNotice(code, reason))`；`MainScreen` 的 `effects.collect` 收该 effect 落成本地 `compactionNotice` 状态渲染**本地化模态**（`compaction_skipped_title` + 按 `reason` 选 `compaction_skipped_low_tokens` / `compaction_skipped_too_few`，values/ 与 values-en/ 双份），"确定"关闭是纯本地 UI 动作不走效果通道。
+UI 侧走**裸事件旁路**（core 只发事实，不认识模态）：`WorkspaceViewModel.init` 里仿 `BROWSER_TASK_STARTED` 的收集器直接订阅 `aiCore.events()`，按 `type==STATUS && payload["scope"]=="compaction" && sessionId==当前会话` 过滤（按会话过滤防串台）——**`code=RUNNING` → 置本地 `isCompacting=true`（压缩中 StatusBar 覆盖为"压缩中"，见下）、`code=IDLE` → `isCompacting=false`（压缩结束复位，不清 turnStart 锚点）**；命中 `SKIPPED` 时先清 `sessionCache.turnStartByConv` 里 `requestCompaction` 事先设的锚点（否则 StatusBar 计时挂着一个"已耗时 0"），再 `trySend(UiEffect.ShowCompactionNotice(code, reason))`；`MainScreen` 的 `effects.collect` 收该 effect 落成本地 `compactionNotice` 状态渲染**本地化模态**（`compaction_skipped_title` + 按 `reason` 选 `compaction_skipped_low_tokens` / `compaction_skipped_too_few`，values/ 与 values-en/ 双份），"确定"关闭是纯本地 UI 动作不走效果通道。
 
-**快照零污染**：`SnapshotReducer` 对非 provider scope 的 STATUS 一律返回快照不变（该分支只认 `scope=provider && code=RETRYING`），故 compaction STATUS 既不写 `statusHint` 也不碰状态机——"core 发机器码事实 / UI 渲染"的解耦是这条链路的设计要点（core 不需要知道 UI 有没有模态；UI 不靠快照而靠裸事件旁路接事实）。自动触发1/2 的 preflight(70%) 与 streamWarning 那条老路径不受本次改动影响。
+**快照零污染**：`SnapshotReducer` 对非 provider scope 的 STATUS 一律返回快照不变（该分支只认 `scope=provider && code=RETRYING`），故 compaction STATUS（SKIPPED 与 RUNNING/IDLE 同）既不写 `statusHint` 也不碰状态机——"core 发机器码事实 / UI 渲染"的解耦是这条链路的设计要点（core 不需要知道 UI 有没有模态；UI 不靠快照而靠裸事件旁路接事实）。自动触发1/2 的 preflight(70%) 与 streamWarning 那条老路径不受本次改动影响。
+
+**压缩中状态栏（2026-10）**：压缩进行中（`STATUS{scope=compaction, code=RUNNING}` → `WorkspaceViewModel.isCompacting=true`）UI StatusBar 经**裸事件旁路**显示"压缩中"（`TurnStatus.Compacting`）：`WorkspaceFloatingOverlay` 渲染期 `if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus` 优先覆盖派生状态，`shouldDisplayInStatusBar=true` 持续显示压缩耗时，文案 `status_compacting`（"压缩中"/"Compacting"）+ 图标 FeatherIcons.Archive——**零快照污染**（SnapshotReducer 不认 compaction STATUS，快照只随 SESSION_UPDATED 走 Working，不额外闪烁）。`isCompacting` 三重复位：IDLE 事件 / 切会话（`attach` 复位，防别的会话压缩事件串台）/ snapshot 已 Idle/Error（IDLE 事件丢失时按快照状态兜底复位）。
 
 ## 6. ask_user 问询时序
 
@@ -391,7 +399,7 @@ sequenceDiagram
     alt planId 非空（计划流程）
         M->>PS: load(planId) 硬校验 subtaskIndex/spec<br/>(subtaskIndex 越界/spec 缺失/已 COMPLETED 均返回拒绝文本)
         M->>PS: updatePlan 原子置 subtask IN_PROGRESS
-        M->>EB: PLAN_PROGRESS('subtask-started' + todos 投影 + subtasks 全量 JSON 列表)
+        M->>EB: PLAN_PROGRESS('subtask-started' + subtasks 全量 JSON 列表)
     else planId 为空（ad-hoc 执行）
         M->>M: task+briefing 直接派 executor<br/>(跳过 spec/IN_PROGRESS/PLAN_PROGRESS)
     end

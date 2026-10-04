@@ -269,7 +269,7 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
   静态详情（brief/targetFiles/verification 命令/decisions）**不再挂**——`plan.md` 落盘在
   `.mederi/plans/{planId}/plan.md`，主代理按需 `read_file` 取（活动子任务 spec 仍挂：spawn 前确认要用）。
   段尾给两个路径指针：`plan.md`（静态详情）+ `research.md`（researcher 报告）。
-- **轻量 todo（update_todo，2026-09）**：无 Plan 任务的进度跟踪，真理源 = sessions.todos 列，每轮挂 `# Current Todo` 段（turn 边界刷新）；**有活跃 Plan（执行期）时代码级硬门禁禁用**（AgentTools 校验）——todo 面板显示 Plan 子任务投影（`PLAN_PROGRESS` payload `todos`，投影函数 `Plan.toTodoProjection()` 唯一），防止两份进度真理源
+- **轻量 todo（update_todo，2026-09）**：todo-list 与 plan 彻底解耦——todo-list 只由 update_todo 驱动（session.todos 列，每轮挂 `# Current Todo` 段，turn 边界刷新），plan 期间也允许 update_todo 记录 plan 之外的独立事项；plan 子任务展示由 planApprovals 投影表驱动
 - **Executor**：spec（Subtask.spec）+ brief（planDetail）注入其唯一一条用户消息；
   不再注入 researchNotes 全文或 appendix 摘录（appendix 字段已删）。需要调研结论时 read_file
   `.mederi/plans/{planId}/research.md`；需要某个原文件认知时直接 read_file 该路径——executor 是
@@ -472,5 +472,5 @@ server 路由（`Server.serverModule`），任何变动四处同步、缺一即�
 - 分诊流程（Triage Flow）：已落地（§5.6）；执行沙盒已落地（§5.5 + `docs/sandbox-plan.md`）
 - 存储架构：双库已落地（§5.7）——config.db / data.db + 设备本地 preferences；原始消息 API（listRaw）已就绪
 - 会话自动命名：`SessionTitleService` 挂 `MederiAiCore.initialize()`（§1.5），两个 interface 都生效
-- Todo 系统：`update_todo`（无 Plan 任务，sessions.todos 持久化 + `# Current Todo` 回注入 + UI TodoListCard）+ Plan 子任务投影（create/spawn/verify/converge 发 `PLAN_PROGRESS` 带 todos）已落地（详见 `docs/todo-system-plan.md`）
+- Todo 系统：`update_todo`（sessions.todos 持久化 + `# Current Todo` 回注入 + UI TodoListCard），与 plan 子任务展示解耦（plan 子任务只走 planApprovals 投影表），已落地（详见 `docs/todo-system-plan.md`）
 - inkcompose：单 KMP 模块已接入 `app:shared`（jvmTest 2600+ tests 全绿，四平台编译通过）

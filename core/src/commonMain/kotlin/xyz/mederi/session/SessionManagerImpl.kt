@@ -15,6 +15,7 @@ import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.infrastructure.koog.TurnExecutor
+import xyz.mederi.infrastructure.koog.aiViewContextUsedTokens
 import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.store.DiffStore
@@ -202,6 +203,11 @@ class SessionManagerImpl(
 
     override suspend fun listMessages(id: String): List<Message> =
         historyStore.load(id)
+
+    override suspend fun contextUsedTokens(id: String): Int {
+        val session = require(id)
+        return aiViewContextUsedTokens(historyStore, id, session.aiModel?.supportsImages ?: true)
+    }
 
     override suspend fun listRawMessages(id: String): List<RawMessageRecord> =
         historyStore.listRaw(id)

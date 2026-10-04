@@ -21,7 +21,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │       ├── mcp/{servers,engine,market}/ ← MCP 配置管理 + 内核引擎（McpConnector）+ MCP 市场
 │       ├── provider/                    ← Provider 领域模型 + Koog client 适配
 │       ├── metadata/                    ← models.dev 模型目录（ModelCatalog）
-│       ├── prompt/                      ← 系统提示词（骨架 SystemPrompts + 素材 PromptGuides）
+│       ├── prompt/                      ← 系统提示词（骨架 SystemPrompts + 素材 PromptGuides + 通用 GeneralPrompts + 编码 CodingPrompts）
 │       ├── question/                    ← ask_user 挂起-恢复机制
 │       ├── config/ debug/               ← 配置容器/路径/迁移审批；调试日志/进程监控
 │       └── sqldelight/{config,data}/    ← 双库 schema（.sq）
@@ -168,7 +168,7 @@ flowchart TD
 | 模型元数据唯一写路径 | FETCHED 模型元数据只经 `ModelMerge.mergeFetched`，用户数据进存量模型唯一通道=`autoSetupProviderModels` | 用户开关被目录洗掉（真实事故） |
 | 能力传导到引擎 | supportsImages/supportsReasoning → `KoogModelBuilder.buildCapabilities` 加 LLMCapability | 设置全通但引擎拒绝图片 |
 | durable-first | 用户消息先落库再置 RUNNING | 回查/自动改名拿到旧状态 |
-| 上下文挂载互斥 | 有活跃 Plan 时禁用 update_todo（AgentTools 硬门禁），todo 面板显示 Plan 投影 | 两份进度真理源 |
+| 上下文挂载互斥 | todo-list 与 plan 解耦——todo-list 只由 update_todo 驱动（session.todos），plan 子任务展示由 planApprovals 投影表驱动，两者互不干涉 | 两份进度真理源 |
 | 文件写白名单 | write_file/edit_file 只能写项目目录 + `.mederi/` + 全局白名单；读全盘放行 | 沙盒逃逸 |
 | 不兜底原则 | 数据层面没有就是没有；程序层面报错不崩 | 默认值掩盖问题 |
 | 禁手拼 JSON | 结构化数据一律 @Serializable + kotlinx.serialization | 解析脆弱 |

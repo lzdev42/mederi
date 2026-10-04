@@ -7,8 +7,10 @@ package xyz.mederi.provider.domain.model
  */
 object ReasoningEffort {
     const val NONE = "none"
+    const val MINIMAL = "minimal"
     const val LOW = "low"
     const val MEDIUM = "medium"
     const val HIGH = "high"
+    const val XHIGH = "xhigh"
     const val MAX = "max"
 }

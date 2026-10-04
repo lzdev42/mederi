@@ -10,9 +10,7 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.SubagentRole
-import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.PlanStore
-import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import java.time.Instant
 
@@ -59,7 +57,7 @@ data class SpawnAgentArgs(
  * @param projectId 当前项目 ID，子 Agent 必须关联到已存在的 Project。
  * @param parentSessionId 父 Session ID，用于追踪与 session 模型动态读取。
  * @param planStore 计划存储，门禁查询活跃计划与读取 spec 用。
- * @param eventBus 事件总线（派工后发 PLAN_PROGRESS 携带子任务投影，驱动 UI todo 面板）。
+ * @param eventBus 事件总线（派工后发 PLAN_PROGRESS 驱动 UI planApprovals 投影表）。
  * @param sessionStore 会话存储：spawn 时读 session 的最新模型/推理档位。
  */
 class SpawnAgentTool(
@@ -169,7 +167,7 @@ class SpawnAgentTool(
             )
         } ?: return "Error: Plan not found: ${args.planId}"
 
-        // 派工后发子任务投影：UI todo 面板据此显示"正在做哪个"（真理源仍是 PlanStore）
+        // 派工后发 PLAN_PROGRESS 驱动 UI planApprovals 投影表（真理源仍是 PlanStore）
         val subtasksJson = kotlinx.serialization.json.Json.encodeToString(
             kotlinx.serialization.builtins.ListSerializer(xyz.mederi.plan.Subtask.serializer()),
             startedPlan.subtasks
@@ -181,7 +179,6 @@ class SpawnAgentTool(
                 "planId" to args.planId,
                 "action" to "subtask-started",
                 "subtaskIndex" to args.subtaskIndex.toString(),
-                "todos" to startedPlan.toTodoProjection().encodeTodos(),
                 "subtasks" to subtasksJson
             ),
             timestamp = Instant.now().toString()

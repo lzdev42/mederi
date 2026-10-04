@@ -76,8 +76,8 @@ mederi-started processes, so it is the only reliable way to stop your servers.
   below. Never directly under a heading (mis-renders as setext underline).
 
 ## Alerts
-GitHub-style: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]` `[!CAUTION]`. Text in the user's
-language; don't stack consecutively or nest.
+GitHub-style: `[!NOTE]` `[!TIP]` `[!IMPORTANT]` `[!WARNING]` `[!CAUTION]`. Don't stack
+consecutively or nest.
 """.trimIndent()
 
     /**

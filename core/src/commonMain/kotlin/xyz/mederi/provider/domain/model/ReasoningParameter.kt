@@ -101,9 +101,11 @@ data class ReasoningParameter(
         fun forOpenAIChat(): ReasoningParameter = ReasoningParameter(
             levels = mapOf(
                 ReasoningLevel.NONE to null,
+                ReasoningLevel.MINIMAL to """{"reasoning_effort":"minimal"}""",
                 ReasoningLevel.LOW to """{"reasoning_effort":"low"}""",
                 ReasoningLevel.MEDIUM to """{"reasoning_effort":"medium"}""",
                 ReasoningLevel.HIGH to """{"reasoning_effort":"high"}""",
+                ReasoningLevel.XHIGH to """{"reasoning_effort":"xhigh"}""",
                 ReasoningLevel.MAX to """{"reasoning_effort":"max"}"""
             )
         )
@@ -116,9 +118,11 @@ data class ReasoningParameter(
         fun forOpenAIResponses(): ReasoningParameter = ReasoningParameter(
             levels = mapOf(
                 ReasoningLevel.NONE to null,
+                ReasoningLevel.MINIMAL to """{"reasoning":{"effort":"minimal"}}""",
                 ReasoningLevel.LOW to """{"reasoning":{"effort":"low"}}""",
                 ReasoningLevel.MEDIUM to """{"reasoning":{"effort":"medium"}}""",
                 ReasoningLevel.HIGH to """{"reasoning":{"effort":"high"}}""",
+                ReasoningLevel.XHIGH to """{"reasoning":{"effort":"xhigh"}}""",
                 ReasoningLevel.MAX to """{"reasoning":{"effort":"max"}}"""
             )
         )

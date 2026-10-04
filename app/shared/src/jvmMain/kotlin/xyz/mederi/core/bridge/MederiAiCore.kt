@@ -29,7 +29,6 @@ import xyz.mederi.browser.toCamoufoxConfig
 import xyz.mederi.browser.toFirefoxPrefs
 import xyz.mederi.core.autotitle.SessionTitleService
 import xyz.mederi.core.contract.AiCore
-import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
@@ -569,26 +568,10 @@ class MederiAiCore(
             conversationId = conversationId,
             sessions = mederi.sessions,
             modelToProvider = { modelToProvider[it] },
-            planTodos = { id -> initialTodos(id) },
             planApproval = { id -> initialPlanApproval(id) },
             planApprovals = { id -> initialPlanApprovals(id) },
             lastError = { lastErrorBySessionId[it] }
         )
-    }
-
-    /**
-     * 初始快照的 todo hydration（与事件流/提示词挂载同源同一投影函数，不产生第二份逻辑）：
-     * 有活跃 Plan → Plan 子任务投影（todo 面板显示"该做哪个/正在做哪个/做完哪个"）；
-     * 无 Plan → sessions.todos 列的模型 todo。优先级与提示词挂载规则同构（Plan 优先）。
-     */
-    private suspend fun initialTodos(conversationId: String): List<xyz.mederi.core.contract.models.TodoItem> {
-        val session = mederi.sessions.get(conversationId)
-        val planTodos = runCatching {
-            val project = mederi.projects.get(session.projectId)
-            xyz.mederi.plan.PlanStore(listOf(project.directory)).loadBySession(conversationId)
-                ?.let { MederiModelMapper.toTodos(it.toTodoProjection()) }
-        }.getOrNull().orEmpty()
-        return planTodos.ifEmpty { MederiModelMapper.toTodos(session.todos) }
     }
 
     /**
@@ -683,13 +666,14 @@ class MederiAiCore(
         val session = mederi.sessions.get(conversationId)
         val messages = mederi.sessions.listMessages(conversationId)
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
+
         val base = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }),
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
-            contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages),
+            contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong(),
             cost = MederiModelMapper.toCostSummary(),
-            todos = initialTodos(conversationId),
+            todos = MederiModelMapper.toTodos(session.todos),
             // 重启/翻历史恢复：当前活跃计划（审批模式待批准 / 自动模式已自动审批），UI 自由决定卡片渲染位置
             pendingPlanApproval = initialPlanApproval(conversationId),
             planApprovals = initialPlanApprovals(conversationId)
@@ -947,7 +931,7 @@ class MederiAiCore(
         MessagesPage(
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
-            contextUsedTokens = MederiModelMapper.toContextUsedTokens(messages)
+            contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong()
         )
     }
 

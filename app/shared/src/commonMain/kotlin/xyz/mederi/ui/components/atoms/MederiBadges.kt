@@ -61,7 +61,7 @@ private val KotlinGradient = Brush.linearGradient(
     colors = listOf(Color(0xFF7F52FF), Color(0xFFC711E1))
 )
 
-/** §3.6 tab-badge 字号：10sp 常规（现状 RawMessagesCard/MetricsCards 计数即 10sp 常规） */
+/** §3.6 tab-badge 字号：10sp 常规（现状 RawMessagesCard/TodoListCard 计数即 10sp 常规） */
 private val TabBadgeText: TextStyle = MederiTypeScale.Caption.copy(fontWeight = FontWeight.Normal)
 
 /** §3.6 plan-id-tag 字号：mono 10sp 常规 */
@@ -88,7 +88,7 @@ private val CompatText: TextStyle = TextStyle(fontSize = 9.sp, fontWeight = Font
  * Tab 计数徽标（02-components §3.6 `tab-badge`）。
  *
  * 标准：1/5dp、radius Pill、`bg-input` + border、10sp `text-muted`。
- * 现状出处：RawMessagesCard / MetricsCards 的 CardHeader count（10sp textMuted）、
+ * 现状出处：RawMessagesCard / TodoListCard 的 CardHeader count（10sp textMuted）、
  * SubAgentComponents 头部计数（10sp textSecondary/accentPrimary）。
  * 按标准取 surfaceInput 底 + surfaceCardBorder 描边 + 10sp 常规 textMuted。
  */
@@ -371,7 +371,7 @@ enum class StepStatus {
 /**
  * 计划步骤状态图标（02-components §3.7 step dots）。
  *
- * 现状出处：InfoPanels 子任务行（dot 6dp + 绿/蓝/textMuted 三色）、MetricsCards TodoListCard
+ * 现状出处：InfoPanels 子任务行（dot 6dp + 绿/蓝/textMuted 三色）、TodoListCard
  * （14dp 方框 + Check 图标 + accentPrimary 实心点）——本原子按标准 §3.7 落：
  * Active=8dp solid accent、Todo=7dp hollow（1.5dp textMuted ring，gray-8 等效）、
  * Done=14×14 内 13dp Check（accentSuccess，green-11 等效）。

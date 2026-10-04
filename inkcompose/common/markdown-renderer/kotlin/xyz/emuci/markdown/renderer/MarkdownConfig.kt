@@ -50,6 +50,9 @@ import xyz.emuci.markdown.parser.flavour.MarkdownFlavour
  * @param enableAsciiEmoticons 是否启用 ASCII 表情自动转换（如 `:)` → 😊），默认关闭。
  * @param enableLinting 是否启用语法验证/Linting，默认关闭。
  * @param enableHeadingNumbering 是否启用标题自动编号（如 1, 1.1, 1.1.1），默认关闭。
+ * @param enableHighlight 是否启用 `==高亮==` 语法。`null`（默认）：跟随 [flavour] 的默认值；
+ *   非 `null`：覆盖 flavour 默认。典型用途：聊天正文场景显式传 `false` 关闭高亮解析，
+ *   防止 `state==Running` 这类普通文本中的 `==` 被误判为高亮标记。
  * @param appendCoalesceThreshold LLM 流式 [xyz.emuci.markdown.parser.MarkdownParser.append] 合并阈值（字符数）。
  *   `0`（默认）：每次 append 立即增量解析，行为与历史版本一致。
  *   `> 0`：未跨换行符且累积 < 阈值的小 chunk 会被缓冲，多个 token 合并为一次解析；
@@ -63,6 +66,8 @@ data class MarkdownConfig(
     val enableAsciiEmoticons: Boolean = false,
     val enableLinting: Boolean = false,
     val enableHeadingNumbering: Boolean = false,
+    /** 是否启用 `==高亮==` 语法。`null`（默认）跟随 [flavour] 的默认值；非 `null` 覆盖之。 */
+    val enableHighlight: Boolean? = null,
     val appendCoalesceThreshold: Int = 0,
 ) {
     companion object {

@@ -67,8 +67,6 @@ sealed interface ChatListItem {
         val createdAt: Long = 0L,
         /** assistant 消息的 footer 元数据——只挂在该轮次最后一个文本块上，其余为 null */
         val assistantFooter: AssistantFooterInfo? = null,
-        /** 是否为伴随工具调用的步骤过渡语（自说自话，弱化展示与最终主交付区分） */
-        val isStepNarration: Boolean = false,
     ) : ChatListItem
 
     /** 独立长文 Markdown 产物卡片（点击在右侧扩展窗口打开） */
@@ -98,6 +96,13 @@ sealed interface ChatListItem {
     data class PlanApproval(
         override val key: String,
         val request: PlanApprovalRequest,
+        override val isTurnStart: Boolean = false,
+    ) : ChatListItem
+
+    /** 问答卡片（ask_user 挂起时内联进 AI 消息流，取代该 ask 工具的 ToolCalls 行；回答后工具行回归） */
+    data class QuestionCard(
+        override val key: String,
+        val request: QuestionRequest,
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
 

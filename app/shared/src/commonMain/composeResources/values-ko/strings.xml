@@ -82,8 +82,6 @@
     <string name="tool_action_verify_target">하위 작업 검증 %1$s</string>
     <string name="tool_action_verify_running">하위 작업 검증 중…</string>
     <string name="tool_action_verify_running_target">하위 작업 검증 중 %1$s…</string>
-    <string name="tool_detail_output">출력</string>
-    <string name="tool_detail_failed_output">실행 실패</string>
     <string name="tool_detail_report">작업 보고서</string>
     <string name="worktrace_summary_title">작업 과정</string>
     <string name="worktrace_steps_count">%1$d단계</string>
@@ -93,9 +91,11 @@
     <string name="reasoning_thought">심층 생각 완료</string>
     <string name="reasoning_thinking">심층 생각 중...</string>
     <string name="reasoning_thinking_for">심층 생각 중 (%1$s)...</string>
+    <string name="reasoning_level_minimal">최소</string>
     <string name="reasoning_level_low">낮음</string>
     <string name="reasoning_level_medium">보통</string>
     <string name="reasoning_level_high">높음</string>
+    <string name="reasoning_level_xhigh">초고</string>
     <string name="reasoning_level_max">최대</string>
     <string name="reasoning_level_none">해제</string>
     <string name="footer_reasoning">추론 %1$s</string>
@@ -163,6 +163,7 @@
     <string name="status_idle">유휴 상태</string>
     <string name="status_sending">전송 중</string>
     <string name="status_preparing">전송 완료, 응답 대기 중</string>
+    <string name="status_compacting">압축 중</string>
     <string name="status_thinking">AI 생각 중</string>
     <string name="status_calling_tool">도구 호출 중</string>
     <string name="status_generating">답변 생성 중</string>
@@ -345,7 +346,7 @@
     <string name="settings_panel_badge_free">무료</string>
     <string name="settings_panel_capability_image">이미지</string>
     <string name="settings_panel_capability_thinking">추론</string>
-    <string name="settings_panel_capability_thinking_levels">추론 (%1$s)</string>
+    <string name="settings_panel_capability_thinking_levels">추론 · %1$s단계</string>
     <string name="settings_panel_reasoning_edit_hint">추론 매개변수(각 레벨별 요청 본문 JSON 조각으로 요청 시 그대로 병합됨; 빈 레벨은 매개변수를 전송하지 않음)</string>
     <string name="settings_panel_save_reconnect">저장 및 다시 연결</string>
     <string name="settings_panel_save_config">구성 저장</string>
@@ -416,9 +417,11 @@
     <string name="model_deleted">모델이 삭제되었습니다</string>
     <string name="model_delete_failed">삭제 실패: %1$s</string>
     <string name="settings_panel_level_none_hint">끄기 / 상시 켜짐 매개변수 (일반적으로 비워둠)</string>
+    <string name="settings_panel_level_minimal_hint">최소</string>
     <string name="settings_panel_level_low_hint">낮음</string>
     <string name="settings_panel_level_medium_hint">보통</string>
     <string name="settings_panel_level_high_hint">높음</string>
+    <string name="settings_panel_level_xhigh_hint">초고</string>
     <string name="settings_panel_level_max_hint">최대</string>
     <string name="settings_panel_level_none_placeholder">비워둠; 명시적 끄기: 예: {"enable_thinking":false}</string>
     <string name="settings_agents_title">Agent 설정</string>
@@ -546,12 +549,9 @@
     <string name="plan_approval_proceed">계속 진행</string>
     <string name="dock_artifact_empty">현재 열린 아티팩트나 첨부 파일이 없습니다</string>
     <string name="dock_artifact_empty_hint">대화에서 이미지나 긴 텍스트 첨부 파일을 클릭하거나 생성된 아티팩트를 열면 여기에 표시됩니다</string>
-    <string name="dock_context_metrics">CONTEXT 지표</string>
-    <string name="dock_context_used">%1$s 사용됨</string>
     <string name="dock_context_max">최대 %1$s</string>
     <string name="dock_context_unset">contextWindow 설정되지 않음</string>
     <string name="dock_requests_title">요청 횟수</string>
-    <string name="dock_requests_count">%1$s회</string>
     <string name="dock_cost_title">예상 비용 (참고용)</string>
     <string name="dock_compact_context">Context 압축</string>
     <string name="compaction_skipped_title">압축 불필요</string>
@@ -668,7 +668,6 @@
     <string name="diff_files_changed">파일 %1$d개 변경 +%2$d -%3$d</string>
     <string name="diff_review">리뷰</string>
     <string name="rp_todo_list_title">TODO-LIST</string>
-    <string name="rp_tokens_used">%1$d 토큰</string>
     <string name="sys_cpu">CPU</string>
     <string name="provider_api_key">API Key</string>
     <string name="provider_base_url">Base URL</string>
@@ -698,7 +697,7 @@
     <string name="overview_title">개요</string>
     <string name="overview_section_conversation">대화 상태</string>
     <string name="overview_section_plan">계획</string>
-    <string name="overview_tokens_title">토큰 사용량</string>
+    <string name="overview_context_usage_title">컨텍스트 사용량</string>
     <string name="status_working">작업 중</string>
     <string name="status_waiting">대기 중</string>
     <string name="status_error">오류</string>

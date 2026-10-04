@@ -41,7 +41,9 @@ import mederi.app.shared.generated.resources.settings_panel_level_high_hint
 import mederi.app.shared.generated.resources.settings_panel_level_low_hint
 import mederi.app.shared.generated.resources.settings_panel_level_max_hint
 import mederi.app.shared.generated.resources.settings_panel_level_medium_hint
+import mederi.app.shared.generated.resources.settings_panel_level_minimal_hint
 import mederi.app.shared.generated.resources.settings_panel_level_none_hint
+import mederi.app.shared.generated.resources.settings_panel_level_xhigh_hint
 import mederi.app.shared.generated.resources.settings_panel_level_none_placeholder
 import mederi.app.shared.generated.resources.settings_panel_manage_keys_title
 import mederi.app.shared.generated.resources.settings_panel_name_placeholder
@@ -53,6 +55,7 @@ import mederi.app.shared.generated.resources.settings_panel_save_reconnect
 import mederi.app.shared.generated.resources.settings_panel_set_default
 import mederi.app.shared.generated.resources.settings_panel_set_default_key
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.ConfirmDialog
 import xyz.mederi.ui.components.atoms.MederiDialog
@@ -112,15 +115,18 @@ internal fun EditProviderCredentialsDialog(
  *
  * - LOW~MAX：该级别的请求体 JSON 片段（如 {"reasoning":{"effort":"high"}}）
  * - NONE：一般留空（不发即关）；奇葩端点填显式关闭参数；常开型端点（Agnes）填常开开关
+ *
+ * 档位顺序唯一真理源 = ReasoningLevels.ORDER（contract 层）
  */
-private val REASONING_LEVEL_ORDER = listOf("NONE", "LOW", "MEDIUM", "HIGH", "MAX")
 
 @Composable
 private fun reasoningLevelHint(level: String): String = when (level) {
     "NONE" -> stringResource(Res.string.settings_panel_level_none_hint)
+    "MINIMAL" -> stringResource(Res.string.settings_panel_level_minimal_hint)
     "LOW" -> stringResource(Res.string.settings_panel_level_low_hint)
     "MEDIUM" -> stringResource(Res.string.settings_panel_level_medium_hint)
     "HIGH" -> stringResource(Res.string.settings_panel_level_high_hint)
+    "XHIGH" -> stringResource(Res.string.settings_panel_level_xhigh_hint)
     "MAX" -> stringResource(Res.string.settings_panel_level_max_hint)
     else -> level
 }
@@ -128,9 +134,11 @@ private fun reasoningLevelHint(level: String): String = when (level) {
 @Composable
 private fun reasoningLevelPlaceholder(level: String): String = when (level) {
     "NONE" -> stringResource(Res.string.settings_panel_level_none_placeholder)
+    "MINIMAL" -> """{"reasoning":{"effort":"minimal"}}"""
     "LOW" -> """{"reasoning":{"effort":"low"}}"""
     "MEDIUM" -> """{"reasoning":{"effort":"medium"}}"""
     "HIGH" -> """{"reasoning":{"effort":"high","summary":"auto"}}"""
+    "XHIGH" -> """{"reasoning":{"effort":"xhigh"}}"""
     "MAX" -> """{"reasoning":{"effort":"max"}}"""
     else -> "{}"
 }
@@ -142,7 +150,7 @@ internal fun ReasoningLevelsEditor(
     colors: MederiColors
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
-        REASONING_LEVEL_ORDER.forEach { level ->
+        ReasoningLevels.ORDER.forEach { level ->
             LabeledTextField(
                 label = "$level · ${reasoningLevelHint(level)}",
                 value = levels[level].orEmpty(),

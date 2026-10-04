@@ -92,4 +92,5 @@ object MarkdownExtraFlavour : MarkdownFlavour {
 
     /** extended inline syntax (math, emoji, highlight, etc.) is not part of PHP Markdown Extra */
     override val enableExtendedInline: Boolean = false
+    override val enableHighlight: Boolean = false
 }

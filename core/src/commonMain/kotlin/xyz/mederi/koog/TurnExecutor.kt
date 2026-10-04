@@ -42,7 +42,6 @@ import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 import xyz.mederi.provider.infrastructure.koog.retry.RetryableLLMClient
 import xyz.mederi.provider.infrastructure.koog.sanitize.MederiOpenAILLMClient
 import xyz.mederi.tools.contextUsedTokens
-import xyz.mederi.tools.estimateTokens
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.EventType
@@ -888,7 +887,7 @@ class TurnExecutor(
         val agent = AIAgent.builder()
             .promptExecutor(executor)
             .agentConfig(agentConfig)
-            .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy(model.contextWindow, keepLastMessages = MANUAL_KEEP_LAST_MESSAGES)))
+            .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy(model.contextWindow, keepLastMessages = MANUAL_KEEP_LAST_MESSAGES, eventBus = eventBus, sessionId = session.id)))
             .install(ChatMemory.Feature) { config ->
                 config.chatHistoryProvider = historyProvider
             }
@@ -1357,18 +1356,8 @@ class TurnExecutor(
         apiKeyId: String? = null
     ): String? {
         val contextWindow = model.contextWindow ?: return null
-        val window = HistoryStoreChatHistoryProvider.aiViewWindow(historyStore, session.id)
-        if (window.isEmpty()) return null
-
-        // 估算与实际发送一致：图片按当前模型能力剔除
-        val koogWindow = KoogMessageMapper.toKoogMessages(window, includeImages = model.supportsImages)
-        // 窗口以 SUMMARY 标记开头时，窗口内消息的 inputTokens 反映的是压缩前的
-        // 大上下文，不能当基线，改用估算；正常窗口用 API 报告的真实值
-        val usedTokens = if (window.first().role == MessageRole.SUMMARY) {
-            estimateTokens(koogWindow)
-        } else {
-            contextUsedTokens(koogWindow)
-        }
+        // 上下文占用口径（空窗口 / SUMMARY 分支等）统一由唯一真理源给出
+        val usedTokens = aiViewContextUsedTokens(historyStore, session.id, model.supportsImages)
         val budget = (contextWindow * 0.70).toInt()
         if (usedTokens <= budget) return null
 
@@ -1481,7 +1470,7 @@ class TurnExecutor(
                     // 70%：上下文越满注意力越分散，且留出发送前压缩的判定余量
                     usedTokens > (contextWindow * 0.70).toInt()
                 },
-                compressionStrategy = MederiCompressionStrategy(contextWindow),
+                compressionStrategy = MederiCompressionStrategy(contextWindow, eventBus = eventBus, sessionId = sessionId),
                 retrievalModel = null
             )
         }
@@ -1542,7 +1531,11 @@ class TurnExecutor(
                         emit(sessionId, EventType.TOOL_RESULT, payload = mapOf(
                             "tool" to eventContext.toolName,
                             "toolCallId" to (eventContext.toolCallId ?: ""),
-                            "output" to (eventContext.toolResult?.toString() ?: ""),
+                            // 必须走 formatToolResultOutput（与上方 args 的修复同源）：Koog
+                            // JSONLiteral.toString() 对字符串字面量包引号且不转义内部引号，
+                            // ask_user 返回的 JSON 字符串会产出非法 JSON，UI 端 parseAskItems
+                            // 解析失败后回退把整串塞进 Q1（已回答显示错乱）。
+                            "output" to formatToolResultOutput(eventContext.toolResult),
                             "isError" to "false"
                         ))
                     }

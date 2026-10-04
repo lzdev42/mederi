@@ -72,4 +72,10 @@ interface MarkdownFlavour {
      * This matches GFM spec 0.29 behavior which differs from CommonMark 0.31.
      */
     val enableEmphasisCoalescing: Boolean get() = false
+
+    /**
+     * Whether to enable `==highlight==` syntax (double equal sign).
+     * Defaults to true; can be overridden to false to avoid misinterpreting code comparison operators (==).
+     */
+    val enableHighlight: Boolean get() = true
 }

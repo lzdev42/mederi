@@ -41,7 +41,9 @@ import mederi.app.shared.generated.resources.reasoning_level_high
 import mederi.app.shared.generated.resources.reasoning_level_low
 import mederi.app.shared.generated.resources.reasoning_level_max
 import mederi.app.shared.generated.resources.reasoning_level_medium
+import mederi.app.shared.generated.resources.reasoning_level_minimal
 import mederi.app.shared.generated.resources.reasoning_level_none
+import mederi.app.shared.generated.resources.reasoning_level_xhigh
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.components.command.SlashCommandTransformation
 import androidx.compose.ui.text.AnnotatedString
@@ -98,9 +100,11 @@ import androidx.compose.ui.focus.onFocusChanged
 /** 推理档位显示名（唯一映射点，桌面下拉与移动端抽屉共用；未知档位回显原始值）。 */
 @Composable
 fun formatReasoningLevelLabel(level: String): String = when (level.uppercase()) {
+    "MINIMAL" -> stringResource(Res.string.reasoning_level_minimal)
     "LOW" -> stringResource(Res.string.reasoning_level_low)
     "MEDIUM" -> stringResource(Res.string.reasoning_level_medium)
     "HIGH" -> stringResource(Res.string.reasoning_level_high)
+    "XHIGH" -> stringResource(Res.string.reasoning_level_xhigh)
     "MAX" -> stringResource(Res.string.reasoning_level_max)
     "NONE", "OFF" -> stringResource(Res.string.reasoning_level_none)
     else -> level

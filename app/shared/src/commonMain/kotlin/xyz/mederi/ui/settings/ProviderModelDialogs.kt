@@ -202,7 +202,11 @@ private fun ReasoningLevelsSelector(
         verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
     ) {
         Text(stringResource(Res.string.settings_panel_thinking_levels_title), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium),
+            verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
+        ) {
             ReasoningLevels.SELECTABLE.forEach { level ->
                 val checked = level in selected
                 Row(

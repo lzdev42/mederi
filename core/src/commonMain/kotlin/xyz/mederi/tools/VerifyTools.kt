@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
-import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.RootCause
 import xyz.mederi.plan.Subtask
@@ -15,7 +14,6 @@ import xyz.mederi.plan.SubtaskStatus
 import xyz.mederi.plan.VerifyStatus
 import xyz.mederi.plan.VerificationResult
 import xyz.mederi.plan.VerificationSpec
-import xyz.mederi.plan.toTodoProjection
 import xyz.mederi.tools.ShellTools.CommandResult
 import java.time.Instant
 
@@ -248,7 +246,6 @@ class VerifyTools(
                     "lastSubtaskIndex" to args.subtaskIndex.toString(),
                     "lastSubtaskStatus" to args.status,
                     "lastSubtaskRootCause" to (args.rootCause ?: ""),
-                    "todos" to finalizedPlan.toTodoProjection().encodeTodos(),
                     "subtasks" to subtasksJson
                 ),
                 timestamp = Instant.now().toString()

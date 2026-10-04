@@ -376,14 +376,6 @@ object MederiModelMapper {
 
     fun toCostSummary(): CostSummary = CostSummary(total = 0.0, currency = "USD")
 
-    /**
-     * 当前上下文真实占用（token）：最近一条 Assistant 消息的 inputTokens，
-     * 即 API 报告的最近一次请求 prompt 大小。与自动压缩触发器同源。
-     * 注意与 [toTokenUsage]（累计消耗，用于成本）语义不同。
-     */
-    fun toContextUsedTokens(messages: List<CoreMessage>): Long =
-        messages.lastOrNull { it.role == CoreMessageRole.ASSISTANT }?.inputTokens?.toLong() ?: 0L
-
     // ------------------------------------------------------------------
     // Diff
     // ------------------------------------------------------------------

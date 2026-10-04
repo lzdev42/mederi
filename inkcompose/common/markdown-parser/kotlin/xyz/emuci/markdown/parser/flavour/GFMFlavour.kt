@@ -98,5 +98,5 @@ object GFMFlavour : MarkdownFlavour {
      * (e.g., `====` being parsed as `<mark></mark>` instead of `<p>====</p>`).
      */
     override val enableExtendedInline: Boolean = false
-
+    override val enableHighlight: Boolean = false
 }

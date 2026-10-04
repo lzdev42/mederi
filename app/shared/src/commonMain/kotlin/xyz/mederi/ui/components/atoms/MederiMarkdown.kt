@@ -3,6 +3,7 @@ package xyz.mederi.ui.components.atoms
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import xyz.emuci.inkcompose.MarkdownView
+import xyz.mederi.theme.MederiMarkdownConfig
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 
 /**
@@ -28,5 +29,6 @@ fun MederiMarkdown(
         markdownTheme = rememberMederiMarkdownTheme(compact = compact),
         enableScrollOverride = enableScrollOverride,
         sessionKey = sessionKey,
+        markdownConfig = MederiMarkdownConfig,
     )
 }

@@ -13,7 +13,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.emuci.inkcompose.LocalMarkdownConfig
 import xyz.emuci.inkcompose.MarkdownColors
+import xyz.emuci.inkcompose.MarkdownConfig
 import xyz.emuci.inkcompose.RenderStyle
 import xyz.emuci.markdown.renderer.MarkdownTheme
 import xyz.emuci.syntax.theme.GithubLightTheme
@@ -281,6 +283,7 @@ fun AppTheme(
         LocalMederiColors provides customColors,
         LocalAppThemeMode provides themeMode,
         LocalCodeTheme provides codeTheme,
+        LocalMarkdownConfig provides MederiMarkdownConfig,
     ) {
         MaterialTheme(
             colorScheme = materialColors,
@@ -288,6 +291,12 @@ fun AppTheme(
         )
     }
 }
+
+/**
+ * Mederi 应用级 Markdown 配置唯一真理源：
+ * 默认关闭 `==高亮==` 解析，防止代码与正文中裸写的比较运算符（如 `state==Running`）被误判为高亮标记。
+ */
+val MederiMarkdownConfig = MarkdownConfig(enableHighlight = false)
 
 /**
  * 获取适配当前 Mederi 主题配色的 [MarkdownColors]。
@@ -307,6 +316,7 @@ fun rememberMederiMarkdownColors(): MarkdownColors {
             divider = colors.divider,
             tableBorder = colors.divider,
             tableHeaderBackground = if (colors.isDark) Color(0xFF18181A) else Color(0xFFF9F9FB), // gray-2
+            highlightColor = if (colors.isDark) Color(0x3DF2CC60) else Color(0xFFFFF3B0),
             isDark = colors.isDark,
         )
     }

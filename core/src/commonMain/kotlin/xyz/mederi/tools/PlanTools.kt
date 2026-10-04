@@ -15,7 +15,6 @@ import kotlinx.serialization.json.JsonTransformingSerializer
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
-import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.plan.Decision
 import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.Plan
@@ -28,7 +27,6 @@ import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.plan.SubtaskStatus
 import xyz.mederi.plan.VerificationChange
-import xyz.mederi.plan.toTodoProjection
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -418,7 +416,7 @@ class PlanTools(
                 } else if (result.approved) {
                     planStore.update(plan.copy(status = PlanStatus.APPROVED))
                     notebook.append("## ${Instant.now()} — Plan approved: ${plan.title}")
-                    emitPlanTodos(plan.copy(status = PlanStatus.APPROVED), "approved")
+                    emitPlanProgress(plan.copy(status = PlanStatus.APPROVED), "approved")
                     "Plan approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
                 } else {
                     // 计划无"拒绝"态（只有批准/作废/被无视）。此分支是用户未批准也未作废时的
@@ -430,16 +428,16 @@ class PlanTools(
                 }
             } else {
                 notebook.append("## ${Instant.now()} — Plan created (auto-approved): ${plan.title}")
-                emitPlanTodos(plan, "created")
+                emitPlanProgress(plan, "created")
                 "Plan created and auto-approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
             }
         }
 
         /**
-         * Plan 子任务投影事件：todo 面板的 Plan 侧唯一来源。
-         * 投影函数共享（plan.toTodoProjection），四类发射点（create/spawn/verify/converge）只调不发各自手拼。
+         * PLAN_PROGRESS 事件：驱动 UI planApprovals 投影表。
+         * 四类发射点（create/spawn/verify/converge）经由本函数统一发出，不发各自手拼 payload。
          */
-        private suspend fun emitPlanTodos(plan: Plan, action: String) {
+        private suspend fun emitPlanProgress(plan: Plan, action: String) {
             val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), plan.subtasks)
             eventBus.emit(MederiEvent(
                 type = EventType.PLAN_PROGRESS,
@@ -447,7 +445,6 @@ class PlanTools(
                 payload = mapOf(
                     "planId" to plan.id,
                     "action" to action,
-                    "todos" to plan.toTodoProjection().encodeTodos(),
                     "subtasks" to subtasksJson
                 ),
                 timestamp = Instant.now().toString()
@@ -514,8 +511,7 @@ class PlanTools(
                     "totalSubtasks" to updatedPlan.subtasks.size.toString(),
                     "passed" to passed.toString(),
                     "failed" to failed.toString(),
-                    "pending" to pending.toString(),
-                    "todos" to updatedPlan.toTodoProjection().encodeTodos()
+                    "pending" to pending.toString()
                 ),
                 timestamp = Instant.now().toString()
             ))
