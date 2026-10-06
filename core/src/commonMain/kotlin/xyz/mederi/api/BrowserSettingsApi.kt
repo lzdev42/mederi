@@ -1,7 +1,6 @@
 package xyz.mederi.api
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 import xyz.mederi.browser.CamoufoxSettings
 import xyz.mederi.browser.ProxyConfig
 
@@ -32,57 +31,18 @@ interface BrowserSettingsApi {
     suspend fun listInstalledVersions(): List<String>
 }
 
-/** Camoufox 设置 DTO（字段与 [CamoufoxSettings] 一一对应）。 */
-@Serializable
-data class CamoufoxSettingsDto(
-    // ── 路径组 ──
-    val browserHome: String? = null,
-    val binaryPath: String? = null,
-    val autoCheckUpdate: Boolean = true,
-
-    // ── 启动行为组 ──
-    val headless: Boolean = true,
-    val humanize: Boolean = true,
-    val humanizeMaxSeconds: Double? = null,
-    val blockImages: Boolean = false,
-    val blockWebgl: Boolean = false,
-    val blockWebrtc: Boolean = true,
-    val disableCoop: Boolean = true,
-    val extraArgs: List<String> = emptyList(),
-
-    // ── 指纹覆盖组 ──
-    val userAgent: String? = null,
-    val locale: String? = null,
-    val timezone: String? = null,
-    val geolocationLat: Double? = null,
-    val geolocationLon: Double? = null,
-    val webglVendor: String? = null,
-    val webglRenderer: String? = null,
-    val webrtcIpv4: String? = null,
-    val webrtcIpv6: String? = null,
-    val screenWidth: Int? = null,
-    val screenHeight: Int? = null,
-    val screenAvailWidth: Int? = null,
-    val screenAvailHeight: Int? = null,
-    val windowOuterWidth: Int? = null,
-    val windowOuterHeight: Int? = null,
-    val windowInnerWidth: Int? = null,
-    val windowInnerHeight: Int? = null,
-    val hardwareConcurrency: Int? = null,
-    val maxTouchPoints: Int? = null,
-    val fonts: List<String> = emptyList(),
-
-    // ── 代理组 ──
-    val proxy: ProxyConfigDto? = null,
-
-    // ── 高级组 ──
-    val advancedConfig: Map<String, JsonElement> = emptyMap()
-)
+/**
+ * Camoufox 设置 DTO（typealias 指向 domain [CamoufoxSettings]，消除 API 层同形副本）。
+ *
+ * 历史：原为独立 data class（字段与 domain 逐一复制 + 手写 toDto/toModel mapper），
+ * 2026-10 合并：字段完全同形且无语义差异，typealias 收口为 1 份 domain 定义。
+ */
+typealias CamoufoxSettingsDto = CamoufoxSettings
 
 /** 更新 Camoufox 设置请求。 */
 @Serializable
 data class UpdateCamoufoxSettingsInput(
-    val settings: CamoufoxSettingsDto
+    val settings: CamoufoxSettings
 )
 
 /** 浏览器状态（configured = browserHome 已配置；不访问网络）。 */
@@ -107,105 +67,9 @@ data class CamoufoxUpdateDto(
     val reason: String
 )
 
-/** 代理配置 DTO（字段与 [ProxyConfig] 一一对应）。 */
-@Serializable
-data class ProxyConfigDto(
-    val type: String = "none",
-    val host: String = "",
-    val port: Int = 0,
-    val bypass: List<String> = emptyList(),
-    val username: String? = null,
-    val password: String? = null
-)
+/**
+ * 代理配置 DTO（typealias 指向 domain [ProxyConfig]，消除 API 层同形副本）。
+ */
+typealias ProxyConfigDto = ProxyConfig
 
-// ── core model ↔ DTO 扩展转换（手动逐字段映射） ──
-
-fun CamoufoxSettings.toDto(): CamoufoxSettingsDto = CamoufoxSettingsDto(
-    browserHome = browserHome,
-    binaryPath = binaryPath,
-    autoCheckUpdate = autoCheckUpdate,
-    headless = headless,
-    humanize = humanize,
-    humanizeMaxSeconds = humanizeMaxSeconds,
-    blockImages = blockImages,
-    blockWebgl = blockWebgl,
-    blockWebrtc = blockWebrtc,
-    disableCoop = disableCoop,
-    extraArgs = extraArgs,
-    userAgent = userAgent,
-    locale = locale,
-    timezone = timezone,
-    geolocationLat = geolocationLat,
-    geolocationLon = geolocationLon,
-    webglVendor = webglVendor,
-    webglRenderer = webglRenderer,
-    webrtcIpv4 = webrtcIpv4,
-    webrtcIpv6 = webrtcIpv6,
-    screenWidth = screenWidth,
-    screenHeight = screenHeight,
-    screenAvailWidth = screenAvailWidth,
-    screenAvailHeight = screenAvailHeight,
-    windowOuterWidth = windowOuterWidth,
-    windowOuterHeight = windowOuterHeight,
-    windowInnerWidth = windowInnerWidth,
-    windowInnerHeight = windowInnerHeight,
-    hardwareConcurrency = hardwareConcurrency,
-    maxTouchPoints = maxTouchPoints,
-    fonts = fonts,
-    proxy = proxy?.toDto(),
-    advancedConfig = advancedConfig
-)
-
-fun CamoufoxSettingsDto.toModel(): CamoufoxSettings = CamoufoxSettings(
-    browserHome = browserHome,
-    binaryPath = binaryPath,
-    autoCheckUpdate = autoCheckUpdate,
-    headless = headless,
-    humanize = humanize,
-    humanizeMaxSeconds = humanizeMaxSeconds,
-    blockImages = blockImages,
-    blockWebgl = blockWebgl,
-    blockWebrtc = blockWebrtc,
-    disableCoop = disableCoop,
-    extraArgs = extraArgs,
-    userAgent = userAgent,
-    locale = locale,
-    timezone = timezone,
-    geolocationLat = geolocationLat,
-    geolocationLon = geolocationLon,
-    webglVendor = webglVendor,
-    webglRenderer = webglRenderer,
-    webrtcIpv4 = webrtcIpv4,
-    webrtcIpv6 = webrtcIpv6,
-    screenWidth = screenWidth,
-    screenHeight = screenHeight,
-    screenAvailWidth = screenAvailWidth,
-    screenAvailHeight = screenAvailHeight,
-    windowOuterWidth = windowOuterWidth,
-    windowOuterHeight = windowOuterHeight,
-    windowInnerWidth = windowInnerWidth,
-    windowInnerHeight = windowInnerHeight,
-    hardwareConcurrency = hardwareConcurrency,
-    maxTouchPoints = maxTouchPoints,
-    fonts = fonts,
-    proxy = proxy?.toModel(),
-    advancedConfig = advancedConfig
-)
-
-fun ProxyConfig.toDto(): ProxyConfigDto = ProxyConfigDto(
-    type = type,
-    host = host,
-    port = port,
-    bypass = bypass,
-    username = username,
-    password = password
-)
-
-fun ProxyConfigDto.toModel(): ProxyConfig = ProxyConfig(
-    type = type,
-    host = host,
-    port = port,
-    bypass = bypass,
-    username = username,
-    password = password
-)
+// ── 历史 toDto/toModel 映射已删除（CamoufoxSettingsDto 现为 CamoufoxSettings 的 typealias） ──

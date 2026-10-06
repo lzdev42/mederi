@@ -181,7 +181,7 @@ class PlanTools(
         )
         val verificationExpected: String = "",
         @LLMDescription(
-            "Optional but strongly recommended. Literal strings the command's output MUST contain — " +
+            "REQUIRED. Literal strings the command's output MUST contain — " +
                 "MACHINE-CHECKED. Exiting 0 is not enough: if any literal here is missing from the real " +
                 "output, verification is mechanically judged FAIL. Pin the actual expectation " +
                 "(e.g. [\"3 passed\", \"BUILD SUCCESSFUL\"]) so a partially-passing command cannot slip through."
@@ -535,8 +535,8 @@ class PlanTools(
     ) {
         override suspend fun execute(args: WriteLogArgs): String {
             val timestamp = Instant.now().toString()
-            notebook.append("## $timestamp — Log entry\n${args.entry}")
-            return "Logged."
+            val ok = notebook.append("## $timestamp — Log entry\n${args.entry}")
+            return if (ok) "Logged." else "Error: no writable .mederi directory; log entry not persisted."
         }
     }
 
@@ -686,6 +686,8 @@ class PlanTools(
                 )
             if (st.targetFiles.isEmpty())
                 errors.add("Subtask $i (${st.name}): targetFiles required (which files will be changed?).")
+            // 规则 1：每个子任务的验证必须钉至少 1 个期望 stdout 字面量（裸 exit-code 验证抓不到"活没干成"）
+            checkLiteralRequired(st)?.let { errors.add("Subtask $i (${st.name}): $it") }
             for (dep in st.dependsOn) {
                 if (dep >= args.subtasks.size || dep < 0)
                     errors.add("Subtask $i (${st.name}): dependsOn $dep out of range (0..${args.subtasks.size - 1}).")
@@ -706,6 +708,8 @@ class PlanTools(
                     )
             }
         }
+        // 规则 4：两个 parallelizable 子任务若共享 gradle 模块，其验证编译会竞争——同批并行 spawn 直接拒绝
+        errors.addAll(checkParallelizableModuleOverlap(args.subtasks))
         if (errors.isEmpty()) return null
         return "Plan validation failed — fix ALL of the following items, then retry create_plan once with the complete arguments:\n" +
             errors.mapIndexed { i, e -> "${i + 1}. $e" }.joinToString("\n")
@@ -747,6 +751,7 @@ class PlanTools(
             if (hasCJK) return "Error: command 必须是单条可执行命令（ASCII），不能是散文描述。"
             if (args.reason.isBlank()) return "Error: reason must not be blank — the audit trail requires a human-readable explanation of why the contract is being changed."
             var oldSpec: VerificationSpec? = null
+            var downgradeRejected = false
             val updated = planStore.updatePlan(args.planId) { p ->
                 val st = p.subtasks.getOrNull(args.subtaskIndex) ?: return@updatePlan null
                 if (st.status == SubtaskStatus.COMPLETED) return@updatePlan null
@@ -760,6 +765,12 @@ class PlanTools(
                     expectStdoutContains = args.expectStdoutContains ?: st.verification.expectStdoutContains,
                     expectStdoutNotContains = args.expectStdoutNotContains ?: st.verification.expectStdoutNotContains,
                 )
+                // 规则 3 降级检测（引用的是修订前旧契约 st.verification）：
+                // 丢命令段 / 减字面量 且 reason 无决策变更关键词 → 拒写（append-only 审计不受影响）
+                if (isVerificationDowngrade(st.verification, newSpec) && !reasonIndicatesDecisionChange(args.reason)) {
+                    downgradeRejected = true
+                    return@updatePlan null
+                }
                 val change = VerificationChange(
                     oldSpec = st.verification,
                     newSpec = newSpec,
@@ -772,7 +783,16 @@ class PlanTools(
                         verificationChanges = s.verificationChanges + change
                     ) else s
                 })
-            } ?: return "Error: Plan not found, or subtask ${args.subtaskIndex} missing/COMPLETED (cannot amend)."
+            }
+            if (downgradeRejected)
+                return "Error: verification DOWNGRADE rejected — the new contract drops a command clause " +
+                    "(./gradlew/assert/test) or reduces expectStdoutContains count without a decision-change " +
+                    "justification. Either re-run the original verification when the module is stable " +
+                    "(do NOT drop checks to clear a false-fail), or fully restate the contract for a genuinely " +
+                    "changed task disposition (and state that in reason with a 'decision/disposition/restated/" +
+                    "changed' keyword)."
+            if (updated == null)
+                return "Error: Plan not found, or subtask ${args.subtaskIndex} missing/COMPLETED (cannot amend)."
             eventBus.emit(MederiEvent(
                 type = EventType.PLAN_PROGRESS,
                 sessionId = sessionId,
@@ -798,6 +818,51 @@ class PlanTools(
     companion object {
         /** create_plan 工具名（TurnExecutor 据此刻意写或找到挂起的计划工具调用）。 */
         const val PLAN_TOOL = "create_plan"
+
+        /** 规则 1：每个子任务的验证契约必须钉至少 1 个期望 stdout 字面量（返错误文本，null = 通过）。
+         *  调用方（validatePlan）负责补 "Subtask $i (${st.name}): " 前缀。 */
+        internal fun checkLiteralRequired(st: SubtaskArg): String? =
+            if (st.verificationExpectStdoutContains.isEmpty())
+                "verificationExpectStdoutContains is REQUIRED — pin >=1 literal the output MUST contain " +
+                    "(e.g. [\"PASS\",\"BUILD SUCCESSFUL\"]). Bare exit-code/compile-only verification is rejected: " +
+                    "it cannot catch 'the work was not done' (a glitched executor that compiles would false-pass)."
+            else null
+
+        /** 文件路径 → gradle 模块名（如 core/src/... → core，src/ 前缀缺失时取第一级目录）。 */
+        private fun moduleOf(path: String): String =
+            path.substringBefore("/src/").ifBlank { path.substringBefore('/') }
+
+        /** 规则 4：两个 parallelizable 子任务共享 gradle 模块时，同批并行 spawn 的验证编译会竞争——逐对报错。 */
+        internal fun checkParallelizableModuleOverlap(subtasks: List<SubtaskArg>): List<String> {
+            val errors = mutableListOf<String>()
+            val parallelGroups = subtasks.mapIndexed { i, st -> i to st }.filter { it.second.parallelizable }
+            for ((i, a) in parallelGroups) for ((j, b) in parallelGroups) {
+                if (j <= i) continue
+                val aMods = a.targetFiles.map(::moduleOf).toSet()
+                val bMods = b.targetFiles.map(::moduleOf).toSet()
+                val shared = aMods.intersect(bMods)
+                if (shared.isNotEmpty())
+                    errors.add(
+                        "Subtasks $i (${a.name}) and $j (${b.name}) are both parallelizable but share gradle module(s) " +
+                            "$shared — their verification compiles of that module will race. " +
+                            "Set parallelizable=false on one, or split into separate batches."
+                    )
+            }
+            return errors
+        }
+
+        /** 规则 3：新验证契约是否较旧契约"降级"——丢命令段（./gradlew/assert/test）或字面量数量减少。 */
+        internal fun isVerificationDowngrade(old: VerificationSpec, new: VerificationSpec): Boolean {
+            val droppedClause = (old.command.contains("./gradlew") && !new.command.contains("./gradlew")) ||
+                (old.command.contains("assert") && !new.command.contains("assert")) ||
+                (old.command.contains(" test ") && !new.command.contains(" test "))
+            val fewerLiterals = new.expectStdoutContains.size < old.expectStdoutContains.size
+            return droppedClause || fewerLiterals
+        }
+
+        /** 规则 3 放行词：reason 是否含决策变更关键词（decision/disposition/restated/changed，大小写不敏感）。 */
+        internal fun reasonIndicatesDecisionChange(reason: String): Boolean =
+            reason.contains(Regex("decision|disposition|restated|changed", RegexOption.IGNORE_CASE))
 
         /**
          * 用户在有计划待批准时直接继续对话的中性结果语料（非批准、非拒绝、非作废）。

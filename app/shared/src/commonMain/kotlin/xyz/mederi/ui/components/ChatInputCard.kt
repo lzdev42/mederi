@@ -38,6 +38,8 @@ import mederi.app.shared.generated.resources.queue_send_now
 import mederi.app.shared.generated.resources.queue_remove
 import mederi.app.shared.generated.resources.queue_steer_tooltip
 import mederi.app.shared.generated.resources.reasoning_level_high
+import mederi.app.shared.generated.resources.remote_clipboard_image_unavailable
+import mederi.app.shared.generated.resources.remote_clipboard_text_unavailable
 import mederi.app.shared.generated.resources.reasoning_level_low
 import mederi.app.shared.generated.resources.reasoning_level_max
 import mederi.app.shared.generated.resources.reasoning_level_medium
@@ -90,6 +92,7 @@ import xyz.mederi.ui.components.command.SlashCommandRegistry
 import xyz.mederi.ui.DebugLog
 import xyz.mederi.ui.UiEffect
 import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.RemoteCapabilityNotice
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.LocalMederiColors
@@ -242,6 +245,7 @@ fun ChatInputCard(
     val errorMessage = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }
     // 一次性轻提示：发送时图片被剔除放行（值为模型名，null=不显示），非错误走 error
     val imageStrippedNotice = viewModel.imageStrippedNotice
+    val remoteCapabilityNotice = viewModel.remoteCapabilityNotice
     val hasContent = textValue.text.trim().isNotEmpty() || pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()
     val canSend = hasContent && !isStreaming && !isOverBudget && !isCompacting
 
@@ -300,6 +304,9 @@ fun ChatInputCard(
                 height = img.height
             )
             DebugLog.event("UI", "$logEvent, size=${img.bytes.size}")
+        } else if (!isDesktopPlatform) {
+            // 遥控端（iOS/Android/wasmJs）无剪贴板读权限：不静默，给一次性轻提示
+            viewModel.showRemoteCapabilityNotice(RemoteCapabilityNotice.IMAGE_CLIPBOARD)
         }
         img != null
     }
@@ -313,6 +320,9 @@ fun ChatInputCard(
         if (clipboardText != null && clipboardText.isNotBlank()) {
             viewModel.addPastedText(clipboardText)
             DebugLog.event("UI", "attached text from clipboard, len=${clipboardText.length}")
+        } else if (!isDesktopPlatform) {
+            // 遥控端（iOS/Android/wasmJs）无剪贴板读权限：不静默，给一次性轻提示
+            viewModel.showRemoteCapabilityNotice(RemoteCapabilityNotice.TEXT_CLIPBOARD)
         }
     }
 
@@ -484,6 +494,45 @@ fun ChatInputCard(
                                 .size(16.dp)
                                 .clip(CircleShape)
                                 .clickable { viewModel.dismissImageStrippedNotice() }
+                                .padding(2.dp)
+                        )
+                    }
+                }
+
+                // 遥控端剪贴板不可用轻提示（非错误样式）：点附件按钮/粘贴文本时剪贴板无权限；
+                // 下次输入或点右上角 × 后消失（VM remoteCapabilityNotice 一次性语义）
+                remoteCapabilityNotice?.let { notice ->
+                    val noticeText = when (notice) {
+                        RemoteCapabilityNotice.IMAGE_CLIPBOARD ->
+                            stringResource(Res.string.remote_clipboard_image_unavailable)
+                        RemoteCapabilityNotice.TEXT_CLIPBOARD ->
+                            stringResource(Res.string.remote_clipboard_text_unavailable)
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(colors.accentSecondary.copy(alpha = 0.15f))
+                            .padding(start = 10.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = noticeText,
+                            color = colors.accentSecondary,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = FeatherIcons.X,
+                            contentDescription = stringResource(Res.string.close),
+                            tint = colors.textSecondary,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .clickable { viewModel.dismissRemoteCapabilityNotice() }
                                 .padding(2.dp)
                         )
                     }

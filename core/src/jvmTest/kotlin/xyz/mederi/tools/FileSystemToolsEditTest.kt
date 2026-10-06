@@ -1,6 +1,5 @@
 package xyz.mederi.tools
 
-import ai.koog.agents.core.tools.ToolException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -13,7 +12,8 @@ import java.io.File
 import kotlin.io.path.createTempDirectory
 
 /**
- * edit_file 行为与并发写防护回归：
+ * edit_file 行为与并发写防护回归（照抄 opencode edit.ts 三级降级 + CRLF + no-op）：
+ * - 三级匹配降级（exact → unicode 归一化 → 行级容差）、CRLF 行尾归一化、no-op 拦截；
  * - 多处匹配默认报错（不静默改第一处）、replace_all 全量替换；
  * - FileWriteRegistry：占用中的文件直接拒绝、异常路径必释放、并发压力下无丢失更新。
  */
@@ -55,16 +55,15 @@ class FileSystemToolsEditTest {
         val target = File(project, "a.txt").apply { writeText("x = 1\ny = 2\nx = 1\n") }
         val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
 
-        val error = runCatching {
-            runBlocking {
-                tools.EditFileTool().execute(
-                    FileSystemTools.EditFileArgs(path = target.absolutePath, original = "x = 1", replacement = "x = 9")
-                )
-            }
-        }.exceptionOrNull()
+        val result = runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(path = target.absolutePath, original = "x = 1", replacement = "x = 9")
+            )
+        }
 
-        assertTrue("multi-match must be rejected, got success", error is ToolException)
-        assertTrue(error!!.message!!.contains("2 times"))
+        // 照抄 opencode 文案
+        assertTrue("multi-match must be rejected: $result", result.contains("Found 2 matches"))
+        assertTrue(result.contains("expected exactly one"))
         // 文件保持原样
         assertEquals("x = 1\ny = 2\nx = 1\n", target.readText())
     }
@@ -85,6 +84,145 @@ class FileSystemToolsEditTest {
 
         assertTrue(result.contains("replaced 2 occurrence(s)"))
         assertEquals("x = 9\ny = 2\nx = 9\n", target.readText())
+    }
+
+    // ==================== 三级降级（照抄 opencode）====================
+
+    @Test
+    fun `智能引号降级匹配`() {
+        val project = tempProject()
+        // 文件用直引号，original 传智能引号（U+2018/U+201C）
+        val target = File(project, "a.txt").apply { writeText("it's \"code\" here\n") }
+        val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
+
+        val result = runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(
+                    path = target.absolutePath,
+                    original = "it’s “code” here",
+                    replacement = "it’s “code” done"
+                )
+            )
+        }
+
+        assertTrue("fuzzy 命中应成功: $result", result.startsWith("Edited"))
+        assertTrue("应标注 fuzzy 降级: $result", result.contains("matched via fuzzy fallback"))
+        assertEquals("it’s “code” done\n", target.readText())
+    }
+
+    @Test
+    fun `全角空格降级匹配`() {
+        val project = tempProject()
+        // 文件用普通空格，original 含 U+00A0 不间断空格
+        val target = File(project, "a.txt").apply { writeText("val a = 1\n") }
+        val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
+
+        // replacement 用普通空格（fuzzy 只归一化查找 oldString，replacement 原样插入——照抄 opencode）
+        val result = runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(
+                    path = target.absolutePath,
+                    original = "val a\u00A0= 1",
+                    replacement = "val b = 1"
+                )
+            )
+        }
+
+        assertTrue("全角空格 fuzzy 命中: $result", result.startsWith("Edited"))
+        assertTrue(result.contains("fuzzy fallback"))
+        assertEquals("val b = 1\n", target.readText())
+    }
+
+    @Test
+    fun `破折号降级匹配`() {
+        val project = tempProject()
+        // 文件用连字符 -，original 用 en-dash – (U+2013)
+        val target = File(project, "a.txt").apply { writeText("a - b\n") }
+        val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
+
+        // replacement 用连字符（fuzzy 只归一化查找 oldString，replacement 原样插入——照抄 opencode）
+        val result = runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(
+                    path = target.absolutePath,
+                    original = "a – b",
+                    replacement = "a - c"
+                )
+            )
+        }
+
+        assertTrue("破折号 fuzzy 命中: $result", result.startsWith("Edited"))
+        assertTrue(result.contains("fuzzy fallback"))
+        assertEquals("a - c\n", target.readText())
+    }
+
+    // ==================== CRLF 归一化 ====================
+
+    @Test
+    fun `CRLF 文件用 LF original 匹配且保留 CRLF`() {
+        val project = tempProject()
+        val target = File(project, "a.txt").apply { writeText("line1\r\nline2\r\n") }
+        val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
+
+        // original 用 LF，文件是 CRLF——归一化后应匹配，替换结果保留 CRLF
+        val result = runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(
+                    path = target.absolutePath,
+                    original = "line1\nline2",
+                    replacement = "lineX\nline2"
+                )
+            )
+        }
+
+        assertTrue("CRLF 归一化匹配: $result", result.startsWith("Edited"))
+        // 替换后文件仍全 CRLF
+        assertEquals("lineX\r\nline2\r\n", target.readText())
+    }
+
+    // ==================== no-op 拦截 ====================
+
+    @Test
+    fun `no-op original 等于 replacement 被拒绝`() {
+        val project = tempProject()
+        val original = "same text"
+        val target = File(project, "a.txt").apply { writeText("$original\n") }
+        val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
+
+        val result = runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(
+                    path = target.absolutePath, original = original, replacement = original
+                )
+            )
+        }
+
+        assertTrue("no-op 应拒绝: $result", result.contains("identical"))
+        assertTrue(result.contains("no changes"))
+        // 文件不变
+        assertEquals("$original\n", target.readText())
+    }
+
+    // ==================== 三级全败通用错误 ====================
+
+    @Test
+    fun `三级全败返回 opencode 通用错误`() {
+        val project = tempProject()
+        val target = File(project, "a.txt").apply { writeText("completely different content\n") }
+        val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
+
+        val result = runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(
+                    path = target.absolutePath, original = "not anywhere near", replacement = "x"
+                )
+            )
+        }
+
+        assertTrue("应返回 opencode 通用错误: $result", result.contains("Could not find oldString"))
+        assertTrue(result.contains("match exactly"))
+        // 文件不变
+        assertEquals("completely different content\n", target.readText())
     }
 
     // ==================== 并发写防护 ====================
@@ -140,13 +278,11 @@ class FileSystemToolsEditTest {
         val target = File(project, "a.txt").apply { writeText("hello") }
         val tools = FileSystemTools(allowedDirectories = listOf(project.absolutePath))
 
-        // original 找不到 → validate 抛异常 → finally 释放
-        runCatching {
-            runBlocking {
-                tools.EditFileTool().execute(
-                    FileSystemTools.EditFileArgs(path = target.absolutePath, original = "not-exist", replacement = "x")
-                )
-            }
+        // original 找不到 → 返回错误字符串 → finally 释放
+        runBlocking {
+            tools.EditFileTool().execute(
+                FileSystemTools.EditFileArgs(path = target.absolutePath, original = "not-exist", replacement = "x")
+            )
         }
 
         // 注册表未残留：可立即再次占用
@@ -193,17 +329,13 @@ class FileSystemToolsEditTest {
         val rejected = results.count { it.startsWith("Error:") }
         assertEquals(n, succeeded + rejected)
 
-        // 无丢失更新（调度无关不变量）：每个「成功」的编辑都必须在最终文件里——
-        // 若注册表失效（并发读改写互相覆盖），重叠的成功编辑会丢失标记；
-        // 被拒绝（Error）的编辑合法缺席
+        // 无丢失更新（调度无关不变量）：每个「成功」的编辑都必须在最终文件里
         val finalContent = target.readText()
         (0 until n).forEach { i ->
             if (results[i].startsWith("Edited")) {
                 assertTrue("edit $i reported success but its change was lost", finalContent.contains("\nX$i\n"))
             }
         }
-        // 有重叠才有意义：注册表生效时重叠方被拒绝，成功数 < n（多线程池下 50 并发写几乎必然重叠；
-        // 即使个别环境完全串行，上面的不变量仍然成立，本断言容忍退化为 succeeded == n）
         assertTrue(succeeded in 1..n)
     }
 

@@ -39,13 +39,15 @@ class InMemorySessionStore : SessionStore {
         id: String,
         agentMode: AgentMode?,
         aiModel: AIModel?,
-        reasoningLevel: ReasoningLevel?
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?
     ) {
         sessions[id] = sessions[id]?.let { s ->
             s.copy(
                 agentMode = agentMode ?: s.agentMode,
                 aiModel = aiModel ?: s.aiModel,
                 reasoningLevel = reasoningLevel ?: s.reasoningLevel,
+                apiKeyId = apiKeyId ?: s.apiKeyId,
                 updatedAt = java.time.Instant.now().toString()
             )
         } ?: return

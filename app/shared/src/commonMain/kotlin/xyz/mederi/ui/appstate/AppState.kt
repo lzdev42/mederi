@@ -223,19 +223,6 @@ class AppState(
                 delay(1000)
             }
         }
-
-        // 按供应商恢复上次选定的 API Key（persist 的 workspace.apiKey.$providerId）；缺省无持久化值 = 用默认 key。
-        scope.launch {
-            aiCore.providers.collect { providers ->
-                providers.forEach { p ->
-                    if (_selectedApiKeyIds.value[p.id] == null) {
-                        preferences.getString("workspace.apiKey.${p.id}")?.let { key ->
-                            _selectedApiKeyIds.update { it + (p.id to key) }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     // ───── C. 写侧 action(同步更新内部值 + 异步持久化) ─────
@@ -265,13 +252,44 @@ class AppState(
     }
 
     /**
-     * 会话快照补位：只改内存态，不写偏好文件。
-     * 仅当全局尚无选择时用会话固有配置（model/agent）补位，
-     * 避免启动恢复或切换会话时用会话旧快照覆盖用户主动偏好。
+     * 会话快照恢复（真理源翻转，2026-10）：只改内存态，不写偏好文件。
+     *
+     * 语义（翻转后）：
+     * - 会话已绑定模型（hasSessionModel=true，已发送或已改过设置）→ **按会话快照覆盖**全局选择：
+     *   会话是真理源——切换会话即恢复该会话的模型 / Agent / API Key / 推理档位四项设置。
+     * - 全新未发送会话（hasSessionModel=false）→ 补位语义（旧 applyConversationDefaults 行为）：
+     *   仅当全局尚无选择时用会话固有配置补位，供其余调用方兜底；
+     *   ViewModel 侧新/空会话默认改走 applyRecentConversationDefaults（最近会话推导），不再走本分支。
+     *
+     * 只改内存态，不写偏好文件（会话是真理源）。
      */
-    fun applyConversationDefaults(model: ModelOption?, agent: AgentOption?) {
-        if (_selectedModel.value == null && model != null) _selectedModel.value = model
-        if (_selectedAgentId.value == null && agent != null) _selectedAgentId.value = agent.id
+    fun applyConversationSettings(
+        model: ModelOption?,
+        agent: AgentOption?,
+        apiKeyId: String?,
+        thinkingLevel: String?,
+        hasSessionModel: Boolean
+    ) {
+        if (hasSessionModel) {
+            // 会话已绑定模型：按会话快照覆盖全局内存态
+            if (model != null) _selectedModel.value = model
+            if (agent != null) _selectedAgentId.value = agent.id
+            // apiKeyId：按当前模型供应商写入 map；null = 用默认 key
+            // （移除该供应商条目，getApiKeyId 返回 null，与"写入 null 条目"观测等价）
+            model?.let { m ->
+                _selectedApiKeyIds.update { current ->
+                    if (apiKeyId != null) current + (m.provider to apiKeyId) else current - m.provider
+                }
+            }
+            // thinkingLevel：写进 modelReasoningLevels（effectiveThinkingLevel 唯一推导链输入，无需改推导）
+            if (thinkingLevel != null && model != null) {
+                _modelReasoningLevels.update { it + (model.id to thinkingLevel) }
+            }
+        } else {
+            // 全新未发送会话：保留当前全局模板（补位语义）
+            if (_selectedModel.value == null && model != null) _selectedModel.value = model
+            if (_selectedAgentId.value == null && agent != null) _selectedAgentId.value = agent.id
+        }
     }
 
     fun setTheme(value: AppThemeMode) {
@@ -416,35 +434,36 @@ class AppState(
     }
 
     fun selectModel(m: ModelOption?) {
+        // selectedModel 现为当前活跃会话设置的内存镜像，不再落盘作模板
+        // （新会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
         _selectedModel.value = m
-        persist("workspace.lastModelId", m) { it.id }
-        persist("workspace.lastModelProviderId", m) { it.provider }
     }
 
     fun getModelReasoningLevel(modelId: String): String? = _modelReasoningLevels.value[modelId]
 
     fun setModelReasoningLevel(modelId: String, level: String?) {
+        // 推理档位为当前活跃会话设置的内存镜像，不再落盘作模板
+        // （新会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
         _modelReasoningLevels.update { current ->
             if (level != null) current + (modelId to level) else current - modelId
         }
-        persist("workspace.reasoningLevel.$modelId", level) { it }
     }
 
     /** 该供应商选定的 API Key ID；null = 用默认 key。 */
     fun getApiKeyId(providerId: String): String? = _selectedApiKeyIds.value[providerId]
 
-    /** 选定该供应商的 API Key（唯一入口）；apiKeyId 为 null 表示用默认 key。按供应商记忆，跨重启恢复。 */
+    /** 选定该供应商的 API Key（唯一入口）；apiKeyId 为 null 表示用默认 key。按供应商记忆（仅内存，由会话快照设置）。 */
     fun selectApiKey(providerId: String, apiKeyId: String?) {
         _selectedApiKeyIds.update { current ->
             if (apiKeyId != null) current + (providerId to apiKeyId) else current - providerId
         }
-        persist("workspace.apiKey.$providerId", apiKeyId) { it }
     }
 
     fun selectAgent(id: String?) {
+        // selectedAgentId 现为当前活跃会话设置的内存镜像，不再落盘作模板
+        // （新会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
         DebugLog.info("AppState", "selectAgent: requestedId=$id, oldAgentId=${_selectedAgentId.value}")
         _selectedAgentId.value = id
-        persist("workspace.lastAgentId", id) { it }
     }
 
     /**
@@ -498,24 +517,14 @@ class AppState(
 
         _selectedProjectId.value = preferences.getString("workspace.lastProjectId")
         _selectedConversationId.value = preferences.getString("workspace.lastConversationId")
-        _selectedAgentId.value = preferences.getString("workspace.lastAgentId")
 
+        // 首次运行模型兜底：无任何选择时填首个可用模型（无 prefs，四项设置模板已移除；
+        // 新/空会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
         scope.launch {
-            val lastModelId = preferences.getString("workspace.lastModelId") ?: return@launch
-            val lastProviderId = preferences.getString("workspace.lastModelProviderId")
             withTimeoutOrNull(3_000) {
                 availableModels.first { it.isNotEmpty() }
             }?.let { list ->
-                _selectedModel.value = list.find { it.id == lastModelId && (lastProviderId == null || it.provider == lastProviderId) }
-                    ?: list.firstOrNull()
-
-                // 恢复各支持思考模型的推理等级记忆
-                list.filter { it.supportsThinking }.forEach { model ->
-                    val savedLevel = preferences.getString("workspace.reasoningLevel.${model.id}")
-                    if (savedLevel != null) {
-                        _modelReasoningLevels.update { it + (model.id to savedLevel) }
-                    }
-                }
+                if (_selectedModel.value == null) _selectedModel.value = list.firstOrNull()
             }
         }
 

@@ -8,8 +8,6 @@ import xyz.mederi.api.UpdateCamoufoxSettingsInput
 import xyz.mederi.api.exception.MederiException
 import xyz.mederi.api.exception.MederiStateException
 import xyz.mederi.api.exception.mederiCall
-import xyz.mederi.api.toDto
-import xyz.mederi.api.toModel
 import xyz.mederi.browser.BrowserSettingsManager
 import xyz.mederi.browser.install.BrowserHome
 import xyz.mederi.browser.install.CamoufoxInstaller
@@ -27,11 +25,11 @@ class BrowserSettingsApiImpl(
 ) : BrowserSettingsApi {
 
     override suspend fun getSettings(): CamoufoxSettingsDto = mederiCall {
-        manager.get().toDto()
+        manager.get()
     }
 
     override suspend fun updateSettings(input: UpdateCamoufoxSettingsInput): CamoufoxSettingsDto = mederiCall {
-        manager.save(input.settings.toModel()).toDto()
+        manager.save(input.settings)
     }
 
     override suspend fun getStatus(): BrowserStatusDto = mederiCall {

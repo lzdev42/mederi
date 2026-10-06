@@ -11,12 +11,6 @@ import kotlinx.coroutines.launch
 import xyz.mederi.util.TimeFormatter
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.ui.appstate.AppState
@@ -87,79 +81,25 @@ class RawMessagesViewModel(
         TimeFormatter.formatMonthDayTime(rawIso)
 
     /**
-     * 提取摘要标签（如 "text"、"bash"、"compose-hot-reload_*"、"reasoning + text + bash" 或 "user: ..."）。
+     * 提取摘要标签（如 "text"、"bash"、"user: hello..."）。
+     * 读取 jvmMain 桥预解析好的 DTO 投影字段 [RawMessageDto.summaryLabel]，
+     * commonMain 不再手解 core payload JSON。
      */
-    fun extractSummaryLabel(item: RawMessageDto, jsonObj: JsonObject?): String {
-        if (jsonObj == null) {
-            return item.role.lowercase()
-        }
-        val role = jsonObj["role"]?.jsonPrimitive?.contentOrNull ?: item.role
-        val parts = jsonObj["parts"]?.jsonArray
-
-        if (role.equals("user", ignoreCase = true)) {
-            val textPart = parts?.mapNotNull { it.jsonObject }?.firstOrNull {
-                it["text"] != null || it["type"]?.jsonPrimitive?.contentOrNull?.contains("Text", ignoreCase = true) == true
-            }
-            val text = textPart?.get("text")?.jsonPrimitive?.contentOrNull
-            if (!text.isNullOrBlank()) {
-                val clean = xyz.mederi.util.PromptComposer.sanitizeUserVisibleText(text).trim()
-                val firstLine = clean.lines().firstOrNull()?.trim().orEmpty()
-                return "user: " + (if (firstLine.length > 50) firstLine.take(50) + "..." else firstLine)
-            }
-            val toolResultPart = parts?.mapNotNull { it.jsonObject }?.firstOrNull {
-                it["tool"] != null && it["output"] != null
-            }
-            if (toolResultPart != null) {
-                val toolName = toolResultPart["tool"]?.jsonPrimitive?.contentOrNull ?: "tool"
-                return "$toolName result"
-            }
-            return "user"
-        }
-
-        if (parts != null && parts.isNotEmpty()) {
-            val partLabels = mutableListOf<String>()
-            for (partElement in parts) {
-                val partObj = partElement.jsonObject
-                val tool = partObj["tool"]?.jsonPrimitive?.contentOrNull
-                if (!tool.isNullOrBlank()) {
-                    partLabels.add(tool)
-                } else if (partObj["content"] != null || partObj["summary"] != null ||
-                    partObj["type"]?.jsonPrimitive?.contentOrNull?.contains("Reasoning", ignoreCase = true) == true
-                ) {
-                    partLabels.add("reasoning")
-                } else if (partObj["text"] != null ||
-                    partObj["type"]?.jsonPrimitive?.contentOrNull?.contains("Text", ignoreCase = true) == true
-                ) {
-                    partLabels.add("text")
-                }
-            }
-            if (partLabels.isNotEmpty()) {
-                val distinctLabels = mutableListOf<String>()
-                for (lbl in partLabels) {
-                    if (distinctLabels.isEmpty() || distinctLabels.last() != lbl) {
-                        distinctLabels.add(lbl)
-                    }
-                }
-                return distinctLabels.joinToString(" + ")
-            }
-        }
-
-        return role.lowercase()
+    fun extractSummaryLabel(item: RawMessageDto): String {
+        return item.summaryLabel ?: item.role.lowercase()
     }
 
     /**
-     * 提取 Token 消耗（input / output）。
+     * 格式化 Token 消耗显示（如 "1,234 / 567"）。
+     * 读取 jvmMain 桥预解析好的 DTO 投影字段 [RawMessageDto.inputTokens] / [RawMessageDto.outputTokens]，
+     * commonMain 不再手解 core payload JSON。千分位格式化是 UI 展示关切，留在本层。
      */
-    fun extractTokens(jsonObj: JsonObject?): String? {
-        if (jsonObj == null) return null
-        val input = jsonObj["inputTokens"]?.jsonPrimitive?.intOrNull
-            ?: jsonObj["tokens"]?.jsonObject?.get("input")?.jsonPrimitive?.intOrNull
-        val output = jsonObj["outputTokens"]?.jsonPrimitive?.intOrNull
-            ?: jsonObj["tokens"]?.jsonObject?.get("output")?.jsonPrimitive?.intOrNull
-
+    fun extractTokens(item: RawMessageDto): String? {
+        val input = item.inputTokens
+        val output = item.outputTokens
         if (input != null || output != null) {
-            val inStr = formatNumber(input ?: 0)
-            val outStr = formatNumber(output ?: 0)
+            val inStr = formatNumber(input?.toInt() ?: 0)
+            val outStr = formatNumber(output?.toInt() ?: 0)
             return "$inStr / $outStr"
         }
         return null

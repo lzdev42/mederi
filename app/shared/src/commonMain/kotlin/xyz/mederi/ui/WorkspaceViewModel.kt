@@ -30,6 +30,7 @@ import okio.ByteString.Companion.toByteString
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.FileAttachment
+import xyz.mederi.core.contract.dto.UpdateConversationSettingsInput
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.appstate.AppState
 import xyz.mederi.ui.appstate.McpStore
@@ -88,6 +89,18 @@ import xyz.mederi.util.openUrl
  *
  * @param appState 全局 AppState，由外部（MainScreen 层）注入
  */
+
+/**
+ * 遥控端不可用能力的一次性轻提示标识（VM state，UI Composable 内经 stringResource 解码渲染）。
+ * 桌面端（jvm）实际拥有剪贴板权限，null 时不提示；iOS/Android/wasmJs 剪贴板不可用时通知用户。
+ */
+enum class RemoteCapabilityNotice {
+    /** 剪贴板图片不可用（getImage() 返回 null 且非 desktop） */
+    IMAGE_CLIPBOARD,
+    /** 剪贴板文本不可用（getText() 返回 null/blank 且非 desktop） */
+    TEXT_CLIPBOARD,
+}
+
 class WorkspaceViewModel(
     private val appState: AppState,
 ) : ViewModel() {
@@ -100,17 +113,16 @@ class WorkspaceViewModel(
     val selectedProjectId: StateFlow<String?> = appState.selectedProjectId
 
     init {
-        // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到项目目录下的 .mederi。
+        // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到 core 暴露的项目工作目录。
         // android/ios 是遥控端：project.directory 是 server 机器的路径，设备上不存在/无写权限，
         // 注入只会让磁盘缓存静默失效——遥控端固定用本地应用缓存目录（Android 宿主启动时注入 cacheDir，
         // iOS 用 NSCaches 默认值），不走项目重定向。wasmJs 无磁盘，setBaseDirectory 本身是 no-op。
         if (isDesktopPlatform) {
             viewModelScope.launch {
                 combine(appState.projects, appState.selectedProjectId) { projects, selectedId ->
-                    val project = projects.find { it.id == selectedId }
-                    val projectDir = project?.directory?.takeIf { it.isNotBlank() }
-                    if (projectDir != null) {
-                        "$projectDir/.mederi"
+                    val workDir = projects.find { it.id == selectedId }?.workDir
+                    if (!workDir.isNullOrBlank()) {
+                        workDir
                     } else {
                         appState.aiCore.configDir
                     }
@@ -180,12 +192,23 @@ class WorkspaceViewModel(
      * 生效时机说明（UI AI 必须理解）：
      * - 该选择**立即影响之后发送的每一条消息**（[send] 每次都会按当前选中 Agent
      *   组装 AgentConfig：APPROVAL 走计划审批流，AUTONOMOUS 直接执行）
-     * - 切换不会改动已存在的会话配置快照，属于"下一句话生效"的全局偏好
-     * - 切换会自动持久化，重启后恢复
+     * - 已绑定会话时切换会**立即持久化到该会话**（updateConversationSettings，见下方实现），
+     *   切换会话后按会话快照恢复；未绑定会话时仅改全局偏好，重启后恢复
      */
     fun selectAgent(id: String?) {
         DebugLog.info("UI", "WorkspaceViewModel.selectAgent: id=$id")
         appState.selectAgent(id)
+        // 会话已绑定时：立即把 Agent 改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
+        // selectAgentMode 内部调 selectAgent，无需单独加覆盖。
+        val convId = conversationId
+        if (convId != null && id != null) {
+            val agent = appState.availableAgents.value.find { it.id == id }
+            if (agent != null) {
+                viewModelScope.launch {
+                    appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(agent = agent))
+                }
+            }
+        }
     }
 
     /**
@@ -552,7 +575,7 @@ class WorkspaceViewModel(
     fun openPlanFile(item: PlanOverviewItem) {
         val content = item.planContent?.takeIf { it.isNotBlank() }
             ?: runCatching {
-                if (item.planPath.isNotBlank()) java.io.File(item.planPath).takeIf { it.exists() }?.readText() else null
+                if (item.planPath.isNotBlank()) appState.fileTreeProvider?.readText(item.planPath) else null
             }.getOrNull()
             ?: "# ${item.title}\n\n${item.summary}"
         openPlanInExtension(item.id, item.title, content)
@@ -672,6 +695,12 @@ class WorkspaceViewModel(
     var imageStrippedNotice by mutableStateOf<String?>(null); private set
 
     /**
+     * 一次性轻提示：遥控端剪贴板能力不可用（null=不显示，标识枚举驱动 UI 渲染解码 i18n 文案）。
+     * 桌面端有真实剪贴板权限，null 时不提示；iOS/Android/wasmJs 无剪贴板权限时给轻提示。
+     */
+    var remoteCapabilityNotice by mutableStateOf<RemoteCapabilityNotice?>(null); private set
+
+    /**
      * 当前会话错误的完整诊断报告（纯文本，来自 [ConversationSnapshot.errorDiagnostic]）。
      * UI 点击错误简报时可展示此完整详情；null 表示无错误或旧路径。
      */
@@ -733,6 +762,7 @@ class WorkspaceViewModel(
 
     fun updateInputDraft(value: TextFieldValue) {
         imageStrippedNotice = null // 下次输入时清空"图片已剔除"轻提示
+        remoteCapabilityNotice = null // 下次输入时清空"遥控端剪贴板不可用"轻提示
         inputDraft = value
     }
 
@@ -852,6 +882,12 @@ class WorkspaceViewModel(
 
     /** 当前上下文真实占用（token）：最近一次请求 API 报告的 prompt 大小，与自动压缩触发同源 */
     val contextUsedTokens: Long get() = snapshot?.contextUsedTokens ?: 0L
+
+    /** 主会话 LLM HTTP 请求累计次数（事件累加 + 历史回填，见 SnapshotReducer/MederiModelMapper） */
+    val requestCount: Int get() = snapshot?.requestCount ?: 0
+
+    /** 最近一次 LLM 请求用量（null = 无数据，UI 卡片隐藏） */
+    val lastRequestUsage: LastRequestUsage? get() = snapshot?.lastRequestUsage
 
     /**
      * 当前会话的"发送请求时刻"（epoch ms）——StatusBar 计时锚点。
@@ -1065,10 +1101,6 @@ class WorkspaceViewModel(
         )
     }
 
-    /** 用户消息条数（扩展面板"请求次数"展示用） */
-    val userMessageCount: Int
-        get() = messages.count { it.role == ChatRole.User }
-
     // ==========================================
     // 问询（ask_user）交互状态机
     // ==========================================
@@ -1256,6 +1288,11 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 id = cached.errorId,
                 isStreamInterrupted = cached.errorIsStreamInterrupted,
             )
+            // 切换到已缓存的会话时，观察流不会重发快照（无新事件→不触发 applySnapshot→不 hydrate），
+            // 故此处显式按缓存快照恢复输入框设置（真理源翻转：会话已绑定模型则覆盖，否则保留模板）。
+            // 标记 selectionHydrated=true 防观察流后续（若有新事件）重复 hydrate。
+            hydrateSelectionFromConversation(cached.conversation)
+            selectionHydrated = true
             DebugLog.event("UI", "attach: rendered from cache (status=${cached.conversation.status}, messages=${cached.messages.size})")
         } else {
             // 无缓存（首次打开 / 已 Idle 清理）：异步拉一次初始快照渲染，再交给观察流持续更新
@@ -1428,29 +1465,55 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     }
 
     private fun hydrateSelectionFromConversation(conv: Conversation) {
-        // 会话快照只做"补位"，不覆盖、不持久化：全局偏好优先。
-        // 否则启动恢复或切换会话会用会话创建时的旧快照覆盖用户主动选的 model/agent，
-        // 并反向写回偏好文件，导致"上次选中的模型/Agent"被污染、记不住。
-        val modelId = conv.modelId
-        val modelProvider = conv.modelProvider
-        val model = if (modelId != null) {
-            appState.availableModels.value.find { it.id == modelId && it.provider == modelProvider }
-        } else null
+        // 真理源翻转（2026-10）：
+        // - 会话已绑定模型（modelId != null）→ 按会话快照覆盖恢复四项设置
+        //   （model / agent / apiKey / thinkingLevel），会话是真理源，不写偏好文件。
+        // - 全新未发送会话（modelId == null）→ 默认取最近修改会话的设置
+        //   （applyRecentConversationDefaults，跨项目最近 updatedAt）。
+        if (conv.modelId != null) {
+            // 模型解析：优先 id+provider 精确匹配；modelProvider 可能为 null（AIModel 不含 provider，
+            // modelToProvider 映射缺失时），此时回退到按 id 匹配，避免会话有模型却恢复不出 → 输入框不刷新。
+            val all = appState.availableModels.value
+            val model = all.find { it.id == conv.modelId && it.provider == conv.modelProvider }
+                ?: all.find { it.id == conv.modelId }
 
-        val agent: AgentOption? = conv.agent?.let { agentOrMode ->
-            val mode = runCatching { AgentMode.valueOf(agentOrMode) }.getOrNull()
-            if (mode != null) {
-                appState.availableAgents.value.find { it.mode == mode }
-            } else {
-                appState.availableAgents.value.find { it.id == agentOrMode }
+            val agent: AgentOption? = conv.agent?.let { agentOrMode ->
+                val mode = runCatching { AgentMode.valueOf(agentOrMode) }.getOrNull()
+                if (mode != null) {
+                    appState.availableAgents.value.find { it.mode == mode }
+                } else {
+                    appState.availableAgents.value.find { it.id == agentOrMode }
+                }
             }
+            appState.applyConversationSettings(
+                model = model,
+                agent = agent,
+                apiKeyId = conv.apiKeyId,
+                thinkingLevel = conv.thinkingLevel,
+                hasSessionModel = true,
+            )
+        } else {
+            // 新/空会话（从未发送）：默认取最近修改会话的设置
+            applyRecentConversationDefaults()
         }
-        appState.applyConversationDefaults(model, agent)
-        // 执行策略不再单独补位：applyConversationDefaults 写 selectedAgentId 后，
+        // 执行策略不再单独恢复：applyConversationSettings 写 selectedAgentId 后，
         // AppState.selectedAgentMode 派生流自动跟随（唯一真理源，无本地副本可分叉）
+    }
 
-        // 思考级别：会话快照不做覆盖（与 model/agent 同理，全局偏好优先），
-        // 生效值一律由 effectiveThinkingLevel（ReasoningMenu.resolve 唯一推导链）现算
+    /**
+     * 新/空会话默认取最近修改会话的设置（跨项目，maxBy updatedAt）。
+     * 真理源单一化为会话：全局偏好模板已移除，默认值从最近会话快照推导。
+     * recent == null（无任何已发送会话）：不填，由 hydrate first-available 兜底。
+     */
+    private fun applyRecentConversationDefaults() {
+        val recent = appState.projects.value
+            .flatMap { it.conversations }
+            .filter { it.modelId != null }
+            .maxByOrNull { it.updatedAt }
+        if (recent != null) {
+            // 复用 hydrateSelectionFromConversation 恢复最近修改会话的设置
+            hydrateSelectionFromConversation(recent)
+        }
     }
 
     fun detach() = attach(null)
@@ -1462,17 +1525,42 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     fun updateThinkingLevel(level: String?) {
         val model = appState.selectedModel.value ?: return
         appState.setModelReasoningLevel(model.id, level)
+        // 会话已绑定时：立即把推理档位改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
+        // level == null（移除偏好走模型默认档）不立即持久化（COALESCE 语义 null=不改），由下次发送覆盖。
+        val convId = conversationId
+        if (convId != null && level != null) {
+            viewModelScope.launch {
+                appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(thinkingLevel = level))
+            }
+        }
     }
 
     fun selectModel(model: ModelOption?) {
         appState.selectModel(model)
         // 思考级别无需在此设置副本：生效值由 effectiveThinkingLevel 现算
         // （模型记忆 > 默认档），切换模型后自动跟随新模型
+        // 会话已绑定时：立即把模型改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
+        // 仅传 model 字段（null = 不改其它项，core COALESCE 保留原值）。
+        val convId = conversationId
+        if (convId != null && model != null) {
+            viewModelScope.launch {
+                appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(model = model))
+            }
+        }
     }
 
     /** 选定当前模型所在供应商的 API Key（UI key 选择器唯一入口）；null = 用该供应商默认 key。 */
     fun selectApiKey(providerId: String, apiKeyId: String?) {
         appState.selectApiKey(providerId, apiKeyId)
+        // 会话已绑定时：立即把 API Key 改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
+        // apiKeyId == null（用户选"默认 key"）不立即持久化（COALESCE 语义 null=不改，无法表达"清除为默认"）；
+        // 该 case 由下次发送时 request.apiKeyId=null + TurnExecutor 回写覆盖。属已知边界。
+        val convId = conversationId
+        if (convId != null && apiKeyId != null) {
+            viewModelScope.launch {
+                appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(apiKeyId = apiKeyId))
+            }
+        }
     }
 
     fun selectProject(id: String?) {
@@ -1948,6 +2036,16 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     /** 关闭"图片已剔除"轻提示（右上角 × 按钮入口）。 */
     fun dismissImageStrippedNotice() {
         imageStrippedNotice = null
+    }
+
+    /** 设置遥控端剪贴板能力不可用轻提示（ChatInputCard 剪贴板调用点非 desktop 时调用）。 */
+    fun showRemoteCapabilityNotice(notice: RemoteCapabilityNotice) {
+        remoteCapabilityNotice = notice
+    }
+
+    /** 关闭遥控端剪贴板不可用轻提示（右上角 × 按钮入口）。 */
+    fun dismissRemoteCapabilityNotice() {
+        remoteCapabilityNotice = null
     }
 
     /**

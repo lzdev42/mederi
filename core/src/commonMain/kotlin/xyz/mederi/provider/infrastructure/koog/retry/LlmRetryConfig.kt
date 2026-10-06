@@ -10,7 +10,7 @@ package xyz.mederi.provider.infrastructure.koog.retry
  * core 业务代码对此无感知——对它们来说重试就是"这次请求慢了点"。
  */
 object LlmRetryConfig {
-    /** 最大重试次数（不含首次请求）。默认 10。设 0 = 关闭重试 */
+    /** 最大重试次数（不含首次请求）。默认 100。设 0 = 关闭重试 */
     @Volatile
     var maxRetries: Int = 100
 

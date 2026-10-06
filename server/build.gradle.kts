@@ -44,7 +44,6 @@ tasks.withType<Zip> {
 }
 
 dependencies {
-    api(project(":core"))
     // JVM 变体：复用 MederiAiCore 桥接 + contract DTO（wasm 浏览器经本模块 REST/SSE 访问与 desktop 一致的 AiCore 语义）
     implementation(project(":app:shared"))
     implementation(libs.logback)

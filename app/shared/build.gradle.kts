@@ -110,6 +110,8 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            // SnapshotReducerTest 需跑 suspend 的 applyWithRefresh（commonTest 无 runBlocking）
+            implementation(libs.kotlinx.coroutinesTest)
         }
     }
 }

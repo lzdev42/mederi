@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_mode      TEXT NOT NULL DEFAULT 'AUTONOMOUS',
     ai_model        TEXT,
     reasoning_level TEXT,
+    api_key_id      TEXT,
     env             TEXT NOT NULL DEFAULT '{}',
     todos           TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL,
@@ -32,24 +33,24 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 
 -- 插入会话
 insertSession:
-INSERT INTO sessions (id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO sessions (id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- 查询所有会话（按更新时间降序）
 listSessions:
-SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, created_at, updated_at
 FROM sessions
 ORDER BY updated_at DESC;
 
 -- 按 ID 查询会话
 getSession:
-SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, created_at, updated_at
 FROM sessions
 WHERE id = ?;
 
 -- 按项目查询会话
 listSessionsByProject:
-SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, env, todos, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, created_at, updated_at
 FROM sessions
 WHERE project_id = ?
 ORDER BY updated_at DESC;
@@ -71,7 +72,7 @@ WHERE id = ?;
 
 -- 更新会话 Agent 配置（COALESCE 使 NOT NULL 的列可接受 null 参数）
 updateSessionAgentConfig:
-UPDATE sessions SET agent_mode = COALESCE(?, agent_mode), ai_model = COALESCE(?, ai_model), reasoning_level = COALESCE(?, reasoning_level), updated_at = ?
+UPDATE sessions SET agent_mode = COALESCE(?, agent_mode), ai_model = COALESCE(?, ai_model), reasoning_level = COALESCE(?, reasoning_level), api_key_id = COALESCE(?, api_key_id), updated_at = ?
 WHERE id = ?;
 
 -- 删除会话

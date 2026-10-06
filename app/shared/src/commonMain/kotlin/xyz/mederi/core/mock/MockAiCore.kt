@@ -407,6 +407,37 @@ class MockAiCore(
         }
     }
 
+    override suspend fun updateConversationSettings(
+        conversationId: String,
+        input: UpdateConversationSettingsInput
+    ): Result<Unit> = runCatching {
+        // Mock: 把设置写回内存会话快照，供预览/测试观察
+        val sf = conversations[conversationId] ?: return@runCatching
+        val conv = sf.value.conversation
+        sf.value = sf.value.copy(
+            conversation = conv.copy(
+                modelId = input.model?.id ?: conv.modelId,
+                modelProvider = input.model?.provider ?: conv.modelProvider,
+                agent = input.agent?.mode?.name ?: conv.agent,
+                apiKeyId = input.apiKeyId ?: conv.apiKeyId,
+                thinkingLevel = input.thinkingLevel ?: conv.thinkingLevel
+            )
+        )
+        _projects.value = _projects.value.map { p ->
+            p.copy(conversations = p.conversations.map { c ->
+                if (c.id == conversationId) {
+                    c.copy(
+                        modelId = input.model?.id ?: c.modelId,
+                        modelProvider = input.model?.provider ?: c.modelProvider,
+                        agent = input.agent?.mode?.name ?: c.agent,
+                        apiKeyId = input.apiKeyId ?: c.apiKeyId,
+                        thinkingLevel = input.thinkingLevel ?: c.thinkingLevel
+                    )
+                } else c
+            })
+        }
+    }
+
     override suspend fun compressHistory(conversationId: String): Result<Unit> = runCatching {
         // Mock: no-op
     }

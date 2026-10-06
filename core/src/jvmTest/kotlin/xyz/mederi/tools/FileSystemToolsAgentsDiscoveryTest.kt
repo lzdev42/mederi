@@ -32,9 +32,9 @@ class FileSystemToolsAgentsDiscoveryTest {
 
         val result = runBlocking { tools.ReadFileTool().execute(FileSystemTools.ReadFileArgs(path = target.absolutePath)) }
 
-        // read_file 现在以 0-based 区间头行返回；懒发现仍应追加到尾部
-        assertTrue(result.startsWith("read_file: lines[0, 1)"))
-        assertTrue(result.contains("println()"))
+        // read_file 1-based 行号前缀格式（对齐 opencode）；懒发现仍应追加到尾部
+        assertTrue(result.contains("Read file f.kt, lines 1-1"))
+        assertTrue(result.contains("1: println()"))
         assertTrue(result.contains("--- AGENTS.md (AGENTS.md) ---"))
         assertTrue(result.endsWith("sub rules"))
     }
@@ -50,9 +50,9 @@ class FileSystemToolsAgentsDiscoveryTest {
 
         val result = runBlocking { tools.ReadFileTool().execute(FileSystemTools.ReadFileArgs(path = target.absolutePath)) }
 
-        // 无懒发现追加：返回即是 read_file 自身输出（header + 内容），不含 AGENTS.md 段
-        assertTrue(result.startsWith("read_file: lines[0, 1)"))
-        assertTrue(result.contains("println()"))
+        // 无懒发现追加：返回即是 read_file 自身输出（header + 行号前缀内容），不含 AGENTS.md 段
+        assertTrue(result.contains("Read file f.kt, lines 1-1"))
+        assertTrue(result.contains("1: println()"))
         assertTrue(!result.contains("AGENTS.md"))
     }
 

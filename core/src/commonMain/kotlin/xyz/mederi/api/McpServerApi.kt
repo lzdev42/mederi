@@ -13,6 +13,10 @@ import xyz.mederi.mcp.servers.domain.McpVerifyResult
  * 资源不存在抛 [xyz.mederi.api.exception.MederiNotFoundException]。
  *
  * 与市场模块（[McpMarketApi]）零耦合：市场产出 JSON，这里只消费 JSON。
+ *
+ * @PendingContractSurface 契约上拋状态（2026-10）：install/list/getJson/update/setEnabled/delete 已上拋到 AiCore 契约；
+ * [discover] / [verify] / [verifyAll] / [verifyConfig] 暂未上拋（与 [McpMarketApi] 同因：依赖 bug 未修完）。
+ * 待依赖修复后由后续功能计划补齐契约四处同步，非被遗弃能力。
  */
 interface McpServerApi {
 

@@ -27,6 +27,19 @@ interface SessionApi {
     suspend fun sendMessage(sessionId: String, request: SendMessageRequest)
     suspend fun steerMessage(sessionId: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(sessionId: String, messageId: String)
+    /**
+     * 更新会话的 Agent 配置（agentMode / aiModel / reasoningLevel / apiKeyId），不依赖发送即落库。
+     * 各参数可空 = null 表示不改变该项（COALESCE 保留原值）。
+     * 用于输入框设置会话级持久化：选择器改动时立即写到会话。
+     */
+    suspend fun updateAgentConfig(
+        sessionId: String,
+        agentMode: AgentMode? = null,
+        aiModel: AIModel? = null,
+        reasoningLevel: ReasoningLevel? = null,
+        apiKeyId: String? = null
+    )
+
     suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>)
     /**
      * 回复计划审批。
@@ -130,5 +143,10 @@ data class RawMessageDto(
     val messageId: String?,
     val role: String,
     val payload: String,
-    val createdAt: String
+    val createdAt: String,
+    /** 诊断列：来自 RawMessageRecord 落库诊断列，null = 无该诊断数据 */
+    val modelId: String? = null,
+    val durationMs: Long? = null,
+    val finishReason: String? = null,
+    val status: String? = null
 )

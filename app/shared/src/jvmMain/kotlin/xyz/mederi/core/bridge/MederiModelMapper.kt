@@ -13,6 +13,7 @@ import xyz.mederi.core.contract.models.CostSummary
 import xyz.mederi.core.contract.models.CustomModelEntry
 import xyz.mederi.core.contract.models.ReasoningMenu
 import xyz.mederi.core.contract.models.FileDiff as UiFileDiff
+import xyz.mederi.core.contract.models.LastRequestUsage
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.core.contract.models.Project as UiProject
@@ -49,7 +50,8 @@ object MederiModelMapper {
             name = coreProject.name,
             directory = coreProject.directory,
             conversations = conversations,
-            createdAt = parseIsoToMillis(coreProject.createdAt)
+            createdAt = parseIsoToMillis(coreProject.createdAt),
+            workDir = coreProject.workDir
         )
 
     // ------------------------------------------------------------------
@@ -71,6 +73,7 @@ object MederiModelMapper {
             // 不得用模型声明档（aiModel.reasoningLevel）兜底冒充会话级别——那是第二个真理源
             thinkingLevel = session.reasoningLevel?.name,
             agent = session.agentMode.name,
+            apiKeyId = session.apiKeyId,
             directory = null,
         )
 
@@ -368,13 +371,43 @@ object MederiModelMapper {
         return TokenUsage(
             input = input,
             output = output,
-            reasoning = 0,
+            // reasoning / cacheWrite 无 core 源 = 死值，传 null 诚实标记"无数据"（UI 显示"—"）
+            reasoning = null,
             cacheRead = cacheRead,
-            cacheWrite = 0
+            cacheWrite = null
         )
     }
 
-    fun toCostSummary(): CostSummary = CostSummary(total = 0.0, currency = "USD")
+    // total 无真实费用源 = 死值，传 null 诚实标记"不可用"（UI 显示"不可用"或隐藏费用行）
+    fun toCostSummary(): CostSummary = CostSummary(total = null, currency = "USD")
+
+    /**
+     * LLM 请求用量回填结果：主会话 requestCount（= assistant 消息数）+ 最近一次请求用量。
+     */
+    data class UsageBackfill(val requestCount: Int, val lastRequestUsage: LastRequestUsage?)
+
+    /**
+     * 从历史 assistant 消息回填 [requestCount]（计数 = assistant 消息数）与 [lastRequestUsage]
+     * （取最后一条带 usage 的 assistant 消息；无 = null）。用于 getSnapshot / listMessagesPage /
+     * 初始快照把"事件累加"与"DB 落库"对齐。
+     */
+    fun toUsageBackfill(messages: List<CoreMessage>): UsageBackfill {
+        var count = 0
+        var last: LastRequestUsage? = null
+        messages.forEach { msg ->
+            if (msg.role == CoreMessageRole.ASSISTANT) {
+                count += 1
+                if (msg.inputTokens != null || msg.outputTokens != null || msg.cachedTokens != null) {
+                    last = LastRequestUsage(
+                        inputTokens = msg.inputTokens?.toLong() ?: 0,
+                        outputTokens = msg.outputTokens?.toLong() ?: 0,
+                        cachedTokens = msg.cachedTokens?.toLong()
+                    )
+                }
+            }
+        }
+        return UsageBackfill(count, last)
+    }
 
     // ------------------------------------------------------------------
     // Diff

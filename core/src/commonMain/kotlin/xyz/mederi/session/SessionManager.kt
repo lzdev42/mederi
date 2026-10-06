@@ -45,6 +45,18 @@ interface SessionManager {
     suspend fun sendMessage(id: String, request: SendMessageRequest)
     suspend fun steerMessage(id: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(id: String, messageId: String)
+    /**
+     * 更新会话的 Agent 配置（agentMode / aiModel / reasoningLevel / apiKeyId），不依赖发送即落库。
+     * 各参数可空 = null 表示不改变该项。用于输入框设置会话级持久化。
+     */
+    suspend fun updateAgentConfig(
+        id: String,
+        agentMode: xyz.mederi.domain.model.AgentMode? = null,
+        aiModel: xyz.mederi.domain.model.AIModel? = null,
+        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel? = null,
+        apiKeyId: String? = null
+    )
+
     suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
     suspend fun resolvePlanApproval(
         id: String,

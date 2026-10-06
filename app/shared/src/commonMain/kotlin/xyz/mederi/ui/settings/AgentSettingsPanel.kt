@@ -27,9 +27,9 @@ import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
-import xyz.mederi.debug.DebugLog
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.DebugLog
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.ui.components.ChipSelectorPill
 import xyz.mederi.ui.components.ModelPickerList

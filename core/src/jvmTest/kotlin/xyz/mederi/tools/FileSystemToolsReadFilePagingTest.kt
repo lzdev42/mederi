@@ -7,9 +7,10 @@ import kotlinx.coroutines.runBlocking
 import kotlin.io.path.createTempDirectory
 
 /**
- * read_file 的 offset/max_lines 分页（0-based 统一）行为锁定：
- * - 返回区间 [start, end) 前闭后开（subList 语义），header 携带 next offset = end（续读零换算）
- * - offset 从文件中部起读、超界、空文件、max_lines=0 全量等边界
+ * read_file 的 offset/max_lines 分页（1-based，对齐 opencode read.ts toModelContent）行为锁定：
+ * - offset 1-based，输出每行带 `N: ` 前缀，header `Read file <path>, lines X-Y`
+ * - truncated 时尾部 `[Output truncated. Continue reading with offset: <next>]`（next 1-based）
+ * - offset 越界、空文件、max_lines=0 全量等边界
  */
 class FileSystemToolsReadFilePagingTest {
 
@@ -18,7 +19,7 @@ class FileSystemToolsReadFilePagingTest {
             File(dir, "f.txt").apply { writeText((0 until 10).joinToString("\n") { "line$it" }) }
         }
 
-    private fun read(path: String, offset: Int = 0, maxLines: Int = 2000): String = runBlocking {
+    private fun read(path: String, offset: Int = 1, maxLines: Int = 2000): String = runBlocking {
         FileSystemTools(allowedDirectories = listOf(File(path).parentFile.absolutePath))
             .ReadFileTool()
             .execute(FileSystemTools.ReadFileArgs(path = path, offset = offset, maxLines = maxLines))
@@ -28,13 +29,14 @@ class FileSystemToolsReadFilePagingTest {
     fun `read from start with truncation exposes next offset`() {
         val file = tenLineFile()
 
-        val r = read(file.absolutePath, maxLines = 3)
+        val r = read(file.absolutePath, offset = 1, maxLines = 3)
 
-        assertTrue("header 应带 next offset=3: $r", r.startsWith("read_file: lines[0, 3) (0-based, end-exclusive), total=10, next offset=3"))
-        assertTrue("首行 line0 在列", r.contains("line0"))
-        assertTrue("第三行（0-based index 2）line2 在列", r.contains("line2"))
+        // displayPath 对 temp 文件返回 f.txt（相对 allowedDirectory）
+        assertTrue("header 应报 lines 1-3: $r", r.contains("Read file f.txt, lines 1-3"))
+        assertTrue("首行带 1: 前缀: $r", r.contains("1: line0"))
+        assertTrue("第三行 line2 带 3: 前缀: $r", r.contains("3: line2"))
         assertTrue("line3 应被截断", !r.contains("line3"))
-        assertTrue("应提示从 offset 3 续读: $r", r.contains("continue from offset 3"))
+        assertTrue("应提示从 offset 4 续读: $r", r.contains("[Output truncated. Continue reading with offset: 4]"))
     }
 
     @Test
@@ -43,33 +45,36 @@ class FileSystemToolsReadFilePagingTest {
 
         val r = read(file.absolutePath, offset = 3, maxLines = 3)
 
-        assertTrue("header 应报 lines[3,6) next offset=6: $r", r.startsWith("read_file: lines[3, 6) (0-based, end-exclusive), total=10, next offset=6"))
-        assertTrue("line3 在列", r.contains("line3"))
-        assertTrue("line5 在列", r.contains("line5"))
-        assertTrue("line6 不在列", !r.contains("line6"))
+        // offset=3(1-based) → start=2(0-based)，slice=lines[2,5) → line2,line3,line4
+        assertTrue("header 应报 lines 3-5: $r", r.contains("Read file f.txt, lines 3-5"))
+        assertTrue("3: line2 在列: $r", r.contains("3: line2"))
+        assertTrue("5: line4 在列: $r", r.contains("5: line4"))
+        assertTrue("line5 不在列", !r.contains("line5"))
+        assertTrue("应提示从 offset 6 续读: $r", r.contains("Continue reading with offset: 6"))
     }
 
     @Test
     fun `middle chunk with no more lines omits next offset`() {
         val file = tenLineFile()
 
-        val last = read(file.absolutePath, offset = 6, maxLines = 4) // 6..9 恰好到尾
+        // offset=7(1-based) maxLines=4 → start=6, end=10, slice=line6..line9，恰到尾
+        val last = read(file.absolutePath, offset = 7, maxLines = 4)
 
-        assertTrue("到文件尾无 next offset: $last", last.startsWith("read_file: lines[6, 10) (0-based, end-exclusive), total=10"))
+        assertTrue("header 应报 lines 7-10: $last", last.contains("Read file f.txt, lines 7-10"))
         assertTrue("无 next offset", !last.contains("next offset"))
         assertTrue("无 truncated", !last.contains("truncated"))
-        assertTrue("line9 在列", last.contains("line9"))
+        assertTrue("10: line9 在列: $last", last.contains("10: line9"))
     }
 
     @Test
     fun `maxLines 0 returns full file`() {
         val file = tenLineFile()
 
-        val r = read(file.absolutePath, offset = 0, maxLines = 0)
+        val r = read(file.absolutePath, offset = 1, maxLines = 0)
 
-        assertTrue("maxLines=0 返全量: $r", r.startsWith("read_file: lines[0, 10) (0-based, end-exclusive), total=10"))
+        assertTrue("maxLines=0 返全量 header lines 1-10: $r", r.contains("Read file f.txt, lines 1-10"))
         assertTrue("无 truncated", !r.contains("truncated"))
-        assertTrue("line9 在列", r.contains("line9"))
+        assertTrue("10: line9 在列: $r", r.contains("10: line9"))
     }
 
     @Test
@@ -78,7 +83,7 @@ class FileSystemToolsReadFilePagingTest {
 
         val r = read(file.absolutePath, offset = 50)
 
-        assertTrue("报告越界: $r", r.contains("offset 50 beyond end of file; file has 10 lines"))
+        assertTrue("报告越界: $r", r.contains("Offset 50 is out of range for this file (10 lines)"))
     }
 
     @Test
@@ -88,6 +93,6 @@ class FileSystemToolsReadFilePagingTest {
 
         val r = read(file.absolutePath)
 
-        assertTrue("空文件: $r", r.contains("(empty file, 0 lines)"))
+        assertTrue("空文件: $r", r.contains("Read file empty.txt, 0 lines"))
     }
 }

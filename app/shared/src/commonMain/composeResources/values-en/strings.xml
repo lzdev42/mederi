@@ -558,6 +558,11 @@
     <string name="dock_context_unset">contextWindow not set</string>
     <string name="dock_requests_title">Requests</string>
     <string name="dock_cost_title">Estimated cost (reference)</string>
+    <string name="dock_last_request_title">Last request</string>
+    <string name="dock_last_request_input">Input</string>
+    <string name="dock_last_request_output">Output</string>
+    <string name="dock_last_request_cached">Cached</string>
+    <string name="dock_last_request_cache_rate">Cache rate</string>
     <string name="dock_compact_context">Compact context</string>
     <!-- One-shot notice when a manual compaction is skipped by the core pre-check (reason=low_tokens|too_few) -->
     <string name="compaction_skipped_title">No compaction needed</string>
@@ -642,6 +647,8 @@
     <string name="mcp_save_failed">Failed to save</string>
     <!-- One-shot notice: images stripped on send (model does not support images) -->
     <string name="image_stripped_notice">Model "%1$s" does not support images. Images were removed from this message but kept in history — switch to an image-capable model and resend to include them.</string>
+    <string name="remote_clipboard_image_unavailable">Clipboard image paste is not available on remote clients</string>
+    <string name="remote_clipboard_text_unavailable">Clipboard text paste is not available on remote clients</string>
     <string name="rawmsg_title">Raw messages</string>
     <string name="rawmsg_count">%1$d messages</string>
     <string name="term_close_tab">Close terminal</string>

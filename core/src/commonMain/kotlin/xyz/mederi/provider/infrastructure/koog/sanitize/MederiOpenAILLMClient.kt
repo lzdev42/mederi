@@ -711,7 +711,8 @@ class MederiOpenAILLMClient(
     // 流式帧处理
     // ------------------------------------------------------------------
 
-    private fun processStreamingFlow(response: Flow<SanitizedStreamResponse>): Flow<StreamFrame> =
+    // internal 以便 MederiOpenAILLMClientTest 直接驱动流式管线
+    internal fun processStreamingFlow(response: Flow<SanitizedStreamResponse>): Flow<StreamFrame> =
         buildStreamFrameFlow {
             var finishReason: String? = null
             var metaInfo: ResponseMetaInfo? = null
@@ -754,7 +755,7 @@ class MederiOpenAILLMClient(
                         DebugLog.event("SSE-Frame", "chat finishReason=$it")
                     }
                 }
-                chunk.usage?.let { metaInfo = createMetaInfo(it) }
+                chunk.usage?.let { metaInfo = createMetaInfoInternal(it) }
             }
 
             DebugLog.event("SSE-Frame", "chat emitEnd: finishReason=$finishReason, toolCallDeltas=$toolCallDeltaCount, usage=${metaInfo != null}")

@@ -45,6 +45,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 agentMode = AgentMode.valueOf(row.agent_mode),
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
+                apiKeyId = row.api_key_id,
                 env = parseEnv(row.env),
                 todos = parseTodos(row.todos),
                 createdAt = row.created_at,
@@ -63,6 +64,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 agentMode = AgentMode.valueOf(row.agent_mode),
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
+                apiKeyId = row.api_key_id,
                 env = parseEnv(row.env),
                 todos = parseTodos(row.todos),
                 createdAt = row.created_at,
@@ -80,6 +82,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             agent_mode = session.agentMode.name,
             ai_model = session.aiModel?.let { serializeAIModel(it) },
             reasoning_level = session.reasoningLevel?.name,
+            api_key_id = session.apiKeyId,
             env = serializeEnv(session.env),
             todos = session.todos.encodeTodos(),
             created_at = session.createdAt,
@@ -103,12 +106,14 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         id: String,
         agentMode: AgentMode?,
         aiModel: AIModel?,
-        reasoningLevel: ReasoningLevel?
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?
     ): Unit = withContext(Dispatchers.IO) {
         queries.updateSessionAgentConfig(
             agentMode?.name,
             aiModel?.let { serializeAIModel(it) },
             reasoningLevel?.name,
+            apiKeyId,
             Instant.now().toString(),
             id
         )

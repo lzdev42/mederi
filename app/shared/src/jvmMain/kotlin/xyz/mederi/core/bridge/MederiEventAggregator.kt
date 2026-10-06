@@ -43,6 +43,7 @@ object MederiEventAggregator {
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
         DebugLog.data("Aggregator", "initial messages", messages.size)
 
+        val backfill = MederiModelMapper.toUsageBackfill(messages)
         val base = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let(modelToProvider)),
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
@@ -51,7 +52,9 @@ object MederiEventAggregator {
             cost = MederiModelMapper.toCostSummary(),
             todos = MederiModelMapper.toTodos(session.todos),
             pendingPlanApproval = planApproval(conversationId),
-            planApprovals = planApprovals(conversationId)
+            planApprovals = planApprovals(conversationId),
+            requestCount = backfill.requestCount,
+            lastRequestUsage = backfill.lastRequestUsage
         )
         var snapshot = hydrateLastError(base, lastError(conversationId))
         DebugLog.event("Aggregator", "initial snapshot built: status=${snapshot.conversation.status}, messages=${snapshot.messages.size}")
@@ -62,10 +65,13 @@ object MederiEventAggregator {
             val refreshed = runCatching { sessions.listMessages(conversationId) }.getOrNull() ?: return null
             DebugLog.data("Aggregator", "refreshed messages", refreshed.size)
             val refreshedToolResults = MederiModelMapper.buildToolResultsById(refreshed)
+            val refreshedBackfill = MederiModelMapper.toUsageBackfill(refreshed)
             return MessagesPage(
                 messages = refreshed.map { MederiModelMapper.toChatMessage(it, refreshedToolResults) },
                 tokenUsage = MederiModelMapper.toTokenUsage(refreshed),
-                contextUsedTokens = sessions.contextUsedTokens(conversationId).toLong()
+                contextUsedTokens = sessions.contextUsedTokens(conversationId).toLong(),
+                requestCount = refreshedBackfill.requestCount,
+                lastRequestUsage = refreshedBackfill.lastRequestUsage
             )
         }
 
@@ -76,25 +82,16 @@ object MederiEventAggregator {
             // MESSAGE_DELTA 是流式期间的高频事件：不打逐事件日志（噪音源），
             // 改为在快照里数 block——blocks 数远超消息数 = "一字母一行"的直接证据
 
-            val enriched = if (event.type == CoreEventType.PLAN_APPROVAL_REQUESTED) {
-                val planPath = event.payload["planPath"] ?: ""
-                val existingContent = event.payload["planContent"]
-                val content = if (!existingContent.isNullOrBlank()) {
-                    existingContent
-                } else {
-                    runCatching { java.io.File(planPath).readText() }.getOrNull()
-                }
+            if (event.type == CoreEventType.PLAN_APPROVAL_REQUESTED) {
+                val planContent = event.payload["planContent"] ?: ""
                 DebugLog.data(
                     "Aggregator",
-                    "PLAN_APPROVAL_REQUESTED enriched",
-                    "planId=${event.payload["planId"]}, summary='${event.payload["summary"]}', planPath='$planPath', contentFound=${content != null}, contentLen=${content?.length ?: 0}"
+                    "PLAN_APPROVAL_REQUESTED",
+                    "planId=${event.payload["planId"]}, summary='${event.payload["summary"]}', planPath='${event.payload["planPath"]}', planContentLen=${planContent.length}"
                 )
-                if (content != null) event.copy(payload = event.payload + ("planContent" to content)) else event
-            } else {
-                event
             }
 
-            val emissions = SnapshotReducer.applyWithRefresh(snapshot, enriched) { refreshPage() }
+            val emissions = SnapshotReducer.applyWithRefresh(snapshot, event) { refreshPage() }
             emissions.forEach {
                 val blockCount = it.messages.sumOf { m -> m.blocks.size }
                 if (isDelta) {
@@ -110,7 +107,7 @@ object MederiEventAggregator {
                 } else {
                     DebugLog.debug(
                         "Aggregator",
-                        "event applied: type=${enriched.type}, status=${it.conversation.status}, messages=${it.messages.size}, blocks=$blockCount"
+                        "event applied: type=${event.type}, status=${it.conversation.status}, messages=${it.messages.size}, blocks=$blockCount"
                     )
                 }
                 if (it.conversation.status == ConversationStatus.Error) {

@@ -18,6 +18,13 @@ data class ConversationSnapshot(
     val childConversations: List<Conversation> = emptyList(),
     val errorMessage: String? = null,
     /**
+     * 主会话 LLM HTTP 请求累计次数：LLM_REQUEST_COMPLETED 事件逐次累加 +
+     * refreshPage 从 assistant 消息数回填（历史会话对齐）。
+     */
+    val requestCount: Int = 0,
+    /** 最近一次 LLM 请求的用量（LLM_REQUEST_COMPLETED 事件更新，refreshPage 回填）；null = 尚无请求 */
+    val lastRequestUsage: LastRequestUsage? = null,
+    /**
      * 环境态状态提示（STATUS 事件驱动，如"供应商限流，重试中 (3/10)"）：
      * 仅内存态、不落库；turn 正常推进（下个 delta/completed）即清除。
      * 与 [errorMessage] 语义不同——errorMessage 是终态错误，statusHint 是过程状态。
@@ -55,6 +62,10 @@ data class MessagesPage(
     val tokenUsage: TokenUsage,
     /** 当前上下文真实占用（token）= 最近一条 Assistant 的 inputTokens */
     val contextUsedTokens: Long = 0,
+    /** 主会话 LLM HTTP 请求累计次数（= assistant 消息数），与 [ConversationSnapshot.requestCount] 同义 */
+    val requestCount: Int = 0,
+    /** 最近一次 LLM 请求的用量（取最后一条带 usage 的 assistant 消息）；null = 尚无 */
+    val lastRequestUsage: LastRequestUsage? = null,
 )
 
 /**
@@ -71,4 +82,17 @@ data class RawMessageDto(
     val role: String,
     val payload: String,
     val createdAt: String,
+    /** 诊断列：从 core RawMessageRecord 同名透传（HistoryStore 已抽取），null = 无该诊断数据 */
+    val modelId: String? = null,
+    val durationMs: Long? = null,
+    val finishReason: String? = null,
+    val status: String? = null,
+    /**
+     * 投影字段（jvmMain 桥从 core payload JSON 提取，commonMain UI 只读不解析）：
+     * summaryLabel = 消息摘要标签（如 "text"、"bash"、"user: hello..."），null = 提取失败/无。
+     * inputTokens / outputTokens = 该条消息的 token 消耗，null = 无 token 数据。
+     */
+    val summaryLabel: String? = null,
+    val inputTokens: Long? = null,
+    val outputTokens: Long? = null,
 )

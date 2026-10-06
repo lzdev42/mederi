@@ -36,10 +36,14 @@ class PlanApprovalRequester(
         pendingId = planId
         pendingDeferred = deferred
 
+        // 发射侧确保 planContent 在 payload：调用方未传则盘读（读失败空串，UI 降级显示 summary）
+        val effectivePlanContent = if (planContent.isNotBlank()) planContent
+            else runCatching { java.io.File(planPath).readText() }.getOrNull() ?: ""
+
         DebugLog.data(
             "PlanApprovalRequester",
             "emitting PLAN_APPROVAL_REQUESTED",
-            "planId=$planId, title='$title', summary='$summary', contentLen=${planContent.length}, path='$planPath'"
+            "planId=$planId, title='$title', summary='$summary', contentLen=${effectivePlanContent.length}, path='$planPath'"
         )
 
         val payloadMap = mutableMapOf(
@@ -48,7 +52,7 @@ class PlanApprovalRequester(
             "title" to title,
             "summary" to summary,
             "subtaskCount" to subtaskCount.toString(),
-            "planContent" to planContent
+            "planContent" to effectivePlanContent
         )
         if (subtasksJson.isNotBlank()) {
             payloadMap["subtasks"] = subtasksJson

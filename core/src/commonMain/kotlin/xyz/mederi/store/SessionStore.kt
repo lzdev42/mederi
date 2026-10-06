@@ -35,13 +35,15 @@ interface SessionStore {
     suspend fun update(id: String, status: SessionStatus? = null, title: String? = null)
 
     /**
-     * 更新会话的 Agent 配置（agentMode / aiModel / reasoningLevel）。
+     * 更新会话的 Agent 配置（agentMode / aiModel / reasoningLevel / apiKeyId）。
+     * 各参数 null = 不修改对应列（与 SQL 侧 COALESCE 语义一致）。
      */
     suspend fun updateAgentConfig(
         id: String,
         agentMode: AgentMode? = null,
         aiModel: AIModel? = null,
-        reasoningLevel: ReasoningLevel? = null
+        reasoningLevel: ReasoningLevel? = null,
+        apiKeyId: String? = null
     )
 
     /**

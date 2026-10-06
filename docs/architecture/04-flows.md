@@ -23,7 +23,7 @@ sequenceDiagram
     SM->>TE: TurnExecutor.sendMessage(sessionId, request)
     TE->>TE: activeApiKeyId = request.apiKeyId（本 turn 唯一真理源）
     TE->>TE: 校验 IDLE → 读 Project → PlanStore.loadBySession<br/>组装 activePlanContent/spec指针/activeTodoContent(互斥)
-    TE->>TE: SystemPrompts.build(agentMode, activePlan, activeTodo)<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深)
+    TE->>TE: 系统提示词装配：静态骨架(build) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深) → dynamicSuffix(plan/todo)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）
     TE->>TE: effectiveModel/effectiveReasoningLevel → sessionStore.updateAgentConfig
     TE->>HS: append(用户消息+durable环境块) 【durable-first】
     TE->>EB: SESSION_UPDATED (客户端 refreshPage 即时回查, 新 turn 用户消息立即可见)
@@ -73,6 +73,21 @@ sequenceDiagram
     UI->>UI: SnapshotReducer.applyWithRefresh + refreshPage 回查落库对齐
 ```
 
+### 1.1 输入框设置真理源翻转（2026-10：全局偏好 → 会话）
+
+**语义**：输入框四项设置（模型 / Agent / API Key / 推理档位）的真理源已从"全局偏好"翻转为**会话**：
+
+- **切换会话**（`WorkspaceViewModel.hydrateSelectionFromConversation`，在 `!selectionHydrated` 守卫内触发）：
+  - 会话已绑定模型（`conv.modelId != null`）→ 调 `appState.applyConversationSettings(model, agent, apiKeyId=conv.apiKeyId, thinkingLevel=conv.thinkingLevel, hasSessionModel=true)` **按会话快照覆盖**全局内存态（只改内存、不写偏好文件）——模型、Agent、API Key（按模型供应商写入 selectedApiKeyIds，null=默认 key）、推理档位（写入 modelReasoningLevels，effectiveThinkingLevel 推导链唯一输入）四项全部恢复。
+  - 全新未发送会话（`conv.modelId == null`）→ 调 `applyRecentConversationDefaults()`（新/空会话默认取最近修改会话的设置）：`appState.projects` 拍平 → 筛 `modelId != null` 的会话 → `maxByOrNull { it.updatedAt }`（跨项目最近修改会话）→ 递归复用 `hydrateSelectionFromConversation(recent)` 恢复其设置；recent == null（无任何已发送会话）→ 不填，由 AppState.hydrate first-available 兜底。
+- **选择器改动立即持久化到当前会话**：`selectModel` / `selectApiKey` / `selectAgent`（selectAgentMode 内部调 selectAgent，覆盖） / `updateThinkingLevel` 在 `conversationId != null` 时 fire-and-forget 调 `aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(...))` 落库该会话（仅传非 null 字段，core COALESCE 不改其它项）：
+  - `selectModel(model)` → `input.model = model`
+  - `selectApiKey(providerId, apiKeyId)` → `input.apiKeyId = apiKeyId`（仅 apiKeyId != null 时；null=选默认 key 不立即持久化，由下次发送 request.apiKeyId=null + TurnExecutor 回写覆盖，已知边界）
+  - `selectAgent(id)` → `input.agent = AgentOption`
+  - `updateThinkingLevel(level)` → `input.thinkingLevel = level`（仅 level != null 时；null=移除偏好走模型默认档，由下次发送覆盖）
+- **不再有全局偏好模板**：`workspace.lastModelId` / `workspace.lastModelProviderId` / `workspace.lastAgentId` / `workspace.apiKey.$provider` / `workspace.reasoningLevel.$modelId` 不再 persist/hydrate——`selectModel` / `selectAgent` / `selectApiKey` / `setModelReasoningLevel` 只改内存镜像；启动 `hydrate()` 仅保留首启 first-available 兜底（模型/Agent 列表就绪后限时 3s 填首个可用项）。导航偏好 `workspace.lastProjectId` / `workspace.lastConversationId` 保留（选中态恢复）。
+- **不动项**：`effectiveThinkingLevel` 推导链（ReasoningMenu.resolve）不变——`modelReasoningLevels` 兼任"当前会话档位载体"，切换会话时按会话重填；`send`/`rollbackMessage`/`approvePlan` 仍读 appState 全局选择（此时全局已是会话镜像）；`applySnapshot` 的 `!selectionHydrated` 守卫不变（防持久化后快照再发重入 hydrate）。
+
 ## 2. Turn 执行流程图（含错误分类）
 
 ```mermaid
@@ -84,7 +99,7 @@ flowchart TD
     STQ --> RUN
     V -- "否" --> E1["上抛异常(上游包装 MederiException)"]
     V -- "是" --> PREP["组装上下文: Project/PlanStore/Notebook<br/>activePlanContent(计划+spec指针+活跃spec)<br/>activeTodoContent(仅无活跃Plan)"]
-    PREP --> SP["SystemPrompts.build / forSubagent<br/>+ withSkills(继承角色) + withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深)"]
+    PREP --> SP["系统提示词装配：静态骨架(build/forSubagent) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深) → dynamicSuffix(plan/todo)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）"]
     SP --> CFG["解析 effectiveModel + effectiveReasoningLevel<br/>回写 sessionStore.updateAgentConfig"]
     CFG --> DF["durable-first: buildUserMessage(注入 NOT_FOR_UI 隐藏标记)<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
     DF --> BG["scope.launch runTurn"]
@@ -151,7 +166,7 @@ flowchart TD
     MAP --> CH2["GET /v1/events SSE<br/>(15s 心跳注释帧, Bearer 鉴权)"]
     CH1 & CH2 --> CLIENT["客户端 (commonMain)"]
     CLIENT --> OB["observeConversation(id)"]
-    OB --> INIT["初始: getSnapshot 构建完整快照<br/>(Aggregator: Session+历史Message+initialTodos hydration: session.todos; planContent 磁盘读取增强)"]
+    OB --> INIT["初始: getSnapshot 构建完整快照<br/>(Aggregator: Session+历史Message+initialTodos hydration: session.todos)"]
     INIT --> LOOP
     LOOP["事件循环"] --> SR["SnapshotReducer.applyWithRefresh(snapshot, event, refreshPage)"]
     SR --> SW{"event type"}
@@ -180,7 +195,7 @@ flowchart TD
     T -- "纯读" --> R1["直接读文件回答<br/>不够深 → subagent(SPAWN_RESEARCHER) → 报告(始终落盘, 父收摘要+路径) → 回答"]
     T -- "小改动(已知根因/几行代码)" --> R2["主代理直接 edit/write<br/>进度走 update_todo(无Plan)"]
     T -- "复杂改动" --> RES["(理解不足先 subagent(SPAWN_RESEARCHER))"]
-    RES --> CP["create_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>前置 voidActivePlans 作废同会话旧计划（发 PLAN_PROGRESS 'voided'）<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
+    RES --> CP["create_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>前置 voidActivePlans 作废同会话旧计划（发 PLAN_PROGRESS 'voided'）<br/>validatePlan 硬门禁: 每子任务 expectStdoutContains≥1 字面量(规则1)、两 parallelizable 子任务同 gradle 模块 reject(规则4)<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
     CP --> MODE{"agentMode"}
     MODE -- "AUTONOMOUS" --> AUTO["自动 APPROVED"]
     MODE -- "APPROVAL" --> WAIT["PLAN_APPROVAL_REQUESTED → UI PlanApprovalCard<br/>用户批准/拒绝(resolvePlanApproval)"]

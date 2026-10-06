@@ -30,7 +30,6 @@ import compose.icons.feathericons.Check
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Terminal
 import kotlinx.coroutines.delay
-import kotlinx.serialization.json.*
 import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.ui.RawMessagesViewModel
 import xyz.mederi.ui.WorkspaceViewModel
@@ -169,11 +168,9 @@ private fun RawMessageItemRow(
     onToggleExpand: () -> Unit,
     colors: MederiColors
 ) {
-    val jsonObj = remember(item.payload) {
-        runCatching { Json.parseToJsonElement(item.payload).jsonObject }.getOrNull()
-    }
-    val label = remember(item, jsonObj) { rawVm.extractSummaryLabel(item, jsonObj) }
-    val tokensText = remember(jsonObj) { rawVm.extractTokens(jsonObj) }
+    // 投影字段由 jvmMain 桥预解析填进 DTO，commonMain UI 只读不解析 payload JSON
+    val label = remember(item) { rawVm.extractSummaryLabel(item) }
+    val tokensText = remember(item) { rawVm.extractTokens(item) }
     val timeText = remember(item.createdAt) { rawVm.formatMessageTimestamp(item.createdAt) }
 
     // 行壳 = 原型 .raw-log-item：6dp 圆角 + surfaceHover 底，无描边（isExpanded 不再换底）

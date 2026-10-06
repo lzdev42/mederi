@@ -50,6 +50,7 @@ import xyz.mederi.core.contract.dto.SetMcpServerEnabledInput
 import xyz.mederi.core.contract.dto.SetSkillsRootInput
 import xyz.mederi.core.contract.dto.InstallSkillInput
 import xyz.mederi.core.contract.dto.SkillsRootResponse
+import xyz.mederi.core.contract.dto.UpdateConversationSettingsInput
 import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.RawMessageDto
@@ -63,6 +64,7 @@ import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
+import xyz.mederi.core.contract.models.SubagentReportDto
 import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
@@ -257,7 +259,16 @@ class ServerAiCore(
                 val newStatus = when (event.type) {
                     CoreEventType.SESSION_UPDATED -> ConversationStatus.Working
                     CoreEventType.MESSAGE_COMPLETED -> ConversationStatus.Idle
-                    CoreEventType.MESSAGE_ERROR -> ConversationStatus.Error
+                    CoreEventType.MESSAGE_ERROR -> {
+                        // 读 payload["finalStatus"]（TurnExecutor.emit() 注入的权威会话终态），
+                        // ERROR→红点，IDLE（transient 可恢复）→蓝点；payload 缺失时保守回退 Error。
+                        val fs = event.payload["finalStatus"]
+                        when (fs) {
+                            "ERROR" -> ConversationStatus.Error
+                            "IDLE" -> ConversationStatus.Idle
+                            else -> ConversationStatus.Error
+                        }
+                    }
                     CoreEventType.QUESTION_REQUESTED -> ConversationStatus.WaitingUser
                     CoreEventType.QUESTION_RESOLVED -> ConversationStatus.Working
                     CoreEventType.PLAN_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
@@ -334,6 +345,13 @@ class ServerAiCore(
     override suspend fun renameConversation(conversationId: String, title: String): Result<Unit> = runCatching {
         httpCall("/v1/sessions/$conversationId", HttpMethod.Patch, xyz.mederi.core.contract.dto.RenameConversationInput(title))
         refreshProjects()
+    }
+
+    override suspend fun updateConversationSettings(
+        conversationId: String,
+        input: UpdateConversationSettingsInput
+    ): Result<Unit> = runCatching {
+        httpCall("/v1/sessions/$conversationId/settings", HttpMethod.Patch, input)
     }
 
     override fun observeConversation(conversationId: String): Flow<ConversationSnapshot> = flow {
@@ -690,8 +708,8 @@ class ServerAiCore(
         )
     }
 
-    override suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> = runCatching {
-        httpGet("/v1/subagents/${agentId.encodeURLParameter()}/report")
+    override suspend fun getSubagentReport(agentId: String): Result<SubagentReportDto> = runCatching {
+        httpGet<SubagentReportDto>("/v1/subagents/${agentId.encodeURLParameter()}/report")
     }
 
     override suspend fun stopSubagent(agentId: String): Result<Unit> = runCatching {

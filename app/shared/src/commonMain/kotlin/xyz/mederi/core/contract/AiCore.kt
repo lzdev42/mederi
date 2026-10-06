@@ -65,6 +65,18 @@ interface AiCore {
     suspend fun resolveQuestion(conversationId: String, questionId: String, answers: List<List<String>>): Result<Unit>
 
     /**
+     * 更新会话输入框设置（不依赖发送即落库）。
+     *
+     * 把输入框四项设置（模型 / Agent / API Key / 推理档位）写到该会话，使改动随会话保留、
+     * 切换会话后恢复。所有入参可空 = null 表示不改变该项（core COALESCE 保留原值）。
+     * 调用时机：选择器改动且已绑定会话时（未发送也立即持久化）。
+     */
+    suspend fun updateConversationSettings(
+        conversationId: String,
+        input: UpdateConversationSettingsInput
+    ): Result<Unit>
+
+    /**
      * 回复计划审批。
      *
      * @param model 批准时刻输入框选中的模型：非 null 且批准时，core 把它写入 session
@@ -132,8 +144,8 @@ interface AiCore {
     suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = Result.success(Unit)
     suspend fun getSubagentGlobalSettings(): Result<SubagentGlobalSettings> = Result.success(SubagentGlobalSettings())
     suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit> = Result.success(Unit)
-    suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> =
-        Result.failure(xyz.mederi.api.exception.MederiNotFoundException("Subagent report not found for agent: $agentId"))
+    suspend fun getSubagentReport(agentId: String): Result<SubagentReportDto> =
+        Result.failure(IllegalStateException("getSubagentReport not implemented for agent: $agentId"))
     suspend fun stopSubagent(agentId: String): Result<Unit> = Result.success(Unit)
 
     // ==========================================

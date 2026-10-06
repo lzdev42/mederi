@@ -11,6 +11,13 @@ enum class EventType {
     MESSAGE_ERROR,
     TOOL_CALLED,
     TOOL_RESULT,
+
+    /**
+     * 单次 LLM HTTP 请求完成的用量事件。
+     * payload: inputTokens / outputTokens / cachedTokens?（均字符串化；cachedTokens 缺省即省略）。
+     * 每次 LLM 请求（流式 End 帧 / 非流式 call completed）完成时发射一次，供快照累加 requestCount。
+     */
+    LLM_REQUEST_COMPLETED,
     QUESTION_REQUESTED,
     QUESTION_RESOLVED,
     PLAN_APPROVAL_REQUESTED,

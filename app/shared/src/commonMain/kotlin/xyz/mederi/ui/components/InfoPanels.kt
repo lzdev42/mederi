@@ -30,6 +30,11 @@ import mederi.app.shared.generated.resources.dock_artifact_empty_hint
 import mederi.app.shared.generated.resources.dock_compact_context
 import mederi.app.shared.generated.resources.dock_context_max
 import mederi.app.shared.generated.resources.dock_context_unset
+import mederi.app.shared.generated.resources.dock_last_request_cache_rate
+import mederi.app.shared.generated.resources.dock_last_request_cached
+import mederi.app.shared.generated.resources.dock_last_request_input
+import mederi.app.shared.generated.resources.dock_last_request_output
+import mederi.app.shared.generated.resources.dock_last_request_title
 import mederi.app.shared.generated.resources.overview_context_usage_title
 import mederi.app.shared.generated.resources.dock_cost_title
 import mederi.app.shared.generated.resources.dock_diff_empty
@@ -53,6 +58,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.DiffView
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.emuci.inkcompose.RenderStyle
+import xyz.mederi.core.contract.models.LastRequestUsage
 import xyz.mederi.ui.ArtifactItem
 import xyz.mederi.ui.ChatLayout
 import xyz.mederi.ui.PlanOverviewItem
@@ -432,6 +438,111 @@ private fun UsageMetricCard(
 }
 
 /**
+ * 最近请求用量卡（独立一卡，位于上下文占用卡与用量 2 列之间）。
+ *
+ * 口径：最近一次 LLM HTTP 请求的 input/output/cached token 用量（快照级、非累加）。
+ * 诚实原则：cachedTokens == null（供应商未报缓存数）不渲染缓存行；无整卡数据由调用方判断
+ * （lastRequestUsage == null 时不渲染本卡），此处不兜底造假数据。
+ * 缓存率 = cached / input（防除零：input > 0 才算）。
+ */
+@Composable
+private fun LastRequestUsageCard(
+    usage: LastRequestUsage,
+    colors: MederiColors
+) {
+    // 缓存率：cachedTokens != null 且 inputTokens > 0 才算（防除零）；否则不显示缓存率
+    val cacheRate = if (usage.cachedTokens != null && usage.inputTokens > 0) {
+        "${(usage.cachedTokens.toDouble() / usage.inputTokens.toDouble() * 100).toInt()}%"
+    } else null
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.divider, RoundedCornerShape(8.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // 标题行（参考 ContextUsageCard 标题字号/颜色）
+        Text(
+            text = stringResource(Res.string.dock_last_request_title),
+            color = colors.textSecondary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        )
+        // 第一行：input / output 两列
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                MetricCell(
+                    label = stringResource(Res.string.dock_last_request_input),
+                    value = usage.inputTokens.toString(),
+                    colors = colors
+                )
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                MetricCell(
+                    label = stringResource(Res.string.dock_last_request_output),
+                    value = usage.outputTokens.toString(),
+                    colors = colors
+                )
+            }
+        }
+        // 仅当供应商报了缓存数：第二行 cached / 缓存率
+        if (usage.cachedTokens != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    MetricCell(
+                        label = stringResource(Res.string.dock_last_request_cached),
+                        value = usage.cachedTokens.toString(),
+                        colors = colors
+                    )
+                }
+                if (cacheRate != null) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        MetricCell(
+                            label = stringResource(Res.string.dock_last_request_cache_rate),
+                            value = cacheRate,
+                            colors = colors
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 用量指标小单元：label（次要色小字）+ value（主色）。
+ */
+@Composable
+private fun MetricCell(
+    label: String,
+    value: String,
+    colors: MederiColors
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            color = colors.textSecondary,
+            fontSize = 11.5.sp
+        )
+        Text(
+            text = value,
+            color = colors.textPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+/**
  * Token 短格式：≥1000 显示一位小数 k（42800 → 42.8k），否则原值。
  */
 private fun formatTokenShort(tokens: Long): String {
@@ -464,7 +575,7 @@ internal fun OverviewTabContent(
     // contextWindow 是 selectedModel 派生 StateFlow：collectAsState 订阅后，
     // 模型切换触发重组，同源读取的 referenceCostUsd 也随之刷新
     val maxTokens by viewModel.contextWindow.collectAsState()
-    val requestCount = viewModel.userMessageCount
+    val requestCount = viewModel.requestCount
     // 参考价估算（models.dev 目录价 × token 用量），非真实账单
     val costUsd = viewModel.referenceCostUsd
     val todoList = viewModel.todos
@@ -495,6 +606,11 @@ internal fun OverviewTabContent(
             onCompact = { viewModel.requestCompaction() },
             colors = colors
         )
+        // 最近请求用量卡：无数据（null）整卡不渲染，不兜底造假数据
+        val lastUsage = viewModel.lastRequestUsage
+        if (lastUsage != null) {
+            LastRequestUsageCard(usage = lastUsage, colors = colors)
+        }
         // 用量 2 列（weight 在 RowScope 字面 lambda 内声明，见 UsageMetricCard 注释）
         Row(
             modifier = Modifier.fillMaxWidth(),

@@ -29,6 +29,8 @@ data class Conversation(
     val thinkingLevel: String? = null,
     /** 会话绑定的 Agent ID（来自 session.agent）。点开会话时回填 Agent 选择。 */
     val agent: String? = null,
+    /** 会话绑定的 API Key ID（来自 session.apiKeyId）。点开会话时回填输入框 key 选择；null = 用该供应商默认 key。 */
+    val apiKeyId: String? = null,
     /** 会话挂载目录（来自 session.location.directory）。用于本地按项目子目录分组。 */
     val directory: String? = null,
 )
@@ -181,6 +183,14 @@ enum class CoreEventType {
     MESSAGE_ERROR,
     TOOL_CALLED,
     TOOL_RESULT,
+
+    /**
+     * 单次 LLM HTTP 请求完成的用量事件（与 core EventType.LLM_REQUEST_COMPLETED 同名对齐，
+     * 映射靠 MederiModelMapper.toCoreEvent 的 valueOf(event.type.name)；
+     * app/shared jvmTest 的 EnumMirrorContractTest 锁死两侧枚举名集合相等，必须两侧同时加）。
+     * payload: inputTokens / outputTokens / cachedTokens?。快照据此累加 requestCount、更新 lastRequestUsage。
+     */
+    LLM_REQUEST_COMPLETED,
     QUESTION_REQUESTED,
     QUESTION_RESOLVED,
     PLAN_APPROVAL_REQUESTED,

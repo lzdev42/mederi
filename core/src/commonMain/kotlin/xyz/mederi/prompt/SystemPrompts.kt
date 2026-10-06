@@ -10,7 +10,9 @@ import xyz.mederi.skills.domain.SkillInfo
  * 架构：配置声明（当前 AgentMode 显式声明）
  * + COMMON（身份 + 核心原则 + 工具指南 + 规划纪律 + 输出格式 + 沙箱 + 格式）
  * + 工作流段（APPROVAL / AUTONOMOUS）
- * + 活跃计划段（如有）
+ *
+ * 动态段（活跃计划 / 当前 todo）已拆到 [dynamicSuffix]，由调用方在
+ * withSkills/withProjectRules 之后追加，保证静态前缀连续（OpenAI prefix cache 不变量）。
  *
  * 压缩原则（2026-09）：**只保留 mederi 特有事实，删重复与铺陈**——
  * 通用常识不教（模型本来就懂），模型不会天然知道的（mederi 的工具语义、Plan 流程、
@@ -471,30 +473,36 @@ current via update_todo (one call replaces the whole list).
     }
 
     /**
-     * 根据 agentMode、活跃计划和当前 todo 构建完整系统提示词。
+     * 构建主代理静态系统提示词（缓存前缀）。
      *
-     * 拼接顺序：配置声明 + COMMON + 模式段 + agentMode 段 + 活跃计划段（如有）+ 当前 todo 段（仅无计划时）。
-     * 互斥规则：有活跃计划时 todo 面板/挂载都走 Plan 子任务投影，不挂模型自管理的 todo——
-     * 防止同一进度出现两份真理源。
+     * 拼接顺序：配置声明 + COMMON + 模式段 + agentMode 工作流段。
+     * 动态段（活跃计划 / 当前 todo）由 [dynamicSuffix] 提供，
+     * 调用方在 withSkills/withProjectRules 之后追加，保证静态前缀连续（OpenAI prefix cache 不变量）。
      */
-    fun build(
-        agentMode: AgentMode,
-        activePlan: String? = null,
-        activeTodo: String? = null
-    ): String {
+    fun build(agentMode: AgentMode): String {
         val workSection = AGENT_MODE_SECTION.trimIndent()
         val modeSection = workflowSection(agentMode)
-        val planSection = activePlan?.let { PLAN_SECTION_TEMPLATE.replace("{plan}", it) }
-        val todoSection = if (activePlan == null && !activeTodo.isNullOrBlank()) {
-            TODO_SECTION_TEMPLATE.replace("{todo}", activeTodo)
-        } else null
         return buildString {
             append(configSection(agentMode)).append("\n\n")
             append(COMMON).append("\n\n")
             append(workSection).append("\n\n")
             append(modeSection)
-            if (planSection != null) append("\n\n").append(planSection.trimIndent())
-            if (todoSection != null) append("\n\n").append(todoSection.trimIndent())
         }
+    }
+
+    /**
+     * 主代理专用动态后缀（子代理提示词不含 plan/todo）。
+     *
+     * 输出永远是"整个系统提示词的尾巴"——在 withSkills/withProjectRules 之后追加。
+     * 互斥规则：有活跃计划时不挂 todo（防止同一进度出现两份真理源）。
+     */
+    fun dynamicSuffix(activePlan: String?, activeTodo: String?): String {
+        if (activePlan != null) {
+            return "\n\n" + PLAN_SECTION_TEMPLATE.replace("{plan}", activePlan).trimIndent()
+        }
+        if (!activeTodo.isNullOrBlank()) {
+            return "\n\n" + TODO_SECTION_TEMPLATE.replace("{todo}", activeTodo).trimIndent()
+        }
+        return ""
     }
 }

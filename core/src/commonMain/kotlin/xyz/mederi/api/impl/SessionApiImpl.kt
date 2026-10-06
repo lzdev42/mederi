@@ -8,6 +8,7 @@ import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.api.SessionApi
 import xyz.mederi.api.exception.mederiCall
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.FileDiff
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
@@ -61,6 +62,16 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.rollbackToMessage(sessionId, messageId)
     }
 
+    override suspend fun updateAgentConfig(
+        sessionId: String,
+        agentMode: AgentMode?,
+        aiModel: AIModel?,
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?
+    ) = mederiCall {
+        sessionManager.updateAgentConfig(sessionId, agentMode, aiModel, reasoningLevel, apiKeyId)
+    }
+
     override suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>) = mederiCall {
         sessionManager.resolveQuestion(sessionId, questionId, answers)
     }
@@ -98,7 +109,12 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
                 messageId = it.messageId,
                 role = it.role,
                 payload = it.payload,
-                createdAt = it.createdAt
+                createdAt = it.createdAt,
+                // 4 诊断列：从 RawMessageRecord（HistoryStore 已抽取落库）同名透传
+                modelId = it.modelId,
+                durationMs = it.durationMs,
+                finishReason = it.finishReason,
+                status = it.status
             )
         }
     }

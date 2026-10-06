@@ -25,6 +25,7 @@ enum class SessionStatus {
  * @param agentMode 执行策略（APPROVAL / AUTONOMOUS）。
  * @param aiModel 用户最后一次选择的模型，可为 null（首次未选择时）。
  * @param reasoningLevel 用户最后一次选择的推理等级，可为 null。
+ * @param apiKeyId 用户最后一次为该会话选定的 API Key ID，可为 null（null = 用该供应商默认 key）。
  * @param env 会话环境变量。
  * @param todos 无 Plan 任务的轻量 todo 列表（update_todo 工具维护，sessions.todos 列持久化）。
  * 有活跃 Plan 时此字段被 Plan 子任务投影取代（见 docs/todo-system-plan.md 真理源表）。
@@ -40,6 +41,7 @@ data class Session(
     val agentMode: AgentMode,
     val aiModel: AIModel?,
     val reasoningLevel: ReasoningLevel?,
+    val apiKeyId: String? = null,
     val env: Map<String, String> = emptyMap(),
     val todos: List<TodoItem> = emptyList(),
     val createdAt: String,

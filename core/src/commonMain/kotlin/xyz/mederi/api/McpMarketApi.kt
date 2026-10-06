@@ -13,6 +13,10 @@ import xyz.mederi.mcp.market.domain.McpServerDetail
  * 数据源唯一标识 = registry name（反 DNS，如 "io.github.upstash/context7"）。
  * 只保证产出格式正确；值的有效性（API key 对不对）是用户的事，
  * 必填项拦截是 UI 层的产品规则（依据 [McpInstallOption.inputs] 的 isRequired/isSecret）。
+ *
+ * @PendingContractSurface 契约上拋状态（2026-10）：本 API 已在 core 内实现并接入 [Mederi] facade，但尚未上拋到
+ * `AiCore` 契约 / ServerAiCore / Server 路由 / UI——因依赖的 bug 尚未修完，故遥控端与 UI 暂不可达。
+ * 这不是被遗弃的能力；待依赖修复后由后续功能计划补齐契约四处同步（AiCore→MederiAiCore→ServerAiCore→Server）。
  */
 interface McpMarketApi {
 

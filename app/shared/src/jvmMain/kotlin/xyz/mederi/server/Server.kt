@@ -62,6 +62,7 @@ import xyz.mederi.core.contract.dto.McpServerJsonResponse
 import xyz.mederi.core.contract.dto.SetMcpServerEnabledInput
 import xyz.mederi.core.contract.dto.SetSkillsRootInput
 import xyz.mederi.core.contract.dto.SkillsRootResponse
+import xyz.mederi.core.contract.dto.UpdateConversationSettingsInput
 import xyz.mederi.core.contract.dto.UpdateMcpServerInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.dto.ReadyInfo
@@ -275,6 +276,10 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     patch("/v1/sessions/{id}") {
         val input = call.receive<RenameConversationInput>()
         call.respondResult(aiCore.renameConversation(call.parameters["id"]!!, input.title))
+    }
+    patch("/v1/sessions/{id}/settings") {
+        val input = call.receive<UpdateConversationSettingsInput>()
+        call.respondResult(aiCore.updateConversationSettings(call.parameters["id"]!!, input))
     }
     get("/v1/sessions/{id}/snapshot") {
         call.respondResult(aiCore.getSnapshot(call.parameters["id"]!!))

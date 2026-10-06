@@ -18,6 +18,7 @@ import xyz.mederi.ui.components.ContainNestedScrollConnection
 import xyz.mederi.core.bridge.BuiltinProviders
 import xyz.mederi.core.bridge.MederiModelMapper
 import xyz.mederi.core.bridge.mapMessageErrorToStatus
+import xyz.mederi.core.bridge.mapMessageErrorToStatusByName
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.core.contract.ToolArgParser
@@ -1004,6 +1005,44 @@ class SharedLogicDesktopTest {
         assertEquals(xyz.mederi.ui.TurnStatus.Idle, xyz.mederi.ui.deriveTurnStatus(errorSnap))
     }
 
+    /** MESSAGE_ERROR payload 带 finalStatus=IDLE 时，SnapshotReducer 应设会话状态为 Idle（蓝点） */
+    @Test
+    fun testSnapshotReducerMessageErrorWithFinalStatusIdle() {
+        val conv = xyz.mederi.core.contract.models.Conversation(
+            id = "conv_err_idle",
+            projectId = "proj_1",
+            title = "Test Transient Error",
+            status = xyz.mederi.core.contract.models.ConversationStatus.Working,
+            createdAt = 1000L,
+            updatedAt = 1000L
+        )
+        val initialSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = conv,
+            messages = emptyList(),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
+            cost = xyz.mederi.core.contract.models.CostSummary(0.0)
+        )
+
+        val errorPayload = mapOf(
+            "error" to "[ENV] Rate limit exhausted after retries",
+            "errorId" to "err_999",
+            "fullDiagnostic" to "[RECOVERABLE] ENV: Rate limit\nRetries exhausted",
+            "finalStatus" to "IDLE"
+        )
+        val errorEvent = xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_ERROR,
+            sessionId = "conv_err_idle",
+            payload = errorPayload
+        )
+
+        val snap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, errorEvent)
+        // finalStatus=IDLE → 蓝点（transient 可恢复）
+        assertEquals(xyz.mederi.core.contract.models.ConversationStatus.Idle, snap.conversation.status)
+        // 错误字段仍正常填入
+        assertEquals("[ENV] Rate limit exhausted after retries", snap.errorMessage)
+        assertEquals("err_999", snap.errorId)
+    }
+
     @Test
     fun testSnapshotReducerMessageCompletedCarriesStreamWarning() {
         // 断流警告以 ErrorRecord payload 随 MESSAGE_COMPLETED 到达：会话保持 Idle（turn 真实完成），
@@ -1907,6 +1946,16 @@ class SharedLogicDesktopTest {
         assertEquals(ConversationStatus.Error, mapMessageErrorToStatus(SessionStatus.ERROR))
         // session IDLE（transient 可恢复，如限流重试耗尽）→ 蓝点
         assertEquals(ConversationStatus.Idle, mapMessageErrorToStatus(SessionStatus.IDLE))
+    }
+
+    /** payload finalStatus 字符串映射：ERROR→红点，IDLE→蓝点，其他/缺失→保守回退红点 */
+    @Test
+    fun testMapMessageErrorToStatusByName() {
+        assertEquals(ConversationStatus.Error, mapMessageErrorToStatusByName("ERROR"))
+        assertEquals(ConversationStatus.Idle, mapMessageErrorToStatusByName("IDLE"))
+        // 未知值 → 保守回退 Error（不静默）
+        assertEquals(ConversationStatus.Error, mapMessageErrorToStatusByName("RUNNING"))
+        assertEquals(ConversationStatus.Error, mapMessageErrorToStatusByName(""))
     }
 
     /**

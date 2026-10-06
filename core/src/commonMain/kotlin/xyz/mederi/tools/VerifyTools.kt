@@ -51,6 +51,30 @@ internal fun checkOutputLiterals(
 )
 
 /**
+ * 规则 2（空产出门禁，2026-10）：executor 报零改动且子任务目标含真实文件 → 拒绝 PASS。
+ *
+ * 防 S15 事故：执行器 glitch 空报告、零改动、但验证命令（编译）仍然过——机器会放行，
+ * 形成"假绿"。这里在机器门之前直接拒：没有产出物就不可能实现子任务。
+ *
+ * 豁免：targetFiles 全是目录路径（endsWith('/')）或 targetFiles 为空——
+ * 这些是门禁/验证型子任务，不产出文件。
+ */
+internal fun shouldRejectEmptyOutputPass(subtask: Subtask): Boolean =
+    subtask.executorTouchedFiles.isEmpty() &&
+        subtask.targetFiles.any { !it.endsWith('/') && it.contains('.') }
+
+/** 规则 2 拒绝消息：直接逼回 FAIL(IMPLEMENTATION) + converge_plan。 */
+internal fun emptyOutputRejectionMessage(subtask: Subtask): String {
+    val realFiles = subtask.targetFiles.filter { !it.endsWith('/') && it.contains('.') }
+    return "Error: cannot declare PASS — the executor reported NO touched files " +
+        "but this is an implementation subtask (targetFiles include real files: ${realFiles.joinToString(", ")}). " +
+        "This is the signature of a glitched/empty-report executor that did nothing. " +
+        "Re-examine: if the executor truly produced no changes, declare FAIL with rootCause=IMPLEMENTATION " +
+        "and call converge_plan to re-run. " +
+        "(Gate/verification-only subtasks with directory or empty targetFiles are exempt.)"
+}
+
+/**
  * 验证工具。主代理在子任务执行完成后调用 verify_subtask。
  *
  * **机器硬校验（2026-09-24 改造）**：只要子任务存了 verification 命令，**无条件**执行它
@@ -132,6 +156,12 @@ class VerifyTools(
 
             if (verifyStatus == VerifyStatus.FAIL && args.remediation.isNullOrBlank()) {
                 return "Error: remediation is required when status is FAIL."
+            }
+
+            // 规则 2（空产出门禁，2026-10）：executor 报零改动 + 子任务有真实文件目标 → 拒 PASS。
+            // 防 S15 事故：空报告 + 编译验证通过 = 假绿。没有产出物就不可能实现子任务。
+            if (verifyStatus == VerifyStatus.PASS && shouldRejectEmptyOutputPass(subtask)) {
+                return emptyOutputRejectionMessage(subtask)
             }
 
             // 无条件执行验证命令（2026-09-24）：不再只在模型声明 PASS 时才跑——"验证被正确执行"

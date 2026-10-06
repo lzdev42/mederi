@@ -121,11 +121,11 @@ object MockScenarios {
         val prev = sf.value.tokenUsage
         sf.value = sf.value.copy(
             tokenUsage = prev.copy(
-                reasoning = prev.reasoning + 300,
+                reasoning = prev.reasoning?.plus(300),
                 output = prev.output + 200,
                 input = prev.input + 50,
             ),
-            cost = sf.value.cost.copy(total = sf.value.cost.total + 0.001),
+            // cost.total 现在是死值（无真实费用源，nullable）——mock 不再伪造累加
         )
     }
 

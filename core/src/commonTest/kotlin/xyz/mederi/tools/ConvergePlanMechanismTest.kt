@@ -69,6 +69,8 @@ class ConvergePlanMechanismTest {
                     spec = "spec content",
                     targetFiles = listOf("file.txt"),
                     verification = VerificationSpec(command = "test -f file.txt"),
+                    // executor 完成时记录了改动文件（规则 2 空产出门禁：非空即放行 PASS）
+                    executorTouchedFiles = listOf("file.txt"),
                     dependsOn = emptyList(),
                     parallelizable = false
                 )

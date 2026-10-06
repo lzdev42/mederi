@@ -6,7 +6,6 @@ import kotlinx.coroutines.runBlocking
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.core.contract.dto.ReadyInfo
 import xyz.mederi.server.serverModule
-import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 import java.io.File
 
 /**
@@ -29,16 +28,21 @@ fun main() {
     val password = System.getenv("MEDERI_SERVER_PASSWORD")?.takeIf { it.isNotBlank() }
     val webappDir = System.getenv("MEDERI_WEBAPP_DIR")?.takeIf { it.isNotBlank() && File(it).isDirectory }
 
-    // 限流重试设定（进程级，RetryableLLMClient 每次包装时读取）
-    System.getenv("MEDERI_LLM_RETRY_MAX")?.toIntOrNull()?.let { LlmRetryConfig.maxRetries = it }
-    System.getenv("MEDERI_LLM_RETRY_MIN_MS")?.toLongOrNull()?.let { LlmRetryConfig.minDelayMs = it }
-    System.getenv("MEDERI_LLM_RETRY_MAX_MS")?.toLongOrNull()?.let { LlmRetryConfig.maxDelayMs = it }
-    println("[MederiServer] LLM retry: maxRetries=${LlmRetryConfig.maxRetries}, " +
-        "backoff=${LlmRetryConfig.minDelayMs}-${LlmRetryConfig.maxDelayMs}ms (random)")
+    // 限流重试设定（经 MederiAiCore 构造参数注入）
+    val retryMaxRetries = System.getenv("MEDERI_LLM_RETRY_MAX")?.toIntOrNull()
+    val retryMinDelayMs = System.getenv("MEDERI_LLM_RETRY_MIN_MS")?.toLongOrNull()
+    val retryMaxDelayMs = System.getenv("MEDERI_LLM_RETRY_MAX_MS")?.toLongOrNull()
+    println("[MederiServer] LLM retry: maxRetries=${retryMaxRetries ?: "default"}, " +
+        "backoff=${retryMinDelayMs ?: "default"}-${retryMaxDelayMs ?: "default"}ms")
 
     println("[MederiServer] Web UI hosting: ${webappDir?.let { "external directory ($it)" } ?: "embedded wasmJs resources (classpath:/static)"}")
 
-    val aiCore = MederiAiCore(configDir)
+    val aiCore = MederiAiCore(
+        configDir,
+        retryMaxRetries = retryMaxRetries,
+        retryMinDelayMs = retryMinDelayMs,
+        retryMaxDelayMs = retryMaxDelayMs
+    )
     var initError: String? = null
     runBlocking {
         aiCore.initialize().onFailure { initError = it.message ?: "initialize failed" }

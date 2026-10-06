@@ -199,6 +199,11 @@ inkcompose/
 **计划/Spec 分层（2026-09-24 重构验证契约 + 严格 append-only）**：create_plan = WHAT（中层技术方案，用户批准的对象，含每个子任务的 verification 契约：命令 + 预期结果 + 机器校验字面量）；批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）；subagent(SPAWN, planId, subtaskIndex) 硬绑定执行存储的 spec；
 verify 两分支（根因轴，**先验实现、实现无误再验计划**）：PASS / rootCause=IMPLEMENTATION（spec 清楚、执行没做到）→converge_plan / rootCause=PLAN（实现照 spec 做到、计划本身错）→ append-only 修订（update_verification 改契约 / generate_spec reason= 改 spec）。
 **验证机器硬校验**：verify_subtask 无条件执行验证命令（不再只在声明 PASS 时才跑）；exit 0 + expectStdoutContains 全过 = 机器 PASS；exit 非零 / 缺字面量 / 命中 expectStdoutNotContains = 机器 FAIL（声明 PASS 时拒绝存储）；机器 PASS 而模型坚持 FAIL/PARTIAL → 记非 PASS + machineMismatch=true（异常态，主代理必须告知用户）。
+**验证契约撰写自检（rubric，2026-10）**：代码层规则 1 已强制验证命令带 ≥1 条 `expectStdoutContains` 字面量（拦"没钉字面量"）；此处补语义质量自检（管"钉的字面量对不对"），人写验证契约时逐条过：
+1. **行为改动禁只用编译验收**：改了行为（新增逻辑 / 改分支 / 改输出）的子任务，验证命令必须断言"行为发生了"（grep 实现标记 / assert / 测试输出），不能只 `./gradlew compile`——编译通过不等于行为实现（空实现也能编译）。`expectStdoutContains` 字面量应钉"行为标志"（如新增方法名、关键分支的日志/输出），而非"编译成功"之类的无信息量字面量。
+2. **`! grep X` 否定断言前先确认 X 在正确实现里无合法 fallback**：如 `! grep ConversationStatus.Error` 会误伤合法的 else 兜底分支（兜底返回 Error 是正确行为）。改用正向行为断言（"能 grep 到读 payload 的代码"而非"代码里零 Error 字面量"）。
+3. **grep 路径先 read 实际文件确认**：写 grep 验证命令前，先 `read_file` 目标文件确认路径、包名、类名拼写——不凭记忆或 grep 模糊命中写路径，避免查错目录（如把 `models/` 写成 `dto/`）或匹配到同名类。
+
 **严格 append-only（spec + verification）**：spec 修正（generate_spec 覆盖既有 spec）必须给 reason，完整旧 spec 文本保存进 specChanges；verification 契约修正（update_verification）必须给 reason，完整旧/新契约保存进 verificationChanges。信息零销毁，生效值 = Subtask.spec / Subtask.verification（最新）。
 
 **并行工具调度（2026-09 定稿）**：Koog 工具执行节点已开 `parallel=true`——同一条消息里的多个工具调用并行执行，**无并发上限，由 AI 调度**（信任 AI 策略）。配套硬性约束：

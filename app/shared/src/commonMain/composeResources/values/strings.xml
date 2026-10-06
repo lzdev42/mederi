@@ -567,6 +567,11 @@
     <string name="dock_context_unset">未设置 contextWindow</string>
     <string name="dock_requests_title">请求次数</string>
     <string name="dock_cost_title">预估成本(参考)</string>
+    <string name="dock_last_request_title">最近请求</string>
+    <string name="dock_last_request_input">输入</string>
+    <string name="dock_last_request_output">输出</string>
+    <string name="dock_last_request_cached">缓存</string>
+    <string name="dock_last_request_cache_rate">缓存率</string>
     <string name="dock_compact_context">压缩 Context</string>
     <!-- 手动压缩被 core 预检跳过时的一次性提示（reason=low_tokens|too_few） -->
     <string name="compaction_skipped_title">无需压缩</string>
@@ -651,6 +656,8 @@
     <string name="mcp_save_failed">保存失败</string>
     <!-- 一次性轻提示：发送时图片被剔除（模型不支持图片，仅提示一次） -->
     <string name="image_stripped_notice">模型「%1$s」不支持图片，图片已从发送内容中剔除（保留在对话历史中，可切换支持图片的模型后重发）</string>
+    <string name="remote_clipboard_image_unavailable">遥控端不支持粘贴图片</string>
+    <string name="remote_clipboard_text_unavailable">遥控端不支持粘贴文本</string>
     <string name="rawmsg_title">原始消息</string>
     <string name="rawmsg_count">%1$d 条</string>
     <string name="term_close_tab">关闭终端</string>

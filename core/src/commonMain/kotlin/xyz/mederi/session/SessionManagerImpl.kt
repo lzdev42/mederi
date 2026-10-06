@@ -183,6 +183,18 @@ class SessionManagerImpl(
         turnExecutor.steerMessage(id, request)
     }
 
+    override suspend fun updateAgentConfig(
+        id: String,
+        agentMode: xyz.mederi.domain.model.AgentMode?,
+        aiModel: xyz.mederi.domain.model.AIModel?,
+        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel?,
+        apiKeyId: String?
+    ) {
+        DebugLog.event("SessionMgr", "updateAgentConfig: sessionId=$id, agentMode=$agentMode, aiModel=${aiModel?.id}, reasoningLevel=$reasoningLevel, apiKeyId=$apiKeyId")
+        require(id)
+        sessionStore.updateAgentConfig(id, agentMode, aiModel, reasoningLevel, apiKeyId)
+    }
+
     override suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>) {
         turnExecutor.resolveQuestion(id, questionId, answers)
     }

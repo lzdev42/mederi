@@ -12,6 +12,7 @@ import xyz.mederi.core.contract.models.ChatRole
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
+import xyz.mederi.core.contract.models.LastRequestUsage
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.core.contract.models.PlanSubtaskItem
@@ -33,6 +34,9 @@ import xyz.mederi.currentTimeMillis
  * - [CoreEventType.MESSAGE_ERROR] 设置 errorMessage 并回查落库数据
  * - [CoreEventType.TOOL_CALLED] / [CoreEventType.TOOL_RESULT] 维护 ToolCall block 状态机
  * - APPROVAL / QUESTION / PLAN_APPROVAL 系列事件维护 pending 状态
+ * - [CoreEventType.LLM_REQUEST_COMPLETED] 累加 requestCount、更新 lastRequestUsage（实时，不走 refreshPage；
+ *   落库对齐仍由 MESSAGE_COMPLETED / SESSION_UPDATED / MESSAGE_ERROR 的回查分支负责，
+ *   这些回查分支的 copy 会携带 page.requestCount / page.lastRequestUsage 与 DB 对齐）
  */
 object SnapshotReducer {
 
@@ -57,6 +61,8 @@ object SnapshotReducer {
                         messages = page.messages,
                         tokenUsage = page.tokenUsage,
                         contextUsedTokens = page.contextUsedTokens,
+                        requestCount = page.requestCount,
+                        lastRequestUsage = page.lastRequestUsage,
                     )
                 }
             )
@@ -68,7 +74,13 @@ object SnapshotReducer {
             // 立即回查对齐落库消息，使快照立刻包含刚发送的用户消息
             val page = runCatching { refreshPage() }.getOrNull()
             listOf(page?.let { p ->
-                updated.copy(messages = p.messages, tokenUsage = p.tokenUsage, contextUsedTokens = p.contextUsedTokens)
+                updated.copy(
+                    messages = p.messages,
+                    tokenUsage = p.tokenUsage,
+                    contextUsedTokens = p.contextUsedTokens,
+                    requestCount = p.requestCount,
+                    lastRequestUsage = p.lastRequestUsage,
+                )
             } ?: updated)
         }
 
@@ -77,7 +89,13 @@ object SnapshotReducer {
             // 回查落库数据对齐（失败保持错误快照），只发最终一个
             val page = runCatching { refreshPage() }.getOrNull()
             listOf(page?.let { p ->
-                errored.copy(messages = p.messages, tokenUsage = p.tokenUsage, contextUsedTokens = p.contextUsedTokens)
+                errored.copy(
+                    messages = p.messages,
+                    tokenUsage = p.tokenUsage,
+                    contextUsedTokens = p.contextUsedTokens,
+                    requestCount = p.requestCount,
+                    lastRequestUsage = p.lastRequestUsage,
+                )
             } ?: errored)
         }
 
@@ -138,17 +156,26 @@ object SnapshotReducer {
             completed
         }
 
-        CoreEventType.MESSAGE_ERROR -> snapshot.copy(
-            conversation = snapshot.conversation.copy(status = ConversationStatus.Error),
-            messages = snapshot.messages.map { msg ->
-                if (msg.isStreaming) msg.copy(isStreaming = false) else msg
-            },
-            errorMessage = event.payload["error"],
-            errorId = event.payload["errorId"],
-            errorDiagnostic = event.payload["fullDiagnostic"],
-            errorIsStreamInterrupted = event.payload["failureMode"] == "PREMATURE_CLOSE",
-            statusHint = null
-        )
+        CoreEventType.MESSAGE_ERROR -> {
+            // 读 payload["finalStatus"]（TurnExecutor.emit() 注入的权威会话终态）：
+            // ERROR→红点，IDLE（transient 可恢复）→蓝点；payload 缺失时保守回退 Error。
+            val fs = event.payload["finalStatus"]
+            val status = when (fs) {
+                "IDLE" -> ConversationStatus.Idle
+                else -> ConversationStatus.Error
+            }
+            snapshot.copy(
+                conversation = snapshot.conversation.copy(status = status),
+                messages = snapshot.messages.map { msg ->
+                    if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+                },
+                errorMessage = event.payload["error"],
+                errorId = event.payload["errorId"],
+                errorDiagnostic = event.payload["fullDiagnostic"],
+                errorIsStreamInterrupted = event.payload["failureMode"] == "PREMATURE_CLOSE",
+                statusHint = null
+            )
+        }
 
         CoreEventType.STATUS -> {
             // 环境态状态事件：过程状态提示，不碰会话状态机。
@@ -182,6 +209,12 @@ object SnapshotReducer {
             name = event.payload["tool"] ?: "tool",
             output = event.payload["output"] ?: "",
             isError = event.payload["isError"] == "true"
+        )
+
+        // 单次 LLM HTTP 请求完成：实时累加 requestCount、更新 lastRequestUsage（不走 refreshPage）
+        CoreEventType.LLM_REQUEST_COMPLETED -> snapshot.copy(
+            requestCount = snapshot.requestCount + 1,
+            lastRequestUsage = event.toLastRequestUsage()
         )
 
         CoreEventType.QUESTION_REQUESTED -> {
@@ -625,4 +658,14 @@ object SnapshotReducer {
      * 非对象结构或解析失败返回空 map，不崩溃（审批卡片入参区显示为空即可）。
      */
     private fun parseToolArgs(args: String): Map<String, String> = ToolArgParser.parse(args)
+
+    /**
+     * LLM_REQUEST_COMPLETED payload → [LastRequestUsage]。
+     * 沿用诚实原则：cachedTokens 缺省（payload 无该 key）→ null，不用 0 伪装；inputTokens/outputTokens 缺省为 0。
+     */
+    private fun CoreEvent.toLastRequestUsage(): LastRequestUsage = LastRequestUsage(
+        inputTokens = payload["inputTokens"]?.toLongOrNull() ?: 0,
+        outputTokens = payload["outputTokens"]?.toLongOrNull() ?: 0,
+        cachedTokens = payload["cachedTokens"]?.toLongOrNull()
+    )
 }

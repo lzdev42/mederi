@@ -17,6 +17,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.mederi.AppInfo
 import xyz.mederi.Mederi
 import xyz.mederi.api.AgentConfig
@@ -31,6 +34,7 @@ import xyz.mederi.core.autotitle.SessionTitleService
 import xyz.mederi.core.contract.AiCore
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
+import xyz.mederi.core.contract.dto.UpdateConversationSettingsInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.dto.RawMessageDto
@@ -57,6 +61,7 @@ import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.TokenUsage
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
+import xyz.mederi.core.contract.models.SubagentReportDto
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
@@ -64,6 +69,7 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.Session
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.provider.domain.model.Provider
+import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 
 /** 会话最近一次终态错误的瞬态登记（内存态，不持久化；MESSAGE_ERROR 写入，MESSAGE_COMPLETED/新 turn 清除）。 */
 data class LastSessionError(
@@ -97,6 +103,18 @@ internal fun mapMessageErrorToStatus(sessionStatus: xyz.mederi.domain.model.Sess
         else -> ConversationStatus.Error
     }
 
+/**
+ * 按字符串名映射 MESSAGE_ERROR payload 中的 finalStatus 字段（core 侧 SessionStatus.name）。
+ * 用于 MederiAiCore 读 payload["finalStatus"] 时的 string→ConversationStatus 映射；
+ * ServerAiCore / SnapshotReducer（commonMain）各自用 when(string) 内联。
+ */
+internal fun mapMessageErrorToStatusByName(statusName: String): ConversationStatus =
+    when (statusName) {
+        "ERROR" -> ConversationStatus.Error
+        "IDLE" -> ConversationStatus.Idle
+        else -> ConversationStatus.Error
+    }
+
 /** 水合：error 为 null 时原样返回，否则把错误字段写进快照。 */
 internal fun hydrateLastError(snapshot: ConversationSnapshot, error: LastSessionError?): ConversationSnapshot {
     if (error == null) return snapshot
@@ -119,7 +137,10 @@ internal fun hydrateLastError(snapshot: ConversationSnapshot, error: LastSession
  */
 class MederiAiCore(
     override val configDir: String,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Default
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val retryMaxRetries: Int? = null,
+    private val retryMinDelayMs: Long? = null,
+    private val retryMaxDelayMs: Long? = null,
 ) : AiCore, xyz.mederi.core.contract.SandboxHooks {
 
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -181,6 +202,10 @@ class MederiAiCore(
 
     override suspend fun initialize(): Result<Unit> = runCatching {
         withContext(dispatcher) {
+            // 宿主注入的限流重试参数写回 core 全局（RetryableLLMClient 在包装时读取）
+            retryMaxRetries?.let { LlmRetryConfig.maxRetries = it }
+            retryMinDelayMs?.let { LlmRetryConfig.minDelayMs = it }
+            retryMaxDelayMs?.let { LlmRetryConfig.maxDelayMs = it }
             mederi = Mederi.create {
                 configDir = this@MederiAiCore.configDir
                 // 出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带上 Mederi 身份头
@@ -279,12 +304,16 @@ class MederiAiCore(
                     xyz.mederi.domain.model.EventType.SESSION_UPDATED -> ConversationStatus.Working
                     xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED -> ConversationStatus.Idle
                     xyz.mederi.domain.model.EventType.MESSAGE_ERROR -> {
-                        // TurnExecutor 在发 MESSAGE_ERROR 前已更新 sessionStore（ERROR 或 IDLE），
-                        // sessionStore 的状态是权威终态：ERROR→红点，IDLE（transient 可恢复，如限流重试耗尽）→蓝点。
-                        // 会话被删等异常取不到时保守回退 Error（保持可见，不静默）。
-                        val ss = runCatching { mederi.sessions.get(event.sessionId).status }.getOrNull()
-                            ?: xyz.mederi.domain.model.SessionStatus.ERROR
-                        mapMessageErrorToStatus(ss)
+                        // 优先读 payload["finalStatus"]（TurnExecutor.emit() 注入的权威会话终态），
+                        // 兜底 sessionStore 读取（过渡期 payload 缺失时）；取不到时保守回退 Error。
+                        val finalStatus = event.payload["finalStatus"]
+                        if (finalStatus != null) {
+                            mapMessageErrorToStatusByName(finalStatus)
+                        } else {
+                            val ss = runCatching { mederi.sessions.get(event.sessionId).status }.getOrNull()
+                                ?: xyz.mederi.domain.model.SessionStatus.ERROR
+                            mapMessageErrorToStatus(ss)
+                        }
                     }
                     xyz.mederi.domain.model.EventType.QUESTION_REQUESTED -> ConversationStatus.WaitingUser
                     xyz.mederi.domain.model.EventType.QUESTION_RESOLVED -> ConversationStatus.Working
@@ -667,6 +696,7 @@ class MederiAiCore(
         val messages = mederi.sessions.listMessages(conversationId)
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
 
+        val backfill = MederiModelMapper.toUsageBackfill(messages)
         val base = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }),
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
@@ -676,7 +706,9 @@ class MederiAiCore(
             todos = MederiModelMapper.toTodos(session.todos),
             // 重启/翻历史恢复：当前活跃计划（审批模式待批准 / 自动模式已自动审批），UI 自由决定卡片渲染位置
             pendingPlanApproval = initialPlanApproval(conversationId),
-            planApprovals = initialPlanApprovals(conversationId)
+            planApprovals = initialPlanApprovals(conversationId),
+            requestCount = backfill.requestCount,
+            lastRequestUsage = backfill.lastRequestUsage
         )
         hydrateLastError(base, lastErrorBySessionId[conversationId])
     }
@@ -915,6 +947,33 @@ class MederiAiCore(
         )
     }
 
+    override suspend fun updateConversationSettings(
+        conversationId: String,
+        input: UpdateConversationSettingsInput
+    ): Result<Unit> = runCatching {
+        DebugLog.section("AiCore", "MederiAiCore.updateConversationSettings")
+        DebugLog.data("AiCore", "conversationId", conversationId)
+        DebugLog.data("AiCore", "input.model", "${input.model?.id} (${input.model?.name})")
+        DebugLog.data("AiCore", "input.agent", "${input.agent?.id} (${input.agent?.name})")
+        DebugLog.data("AiCore", "input.apiKeyId", input.apiKeyId)
+        DebugLog.data("AiCore", "input.thinkingLevel", input.thinkingLevel)
+        // 各字段 null = 不改变该项（COALESCE 保留会话原值），与 resolvePlanApproval 的 nullable 语义一致。
+        // 注意：不能直接用 MederiInputMapper.toAgentConfig —— 它在 agent==null 时把 agentMode 默认成 AUTONOMOUS，
+        // 会错误覆盖会话原值；这里按字段独立解析，null 透传为"不改"。
+        val coreModel = input.model?.let { findCoreModel(it.id) }
+        val agentMode = input.agent?.let {
+            runCatching { xyz.mederi.domain.model.AgentMode.valueOf(it.mode.name) }.getOrNull()
+        }
+        val reasoningLevel = MederiInputMapper.toReasoningLevel(input.thinkingLevel)
+        mederi.sessions.updateAgentConfig(
+            conversationId,
+            agentMode = agentMode,
+            aiModel = coreModel,
+            reasoningLevel = reasoningLevel,
+            apiKeyId = input.apiKeyId
+        )
+    }
+
     override suspend fun compressHistory(conversationId: String): Result<Unit> = runCatching {
         mederi.sessions.compressHistory(conversationId)
     }
@@ -928,10 +987,13 @@ class MederiAiCore(
     override suspend fun listMessagesPage(conversationId: String): Result<MessagesPage> = runCatching {
         val messages = mederi.sessions.listMessages(conversationId)
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
+        val backfill = MederiModelMapper.toUsageBackfill(messages)
         MessagesPage(
             messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
-            contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong()
+            contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong(),
+            requestCount = backfill.requestCount,
+            lastRequestUsage = backfill.lastRequestUsage
         )
     }
 
@@ -945,15 +1007,145 @@ class MederiAiCore(
     }
 
     override suspend fun listRawMessages(conversationId: String): Result<List<RawMessageDto>> = runCatching {
-        mederi.sessions.listRawMessages(conversationId).map {
+        mederi.sessions.listRawMessages(conversationId).map { record ->
+            val proj = rawMessageProjection(record)
             RawMessageDto(
-                seq = it.seq,
-                messageId = it.messageId,
-                role = it.role,
-                payload = it.payload,
-                createdAt = it.createdAt
+                seq = record.seq,
+                messageId = record.messageId,
+                role = record.role,
+                payload = record.payload,
+                createdAt = record.createdAt,
+                // 4 个诊断列：从 core RawMessageRecord 同名透传（HistoryStore 已抽取落库）
+                modelId = record.modelId,
+                durationMs = record.durationMs,
+                finishReason = record.finishReason,
+                status = record.status,
+                // 投影字段：jvmMain 侧解析 core payload JSON（core schema 在 JVM 侧合法可见）
+                summaryLabel = proj.summaryLabel,
+                inputTokens = proj.inputTokens,
+                outputTokens = proj.outputTokens
             )
         }
+    }
+
+    /**
+     * 从 core RawMessageRecord 提取投影字段（summaryLabel + token）。
+     *
+     * 这段逻辑此前在 commonMain RawMessagesViewModel 里手解 JSON key——core 的落库 JSON schema
+     * 在 JVM 侧合法可见，移到 jvmMain 桥是合规的。commonMain UI 只读 DTO 字段，不碰 JSON。
+     *
+     * 解析失败 / 缺字段 → null（不崩，不兜底）。
+     */
+    private data class RawMessageProjection(
+        val summaryLabel: String?,
+        val inputTokens: Long?,
+        val outputTokens: Long?,
+    )
+
+    private fun rawMessageProjection(record: xyz.mederi.api.RawMessageDto): RawMessageProjection {
+        val json = runCatching {
+            kotlinx.serialization.json.Json.parseToJsonElement(record.payload)
+        }.getOrNull() ?: return RawMessageProjection(null, null, null)
+
+        val jsonObj = runCatching { json.jsonObject }.getOrNull()
+            ?: return RawMessageProjection(null, null, null)
+
+        // ── token 提取 ──
+        val inputTokens = jsonObj["inputTokens"]?.let {
+            runCatching { it.jsonPrimitive.content.toLongOrNull() }.getOrNull()
+        } ?: jsonObj["tokens"]?.let { tokensObj ->
+            runCatching { tokensObj.jsonObject["input"]?.jsonPrimitive?.content?.toLongOrNull() }.getOrNull()
+        }
+        val outputTokens = jsonObj["outputTokens"]?.let {
+            runCatching { it.jsonPrimitive.content.toLongOrNull() }.getOrNull()
+        } ?: jsonObj["tokens"]?.let { tokensObj ->
+            runCatching { tokensObj.jsonObject["output"]?.jsonPrimitive?.content?.toLongOrNull() }.getOrNull()
+        }
+
+        // ── summary label 提取 ──
+        val summaryLabel = extractSummaryLabelFromJson(jsonObj, record.role)
+
+        return RawMessageProjection(summaryLabel, inputTokens, outputTokens)
+    }
+
+    /**
+     * 从 core payload JSON 提取消息摘要标签（如 "text"、"bash"、"user: hello..."）。
+     * 逻辑与旧 RawMessagesViewModel.extractSummaryLabel 完全一致，但读的是 core 的 JSON schema。
+     */
+    private fun extractSummaryLabelFromJson(jsonObj: kotlinx.serialization.json.JsonObject, recordRole: String): String? {
+        val role = jsonObj["role"]?.let {
+            runCatching { it.jsonPrimitive.content }.getOrNull()
+        } ?: recordRole
+        val parts = jsonObj["parts"]?.let {
+            runCatching { it.jsonArray }.getOrNull()
+        }
+
+        if (role.equals("user", ignoreCase = true)) {
+            val textPart = parts?.mapNotNull {
+                runCatching { it.jsonObject }.getOrNull()
+            }?.firstOrNull {
+                it["text"] != null ||
+                    it["type"]?.let { t ->
+                        runCatching { t.jsonPrimitive.content.contains("Text", ignoreCase = true) }.getOrDefault(false)
+                    } ?: false
+            }
+            val text = textPart?.get("text")?.let {
+                runCatching { it.jsonPrimitive.content }.getOrNull()
+            }
+            if (!text.isNullOrBlank()) {
+                val clean = xyz.mederi.util.PromptComposer.sanitizeUserVisibleText(text).trim()
+                val firstLine = clean.lines().firstOrNull()?.trim().orEmpty()
+                return "user: " + (if (firstLine.length > 50) firstLine.take(50) + "..." else firstLine)
+            }
+            val toolResultPart = parts?.mapNotNull {
+                runCatching { it.jsonObject }.getOrNull()
+            }?.firstOrNull {
+                it["tool"] != null && it["output"] != null
+            }
+            if (toolResultPart != null) {
+                val toolName = toolResultPart["tool"]?.let {
+                    runCatching { it.jsonPrimitive.content }.getOrNull()
+                } ?: "tool"
+                return "$toolName result"
+            }
+            return "user"
+        }
+
+        if (parts != null && parts.isNotEmpty()) {
+            val partLabels = mutableListOf<String>()
+            for (partElement in parts) {
+                val partObj = runCatching { partElement.jsonObject }.getOrNull() ?: continue
+                val tool = partObj["tool"]?.let {
+                    runCatching { it.jsonPrimitive.content }.getOrNull()
+                }
+                if (!tool.isNullOrBlank()) {
+                    partLabels.add(tool)
+                } else if (partObj["content"] != null || partObj["summary"] != null ||
+                    partObj["type"]?.let { t ->
+                        runCatching { t.jsonPrimitive.content.contains("Reasoning", ignoreCase = true) }.getOrDefault(false)
+                    } ?: false
+                ) {
+                    partLabels.add("reasoning")
+                } else if (partObj["text"] != null ||
+                    partObj["type"]?.let { t ->
+                        runCatching { t.jsonPrimitive.content.contains("Text", ignoreCase = true) }.getOrDefault(false)
+                    } ?: false
+                ) {
+                    partLabels.add("text")
+                }
+            }
+            if (partLabels.isNotEmpty()) {
+                val distinctLabels = mutableListOf<String>()
+                for (lbl in partLabels) {
+                    if (distinctLabels.isEmpty() || distinctLabels.last() != lbl) {
+                        distinctLabels.add(lbl)
+                    }
+                }
+                return distinctLabels.joinToString(" + ")
+            }
+        }
+
+        return role.lowercase()
     }
 
     override suspend fun getProcessStats(): Result<ProcessStats> = runCatching {
@@ -1294,12 +1486,19 @@ class MederiAiCore(
         )
     }
 
-    override suspend fun getSubagentReport(agentId: String): Result<xyz.mederi.tools.subagent.SubagentManager.SubagentReportData> = runCatching {
+    override suspend fun getSubagentReport(agentId: String): Result<SubagentReportDto> = runCatching {
         if (!::mederi.isInitialized) {
             _isReady.first { it }
         }
-        mederi.sessions.getSubagentReport(agentId)
+        val report = mederi.sessions.getSubagentReport(agentId)
             ?: throw xyz.mederi.api.exception.MederiNotFoundException("Subagent report not found for agent: $agentId")
+        SubagentReportDto(
+            agentId = report.agentId,
+            role = report.role.name,
+            status = report.status.name,
+            reportPath = report.reportPath,
+            content = report.content
+        )
     }
 
     override suspend fun stopSubagent(agentId: String): Result<Unit> = runCatching {

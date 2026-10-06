@@ -196,7 +196,17 @@ class Mederi private constructor(
             }
             val dataDriver = paths?.let {
                 createDriver(it.dataDatabaseFile.absolutePath)
-                    .also { driver -> MederiDataDatabase.Schema.create(driver) }
+                    .also { driver ->
+                        MederiDataDatabase.Schema.create(driver)
+                        // 非破坏性幂等迁移：给存量 data.db 的 sessions 表补 api_key_id 列。
+                        // 全新库由 .sq 的 CREATE TABLE 直接带列；此 ALTER 只在旧库缺列时生效，
+                        // 列已存在 / 表不存在时 SQLite 抛错——捕获后仅记日志，绝不向外抛。
+                        runCatching {
+                            driver.execute(null, "ALTER TABLE sessions ADD COLUMN api_key_id TEXT", 0)
+                        }.onFailure { e ->
+                            xyz.mederi.debug.DebugLog.info("Mederi", "sessions.api_key_id 幂等迁移跳过（列已存在或表不存在）: ${e.message}")
+                        }
+                    }
             }
 
             // === 配置库 store（config.db） ===

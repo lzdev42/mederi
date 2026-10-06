@@ -101,8 +101,9 @@ class PlanValidationTest {
                         name = "grep check",
                         planDetail = "run grep check",
                         targetFiles = listOf("check.sh"),
-                        verification = "grep -q foo file.txt",
-                        verificationExpected = "命令 exit 0，输出为空"
+                        verification = "grep -q foo file.txt && echo PASS",
+                        verificationExpected = "命令 exit 0，输出 PASS",
+                        verificationExpectStdoutContains = listOf("PASS")
                     )
                 )
             )
@@ -142,10 +143,11 @@ class PlanValidationTest {
                         name = "compile",
                         planDetail = "run compile check",
                         targetFiles = listOf("compile.sh"),
-                        verification = "grep -q foo file.txt",
+                        verification = "grep -q foo file.txt && echo PASS",
                         verificationCwd = "sub/dir",
                         verificationTimeoutSeconds = 120,
-                        verificationExpected = "命令 exit 0，输出为空"
+                        verificationExpected = "命令 exit 0，输出 PASS",
+                        verificationExpectStdoutContains = listOf("PASS")
                     )
                 )
             )
@@ -157,7 +159,7 @@ class PlanValidationTest {
         val plan = planStore.load(planId)
         assertNotNull(plan, "Plan should be persisted")
         assertEquals(1, plan.subtasks.size)
-        assertEquals("grep -q foo file.txt", plan.subtasks[0].verification.command)
+        assertEquals("grep -q foo file.txt && echo PASS", plan.subtasks[0].verification.command)
         assertEquals("sub/dir", plan.subtasks[0].verification.cwd)
         assertEquals(120, plan.subtasks[0].verification.timeoutSeconds)
     }

@@ -14,6 +14,10 @@ import kotlinx.serialization.Serializable
  * @param directory 项目绑定的绝对路径目录（唯一，非空）。
  * @param createdAt ISO 8601 创建时间戳。
  * @param updatedAt ISO 8601 更新时间戳。
+ *
+ * 派生属性（不参与序列化）：
+ * @property workDir 项目工作目录（`directory + "/.mederi"`）——core 自有布局约定，
+ *   唯一真理源。UI 通过契约 `Project.workDir` 读取，不手拼后缀。
  */
 @Serializable
 data class Project(
@@ -23,6 +27,9 @@ data class Project(
     val createdAt: String,
     val updatedAt: String
 ) {
+    /** core 布局约定：项目工作目录 = directory + "/.mederi"。 */
+    val workDir: String get() = directory + "/.mederi"
+
     init {
         require(directory.isNotBlank()) {
             "Project must have a directory"

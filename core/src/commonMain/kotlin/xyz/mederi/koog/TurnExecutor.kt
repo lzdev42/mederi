@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.debug.DebugLog
@@ -411,10 +412,10 @@ class TurnExecutor(
             appendLine("Progress: $done/${session.todos.size} completed.")
         }.trimEnd() else null
         // 子代理用专用执行者/研究者提示词（无 plan/spawn/verify 工具，主代理工作流指令对它全是误导）；
-        // 主代理用完整提示词（含工作流与活跃计划段）。
+        // 主代理用完整提示词（含工作流段）。
         // 是否注入已安装 skills：一律读中心化 AgentCapabilities 表（主代理 + EXECUTOR 注入，RESEARCHER 不注入）。
         val basePrompt = if (subagentRole != null) SystemPrompts.forSubagent(subagentRole)
-        else SystemPrompts.build(agentMode, activePlanContent, activeTodoContent)
+        else SystemPrompts.build(agentMode)
         val systemPromptWithSkills = if (AgentCapabilities.of(subagentRole).inheritSkills) {
             val skillList = runCatching { skills?.list() }.getOrElse { e ->
                 DebugLog.error("TurnExec", "加载 skills 列表失败（不阻塞 turn）: ${e.message}", e)
@@ -424,7 +425,7 @@ class TurnExecutor(
         } else basePrompt
         // AGENTS.md 指令链注入（代码级自动读取）：git 根 → 项目目录浅→深。
         // 每轮重建（文件可能被用户/模型改过）；读取失败不阻塞 turn。
-        val systemPrompt = runCatching {
+        val systemPromptBase = runCatching {
             SystemPrompts.withProjectRules(
                 systemPromptWithSkills,
                 agentsFileLoader.loadInstructionChain(project.directory)
@@ -433,6 +434,10 @@ class TurnExecutor(
             DebugLog.error("TurnExec", "加载 AGENTS.md 失败（不阻塞 turn）: ${e.message}", e)
             systemPromptWithSkills
         }
+        // 装配顺序不变量 = 静态骨架 → skills → AGENTS.md → 动态 plan/todo 后缀。
+        // 顺序被 TurnExecutorPromptOrderTest 锁定（OpenAI 按最长前缀缓存，动态内容必须永远在最后）。
+        val dynamicSuffix = if (subagentRole == null) SystemPrompts.dynamicSuffix(activePlanContent, activeTodoContent) else ""
+        val systemPrompt = systemPromptBase + dynamicSuffix
         DebugLog.data("TurnExec", "agentMode", agentMode)
         DebugLog.data("TurnExec", "activePlan", activePlan?.id ?: "none")
         DebugLog.data("TurnExec", "systemPrompt (first 100)", "${systemPrompt.take(100)}...")
@@ -461,12 +466,14 @@ class TurnExecutor(
         DebugLog.data("TurnExec", "provider.reasoningParameter", provider.reasoningParameter)
         DebugLog.data("TurnExec", "model (from provider)", "${model.id} (${model.name}), providerModelId=${model.providerModelId}")
 
-        // 回写 Session 的 Agent 配置（记住用户最后一次选择）
+        // 回写 Session 的 Agent 配置（记住用户最后一次选择）：
+        // 发送时随 model/agent/reasoning 一并回写会话级 apiKeyId（null = 该供应商默认 key）。
         sessionStore.updateAgentConfig(
             sessionId,
             agentMode = agentMode,
             aiModel = effectiveModel,
-            reasoningLevel = effectiveReasoningLevel
+            reasoningLevel = effectiveReasoningLevel,
+            apiKeyId = activeApiKeyId
         )
 
         val inputText = request.parts.filterIsInstance<MessagePart.Text>()
@@ -829,6 +836,8 @@ class TurnExecutor(
                 phase = "compression",
                 sessionId = sessionId
             ))
+            // 压缩失败是 transient：emit 前更新 sessionStore，保证 emit() 内读到权威终态 IDLE
+            sessionStore.update(sessionId, SessionStatus.IDLE)
             emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
             throw e
         } finally {
@@ -1501,6 +1510,27 @@ class TurnExecutor(
                 config.onLLMStreamingFrameReceived { eventContext ->
                     // 逐帧只转发给 frameChannel，不逐帧打日志（速率/时间戳由 StreamTimingLog 汇总）
                     frameChannel.trySend(eventContext.streamFrame)
+                    // End 帧是流式请求的自然完成点：携带 metaInfo（含 inputTokensCount 等）时发射用量事件
+                    val frame = eventContext.streamFrame
+                    if (frame is StreamFrame.End) {
+                        extractUsagePayload(frame.metaInfo)?.let { usage ->
+                            scope.launch {
+                                emit(sessionId, EventType.LLM_REQUEST_COMPLETED, payload = usage)
+                            }
+                        }
+                    }
+                }
+                config.onLLMCallCompleted { eventContext ->
+                    // 非流式 execute 路径：Koog 中 execute 与 executeStreaming 互斥（流式只发 Streaming 事件、
+                    // 非流式只发 CallCompleted），不会与上面的 End 帧双计。metaInfo 为空帧时 extractUsagePayload
+                    // 返回 null（无用量数据），不发射。
+                    eventContext.response?.metaInfo?.let { meta ->
+                        extractUsagePayload(meta)?.let { usage ->
+                            scope.launch {
+                                emit(sessionId, EventType.LLM_REQUEST_COMPLETED, payload = usage)
+                            }
+                        }
+                    }
                 }
                 config.onLLMStreamingFailed { eventContext ->
                     // ErrorCollector 内部完成日志 + 历史记录；agent 会抛错走 runTurn 的 catch（MESSAGE_ERROR）
@@ -1590,13 +1620,21 @@ class TurnExecutor(
         payload: Map<String, String> = emptyMap()
     ) {
         try {
-            DebugLog.debug("EventBus", "emit: type=$type, sessionId=$sessionId, messageId=$messageId, payload keys=${payload.keys}")
+            // MESSAGE_ERROR：读 sessionStore 权威终态注入 payload，消费端（MederiAiCore / ServerAiCore /
+            // SnapshotReducer）统一读 payload["finalStatus"] 映射，不再各自读 sessionStore 或硬编码。
+            val enrichedPayload = if (type == EventType.MESSAGE_ERROR) {
+                val ss = try { sessionStore.get(sessionId)?.status } catch (_: Exception) { null }
+                if (ss != null) payload + ("finalStatus" to ss.name) else payload
+            } else {
+                payload
+            }
+            DebugLog.debug("EventBus", "emit: type=$type, sessionId=$sessionId, messageId=$messageId, payload keys=${enrichedPayload.keys}")
             eventBus.emit(
                 MederiEvent(
                     type = type,
                     sessionId = sessionId,
                     messageId = messageId,
-                    payload = payload,
+                    payload = enrichedPayload,
                     timestamp = Instant.now().toString()
                 )
             )
@@ -1708,5 +1746,23 @@ class TurnExecutor(
                 DebugLog.error("TurnExec", "dispatchPendingEventMessages failed for $sessionId: ${e.message}", e)
             }
         }
+    }
+}
+
+/**
+ * 从 LLM 响应的 [ResponseMetaInfo] 提取单次请求用量 payload（供 LLM_REQUEST_COMPLETED 事件发射）。
+ *
+ * 门禁：inputTokensCount 为 null 视为无用量数据 → 返回 null（不发射），符合"没有数据就是没有"的不兜底原则。
+ * 结构化数据仍走 kotlinx.serialization：cachedTokens 从响应 metadata（JsonObject）里按 key 取，
+ * 命中 JsonPrimitive 才写入 payload，缺省即省略该 key。
+ *
+ * @return 非空时 = {"inputTokens": "...", "outputTokens"?, "cachedTokens"?}；无用量数据时为 null
+ */
+internal fun extractUsagePayload(meta: ai.koog.prompt.message.ResponseMetaInfo): Map<String, String>? {
+    val input = meta.inputTokensCount ?: return null
+    return buildMap {
+        put("inputTokens", input.toString())
+        meta.outputTokensCount?.let { put("outputTokens", it.toString()) }
+        (meta.metadata?.get("cachedTokens") as? JsonPrimitive)?.content?.let { put("cachedTokens", it) }
     }
 }
