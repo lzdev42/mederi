@@ -210,18 +210,6 @@ class AppState(
     val processStats: StateFlow<ProcessStats?> = _processStats.asStateFlow()
 
     init {
-        // 选中模型自愈：模型列表重建（手动刷新/元数据回填/增删模型）后，把选中项重指向
-        // 新列表里的同款实例。否则 selectedModel 一直拿着旧实例，概览卡的已用百分比、
-        // 参考成本等永远停留在刷新前的旧元数据，直到重启。
-        // 按结构相等去重：元数据没变时 StateFlow 不重复发射；按 id+provider 定位，不碰偏好持久化。
-        scope.launch {
-            availableModels.collect { models ->
-                val current = _selectedModel.value ?: return@collect
-                val fresh = models.find { it.id == current.id && it.provider == current.provider }
-                if (fresh != null) _selectedModel.value = fresh
-            }
-        }
-
         // 轮询进程资源占用（1秒一次，失败静默跳过）
         scope.launch {
             while (isActive) {
@@ -257,47 +245,6 @@ class AppState(
      */
     suspend fun flushPreferences() {
         withTimeoutOrNull(2_000) { pendingWriteCount.first { it == 0 } }
-    }
-
-    /**
-     * 会话快照恢复（真理源翻转，2026-10）：只改内存态，不写偏好文件。
-     *
-     * 语义（翻转后）：
-     * - 会话已绑定模型（hasSessionModel=true，已发送或已改过设置）→ **按会话快照覆盖**全局选择：
-     *   会话是真理源——切换会话即恢复该会话的模型 / Agent / API Key / 推理档位四项设置。
-     * - 全新未发送会话（hasSessionModel=false）→ 补位语义（旧 applyConversationDefaults 行为）：
-     *   仅当全局尚无选择时用会话固有配置补位，供其余调用方兜底；
-     *   ViewModel 侧新/空会话默认改走 applyRecentConversationDefaults（最近会话推导），不再走本分支。
-     *
-     * 只改内存态，不写偏好文件（会话是真理源）。
-     */
-    fun applyConversationSettings(
-        model: ModelOption?,
-        agent: AgentOption?,
-        apiKeyId: String?,
-        thinkingLevel: String?,
-        hasSessionModel: Boolean
-    ) {
-        if (hasSessionModel) {
-            // 会话已绑定模型：按会话快照覆盖全局内存态
-            if (model != null) _selectedModel.value = model
-            if (agent != null) _selectedAgentId.value = agent.id
-            // apiKeyId：按当前模型供应商写入 map；null = 用默认 key
-            // （移除该供应商条目，getApiKeyId 返回 null，与"写入 null 条目"观测等价）
-            model?.let { m ->
-                _selectedApiKeyIds.update { current ->
-                    if (apiKeyId != null) current + (m.provider to apiKeyId) else current - m.provider
-                }
-            }
-            // thinkingLevel：写进 modelReasoningLevels（effectiveThinkingLevel 唯一推导链输入，无需改推导）
-            if (thinkingLevel != null && model != null) {
-                _modelReasoningLevels.update { it + (model.id to thinkingLevel) }
-            }
-        } else {
-            // 全新未发送会话：保留当前全局模板（补位语义）
-            if (_selectedModel.value == null && model != null) _selectedModel.value = model
-            if (_selectedAgentId.value == null && agent != null) _selectedAgentId.value = agent.id
-        }
     }
 
     fun setTheme(value: AppThemeMode) {
@@ -458,16 +405,18 @@ class AppState(
     }
 
     fun selectModel(m: ModelOption?) {
-        // selectedModel 现为当前活跃会话设置的内存镜像，不再落盘作模板
-        // （新会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
+        // selectedModel 为当前活跃会话设置的内存镜像，不入偏好文件：
+        // attach 时由 WorkspaceViewModel.applySessionSettings 设置，用户改选择器时由
+        // WorkspaceViewModel 同名方法写库前先调此处。
         _selectedModel.value = m
     }
 
     fun getModelReasoningLevel(modelId: String): String? = _modelReasoningLevels.value[modelId]
 
     fun setModelReasoningLevel(modelId: String, level: String?) {
-        // 推理档位为当前活跃会话设置的内存镜像，不再落盘作模板
-        // （新会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
+        // 推理档位为当前活跃会话设置的内存镜像（effectiveThinkingLevel 唯一推导链输入）：
+        // attach 时由 WorkspaceViewModel.applySessionSettings 设置，用户改选择器时由
+        // WorkspaceViewModel 同名方法写库前先调此处。
         _modelReasoningLevels.update { current ->
             if (level != null) current + (modelId to level) else current - modelId
         }
@@ -484,8 +433,9 @@ class AppState(
     }
 
     fun selectAgent(id: String?) {
-        // selectedAgentId 现为当前活跃会话设置的内存镜像，不再落盘作模板
-        // （新会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
+        // selectedAgentId 为当前活跃会话设置的内存镜像，不入偏好文件：
+        // attach 时由 WorkspaceViewModel.applySessionSettings 设置，用户改选择器时由
+        // WorkspaceViewModel 同名方法写库前先调此处。
         DebugLog.info("AppState", "selectAgent: requestedId=$id, oldAgentId=${_selectedAgentId.value}")
         _selectedAgentId.value = id
     }
@@ -544,26 +494,6 @@ class AppState(
 
         _selectedProjectId.value = preferences.getString("workspace.lastProjectId")
         _selectedConversationId.value = preferences.getString("workspace.lastConversationId")
-
-        // 首次运行模型兜底：无任何选择时填首个可用模型（无 prefs，四项设置模板已移除；
-        // 新/空会话默认由 WorkspaceViewModel.applyRecentConversationDefaults 从最近会话推导）
-        scope.launch {
-            withTimeoutOrNull(3_000) {
-                availableModels.first { it.isNotEmpty() }
-            }?.let { list ->
-                if (_selectedModel.value == null) _selectedModel.value = list.firstOrNull()
-            }
-        }
-
-        scope.launch {
-            if (_selectedAgentId.value == null) {
-                withTimeoutOrNull(3_000) {
-                    availableAgents.first { it.isNotEmpty() }
-                }?.let { agents ->
-                    _selectedAgentId.value = agents.firstOrNull()?.id
-                }
-            }
-        }
     }
 }
 

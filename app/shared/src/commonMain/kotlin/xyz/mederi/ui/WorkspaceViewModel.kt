@@ -1176,13 +1176,24 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     // 但观察流保留——新 turn 的事件仍持续聚合。
     // 乐观消息对账日志去重：同一会话的 matched/unmatched 结论只打一次（状态翻转时重置）
     private val pendingOptReconciled = mutableSetOf<String>()
-    private var selectionHydrated = false
 
     init {
         viewModelScope.launch {
             appState.selectedConversationId.collect { id ->
                 if (id != conversationId) attach(id)
             }
+        }
+        // 冷启动兜底（只跑一次）：应用刚启动且尚无选中模型（新/空会话 attach 不再推导默认值）时，
+        // 从已加载到内存的项目列表中取最近修改的已发送会话（modelId != null，ORDER BY updatedAt DESC LIMIT 1 语义），
+        // 直接读其四列恢复模型/Agent/Key/推理档位设置。数据已在内存（appState.projects），非遍历数据库。
+        viewModelScope.launch {
+            appState.aiCore.isReady.first { it }
+            if (appState.selectedModel.value != null) return@launch
+            val recent = appState.projects.value
+                .flatMap { it.conversations }
+                .filter { it.modelId != null }
+                .maxByOrNull { it.updatedAt }
+            if (recent != null) applySessionSettings(recent)
         }
         // 浏览器任务监听：外部自动化浏览器任务启动 → 自动展开浏览器面板展示执行流程
         viewModelScope.launch {
@@ -1255,7 +1266,6 @@ private val SUBAGENT_EVENT_TYPES = setOf(
 
     fun attach(id: String?) {
         DebugLog.event("UI", "attach: id=$id")
-        selectionHydrated = false
         resetQuestionState()
         isSubagentBannerDismissed = false
         // compaction 本地态不随会话走：切会话复位，防别的会话压缩事件串台
@@ -1288,22 +1298,24 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 id = cached.errorId,
                 isStreamInterrupted = cached.errorIsStreamInterrupted,
             )
-            // 切换到已缓存的会话时，观察流不会重发快照（无新事件→不触发 applySnapshot→不 hydrate），
-            // 故此处显式按缓存快照恢复输入框设置（真理源翻转：会话已绑定模型则覆盖，否则保留模板）。
-            // 标记 selectionHydrated=true 防观察流后续（若有新事件）重复 hydrate。
-            hydrateSelectionFromConversation(cached.conversation)
-            selectionHydrated = true
+            // 切换到已缓存的会话时，观察流不会重发快照（无新事件→不触发 applySnapshot→不恢复设置），
+            // 故此处显式按缓存会话对象直接恢复四项设置（model / agent / apiKey / thinkingLevel）。
+            // 会话是真理源：已绑定模型则覆盖，否则（modelId==null）保留用户当前选择，不写库。
+            applySessionSettings(cached.conversation)
             DebugLog.event("UI", "attach: rendered from cache (status=${cached.conversation.status}, messages=${cached.messages.size})")
         } else {
             // 无缓存（首次打开 / 已 Idle 清理）：异步拉一次初始快照渲染，再交给观察流持续更新
             snapshot = null
             isAttached = false
             viewModelScope.launch {
-                val snap = appState.aiCore.getSnapshot(id).getOrNull()
+                // 竞态防护：异步返回期间用户可能已切走，旧结果一律丢弃（applySnapshot 内部也有会话判，
+                // 但设置恢复要在它之后单独执行，故这里显式记 reqId 作一次性一致性检查）
+                val reqId = id
+                val snap = appState.aiCore.getSnapshot(reqId).getOrNull()
                 if (snap == null) {
-                    DebugLog.event("UI", "attach: conversation $id not found, clearing stale selection")
-                    sessionCache.snapshotCache.remove(id)
-                    if (conversationId == id) {
+                    DebugLog.event("UI", "attach: conversation $reqId not found, clearing stale selection")
+                    sessionCache.snapshotCache.remove(reqId)
+                    if (conversationId == reqId) {
                         conversationId = null
                         snapshot = null
                         isAttached = false
@@ -1311,7 +1323,10 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     }
                     return@launch
                 }
-                applySnapshot(id, snap)
+                applySnapshot(reqId, snap)
+                // 拿到会话对象后直接读四列设选择器（会话是真理源，不写库、不写偏好文件）。
+                // 用户已切走（conversationId != reqId）时不应用旧会话的设置。
+                if (conversationId == reqId) applySessionSettings(snap.conversation)
             }
         }
         ensureObserving(id)
@@ -1415,11 +1430,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 }
             }
         }
-        if (conversationId == id && !selectionHydrated) {
-            selectionHydrated = true
-            hydrateSelectionFromConversation(snap.conversation)
         }
-    }
 
     /**
      * 流式闲置超时/中途断流后，若模型已吐出部分内容，UI 层自动替用户补发一句 "Continue"（且严格只发一次）。
@@ -1464,62 +1475,38 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         }
     }
 
-    private fun hydrateSelectionFromConversation(conv: Conversation) {
-        // 真理源翻转（2026-10）：
-        // - 会话已绑定模型（modelId != null）→ 按会话快照覆盖恢复四项设置
-        //   （model / agent / apiKey / thinkingLevel），会话是真理源，不写偏好文件。
-        // - 全新未发送会话（modelId == null）→ 默认取最近修改会话的设置
-        //   （applyRecentConversationDefaults，跨项目最近 updatedAt）。
-        if (conv.modelId != null) {
-            // 模型解析：优先 id+provider 精确匹配；modelProvider 可能为 null（AIModel 不含 provider，
-            // modelToProvider 映射缺失时），此时回退到按 id 匹配，避免会话有模型却恢复不出 → 输入框不刷新。
-            val all = appState.availableModels.value
-            val model = all.find { it.id == conv.modelId && it.provider == conv.modelProvider }
-                ?: all.find { it.id == conv.modelId }
+    /**
+     * attach 拿到会话对象后直接读其四列（model / apiKey / agent / thinkingLevel）设四个选择器。
+     * 会话是真理源：只改 AppState 内存态（selectModel/selectApiKey/selectAgent/setModelReasoningLevel
+     * 均为纯设值，不写库、不写偏好文件），写库只由 WorkspaceViewModel 同名方法（UI 用户操作）负责。
+     *
+     * - 模型解析：优先 id+provider 精确匹配；modelProvider 可能为 null（AIModel 不含 provider，
+     *   modelToProvider 映射缺失时），此时回退到按 id 匹配，避免会话有模型却恢复不出 → 输入框不刷新。
+     * - apiKeyId：按当前模型供应商写入 per-provider map，null = 移除条目（默认 key 语义）。
+     * - thinkingLevel：写进模型记忆载体（setModelReasoningLevel，null = 清 key），
+     *   供 [effectiveThinkingLevel] 推导链使用（记忆 > 默认档）。
+     * - 全新未发送会话（modelId == null）→ 不覆盖选择器（保留用户当前选择）；冷启动兜底在 init。
+     */
+    private fun applySessionSettings(conv: Conversation) {
+        if (conv.modelId == null) return
+        val all = appState.availableModels.value
+        val model = all.find { it.id == conv.modelId && it.provider == conv.modelProvider }
+            ?: all.find { it.id == conv.modelId }
 
-            val agent: AgentOption? = conv.agent?.let { agentOrMode ->
-                val mode = runCatching { AgentMode.valueOf(agentOrMode) }.getOrNull()
-                if (mode != null) {
-                    appState.availableAgents.value.find { it.mode == mode }
-                } else {
-                    appState.availableAgents.value.find { it.id == agentOrMode }
-                }
-            }
-            appState.applyConversationSettings(
-                model = model,
-                agent = agent,
-                apiKeyId = conv.apiKeyId,
-                thinkingLevel = conv.thinkingLevel,
-                hasSessionModel = true,
-            )
-        } else {
-            // 新/空会话（从未发送，modelId == null）：保留用户当前选择器里的模型选择，不覆盖。
-            // 新会话应继承用户此刻在选框里选中的模型（_selectedModel 持有最近一次选择），而非强制套用
-            // 最近会话的模型——否则会把用户刚选的模型（如 agnes）悄悄换成另一会话的模型（如 glm）。
-            // 仅当当前确实无选中模型（应用刚启动，_selectedModel == null）时，才从最近会话推导默认值。
-            // 同时规避建会话竞态：getSnapshot 可能先于 sendMessage 的 modelId 回写读到 modelId=null，
-            // 此处不覆盖即可避免把首条消息用的模型被改成最近会话的模型（selectionHydrated 锁定后不再纠正）。
-            if (appState.selectedModel.value == null) {
-                applyRecentConversationDefaults()
+        val agent: AgentOption? = conv.agent?.let { agentOrMode ->
+            val mode = runCatching { AgentMode.valueOf(agentOrMode) }.getOrNull()
+            if (mode != null) {
+                appState.availableAgents.value.find { it.mode == mode }
+            } else {
+                appState.availableAgents.value.find { it.id == agentOrMode }
             }
         }
-        // 执行策略不再单独恢复：applyConversationSettings 写 selectedAgentId 后，
-        // AppState.selectedAgentMode 派生流自动跟随（唯一真理源，无本地副本可分叉）
-    }
-
-    /**
-     * 新/空会话默认取最近修改会话的设置（跨项目，maxBy updatedAt）。
-     * 真理源单一化为会话：全局偏好模板已移除，默认值从最近会话快照推导。
-     * recent == null（无任何已发送会话）：不填，由 hydrate first-available 兜底。
-     */
-    private fun applyRecentConversationDefaults() {
-        val recent = appState.projects.value
-            .flatMap { it.conversations }
-            .filter { it.modelId != null }
-            .maxByOrNull { it.updatedAt }
-        if (recent != null) {
-            // 复用 hydrateSelectionFromConversation 恢复最近修改会话的设置
-            hydrateSelectionFromConversation(recent)
+        // model 解析不出（模型已下架/未加载）时保持当前 selection 不清空；agent 仍按会话恢复
+        model?.let { appState.selectModel(it) }
+        agent?.let { appState.selectAgent(it.id) }
+        model?.let { m ->
+            appState.selectApiKey(m.provider, conv.apiKeyId)
+            appState.setModelReasoningLevel(m.id, conv.thinkingLevel)
         }
     }
 
