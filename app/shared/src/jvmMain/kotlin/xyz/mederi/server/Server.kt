@@ -1,5 +1,6 @@
 package xyz.mederi.server
 
+import io.ktor.http.CacheControl
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
@@ -14,6 +15,8 @@ import io.ktor.server.auth.bearer
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.compression.Compression
+import io.ktor.server.plugins.compression.gzip
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.request.receive
@@ -166,6 +169,10 @@ fun Application.serverModule(
     webappDir: String? = null,
 ) {
     install(ContentNegotiation) { json(json) }
+    install(Compression) {
+        // gzip 压缩 wasm/js/css/json 等：24MB 产物 → ~8MB，大幅加速 Cloudflare 隧道首屏
+        gzip { priority = 1.0 }
+    }
     install(SSE)
     install(CORS) {
         // 本地开发工具：wasmJs dev server 与 server 跨端口，放开跨域；
@@ -204,6 +211,13 @@ fun Application.serverModule(
                 contentType { file ->
                     if (file.extension.equals("wasm", ignoreCase = true)) ContentTypeWasm else null
                 }
+                // 带 hash 的 wasm 永久缓存（immutable），其余（index.html 等）不设 → 浏览器每次验证
+                cacheControl { file ->
+                    if (file.extension.equals("wasm", ignoreCase = true))
+                        listOf(CacheControl.MaxAge(31536000))
+                    else
+                        emptyList()
+                }
             }
         } else {
             staticResources("/", "static") {
@@ -211,6 +225,13 @@ fun Application.serverModule(
                 preCompressed(CompressedFileType.GZIP)
                 contentType { url ->
                     if (url.path.endsWith(".wasm", ignoreCase = true)) ContentTypeWasm else null
+                }
+                // 带 hash 的 wasm 永久缓存（immutable），其余（index.html 等）不设 → 浏览器每次验证
+                cacheControl { url ->
+                    if (url.path.endsWith(".wasm", ignoreCase = true))
+                        listOf(CacheControl.MaxAge(31536000))
+                    else
+                        emptyList()
                 }
             }
         }

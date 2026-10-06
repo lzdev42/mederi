@@ -335,6 +335,7 @@ flowchart TB
 | remoteControlEnabled / remoteControlPassword / remotePort | `remote.enabled` / `remote.password` / `remote.port`（默认 8081，成功后回写实际端口） | 遥控 |
 | remoteServerState | —（内存） | Idle/Starting/Running(port, portFallback)/Failed |
 | tunnelState | —（内存） | Idle/Starting/Running(url)/Failed(notInstalled) |
+| tunnelToken / tunnelDomain | `tunnel.token` / `tunnel.domain`（空白即清除） | 隧道连接器 token / 公网域名（token 模式，2026-10 起不再解析 config.yml） |
 | selectedProjectId / selectedConversationId | `workspace.lastProjectId` / `workspace.lastConversationId` | 选中态 |
 | selectedModel | —（内存，2026-10 起不再持久化） | 当前活跃会话设置的模型**内存镜像**；带自愈：列表重建后重指向同款新实例；新/空会话默认由 `WorkspaceViewModel.applyRecentConversationDefaults` 从最近会话推导 |
 | selectedAgentId | —（内存） | 当前活跃会话设置的 Agent 内存镜像；同 selectedModel（applyRecentConversationDefaults 推导） |
@@ -352,7 +353,7 @@ i18n 资源（2026-10 定稿）：`composeResources` 下共 10 个 `values*/stri
 - `mcpStore: McpStore`：管理 `mcpServers: StateFlow<List<McpServerItem>>`，提供 `refresh()`、`toggleEnabled(name, enabled)`、`install(json)`、`update(name, json)`、`delete(name)`、`verify(name)`、`getJson(name)`。
 - `browserSettingsStore: BrowserSettingsStore`（`ui/appstate/BrowserSettingsStore.kt`，AppState 构造即建，挂 aiCore 契约 6 方法）：管理 `settings: StateFlow<CamoufoxSettings>`、`status: StateFlow<BrowserStatus?>`、`installedVersions: StateFlow<List<String>>`，提供 `refresh()`（设置+状态+版本并发拉取）、`save(settings)`（整体替换）、`install(versionTag?)`、`checkUpdate()`——设置页 BROWSER tab 数据源。
 
-方法：`persist(key, value)`（异步写、pendingWriteCount 计数）、`flushPreferences()`（退出前同步等待归零，2s 兜底）、`applyConversationSettings(model, agent, apiKeyId, thinkingLevel, hasSessionModel)`（真理源翻转 2026-10：会话已绑定模型时按快照覆盖四项设置，否则补位——供其余调用方兜底，ViewModel 新/空会话默认改走 `applyRecentConversationDefaults`；只改内存不写偏好，详见 04-flows.md §1.1）、`setRemoteControl/startRemoteControl/stopRemoteControl`、`startTunnel/stopTunnel`、`handleProjectDeleted/handleConversationDeleted`（唯一允许偏好与引擎状态对齐的地方）、`hydrate()`（启动恢复：导航偏好/主题/语言/remote/sandbox 等；模型/Agent 仅 first-available 兜底——列表就绪后限时 3s 填首个可用项，四项设置模板已移除）。
+方法：`persist(key, value)`（异步写、pendingWriteCount 计数）、`flushPreferences()`（退出前同步等待归零，2s 兜底）、`applyConversationSettings(model, agent, apiKeyId, thinkingLevel, hasSessionModel)`（真理源翻转 2026-10：会话已绑定模型时按快照覆盖四项设置，否则补位——供其余调用方兜底，ViewModel 新/空会话默认改走 `applyRecentConversationDefaults`；只改内存不写偏好，详见 04-flows.md §1.1）、`setRemoteControl/startRemoteControl/stopRemoteControl`、`setTunnelToken/setTunnelDomain`（持久化 `tunnel.token`/`tunnel.domain`）、`startTunnel/stopTunnel`、`handleProjectDeleted/handleConversationDeleted`（唯一允许偏好与引擎状态对齐的地方）、`hydrate()`（启动恢复：导航偏好/主题/语言/remote/sandbox 等；模型/Agent 仅 first-available 兜底——列表就绪后限时 3s 填首个可用项，四项设置模板已移除）。
 
 
 ### 7.2 ViewModel 类图
@@ -363,7 +364,7 @@ classDiagram
         +aiCore +preferences
         +theme/selectedModel/selectedAgentId/...
         +modelReasoningLevels(模型记忆)
-        +startRemoteControl()/startTunnel()
+        +startRemoteControl()/setTunnelToken()/startTunnel()
         +handleProjectDeleted()/handleConversationDeleted()
     }
     class WorkspaceViewModel {
@@ -519,13 +520,24 @@ flowchart TD
 
 - `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **后台预热 `DesktopBrowserRuntime.ensureInitialized()`**（KBrowser 全局单例，`useOsr=true`，专供 inkcompose mermaid 渲染 / Markdown 导出）；camoufox 在 MederiAiCore 注册（唯一注册源），desktopApp 不再注册 JCEF 浏览器宿主。`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`Server.stop()` → `terminalHub.shutdown()` → `DesktopBrowserRuntime.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
 - **`DesktopBrowserRuntime`（desktopApp `browser/DesktopBrowserRuntime.kt`，object 全局单例）**：统一管理 KBrowser（JCEF/Chromium）的生命周期——`ensureInitialized()` 幂等线程安全：`JcefChecker.isJcefAvailable` 检查 → `KBrowser.initializeConfig(storageDir, useOsr=true)` + `initializeKBrowser()` → 向 inkcompose 注入单例引用（`SingleMermaidWorker.attachBrowser(KBrowser)` + `MarkdownExporter.setBrowser(KBrowser)`）；`shutdown()` 回收 KBrowser。**职责 = 渲染运行时宿主**（mermaid 离屏 PNG / Markdown→PDF 导出），**非浏览器自动化宿主**（内置 JCEF 浏览器宿主类已整体移除）。`UiBrowserHost`（commonMain）接口与 `AppState.uiBrowserHost` 字段保留但无实现注入（恒 null），保留待清理。desktopApp 依赖 `libs.kbrowser`（与 inkcompose 同版本同源）。
-- `DesktopRemoteControlHooks.kt`：`start(port, password) = Server.start(...)`；`localAddress` = 枚举 site-local IPv4（10/8、172.16/12、192.168/16）；`isCloudflaredInstalled()` = `cloudflared --version` 探测（未装 UI 提示自行安装，不代装）；`startTunnel(port)` = **pty4j** 真实 pty 拉起 `cloudflared tunnel run`（读 `~/.cloudflared/config.yml`），幂等；**生命周期** = 本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（无需看门狗）；`parseTunnelDomain()` = 解析 config.yml 第一条 ingress hostname 拼 `https://<host>`。
+- `DesktopRemoteControlHooks.kt`：`start(port, password) = Server.start(...)`；`localAddress` = 枚举 site-local IPv4（10/8、172.16/12、192.168/16）；`isCloudflaredInstalled()` = `cloudflared --version` 探测（未装 UI 提示自行安装，不代装）；`startTunnel(port, token, domain)` = **pty4j** 真实 pty 拉起 `cloudflared tunnel run --token <token>`（连接器 token 模式；token 空白直接 Failed），幂等；**生命周期** = 本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（无需看门狗）；`formatTunnelUrl(domain)` = 用户填的域名去 scheme 后拼 `https://<host>`（空返回 null）——`parseTunnelDomain()`（读 config.yml）已删除。
 
 ### 9.4 其他入口
 
 - **androidApp**（`MainActivity.kt`）：`MermaidCacheConfig.setBaseDirectory(cacheDir)` + 注入 `AndroidAppContext.applicationContext`（SharedPrefs 工厂）→ `setContent { App() }`；AiCoreProvider.android = ServerAiCore（100% 遥控端）。
 - **webApp**（wasmJs `main.kt`）：`ComposeViewport { RemoteGate { MederiApp() } }`。
 - **iosApp**：SwiftUI `WindowGroup → ContentView → ComposeView(MainViewControllerKt.MainViewController())`；shared 的 `MainViewController() = ComposeUIViewController { App() }`；AiCoreProvider.ios = ServerAiCore（暂硬编码 127.0.0.1:8081）。
+
+### 9.5 WasmImeBridge（`…/commonMain/ui/components/WasmImeBridge.kt` expect + wasmJs/jvm/android/ios actual）
+
+- **背景（上游 bug）**：Compose Multiplatform wasmJs 画布渲染的 material3 `TextField` 在 iOS Safari / 移动 Chrome 点按不唤起软键盘——Canvas 非可编辑 DOM 元素，iOS 只在 focus 真实可编辑元素时才弹键盘；上游未修（CMP-10858 / compose-multiplatform#4836）。本桥接为 **workaround**。
+- **桥接方案（wasmJs actual）**：在 DOM 创建透明 `<textarea>`，用 ChatInputCard 的 TextField `Modifier.onGloballyPositioned` 拿到的布局矩形（Compose px，`LocalDensity.density` → CSS px）`position: fixed` 实时定位/缩放覆盖文本区；用户点按直接命中真实可编辑元素 → 原生 focus → iOS 键盘弹出（规避 trusted-gesture 同步性问题）。样式：`opacity:0` + `color/caret-color: transparent` + `font-size:16px`（防 iOS 自动缩放）+ `z-index` 高于 canvas；`autocapitalize/autocomplete/autocorrect/spellcheck` 关闭，避免与 Compose 侧行为打架。
+- **事件回灌**：textarea 的 `input` / `compositionstart` / `compositionend` 事件 → 构造 `TextFieldValue(text, TextRange(selStart, selEnd))` → `onValueChange`（走原 `onSlashCommandTextChange` → `viewModel.updateInputDraft` 链路，slash 菜单检测照常触发）。**组合期（compositionstart..compositionend）`isComposing` 标记**：期间 input 事件不回灌、VM 值不反写 textarea（避免打断 CJK IME 候选），compositionend 一次性回灌最终文本——硬约束（勿改）。
+- **VM → textarea 反向同步**：非组合期 `textValue` 变化（slash 自动补全 / 原子 token 删除 / 粘贴等）时同步 `textarea.value` 与 `selectionStart/End`（设 value 会把光标重置到末尾，必须同一块内紧随设置选区）。
+- **enabled 语义**：ChatInputCard 传 `enabled = !isCompacting`；false（压缩进行中禁用输入）时不挂覆盖层（`display:none`）。
+- **光标同步（`onFocusChange`）**：textarea 持 DOM 焦点，但 Compose TextField 未拿 Compose 焦点 → Canvas 不画光标；又因 textarea `caret-color: transparent` 自身光标也隐藏 → 用户看不到光标。故 textarea `focus`/`blur` 事件经 `onFocusChange(Boolean)` 回调给 ChatInputCard，后者用 `FocusRequester.requestFocus()`/`focusManager.clearFocus()` 把 Compose 焦点同步给 TextField，使 Canvas 渲染自身光标（`cursorColor = accentPrimary`，深/浅主题自适应），选区同步自 textarea 故与 Canvas 文字天然对齐。textarea 仍持 DOM 焦点保键盘。
+- **平台隔离**：commonMain `expect @Composable fun WasmImeBridge(textValue, enabled, onValueChange, onFocusChange, rectPx, density)`；jvm/android/ios 为 **no-op actual**（iOS native UIKit 键盘正常、Android View 系统正常、desktop 直调 core 不走 wasm）。这是继 `TerminalView` 之后第二个 UI 组件级 expect/actual、第一个由平台限制驱动的 UI 桥接——不往 commonMain 塞 `isDesktopPlatform` 分支。
+- **范围**：仅聊天主输入框（ChatInputCard 的 TextField，约 552 行处）接入；其他文本框暂未接入。Enter 仍插换行（移动端语义），发送走发送按钮。
 
 ## 10. preferences 契约（`…/contract/preferences/`）
 

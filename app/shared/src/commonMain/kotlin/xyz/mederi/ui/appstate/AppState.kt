@@ -88,8 +88,8 @@ interface RemoteControlHooks {
     /** 探测本机是否已安装 cloudflared */
     fun isCloudflaredInstalled(): Boolean
 
-    /** 启动 Cloudflare 隧道（pty 挂 cloudflared，随本进程生命周期）。[port] 为内嵌 server 当前监听端口 */
-    fun startTunnel(port: Int): TunnelStartResult
+    /** 启动 Cloudflare 隧道（pty 挂 cloudflared，随本进程生命周期）。[port] 为内嵌 server 当前监听端口；[token] 为 cloudflared 连接器 token；[domain] 为用户填的公网域名（仅用于展示 URL，不参与命令参数） */
+    fun startTunnel(port: Int, token: String, domain: String?): TunnelStartResult
 
     /** 停止隧道 */
     fun stopTunnel()
@@ -166,6 +166,14 @@ class AppState(
     /** Cloudflare 隧道状态（未启动 / 启动中 / 运行中(地址) / 失败） */
     private val _tunnelState = MutableStateFlow<TunnelUiState>(TunnelUiState.Idle)
     val tunnelState: StateFlow<TunnelUiState> = _tunnelState.asStateFlow()
+
+    /** Cloudflare 隧道 token（dashboard 创建隧道后复制的连接器 token） */
+    private val _tunnelToken = MutableStateFlow("")
+    val tunnelToken: StateFlow<String> = _tunnelToken.asStateFlow()
+
+    /** 隧道公网域名（用户填写，用于 UI 展示公网地址；不参与 cloudflared 命令参数） */
+    private val _tunnelDomain = MutableStateFlow("")
+    val tunnelDomain: StateFlow<String> = _tunnelDomain.asStateFlow()
 
     private val _selectedProjectId = MutableStateFlow<String?>(null)
     val selectedProjectId: StateFlow<String?> = _selectedProjectId.asStateFlow()
@@ -356,11 +364,15 @@ class AppState(
         val hooks = remoteControl ?: return
         if (remoteServerState.value !is RemoteServerUiState.Running) return
         _tunnelState.value = TunnelUiState.Starting
-        val result = hooks.startTunnel(_remotePort.value)
-        _tunnelState.value = when (result) {
-            is TunnelStartResult.Started -> TunnelUiState.Running(result.url)
-            is TunnelStartResult.NotInstalled -> TunnelUiState.Failed(UiMessage(Res.string.tunnel_not_installed_msg), notInstalled = true)
-            is TunnelStartResult.Failed -> TunnelUiState.Failed(UiMessage(Res.string.err_generic, listOf(result.reason)))
+        // 在协程里调：hooks.startTunnel 会阻塞读 cloudflared 输出确认连接（最多 20s），
+        // scope 用 Dispatchers.Default，不卡 UI。
+        scope.launch {
+            val result = hooks.startTunnel(_remotePort.value, _tunnelToken.value, _tunnelDomain.value.takeIf { it.isNotBlank() })
+            _tunnelState.value = when (result) {
+                is TunnelStartResult.Started -> TunnelUiState.Running(result.url)
+                is TunnelStartResult.NotInstalled -> TunnelUiState.Failed(UiMessage(Res.string.tunnel_not_installed_msg), notInstalled = true)
+                is TunnelStartResult.Failed -> TunnelUiState.Failed(UiMessage(Res.string.err_generic, listOf(result.reason)))
+            }
         }
     }
 
@@ -368,6 +380,18 @@ class AppState(
     fun stopTunnel() {
         remoteControl?.stopTunnel()
         _tunnelState.value = TunnelUiState.Idle
+    }
+
+    /** 设置隧道 token（写状态 + 持久化；空白清除持久化）。 */
+    fun setTunnelToken(token: String) {
+        _tunnelToken.value = token
+        persist("tunnel.token", token.takeIf { it.isNotBlank() }) { it }
+    }
+
+    /** 设置隧道公网域名（写状态 + 持久化；空白清除持久化）。 */
+    fun setTunnelDomain(domain: String) {
+        _tunnelDomain.value = domain
+        persist("tunnel.domain", domain.takeIf { it.isNotBlank() }) { it }
     }
 
     fun selectProject(id: String?) {
@@ -507,6 +531,9 @@ class AppState(
         _remoteControlEnabled.value = preferences.getBoolean("remote.enabled")
         _remoteControlPassword.value = preferences.getString("remote.password")
         _remotePort.value = preferences.getString("remote.port")?.toIntOrNull() ?: 8081
+
+        _tunnelToken.value = preferences.getString("tunnel.token") ?: ""
+        _tunnelDomain.value = preferences.getString("tunnel.domain") ?: ""
 
         preferences.getString("sandbox.extraPaths")?.let { jsonStr ->
             runCatching { json.decodeFromString<List<String>>(jsonStr) }.getOrNull()

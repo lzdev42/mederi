@@ -97,7 +97,15 @@ import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiRadius
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 
 
 /** 推理档位显示名（唯一映射点，桌面下拉与移动端抽屉共用；未知档位回显原始值）。 */
@@ -148,6 +156,21 @@ fun ChatInputCard(
     // 草稿唯一真理源 = WorkspaceViewModel.inputDraft（会话级状态）：
     // 欢迎页/消息列表两个调用点共享，分支切换不丢字；选区菜单追加直接写 VM
     val textValue = viewModel.inputDraft
+    // IME 桥接（wasmJs）：透明 <textarea> 覆盖输入框触发 iOS 软键盘，需跟踪输入框在窗口中的矩形。
+    // positionInWindow 返回 Compose px（= CSS px * density），wasmJs actual 侧除 density 得 CSS px。
+    var imeRect by remember { mutableStateOf<Rect?>(null) }
+    val imeDensity = LocalDensity.current.density
+    // wasmJs IME 桥接：textarea 持 DOM 焦点唤起键盘，但 Compose TextField 未拿 Compose 焦点
+    // → Canvas 不画光标。用 FocusRequester 把 Compose 焦点同步给 TextField，使 Canvas 渲染
+    // 自身光标（cursorColor=accentPrimary，深/浅主题自适应），与 Canvas 文字天然对齐（选区同步自 textarea）。
+    val imeFocusRequester = remember { FocusRequester() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    var imeFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(imeFocus) {
+        runCatching {
+            if (imeFocus) imeFocusRequester.requestFocus() else focusManager.clearFocus()
+        }
+    }
     var isMobileSheetOpen by remember { mutableStateOf(false) }
     // 聚焦态（原型 focus-within）：TextField 聚焦 → 卡片自身 border 与外圈 ring 切 accentFocus
     var focused by remember { mutableStateOf(false) }
@@ -574,7 +597,17 @@ fun ChatInputCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp, max = 160.dp)
+                        .focusRequester(imeFocusRequester)
                         .onFocusChanged { focused = it.isFocused }
+                        .onGloballyPositioned { coords: LayoutCoordinates ->
+                            val pos = coords.positionInWindow()
+                            imeRect = Rect(
+                                pos.x,
+                                pos.y,
+                                pos.x + coords.size.width.toFloat(),
+                                pos.y + coords.size.height.toFloat()
+                            )
+                        }
                         .onPreviewKeyEvent { keyEvent ->
                             // 在 KeyDown 阶段处理：此时修饰键状态可靠（KeyUp 时 macOS 的 isMetaPressed 不可靠）
                             if (keyEvent.type == KeyEventType.KeyDown) {
@@ -657,6 +690,16 @@ fun ChatInputCard(
                                 false
                             }
                         }
+                )
+
+                // wasmJs IME 桥接（其他平台 no-op）：透明 textarea 跟随输入框矩形，回灌输入/反向同步
+                WasmImeBridge(
+                    textValue = textValue,
+                    enabled = !isCompacting,
+                    onValueChange = onSlashCommandTextChange,
+                    onFocusChange = { imeFocus = it },
+                    rectPx = imeRect,
+                    density = imeDensity,
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))

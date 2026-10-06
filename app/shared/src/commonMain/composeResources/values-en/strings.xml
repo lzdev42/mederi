@@ -280,15 +280,20 @@
     <string name="settings_show">Show</string>
     <string name="settings_hide">Hide</string>
     <string name="settings_tunnel_title">Cloudflare tunnel</string>
-    <string name="settings_tunnel_desc">Expose this machine to the internet via a Cloudflare tunnel (requires cloudflared)</string>
+    <string name="settings_tunnel_desc">Expose this machine to the internet via a Cloudflare tunnel (enter token + domain; requires cloudflared)</string>
     <string name="settings_tunnel_start">Start tunnel</string>
     <string name="settings_tunnel_starting">Starting tunnel…</string>
     <string name="settings_tunnel_running">Tunnel running</string>
     <string name="settings_tunnel_public_url">Public URL: %1$s</string>
-    <string name="settings_tunnel_no_hostname">Tunnel hostname not recognized (check the hostname in ~/.cloudflared/config.yml)</string>
     <string name="settings_tunnel_stop">Stop tunnel</string>
     <string name="settings_tunnel_not_installed">cloudflared not detected; please install it yourself</string>
     <string name="settings_tunnel_failed">Tunnel failed to start: %1$s</string>
+    <string name="settings_tunnel_token_label">Tunnel token</string>
+    <string name="settings_tunnel_token_placeholder">Connector token from Cloudflare dashboard</string>
+    <string name="settings_tunnel_token_note">Create a tunnel in Cloudflare Zero Trust → Networks → Tunnels, configure a public hostname, then copy the token here.</string>
+    <string name="settings_tunnel_domain_label">Public domain (optional)</string>
+    <string name="settings_tunnel_domain_placeholder">app.example.com</string>
+    <string name="settings_tunnel_no_token">Please enter the tunnel token first</string>
     <string name="settings_retry">Retry</string>
     <!-- Remote/tunnel failure reasons (AppState.kt, UiMessage) -->
     <string name="remote_unsupported">Remote control is not supported on this platform</string>

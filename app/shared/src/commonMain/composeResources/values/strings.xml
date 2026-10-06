@@ -289,15 +289,20 @@
     <string name="settings_show">显示</string>
     <string name="settings_hide">隐藏</string>
     <string name="settings_tunnel_title">Cloudflare 隧道</string>
-    <string name="settings_tunnel_desc">通过 Cloudflare 隧道可从公网访问本机（需先安装 cloudflared）</string>
+    <string name="settings_tunnel_desc">通过 Cloudflare 隧道可从公网访问本机（填入 token + 域名，需先安装 cloudflared）</string>
     <string name="settings_tunnel_start">启动隧道</string>
     <string name="settings_tunnel_starting">正在启动隧道…</string>
     <string name="settings_tunnel_running">隧道运行中</string>
     <string name="settings_tunnel_public_url">公网地址：%1$s</string>
-    <string name="settings_tunnel_no_hostname">隧道域名未识别（请检查 ~/.cloudflared/config.yml 的 hostname 配置）</string>
     <string name="settings_tunnel_stop">停止隧道</string>
     <string name="settings_tunnel_not_installed">未检测到 cloudflared，请自行安装</string>
     <string name="settings_tunnel_failed">隧道启动失败：%1$s</string>
+    <string name="settings_tunnel_token_label">隧道 Token</string>
+    <string name="settings_tunnel_token_placeholder">Cloudflare 面板复制的连接器 token</string>
+    <string name="settings_tunnel_token_note">在 Cloudflare Zero Trust → Networks → Tunnels 创建隧道并配置公网域名后，复制 token 填入此处。</string>
+    <string name="settings_tunnel_domain_label">公网域名（可选）</string>
+    <string name="settings_tunnel_domain_placeholder">app.example.com</string>
+    <string name="settings_tunnel_no_token">请先填写隧道 token</string>
     <string name="settings_retry">重试</string>
     <!-- 遥控/隧道启动失败原因（AppState.kt，UiMessage） -->
     <string name="remote_unsupported">当前端不支持遥控</string>

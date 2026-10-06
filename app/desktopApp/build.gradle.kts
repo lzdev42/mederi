@@ -1,3 +1,4 @@
+import org.gradle.language.jvm.tasks.ProcessResources
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
@@ -25,6 +26,29 @@ dependencies {
 
     // 图标库：用于浏览器工具栏后退、前进、刷新等图标
     implementation(libs.composeIcons.feather)
+}
+
+// ------------------------------------------------------------------
+// 自托管 wasmJs Web UI：构建期联动 :app:webApp 的 wasmJsBrowserDistribution
+// ------------------------------------------------------------------
+evaluationDependsOn(":app:webApp")
+
+val wasmJsProject = project(":app:webApp")
+val wasmJsDistTask = wasmJsProject.tasks.named("wasmJsBrowserDistribution")
+
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(wasmJsDistTask)
+    from(wasmJsProject.layout.buildDirectory.dir("dist/wasmJs/productionExecutable")) {
+        into("static")
+    }
+}
+
+tasks.withType<Tar> {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.withType<Zip> {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 compose.desktop {

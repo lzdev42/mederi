@@ -1493,8 +1493,15 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 hasSessionModel = true,
             )
         } else {
-            // 新/空会话（从未发送）：默认取最近修改会话的设置
-            applyRecentConversationDefaults()
+            // 新/空会话（从未发送，modelId == null）：保留用户当前选择器里的模型选择，不覆盖。
+            // 新会话应继承用户此刻在选框里选中的模型（_selectedModel 持有最近一次选择），而非强制套用
+            // 最近会话的模型——否则会把用户刚选的模型（如 agnes）悄悄换成另一会话的模型（如 glm）。
+            // 仅当当前确实无选中模型（应用刚启动，_selectedModel == null）时，才从最近会话推导默认值。
+            // 同时规避建会话竞态：getSnapshot 可能先于 sendMessage 的 modelId 回写读到 modelId=null，
+            // 此处不覆盖即可避免把首条消息用的模型被改成最近会话的模型（selectionHydrated 锁定后不再纠正）。
+            if (appState.selectedModel.value == null) {
+                applyRecentConversationDefaults()
+            }
         }
         // 执行策略不再单独恢复：applyConversationSettings 写 selectedAgentId 后，
         // AppState.selectedAgentMode 派生流自动跟随（唯一真理源，无本地副本可分叉）

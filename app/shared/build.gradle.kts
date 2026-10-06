@@ -95,6 +95,7 @@ kotlin {
             implementation(libs.ktor.serverCors)
             implementation(libs.ktor.serverSse)
             implementation(libs.ktor.serverAuth)
+            implementation(libs.ktor.serverCompression)
             implementation(libs.ktor.serializationJson)
             // TerminalHub：pty4j 真实 pty 会话（会话拥有者）。
             // JVM-only：pty4j 的 native 是 glibc 二进制，Android(bionic)/iOS(沙箱) 不可用，无 KMP 替代品

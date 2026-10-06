@@ -194,6 +194,7 @@ private fun RemoteControlCard(
                     )
                     when (val ts = tunnelState) {
                         is TunnelUiState.Idle -> {
+                            TunnelInputFields(appState, colors)
                             Text(stringResource(Res.string.settings_tunnel_desc), color = colors.textMuted, fontSize = 11.5.sp)
                             MederiPrimaryDecisionButton(
                                 text = stringResource(Res.string.settings_tunnel_start),
@@ -244,6 +245,8 @@ private fun RemoteControlCard(
                             val msg = if (ts.notInstalled) stringResource(Res.string.settings_tunnel_not_installed)
                             else stringResource(Res.string.settings_tunnel_failed, stringResource(ts.reason.key, *ts.reason.args.toTypedArray()))
                             Text(msg, color = colors.accentDanger, fontSize = 12.sp)
+                            // 失败时仍显示输入框，允许用户修改 token/domain 后重试
+                            TunnelInputFields(appState, colors)
                             MederiPrimaryDecisionButton(
                                 text = stringResource(Res.string.settings_retry),
                                 onClick = { appState.startTunnel() }
@@ -253,5 +256,70 @@ private fun RemoteControlCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * Cloudflare 隧道的 token + 域名输入框（Idle 和 Failed 状态共用）。
+ * Failed 时允许用户修改后重试，而不是只给一个重试按钮。
+ */
+@Composable
+private fun TunnelInputFields(
+    appState: xyz.mederi.ui.appstate.AppState,
+    colors: MederiColors,
+) {
+    val token by appState.tunnelToken.collectAsState()
+    val domain by appState.tunnelDomain.collectAsState()
+    var showToken by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = stringResource(Res.string.settings_tunnel_token_label),
+            color = colors.textPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        SettingsInputField(
+            value = token,
+            onValueChange = { appState.setTunnelToken(it) },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = stringResource(Res.string.settings_tunnel_token_placeholder),
+            singleLine = true,
+            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                Icon(
+                    imageVector = if (showToken) FeatherIcons.EyeOff else FeatherIcons.Eye,
+                    contentDescription = null,
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(16.dp).clickable { showToken = !showToken }
+                )
+            },
+            colors = colors
+        )
+        Text(
+            text = stringResource(Res.string.settings_tunnel_token_note),
+            color = colors.textMuted,
+            fontSize = 11.sp
+        )
+
+        // 域名输入
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = stringResource(Res.string.settings_tunnel_domain_label),
+            color = colors.textPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        SettingsInputField(
+            value = domain,
+            onValueChange = { appState.setTunnelDomain(it) },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = stringResource(Res.string.settings_tunnel_domain_placeholder),
+            singleLine = true,
+            colors = colors
+        )
     }
 }

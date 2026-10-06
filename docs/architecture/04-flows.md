@@ -584,9 +584,11 @@ flowchart TD
         D3 -- "是" --> D4["Running(port)"]
         D3 -- "否(被占)" --> D5["port=0 OS 挑空闲 → Running(actualPort, portFallback)"]
         D4 & D5 --> D6["AppState 回写 remote.port 实际端口"]
-        D7["startTunnel"] --> D8{"cloudflared 已装?"}
-        D8 -- "否" --> D9["UI 提示自行安装"]
-        D8 -- "是" --> D10["pty4j 真实 pty 拉起 cloudflared tunnel run<br/>进程退出→OS关pty→SIGHUP→cloudflared 退出"]
+        D7["startTunnel(port, token, domain)"] --> D8{"token 非空?"}
+        D8 -- "否" --> D9["Failed(请先填写隧道 token)"]
+        D8 -- "是" --> D10{"cloudflared 已装?"}
+        D10 -- "否" --> D11["UI 提示自行安装"]
+        D10 -- "是" --> D12["pty4j 真实 pty 拉起 cloudflared tunnel run --token<br/>进程退出→OS关pty→SIGHUP→cloudflared 退出<br/>URL = formatTunnelUrl(domain)"]
     end
     subgraph host2["server: Application.kt"]
         S1["读环境变量(PORT/CONFIG_DIR/PASSWORD/WEBAPP_DIR/RETRY)"] --> S2["MederiAiCore(configDir) + runBlocking initialize()"] --> S3["embeddedServer(Netty){ serverModule(...) }.start(wait=true)"]
@@ -598,6 +600,8 @@ flowchart TD
     end
     D4 & S3 --> ROUTE["serverModule(aiCore):<br/>Bearer 鉴权 / webapp 托管 / SPA fallback<br/>/v1 路由 → AiCore 方法 / SSE /v1/events"]
 ```
+
+**webapp 资源托管**：desktop 内嵌 wasmJs 遥控 UI——`webappDir` 优先（环境变量 `MEDERI_WEBAPP_DIR` 或探测常见 wasm 产物路径），为空时 `Server` 回退 classpath `staticResources("/","static")`（内置 wasm 产物）；浏览器访问 desktop IP:port 即加载同源托管（SPA fallback）的遥控 UI（详见 02-app-shared.md §9）。
 
 ## 11. 初始化时序（desktop 冷启动全链）
 
@@ -689,4 +693,4 @@ flowchart LR
 
 **ToolCallState（契约层）**：`Pending → Running → Completed / Failed`。
 
-**RemoteServerUiState**：`Idle → Starting → Running(port, portFallback?) / Failed`；**TunnelUiState**：`Idle → Starting → Running(url) / Failed(reason, notInstalled)`（`notInstalled=true` = 本机未装 cloudflared，AppState.kt L72-73）。
+**RemoteServerUiState**：`Idle → Starting → Running(port, portFallback?) / Failed`；**TunnelUiState**：`Idle → Starting → Running(url) / Failed(reason, notInstalled)`（`url` = `formatTunnelUrl(domain)` 用户填域名拼 `https://` 的结果；`notInstalled=true` = 本机未装 cloudflared，AppState.kt L72-73）。

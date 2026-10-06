@@ -1,21 +1,26 @@
 package xyz.mederi
 
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.server.testing.*
-import java.lang.classfile.Attributes.module
-import kotlin.test.*
+import kotlin.test.Test
+import kotlin.test.assertNotNull
 
 class ApplicationTest {
 
     @Test
-    fun testRoot() = testApplication {
-        application {
-            module()
-        }
-        val response = client.get("/")
-        assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals("Hello, Ktor!", response.bodyAsText())
+    fun staticResourcesExist() {
+        // wasmJs 入口页嵌入 classpath 的 /static/
+        assertNotNull(
+            ApplicationTest::class.java.getResource("/static/index.html"),
+            "wasmJs 入口页 /static/index.html 未嵌入 classpath"
+        )
+        // JS bundle 嵌入 classpath 的 /static/
+        assertNotNull(
+            ApplicationTest::class.java.getResource("/static/webApp.js"),
+            "wasmJs JS bundle /static/webApp.js 未嵌入 classpath"
+        )
+        // 样式资源嵌入 classpath 的 /static/
+        assertNotNull(
+            ApplicationTest::class.java.getResource("/static/styles.css"),
+            "wasmJs 样式 /static/styles.css 未嵌入 classpath"
+        )
     }
 }
