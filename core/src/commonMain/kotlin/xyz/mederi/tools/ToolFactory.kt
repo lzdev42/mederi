@@ -176,7 +176,8 @@ object ToolFactory {
                             subagentConfigManager = subagentConfigManager,
                             planStore = planStore
                         ),
-                        manager = mgr
+                        manager = mgr,
+                        parentSessionId = sessionId
                     )
                 }
             )

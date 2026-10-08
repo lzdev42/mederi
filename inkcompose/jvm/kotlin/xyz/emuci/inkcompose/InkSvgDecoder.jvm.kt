@@ -96,22 +96,22 @@ private val SVG_EXTENSIONS = setOf("svg", "svgz")
 
 internal class InkSvgDecoderFactory : Decoder.Factory {
 
-    override fun create(data: SourceFetchResult, options: Options, imageLoader: ImageLoader): Decoder? {
+    override fun create(result: SourceFetchResult, options: Options, imageLoader: ImageLoader): Decoder? {
         // 1. MIME 类型判断（网络请求通常带 Content-Type，零 I/O）
-        val mime = data.mimeType?.lowercase()
-        if (mime != null && mime.contains("svg")) return InkSvgDecoder(data, options)
+        val mime = result.mimeType?.lowercase()
+        if (mime != null && mime.contains("svg")) return InkSvgDecoder(result, options)
 
         // 2. 扩展名快速路径（本地 file:// 无 MIME 时，纯字符串操作零 I/O）
-        val filePath = data.source.file()?.name
+        val filePath = result.source.fileOrNull()?.name
         if (filePath != null) {
             val ext = filePath.substringAfterLast('.', "").lowercase()
-            if (ext in SVG_EXTENSIONS) return InkSvgDecoder(data, options)
+            if (ext in SVG_EXTENSIONS) return InkSvgDecoder(result, options)
         }
 
         // 3. 内容嗅探兜底（data: URI 或无扩展名场景）
         //    使用 peek + request 主动从上游拉取数据，避免读取空缓冲区
         val isSvg = try {
-            val peek = data.source.source().peek()
+            val peek = result.source.source().peek()
             peek.request(1024)
             val buffered = peek.buffer
             val n = minOf(buffered.size, 1024L).toInt()
@@ -119,6 +119,6 @@ internal class InkSvgDecoderFactory : Decoder.Factory {
         } catch (_: Exception) {
             false
         }
-        return if (isSvg) InkSvgDecoder(data, options) else null
+        return if (isSvg) InkSvgDecoder(result, options) else null
     }
 }

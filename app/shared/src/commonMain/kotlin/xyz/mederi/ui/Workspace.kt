@@ -19,7 +19,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.TextStyle
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import xyz.mederi.util.PlatformClipboard
+import xyz.mederi.util.copyText
+import xyz.mederi.util.readPlainTextFromClip
+import xyz.mederi.util.rememberClipboardCopy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -44,8 +51,11 @@ import mederi.app.shared.generated.resources.input_image_n
 import mederi.app.shared.generated.resources.input_pasted_text_n
 import mederi.app.shared.generated.resources.mode_auto_approve
 import mederi.app.shared.generated.resources.mode_manual_approve
+import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.ws_add_to_input
 import mederi.app.shared.generated.resources.ws_ai_image_n
+import mederi.app.shared.generated.resources.ws_paste_to_input
+import mederi.app.shared.generated.resources.ws_search
 import mederi.app.shared.generated.resources.ws_conversation_id
 import mederi.app.shared.generated.resources.ws_generated_image_n
 import mederi.app.shared.generated.resources.ws_new_conversation
@@ -80,6 +90,7 @@ import xyz.mederi.ui.components.TurnDiffSummaryCard
 import xyz.mederi.ui.components.WorkTraceCard
 import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
+import xyz.mederi.util.encodeUrlQuery
 import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.markdown.renderer.SelectionMenuAction
 import xyz.mederi.ui.components.atoms.ConfirmDialog
@@ -503,11 +514,31 @@ private fun MessageList(
     // 选区菜单 actions——在 item 外部 remember，避免每个 item 都重建
     // （stringResource 必须在组合上下文取值后传入：remember lambda 与操作用户回调都不是 @Composable）
     val addToInputLabel = stringResource(Res.string.ws_add_to_input)
-    val selectionMenuActions = remember(viewModel, addToInputLabel) {
+    val copyLabel = stringResource(Res.string.copy)
+    val searchLabel = stringResource(Res.string.ws_search)
+    val pasteLabel = stringResource(Res.string.ws_paste_to_input)
+    val clipboard = LocalClipboard.current
+    val clipboardScope = rememberCoroutineScope()
+    val selectionMenuActions = remember(
+        viewModel, addToInputLabel, copyLabel, searchLabel, pasteLabel, clipboard, clipboardScope,
+    ) {
         listOf(
-            SelectionMenuAction(addToInputLabel) { text ->
+            SelectionMenuAction(copyLabel, onClick = { text ->
+                clipboard.copyText(clipboardScope, text)
+            }),
+            SelectionMenuAction(searchLabel, onClick = { text ->
+                viewModel.openLink("https://www.google.com/search?q=" + encodeUrlQuery(text))
+            }),
+            SelectionMenuAction(pasteLabel, onClick = { _ ->
+                clipboardScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    val clip = readPlainTextFromClip(clipboard.getClipEntry())
+                        ?: PlatformClipboard.getText()
+                    if (!clip.isNullOrEmpty()) viewModel.appendToInput(clip)
+                }
+            }),
+            SelectionMenuAction(addToInputLabel, onClick = { text ->
                 viewModel.appendToInput(text)
-            }
+            }),
         )
     }
 
@@ -901,7 +932,7 @@ private fun MessageList(
                                             }
                                         }
                                         DisableSelection {
-                                            val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                                            val copyToClipboard = xyz.mederi.util.rememberClipboardCopy()
                                             UserMessageFooter(
                                                 createdAt = item.createdAt,
                                                 onRollback = {
@@ -913,7 +944,7 @@ private fun MessageList(
                                                 },
                                                 onCopy = {
                                                     val textToCopy = if (parsed.pastedTexts.isNotEmpty()) item.text else parsed.instruction.ifBlank { item.text }
-                                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(textToCopy))
+                                                    copyToClipboard(textToCopy)
                                                 },
                                                 modifier = Modifier.align(Alignment.End)
                                             )

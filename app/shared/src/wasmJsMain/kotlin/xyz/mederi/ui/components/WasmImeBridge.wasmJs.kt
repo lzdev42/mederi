@@ -73,8 +73,8 @@ actual fun WasmImeBridge(
         // 读 textarea 当前 value/选区 → 回灌 Compose（组合期不回灌，由调用方判断）
         fun flush() {
             val value = textarea.value
-            val start = textarea.selectionStart?.toInt() ?: 0
-            val end = textarea.selectionEnd?.toInt() ?: 0
+            val start = textarea.selectionStart ?: 0
+            val end = textarea.selectionEnd ?: 0
             latestOnValueChange.value(TextFieldValue(value, TextRange(start, end)))
         }
 

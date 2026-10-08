@@ -7,6 +7,10 @@ package xyz.emuci.markdown.renderer.internal.util
  * - iOS (Kotlin/Native)：kotlin.concurrent.Lock
  * - JS / wasmJs：单线程事件循环天然串行，直接执行
  */
-expect class CacheMutex() {
-    fun <T> withLock(block: () -> T): T
+class CacheMutex {
+    private val lock: Any = createPlatformCacheLock()
+    fun <T> withLock(block: () -> T): T = withPlatformCacheLock(lock, block)
 }
+
+internal expect fun createPlatformCacheLock(): Any
+internal expect fun <T> withPlatformCacheLock(lock: Any, block: () -> T): T

@@ -2,12 +2,10 @@ package xyz.emuci.syntax.i18n
 
 import java.util.Locale
 
-internal actual object PlatformLocale {
-    actual fun current(): LocaleInfo {
-        val locale = Locale.getDefault()
-        return LocaleInfo(
-            language = locale.language ?: "en",
-            country = locale.country ?: ""
-        )
-    }
+internal actual fun currentPlatformLocale(): LocaleInfo {
+    val locale = Locale.getDefault()
+    return LocaleInfo(
+        language = locale.language ?: "en",
+        country = locale.country ?: ""
+    )
 }

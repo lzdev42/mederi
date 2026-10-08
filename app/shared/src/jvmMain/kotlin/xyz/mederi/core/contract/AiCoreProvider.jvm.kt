@@ -2,6 +2,4 @@ package xyz.mederi.core.contract
 
 import xyz.mederi.core.bridge.MederiAiCore
 
-actual object AiCoreProvider {
-    actual fun default(): AiCore = MederiAiCore(configDir = "~/.mederi")
-}
+internal actual fun createDefaultAiCore(): AiCore = MederiAiCore(configDir = "~/.mederi")

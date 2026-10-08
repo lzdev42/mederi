@@ -55,6 +55,6 @@ class StopAgentTool(
 ) {
     override suspend fun execute(args: StopAgentArgs): String {
         if (args.agentId.isBlank()) return "Error: agentId must not be empty."
-        return subagentManager.stop(args.agentId)
+        return subagentManager.stop(args.agentId, operator = SubagentManager.OPERATOR_MAIN_AGENT)
     }
 }

@@ -15,9 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import xyz.mederi.util.rememberClipboardCopy
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -151,7 +150,7 @@ internal fun TextReaderTabContent(
     isStreaming: Boolean = false,
     colors: MederiColors
 ) {
-    val clipboardManager = LocalClipboardManager.current
+    val copyToClipboard = rememberClipboardCopy()
     var copied by remember { mutableStateOf(false) }
 
     var exportError by remember { mutableStateOf<String?>(null) }
@@ -251,7 +250,7 @@ internal fun TextReaderTabContent(
                         .clip(RoundedCornerShape(4.dp))
                         .background(if (copied) colors.accentSuccess.copy(alpha = 0.15f) else colors.surfaceWorkspace)
                         .clickable {
-                            clipboardManager.setText(AnnotatedString(content))
+                            copyToClipboard(content)
                             copied = true
                         }
                         .padding(horizontal = 7.dp, vertical = 3.dp)

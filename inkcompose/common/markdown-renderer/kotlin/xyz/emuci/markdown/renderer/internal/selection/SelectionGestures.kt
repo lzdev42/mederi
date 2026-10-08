@@ -1,5 +1,7 @@
 package xyz.emuci.markdown.renderer.internal.selection
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusable
@@ -73,6 +75,13 @@ internal fun Modifier.markdownSelectionGestures(
             connection = object : NestedScrollConnection {},
             dispatcher = dispatcher,
         )
+        .pointerInput(controller) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                controller.state.isMouseInput = down.type == PointerType.Mouse
+                // 不消费：detectDragGestures/detectTapGestures 仍能收到该 down
+            }
+        }
         .pointerInput(controller, dispatcher) {
             var selectionActive = false
             var pendingStart: Offset? = null
@@ -98,27 +107,39 @@ internal fun Modifier.markdownSelectionGestures(
                     pendingStart = null
                 },
                 onDrag = { change, dragAmount ->
-                    // 通过 nestedScroll 把拖拽量先分发给父级（LazyColumn）。
-                    // 父级能滚动就消费，不能滚动（到边界）则返回 0。
-                    val consumedByParent = dispatcher.dispatchPreScroll(
-                        available = dragAmount,
-                        source = NestedScrollSource.UserInput,
-                    )
-
-                    if (consumedByParent != Offset.Zero) {
-                        // 父级滚动了 → 取消已启动的选区
-                        if (selectionActive) {
-                            controller.finishSelectionGesture()
-                            selectionActive = false
-                        }
-                    } else {
-                        // 父级没滚动 → 启动/扩展选区
+                    if (change.type == PointerType.Mouse) {
+                        // 鼠标拖拽 = 直接框选，不把拖拽量让给父级滚动容器（列表滚动交滚轮/触控板）
                         if (!selectionActive && pendingStart != null) {
                             controller.beginSelectionAtRootLocal(pendingStart!!)
                             selectionActive = true
                         }
                         if (selectionActive) {
                             controller.extendSelectionToRootLocal(change.position)
+                        }
+                    } else {
+                        // 触屏：nestedScroll 先喂父级（LazyColumn），父级能滚就消费并取消选区，到边界才选
+                        // 通过 nestedScroll 把拖拽量先分发给父级（LazyColumn）。
+                        // 父级能滚动就消费，不能滚动（到边界）则返回 0。
+                        val consumedByParent = dispatcher.dispatchPreScroll(
+                            available = dragAmount,
+                            source = NestedScrollSource.UserInput,
+                        )
+
+                        if (consumedByParent != Offset.Zero) {
+                            // 父级滚动了 → 取消已启动的选区
+                            if (selectionActive) {
+                                controller.finishSelectionGesture()
+                                selectionActive = false
+                            }
+                        } else {
+                            // 父级没滚动 → 启动/扩展选区
+                            if (!selectionActive && pendingStart != null) {
+                                controller.beginSelectionAtRootLocal(pendingStart!!)
+                                selectionActive = true
+                            }
+                            if (selectionActive) {
+                                controller.extendSelectionToRootLocal(change.position)
+                            }
                         }
                     }
                     change.consume()

@@ -20,7 +20,7 @@ enum class AppLanguage(val tag: String?, val nativeName: String) {
     ES("es", "Español"),
     PT_BR("pt-BR", "Português (Brasil)"),
     ID("id", "Bahasa Indonesia"),
-    MNC("mnc", "Manchu");
+    MNC("mnc", "Manju");
 
     companion object {
         fun fromString(value: String?): AppLanguage =

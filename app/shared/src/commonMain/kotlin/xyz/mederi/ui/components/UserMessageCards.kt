@@ -20,9 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import kotlinx.coroutines.delay
+import xyz.mederi.util.rememberClipboardCopy
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.action_rollback
 import mederi.app.shared.generated.resources.attachment_meta
@@ -234,7 +233,7 @@ fun AssistantMessageFooter(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalMederiColors.current
-    val clipboardManager = LocalClipboardManager.current
+    val copyToClipboard = rememberClipboardCopy()
     var copiedLast by remember { mutableStateOf(false) }
     var copiedFull by remember { mutableStateOf(false) }
 
@@ -315,7 +314,7 @@ fun AssistantMessageFooter(
                     text = textLast,
                     icon = if (copiedLast) FeatherIcons.Check else FeatherIcons.Copy,
                     onClick = {
-                        clipboardManager.setText(AnnotatedString(lastMessageText))
+                        copyToClipboard(lastMessageText)
                         copiedLast = true
                     },
                 )
@@ -327,7 +326,7 @@ fun AssistantMessageFooter(
                     text = textFull,
                     icon = if (copiedFull) FeatherIcons.Check else FeatherIcons.Copy,
                     onClick = {
-                        clipboardManager.setText(AnnotatedString(fullTurnText))
+                        copyToClipboard(fullTurnText)
                         copiedFull = true
                     },
                 )

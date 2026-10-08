@@ -63,9 +63,11 @@ internal object Strings {
 /**
  * 平台相关的 Locale 获取
  */
-internal expect object PlatformLocale {
-    fun current(): LocaleInfo
+internal object PlatformLocale {
+    fun current(): LocaleInfo = currentPlatformLocale()
 }
+
+internal expect fun currentPlatformLocale(): LocaleInfo
 
 /**
  * 语言环境信息

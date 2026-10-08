@@ -1,7 +1,5 @@
 package xyz.emuci.inkcompose
 
-actual object MermaidCacheConfig {
-    actual fun setBaseDirectory(path: String) {}
-    actual fun getBaseDirectory(): String? = null
-    actual fun clearSessionCache(sessionKey: String) {}
-}
+internal actual fun platformMermaidSetBaseDirectory(path: String) {}
+internal actual fun platformMermaidGetBaseDirectory(): String? = null
+internal actual fun platformMermaidClearSessionCache(sessionKey: String) {}

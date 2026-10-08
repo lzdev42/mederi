@@ -53,8 +53,6 @@ import xyz.mederi.theme.MederiTypeScale
  *
  * 组件级尺寸不在全局刻度内（28dp 按钮、22dp 面板图标、11dp 小图标、5dp gap），按标准值直用并注释。
  */
-private val MederiColors.borderStrong: Color get() = textMuted
-
 /** §1.1 主操作字号 12sp/500（MederiTypeScale.Body + Medium） */
 private val DecisionLabel: TextStyle = MederiTypeScale.Body.copy(fontWeight = FontWeight.Medium)
 

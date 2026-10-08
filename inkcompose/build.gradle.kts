@@ -63,6 +63,7 @@ kotlin {
                 api(libs.kotlinx.coroutinesCore)
                 implementation(libs.coil.compose)
                 implementation(libs.coil.network.ktor3)
+                implementation(libs.ktor.clientCore)
                 implementation(libs.kbrowser)
             }
         }

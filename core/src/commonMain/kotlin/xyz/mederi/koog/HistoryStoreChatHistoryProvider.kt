@@ -157,6 +157,7 @@ class HistoryStoreChatHistoryProvider(
         //    这里先按 id 剔除已在库中的回显消息，只对真正的新消息做回写——
         //    已落库消息永远以库中版本为准，无图 AI 视图不得覆盖历史。
         val existingIds = existing.mapTo(java.util.HashSet<String?>()) { it.id }
+        val incomingIds = incoming.mapTo(java.util.HashSet<String?>()) { it.id }
         val freshIncoming = incoming.filter { it.id !in existingIds }
         if (freshIncoming.isEmpty()) return
 
@@ -223,11 +224,17 @@ class HistoryStoreChatHistoryProvider(
         if (alignStart >= 0) {
             var i = 0
             var j = alignStart
-            while (i < freshIncoming.size && j < existing.size &&
-                freshIncomingSigs[i] == existingSigs[j]
-            ) {
-                i++
-                j++
+            while (i < freshIncoming.size && j < existing.size) {
+                if (freshIncomingSigs[i] == existingSigs[j]) {
+                    i++
+                    j++
+                } else if (existing[j].id in incomingIds) {
+                    // existing[j] 在 incoming 中存在但被 id 过滤移出了 freshIncoming（如 steering 消息）
+                    // 跳过它继续对齐
+                    j++
+                } else {
+                    break
+                }
             }
             // i 之后的是本轮新增消息（j 已到已有历史末尾或内容不再匹配）
             for (msg in freshIncoming.drop(i)) {

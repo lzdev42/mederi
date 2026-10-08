@@ -658,8 +658,8 @@ class TurnExecutor(
     fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? =
         subagentManager.getReport(agentId)
 
-    fun stopSubagent(agentId: String, reason: String = "被用户关闭"): String =
-        subagentManager.stop(agentId, reason)
+    fun stopSubagent(agentId: String, reason: String = SubagentManager.REASON_STOPPED_BY_USER): String =
+        subagentManager.stop(agentId, reason = reason)
 
     suspend fun resolvePlanApproval(
         sessionId: String,
@@ -1704,6 +1704,16 @@ class TurnExecutor(
             val session = sessionStore.get(sessionId) ?: return
             if (session.status == SessionStatus.RUNNING || activeJobs[sessionId]?.isActive == true) {
                 DebugLog.debug("TurnExec", "dispatchPendingEventMessages: session $sessionId is RUNNING, deferring dispatch")
+                return
+            }
+
+            // 仍有 RUNNING 子代理时延后派发：等全部终态事件聚合（多个子代理并发完成时，
+            // 前面的终态事件会先入队；若此时就冲刷，父代理会被中间状态唤醒多次）。
+            // 不加定时器、不轮询——最后一个子代理完成发终态事件 → handleSubagentTerminalEvent
+            // → 再次调本方法，此时 runningCount 为 0 才真正派发。
+            val runningSubagents = subagentManager.runningCountForSession(sessionId)
+            if (runningSubagents > 0) {
+                DebugLog.debug("TurnExec", "dispatchPendingEventMessages: $sessionId has $runningSubagents running subagent(s), deferring dispatch")
                 return
             }
 

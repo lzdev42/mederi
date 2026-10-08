@@ -243,7 +243,11 @@ class SubagentManager(
                     throw e
                 }
                 val reason = bg.stopReason ?: e.message?.takeIf { it.isNotBlank() } ?: "cancelled"
-                bg.result = if (reason == "被用户关闭") "被用户关闭" else "[stopped] $reason"
+                bg.result = if (reason == REASON_STOPPED_BY_USER || reason == REASON_STOPPED_BY_MAIN_AGENT) {
+                    reason
+                } else {
+                    "[stopped] $reason"
+                }
                 bg.status = SubagentStatus.STOPPED
                 bg.progress = "stopped"
                 throw e
@@ -354,8 +358,17 @@ class SubagentManager(
         return Json.encodeToString(StatusResult(agentId = agentId, status = "NOT_FOUND"))
     }
 
-    /** 取消子 Agent，返回 JSON（含部分结果）。 */
-    fun stop(agentId: String, reason: String = "被用户关闭"): String {
+    /**
+     * 取消子 Agent，返回 JSON（含部分结果）。
+     *
+     * @param operator 操作者标识（传入非空值如 [OPERATOR_MAIN_AGENT] 表示由主 Agent 主动关闭；未传/为 null 表示由用户关闭）。
+     * @param reason 关闭原因文本（未显式指定时按 [operator] 决定：[REASON_STOPPED_BY_MAIN_AGENT] 或 [REASON_STOPPED_BY_USER]）。
+     */
+    fun stop(
+        agentId: String,
+        operator: String? = null,
+        reason: String = if (!operator.isNullOrBlank()) REASON_STOPPED_BY_MAIN_AGENT else REASON_STOPPED_BY_USER
+    ): String {
         val bg = agents[agentId]
             ?: return Json.encodeToString(StatusResult(agentId = agentId, status = "NOT_FOUND"))
         bg.stopReason = reason
@@ -365,7 +378,7 @@ class SubagentManager(
                 agentId = agentId,
                 status = SubagentStatus.STOPPED.name,
                 progress = "stopped",
-                result = bg.result ?: if (reason == "被用户关闭") "被用户关闭" else null
+                result = bg.result ?: if (reason == REASON_STOPPED_BY_USER || reason == REASON_STOPPED_BY_MAIN_AGENT) reason else null
             )
         )
     }
@@ -391,6 +404,16 @@ class SubagentManager(
         }
         return stopped
     }
+
+    /**
+     * 查询一个父会话当前 RUNNING 子代理数（纯读，agents 为 ConcurrentHashMap，无需加锁）。
+     *
+     * 用途：STATUS 拦截轮询（有 RUNNING 子代理时禁止父代理 STATUS 轮询，改为结束 turn 等自动唤醒）；
+     * SPAWN 返回值 runningCount 增强；TurnExecutor 事件冲刷前检查（仍有 RUNNING 子代理时延后派发，
+     * 等全部终态事件聚合后再一次性唤醒）。
+     */
+    fun runningCountForSession(parentSessionId: String): Int =
+        agents.values.count { it.parentSessionId == parentSessionId && it.status == SubagentStatus.RUNNING }
 
     /**
      * 回滚对话历史时，丢弃在回滚目标消息时尚未创立的子 Agent。
@@ -496,6 +519,10 @@ class SubagentManager(
     )
 
     companion object {
+        const val OPERATOR_MAIN_AGENT = "MAIN_AGENT"
+        const val REASON_STOPPED_BY_USER = "被用户关闭"
+        const val REASON_STOPPED_BY_MAIN_AGENT = "已被主agent关闭"
+
         /** 从报告文本中提取报告落盘路径。格式形如：`[executor report saved to /path/to/file]` */
         fun extractReportPath(text: String): String? {
             val regex = Regex("""\[(?:executor|research)\s+report\s+saved\s+to\s+([^]]+)]""")

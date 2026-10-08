@@ -147,12 +147,14 @@ internal fun ChipSelectorPill(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     height: Dp = 26.dp,
+    maxWidth: Dp? = null,
     onClick: () -> Unit = {}
 ) {
     val colors = LocalMederiColors.current
     Row(
         modifier = Modifier
             .height(height)
+            .then(if (maxWidth != null) Modifier.widthIn(max = maxWidth) else Modifier)
             .clip(RoundedCornerShape(MederiRadius.Control))
             .background(colors.surfaceHover)
             .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(MederiRadius.Control))

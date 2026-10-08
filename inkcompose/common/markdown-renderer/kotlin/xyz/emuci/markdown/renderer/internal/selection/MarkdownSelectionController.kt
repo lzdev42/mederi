@@ -254,8 +254,9 @@ internal class MarkdownSelectionController(
         if (selectedText.isEmpty()) {
             clearSelection()
         } else {
-            skipNextTapClear = true
-            state.toolbarRequestKey += 1
+            // 鼠标框选后不吞下次点击：鼠标点击空白处应清选区（skipNextTapClear 不设）
+            if (!state.isMouseInput) skipNextTapClear = true
+            if (!state.isMouseInput) state.toolbarRequestKey += 1
         }
     }
 
@@ -298,8 +299,8 @@ internal class MarkdownSelectionController(
         val text = entry.text
         if (text.isEmpty()) {
             state.range = SelectionRange(anchor, anchor)
-            skipNextTapClear = true
-            state.toolbarRequestKey += 1
+            if (!state.isMouseInput) skipNextTapClear = true
+            if (!state.isMouseInput) state.toolbarRequestKey += 1
             return
         }
         val pos = anchor.charInBlock.coerceIn(0, text.length - 1)
@@ -309,8 +310,8 @@ internal class MarkdownSelectionController(
             SelectionAnchor(anchor.blockStableId, start),
             SelectionAnchor(anchor.blockStableId, end),
         )
-        skipNextTapClear = true
-        state.toolbarRequestKey += 1
+        if (!state.isMouseInput) skipNextTapClear = true
+        if (!state.isMouseInput) state.toolbarRequestKey += 1
     }
 
     /**
@@ -322,7 +323,9 @@ internal class MarkdownSelectionController(
         if (!hasSelection) {
             selectWordAtRootLocal(rootLocal)
         }
-        skipNextTapClear = true
+        // showContextMenuAt 只由鼠标右键触发（isMouseInput=true），故不设——
+        // 下次左键点击（onTap）直接清选区
+        if (!state.isMouseInput) skipNextTapClear = true
         state.toolbarRequestKey += 1
     }
 

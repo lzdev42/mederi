@@ -7,6 +7,11 @@ package xyz.mederi.core.contract
  * - android / ios / wasmJs 暂返回 [xyz.mederi.core.mock.MockAiCore] 作为占位，
  *   等平台 actual 接入真实 core 后再替换。
  */
-expect object AiCoreProvider {
-    fun default(): AiCore
+object AiCoreProvider {
+    const val KEY_SERVER_URL = "remote.baseUrl"
+    const val KEY_SERVER_PASSWORD = "remote.password"
+
+    fun default(): AiCore = createDefaultAiCore()
 }
+
+internal expect fun createDefaultAiCore(): AiCore

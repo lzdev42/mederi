@@ -158,6 +158,8 @@
     <string name="ws_conversation_id">Conversation %1$s</string>
     <string name="ws_open_extension">Open extension panel</string>
     <string name="ws_add_to_input">Add to input</string>
+    <string name="ws_search">Search</string>
+    <string name="ws_paste_to_input">Paste to input</string>
     <string name="ws_summary_title">Compacted summary</string>
     <string name="ws_generated_image_n">Generated image #%1$d</string>
     <string name="ws_ai_image_n">AI image #%1$d</string>

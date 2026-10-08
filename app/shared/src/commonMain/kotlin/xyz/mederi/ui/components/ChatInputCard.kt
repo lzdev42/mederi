@@ -57,8 +57,18 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
+import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collect
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowUp
@@ -216,6 +226,9 @@ fun ChatInputCard(
 
     // 菜单显隐控制：只有在匹配到候选且未被 Esc 显式关闭时展示
     val slashMenuOpen = hasActiveQuery && filteredSlashCommands.isNotEmpty() && !slashMenuDismissed
+
+    // 斜杠菜单 Popup 锚点：输入卡片外层 Box（含聚焦 ring）在窗口中的坐标，供 PopupPositionProvider 定位
+    var cardCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     LaunchedEffect(filteredSlashCommands.size) {
         if (slashSelectedIndex >= filteredSlashCommands.size) {
@@ -420,20 +433,6 @@ fun ChatInputCard(
             )
         }
 
-        // 快捷命令浮层（分体式独立卡片：位于输入框卡片上方，保持间隔）
-        AnimatedVisibility(
-            visible = slashMenuOpen,
-            enter = expandVertically(tween(160)) + fadeIn(tween(160)),
-            exit = shrinkVertically(tween(120)) + fadeOut(tween(120))
-        ) {
-            SlashCommandMenu(
-                items = filteredSlashCommands,
-                selectedIndex = slashSelectedIndex,
-                onSelect = onSelectCommand,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
         // 输入卡片（聚焦 ring：常驻 1dp 透明外环预留避免聚焦抖动；聚焦时外环 accentFocus + 卡片自身 border 同步切换）
         Box(
             modifier = Modifier
@@ -443,6 +442,7 @@ fun ChatInputCard(
                     RoundedCornerShape(MederiRadius.Card)
                 )
                 .padding(1.dp)
+                .onGloballyPositioned { cardCoords = it }
         ) {
             Card(
                 shape = RoundedCornerShape(MederiRadius.Card),
@@ -704,116 +704,130 @@ fun ChatInputCard(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 第二层：工具栏（自适应换行排版）
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val isCompact = maxWidth < 640.dp
-                    DebugLog.data(
-                        "UI", "ChatInputCard toolbar layout",
-                        "maxWidth=$maxWidth, layoutMode=${if (isCompact) "STACKED_FLOW" else "SINGLE_LINE"}, model=${selectedModel?.name}"
-                    )
-
-                    if (isCompact) {
-                        // 挤压模式：提高输入框高度，换行排列控件，控件尺寸固定且不缺失任何功能项
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // 第一行：上下文控制组（项目选择、附件、图片、自动审批）
-                            FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.Start),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                ProjectSelectorMenu(
-                                    onOpenProjectPicker = onOpenProjectPicker,
-                                    onSelect = { viewModel.selectProject(it) },
-                                    highlight = needProjectGuide,
-                                    openRequest = projectMenuOpenCount
-                                )
-                                IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
-                                if (modelSupportsImages) {
-                                    IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
-                                }
-                                AgentModeSelector(viewModel = viewModel)
-                            }
-
-                            // 第二行：模型配置与主操作组（API Key、模型、思考等级、发送/停止按钮）
-                            FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                ApiKeySelectorMenu(viewModel = viewModel)
-                                ModelSelectorMenu(viewModel = viewModel, compact = false)
-                                AnimatedVisibility(
-                                    visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
-                                    enter = fadeIn(tween(180)) + expandHorizontally(tween(180)),
-                                    exit = fadeOut(tween(180)) + shrinkHorizontally(tween(180))
-                                ) {
-                                    ThinkingLevelMenu(viewModel = viewModel)
-                                }
-                                SendButton(
-                                    size = 28.dp,
-                                    isStreaming = isStreaming,
-                                    hasContent = hasContent,
-                                    canSend = canSend,
-                                    onSubmit = submit
-                                )
-                            }
+                // 第二层：工具栏（内容驱动换行：发送按钮钉在第一行最右永不换行；
+                // 其余控件在其左侧剩余空间回流，挤兑时自动折行，不再依赖 640dp 阈值）
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    // 回流区：上下文控制 + 模型配置，占据发送按钮左侧的剩余宽度，内容超限自动折行
+                    FlowRow(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ProjectSelectorMenu(
+                            onOpenProjectPicker = onOpenProjectPicker,
+                            onSelect = { viewModel.selectProject(it) },
+                            highlight = needProjectGuide,
+                            openRequest = projectMenuOpenCount
+                        )
+                        IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
+                        if (modelSupportsImages) {
+                            IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
                         }
-                    } else {
-                        // 宽屏模式：单行两端对齐排版
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        AgentModeSelector(viewModel = viewModel)
+                        ApiKeySelectorMenu(viewModel = viewModel)
+                        ModelSelectorMenu(viewModel = viewModel, compact = false)
+                        AnimatedVisibility(
+                            visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
+                            enter = fadeIn(tween(180)) + expandHorizontally(tween(180)),
+                            exit = fadeOut(tween(180)) + shrinkHorizontally(tween(180))
                         ) {
-                            // 左侧：项目选择器 + 附件 + 图片 + 执行策略
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                ProjectSelectorMenu(
-                                    onOpenProjectPicker = onOpenProjectPicker,
-                                    onSelect = { viewModel.selectProject(it) },
-                                    highlight = needProjectGuide,
-                                    openRequest = projectMenuOpenCount
-                                )
-                                IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
-                                if (modelSupportsImages) {
-                                    IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
-                                }
-                                AgentModeSelector(viewModel = viewModel)
-                            }
-
-                            // 右侧：模型 / 思考等级 / 发送
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                ApiKeySelectorMenu(viewModel = viewModel)
-                                ModelSelectorMenu(viewModel = viewModel, compact = false)
-                                AnimatedVisibility(
-                                    visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
-                                    enter = fadeIn(tween(180)) + expandHorizontally(tween(180)),
-                                    exit = fadeOut(tween(180)) + shrinkHorizontally(tween(180))
-                                ) {
-                                    ThinkingLevelMenu(viewModel = viewModel)
-                                }
-                                SendButton(
-                                    size = 28.dp,
-                                    isStreaming = isStreaming,
-                                    hasContent = hasContent,
-                                    canSend = canSend,
-                                    onSubmit = submit
-                                )
-                            }
+                            ThinkingLevelMenu(viewModel = viewModel)
                         }
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    // 发送/停止：钉在第一行最右，永不参与换行（Top 对齐回流区首行）
+                    SendButton(
+                        size = 28.dp,
+                        isStreaming = isStreaming,
+                        hasContent = hasContent,
+                        canSend = canSend,
+                        onSubmit = submit
+                    )
                 }
             }
             }
+            // 斜杠菜单 Popup 浮层（不参与布局测量；锚定输入卡片正上方，上方空间不足翻转到下方）
+            if (slashMenuOpen && cardCoords != null) {
+                // 菜单宽度对齐输入卡片：Popup 内容默认受窗口宽度约束，SlashCommandMenu 内部
+                // fillMaxWidth 会撑满整窗；用卡片实际宽度收口，使菜单与输入框同宽（左缘对齐卡片）。
+                val cardWidthDp = with(LocalDensity.current) { cardCoords!!.size.width.toDp() }
+                Popup(
+                    popupPositionProvider = SlashMenuPopupPositionProvider(cardCoords, LocalDensity.current),
+                    onDismissRequest = { slashMenuDismissed = true },
+                    properties = PopupProperties(focusable = false)
+                ) {
+                    SlashMenuPopupContent(
+                        items = filteredSlashCommands,
+                        selectedIndex = slashSelectedIndex,
+                        onSelect = onSelectCommand,
+                        modifier = Modifier.width(cardWidthDp)
+                    )
+                }
+            }
         }
+    }
+}
+
+/**
+ * 斜杠菜单 Popup 定位器：把菜单锚定在输入卡片正上方（gap 8.dp），
+ * 上方空间不足时翻转到卡片下方；横向超宽时贴窗口右缘裁剪。
+ * coords 为 null（锚点尚未捕获）时退化为 anchorBounds.topLeft（与 DropdownMenu 一致）。
+ */
+private class SlashMenuPopupPositionProvider(
+    val coords: LayoutCoordinates?,
+    val density: Density
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize
+    ): IntOffset {
+        val anchor = coords ?: return anchorBounds.topLeft
+        val gap = with(density) { 8.dp.toPx() }.roundToInt()
+        val pos = anchor.positionInWindow()
+        val x = pos.x.roundToInt()
+        val y = pos.y.roundToInt()
+        val h = anchor.size.height
+        var targetX = x
+        var targetY = y - gap - popupContentSize.height
+        if (targetY < 0) {
+            // 上方空间不足：翻转到卡片下方
+            targetY = y + h + gap
+        }
+        if (targetX + popupContentSize.width > windowSize.width) {
+            targetX = max(0, windowSize.width - popupContentSize.width)
+        }
+        return IntOffset(targetX, targetY)
+    }
+}
+
+/**
+ * 斜杠菜单 Popup 内容（独立顶层 Composable：脱离外层 Column 作用域，
+ * 避免 `ColumnScope.AnimatedVisibility` 的隐式接收者 DSL 冲突，
+ * 保留 enter-only 进入动画——退出动画由 Popup 卸载承担）。
+ */
+@Composable
+private fun SlashMenuPopupContent(
+    items: List<SlashCommandItem>,
+    selectedIndex: Int,
+    onSelect: (SlashCommandItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = true,
+        enter = expandVertically(tween(160)) + fadeIn(tween(160)),
+        modifier = modifier
+    ) {
+        SlashCommandMenu(
+            items = items,
+            selectedIndex = selectedIndex,
+            onSelect = onSelect,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 

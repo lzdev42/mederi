@@ -14,6 +14,8 @@ internal class MarkdownSelectionState {
     var activeHandle: SelectionActiveHandle by mutableStateOf(SelectionActiveHandle.None)
     var isHandleDrag: Boolean by mutableStateOf(false)
     var toolbarRequestKey: Int by mutableStateOf(0)
+    /** 输入模式标志：true=鼠标，false=触屏。默认触屏。 */
+    var isMouseInput: Boolean by mutableStateOf(false)
 
     val hasSelection: Boolean get() = range != null
 
@@ -22,5 +24,6 @@ internal class MarkdownSelectionState {
         activeHandle = SelectionActiveHandle.None
         isHandleDrag = false
         toolbarRequestKey = 0
+        isMouseInput = false
     }
 }

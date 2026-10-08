@@ -238,6 +238,8 @@ internal fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) 
     Box {
         ChipSelectorPill(
             label = selectedModel?.name ?: stringResource(Res.string.input_select_model),
+            // 封顶胶囊宽度：超长模型名省略作溢出兜底，不无限撑宽、不挤压 send/thinking 控件
+            maxWidth = 260.dp,
             onClick = { expanded = true }
         )
         DropdownMenu(

@@ -528,7 +528,7 @@ class MederiAiCore(
         }
         runCatching {
             val project = mederi.projects.get(projectId)
-            project?.directory?.let { dirPath ->
+            project.directory.let { dirPath ->
                 val mermaidDir = File(dirPath, ".mederi/mermaid")
                 if (mermaidDir.exists()) {
                     mermaidDir.deleteRecursively()

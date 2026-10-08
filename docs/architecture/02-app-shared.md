@@ -125,7 +125,7 @@ interface AiCore {
 **配套契约接口**（与 AiCore 并列的平台能力注入）：
 - `Terminal.kt`：`TerminalManager(getOrCreate/find/all)` + `TerminalSession(key/title/isRunning/exitCode/output()/write/resize/kill)` —— 仅本机 jvmMain 实现（PtyTerminalHub），遥控端 null。
 - `SandboxHooks.kt`：`setSandboxExtraPaths(paths)` + `sandboxStatus(): SandboxStatusInfo?` —— 仅 MederiAiCore 实现；`SandboxStatusInfo(backend, available, shell, detail)`。
-- `AiCoreProvider.kt`：`expect object AiCoreProvider { fun default(): AiCore }`。
+- `AiCoreProvider.kt`：`object AiCoreProvider { fun default(): AiCore }`（委托顶层 `internal expect fun defaultAiCore(): AiCore`）。
 
 ## 2. 契约模型（`…/contract/models/` + `dto/`）
 
@@ -550,7 +550,7 @@ flowchart TD
 - **PromptComposer**：粘贴大文本判定（`isLargeText` ≥800 字符或 ≥15 行）+ Prompt 组装/解析（compose 主指令在前、粘贴文本以编号 XML `<pasted_text>` 标签追加在后；parse 反向拆分）。
 - **GitUtils**：`expect fun getGitBranch(directoryPath): String?`。
 - **PlatformUtils**：`expect openUrl` + `expect openFile(path): Boolean`（成功 true 失败 false——2026-10 由 Unit 改为 Boolean；macOS 用 `open` 命令（LaunchServices，与双击行为一致，exit 0 = 成功），Windows/Linux 用 `Desktop.open` 包 try-catch）+ `expect defaultAppNameFor(path): String?`（查系统默认打开程序的人类可读名；macOS 恒 null 走泛称，Linux 走 `xdg-mime`→`.desktop` 的 `Name`，Windows 走 `assoc`+`ftype`→exe 友好名表）+ `expect revealInFolder(path): Boolean`（mac `open -R` / Windows `explorer /select,"path"` 单参数 / Linux KDE `dolphin --select` 失败回落 `xdg-open` 父目录）+ 纯函数 `formatContextWindow`(token→"x.x万/K")、`formatBytes`、`formatCpuUsage`。jvm actual 全部走 `ProcessBuilder(List)` 数组传参 + `runCatching` 兜底（宿主 OS I/O，免 JNI/JNA，其余平台 stub 返回 null/false）；遥控端文件不在本地，均返回 null/false。
-- **ClipboardHelper**：`expect object PlatformClipboard { getImage()/getText() }`（读系统剪贴板图片/文本）。
+- **ClipboardHelper**：`object PlatformClipboard { getImage()/getText() }`（委托顶层 `expect` 读系统剪贴板图片/文本）+ `expect fun plainTextClipEntry(text): ClipEntry` / `expect suspend fun readPlainTextFromClip(clipEntry): String?` / `Clipboard.copyText` / `rememberClipboardCopy()`（基于 `LocalClipboard` 的跨平台剪贴板读写）。
 - **DirectoryPicker**：`expect suspend fun pickDirectory(title: String): String?`（title 为原生对话框标题，UI 层 stringResource 后传入）。
 - **FilePickerUtils**：`expect suspend fun pickSaveFile(defaultName: String, extension: String, title: String, filterLabel: String): String?`（title/filterLabel 由 UI 层本地化后传入）；`expect suspend fun writeTextToFile(filePath: String, text: String): Boolean`。
 - **DocumentExporter**（`util/DocumentExporter.kt`）：`suspend fun exportDocumentToHtml / exportDocumentToPdf`——内部 `pickSaveFile → MarkdownExporter.toHtml/toPdf → writeTextToFile → openFile`，返回 `ExportResult(status, error)`（`ExportStatus{EXPORTED, CANCELLED, WRITE_FAILED, EXPORT_FAILED}`；2026-09 自 TextReaderTabContent 移出，Composable 层零 I/O）。

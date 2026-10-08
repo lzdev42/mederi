@@ -15,10 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import xyz.mederi.util.rememberClipboardCopy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,7 +71,7 @@ fun ErrorDetailDialog(
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMederiColors.current
-    val clipboardManager = LocalClipboardManager.current
+    val copyToClipboard = rememberClipboardCopy()
     val uriHandler = LocalUriHandler.current
 
     var copyHint by remember { mutableStateOf<String?>(null) }
@@ -292,7 +291,7 @@ fun ErrorDetailDialog(
                             text = stringResource(Res.string.error_report_copy_logs),
                             icon = FeatherIcons.Copy,
                             onClick = {
-                                clipboardManager.setText(AnnotatedString(bugReportMarkdown))
+                                copyToClipboard(bugReportMarkdown)
                                 copyHint = copyDoneHint
                             }
                         )
@@ -302,7 +301,7 @@ fun ErrorDetailDialog(
                             text = stringResource(Res.string.error_report_submit_bug),
                             icon = FeatherIcons.ExternalLink,
                             onClick = {
-                                clipboardManager.setText(AnnotatedString(bugReportMarkdown))
+                                copyToClipboard(bugReportMarkdown)
                                 copyHint = copiedGithubHint
                                 val issueTitle = "[Bug]: ${cleanSummary.take(80)}".encodeURLParameter()
                                 val issueBody = bugReportMarkdown.encodeURLParameter()

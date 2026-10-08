@@ -2,14 +2,12 @@ package xyz.emuci.inkcompose
 
 import xyz.emuci.diagram.mermaid.MermaidDiskCache
 
-actual object MermaidCacheConfig {
-    actual fun setBaseDirectory(path: String) {
-        MermaidDiskCache.setBaseDir(path)
-    }
+internal actual fun platformMermaidSetBaseDirectory(path: String) {
+    MermaidDiskCache.setBaseDir(path)
+}
 
-    actual fun getBaseDirectory(): String? = MermaidDiskCache.getBaseDir()
+internal actual fun platformMermaidGetBaseDirectory(): String? = MermaidDiskCache.getBaseDir()
 
-    actual fun clearSessionCache(sessionKey: String) {
-        MermaidDiskCache.clearSession(sessionKey)
-    }
+internal actual fun platformMermaidClearSessionCache(sessionKey: String) {
+    MermaidDiskCache.clearSession(sessionKey)
 }

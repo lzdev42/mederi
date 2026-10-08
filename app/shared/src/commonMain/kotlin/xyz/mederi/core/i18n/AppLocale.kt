@@ -19,13 +19,19 @@ import androidx.compose.runtime.setValue
  */
 var customAppLocale by mutableStateOf<String?>(null)
 
-expect object LocalAppLocale {
+object LocalAppLocale {
     val current: String
-        @Composable get
+        @Composable get() = currentAppLocale()
 
     @Composable
-    infix fun provides(value: String?): ProvidedValue<*>
+    infix fun provides(value: String?): ProvidedValue<*> = provideAppLocale(value)
 }
+
+@Composable
+internal expect fun currentAppLocale(): String
+
+@Composable
+internal expect fun provideAppLocale(value: String?): ProvidedValue<*>
 
 /** 用 AppState 持久化的语言设置包裹整个应用；key() 保证语言切换时全树重组、资源环境重新解析。 */
 @Composable

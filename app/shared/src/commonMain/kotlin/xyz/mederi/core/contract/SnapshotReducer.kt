@@ -259,7 +259,7 @@ object SnapshotReducer {
             val subtasksJson = event.payload["subtasks"]
             val subtasks = if (!subtasksJson.isNullOrBlank()) {
                 runCatching {
-                    Json { ignoreUnknownKeys = true }.decodeFromString<List<PlanSubtaskItem>>(subtasksJson)
+                    todoWireJson.decodeFromString(planSubtasksSerializer, subtasksJson)
                 }.getOrDefault(emptyList())
             } else emptyList()
 
@@ -297,7 +297,7 @@ object SnapshotReducer {
             val subtasksJson = event.payload["subtasks"]
             val newSubtasks = if (!subtasksJson.isNullOrBlank()) {
                 runCatching {
-                    Json { ignoreUnknownKeys = true }.decodeFromString<List<PlanSubtaskItem>>(subtasksJson)
+                    todoWireJson.decodeFromString(planSubtasksSerializer, subtasksJson)
                 }.getOrNull()
             } else null
 
@@ -367,6 +367,7 @@ object SnapshotReducer {
 
     private val todoWireJson = Json { ignoreUnknownKeys = true }
     private val todoWireSerializer = ListSerializer(TodoWireItem.serializer())
+    private val planSubtasksSerializer = ListSerializer(PlanSubtaskItem.serializer())
 
     private val questionWireJson = Json {
         ignoreUnknownKeys = true

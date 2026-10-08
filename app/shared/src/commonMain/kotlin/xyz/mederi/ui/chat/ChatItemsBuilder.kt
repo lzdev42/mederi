@@ -143,7 +143,7 @@ fun computeChatItems(
         val (planIdFromTool, planTitleFromTool) = when (val s = createPlanCall?.state) {
             is ToolCallState.Completed -> {
                 val idFromInput = s.input["planId"]
-                val idFromOutput = s.output?.let { out ->
+                val idFromOutput = s.output.let { out ->
                     Regex("""Plan ID:\s*([a-zA-Z0-9_-]+)""").find(out)?.groupValues?.getOrNull(1)
                         ?: Regex("""(plan_[a-f0-9]{8})""").find(out)?.groupValues?.getOrNull(1)
                 }
@@ -291,7 +291,7 @@ fun computeChatItems(
                             rawChronologicalItems.add(
                                 ChatListItem.QuestionCard(
                                     key = "${msg.id}_${block.id}_q",
-                                    request = snapshot.pendingQuestion!!,
+                                    request = snapshot.pendingQuestion,
                                     isTurnStart = false,
                                 )
                             )
@@ -383,15 +383,15 @@ fun computeChatItems(
             // Turn 已完成：判定本轮是否为用户指令周期内的中间轮次（紧随其后的是同一用户周期内的 <event_message> 唤醒消息）
             val isIntermediateTurnInCycle = hasLaterTurnInSameCycle(turns, turnIndex)
 
-            if (!hasAnyToolCallInTurn && !isIntermediateTurnInCycle) {
-                // 无工具调用且为最终轮次：全时序输出
+            if (!hasAnyToolCallInTurn) {
+                // 无工具调用：全时序输出（无论是否中间轮次——纯文本/推理回复不应折叠）
                 rawChronologicalItems.forEachIndexed { idx, item ->
                     val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) item.withTurnStart(true) else item
                     result.add(itemWithTurnStart)
                     turnHasFirstItem = true
                 }
             } else {
-                // 有工具调用或处于周期中间轮次：思考、工具调用、子代理及非最终过渡文本全部按时序折叠进 WorkTraceBlock，外部仅保留最终交付项
+                // 有工具调用：思考、工具调用、子代理及非最终过渡文本全部按时序折叠进 WorkTraceBlock，外部仅保留最终交付项
                 val workItems = mutableListOf<ChatListItem>()
                 val deliverableItems = mutableListOf<ChatListItem>()
                 var planApprovalItem: ChatListItem.PlanApproval? = null
@@ -410,7 +410,7 @@ fun computeChatItems(
                         is ChatListItem.PlanApproval -> planApprovalItem = item
 
                         is ChatListItem.TextMessage -> {
-                            val isFinalDeliverableText = !isIntermediateTurnInCycle &&
+                            val isFinalDeliverableText =
                                 idx > lastToolIdx &&
                                 (idx == lastTextIdx || rawChronologicalItems.getOrNull(idx + 1) is ChatListItem.DocumentCard)
                             if (isFinalDeliverableText) {

@@ -96,3 +96,24 @@ fun formatCpuUsage(usage: Double?): String {
     val rounded = ((percent * 10).toLong()) / 10.0
     return "$rounded%"
 }
+
+/**
+ * 把字符串编码为 URL 查询参数值（百分号编码，UTF-8 字节）。
+ * 纯 Kotlin 实现（commonMain 无 java.net.URLEncoder），用于搜索 URL 拼装等。
+ * 保留字母数字与 `-_.~`，其余字节百分号编码。
+ */
+fun encodeUrlQuery(text: String): String {
+    val sb = StringBuilder(text.length)
+    for (byte in text.encodeToByteArray()) {
+        val u = byte.toInt() and 0xFF
+        if (u in 0x30..0x39 || u in 0x41..0x5A || u in 0x61..0x7A ||
+            u == 0x2D || u == 0x5F || u == 0x2E || u == 0x7E) {
+            sb.append(u.toChar())
+        } else {
+            sb.append('%')
+            sb.append(((u ushr 4) and 0x0F).toString(16).uppercase())
+            sb.append((u and 0x0F).toString(16).uppercase())
+        }
+    }
+    return sb.toString()
+}

@@ -167,6 +167,8 @@
     <string name="ws_conversation_id">会话 %1$s</string>
     <string name="ws_open_extension">打开扩展窗口</string>
     <string name="ws_add_to_input">添加到对话框</string>
+    <string name="ws_search">搜索</string>
+    <string name="ws_paste_to_input">粘贴到输入框</string>
     <string name="ws_summary_title">压缩总结</string>
     <string name="ws_generated_image_n">生成的图片 #%1$d</string>
     <string name="ws_ai_image_n">AI生成的图片 #%1$d</string>

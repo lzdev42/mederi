@@ -73,7 +73,7 @@ object TimeFormatter {
     ): String {
         val dt = toLocalDateTime(epochMillis, timeZone) ?: return ""
         val month = dt.month.ordinal + 1
-        return "$month/${dt.dayOfMonth} ${dt.hour.pad2()}:${dt.minute.pad2()}"
+        return "$month/${dt.day} ${dt.hour.pad2()}:${dt.minute.pad2()}"
     }
 
     /**
@@ -88,7 +88,7 @@ object TimeFormatter {
         val dt = parseToLocalDateTime(isoOrDateString, timeZone)
         return if (dt != null) {
             val month = dt.month.ordinal + 1
-            "$month/${dt.dayOfMonth} ${dt.hour.pad2()}:${dt.minute.pad2()}"
+            "$month/${dt.day} ${dt.hour.pad2()}:${dt.minute.pad2()}"
         } else {
             isoOrDateString.take(16)
         }
@@ -104,7 +104,7 @@ object TimeFormatter {
     ): String {
         val dt = toLocalDateTime(epochMillis, timeZone) ?: return ""
         val month = dt.month.ordinal + 1
-        return "${dt.year}-${month.pad2()}-${dt.dayOfMonth.pad2()} ${dt.hour.pad2()}:${dt.minute.pad2()}:${dt.second.pad2()}"
+        return "${dt.year}-${month.pad2()}-${dt.day.pad2()} ${dt.hour.pad2()}:${dt.minute.pad2()}:${dt.second.pad2()}"
     }
 
     /**
@@ -119,7 +119,7 @@ object TimeFormatter {
         val dt = parseToLocalDateTime(isoOrDateString, timeZone)
         return if (dt != null) {
             val month = dt.month.ordinal + 1
-            "${dt.year}-${month.pad2()}-${dt.dayOfMonth.pad2()} ${dt.hour.pad2()}:${dt.minute.pad2()}:${dt.second.pad2()}"
+            "${dt.year}-${month.pad2()}-${dt.day.pad2()} ${dt.hour.pad2()}:${dt.minute.pad2()}:${dt.second.pad2()}"
         } else {
             isoOrDateString
         }

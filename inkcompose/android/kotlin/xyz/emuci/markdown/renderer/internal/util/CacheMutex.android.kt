@@ -1,5 +1,5 @@
 package xyz.emuci.markdown.renderer.internal.util
 
-actual class CacheMutex actual constructor() {
-    actual fun <T> withLock(block: () -> T): T = synchronized(this) { block() }
-}
+internal actual fun createPlatformCacheLock(): Any = Any()
+
+internal actual fun <T> withPlatformCacheLock(lock: Any, block: () -> T): T = synchronized(lock) { block() }

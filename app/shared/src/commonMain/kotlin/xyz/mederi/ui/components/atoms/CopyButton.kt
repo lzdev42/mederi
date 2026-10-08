@@ -9,14 +9,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Copy
 import kotlinx.coroutines.delay
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.util.rememberClipboardCopy
 
 /**
  * 复制反馈状态：持有 copied 标志，copy(text) 置位并写入系统剪贴板。
@@ -24,14 +22,14 @@ import xyz.mederi.theme.LocalMederiColors
  */
 @Stable
 class CopyFeedbackState internal constructor(
-    private val clipboard: ClipboardManager? = null,
+    private val copyToClipboard: ((String) -> Unit)? = null,
 ) {
     var copied by mutableStateOf(false)
         internal set
 
     fun copy(text: String) {
         copied = true
-        clipboard?.setText(AnnotatedString(text))
+        copyToClipboard?.invoke(text)
     }
 }
 
@@ -59,8 +57,8 @@ fun CopyFeedbackScope(
  */
 @Composable
 fun rememberCopyFeedback(): CopyFeedbackState {
-    val clipboard = LocalClipboardManager.current
-    return remember(clipboard) { CopyFeedbackState(clipboard) }
+    val copyToClipboard = rememberClipboardCopy()
+    return remember(copyToClipboard) { CopyFeedbackState(copyToClipboard) }
 }
 
 /**

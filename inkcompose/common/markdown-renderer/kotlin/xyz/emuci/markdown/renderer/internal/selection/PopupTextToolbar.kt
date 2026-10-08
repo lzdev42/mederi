@@ -9,20 +9,20 @@ import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 
 /**
- * 自实现 [TextToolbar]：用 Compose `DropdownMenu` 替代桌面端空壳 `DefaultTextToolbar`。
+ * 自实现 [TextToolbar]：用 Compose `Popup` 替代桌面端空壳 `DefaultTextToolbar`。
  *
  * 统一所有平台：`SelectionToolbarHost` 调 `showMenu()` → 此类存状态 →
  * [PopupTextToolbarHost] 监听状态弹菜单。不再需要平台判断分支。
+ *
+ * 菜单为纯渲染：[MenuState] 只保存锚点 rect，TextToolbar 接口的
+ * copy/paste/cut/selectAll 回调被忽略（菜单不再渲染它们），
+ * 复制等动作由 app 层经 selectionMenuActions 提供。
  */
 @Stable
 internal class PopupTextToolbar : TextToolbar {
 
     data class MenuState(
         val rect: Rect,
-        val onCopyRequested: (() -> Unit)?,
-        val onPasteRequested: (() -> Unit)?,
-        val onCutRequested: (() -> Unit)?,
-        val onSelectAllRequested: (() -> Unit)?,
     )
 
     var menuState: MenuState? by mutableStateOf(null)
@@ -38,7 +38,8 @@ internal class PopupTextToolbar : TextToolbar {
         onCutRequested: (() -> Unit)?,
         onSelectAllRequested: (() -> Unit)?,
     ) {
-        menuState = MenuState(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested)
+        // 纯渲染协议：只记录锚点 rect，忽略 TextToolbar 回调（菜单不再渲染它们）。
+        menuState = MenuState(rect)
     }
 
     override fun hide() {

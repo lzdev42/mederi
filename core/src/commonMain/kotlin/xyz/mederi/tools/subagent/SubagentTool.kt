@@ -67,29 +67,54 @@ data class SubagentArgs(
 class SubagentTool(
     private val spawnExecutor: SpawnAgentTool,
     private val spawnResearcher: SpawnResearcherTool,
-    private val manager: SubagentManager
+    private val manager: SubagentManager,
+    /** 父会话 ID：STATUS 拦截轮询与 SPAWN 返回值 runningCount 都按本会话统计。 */
+    private val parentSessionId: String
 ) : SimpleTool<SubagentArgs>(
     argsType = typeToken<SubagentArgs>(),
     name = "subagent",
-    description = "Single tool to delegate and manage sub-agents: SPAWN executes a planned subtask " +
-        "(the exact spec stored by generate_spec), SPAWN_RESEARCHER runs a read-only investigation, " +
-        "and STATUS/STOP query or cancel a spawned sub-agent. SPAWN / SPAWN_RESEARCHER return an " +
-        "agentId immediately (the sub-agent runs in the background). You will be AUTOMATICALLY woken " +
-        "up when a sub-agent finishes — end your turn after SPAWN; the result arrives as an " +
-        "<event_message> in a new turn. Use STATUS to check progress or STOP to cancel."
+    description = "Single tool to delegate and manage asynchronous sub-agents: SPAWN executes a task " +
+        "(planned spec or ad-hoc), SPAWN_RESEARCHER runs a read-only investigation, " +
+        "and STATUS/STOP query or cancel a spawned sub-agent. SPAWN / SPAWN_RESEARCHER are non-blocking " +
+        "and return an agentId immediately while the sub-agent runs in the background. After calling " +
+        "SPAWN or SPAWN_RESEARCHER, your NEXT response MUST be a text-only final message with ZERO " +
+        "tool calls — state you have dispatched the sub-agent and are waiting. You will be " +
+        "automatically woken when all dispatched sub-agents complete. Do NOT call subagent(STATUS) " +
+        "to poll. Use STOP to cancel a sub-agent if it seems stuck."
 ) {
     override suspend fun execute(args: SubagentArgs): String = when (args.action) {
-        SubagentAction.SPAWN -> spawnExecutor.execute(
-            SpawnAgentArgs(task = args.task, briefing = args.briefing, planId = args.planId, subtaskIndex = args.subtaskIndex)
+        SubagentAction.SPAWN -> appendSpawnGuidance(
+            spawnExecutor.execute(
+                SpawnAgentArgs(task = args.task, briefing = args.briefing, planId = args.planId, subtaskIndex = args.subtaskIndex)
+            )
         )
-        SubagentAction.SPAWN_RESEARCHER -> spawnResearcher.execute(
-            SpawnResearcherArgs(task = args.task, briefing = args.briefing)
+        SubagentAction.SPAWN_RESEARCHER -> appendSpawnGuidance(
+            spawnResearcher.execute(
+                SpawnResearcherArgs(task = args.task, briefing = args.briefing)
+            )
         )
         SubagentAction.STATUS ->
             if (args.agentId.isBlank()) "Error: STATUS requires agentId (from a previous SPAWN)."
+            // 轮询拦截：本会话仍有 RUNNING 子代理时，不返回实际状态——引导父代理结束 turn 等自动唤醒
+            else if (manager.runningCountForSession(parentSessionId) > 0)
+                "Subagents are still running. Do NOT poll — end your turn now. You will be automatically woken when all results are in."
             else manager.status(args.agentId)
         SubagentAction.STOP ->
             if (args.agentId.isBlank()) "Error: STOP requires agentId (from a previous SPAWN)."
-            else manager.stop(args.agentId)
+            else manager.stop(args.agentId, operator = SubagentManager.OPERATOR_MAIN_AGENT)
+    }
+
+    /**
+     * SPAWN / SPAWN_RESEARCHER 返回值增强：JSON 之后追加人类可读指令文案。
+     *
+     * Error 文本（含并发上限拒绝）原样透传——没有派工成功就不能说 "dispatched"。
+     * 成功路径才追加 runningCount（spawn 已注册，计数包含刚派出的这个）与 end-turn 硬指令。
+     */
+    private fun appendSpawnGuidance(result: String): String {
+        if (result.startsWith("Error:")) return result
+        val running = manager.runningCountForSession(parentSessionId)
+        return "$result\nSubagent dispatched. $running subagent(s) running. " +
+            "End your turn — you will be automatically woken when all complete. " +
+            "Do NOT call subagent(STATUS) to poll."
     }
 }

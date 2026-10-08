@@ -368,7 +368,7 @@ private fun ContextUsageCard(
             )
             Text(
                 text = if (hasWindow) {
-                    "$percentText · ${stringResource(Res.string.dock_context_max, contextWindow)}"
+                    "$percentText · ${stringResource(Res.string.dock_context_max, formatTokenShort(contextWindow.toLong()))}"
                 } else {
                     stringResource(Res.string.dock_context_unset)
                 },
@@ -479,14 +479,14 @@ private fun LastRequestUsageCard(
             Box(modifier = Modifier.weight(1f)) {
                 MetricCell(
                     label = stringResource(Res.string.dock_last_request_input),
-                    value = usage.inputTokens.toString(),
+                    value = formatTokenShort(usage.inputTokens),
                     colors = colors
                 )
             }
             Box(modifier = Modifier.weight(1f)) {
                 MetricCell(
                     label = stringResource(Res.string.dock_last_request_output),
-                    value = usage.outputTokens.toString(),
+                    value = formatTokenShort(usage.outputTokens),
                     colors = colors
                 )
             }
@@ -500,7 +500,7 @@ private fun LastRequestUsageCard(
                 Box(modifier = Modifier.weight(1f)) {
                     MetricCell(
                         label = stringResource(Res.string.dock_last_request_cached),
-                        value = usage.cachedTokens.toString(),
+                        value = formatTokenShort(usage.cachedTokens),
                         colors = colors
                     )
                 }
@@ -543,15 +543,23 @@ private fun MetricCell(
 }
 
 /**
- * Token 短格式：≥1000 显示一位小数 k（42800 → 42.8k），否则原值。
+ * Token 短格式（自动切换单位）：
+ * ≥1_000_000 显示一位小数 m（4_200_000 → 4.2m），
+ * ≥1000 显示一位小数 k（42_800 → 42.8k），否则原值。
  */
 private fun formatTokenShort(tokens: Long): String {
-    return if (tokens >= 1000) {
-        val k = tokens / 1000
-        val dec = (tokens % 1000) / 100
-        "${k}.${dec}k"
-    } else {
-        tokens.toString()
+    return when {
+        tokens >= 1_000_000 -> {
+            val m = tokens / 1_000_000
+            val dec = (tokens % 1_000_000) / 100_000
+            "${m}.${dec}m"
+        }
+        tokens >= 1000 -> {
+            val k = tokens / 1000
+            val dec = (tokens % 1000) / 100
+            "${k}.${dec}k"
+        }
+        else -> tokens.toString()
     }
 }
 

@@ -18,9 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import xyz.mederi.util.rememberClipboardCopy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -224,7 +223,7 @@ private fun RawMessageItemRow(
             val prettyJson = remember(item.payload) {
                 rawVm.prettyPrintJson(item.payload)
             }
-            val clipboardManager = LocalClipboardManager.current
+            val copyToClipboard = rememberClipboardCopy()
             var copied by remember { mutableStateOf(false) }
 
             LaunchedEffect(copied) {
@@ -267,7 +266,7 @@ private fun RawMessageItemRow(
                     MederiIconButton(
                         icon = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
                         onClick = {
-                            clipboardManager.setText(AnnotatedString(prettyJson))
+                            copyToClipboard(prettyJson)
                             copied = true
                         },
                         contentDescription = stringResource(if (copied) Res.string.copy_done else Res.string.copy),

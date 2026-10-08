@@ -7,7 +7,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import com.jediterm.core.util.TermSize
 import com.jediterm.terminal.TerminalColor
-import com.jediterm.terminal.TextStyle
 import com.jediterm.terminal.emulator.ColorPalette
 import com.jediterm.terminal.emulator.ColorPaletteImpl
 import com.jediterm.terminal.TtyConnector
@@ -106,8 +105,6 @@ private class MederiTerminalSettings(private val isDark: Boolean) : DefaultSetti
 
     override fun getDefaultForeground(): TerminalColor =
         if (isDark) TerminalColor.rgb(0xE6, 0xE6, 0xE6) else TerminalColor.rgb(0x1F, 0x1F, 0x1F)
-
-    override fun getDefaultStyle(): TextStyle = TextStyle(getDefaultForeground(), getDefaultBackground())
 }
 
 /**

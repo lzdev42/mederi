@@ -18,9 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import xyz.mederi.util.rememberClipboardCopy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -300,7 +299,7 @@ fun SubAgentDetailDialog(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val clipboardManager = LocalClipboardManager.current
+    val copyToClipboard = rememberClipboardCopy()
     var isCommandCopied by remember { mutableStateOf(false) }
     var isAgentIdCopied by remember { mutableStateOf(false) }
 
@@ -506,7 +505,7 @@ fun SubAgentDetailDialog(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
                                         .clickable {
-                                            clipboardManager.setText(AnnotatedString(subagent.agentId))
+                                            copyToClipboard(subagent.agentId)
                                             isAgentIdCopied = true
                                         }
                                         .padding(2.dp)
@@ -601,7 +600,7 @@ fun SubAgentDetailDialog(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
                                         .clickable {
-                                            clipboardManager.setText(AnnotatedString(subagent.task))
+                                            copyToClipboard(subagent.task)
                                             isCommandCopied = true
                                         }
                                         .padding(horizontal = 6.dp, vertical = 2.dp),
