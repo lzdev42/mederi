@@ -3,6 +3,7 @@ package xyz.mederi.core.bridge
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.MessageRole
@@ -60,5 +61,39 @@ class MederiModelMapperTest {
         val backfill = MederiModelMapper.toUsageBackfill(messages)
         assertEquals(2, backfill.requestCount)
         assertNull(backfill.lastRequestUsage, "全无 usage → lastRequestUsage 为 null（不用 0 伪装）")
+    }
+
+    // ── UI_HIDDEN_MARKER 剥离的角色作用域（回归：ASSISTANT 字面提及标记不得被截断）──
+
+    @Test
+    fun toChatMessage_assistantTextWithLiteralMarkerIsNotTruncated() {
+        // 回归：ASSISTANT 回复里字面提及 <<<NOT_FOR_UI>>> 时不得被 sanitize 截断。
+        // 标记剥离只作用于 USER 消息（环境元数据附在用户消息尾部、内部指令消息以标记开头、
+        // 工具边界插话用 <user_intervention> 包装——三者都是 USER 角色）。
+        val body = "你看一下如何解决 `<<<NOT_FOR_UI>>>` 这个字符"
+        val message = Message(
+            sessionId = "s",
+            role = MessageRole.ASSISTANT,
+            parts = listOf(MessagePart.Text(body)),
+            createdAt = "2026-01-01T00:00:00Z",
+        )
+        val chat = MederiModelMapper.toChatMessage(message)
+        val textBlock = chat.blocks.filterIsInstance<ChatBlock.Text>().single()
+        assertEquals(body, textBlock.text, "ASSISTANT 原文不得因字面提及标记而被截断")
+    }
+
+    @Test
+    fun toChatMessage_userTextWithEnvMarkerIsStripped() {
+        // 回归守卫：USER 消息尾部的环境元数据块仍须被剥离（上一修复不得误伤 USER 路径）。
+        val userText = "帮我看下这个 bug"
+        val message = Message(
+            sessionId = "s",
+            role = MessageRole.USER,
+            parts = listOf(MessagePart.Text(userText + "\n<<<NOT_FOR_UI>>>\nNOTE FOR AI (hidden): UTC now")),
+            createdAt = "2026-01-01T00:00:00Z",
+        )
+        val chat = MederiModelMapper.toChatMessage(message)
+        val textBlock = chat.blocks.filterIsInstance<ChatBlock.Text>().single()
+        assertEquals(userText, textBlock.text, "USER 消息尾部的 <<<NOT_FOR_UI>>> 环境块仍须被剥离")
     }
 }

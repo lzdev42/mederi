@@ -307,8 +307,13 @@ object MederiModelMapper {
     ): ChatBlock? = when (part) {
         is CoreMessagePart.Text -> ChatBlock.Text(
             id = blockId(message, index),
-            // 剥离 `<<<NOT_FOR_UI>>>` 环境标记与 `<user_intervention>` 系统干预包装，只渲染真实正文
-            text = xyz.mederi.util.PromptComposer.sanitizeUserVisibleText(part.text).removeSuffix("\n")
+            // `<<<NOT_FOR_UI>>>` 环境标记与 `<user_intervention>` 系统干预包装只注入进 USER 角色消息
+            //（环境元数据附在用户消息尾部、内部指令消息以标记开头、工具边界插话用 user_intervention 包装），
+            // 故只在 USER 消息上剥离；ASSISTANT 等角色原文渲染——否则 AI 在回复里字面提及标记时会被
+            // substringBefore 从该处截断（连同闭合反引号及后续正文一并丢失）。
+            text = (if (message.role == CoreMessageRole.USER)
+                xyz.mederi.util.PromptComposer.sanitizeUserVisibleText(part.text)
+            else part.text).removeSuffix("\n")
         )
         is CoreMessagePart.Reasoning -> ChatBlock.Reasoning(
             id = blockId(message, index),

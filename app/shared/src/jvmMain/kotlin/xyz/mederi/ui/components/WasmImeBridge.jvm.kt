@@ -12,7 +12,7 @@ actual fun WasmImeBridge(
     textValue: TextFieldValue,
     enabled: Boolean,
     onValueChange: (TextFieldValue) -> Unit,
-    onFocusChange: (Boolean) -> Unit,
+    cursorColorHex: String,
     rectPx: Rect?,
     density: Float,
 ) {

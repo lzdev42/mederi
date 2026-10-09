@@ -31,7 +31,7 @@ actual fun WasmImeBridge(
     textValue: TextFieldValue,
     enabled: Boolean,
     onValueChange: (TextFieldValue) -> Unit,
-    onFocusChange: (Boolean) -> Unit,
+    cursorColorHex: String,
     rectPx: Rect?,
     density: Float,
 ) {
@@ -39,18 +39,20 @@ actual fun WasmImeBridge(
     val textarea = remember { document.createElement("textarea") as HTMLTextAreaElement }
     // 事件回调闭包捕获最新回调，避免 DisposableEffect 只安装一次导致 stale closure
     val latestOnValueChange = rememberUpdatedState(onValueChange)
-    val latestOnFocusChange = rememberUpdatedState(onFocusChange)
     // 组合期标志（JS 事件回调里读写，用快照状态即可，闭包捕获引用）
     val isComposing = remember { mutableStateOf(false) }
 
     // 初始化样式 + 挂到 body；离开组合时移除
-    DisposableEffect(textarea) {
+    DisposableEffect(textarea, cursorColorHex) {
         val style = textarea.style
         style.position = "fixed"
-        style.opacity = "0"
+        // 文本透明（Canvas 文字/斜杠高亮在背后显示），但 caret-color 单独设主题色 → textarea 自身光标可见
+        // 不用 opacity:0（那会连光标一起隐藏）。不用 FocusRequester 给 Compose 发焦点（会抢 DOM 焦点顶掉键盘）。
         style.color = "transparent"
-        style.setProperty("caret-color", "transparent")
-        style.fontSize = "16px" // 防 iOS 自动缩放
+        style.setProperty("caret-color", cursorColorHex)
+        style.background = "transparent"
+        style.fontSize = "16px" // 防 iOS 自动缩放（<16px 会触发 focus zoom，破坏覆盖层定位）
+        style.fontFamily = "sans-serif" // 尽量贴近 Canvas 默认无衬线，减少光标横向错位
         style.border = "0"
         style.padding = "0"
         style.margin = "0"
@@ -77,11 +79,6 @@ actual fun WasmImeBridge(
             val end = textarea.selectionEnd ?: 0
             latestOnValueChange.value(TextFieldValue(value, TextRange(start, end)))
         }
-
-        // textarea 获得/失去 DOM 焦点 → 通知调用方给 Compose TextField 发/清 Compose 焦点，
-        // 使 Canvas 渲染自己的光标（textarea 自身 caret-color 被设为 transparent）。
-        textarea.addEventListener("focus") { latestOnFocusChange.value(true) }
-        textarea.addEventListener("blur") { latestOnFocusChange.value(false) }
 
         textarea.addEventListener("compositionstart") { isComposing.value = true }
         textarea.addEventListener("compositionend") {

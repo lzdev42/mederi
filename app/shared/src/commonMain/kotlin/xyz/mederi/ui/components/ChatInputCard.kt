@@ -107,8 +107,6 @@ import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiRadius
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -170,17 +168,6 @@ fun ChatInputCard(
     // positionInWindow 返回 Compose px（= CSS px * density），wasmJs actual 侧除 density 得 CSS px。
     var imeRect by remember { mutableStateOf<Rect?>(null) }
     val imeDensity = LocalDensity.current.density
-    // wasmJs IME 桥接：textarea 持 DOM 焦点唤起键盘，但 Compose TextField 未拿 Compose 焦点
-    // → Canvas 不画光标。用 FocusRequester 把 Compose 焦点同步给 TextField，使 Canvas 渲染
-    // 自身光标（cursorColor=accentPrimary，深/浅主题自适应），与 Canvas 文字天然对齐（选区同步自 textarea）。
-    val imeFocusRequester = remember { FocusRequester() }
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
-    var imeFocus by remember { mutableStateOf(false) }
-    LaunchedEffect(imeFocus) {
-        runCatching {
-            if (imeFocus) imeFocusRequester.requestFocus() else focusManager.clearFocus()
-        }
-    }
     var isMobileSheetOpen by remember { mutableStateOf(false) }
     // 聚焦态（原型 focus-within）：TextField 聚焦 → 卡片自身 border 与外圈 ring 切 accentFocus
     var focused by remember { mutableStateOf(false) }
@@ -597,7 +584,6 @@ fun ChatInputCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp, max = 160.dp)
-                        .focusRequester(imeFocusRequester)
                         .onFocusChanged { focused = it.isFocused }
                         .onGloballyPositioned { coords: LayoutCoordinates ->
                             val pos = coords.positionInWindow()
@@ -697,7 +683,7 @@ fun ChatInputCard(
                     textValue = textValue,
                     enabled = !isCompacting,
                     onValueChange = onSlashCommandTextChange,
-                    onFocusChange = { imeFocus = it },
+                    cursorColorHex = mederiColorToCssHex(colors.accentPrimary),
                     rectPx = imeRect,
                     density = imeDensity,
                 )
