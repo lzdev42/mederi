@@ -57,6 +57,7 @@ import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.koog.MANUAL_KEEP_LAST_MESSAGES
 import xyz.mederi.koog.manualCompactionSkipReason
 import xyz.mederi.project.ProjectManager
+import xyz.mederi.prompt.EnvironmentInfoProvider
 import xyz.mederi.prompt.SystemPrompts
 import xyz.mederi.provider.ApiKeyResolver
 import xyz.mederi.provider.ProviderManager
@@ -434,9 +435,12 @@ class TurnExecutor(
             DebugLog.error("TurnExec", "加载 AGENTS.md 失败（不阻塞 turn）: ${e.message}", e)
             systemPromptWithSkills
         }
-        // 装配顺序不变量 = 静态骨架 → skills → AGENTS.md → 动态 plan/todo 后缀。
+        // 装配顺序不变量 = 静态骨架 → skills → AGENTS.md → 动态 plan/todo + 环境信息后缀。
         // 顺序被 TurnExecutorPromptOrderTest 锁定（OpenAI 按最长前缀缓存，动态内容必须永远在最后）。
-        val dynamicSuffix = if (subagentRole == null) SystemPrompts.dynamicSuffix(activePlanContent, activeTodoContent) else ""
+        val commandSandbox = xyz.mederi.tools.sandbox.CommandSandbox(projectDirs)
+        val planTodoSuffix = if (subagentRole == null) SystemPrompts.dynamicSuffix(activePlanContent, activeTodoContent) else ""
+        val envSuffix = EnvironmentInfoProvider.build(commandSandbox, projectDirs)
+        val dynamicSuffix = planTodoSuffix + envSuffix
         val systemPrompt = systemPromptBase + dynamicSuffix
         DebugLog.data("TurnExec", "agentMode", agentMode)
         DebugLog.data("TurnExec", "activePlan", activePlan?.id ?: "none")
@@ -481,12 +485,12 @@ class TurnExecutor(
 
         // ── durable-first：用户消息先落库，再启动 Agent ──
         // 乐观更新的持久化兜底：网络/模型/工具在 turn 任何阶段失败，用户输入都已在
-        // HistoryStore，不会丢失。消息带 UI 隐藏元数据块（时间/系统环境）——存的就是发的，
+        // HistoryStore，不会丢失。消息带 UI 隐藏时间戳——存的就是发的，
         // ChatMemory load 时已落库的消息自然进入 prompt；回写 reconcile 按内容指纹对齐，
         // 不会重复追加。append 同步执行且先于 SESSION_UPDATED 事件，
         // 发送时机的监听者（如自动改名）回查快照必然能看到本条消息。
-        val commandSandbox = xyz.mederi.tools.sandbox.CommandSandbox(projectDirs)
-        val userMessage = buildUserMessage(sessionId, request.parts, projectDirs, commandSandbox)
+        // 环境元数据（OS/Shell/沙箱等）已移至系统提示词，不在此落库。
+        val userMessage = buildUserMessage(sessionId, request.parts)
         historyStore.append(sessionId, userMessage)
 
         sessionStore.update(sessionId, SessionStatus.RUNNING)
@@ -518,16 +522,14 @@ class TurnExecutor(
     }
 
     /**
-     * 构建待落库的用户消息：文本末尾附 UI 隐藏标记 + 环境备注（时间 + 系统环境
-     * OS/架构/shell/沙箱状态）。标记后内容存进消息本体但不渲染到 UI（映射层在标记处
-     * 截断），AI 全量可见；存的就是发的，提示词前缀稳定（缓存安全）。
-     * 环境块只含"AI 需要知道但不该让用户每次输入"的事实，采集全部来自进程内已有信息，零额外 IO。
+     * 构建待落库的用户消息：文本末尾附 UI 隐藏标记 + 时间戳。
+     * 标记后内容存进消息本体但不渲染到 UI（映射层在标记处截断），AI 全量可见。
+     * 环境元数据（OS/Shell/沙箱/项目目录/Java）已移至系统提示词动态后缀（EnvironmentInfoProvider），
+     * 不再随每条消息落库——避免历史膨胀 + 时间戳渐旧。
      */
     private fun buildUserMessage(
         sessionId: String,
-        parts: List<MessagePart>,
-        directories: List<String>,
-        commandSandbox: xyz.mederi.tools.sandbox.CommandSandbox
+        parts: List<MessagePart>
     ): Message {
         val now = Instant.now()
         val tz = java.time.ZoneId.systemDefault()
@@ -542,12 +544,7 @@ class TurnExecutor(
         val metaNote = "\n$UI_HIDDEN_MARKER\n" +
             "NOTE FOR AI (this section is hidden from the user in the UI):\n" +
             "UTC: $utc ($utcDow)\n" +
-            "Local: $local (${tz.id}, $localDow)\n" +
-            xyz.mederi.tools.sandbox.CommandSandbox.environmentNote(commandSandbox) +
-            "Project dir: " + directories.first() + "\n" +
-            (xyz.mederi.tools.sandbox.SandboxConfig.extraWritablePaths.takeIf { it.isNotEmpty() }
-                ?.let { "Extra writable paths: ${it.joinToString(", ")}\n" } ?: "") +
-            "Mederi workdir: ${java.io.File(directories.first(), ".mederi").absolutePath}"
+            "Local: $local (${tz.id}, $localDow)"
         val lastTextIndex = parts.indexOfLast { it is MessagePart.Text }
         val partsWithMeta = if (lastTextIndex >= 0) {
             parts.mapIndexed { index, part ->

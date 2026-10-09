@@ -257,8 +257,8 @@ class CommandSandbox(
 
     companion object {
         /**
-         * 系统环境块（不含时间——时间由 TurnExecutor 注入）。
-         * 注入系统提示词/用户消息隐藏区：AI 需要知道但不该让用户每次输入的环境事实。
+         * 系统环境块（不含时间——时间由 EnvironmentInfoProvider 注入）。
+         * 注入系统提示词动态后缀：AI 需要知道但不该让用户每次输入的环境事实。
          */
         fun environmentNote(sandbox: CommandSandbox?): String = buildString {
             val status = sandbox?.status()

@@ -23,9 +23,9 @@ sequenceDiagram
     SM->>TE: TurnExecutor.sendMessage(sessionId, request)
     TE->>TE: activeApiKeyId = request.apiKeyId（本 turn 唯一真理源）
     TE->>TE: 校验 IDLE → 读 Project → PlanStore.loadBySession<br/>组装 activePlanContent/spec指针/activeTodoContent(互斥)
-    TE->>TE: 系统提示词装配：静态骨架(build) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深) → dynamicSuffix(plan/todo)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）
+    TE->>TE: 系统提示词装配：静态骨架(build) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深) → dynamicSuffix(plan/todo) + EnvironmentInfoProvider(环境信息)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）
     TE->>TE: effectiveModel/effectiveReasoningLevel → sessionStore.updateAgentConfig
-    TE->>HS: append(用户消息+durable环境块) 【durable-first】
+    TE->>HS: append(用户消息+durable时间戳) 【durable-first】
     TE->>EB: SESSION_UPDATED (客户端 refreshPage 即时回查, 新 turn 用户消息立即可见)
     TE->>TE: sessionStore.updateStatus(RUNNING)
     TE->>TE: scope.launch { runTurn() }
@@ -99,9 +99,9 @@ flowchart TD
     STQ --> RUN
     V -- "否" --> E1["上抛异常(上游包装 MederiException)"]
     V -- "是" --> PREP["组装上下文: Project/PlanStore/Notebook<br/>activePlanContent(计划+spec指针+活跃spec)<br/>activeTodoContent(仅无活跃Plan)"]
-    PREP --> SP["系统提示词装配：静态骨架(build/forSubagent) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深) → dynamicSuffix(plan/todo)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）"]
+    PREP --> SP["系统提示词装配：静态骨架(build/forSubagent) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深) → dynamicSuffix(plan/todo) + EnvironmentInfoProvider(环境信息)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）"]
     SP --> CFG["解析 effectiveModel + effectiveReasoningLevel<br/>回写 sessionStore.updateAgentConfig"]
-    CFG --> DF["durable-first: buildUserMessage(注入 NOT_FOR_UI 隐藏标记)<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
+    CFG --> DF["durable-first: buildUserMessage(注入 NOT_FOR_UI 时间戳)<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
     DF --> BG["scope.launch runTurn"]
     BG --> PF{"usedTokens > 70% 窗口?"}
     PF -- "是" --> COMP["compressOnce(mini agent maxAgentIterations=10, compressOnlyStrategy)<br/>失败不阻塞"]
