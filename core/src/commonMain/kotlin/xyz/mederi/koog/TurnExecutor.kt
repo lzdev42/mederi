@@ -72,6 +72,7 @@ import xyz.mederi.tools.diff.countChanges
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
 import xyz.mederi.skills.SkillManager
+import xyz.mederi.tools.CustomToolRegistry
 import xyz.mederi.tools.ToolFactory
 import xyz.mederi.tools.diff.TurnDiffTracker
 import xyz.mederi.tools.subagent.SubagentConfigManager
@@ -1011,6 +1012,9 @@ class TurnExecutor(
                 if (seen.add(found.path)) found else null
             }
 
+            // 自定义工具：每轮 turn 从全局注册表收集新实例（UI 层启动装配阶段 register 工厂闭包）
+            val customTools = CustomToolRegistry.buildAll()
+
             val toolRegistry = ToolFactory.build(
                 toolNames = ToolFactory.ALL_TOOL_NAMES,
                 directories = directories,
@@ -1034,6 +1038,7 @@ class TurnExecutor(
                 commandSandbox = commandSandbox,
                 sessionStore = sessionStore,
                 mcpTools = mcpSession?.tools ?: emptyList(),
+                customTools = customTools,
                 agentsDiscovery = agentsDiscovery,
                 onFileTouched = onFileTouched,
                 apiKeyId = apiKeyId,

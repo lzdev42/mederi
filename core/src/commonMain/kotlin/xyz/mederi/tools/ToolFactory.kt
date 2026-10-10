@@ -48,7 +48,9 @@ object ToolFactory {
     val OFFICE_TOOL_NAMES = listOf("office_read", "office_write")
     val VERIFY_TOOL_NAMES = listOf("verify_subtask")
     val PROCESS_TOOL_NAMES = listOf("list_processes", "stop_process")
-    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES
+    // web_search 仅研究员子代理可用（curl GET 只读网络搜索）
+    val RESEARCHER_TOOL_NAMES = listOf("web_search")
+    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES + RESEARCHER_TOOL_NAMES
 
     fun build(
         toolNames: List<String>,
@@ -77,7 +79,9 @@ object ToolFactory {
         apiKeyId: String? = null,
         /** 执行器子代理的文件写入回调（SubagentRunnerImpl 挂，收集 touched files）。 */
         onFileTouched: ((String) -> Unit)? = null,
-        subagentConfigManager: SubagentConfigManager? = null
+        subagentConfigManager: SubagentConfigManager? = null,
+        /** 自定义工具（CustomToolRegistry.buildAll() 收集）：旁路合并，不参与 toolNames 裁剪。 */
+        customTools: List<ToolBase<*, *>> = emptyList()
     ): ToolRegistry {
         val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched)
         val shellTools = ShellTools(directories, commandSandbox)
@@ -109,6 +113,10 @@ object ToolFactory {
         if (canExecute) {
             // 非破坏命令自由执行；OS 沙箱（macOS Seatbelt / Linux bwrap）锁写白名单
             fsToolMap["execute_command"] = { shellTools.ExecuteCommandTool() }
+        }
+        // web_search：仅研究员子代理（curl GET 只读网络搜索，复用 ShellTools.runCommand）
+        if (isResearcher) {
+            fsToolMap["web_search"] = { shellTools.WebSearchTool() }
         }
 
         // 进程管理：只对能执行命令的角色开放（主代理 + EXECUTOR）。
@@ -231,12 +239,13 @@ object ToolFactory {
             }
         }
 
-        // MCP server 工具（已带 server 名前缀）：旁路合并，不参与 toolNames 裁剪。
-        // 无 MCP 工具时直接返回内置 registry，避免多包一层。
-        return if (mcpTools.isEmpty()) {
+        // MCP server 工具（已带 server 名前缀）与自定义工具（CustomToolRegistry）：旁路合并，
+        // 不参与 toolNames 裁剪。两者皆空时直接返回内置 registry，避免多包一层。
+        val externalTools = customTools + mcpTools
+        return if (externalTools.isEmpty()) {
             built
         } else {
-            built + ToolRegistry { mcpTools.forEach { tool(it) } }
+            built + ToolRegistry { externalTools.forEach { tool(it) } }
         }
     }
 }

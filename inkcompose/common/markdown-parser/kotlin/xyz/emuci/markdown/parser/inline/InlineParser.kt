@@ -1276,15 +1276,38 @@ private class InlineParserInstance(
             }
         }
         if (opener.char == '~') {
-            // 双 ~ 匹配删除线，单 ~ 匹配下标，不混合
+            // 双 ~ 匹配删除线，单 ~ 匹配下标（Pandoc 规范：下标内部不允许含空白字符），不混合
             if (opener.count >= 2 && closer.count >= 2) return true
-            if (opener.count == 1 && closer.count == 1) return true
+            if (opener.count == 1 && closer.count == 1) {
+                return !hasWhitespaceBetween(opener.llNode, closer.llNode)
+            }
             return false
+        }
+        if (opener.char == '^') {
+            // Pandoc 规范：上标内部不允许含空白字符
+            return !hasWhitespaceBetween(opener.llNode, closer.llNode)
         }
         if (opener.char == '=' || opener.char == '+') {
             return opener.count >= 2 && closer.count >= 2
         }
         return true
+    }
+
+    private fun hasWhitespaceBetween(openerLL: LLNode, closerLL: LLNode): Boolean {
+        var cur = openerLL.next
+        while (cur != null && cur !== closerLL) {
+            if (containsWhitespace(cur.astNode)) return true
+            cur = cur.next
+        }
+        return false
+    }
+
+    private fun containsWhitespace(node: Node): Boolean = when (node) {
+        is SoftLineBreak, is HardLineBreak -> true
+        is Text -> node.literal.any { CharacterUtils.isUnicodeWhitespace(it) }
+        is InlineCode -> node.literal.any { CharacterUtils.isUnicodeWhitespace(it) }
+        is ContainerNode -> node.children.any { containsWhitespace(it) }
+        else -> false
     }
 
     // ────── 链接解析 ──────

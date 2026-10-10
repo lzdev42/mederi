@@ -472,6 +472,31 @@ class InlineParserTest {
     }
 
     @Test
+    fun should_not_parse_subscript_or_superscript_across_whitespace() {
+        val input = "改动量：1 个新文件（~15 行）+ ToolFactory 加一个参数（~2 行）+ TurnExecutor 加一行调用 + 测试 + 文档。"
+        val doc = parser.parse(input)
+        val para = doc.children.first() as Paragraph
+        val repairSuffix = xyz.emuci.markdown.parser.streaming.InlineAutoCloser.buildRepairSuffix("改动量：1 个新文件（~15 行）")
+
+        assertTrue(para.children.none { it is Subscript }, "Single tildes across spaces should not form Subscript")
+        assertEquals(1, para.children.size)
+        assertEquals(input, (para.children.first() as Text).literal)
+        assertEquals("", repairSuffix)
+
+        // 前面有带空格的 ~15 行，后面的紧凑 H~2~O 仍应正常解析为下标
+        val mixedDoc = parser.parse("约 ~15 行，化学式 H~2~O")
+        val mixedPara = mixedDoc.children.first() as Paragraph
+        val subs = mixedPara.children.filterIsInstance<Subscript>()
+        assertEquals(1, subs.size)
+        assertEquals("2", (subs.first().children.first() as Text).literal)
+
+        // 上标 ^...^ 跨空格同样不应配对
+        val supDoc = parser.parse("a^2 + b^2")
+        val supPara = supDoc.children.first() as Paragraph
+        assertTrue(supPara.children.none { it is Superscript }, "Carets across spaces should not form Superscript")
+    }
+
+    @Test
     fun should_parse_inserted_text() {
         val doc = parser.parse("++inserted++")
         val para = doc.children.first()

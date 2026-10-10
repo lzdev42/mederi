@@ -1,5 +1,7 @@
 package xyz.emuci.markdown.parser.streaming
 
+import xyz.emuci.markdown.parser.core.CharacterUtils
+
 /**
  * 行内未关闭结构自动修复器。
  *
@@ -67,6 +69,12 @@ object InlineAutoCloser {
                 }
                 // 如果在数学公式中，跳过所有内容
                 state.inMath() -> {
+                    i++
+                    continue
+                }
+                // 空白字符：单 ~ 下标与 ^ 上标不允许跨空白字符，遇到空白即作废未闭合的上下标分隔符
+                CharacterUtils.isUnicodeWhitespace(c) -> {
+                    state.dropSingleWordPairedDelims()
                     i++
                     continue
                 }
@@ -277,6 +285,12 @@ object InlineAutoCloser {
             }
             // 未找到匹配，作为新的开启分隔符
             stack.add(OpenStructure.PairedDelim(char, count))
+        }
+
+        fun dropSingleWordPairedDelims() {
+            stack.removeAll { item ->
+                item is OpenStructure.PairedDelim && item.count == 1 && (item.char == '~' || item.char == '^')
+            }
         }
 
         fun pushBracket(isImage: Boolean) {

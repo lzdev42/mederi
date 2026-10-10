@@ -40,7 +40,8 @@ sequenceDiagram
         note over TE,LLM: runTurn（后台协程）
         TE->>TE: 解析 apiKey = activeApiKeyId?.let{getKeyValue(provider,it)} ?: getDefaultKeyValue(provider)<br/>(选定 key 优先，未选回退默认；压缩/子代理/浏览器同类同源)
         TE->>TE: preflightCompressionIfNeeded<br/>(contextUsedTokens > 70% 窗口 → compressOnce，带 apiKeyId)
-        TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪)<br/>透传 AgentsSubtreeDiscovery: read/list 工具访问路径上<br/>发现未注入过的 AGENTS.md 时追加进工具返回文本(会话级去重)
+        TE->>TE: CustomToolRegistry.buildAll() 收集 UI 层注册的自定义工具
+        TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪, customTools+mcpTools旁路合并)<br/>透传 AgentsSubtreeDiscovery: read/list 工具访问路径上<br/>发现未注入过的 AGENTS.md 时追加进工具返回文本(会话级去重)
         TE->>TE: buildTurnAgent: KoogClientFactory(+RetryableLLMClient)<br/>+ KoogModelBuilder + KoogParamsBuilder<br/>+ ChatMemory(HistoryStoreChatHistoryProvider)<br/>+ graphStrategy(+Compression) + EventHandler
         K->>HS: load → aiViewWindow(最后 SUMMARY 之后) → KoogMessageMapper
         K->>LLM: requestLLMStreaming(系统提示+AI视图窗口+哨兵输入)
