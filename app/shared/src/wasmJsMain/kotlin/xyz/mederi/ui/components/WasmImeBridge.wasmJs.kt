@@ -13,14 +13,17 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import kotlinx.browser.document
 import org.w3c.dom.HTMLTextAreaElement
+import org.w3c.dom.events.KeyboardEvent
 
 /**
- * wasmJs actual：透明 <textarea> 覆盖 Web 端 Compose TextField，触发 iOS 软键盘并回灌输入。
+ * wasmJs actual：DOM <textarea> 作为 Web 端唯一可见文本输入面（single-engine），触发 iOS 软键盘并回灌输入。
  *
- * 原理：Web 端（含 iOS Safari）Compose 的文本输入无法直接唤起系统软键盘，因此把一个透明
- * <textarea> 固定在 TextField 上方的窗口坐标处，让系统把输入焦点/软键盘给到它；它的
- * input/composition 事件回灌成 [TextFieldValue]（经 [onValueChange] 进 VM），VM 侧的文本
- * 变化（如斜杠命令自动补全、粘贴）再反同步回 textarea。
+ * 原理：Web 端（含 iOS Safari）Compose 的文本输入无法直接唤起系统软键盘，因此把 <textarea> 固定在
+ * TextField 上方的窗口坐标处，让系统把输入焦点/软键盘给到它；Compose TextField 文字设透明、
+ * placeholder 设 null（见 [xyz.mederi.isDomTextInput]），故 textarea 的文字/placeholder 就是用户
+ * 看到的文字/占位。它的 input/composition 事件回灌成 [TextFieldValue]（经 [onValueChange] 进 VM），
+ * VM 侧的文本变化（如斜杠命令自动补全、粘贴）再反同步回 textarea。keydown 纯 Enter（无 Shift/Ctrl/Meta）
+ * 触发 [onSend]（null = 不发送）；Shift/Ctrl/Cmd+Enter 保留默认换行。
  *
  * 硬约束（CJK 输入不丢候选的关键，勿改）：
  * 1. 组合期（compositionstart..compositionend）绝不反写 textarea.value/selection；
@@ -32,6 +35,10 @@ actual fun WasmImeBridge(
     enabled: Boolean,
     onValueChange: (TextFieldValue) -> Unit,
     cursorColorHex: String,
+    textColorHex: String,
+    placeholderText: String,
+    placeholderColorHex: String,
+    onSend: (() -> Unit)?,
     rectPx: Rect?,
     density: Float,
 ) {
@@ -39,20 +46,23 @@ actual fun WasmImeBridge(
     val textarea = remember { document.createElement("textarea") as HTMLTextAreaElement }
     // 事件回调闭包捕获最新回调，避免 DisposableEffect 只安装一次导致 stale closure
     val latestOnValueChange = rememberUpdatedState(onValueChange)
+    val latestOnSend = rememberUpdatedState(onSend)
     // 组合期标志（JS 事件回调里读写，用快照状态即可，闭包捕获引用）
     val isComposing = remember { mutableStateOf(false) }
 
     // 初始化样式 + 挂到 body；离开组合时移除
-    DisposableEffect(textarea, cursorColorHex) {
+    DisposableEffect(textarea, cursorColorHex, textColorHex, placeholderColorHex, placeholderText) {
         val style = textarea.style
         style.position = "fixed"
-        // 文本透明（Canvas 文字/斜杠高亮在背后显示），但 caret-color 单独设主题色 → textarea 自身光标可见
+        // 单引擎渲染：textarea 是唯一可见文字面（Canvas 文字/斜杠高亮已透明/隐藏），
+        // 文字颜色直接 = 主题 textPrimary；caret-color 单独设主题色 → textarea 自身光标可见
         // 不用 opacity:0（那会连光标一起隐藏）。不用 FocusRequester 给 Compose 发焦点（会抢 DOM 焦点顶掉键盘）。
-        style.color = "transparent"
+        style.color = textColorHex
         style.setProperty("caret-color", cursorColorHex)
         style.background = "transparent"
         style.fontSize = "16px" // 防 iOS 自动缩放（<16px 会触发 focus zoom，破坏覆盖层定位）
         style.fontFamily = "sans-serif" // 尽量贴近 Canvas 默认无衬线，减少光标横向错位
+        style.lineHeight = "20px" // 对齐 Canvas textStyle lineHeight（20.sp = 20 CSS px），避免光标/文字错位
         style.border = "0"
         style.padding = "0"
         style.margin = "0"
@@ -61,7 +71,7 @@ actual fun WasmImeBridge(
         style.overflowY = "hidden"
         style.outline = "none"
         style.background = "transparent"
-        style.zIndex = "999999"
+        style.zIndex = "2"
         style.whiteSpace = "pre-wrap"
         style.wordWrap = "break-word"
         style.display = "none" // 初始隐藏，由 enabled/rectPx 控制显隐
@@ -70,6 +80,12 @@ actual fun WasmImeBridge(
         textarea.setAttribute("autocomplete", "off")
         textarea.setAttribute("autocorrect", "off")
         textarea.setAttribute("spellcheck", "false")
+        // placeholder 文字与着色（伪元素不能用 inline style，需 stylesheet 规则 + 类名）
+        textarea.placeholder = placeholderText
+        val placeholderStyle = document.createElement("style")
+        placeholderStyle.textContent = ".mederi-ime-placeholder::placeholder { color: $placeholderColorHex; opacity: 1; }"
+        document.head?.appendChild(placeholderStyle)
+        textarea.classList.add("mederi-ime-placeholder")
         document.body?.appendChild(textarea)
 
         // 读 textarea 当前 value/选区 → 回灌 Compose（组合期不回灌，由调用方判断）
@@ -91,8 +107,23 @@ actual fun WasmImeBridge(
         }
         // selectionchange 事件（选区单独变化时回灌）：v1 不需要，随 composition/input 一并回传即可
 
+        // Enter 发送：纯 Enter（无 Shift/Ctrl/Meta）触发 onSend（Compose onPreviewKeyEvent 在
+        // wasmJs 不会触发——DOM 焦点在 textarea 上，键盘事件不进 Compose），Shift/Ctrl/Cmd+Enter 保留默认换行。
+        // latestOnSend 避免 stale closure，同 latestOnValueChange 模式。
+        textarea.addEventListener("keydown") { e ->
+            val ke = e as KeyboardEvent
+            if (ke.key == "Enter" && !ke.shiftKey && !ke.ctrlKey && !ke.metaKey) {
+                val sendCb = latestOnSend.value
+                if (sendCb != null) {
+                    e.preventDefault()
+                    sendCb()
+                }
+            }
+        }
+
         onDispose {
             textarea.remove()
+            placeholderStyle.remove()
         }
     }
 

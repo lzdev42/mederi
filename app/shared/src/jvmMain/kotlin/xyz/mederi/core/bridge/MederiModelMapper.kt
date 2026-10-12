@@ -75,6 +75,7 @@ object MederiModelMapper {
             agent = session.agentMode.name,
             apiKeyId = session.apiKeyId,
             directory = null,
+            draftText = session.draftText,
         )
 
     private fun toConversationStatus(status: SessionStatus): ConversationStatus = when (status) {

@@ -47,9 +47,10 @@ fun main() = application {
         onCloseRequest = {
             Server.stop()
             terminalHub.shutdown()
+            appStateHolder.value?.uiBrowserHost?.shutdown()
             DesktopBrowserRuntime.shutdown()
             appStateHolder.value?.remoteControl?.stopTunnel()
-            appStateHolder.value?.let { runBlocking { it.flushPreferences() } }
+            appStateHolder.value?.let { runBlocking { it.flushAll() } }
             exitApplication()
         },
         title = "Mederi",
@@ -69,7 +70,13 @@ fun main() = application {
 
                         // 启动后台预热桌面浏览器全局单例（固定 useOsr = true，专供 inkcompose 结构图与 Markdown 导出）
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-                            DesktopBrowserRuntime.ensureInitialized()
+                            val ok = DesktopBrowserRuntime.ensureInitialized()
+                            if (ok) {
+                                // 初始化成功后注入内置浏览器宿主（Compose 读取状态，切回 Main 线程设置）
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    appState.uiBrowserHost = xyz.mederi.browser.JcefBrowserHost()
+                                }
+                            }
                         }
                     }
 

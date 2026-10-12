@@ -20,16 +20,22 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.seconds
@@ -114,6 +120,12 @@ class ServerAiCore(
     private val _isReady = MutableStateFlow(false)
     override val isReady: StateFlow<Boolean> = _isReady.asStateFlow()
 
+    // 全局 SSE 事件热流：所有 events() 订阅者共享 1 条 SSE 连接（替代每订阅者一条冷流连接）
+    // WhileSubscribed：最后一个订阅者断开后 5 秒（默认 stopTimeout）再关闭 SSE 连接
+    // replay = 0：全局事件总线不缓存历史事件，避免新订阅者收到无关残留事件
+    private val sharedEvents: Flow<CoreEvent> = sseEvents("/v1/events")
+        .shareIn(scope, SharingStarted.WhileSubscribed(), replay = 0)
+
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
     override val projects: StateFlow<List<Project>> = _projects.asStateFlow()
 
@@ -196,17 +208,28 @@ class ServerAiCore(
     /** SSE 事件流：官方 SSE 客户端插件，`incoming` 帧的 data 段 → [CoreEvent]；心跳注释帧默认不投递 */
     private fun sseEvents(path: String): Flow<CoreEvent> = flow {
         val auth = passwordProvider()
-        client.sse(
-            urlString = "$baseUrl$path",
-            request = { withAuth(auth) }
-        ) {
-            incoming.collect { event ->
-                event.data?.let { data ->
-                    runCatching { json.decodeFromString<CoreEvent>(data) }
-                        .getOrNull()
-                        ?.let { emit(it) }
+        while (currentCoroutineContext().isActive) {
+            try {
+                client.sse(
+                    urlString = "$baseUrl$path",
+                    request = { withAuth(auth) }
+                ) {
+                    incoming.collect { event ->
+                        event.data?.let { data ->
+                            runCatching { json.decodeFromString<CoreEvent>(data) }
+                                .getOrNull()
+                                ?.let { emit(it) }
+                        }
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // SSE 连接断开（Ktor 客户端 4 次重连耗尽后抛出）
+                // 等待后重试整个 sse 调用，防止事件流永久死亡
             }
+            // 正常结束或异常后都等待 5 秒再重连
+            delay(5.seconds)
         }
     }
 
@@ -357,7 +380,7 @@ class ServerAiCore(
     override fun observeConversation(conversationId: String): Flow<ConversationSnapshot> = flow {
         var snapshot = httpGet<ConversationSnapshot>("/v1/sessions/$conversationId/snapshot")
         emit(snapshot)
-        sseEvents("/v1/sessions/$conversationId/events").collect { event ->
+        events().filter { it.sessionId == conversationId }.collect { event ->
             val emissions = SnapshotReducer.applyWithRefresh(snapshot, event) {
                 runCatching { httpGet<MessagesPage>("/v1/sessions/$conversationId/messages") }.getOrNull()
             }
@@ -565,7 +588,7 @@ class ServerAiCore(
         httpGet("/v1/system/stats")
     }
 
-    override fun events(): Flow<CoreEvent> = sseEvents("/v1/events")
+    override fun events(): Flow<CoreEvent> = sharedEvents
 
     // ------------------------------------------------------------------
     // Diff

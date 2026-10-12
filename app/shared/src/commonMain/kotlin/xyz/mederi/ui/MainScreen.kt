@@ -140,7 +140,8 @@ fun MainScreen() {
                     isLeftSidebarOpen = isMobileDrawerOpen,
                     onToggleLeftSidebar = { isMobileDrawerOpen = !isMobileDrawerOpen },
                     onOpenProjectPicker = openProjectPicker,
-                    onOpenSettings = { workspaceViewModel.openSettings() }
+                    onOpenSettings = { workspaceViewModel.openSettings() },
+                    imeOverlayActive = isSettingsVisible || compactionNotice != null
                 )
 
                 // 侧边栏抽屉半透明背景遮罩
@@ -251,7 +252,8 @@ fun MainScreen() {
                         isLeftSidebarOpen = true,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(false) },
                         onOpenProjectPicker = openProjectPicker,
-                        onOpenSettings = { workspaceViewModel.openSettings() }
+                        onOpenSettings = { workspaceViewModel.openSettings() },
+                        imeOverlayActive = isSettingsVisible || compactionNotice != null
                     )
                 }
             } else {
@@ -267,7 +269,8 @@ fun MainScreen() {
                         isLeftSidebarOpen = isHoverRevealed,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(true) },
                         onOpenProjectPicker = openProjectPicker,
-                        onOpenSettings = { workspaceViewModel.openSettings() }
+                        onOpenSettings = { workspaceViewModel.openSettings() },
+                        imeOverlayActive = isSettingsVisible || compactionNotice != null
                     )
 
                     // 屏幕左边缘指示把手（鼠标移过去自动弹出来，未常驻时常驻底层渲染避免重挂载抖动）

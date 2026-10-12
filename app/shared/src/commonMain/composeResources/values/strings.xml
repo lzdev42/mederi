@@ -606,8 +606,19 @@
     <string name="browser_forward">前进</string>
     <string name="browser_reload">刷新</string>
     <string name="browser_stop">停止</string>
-    <string name="browser_url_placeholder">输入网址 (自动补全 http/https)</string>
+    <string name="browser_url_placeholder">输入网址或使用 Bing 搜索…</string>
     <string name="browser_go">前往</string>
+    <string name="browser_close_tab">关闭标签页</string>
+    <string name="browser_clear_url">清空输入</string>
+    <string name="browser_zoom_in">放大页面</string>
+    <string name="browser_zoom_out">缩小页面</string>
+    <string name="browser_zoom_reset">重置缩放</string>
+    <string name="browser_load_error_title">页面加载失败</string>
+    <string name="browser_retry">重试</string>
+    <string name="browser_js_alert_title">网页提示</string>
+    <string name="browser_js_confirm_title">网页确认</string>
+    <string name="browser_js_prompt_title">网页输入</string>
+    <string name="browser_ok">确定</string>
     <!-- Files 双 Tab 与文件树（S1 新增） -->
     <string name="files_subtab_tree">项目目录</string>
     <string name="files_subtab_diff">已修改</string>
@@ -772,4 +783,5 @@
     <string name="subagent_activity_idle">等待中</string>
     <string name="subagent_live_waiting">等待子 Agent 产生输出…</string>
     <string name="subagent_live_empty">（无实时输出记录）</string>
+    <string name="browser_not_available">当前端不可用</string>
 </resources>

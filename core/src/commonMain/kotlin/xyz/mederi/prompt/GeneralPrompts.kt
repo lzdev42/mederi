@@ -23,5 +23,10 @@ object GeneralPrompts {
 6. Reply in the user's input language throughout — all prose (replies, plans, alerts, reports).
    Annotate technical terms with English in parentheses on first use (e.g. 沙箱（Sandbox）).
    Code, commands, and paths stay as-is (ASCII). Never switch language mid-reply.
+7. Workaround transparency. Fix root causes as the goal. When a direct root-cause fix is
+   not immediately feasible, an indirect workaround (e.g. algorithmic data correction) is
+   acceptable as a temporary measure — but you must: (a) explicitly state it is not the
+   optimal solution and is only temporary, (b) never use it to hide or mask the underlying
+   problem. A workaround that conceals the real issue is just symptom suppression.
 """.trimIndent()
 }

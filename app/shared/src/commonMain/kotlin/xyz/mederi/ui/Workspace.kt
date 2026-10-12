@@ -113,10 +113,15 @@ fun Workspace(
     isLeftSidebarOpen: Boolean = true,
     onToggleLeftSidebar: () -> Unit = {},
     onOpenProjectPicker: () -> Unit = {},
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    imeOverlayActive: Boolean = false
 ) {
     val colors = LocalMederiColors.current
     val appState = LocalAppState.current
+    // 覆盖层状态传递：任何 Dialog/错误详情/文件确认弹窗打开时，ChatInputCard 需隐藏 IME 桥接 textarea
+    val wsOverlayActive = imeOverlayActive ||
+        viewModel.isErrorDetailOpen ||
+        viewModel.pendingFileOpen != null
     // 子面板 VM 在 Route 层统一创建（ViewModelStore 管理生命周期），组件只接收实例渲染
     val rawMessagesViewModel: RawMessagesViewModel = viewModel { RawMessagesViewModel(appState) }
     val terminalViewModel: TerminalViewModel = viewModel { TerminalViewModel(appState) }
@@ -339,7 +344,8 @@ fun Workspace(
                                         ChatInputCard(
                                             viewModel = viewModel,
                                             modifier = Modifier.fillMaxWidth(),
-                                            onOpenProjectPicker = onOpenProjectPicker
+                                            onOpenProjectPicker = onOpenProjectPicker,
+                                            imeOverlayActive = wsOverlayActive
                                         )
                                     }
                                 }
@@ -379,7 +385,8 @@ fun Workspace(
                                         ChatInputCard(
                                             viewModel = viewModel,
                                             modifier = Modifier.fillMaxWidth(),
-                                            onOpenProjectPicker = onOpenProjectPicker
+                                            onOpenProjectPicker = onOpenProjectPicker,
+                                            imeOverlayActive = wsOverlayActive
                                         )
                                     }
                                 }

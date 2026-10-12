@@ -7,3 +7,5 @@ class JVMPlatform : Platform {
 actual fun getPlatform(): Platform = JVMPlatform()
 
 actual val isDesktopPlatform: Boolean = true
+
+actual val isDomTextInput: Boolean = false

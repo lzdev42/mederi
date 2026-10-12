@@ -72,6 +72,17 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.updateAgentConfig(sessionId, agentMode, aiModel, reasoningLevel, apiKeyId)
     }
 
+    override suspend fun updateComposeState(
+        sessionId: String,
+        agentMode: AgentMode,
+        aiModel: AIModel?,
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?,
+        draftText: String
+    ) = mederiCall {
+        sessionManager.updateComposeState(sessionId, agentMode, aiModel, reasoningLevel, apiKeyId, draftText)
+    }
+
     override suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>) = mederiCall {
         sessionManager.resolveQuestion(sessionId, questionId, answers)
     }

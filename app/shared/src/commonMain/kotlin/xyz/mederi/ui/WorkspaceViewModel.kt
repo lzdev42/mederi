@@ -133,6 +133,8 @@ class WorkspaceViewModel(
                 }
             }
         }
+        // 程序关闭时同步保存当前会话 compose state（AppState.flushAll 先跑全部 flush 回调再落偏好）
+        appState.registerFlushCallback { flushComposeState() }
     }
 
 
@@ -198,17 +200,7 @@ class WorkspaceViewModel(
     fun selectAgent(id: String?) {
         DebugLog.info("UI", "WorkspaceViewModel.selectAgent: id=$id")
         appState.selectAgent(id)
-        // 会话已绑定时：立即把 Agent 改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
-        // selectAgentMode 内部调 selectAgent，无需单独加覆盖。
-        val convId = conversationId
-        if (convId != null && id != null) {
-            val agent = appState.availableAgents.value.find { it.id == id }
-            if (agent != null) {
-                viewModelScope.launch {
-                    appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(agent = agent))
-                }
-            }
-        }
+        saveComposeState()
     }
 
     /**
@@ -218,6 +210,7 @@ class WorkspaceViewModel(
     fun selectAgentMode(mode: AgentMode) {
         DebugLog.info("UI", "WorkspaceViewModel.selectAgentMode: requested=$mode, currentAgentId=${selectedAgentId.value}")
         appState.selectAgentMode(mode)
+        saveComposeState()
     }
 
     // ==========================================
@@ -770,6 +763,49 @@ class WorkspaceViewModel(
         inputDraft = TextFieldValue("")
     }
 
+    /**
+     * 读取当前输入框全部设置的最新值，组装全量 UpdateConversationSettingsInput。
+     * 任意设置变化时由 [saveComposeState] 调用——一个入口，一个数据结构，全量覆盖写。
+     */
+    private fun buildComposeStateInput(): UpdateConversationSettingsInput {
+        val model = appState.selectedModel.value
+        val agentId = appState.selectedAgentId.value
+        val agent = appState.availableAgents.value.find { it.id == agentId }
+        val apiKeyId = model?.let { appState.getApiKeyId(it.provider) }
+        val thinkingLevel = model?.let { appState.getModelReasoningLevel(it.id) }
+        val draftText = inputDraft.text
+        return UpdateConversationSettingsInput(
+            model = model,
+            agent = agent,
+            apiKeyId = apiKeyId,
+            thinkingLevel = thinkingLevel,
+            draftText = draftText,
+        )
+    }
+
+    /**
+     * 统一保存当前会话的 compose state（设置类变化时调用，fire-and-forget）。
+     * 读全量当前值 → 全量覆盖写到会话数据库。会话未绑定（conversationId == null）时跳过。
+     *
+     * 无需同步更新缓存：Idle 会话的缓存已被 [applySnapshot] 清除，切回来走 getSnapshot 读 DB 真理源。
+     * Working 会话的缓存由观察流持续更新，用户改设置时缓存会被下个事件覆盖。
+     */
+    fun saveComposeState() {
+        val convId = conversationId ?: return
+        val input = buildComposeStateInput()
+        viewModelScope.launch {
+            appState.aiCore.updateConversationSettings(convId, input)
+        }
+    }
+
+    /**
+     * 程序关闭时同步保存当前会话 compose state（由 AppState flushAll 回调调用）。
+     */
+    private suspend fun flushComposeState() {
+        val convId = conversationId ?: return
+        appState.aiCore.updateConversationSettings(convId, buildComposeStateInput())
+    }
+
     // ───── 输入容量预算（业务规则归口 VM，UI 只渲染提示） ─────
 
     /** 单次输入安全字符预算：上下文窗口按比例折算，并受硬上限约束 */
@@ -1266,6 +1302,14 @@ private val SUBAGENT_EVENT_TYPES = setOf(
 
     fun attach(id: String?) {
         DebugLog.event("UI", "attach: id=$id")
+        // 切换前保存旧会话的 compose state（含草稿文本）
+        val oldConvId = conversationId
+        if (oldConvId != null && oldConvId != id) {
+            val input = buildComposeStateInput()
+            viewModelScope.launch {
+                appState.aiCore.updateConversationSettings(oldConvId, input)
+            }
+        }
         resetQuestionState()
         isSubagentBannerDismissed = false
         // compaction 本地态不随会话走：切会话复位，防别的会话压缩事件串台
@@ -1413,22 +1457,24 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             }
             checkAndTriggerAutoContinue(id, snap)
         }
-        // 仅在真实离开 Working 状态（turn 结束）时清除 StatusBar 计时锚点 + 快照缓存
-        if (wasWorking && snap.conversation.status != ConversationStatus.Working) {
-            DebugLog.debug("UI-Timer", "turn ended for $id (wasWorking=$wasWorking, newStatus=${snap.conversation.status}), removing timer and snapshotCache")
-            sessionCache.turnStartByConv.remove(id)
-            // turn 已结束：store 已有完整数据，缓存不再需要（下次切回走 getSnapshot 即可）。
-            // 观察流保留——后续新 turn 的事件仍持续聚合进缓存。
-            sessionCache.snapshotCache.remove(id)
-
-            // 排队模式：当前 turn 结束恢复 Idle 时自动出队消费
-            if (snap.conversation.status == ConversationStatus.Idle) {
-                val queue = sessionCache.queuedMessagesByConv[id]
-                if (!queue.isNullOrEmpty()) {
-                    val nextMsg = queue.removeAt(0)
-                    sendQueuedMessage(nextMsg)
+        // Working 状态保留缓存（切回零闪烁、不丢流式增量）；
+        // 非 Working（Idle/Error）清缓存——数据已在库，缓存无价值只会变成 stale 副本
+        //（切回走 getSnapshot 读 DB 真理源，草稿/设置自动正确，无需手动同步缓存）。
+        if (snap.conversation.status != ConversationStatus.Working) {
+            // turn 结束（Working → Idle/Error）时清计时锚点 + 排队出队
+            if (wasWorking) {
+                DebugLog.debug("UI-Timer", "turn ended for $id (newStatus=${snap.conversation.status}), removing timer and snapshotCache")
+                sessionCache.turnStartByConv.remove(id)
+                // 排队模式：当前 turn 结束恢复 Idle 时自动出队消费
+                if (snap.conversation.status == ConversationStatus.Idle) {
+                    val queue = sessionCache.queuedMessagesByConv[id]
+                    if (!queue.isNullOrEmpty()) {
+                        val nextMsg = queue.removeAt(0)
+                        sendQueuedMessage(nextMsg)
+                    }
                 }
             }
+            sessionCache.snapshotCache.remove(id)
         }
         }
 
@@ -1488,6 +1534,8 @@ private val SUBAGENT_EVENT_TYPES = setOf(
      * - 全新未发送会话（modelId == null）→ 不覆盖选择器（保留用户当前选择）；冷启动兜底在 init。
      */
     private fun applySessionSettings(conv: Conversation) {
+        // 恢复草稿文本（即使无模型也要恢复）
+        inputDraft = TextFieldValue(conv.draftText ?: "")
         if (conv.modelId == null) return
         val all = appState.availableModels.value
         val model = all.find { it.id == conv.modelId && it.provider == conv.modelProvider }
@@ -1519,42 +1567,18 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     fun updateThinkingLevel(level: String?) {
         val model = appState.selectedModel.value ?: return
         appState.setModelReasoningLevel(model.id, level)
-        // 会话已绑定时：立即把推理档位改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
-        // level == null（移除偏好走模型默认档）不立即持久化（COALESCE 语义 null=不改），由下次发送覆盖。
-        val convId = conversationId
-        if (convId != null && level != null) {
-            viewModelScope.launch {
-                appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(thinkingLevel = level))
-            }
-        }
+        saveComposeState()
     }
 
     fun selectModel(model: ModelOption?) {
         appState.selectModel(model)
-        // 思考级别无需在此设置副本：生效值由 effectiveThinkingLevel 现算
-        // （模型记忆 > 默认档），切换模型后自动跟随新模型
-        // 会话已绑定时：立即把模型改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
-        // 仅传 model 字段（null = 不改其它项，core COALESCE 保留原值）。
-        val convId = conversationId
-        if (convId != null && model != null) {
-            viewModelScope.launch {
-                appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(model = model))
-            }
-        }
+        saveComposeState()
     }
 
     /** 选定当前模型所在供应商的 API Key（UI key 选择器唯一入口）；null = 用该供应商默认 key。 */
     fun selectApiKey(providerId: String, apiKeyId: String?) {
         appState.selectApiKey(providerId, apiKeyId)
-        // 会话已绑定时：立即把 API Key 改动持久化到该会话（内存态已同步，fire-and-forget best-effort）。
-        // apiKeyId == null（用户选"默认 key"）不立即持久化（COALESCE 语义 null=不改，无法表达"清除为默认"）；
-        // 该 case 由下次发送时 request.apiKeyId=null + TurnExecutor 回写覆盖。属已知边界。
-        val convId = conversationId
-        if (convId != null && apiKeyId != null) {
-            viewModelScope.launch {
-                appState.aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(apiKeyId = apiKeyId))
-            }
-        }
+        saveComposeState()
     }
 
     fun selectProject(id: String?) {

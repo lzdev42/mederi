@@ -9,3 +9,5 @@ class IOSPlatform : Platform {
 actual fun getPlatform(): Platform = IOSPlatform()
 
 actual val isDesktopPlatform: Boolean = false
+
+actual val isDomTextInput: Boolean = false

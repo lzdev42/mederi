@@ -195,6 +195,19 @@ class SessionManagerImpl(
         sessionStore.updateAgentConfig(id, agentMode, aiModel, reasoningLevel, apiKeyId)
     }
 
+    override suspend fun updateComposeState(
+        id: String,
+        agentMode: xyz.mederi.domain.model.AgentMode,
+        aiModel: xyz.mederi.domain.model.AIModel?,
+        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel?,
+        apiKeyId: String?,
+        draftText: String
+    ) {
+        DebugLog.event("SessionMgr", "updateComposeState: sessionId=$id, agentMode=$agentMode, aiModel=${aiModel?.id}, reasoningLevel=$reasoningLevel, apiKeyId=$apiKeyId, draftTextLen=${draftText.length}")
+        require(id)
+        sessionStore.updateComposeState(id, agentMode, aiModel, reasoningLevel, apiKeyId, draftText)
+    }
+
     override suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>) {
         turnExecutor.resolveQuestion(id, questionId, answers)
     }

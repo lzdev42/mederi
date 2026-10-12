@@ -412,26 +412,29 @@ class MockAiCore(
         input: UpdateConversationSettingsInput
     ): Result<Unit> = runCatching {
         // Mock: 把设置写回内存会话快照，供预览/测试观察
+        // 全量覆盖写（与真实实现 updateComposeState 的 SET 语义一致）：null/空值直接写入，不再保留旧值
         val sf = conversations[conversationId] ?: return@runCatching
         val conv = sf.value.conversation
         sf.value = sf.value.copy(
             conversation = conv.copy(
-                modelId = input.model?.id ?: conv.modelId,
-                modelProvider = input.model?.provider ?: conv.modelProvider,
-                agent = input.agent?.mode?.name ?: conv.agent,
-                apiKeyId = input.apiKeyId ?: conv.apiKeyId,
-                thinkingLevel = input.thinkingLevel ?: conv.thinkingLevel
+                modelId = input.model?.id,
+                modelProvider = input.model?.provider,
+                agent = input.agent?.mode?.name,
+                apiKeyId = input.apiKeyId,
+                thinkingLevel = input.thinkingLevel,
+                draftText = input.draftText
             )
         )
         _projects.value = _projects.value.map { p ->
             p.copy(conversations = p.conversations.map { c ->
                 if (c.id == conversationId) {
                     c.copy(
-                        modelId = input.model?.id ?: c.modelId,
-                        modelProvider = input.model?.provider ?: c.modelProvider,
-                        agent = input.agent?.mode?.name ?: c.agent,
-                        apiKeyId = input.apiKeyId ?: c.apiKeyId,
-                        thinkingLevel = input.thinkingLevel ?: c.thinkingLevel
+                        modelId = input.model?.id,
+                        modelProvider = input.model?.provider,
+                        agent = input.agent?.mode?.name,
+                        apiKeyId = input.apiKeyId,
+                        thinkingLevel = input.thinkingLevel,
+                        draftText = input.draftText
                     )
                 } else c
             })

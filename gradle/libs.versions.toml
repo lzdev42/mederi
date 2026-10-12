@@ -2,7 +2,7 @@
 agp = "9.1.1"
 android-compileSdk = "37"
 android-minSdk = "24"
-android-targetSdk = "36"
+android-targetSdk = "37"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.8.0"
 androidx-core = "1.19.1"
@@ -11,7 +11,7 @@ androidx-lifecycle = "2.11.0"
 androidx-testExt = "1.3.0"
 composeMultiplatform = "1.12.1"
 junit = "4.13.2"
-kotlin = "2.4.20"
+kotlin = "2.4.21"
 kotlin-wrappers = "2026.9.3"
 kotlinx-coroutines = "1.11.0"
 kotlinx-datetime = "0.8.0"
@@ -19,7 +19,7 @@ coil = "3.6.3"
 composeIcons = "1.1.1"
 koog = "1.3.0"
 okio = "3.18.2"
-sqldelight = "2.4.0"
+sqldelight = "2.4.1"
 serialization-json = "1.11.0"
 androidx-graphics-path = "1.1.0"
 ktor = "3.6.0"
@@ -28,9 +28,10 @@ material3 = "1.12.0-alpha03"
 koogEX = "1.2.0-beta"
 pty4j = "0.14.0"
 jediterm = "3.74"
-kbrowser = "0.1.0-beta1"
+kbrowser = "0.1.0-beta2"
 poi = "5.5.1"
 mammoth = "1.13.0"
+
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -85,6 +86,7 @@ ktor-serverCors = { module = "io.ktor:ktor-server-cors-jvm", version.ref = "ktor
 ktor-serverSse = { module = "io.ktor:ktor-server-sse-jvm", version.ref = "ktor" }
 ktor-serverAuth = { module = "io.ktor:ktor-server-auth-jvm", version.ref = "ktor" }
 ktor-serverCompression = { module = "io.ktor:ktor-server-compression-jvm", version.ref = "ktor" }
+ktor-serverAutoHeadResponse = { module = "io.ktor:ktor-server-auto-head-response-jvm", version.ref = "ktor" }
 ktor-serializationJson = { module = "io.ktor:ktor-serialization-kotlinx-json-jvm", version.ref = "ktor" }
 wrappers-browser = { module = "org.jetbrains.kotlin-wrappers:kotlin-browser", version.ref = "kotlin-wrappers" }
 pty4j = { module = "org.jetbrains.pty4j:pty4j", version.ref = "pty4j" }

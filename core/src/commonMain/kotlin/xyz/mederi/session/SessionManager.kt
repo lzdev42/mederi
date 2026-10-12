@@ -57,6 +57,19 @@ interface SessionManager {
         apiKeyId: String? = null
     )
 
+    /**
+     * 全量覆盖写会话 compose state（非 COALESCE，null 写 null）。
+     * 用于输入框设置统一保存。
+     */
+    suspend fun updateComposeState(
+        id: String,
+        agentMode: xyz.mederi.domain.model.AgentMode,
+        aiModel: xyz.mederi.domain.model.AIModel?,
+        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel?,
+        apiKeyId: String?,
+        draftText: String
+    )
+
     suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
     suspend fun resolvePlanApproval(
         id: String,

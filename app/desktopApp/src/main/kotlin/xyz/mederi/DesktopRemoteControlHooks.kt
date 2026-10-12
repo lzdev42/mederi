@@ -46,17 +46,27 @@ class DesktopRemoteControlHooks(
     /** 本机局域网 IPv4（site-local，非回环）；拿不到返回 null。 */
     override val localAddress: String? by lazy {
         runCatching {
+            // 已知虚拟/桥接接口名前缀——这些上面不会有 mederi server，应降级
+            val virtualPrefixes = listOf("bridge", "vmnet", "vboxnet", "docker", "virbr", "veth", "tap")
+            // (接口名, IPv4) 候选对
             NetworkInterface.getNetworkInterfaces().toList()
-                .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-                .flatMap { it.inetAddresses.toList() }
-                .filterIsInstance<Inet4Address>()
-                .map { it.hostAddress }
-                .firstOrNull { ip ->
-                    // site-local：10/8、172.16/12、192.168/16
-                    ip.startsWith("10.") ||
-                        ip.startsWith("192.168.") ||
-                        (ip.startsWith("172.") && ip.split(".").getOrNull(1)?.toIntOrNull()?.let { it in 16..31 } == true)
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { nic ->
+                    nic.inetAddresses.toList()
+                        .filterIsInstance<Inet4Address>()
+                        .map { it.hostAddress }
+                        .filter { ip ->
+                            // site-local：10/8、172.16/12、192.168/16
+                            ip.startsWith("10.") ||
+                                ip.startsWith("192.168.") ||
+                                (ip.startsWith("172.") && ip.split(".").getOrNull(1)?.toIntOrNull()?.let { it in 16..31 } == true)
+                        }
+                        .map { nic.name to it }
                 }
+                // 物理网卡优先，虚拟/桥接垫底
+                .sortedBy { (name, _) -> virtualPrefixes.any { name.startsWith(it) } }
+                .firstOrNull()
+                ?.second
         }.getOrNull()
     }
 

@@ -67,8 +67,9 @@ interface AiCore {
     /**
      * 更新会话输入框设置（不依赖发送即落库）。
      *
-     * 把输入框四项设置（模型 / Agent / API Key / 推理档位）写到该会话，使改动随会话保留、
-     * 切换会话后恢复。所有入参可空 = null 表示不改变该项（core COALESCE 保留原值）。
+     * 把输入框设置（模型 / Agent / API Key / 推理档位 / 草稿）写到该会话，使改动随会话保留、
+     * 切换会话后恢复。全量覆盖写：调用方每次传入所有字段的当前值，底层 updateComposeState 做
+     * SET（非 COALESCE），null 直接写 null（清空语义）。
      * 调用时机：选择器改动且已绑定会话时（未发送也立即持久化）。
      */
     suspend fun updateConversationSettings(

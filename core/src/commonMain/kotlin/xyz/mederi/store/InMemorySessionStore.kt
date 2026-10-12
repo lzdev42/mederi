@@ -53,6 +53,26 @@ class InMemorySessionStore : SessionStore {
         } ?: return
     }
 
+    override suspend fun updateComposeState(
+        id: String,
+        agentMode: AgentMode,
+        aiModel: AIModel?,
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?,
+        draftText: String
+    ) {
+        sessions[id] = sessions[id]?.let { s ->
+            s.copy(
+                agentMode = agentMode,
+                aiModel = aiModel,
+                reasoningLevel = reasoningLevel,
+                apiKeyId = apiKeyId,
+                draftText = draftText,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        } ?: return
+    }
+
     override suspend fun updateTodos(id: String, todos: List<TodoItem>) {
         sessions[id] = sessions[id]?.let { s ->
             s.copy(

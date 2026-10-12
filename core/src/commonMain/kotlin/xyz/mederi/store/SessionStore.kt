@@ -47,6 +47,20 @@ interface SessionStore {
     )
 
     /**
+     * 全量覆盖写会话 compose state（agentMode / aiModel / reasoningLevel / apiKeyId / draftText）。
+     * 与 [updateAgentConfig] 不同：不做 COALESCE，null 直接写 null（清空语义）。
+     * 用于输入框设置统一保存（UI 任意设置变化时全量写当前值）。
+     */
+    suspend fun updateComposeState(
+        id: String,
+        agentMode: AgentMode,
+        aiModel: AIModel?,
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?,
+        draftText: String
+    )
+
+    /**
      * 更新会话的 todo 列表（整体替换；无 Plan 任务的轻量进度跟踪）。
      * 真理源 = sessions.todos 列；事件/快照/提示词段都是它的投影。
      */

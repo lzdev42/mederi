@@ -1,5 +1,8 @@
 package xyz.mederi.ui.appstate
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -109,7 +112,7 @@ class AppState(
     var terminalManager: TerminalManager? = null
 
     /** 宿主启动后注入；null = 当前端不渲染内置浏览器（遥控/wasm 端为 null，见 canRenderJcef） */
-    var uiBrowserHost: xyz.mederi.ui.browser.UiBrowserHost? = null
+    var uiBrowserHost: xyz.mederi.ui.browser.UiBrowserHost? by mutableStateOf(null)
 
     /** 宿主启动后注入；null = 当前端无本地文件树（遥控端文件不在本地）。供 WorkspaceViewModel.openFile 读文本。 */
     var fileTreeProvider: xyz.mederi.ui.host.ProjectFileTreeProvider? = null
@@ -245,6 +248,19 @@ class AppState(
      */
     suspend fun flushPreferences() {
         withTimeoutOrNull(2_000) { pendingWriteCount.first { it == 0 } }
+    }
+
+    private val flushCallbacks = mutableListOf<suspend () -> Unit>()
+
+    /** 注册程序关闭时的 flush 回调（如 VM 保存草稿到会话）。 */
+    fun registerFlushCallback(callback: suspend () -> Unit) {
+        flushCallbacks.add(callback)
+    }
+
+    /** 程序关闭前同步 flush：先跑所有注册的 flush 回调（compose state 等），再等待偏好写盘完成。 */
+    suspend fun flushAll() {
+        flushCallbacks.forEach { runCatching { it() } }
+        flushPreferences()
     }
 
     fun setTheme(value: AppThemeMode) {

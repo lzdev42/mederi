@@ -105,6 +105,7 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.RemoteCapabilityNotice
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
+import xyz.mederi.isDomTextInput
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiRadius
 import androidx.compose.ui.focus.onFocusChanged
@@ -157,7 +158,8 @@ internal fun ModelCapabilityTag(text: String, tint: Color) {
 fun ChatInputCard(
     viewModel: WorkspaceViewModel,
     modifier: Modifier = Modifier,
-    onOpenProjectPicker: () -> Unit = {}
+    onOpenProjectPicker: () -> Unit = {},
+    imeOverlayActive: Boolean = false
 ) {
     val colors = LocalMederiColors.current
     val appState = LocalAppState.current
@@ -169,6 +171,11 @@ fun ChatInputCard(
     var imeRect by remember { mutableStateOf<Rect?>(null) }
     val imeDensity = LocalDensity.current.density
     var isMobileSheetOpen by remember { mutableStateOf(false) }
+    // 覆盖层状态：任何 Dialog/错误详情/文件确认弹窗/移动端 Sheet 打开时，隐藏 IME 桥接 textarea（文字不得透过遮罩可见）
+    val anyOverlayActive = imeOverlayActive ||
+        viewModel.isErrorDetailOpen ||
+        viewModel.pendingFileOpen != null ||
+        isMobileSheetOpen
     // 聚焦态（原型 focus-within）：TextField 聚焦 → 卡片自身 border 与外圈 ring 切 accentFocus
     var focused by remember { mutableStateOf(false) }
 
@@ -266,6 +273,8 @@ fun ChatInputCard(
     val isCompacting = viewModel.isCompacting
     val isStreaming = viewModel.isWorking && !isWaitingPlanApproval && !isCompacting
     val errorMessage = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }
+    // 输入框 placeholder（wasmJs 走 textarea 的 placeholder 属性 + CSS，其他平台走 Compose placeholder）
+    val placeholderText = stringResource(Res.string.input_placeholder)
     // 一次性轻提示：发送时图片被剔除放行（值为模型名，null=不显示），非错误走 error
     val imageStrippedNotice = viewModel.imageStrippedNotice
     val remoteCapabilityNotice = viewModel.remoteCapabilityNotice
@@ -560,17 +569,20 @@ fun ChatInputCard(
                         )
                     },
                     textStyle = TextStyle(
-                        color = colors.textPrimary,
+                        // wasmJs 上 DOM textarea 是唯一可见文字面，Compose Canvas 文字透明
+                        color = if (isDomTextInput) Color.Transparent else colors.textPrimary,
                         fontSize = 13.5.sp,
                         lineHeight = 20.sp
                     ),
-                    placeholder = {
-                        Text(
-                            text = stringResource(Res.string.input_placeholder),
-                            color = colors.textSecondary,
-                            fontSize = 13.5.sp,
-                            lineHeight = 20.sp
-                        )
+                    placeholder = if (isDomTextInput) null else {
+                        {
+                            Text(
+                                text = placeholderText,
+                                color = colors.textSecondary,
+                                fontSize = 13.5.sp,
+                                lineHeight = 20.sp
+                            )
+                        }
                     },
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
@@ -678,12 +690,22 @@ fun ChatInputCard(
                         }
                 )
 
-                // wasmJs IME 桥接（其他平台 no-op）：透明 textarea 跟随输入框矩形，回灌输入/反向同步
+                // wasmJs IME 桥接（其他平台 no-op）：DOM textarea 是唯一可见文字面，跟随输入框矩形，回灌输入/反向同步
+                // onSend：canSend 且未开斜杠联想菜单才注册 Enter 发送（null = textarea 保留 Enter 默认行为，不拦截）
+                val imeOnSend: (() -> Unit)? = if (canSend && !slashMenuOpen) {
+                    { submit() }
+                } else {
+                    null
+                }
                 WasmImeBridge(
                     textValue = textValue,
-                    enabled = !isCompacting,
+                    enabled = !isCompacting && !anyOverlayActive,
                     onValueChange = onSlashCommandTextChange,
                     cursorColorHex = mederiColorToCssHex(colors.accentPrimary),
+                    textColorHex = mederiColorToCssHex(colors.textPrimary),
+                    placeholderText = placeholderText,
+                    placeholderColorHex = mederiColorToCssHex(colors.textSecondary),
+                    onSend = imeOnSend,
                     rectPx = imeRect,
                     density = imeDensity,
                 )

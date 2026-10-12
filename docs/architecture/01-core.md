@@ -39,6 +39,7 @@ classDiagram
         +id +projectId +title +status: SessionStatus
         +agentMode: AgentMode
         +aiModel: AIModel? +reasoningLevel: ReasoningLevel? +apiKeyId: String?
+        +draftText: String?
         +env: Map +todos: List~TodoItem~ +createdAt +updatedAt
     }
     class AIModel {
@@ -146,6 +147,8 @@ suspend fun sendMessage(id: String, request: SendMessageRequest)
 suspend fun steerMessage(id: String, request: SendMessageRequest)   // Steering（turn 运行时插话引导，见 §6.2）：
 % RUNNING → 排队 pendingSteerings 等工具边界注入 + STATUS(steering_queued)；非 RUNNING → 降级走 sendMessage
 suspend fun rollbackToMessage(id: String, messageId: String)   // abortAndJoin 后 historyStore.replace(截断)
+suspend fun updateComposeState(id: String, agentMode: AgentMode, aiModel: AIModel?, reasoningLevel: ReasoningLevel?, apiKeyId: String?, draftText: String)
+% 全量覆盖写会话 compose state（非 COALESCE：null 写 null，清空语义），用于输入框设置统一保存
 suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
 suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean, aiModel: AIModel? = null, reasoningLevel: ReasoningLevel? = null)
 % 批准 + aiModel 非 null 时先 updateAgentConfig 写 session（"最后一次选择"语义）再 resolve requester——
@@ -226,6 +229,7 @@ suspend fun uninstall(name: String)                    // 删除根目录下对�
 | API | 方法（Impl 全部薄转调 + mederiCall） | 特别逻辑 |
 |---|---|---|
 | `SessionApi` | list / create(CreateSessionRequest) / get / rename / delete / abort / abortAndJoin / sendMessage(SendMessageRequest) / steerMessage(SendMessageRequest) / getSubagentReport(agentId)(→SubagentReportData?) / stopSubagent(agentId) / rollbackToMessage / resolveQuestion / resolvePlanApproval / compressHistory / listMessages / getMessage / listRawMessages(→RawMessageDto) / getFileDiffs / events | RawMessageRecord→Dto 转换 |
+| `SessionApi`（续，输入框设置 + 会话控制） | updateAgentConfig(sessionId, agentMode?, aiModel?, reasoningLevel?, apiKeyId?)（COALESCE：null 不改） / **updateComposeState(sessionId, agentMode, aiModel?, reasoningLevel?, apiKeyId?, draftText)**（全量覆盖写含 draftText，非 COALESCE） / contextUsedTokens(sessionId) / stopSubagent(agentId) | 输入框设置统一保存；updateComposeState 为全量 SET 语义（null 写 null、清空） |
 | `ProjectApi` | list / create / get / delete / rename / addDirectory / removeDirectory | |
 | `ProviderApi` | list / create / get / update / delete / addKey / listKeys / deleteKey / setDefaultKey / listModels / addModel / updateModel / deleteModel / **refreshModels** / **autoSetupModels** | refresh 只新增远端新模型（DEFAULT_VISIBLE_MODEL_LIMIT=10 补足启用）不碰存量元数据；autoSetupModels=目录元数据进存量 FETCHED 模型唯一通道；type 字符串解析失败抛 Validation |
 | `ModelApi` | list / get（跨供应商聚合） | |
@@ -260,7 +264,7 @@ SessionApi 同文件 DTO：`AgentConfig(agentMode, aiModel=null, reasoningLevel=
 
 | Store 接口 | 方法 | Sqlite 实现 → 表（库） |
 |---|---|---|
-| `SessionStore` | list / get / insert / update(id, status?, title?) / updateAgentConfig(id, agentMode?, aiModel?, reasoningLevel?, apiKeyId?) / updateTodos / delete | `SqliteSessionStore` → **sessions**（data.db） |
+| `SessionStore` | list / get / insert / update(id, status?, title?) / updateAgentConfig(id, agentMode?, aiModel?, reasoningLevel?, apiKeyId?)（COALESCE）/ updateComposeState(id, agentMode, aiModel?, reasoningLevel?, apiKeyId?, draftText)（全量覆盖 SET，null 写 null）/ updateTodos / delete | `SqliteSessionStore` → **sessions**（data.db） |
 | `HistoryStore` | load(sessionId) / append / replace(sessionId, messages) / delete(sessionId) / rollbackTo(sessionId, seq) / listSummary / listRaw | `SqliteHistoryStore` → **message_history**（data.db） |
 | `ProjectStore` | list / get / save(upsert) / delete | `SqliteProjectStore` → **projects**（config.db） |
 | `ProviderStore` | list（不含 keys）/ get / save / delete | `SqliteProviderStore` → **providers**（config.db） |
@@ -289,7 +293,7 @@ settings(key PK, value)                                     -- 通用 key-value�
 sessions(id PK, project_id IDX, title, status DEFAULT 'IDLE',
          agent_mode DEFAULT 'AUTONOMOUS',
          ai_model(JSON), reasoning_level, api_key_id, env DEFAULT '{}', todos DEFAULT '[]',
-         created_at, updated_at)                            -- 按 updated_at DESC 排序；api_key_id 由 Mederi.kt 幂等 ALTER 给存量库补列
+         draft_text, created_at, updated_at)                -- 按 updated_at DESC 排序；api_key_id 由 Mederi.kt 幂等 ALTER 给存量库补列（draft_text 为开发期列变更，随 CREATE TABLE 重建）
 message_history(session_id+seq 复合PK, message_id, role, content,
          payload(消息 JSON 真相), created_at,
          model_id, duration_ms, finish_reason, status)      -- 诊断列直查；按 seq ASC

@@ -957,20 +957,21 @@ class MederiAiCore(
         DebugLog.data("AiCore", "input.agent", "${input.agent?.id} (${input.agent?.name})")
         DebugLog.data("AiCore", "input.apiKeyId", input.apiKeyId)
         DebugLog.data("AiCore", "input.thinkingLevel", input.thinkingLevel)
-        // 各字段 null = 不改变该项（COALESCE 保留会话原值），与 resolvePlanApproval 的 nullable 语义一致。
-        // 注意：不能直接用 MederiInputMapper.toAgentConfig —— 它在 agent==null 时把 agentMode 默认成 AUTONOMOUS，
-        // 会错误覆盖会话原值；这里按字段独立解析，null 透传为"不改"。
+        DebugLog.data("AiCore", "input.draftTextLen", input.draftText.length.toString())
         val coreModel = input.model?.let { findCoreModel(it.id) }
+        // 全量覆盖写（updateComposeState 做 SET 非 COALESCE）：agentMode 参数非 null，
+        // agent 为 null 时兜底 AUTONOMOUS（null 语义由调用方传入的 input 字段表达，agent 空 = 清空态）。
         val agentMode = input.agent?.let {
             runCatching { xyz.mederi.domain.model.AgentMode.valueOf(it.mode.name) }.getOrNull()
-        }
+        } ?: xyz.mederi.domain.model.AgentMode.AUTONOMOUS
         val reasoningLevel = MederiInputMapper.toReasoningLevel(input.thinkingLevel)
-        mederi.sessions.updateAgentConfig(
+        mederi.sessions.updateComposeState(
             conversationId,
             agentMode = agentMode,
             aiModel = coreModel,
             reasoningLevel = reasoningLevel,
-            apiKeyId = input.apiKeyId
+            apiKeyId = input.apiKeyId,
+            draftText = input.draftText
         )
     }
 

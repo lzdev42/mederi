@@ -7,6 +7,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.ApplicationCallPipeline
+import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.UserIdPrincipal
@@ -15,11 +17,15 @@ import io.ktor.server.auth.bearer
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.compression.Compression
+import io.ktor.server.plugins.compression.excludeContentType
 import io.ktor.server.plugins.compression.gzip
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
+import io.ktor.server.request.path
 import io.ktor.server.request.receive
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.http.content.CompressedFileType
@@ -169,9 +175,14 @@ fun Application.serverModule(
     webappDir: String? = null,
 ) {
     install(ContentNegotiation) { json(json) }
+    install(AutoHeadResponse)
     install(Compression) {
         // gzip 压缩 wasm/js/css/json 等：24MB 产物 → ~8MB，大幅加速 Cloudflare 隧道首屏
-        gzip { priority = 1.0 }
+        gzip {
+            priority = 1.0
+            // 排除已压缩格式（再 gzip 浪费 CPU，可能增大体积）
+            excludeContentType(ContentType.Image.PNG, ContentType.Image.JPEG, ContentType.Image.GIF, ContentType.Image.WEBP, ContentType.Font.Woff2)
+        }
     }
     install(SSE)
     install(CORS) {
@@ -200,38 +211,88 @@ fun Application.serverModule(
         }
     }
 
+    // 安全头 + API 缓存控制
+    intercept(ApplicationCallPipeline.Plugins) {
+        call.response.header("X-Content-Type-Options", "nosniff")
+        val path = call.request.path()
+        // 排除 SSE 路径（/v1/events, /v1/sessions/{id}/events）——SSE 插件已设 no-store，重复设会导致重复头
+        if ((path.startsWith("/v1/") || path == "/v1") && !path.contains("/events")) {
+            call.response.header("Cache-Control", "no-store")
+        }
+        proceed()
+    }
+
     routing {
+        // 根路径显式返回 index.html（替代 default("index.html") 的 catch-all，
+        // 避免 missing 资源返回 200 HTML 的 soft-404 污染）
+        get("/") {
+            call.response.header("Cache-Control", "no-cache")
+            if (webappDir != null) {
+                val file = File(webappDir, "index.html")
+                if (file.exists()) {
+                    call.respondText(file.readText(), ContentType.Text.Html)
+                } else {
+                    call.respond(HttpStatusCode.NotFound)
+                }
+            } else {
+                val html = Thread.currentThread().contextClassLoader
+                    .getResourceAsStream("static/index.html")
+                    ?.bufferedReader()?.use { it.readText() }
+                if (html != null) {
+                    call.respondText(html, ContentType.Text.Html)
+                } else {
+                    call.respond(HttpStatusCode.NotFound)
+                }
+            }
+        }
+
         // wasmJs Web UI 同源托管：
         // 1. 若外部指定 webappDir（MEDERI_WEBAPP_DIR），从本地文件系统加载（开发调试用）；
         // 2. 否则自托管：直接从 Classpath 内置资源（resources/static）读取打包的 wasmJs 产物。
         if (webappDir != null) {
             staticFiles("/", File(webappDir)) {
-                default("index.html")   // SPA fallback：任意路径回首页
                 preCompressed(CompressedFileType.GZIP)
                 contentType { file ->
                     if (file.extension.equals("wasm", ignoreCase = true)) ContentTypeWasm else null
                 }
-                // 带 hash 的 wasm 永久缓存（immutable），其余（index.html 等）不设 → 浏览器每次验证
+                // 带 hash 的 wasm 永久缓存；.html 入口 → no-cache（每次验证，入口必须新鲜）；
+                // .cvr/.js/.css 无 hash → max-age=300（5 分钟，覆盖单次页面会话的多次 stringResource 调用，过期后重下确保新鲜）；
+                // .ttf 等字体稳定 → 1h 缓存；其余不设 → 浏览器每次验证
                 cacheControl { file ->
-                    if (file.extension.equals("wasm", ignoreCase = true))
-                        listOf(CacheControl.MaxAge(31536000))
-                    else
-                        emptyList()
+                    when {
+                        file.extension.equals("wasm", ignoreCase = true) ->
+                            listOf(CacheControl.MaxAge(31536000))
+                        file.extension.equals("html", ignoreCase = true) ->
+                            listOf(CacheControl.NoCache(CacheControl.Visibility.Private))
+                        file.extension.lowercase() in setOf("cvr", "js", "css") ->
+                            listOf(CacheControl.MaxAge(300))
+                        file.extension.lowercase() in setOf("ttf", "otf", "woff", "woff2") ->
+                            listOf(CacheControl.MaxAge(3600))
+                        else -> emptyList()
+                    }
                 }
             }
         } else {
             staticResources("/", "static") {
-                default("index.html")   // SPA fallback：任意路径回首页
                 preCompressed(CompressedFileType.GZIP)
                 contentType { url ->
                     if (url.path.endsWith(".wasm", ignoreCase = true)) ContentTypeWasm else null
                 }
-                // 带 hash 的 wasm 永久缓存（immutable），其余（index.html 等）不设 → 浏览器每次验证
+                // 带 hash 的 wasm 永久缓存；.html 入口 → no-cache（每次验证，入口必须新鲜）；
+                // .cvr/.js/.css 无 hash → max-age=300（5 分钟，覆盖单次页面会话的多次 stringResource 调用，过期后重下确保新鲜）；
+                // .ttf 等字体稳定 → 1h 缓存；其余不设 → 浏览器每次验证
                 cacheControl { url ->
-                    if (url.path.endsWith(".wasm", ignoreCase = true))
-                        listOf(CacheControl.MaxAge(31536000))
-                    else
-                        emptyList()
+                    when {
+                        url.path.endsWith(".wasm", ignoreCase = true) ->
+                            listOf(CacheControl.MaxAge(31536000))
+                        url.path.endsWith(".html", ignoreCase = true) ->
+                            listOf(CacheControl.NoCache(CacheControl.Visibility.Private))
+                        url.path.substringAfterLast('.', "").lowercase() in setOf("cvr", "js", "css") ->
+                            listOf(CacheControl.MaxAge(300))
+                        url.path.substringAfterLast('.', "").lowercase() in setOf("ttf", "otf", "woff", "woff2") ->
+                            listOf(CacheControl.MaxAge(3600))
+                        else -> emptyList()
+                    }
                 }
             }
         }

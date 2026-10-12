@@ -48,6 +48,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 apiKeyId = row.api_key_id,
                 env = parseEnv(row.env),
                 todos = parseTodos(row.todos),
+                draftText = row.draft_text,
                 createdAt = row.created_at,
                 updatedAt = row.updated_at
             )
@@ -67,6 +68,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 apiKeyId = row.api_key_id,
                 env = parseEnv(row.env),
                 todos = parseTodos(row.todos),
+                draftText = row.draft_text,
                 createdAt = row.created_at,
                 updatedAt = row.updated_at
             )
@@ -85,6 +87,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             api_key_id = session.apiKeyId,
             env = serializeEnv(session.env),
             todos = session.todos.encodeTodos(),
+            draft_text = session.draftText,
             created_at = session.createdAt,
             updated_at = session.updatedAt
         )
@@ -114,6 +117,25 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             aiModel?.let { serializeAIModel(it) },
             reasoningLevel?.name,
             apiKeyId,
+            Instant.now().toString(),
+            id
+        )
+    }
+
+    override suspend fun updateComposeState(
+        id: String,
+        agentMode: AgentMode,
+        aiModel: AIModel?,
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?,
+        draftText: String
+    ): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionComposeState(
+            agentMode.name,
+            aiModel?.let { serializeAIModel(it) },
+            reasoningLevel?.name,
+            apiKeyId,
+            draftText,
             Instant.now().toString(),
             id
         )

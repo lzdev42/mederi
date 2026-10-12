@@ -76,16 +76,16 @@ sequenceDiagram
 
 ### 1.1 输入框设置真理源翻转（2026-10：全局偏好 → 会话）
 
-**语义**：输入框四项设置（模型 / Agent / API Key / 推理档位）的真理源已从"全局偏好"翻转为**会话**：
+**语义**：输入框全部设置（模型 / Agent / API Key / 推理档位 / 草稿文本）的真理源已从"全局偏好"翻转为**会话**：
 
 - **切换会话**（`WorkspaceViewModel.hydrateSelectionFromConversation`，在 `!selectionHydrated` 守卫内触发）：
   - 会话已绑定模型（`conv.modelId != null`）→ 调 `appState.applyConversationSettings(model, agent, apiKeyId=conv.apiKeyId, thinkingLevel=conv.thinkingLevel, hasSessionModel=true)` **按会话快照覆盖**全局内存态（只改内存、不写偏好文件）——模型、Agent、API Key（按模型供应商写入 selectedApiKeyIds，null=默认 key）、推理档位（写入 modelReasoningLevels，effectiveThinkingLevel 推导链唯一输入）四项全部恢复。
   - 全新未发送会话（`conv.modelId == null`）→ 调 `applyRecentConversationDefaults()`（新/空会话默认取最近修改会话的设置）：`appState.projects` 拍平 → 筛 `modelId != null` 的会话 → `maxByOrNull { it.updatedAt }`（跨项目最近修改会话）→ 递归复用 `hydrateSelectionFromConversation(recent)` 恢复其设置；recent == null（无任何已发送会话）→ 不填，由 AppState.hydrate first-available 兜底。
-- **选择器改动立即持久化到当前会话**：`selectModel` / `selectApiKey` / `selectAgent`（selectAgentMode 内部调 selectAgent，覆盖） / `updateThinkingLevel` 在 `conversationId != null` 时 fire-and-forget 调 `aiCore.updateConversationSettings(convId, UpdateConversationSettingsInput(...))` 落库该会话（仅传非 null 字段，core COALESCE 不改其它项）：
-  - `selectModel(model)` → `input.model = model`
-  - `selectApiKey(providerId, apiKeyId)` → `input.apiKeyId = apiKeyId`（仅 apiKeyId != null 时；null=选默认 key 不立即持久化，由下次发送 request.apiKeyId=null + TurnExecutor 回写覆盖，已知边界）
-  - `selectAgent(id)` → `input.agent = AgentOption`
-  - `updateThinkingLevel(level)` → `input.thinkingLevel = level`（仅 level != null 时；null=移除偏好走模型默认档，由下次发送覆盖）
+- **选择器改动统一保存到当前会话**（2026-10：统一全量覆盖写）：`selectModel` / `selectApiKey` / `selectAgent` / `selectAgentMode` / `updateThinkingLevel` 在改动 AppState 后统一调 `saveComposeState()` → 读全量当前值（`buildComposeStateInput()`）→ fire-and-forget 调 `aiCore.updateConversationSettings(convId, input)` 全量覆盖写到该会话。底层 `updateComposeState` SQL 做 SET（非 COALESCE），null 直接写 null（清空语义）——不再有 null 守卫跳过、不再有"null=不改"的 COALESCE 歧义。`conversationId == null`（会话未建立）时跳过。
+- **草稿文本持久化**（新增）：`inputDraft.text` 在两个生命周期节点落库，不用定时器：
+  - **切换会话时**：`attach(newId)` 在切换前用 `buildComposeStateInput()` 同步捕获旧会话全量值（含草稿），fire-and-forget 写旧 convId。
+  - **程序关闭时**：VM init 注册 `appState.registerFlushCallback { flushComposeState() }`；`main.kt` onCloseRequest 调 `runBlocking { appState.flushAll() }`（先跑 flush 回调保存 compose state，再 flushPreferences）。
+- **草稿恢复**：`applySessionSettings(conv)` 在 modelId null check 之前 `inputDraft = TextFieldValue(conv.draftText ?: "")`——无模型也恢复草稿。
 - **不再有全局偏好模板**：`workspace.lastModelId` / `workspace.lastModelProviderId` / `workspace.lastAgentId` / `workspace.apiKey.$provider` / `workspace.reasoningLevel.$modelId` 不再 persist/hydrate——`selectModel` / `selectAgent` / `selectApiKey` / `setModelReasoningLevel` 只改内存镜像；启动 `hydrate()` 仅保留首启 first-available 兜底（模型/Agent 列表就绪后限时 3s 填首个可用项）。导航偏好 `workspace.lastProjectId` / `workspace.lastConversationId` 保留（选中态恢复）。
 - **不动项**：`effectiveThinkingLevel` 推导链（ReasoningMenu.resolve）不变——`modelReasoningLevels` 兼任"当前会话档位载体"，切换会话时按会话重填；`send`/`rollbackMessage`/`approvePlan` 仍读 appState 全局选择（此时全局已是会话镜像）；`applySnapshot` 的 `!selectionHydrated` 守卫不变（防持久化后快照再发重入 hydrate）。
 

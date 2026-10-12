@@ -198,14 +198,7 @@ class Mederi private constructor(
                 createDriver(it.dataDatabaseFile.absolutePath)
                     .also { driver ->
                         MederiDataDatabase.Schema.create(driver)
-                        // 非破坏性幂等迁移：给存量 data.db 的 sessions 表补 api_key_id 列。
-                        // 全新库由 .sq 的 CREATE TABLE 直接带列；此 ALTER 只在旧库缺列时生效，
-                        // 列已存在 / 表不存在时 SQLite 抛错——捕获后仅记日志，绝不向外抛。
-                        runCatching {
-                            driver.execute(null, "ALTER TABLE sessions ADD COLUMN api_key_id TEXT", 0)
-                        }.onFailure { e ->
-                            xyz.mederi.debug.DebugLog.info("Mederi", "sessions.api_key_id 幂等迁移跳过（列已存在或表不存在）: ${e.message}")
-                        }
+                        migrateDataDb(driver)
                     }
             }
 
@@ -312,6 +305,51 @@ class Mederi private constructor(
                 else -> path
             }
         }
+
+        /**
+         * data.db 版本化迁移。
+         *
+         * 用 SQLite 的 PRAGMA user_version 追踪 schema 版本。启动时读版本号，
+         * 低于当前版本则按顺序跑迁移脚本（每条幂等 ALTER，列已存在时 SQLite 抛错被 runCatching 吞掉），
+         * 跑完写新版本号。全新库由 Schema.create 建表带全列，ALTER 会因列已存在跳过，版本号照样设对。
+         *
+         * 新增 schema 变更时：① 改 .sq（全新库用）② 这里加一条迁移脚本 ③ 递增 [DATA_DB_VERSION]。
+         */
+        private fun migrateDataDb(driver: app.cash.sqldelight.db.SqlDriver) {
+            val currentVersion = driver.executeQuery(
+                null,
+                "PRAGMA user_version",
+                { cursor ->
+                    app.cash.sqldelight.db.QueryResult.Value(
+                        if (cursor.next().value) cursor.getLong(0)?.toInt() ?: 0 else 0
+                    )
+                },
+                0
+            ).value
+
+            if (currentVersion >= DATA_DB_VERSION) return
+
+            // 迁移脚本：版本号 → SQL 列表。每条幂等（列已存在/表不存在时 SQLite 抛错，runCatching 吞掉）。
+            val migrations = linkedMapOf(
+                1 to listOf("ALTER TABLE sessions ADD COLUMN api_key_id TEXT"),
+                2 to listOf("ALTER TABLE sessions ADD COLUMN draft_text TEXT"),
+            )
+
+            for (v in (currentVersion + 1)..DATA_DB_VERSION) {
+                migrations[v]?.forEach { sql ->
+                    runCatching { driver.execute(null, sql, 0) }
+                        .onFailure { e ->
+                            xyz.mederi.debug.DebugLog.info("Mederi", "data.db 迁移 v$v 跳过: ${e.message}")
+                        }
+                }
+            }
+
+            driver.execute(null, "PRAGMA user_version = $DATA_DB_VERSION", 0)
+            xyz.mederi.debug.DebugLog.event("Mederi", "data.db 迁移完成: v$currentVersion → v$DATA_DB_VERSION")
+        }
+
+        /** 当前 data.db schema 版本（每次改 .sq schema 递增 + 加迁移脚本）。 */
+        private const val DATA_DB_VERSION = 2
 
         /** 创建 SQLite driver（WAL + 外键约束），建表。 */
         private fun createDriver(dbPath: String): app.cash.sqldelight.db.SqlDriver {

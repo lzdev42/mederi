@@ -40,6 +40,19 @@ interface SessionApi {
         apiKeyId: String? = null
     )
 
+    /**
+     * 全量覆盖写会话 compose state（非 COALESCE：null 写 null，清空语义）。
+     * 用于输入框设置统一保存：UI 任意设置变化时全量写当前值。
+     */
+    suspend fun updateComposeState(
+        sessionId: String,
+        agentMode: AgentMode,
+        aiModel: AIModel?,
+        reasoningLevel: ReasoningLevel?,
+        apiKeyId: String?,
+        draftText: String
+    )
+
     suspend fun resolveQuestion(sessionId: String, questionId: String, answers: List<List<String>>)
     /**
      * 回复计划审批。

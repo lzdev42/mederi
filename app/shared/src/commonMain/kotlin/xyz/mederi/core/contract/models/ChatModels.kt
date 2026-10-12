@@ -33,6 +33,8 @@ data class Conversation(
     val apiKeyId: String? = null,
     /** 会话挂载目录（来自 session.location.directory）。用于本地按项目子目录分组。 */
     val directory: String? = null,
+    /** 会话草稿文本（来自 session.draftText）；切换会话时回填输入框。 */
+    val draftText: String? = null,
 )
 
 enum class ChatRole { User, Assistant, System, Summary }

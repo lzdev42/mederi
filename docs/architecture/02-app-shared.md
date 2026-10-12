@@ -55,8 +55,8 @@ interface AiCore {
     suspend fun rollbackToMessage(conversationId: String, messageId: String): Result<Unit>
     suspend fun resolveQuestion(conversationId, questionId, answers: List<List<String>>): Result<Unit>
     suspend fun updateConversationSettings(conversationId, input: UpdateConversationSettingsInput): Result<Unit>
-     % 输入框设置会话级持久化（不依赖发送即落库）：选择器改动且已绑定会话时立即写 model/agent/apiKeyId/thinkingLevel 到该会话；
-     % 全可空=null 不改该项（COALESCE）。切换会话后恢复该会话设置。DTO=UpdateConversationSettingsInput(model,agent,apiKeyId,thinkingLevel)
+     % 输入框设置会话级持久化（不依赖发送即落库）：选择器改动且已绑定会话时立即写 model/agent/apiKeyId/thinkingLevel/draftText 到该会话；
+     % 全量覆盖写（非 COALESCE）：调用方每次传所有字段当前值，null/空值直接写入（清空语义），core 侧 updateComposeState 做 SET。切换会话后恢复该会话设置。DTO=UpdateConversationSettingsInput(model,agent,apiKeyId,thinkingLevel,draftText="")
     suspend fun resolvePlanApproval(conversationId, planId, approved: Boolean, model: ModelOption? = null, thinkingLevel: String? = null): Result<Unit>
     % 批准时刻输入框选中的模型/推理档位随批准手势传入（null=不改变，旧客户端兼容）——
     % core 批准时写入 session，同 turn 后续 spawn 的子代理按此模型执行（见 01-core.md SessionManager）
@@ -132,7 +132,7 @@ interface AiCore {
 ### 2.1 ChatModels.kt
 
 - `enum ConversationStatus { Idle, Working, WaitingUser, Error }` —— 挂起态映射：`QUESTION_REQUESTED` / `PLAN_APPROVAL_REQUESTED` → WaitingUser，对应 RESOLVED → Working（`SnapshotReducer` 与 `MederiAiCore.startSessionStatusSync` / `ServerAiCore.startSessionStatusSync` 同映射，驱动侧边栏状态点）
-- `Conversation(id, projectId?, title, status, createdAt: Long, updatedAt: Long, parentConversationId?=null, modelId?=null, modelProvider?=null, thinkingLevel: String?=null(仅回显 core 诊断值,非 UI 真理源), agent?=null, apiKeyId?=null(会话绑定的 API Key ID，点开会话回填输入框 key 选择), directory?=null)`
+- `Conversation(id, projectId?, title, status, createdAt: Long, updatedAt: Long, parentConversationId?=null, modelId?=null, modelProvider?=null, thinkingLevel: String?=null(仅回显 core 诊断值,非 UI 真理源), agent?=null, apiKeyId?=null(会话绑定的 API Key ID，点开会话回填输入框 key 选择), draftText: String?=null(会话草稿文本，切换会话时回填输入框), directory?=null)`
 - `enum ChatRole { User, Assistant, System, Summary }`
 - `ChatMessage(id, conversationId, role, blocks: List<ChatBlock>, createdAt, completedAt?, parentMessageId?, model?, agent?, isStreaming=false, error?=null, modelName?(assistant footer 模型显示名), agentMode?(APPROVAL/AUTONOMOUS), thinkingLevel?(实际推理档位), durationMs?(LLM 耗时), turnDiffSummary: TurnDiffSummaryUi?(本轮文件变更摘要,assistant 消息底部展示))` —— footer 诊断字段由 `MederiModelMapper.toChatMessage` 从 core Message 诊断字段填充（completedAt ≈ createdAt + durationMs 下界估计）；`turnDiffSummary` 由 MESSAGE_COMPLETED 的 `turnDiffSummary`/`diffMessageId` payload 回填（UI `TurnDiffCard` 单轮"N files changed"卡）
 - `FileDiffSummaryUi(path, status, additions, deletions)`（单文件变更统计）；`TurnDiffSummaryUi(files: List<FileDiffSummaryUi>=[], totalAdditions=0, totalDeletions=0)`（单轮全部文件变更聚合摘要）
@@ -265,7 +265,7 @@ flowchart TB
 - Ktor client 配置：`defaultRequest` 统一带 `User-Agent: AppInfo.userAgent`（身份头唯一真理源 = `AppInfo.userAgent`，见 §4.3）。
 - 鉴权：passwordProvider 非空时所有 REST + SSE 带 `Authorization: Bearer <password>`。
 - initialize：校验 baseUrl → 轮询 `GET /v1/ready`（20s 上限、250ms 间隔）→ 拉 presets/agents/models/providers/projects → isReady → `startSessionStatusSync()`（订阅全局 SSE `events()` 流，实时把会话状态同步进 `_projects` StateFlow 驱动侧边栏状态点；映射与 jvm 桥一致：SESSION_UPDATED→Working、MESSAGE_COMPLETED→Idle、MESSAGE_ERROR→Error、QUESTION/PLAN_APPROVAL REQUESTED→WaitingUser、RESOLVED→Working）。
-- SSE：官方 SSE 插件，incoming data 段反序列化为 CoreEvent（失败丢弃），心跳注释帧不投递；两个流：`/v1/events`（全局）与 `/v1/sessions/{id}/events`（会话）。
+- SSE：官方 SSE 插件，incoming data 段反序列化为 CoreEvent（失败丢弃），心跳注释帧不投递；**全局单流热共享**：`sseEvents("/v1/events")` 冷流经 `shareIn(scope, SharingStarted.WhileSubscribed(), replay=0)` 转 SharedFlow（`sharedEvents`），所有 `events()` 订阅者（startSessionStatusSync、ViewModel 等）共享 **1 条 SSE 连接**（替代每订阅者 1 条冷流连接）；replay=0：全局事件总线不缓存历史事件，避免新订阅者收到无关残留事件；`sseEvents` 外层 `while (isActive)` 重连循环——SSE 连接正常结束或 Ktor 客户端 4 次自动重连耗尽抛异常时，`delay(5s)` 后重试整条连接，防事件流永久死亡（CancellationException 重抛不吞）。`observeConversation(id)` 不再开独立会话流，改为 `events().filter { it.sessionId == id }` 客户端过滤。server 端 `/v1/sessions/{id}/events` 端点保留但 ServerAiCore 不再消费。
 - 新增契约方法的 REST 路径：`steerMessage` → `POST /v1/sessions/{id}/steer`（body=ChatPromptInput）；`getSubagentReport` → `GET /v1/subagents/{agentId}/report`（→ SubagentReportData）；`stopSubagent` → `POST /v1/subagents/{agentId}/stop`。
 - 错误：非 2xx 抛异常（优先 ApiError.error 文本），方法边界包 Result 失败。
 
@@ -295,9 +295,9 @@ flowchart TB
 | POST `/v1/sessions`；DELETE/PATCH `/v1/sessions/{id}` | Conversation 组 |
 | GET `/v1/sessions/{id}/snapshot` \| `messages` \| `messages/raw` \| `messages/{messageId}` \| `diffs[?messageId=]` | 查询组 |
 | POST `/v1/sessions/{id}/messages` \| `abort` \| `rollback` \| `questions/{questionId}` \| `plans/{planId}/approve`（body=`ResolvePlanApprovalInput(approved, model?, thinkingLevel?)`——批准时刻选中模型随批准传 core） \| `compress` | 动作组 |
-| PATCH `/v1/sessions/{id}/settings`（body=`UpdateConversationSettingsInput(model?, agent?, apiKeyId?, thinkingLevel?)`——全可空=null 不改该项） | 输入框设置会话级持久化：选择器改动且已绑定会话时立即落库（不依赖发送）；切换会话恢复该会话设置 |
+| PATCH `/v1/sessions/{id}/settings`（body=`UpdateConversationSettingsInput(model?, agent?, apiKeyId?, thinkingLevel?, draftText="")`——全量覆盖写：null/空值直接写入清空，非 COALESCE） | 输入框设置会话级持久化：选择器改动且已绑定会话时立即落库（不依赖发送）；切换会话恢复该会话设置 |
 | POST `/v1/sessions/{id}/steer`（body=ChatPromptInput） | steerMessage：排队/引导（Steering）入口 |
-| SSE GET `/v1/events`（全局）；GET `/v1/sessions/{id}/events`（按 sessionId filter） | 事件流 |
+| SSE GET `/v1/events`（全局，ServerAiCore 唯一消费的流——`sharedEvents` 热流多订阅者共享 1 条连接，`observeConversation` 客户端按 sessionId filter）；GET `/v1/sessions/{id}/events`（保留端点，ServerAiCore 不再消费） | 事件流 |
 | POST `/v1/providers`；POST `/v1/providers/builtin`；PATCH/DELETE `/v1/providers/{id}` | Provider 组 |
 | POST `/v1/providers/{id}/models`；POST `.../models/refresh`；POST `.../models/auto-setup`；PATCH/DELETE `.../models/{modelId}`；POST `.../models/{modelId}/enabled` | Model 组 |
 | POST `/v1/providers/{id}/keys`；DELETE `.../keys/{keyId}`；POST `.../keys/{keyId}/set-default` | Key 组 |
@@ -325,7 +325,7 @@ flowchart TB
 
 ### 7.1 AppState（`…/commonMain/ui/appstate/AppState.kt`）
 
-`class AppState(aiCore, preferences: PreferencesStore, scope)`；宿主注入点 = `remoteControl: RemoteControlHooks?`、`terminalManager: TerminalManager?`、`uiBrowserHost: UiBrowserHost?`（**已移除/保留待清理**：内置 JCEF 浏览器宿主类已整体移除，接口 `UiBrowserHost` 与 `AppState.uiBrowserHost` 字段保留但无实现注入，恒 null）与 `fileTreeProvider: ProjectFileTreeProvider?`（desktop 宿主 `onAppStateReady` 注入 `ProjectFileTreeProviderJvm`，**VM 层读取用**——`WorkspaceViewModel.openFile` 读盘；`LocalProjectFileTreeProvider` CompositionLocal 保留给树面板，与本字段同源实例；遥控端/wasm 恒 null）；`canRenderJcef = uiBrowserHost != null`（恒 false，保留待清理）；`LocalAppState` CompositionLocal。
+`class AppState(aiCore, preferences: PreferencesStore, scope)`；宿主注入点 = `remoteControl: RemoteControlHooks?`、`terminalManager: TerminalManager?`、`uiBrowserHost: UiBrowserHost?`（`by mutableStateOf(null)`，确保后台 JCEF 预热完成后自动触发 Compose 重组；desktopApp `browser/JcefBrowserHost.kt` 实现标准简化版多 Tab JCEF 浏览器宿主——弹窗拦截转新 Tab `onNewPage`、横向可滚动 Tab 栏 + 固定 `+`、智能地址栏 Omnibox 含协议补全与 Bing 搜索、刷新/停止合一 + 2dp 顶部进度条、页面加载错误页与重试、JS 对话框 `alert`/`confirm`/`prompt` 与 `<input type="file">` 原生文件选择、50%~200% 页面缩放；`main.kt` 在 `DesktopBrowserRuntime.ensureInitialized()` 成功后切 `Dispatchers.Main` 注入 `appState.uiBrowserHost = JcefBrowserHost()`）与 `fileTreeProvider: ProjectFileTreeProvider?`（desktop 宿主 `onAppStateReady` 注入 `ProjectFileTreeProviderJvm`，**VM 层读取用**——`WorkspaceViewModel.openFile` 读盘；`LocalProjectFileTreeProvider` CompositionLocal 保留给树面板，与本字段同源实例；遥控端/wasm 恒 null）；`canRenderJcef = uiBrowserHost != null`；`LocalAppState` CompositionLocal。
 
 **持久化字段**：
 
@@ -376,7 +376,7 @@ classDiagram
         % 错误族与 diff 族已收敛为分组状态(2026-09 UI 规范化)
         +inputDraft: TextFieldValue  % 输入草稿唯一真理源
         -activeDockPanel: RightDockPanel?  % 保守保留平铺(同时服务全部 dock 面板)
-        +uiBrowserHost: UiBrowserHost?  % 窄访问器 get() = appState.uiBrowserHost; 已移除/恒 null（保留待清理）
+        +uiBrowserHost: UiBrowserHost?  % 窄访问器 get() = appState.uiBrowserHost; desktopApp 实现 JcefBrowserHost（browser/JcefBrowserHost.kt 多 Tab KBPage 宿主）
         +pendingFileOpen: PendingFileOpen?  % 文件打开确认态单一真理源(OpenExternally/RevealInFolder)；非 null 时 Workspace 根部渲染 ConfirmDialog
         +openFile(path)  % 对话流文件点击唯一路由：classifyFilePath 四档→INTERNAL_IMAGE 走 openImageInExtension / INTERNAL_TEXT 走 openTextInExtension(经 appState.fileTreeProvider.readText，NUL 扫描判二进制，查不到/二进制→降级 routeExternalOrReveal) / EXTERNAL→routeExternalOrReveal / REVEAL_IN_FOLDER→写 pendingFileOpen
         +confirmPendingFileOpen() / +cancelPendingFileOpen()  % 确认走 PlatformUtils.openFile(别名 openFileInOs,防与路由 openFile 递归)或 revealInFolder；两者都清态
@@ -389,7 +389,7 @@ classDiagram
         +approvePlan(planId, approved) / replyQuestion(...) 
         +tryAttachImage(...) Boolean  % 图片能力门禁
         +openDiff/closeDiff + toggleDockPanel...
-        % 全局事件监听：BROWSER_TASK_STARTED → 自动展开 BROWSER 面板（JCEF 宿主已移除，面板无内置浏览器渲染）
+        % 全局事件监听：BROWSER_TASK_STARTED → 自动展开 BROWSER 面板
         % STATUS{scope=compaction} 裸事件旁路（按 conversationId 过滤）：code=RUNNING→isCompacting=true / IDLE→false（压缩本地态，不写快照）；code=SKIPPED→清 sessionCache.turnStartByConv 锚点 + 派发 UiEffect.ShowCompactionNotice(code,reason)（core 侧只发事实，本 VM 只旁路不改状态机）
     }
     class SidebarViewModel {
@@ -423,7 +423,7 @@ classDiagram
     AppState --> SidebarViewModel
     AppState --> RawMessagesViewModel
     AppState --> TerminalViewModel : terminalManager
-    AppState --> UiBrowserHost : uiBrowserHost（已移除/保留待清理，恒 null）
+    AppState --> UiBrowserHost : uiBrowserHost（desktopApp JcefBrowserHost 实现）
 ```
 
 - **时间格式化真理源（`util/TimeFormatter.kt`，2026-10 规范化）**：所有面向用户展示时间的地方统一由 `TimeFormatter` 处理，强制转换为用户系统所属时区（`TimeZone.currentSystemDefault()`）；提供 `formatShortTime`（"HH:mm"）、`formatTimeWithSeconds`（"HH:mm:ss"）、`formatMonthDayTime`（"M/d HH:mm"）、`formatFullDateTime`（"yyyy-MM-dd HH:mm:ss"）；`TimeUtils.formatMessageTime` 为 thin wrapper 统一委托；`SubAgentComponents`（启动时刻/列表）与 `RawMessagesCard` 杜绝组件私有截串与平台原生实现分叉。
@@ -518,8 +518,8 @@ flowchart TD
 
 ### 9.3 desktopApp（`app/desktopApp/src/main/kotlin/xyz/mederi/`）
 
-- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **后台预热 `DesktopBrowserRuntime.ensureInitialized()`**（KBrowser 全局单例，`useOsr=true`，专供 inkcompose mermaid 渲染 / Markdown 导出）；camoufox 在 MederiAiCore 注册（唯一注册源），desktopApp 不再注册 JCEF 浏览器宿主。`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`Server.stop()` → `terminalHub.shutdown()` → `DesktopBrowserRuntime.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
-- **`DesktopBrowserRuntime`（desktopApp `browser/DesktopBrowserRuntime.kt`，object 全局单例）**：统一管理 KBrowser（JCEF/Chromium）的生命周期——`ensureInitialized()` 幂等线程安全：`JcefChecker.isJcefAvailable` 检查 → `KBrowser.initializeConfig(storageDir, useOsr=true)` + `initializeKBrowser()` → 向 inkcompose 注入单例引用（`SingleMermaidWorker.attachBrowser(KBrowser)` + `MarkdownExporter.setBrowser(KBrowser)`）；`shutdown()` 回收 KBrowser。**职责 = 渲染运行时宿主**（mermaid 离屏 PNG / Markdown→PDF 导出），**非浏览器自动化宿主**（内置 JCEF 浏览器宿主类已整体移除）。`UiBrowserHost`（commonMain）接口与 `AppState.uiBrowserHost` 字段保留但无实现注入（恒 null），保留待清理。desktopApp 依赖 `libs.kbrowser`（与 inkcompose 同版本同源）。
+- `main.kt` 注入：进程级 `PtyTerminalHub()` 单例 → `appState.terminalManager`；`onAppStateReady` 中若 aiCore 是 MederiAiCore → `appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)` + **后台预热 `DesktopBrowserRuntime.ensureInitialized()`**（KBrowser 全局单例，`useOsr=true`，供 inkcompose mermaid 渲染 / Markdown 导出与内置浏览器共用），预热成功后切回 `Dispatchers.Main` 注入 `appState.uiBrowserHost = JcefBrowserHost()`；camoufox 在 MederiAiCore 注册（AI 工具唯一注册源）。desktopApp 的 JCEF 浏览器宿主类 `JcefBrowserHost`（`browser/` 下 5 文件拆分：`JcefBrowserHost.kt` 类本体+BrowserContent 入口、`BrowserTabState.kt` 模型（`BrowserTabState`/`BrowserJsDialog`/`ZOOM_STEPS`/`CEF_ERR_ABORTED`）、`BrowserUrlResolver.kt` URL 解析纯逻辑（`resolveUrlOrSearch`/`resolveTabDisplayTitle`）、`BrowserUtils.kt` JVM 工具（`applyZoomToWebView`/`showNativeFileDialog`）、`BrowserComposables.kt` @Composable 子组件）实现完整简化版多 Tab 浏览器：弹窗转新 Tab（`KBPage.onNewPage`）、可横向滚动多 Tab 栏（右侧固定 `+`、首次打开自动建首 Tab、关闭最后 Tab 自动补新 Tab）、智能地址栏 Omnibox（域名补 `https://`、本地/端口补 `http://`、关键词走 Bing 搜索 `resolveUrlOrSearch`）、后退/前进/刷新与停止合一按钮、顶部 2dp 加载进度条、错误页覆层（`LoadingState.Error` 过滤 `-3` `ERR_ABORTED`）与重试、JS 对话框（`KBWebChromeClient` 桥接 `MederiDialog`/`ConfirmDialog`）与原生文件上传（`KBPage.onFileDialog` 桥接 AWT `FileDialog`/`JFileChooser`）、50%~200% 页面缩放控制。`LaunchedEffect` 观察 `remoteControlEnabled` 自动启停内嵌 server；`webappDir` = 环境变量 `MEDERI_WEBAPP_DIR` 或探测三个常见 wasm 产物路径；`onCloseRequest` 顺序收尾：`Server.stop()` → `terminalHub.shutdown()` → `uiBrowserHost?.shutdown()` → `DesktopBrowserRuntime.shutdown()` → `stopTunnel()` → `flushPreferences()` → 退出。
+- **`DesktopBrowserRuntime`（desktopApp `browser/DesktopBrowserRuntime.kt`，object 全局单例）**：统一管理 KBrowser（JCEF/Chromium）的生命周期——`ensureInitialized()` 幂等线程安全：`JcefChecker.isJcefAvailable` 检查 → `KBrowser.initializeConfig(storageDir, useOsr=true)` + `initializeKBrowser()` → 向 inkcompose 注入单例引用（`SingleMermaidWorker.attachBrowser(KBrowser)` + `MarkdownExporter.setBrowser(KBrowser)`）；`shutdown()` 回收 KBrowser。**职责 = 渲染运行时宿主**（mermaid 离屏 PNG / Markdown→PDF 导出）**+ 内置浏览器宿主的统一运行时**（`JcefBrowserHost` 经 `DesktopBrowserRuntime.browser` 创建 KBPage）。desktopApp 依赖 `libs.kbrowser`（与 inkcompose 同版本同源）。
 - `DesktopRemoteControlHooks.kt`：`start(port, password) = Server.start(...)`；`localAddress` = 枚举 site-local IPv4（10/8、172.16/12、192.168/16）；`isCloudflaredInstalled()` = `cloudflared --version` 探测（未装 UI 提示自行安装，不代装）；`startTunnel(port, token, domain)` = **pty4j** 真实 pty 拉起 `cloudflared tunnel run --token <token>`（连接器 token 模式；token 空白直接 Failed），幂等；**生命周期** = 本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（无需看门狗）；`formatTunnelUrl(domain)` = 用户填的域名去 scheme 后拼 `https://<host>`（空返回 null）——`parseTunnelDomain()`（读 config.yml）已删除。
 
 ### 9.4 其他入口
@@ -531,13 +531,14 @@ flowchart TD
 ### 9.5 WasmImeBridge（`…/commonMain/ui/components/WasmImeBridge.kt` expect + wasmJs/jvm/android/ios actual）
 
 - **背景（上游 bug）**：Compose Multiplatform wasmJs 画布渲染的 material3 `TextField` 在 iOS Safari / 移动 Chrome 点按不唤起软键盘——Canvas 非可编辑 DOM 元素，iOS 只在 focus 真实可编辑元素时才弹键盘；上游未修（CMP-10858 / compose-multiplatform#4836）。本桥接为 **workaround**。
-- **桥接方案（wasmJs actual）**：在 DOM 创建透明 `<textarea>`，用 ChatInputCard 的 TextField `Modifier.onGloballyPositioned` 拿到的布局矩形（Compose px，`LocalDensity.density` → CSS px）`position: fixed` 实时定位/缩放覆盖文本区；用户点按直接命中真实可编辑元素 → 原生 focus → iOS 键盘弹出（规避 trusted-gesture 同步性问题）。样式：`opacity:0` + `color/caret-color: transparent` + `font-size:16px`（防 iOS 自动缩放）+ `z-index` 高于 canvas；`autocapitalize/autocomplete/autocorrect/spellcheck` 关闭，避免与 Compose 侧行为打架。
+- **桥接方案（wasmJs actual，single-engine 单引擎）**：在 DOM 创建 `<textarea>` 作为**唯一可见文字面**（Compose Canvas 文字透明、placeholder null，由 `isDomTextInput` 条件驱动——见下），用 ChatInputCard 的 TextField `Modifier.onGloballyPositioned` 拿到的布局矩形（Compose px，`LocalDensity.density` → CSS px）`position: fixed` 实时定位/缩放覆盖文本区；用户点按直接命中真实可编辑元素 → 原生 focus → iOS 键盘弹出（规避 trusted-gesture 同步性问题）。样式：`color: textColorHex`（文字可见 = 主题 textPrimary）+ `caret-color: cursorColorHex`（主题强调色）+ `line-height: 20px`（对齐 Canvas 行高）+ `font-size:16px`（防 iOS 自动缩放）+ `z-index` 高于 canvas；`autocapitalize/autocomplete/autocorrect/spellcheck` 关闭。**单引擎动机**：此前 textarea 文字透明 + Canvas 文字可见的双引擎方案导致光标与文字不在一行（两个文本引擎行盒/基线不同）且 Enter 事件给 textarea、send 逻辑挂 Compose（够不到）→ 回车变换行；砍掉 Canvas 文字渲染、只留 textarea 一个引擎，对齐问题和事件分裂同时消失。
 - **事件回灌**：textarea 的 `input` / `compositionstart` / `compositionend` 事件 → 构造 `TextFieldValue(text, TextRange(selStart, selEnd))` → `onValueChange`（走原 `onSlashCommandTextChange` → `viewModel.updateInputDraft` 链路，slash 菜单检测照常触发）。**组合期（compositionstart..compositionend）`isComposing` 标记**：期间 input 事件不回灌、VM 值不反写 textarea（避免打断 CJK IME 候选），compositionend 一次性回灌最终文本——硬约束（勿改）。
 - **VM → textarea 反向同步**：非组合期 `textValue` 变化（slash 自动补全 / 原子 token 删除 / 粘贴等）时同步 `textarea.value` 与 `selectionStart/End`（设 value 会把光标重置到末尾，必须同一块内紧随设置选区）。
 - **enabled 语义**：ChatInputCard 传 `enabled = !isCompacting`；false（压缩进行中禁用输入）时不挂覆盖层（`display:none`）。
-- **光标（textarea 自身光标，不用 Compose 焦点）**：textarea 文本 `color: transparent`（Canvas 文字/斜杠高亮在背后显示），但 `caret-color` = `cursorColorHex`（`mederiColorToCssHex(colors.accentPrimary)`，深/浅主题自适应）→ textarea 自己的光标可见、随主题着色。**禁止**用 `FocusRequester` 给 Compose TextField 发 Compose 焦点来画 Canvas 光标——那会让 Compose 画布抢 DOM 焦点、顶掉 textarea 焦点，导致键盘一弹即关（已验证事故）。`font-size: 16px` 防 iOS focus-zoom（<16px 会缩放页面破坏覆盖层定位）；`font-family: sans-serif` 贴近 Canvas 默认无衬线减少光标横向错位。已知局限：16px textarea 与 13.5sp Canvas 文字字号不同，光标横向位置可能与 Canvas 文字末尾略有偏移（长文本更明显）。
-- **平台隔离**：commonMain `expect @Composable fun WasmImeBridge(textValue, enabled, onValueChange, cursorColorHex, rectPx, density)`（+ `internal fun mederiColorToCssHex(Color): String`）；jvm/android/ios 为 **no-op actual**（iOS native UIKit 键盘正常、Android View 系统正常、desktop 直调 core 不走 wasm）。这是继 `TerminalView` 之后第二个 UI 组件级 expect/actual、第一个由平台限制驱动的 UI 桥接——不往 commonMain 塞 `isDesktopPlatform` 分支。
-- **范围**：仅聊天主输入框（ChatInputCard 的 TextField，约 552 行处）接入；其他文本框暂未接入。Enter 仍插换行（移动端语义），发送走发送按钮。
+- **单引擎渲染（textarea 独占可见文字 + 光标）**：textarea `color: textColorHex`（`mederiColorToCssHex(colors.textPrimary)`，文字可见）、`caret-color: cursorColorHex`（`mederiColorToCssHex(colors.accentPrimary)`，深/浅主题自适应）。Canvas 文字颜色 = `Color.Transparent`（`isDomTextInput` 条件），`visualTransformation = SlashCommandTransformation` 仍运行但输出不可见——**代价：wasmJs 上 slash 命令色块高亮消失**（功能全在：菜单弹/补全/token 解析均不受影响，仅丢颜色）。placeholder 由 textarea `placeholder` 属性 + CSS `::placeholder` 规则（注入 `<style class="mederi-ime-placeholder">`）着色 = `placeholderColorHex`（`mederiColorToCssHex(colors.textSecondary)`）；Compose 侧 placeholder 在 `isDomTextInput` 时设 null。**禁止**用 `FocusRequester` 给 Compose TextField 发 Compose 焦点——那会让 Compose 画布抢 DOM 焦点、顶掉 textarea 焦点，导致键盘一弹即关（已验证事故）。
+- **平台隔离**：commonMain `expect @Composable fun WasmImeBridge(textValue, enabled, onValueChange, cursorColorHex, textColorHex, placeholderText, placeholderColorHex, onSend, rectPx, density)`（+ `internal fun mederiColorToCssHex(Color): String`）；jvm/android/ios 为 **no-op actual**（iOS native UIKit 键盘正常、Android View 系统正常、desktop 直调 core 不走 wasm）。`expect val isDomTextInput: Boolean`（wasmJs=true，其他=false）驱动 ChatInputCard 的条件分支（textStyle 透明色 + placeholder null）。这是继 `TerminalView` 之后第二个 UI 组件级 expect/actual、第一个由平台限制驱动的 UI 桥接。`isDomTextInput` 定义见 `…/commonMain/Platform.kt` expect + 各平台 actual（wasmJs=true，其余=false）。
+- **Enter 发送（keydown）**：textarea `addEventListener("keydown")` 监听纯 Enter（无 Shift/Ctrl/Meta）→ `latestOnSend.value?.let { preventDefault(); it() }`；`onSend` 由 ChatInputCard 计算 = `canSend && !slashMenuOpen ? { submit() } : null`（null 时不拦截、textarea 保留 Enter 默认换行）。Shift/Ctrl/Cmd+Enter 保留默认换行。Compose `onPreviewKeyEvent` 在 wasmJs 不触发（DOM 焦点在 textarea），Enter 逻辑只能在 textarea keydown 层处理。
+- **范围**：仅聊天主输入框（ChatInputCard 的 TextField，约 552 行处）接入；其他文本框暂未接入。slash 菜单键盘导航（Enter 选命令）在 wasmJs 不工作——移动端走点按选择，桌面浏览器是次要场景，暂不处理。
 
 ## 10. preferences 契约（`…/contract/preferences/`）
 

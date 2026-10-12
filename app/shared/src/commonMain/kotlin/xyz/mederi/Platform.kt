@@ -11,3 +11,8 @@ expect fun getPlatform(): Platform
  * 用于键盘行为差异：桌面端 Enter=发送、Ctrl/Cmd+Enter=换行；非桌面端 Enter=换行。
  */
 expect val isDesktopPlatform: Boolean
+
+/**
+ * wasmJs 使用 DOM textarea 接管文本渲染，需要把 Compose TextField 文字设透明、placeholder 设 null。
+ */
+expect val isDomTextInput: Boolean
