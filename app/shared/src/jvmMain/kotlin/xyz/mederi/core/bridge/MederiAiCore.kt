@@ -162,6 +162,10 @@ class MederiAiCore(
 
     private lateinit var mederi: Mederi
 
+    /** KBrowser 实例（JCEF 可用且初始化成功时非 null；null = 不支持/未初始化）。供 main.kt 注入 inkcompose + UI。 */
+    val kBrowser: xyz.kbrowser.webview.KBrowser? get() = _kBrowser
+    private var _kBrowser: xyz.kbrowser.webview.KBrowser? = null
+
     private lateinit var browserSettingsManager: xyz.mederi.browser.BrowserSettingsManager
     private lateinit var browserSettingsApi: xyz.mederi.api.BrowserSettingsApi
 
@@ -211,9 +215,12 @@ class MederiAiCore(
                 // 出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带上 Mederi 身份头
                 userAgent = AppInfo.userAgent
             }
+            // KBrowser 初始化（JCEF 可用且运行环境支持时非 null；headless 无 Xvfb 时为 null）
+            // core 拥有 KBrowser 单例，注入给 inkcompose（渲染）和 UI（可见浏览器），也用于 JcefBrowserControl 自动化
+            _kBrowser = xyz.mederi.browser.KBrowserRuntime.ensureInitialized()
             // 浏览器自动化：注册 Camoufox（headless 可选能力；未安装/未配置时选择它会得到引导错误）。
-            // UI 层（desktop）再注册内置 JCEF——注册表默认策略优先内置可见浏览器（JCEF），
-            // headless server 无 JCEF 时默认才落到 Camoufox。
+            // 内置 JCEF 在此注册（KBrowser 初始化成功时，见上方 _kBrowser 判空）——注册表默认策略
+            // 优先内置可见浏览器（JCEF），headless server 无 JCEF 时默认才落到 Camoufox。
             // AI 通过 run_browser_task(browser=...) 选择：测自己网页→jcef，第三方自动化→camoufox。
             browserSettingsManager = xyz.mederi.browser.BrowserSettingsManager(mederi.settingsStore)
             browserSettingsApi = xyz.mederi.api.impl.BrowserSettingsApiImpl(
@@ -248,6 +255,15 @@ class MederiAiCore(
                     )
                 }
             )
+            // JCEF 浏览器自动化：KBrowser 可用时注册为主力引擎（BrowserRegistry.default() 策略优先 JCEF）
+            // Camoufox 保持注册为 backup；AI 可通过 browser=camoufox 显式选择
+            if (_kBrowser != null) {
+                xyz.mederi.browser.BrowserRegistry.register(
+                    name = "jcef",
+                    kind = xyz.mederi.browser.BrowserKind.JCEF,
+                    factory = { _ -> xyz.mederi.browser.JcefBrowserControl() }
+                )
+            }
             cleanupLegacyBuiltinProviders()
             cleanupStaleRunningSessions()
             syncBuiltinProviders()
@@ -324,11 +340,18 @@ class MederiAiCore(
                 if (newStatus != null) {
                     updateConversationStatus(event.sessionId, newStatus)
                 }
-                // 终态错误内存注册表：MESSAGE_ERROR 写入，MESSAGE_COMPLETED 清除（跨 re-attach 水合用）
+                // 终态错误内存注册表：MESSAGE_ERROR 与带断流警告的 MESSAGE_COMPLETED 写入，
+                // 正常 MESSAGE_COMPLETED 与新 turn SESSION_UPDATED 清除（跨 re-attach 水合用）
                 when (event.type) {
                     xyz.mederi.domain.model.EventType.MESSAGE_ERROR ->
                         lastErrorBySessionId[event.sessionId] = lastErrorFromPayload(event.payload)
                     xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED ->
+                        if (event.payload["error"] != null) {
+                            lastErrorBySessionId[event.sessionId] = lastErrorFromPayload(event.payload)
+                        } else {
+                            lastErrorBySessionId.remove(event.sessionId)
+                        }
+                    xyz.mederi.domain.model.EventType.SESSION_UPDATED ->
                         lastErrorBySessionId.remove(event.sessionId)
                     else -> {}
                 }

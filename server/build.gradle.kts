@@ -11,6 +11,13 @@ group = "xyz.mederi"
 version = "1.0.0"
 application {
     mainClass = "xyz.mederi.ApplicationKt"
+    // JCEF JVM args：server 用 JBR（JvmVendorSpec.JETBRAINS），JCEF 经 :app:shared 传递依赖在 classpath 上，
+    // 与 app/desktopApp/build.gradle.kts 的 compose.desktop.application.jvmArgs 对齐，使 server 进程能初始化 JCEF。
+    applicationDefaultJvmArgs = listOf(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
 }
 
 java {

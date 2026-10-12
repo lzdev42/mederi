@@ -11,28 +11,21 @@ import java.time.format.DateTimeFormatter
 /**
  * 浏览器判定脑（BrowserBrain，对应 BrowserPilot 的 Analyst）。
  *
+ * 完全无状态：每次调用均为独立单发（system + user 两条 message），不跨调用累积任何上下文。
+ * 任务结束后实例销毁——操作员负责把历史摘要喂进来，大脑本身不记忆。
+ *
  * 职责：
  * 1. 内容判定（judge）：分析 Operator 抓取的原始文本，提取结构化数据或做出布尔判定；
  * 2. 终态报告（generateFinalReport）：结合任务目标、执行轨迹及 Operator 汇总，生成一句话简报与详细总结，
- *    workingDir 非 null 时把详细报告真写入 `workingDir/reports/task_<ts>.md`；
- * 3. 记忆灵活性：[continuousMemory] 控制单次判定是否跨轮次保留对话历史，随时可以在一次性与持续记忆间切换。
+ *    workingDir 非 null 时把详细报告真写入 `workingDir/reports/task_<ts>.md`。
  *
  * LLM 调用全部走 [BrowserLLMCaller]（由 [BrowserLLMHelper] 默认实现）——Brain 不持有
  * provider/client，判定与报告均为纯文本调用（无 image）。
  */
 class BrowserBrain(
     private val llmCaller: BrowserLLMCaller,
-    private val workingDir: File? = null,
-    /**
-     * 持续记忆开关：
-     * false: 每次调用均为全新提示词（无历史堆叠，默认，轻量高抗噪）
-     * true: 在生命周期内累积每次判定记录（跨步骤持续上下文）
-     */
-    private val continuousMemory: Boolean = false
+    private val workingDir: File? = null
 ) {
-
-    // 持续记忆存储：若 continuousMemory = true，历史记录累积在此
-    private val memoryLog = mutableListOf<String>()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -41,14 +34,7 @@ class BrowserBrain(
     }
 
     /**
-     * 重置记忆。
-     */
-    fun resetMemory() {
-        memoryLog.clear()
-    }
-
-    /**
-     * 判定/提取网页内容。
+     * 判定/提取网页内容（无状态单发：传入内容+指令，返回判定结果，不累积历史）。
      *
      * @param content 原始页面抓取文本
      * @param instruction 具体的判定指令或期望的 schema
@@ -60,26 +46,11 @@ class BrowserBrain(
         recipeRules: String = ""
     ): BrainResult {
         val sysPrompt = BrowserBrainPrompt.buildJudgeSystemPrompt()
-        val baseUserPrompt = BrowserBrainPrompt.buildJudgeUserPrompt(content, instruction, recipeRules)
-
-        val fullUserPrompt = if (continuousMemory && memoryLog.isNotEmpty()) {
-            buildString {
-                append("<prior_judgments>\n")
-                append(memoryLog.joinToString("\n---\n"))
-                append("\n</prior_judgments>\n\n")
-                append(baseUserPrompt)
-            }
-        } else {
-            baseUserPrompt
-        }
+        val userPrompt = BrowserBrainPrompt.buildJudgeUserPrompt(content, instruction, recipeRules)
 
         return try {
-            val text = llmCaller.call(sysPrompt, fullUserPrompt)
+            val text = llmCaller.call(sysPrompt, userPrompt)
             val parsed = parseJsonToMap(text)
-
-            if (continuousMemory) {
-                memoryLog.add("Instruction: $instruction\nContent: ${content.take(300)}\nResult: $text")
-            }
 
             BrainResult(
                 success = true,

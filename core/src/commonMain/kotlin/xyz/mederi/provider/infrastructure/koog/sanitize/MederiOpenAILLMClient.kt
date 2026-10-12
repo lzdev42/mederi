@@ -750,7 +750,7 @@ class MederiOpenAILLMClient(
                             index = toolCall.index ?: lastToolCallIndex
                         )
                     }
-                    choice.finishReason?.let {
+                    choice.finishReason?.takeIf { it.isNotBlank() }?.let {
                         finishReason = it
                         DebugLog.event("SSE-Frame", "chat finishReason=$it")
                     }

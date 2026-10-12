@@ -48,9 +48,9 @@ object ToolFactory {
     val OFFICE_TOOL_NAMES = listOf("office_read", "office_write")
     val VERIFY_TOOL_NAMES = listOf("verify_subtask")
     val PROCESS_TOOL_NAMES = listOf("list_processes", "stop_process")
-    // web_search 仅研究员子代理可用（curl GET 只读网络搜索）
-    val RESEARCHER_TOOL_NAMES = listOf("web_search")
-    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES + RESEARCHER_TOOL_NAMES
+    // web_search/web_fetch：主代理 + 研究员子代理可用（Bing 搜索 + URL 抓取，curl GET 只读）
+    val WEB_TOOL_NAMES = listOf("web_search", "web_fetch")
+    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES + WEB_TOOL_NAMES
 
     fun build(
         toolNames: List<String>,
@@ -89,7 +89,7 @@ object ToolFactory {
 
         // 主代理：全量工具（Triage Flow——是否建计划由 AI 判断，无代码门禁）。子代理按角色裁剪：
         // - EXECUTOR：执行计划内子任务——全量写/执行工具，但无 plan/spawn/verify/ask_user。
-        // - RESEARCHER：只读调研——read_file/list_directory 之外一律不给（无写、无命令、无计划工具）。
+        // - RESEARCHER：只读调研——read_file/list_directory + web_search/web_fetch（无写、无命令、无计划工具）。
         val isSubagent = subagentRole != null
         val isResearcher = subagentRole == SubagentRole.RESEARCHER
         val canWrite = !isResearcher
@@ -114,9 +114,10 @@ object ToolFactory {
             // 非破坏命令自由执行；OS 沙箱（macOS Seatbelt / Linux bwrap）锁写白名单
             fsToolMap["execute_command"] = { shellTools.ExecuteCommandTool() }
         }
-        // web_search：仅研究员子代理（curl GET 只读网络搜索，复用 ShellTools.runCommand）
-        if (isResearcher) {
+        // web_search / web_fetch：主代理 + 研究员子代理（curl GET 只读网络搜索/抓取，复用 ShellTools.runCommand）
+        if (isResearcher || !isSubagent) {
             fsToolMap["web_search"] = { shellTools.WebSearchTool() }
+            fsToolMap["web_fetch"] = { shellTools.WebFetchTool() }
         }
 
         // 进程管理：只对能执行命令的角色开放（主代理 + EXECUTOR）。

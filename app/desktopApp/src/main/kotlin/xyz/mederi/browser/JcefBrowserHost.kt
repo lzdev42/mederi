@@ -34,7 +34,6 @@ import xyz.kbrowser.webview.KBWebChromeClient
 import xyz.kbrowser.webview.KBWebView
 import xyz.kbrowser.webview.LoadingState
 import xyz.kbrowser.webview.PermissionRequest
-import xyz.mederi.DesktopBrowserRuntime
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.browser.UiBrowserHost
 import java.util.concurrent.atomic.AtomicBoolean
@@ -52,7 +51,7 @@ import java.util.concurrent.atomic.AtomicLong
  * 5. **JS 对话框与文件上传**：桥接 `alert`/`confirm`/`prompt` 到 Mederi 弹窗组件，桥接 `<input type="file">` 到系统原生文件选择器；
  * 6. **页面缩放控制**：支持 50% ~ 200% 缩放调节与一键重置 100%。
  */
-class JcefBrowserHost : UiBrowserHost {
+class JcefBrowserHost(private val browser: xyz.kbrowser.webview.KBrowser) : UiBrowserHost {
 
     private val tabIdGenerator = AtomicLong(1L)
 
@@ -68,7 +67,7 @@ class JcefBrowserHost : UiBrowserHost {
     /** 类级主线程协程作用域，shutdown 时取消。 */
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    override val isAvailable: Boolean get() = DesktopBrowserRuntime.isInitialized
+    override val isAvailable: Boolean get() = true
 
     @Composable
     override fun BrowserContent(colors: MederiColors) {
@@ -255,7 +254,7 @@ class JcefBrowserHost : UiBrowserHost {
     ): BrowserTabState? {
         if (!isAvailable) return null
         val page = withContext(Dispatchers.Default) {
-            DesktopBrowserRuntime.browser.newPage()
+            browser.newPage()
         }
         return withContext(Dispatchers.Main) {
             val tab = BrowserTabState(
@@ -392,6 +391,19 @@ class JcefBrowserHost : UiBrowserHost {
                 else -> selectedTabIndex.coerceAtMost(tabs.lastIndex)
             }
         }
+    }
+
+    /**
+     * 为 AI 浏览器任务创建一个可见 tab，并返回绑定该 tab 页面的 [JcefBrowserControl]。
+     *
+     * 页面通过 [openTabInternal] 创建（viewport-less，可挂进 KBWebView），与用户手动开的 tab
+     * 一样可见可交互。返回的 [JcefBrowserControl] 用带页面的构造函数构造——其 start 为 no-op、
+     * close 只释放引用不关页面（本宿主拥有页面生命周期）。
+     */
+    suspend fun createAiTab(taskId: String): JcefBrowserControl {
+        val tab = openTabInternal(initialUrl = null, select = true)
+            ?: error("Failed to create AI browser tab")
+        return JcefBrowserControl(tab.page)
     }
 
     /** 在新标签页中加载 HTML（Office 文档预览等）。 */

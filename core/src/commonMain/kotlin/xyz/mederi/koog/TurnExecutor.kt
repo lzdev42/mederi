@@ -1288,11 +1288,11 @@ class TurnExecutor(
                         emitToolDelta(sessionId, name = frame.name!!, args = frame.content, complete = true)
                     }
                     is StreamFrame.End -> {
-                        // End 也是轮次边界（tool loop 每轮一个 End）。finishReason=null 的 End
+                        // End 也是轮次边界（tool loop 每轮一个 End）。finishReason 为空/空白的 End
                         // = 上游没给收尾标记（SSE 连接断开时 lines() flow 正常结束、emitEnd
-                        // 无 finishReason）→ turn 会"成功"收尾但回复被静默截断。
+                        // 无有效 finishReason）→ turn 会"成功"收尾但回复被静默截断。
                         // 生成 WARNING 级 ErrorRecord 走统一错误出口（ErrorBoard），并留人类提示文本。
-                        if (frame.finishReason == null) {
+                        if (frame.finishReason.isNullOrBlank()) {
                             val diag = diagnosticsProvider()
                             val summary = "流式连接提前中断：服务器关闭连接但未发送结束标记" +
                                 "（已接收 ${traceSession.deltaCount} 帧 / ${traceSession.charCount} 字符）"

@@ -164,8 +164,7 @@ class BrowserTaskManager(
 
             val brain = BrowserBrain(
                 llmCaller = brainLlmCaller,
-                workingDir = workingDir,
-                continuousMemory = false
+                workingDir = workingDir
             )
 
             val runner = BrowserOperator(

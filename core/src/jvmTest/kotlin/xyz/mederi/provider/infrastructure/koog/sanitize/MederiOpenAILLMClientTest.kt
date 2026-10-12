@@ -149,4 +149,70 @@ class MederiOpenAILLMClientTest {
         assertNull(end.metaInfo.outputTokensCount)
         assertNull(end.metaInfo.metadata)
     }
+
+    @Test
+    fun `blank finish reason in intermediate chunks stays null on premature close`() = runBlocking {
+        val client = makeClient()
+        val response = flowOf(
+            SanitizedStreamResponse(
+                choices = listOf(
+                    SanitizedStreamChoice(
+                        delta = SanitizedStreamDelta(reasoningContent = "thinking..."),
+                        finishReason = "",
+                        index = 0
+                    )
+                ),
+                created = 0L,
+                id = "1",
+                model = "test",
+                objectType = "chat.completion.chunk",
+                usage = null
+            )
+        )
+
+        val frames = client.processStreamingFlow(response).toList()
+        val end = frames.filterIsInstance<StreamFrame.End>().single()
+
+        assertNull(end.finishReason, "空字符串 finishReason 应被忽略，提前结束时 End.finishReason 必须为 null")
+    }
+
+    @Test
+    fun `trailing blank finish reason does not overwrite prior valid finish reason`() = runBlocking {
+        val client = makeClient()
+        val response = flowOf(
+            SanitizedStreamResponse(
+                choices = listOf(
+                    SanitizedStreamChoice(
+                        delta = SanitizedStreamDelta(content = "done"),
+                        finishReason = "stop",
+                        index = 0
+                    )
+                ),
+                created = 0L,
+                id = "1",
+                model = "test",
+                objectType = "chat.completion.chunk",
+                usage = null
+            ),
+            SanitizedStreamResponse(
+                choices = listOf(
+                    SanitizedStreamChoice(
+                        delta = SanitizedStreamDelta(),
+                        finishReason = "",
+                        index = 0
+                    )
+                ),
+                created = 0L,
+                id = "1",
+                model = "test",
+                objectType = "chat.completion.chunk",
+                usage = OpenAIUsage(promptTokens = 10, completionTokens = 5, totalTokens = 15)
+            )
+        )
+
+        val frames = client.processStreamingFlow(response).toList()
+        val end = frames.filterIsInstance<StreamFrame.End>().single()
+
+        assertEquals("stop", end.finishReason, "末尾帧的空串 finishReason 不得覆盖已收到的有效 finishReason")
+    }
 }

@@ -101,6 +101,9 @@ kotlin {
             // TerminalHub：pty4j 真实 pty 会话（会话拥有者）。
             // JVM-only：pty4j 的 native 是 glibc 二进制，Android(bionic)/iOS(沙箱) 不可用，无 KMP 替代品
             implementation(libs.pty4j)
+            // KBrowser/JCEF 运行时：MederiAiCore 暴露 kBrowser（core 对 kbrowser 是 implementation，
+            // 类型不跨模块可见，须在 jvmMain 侧直接声明）。JVM-only，无 KMP 替代品。
+            implementation(libs.kbrowser)
             // desktop 终端渲染：jediterm（IntelliJ 终端本体，纯 Java Swing，经 SwingPanel 嵌入）。
             // 坐标在 JetBrains intellij-dependencies repo（见 settings.gradle.kts）；ui/core 为 LGPL
             implementation(libs.jediterm.ui)

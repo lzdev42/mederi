@@ -30,6 +30,8 @@ kotlin {
             // Office 文档处理（JVM-only，无 KMP 替代品）：docx/xlsx/pptx 读写 + docx→HTML 预览
             implementation(libs.poi.ooxml)
             implementation(libs.mammoth)
+            // KBrowser/JCEF 浏览器运行时：Mermaid 离屏渲染与内置浏览器 Tab 共用同一运行时（useOsr=true）
+            implementation(libs.kbrowser)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

@@ -7,6 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.core.bridge.MederiAiCore
@@ -48,7 +49,7 @@ fun main() = application {
             Server.stop()
             terminalHub.shutdown()
             appStateHolder.value?.uiBrowserHost?.shutdown()
-            DesktopBrowserRuntime.shutdown()
+            xyz.mederi.browser.KBrowserRuntime.shutdown()
             appStateHolder.value?.remoteControl?.stopTunnel()
             appStateHolder.value?.let { runBlocking { it.flushAll() } }
             exitApplication()
@@ -68,15 +69,27 @@ fun main() = application {
                     if (aiCore is MederiAiCore) {
                         appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)
 
-                        // 启动后台预热桌面浏览器全局单例（固定 useOsr = true，专供 inkcompose 结构图与 Markdown 导出）
+                        // KBrowser 在 MederiAiCore.initialize() 中初始化，但 onAppStateReady 在 initialize() 之前调用，
+                        // 故用后台协程等 isReady 变 true 后再读取 kBrowser 注入。
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-                            val ok = DesktopBrowserRuntime.ensureInitialized()
-                            if (ok) {
-                                // 初始化成功后注入内置浏览器宿主（Compose 读取状态，切回 Main 线程设置）
+                            aiCore.isReady.first { it }  // 等 initialize() 完成
+                            val kb = aiCore.kBrowser
+                            if (kb != null) {
+                                xyz.emuci.diagram.mermaid.SingleMermaidWorker.attachBrowser(kb)
+                                xyz.emuci.inkcompose.MarkdownExporter.setBrowser(kb)
                                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                    appState.uiBrowserHost = xyz.mederi.browser.JcefBrowserHost()
+                                    val host = xyz.mederi.browser.JcefBrowserHost(kb)
+                                    appState.uiBrowserHost = host
+                                    // 重新注册 JCEF 工厂：让浏览器工具的页面通过 UI 宿主创建（可见），
+                                    // 覆盖 MederiAiCore 注册的独立 viewport 工厂（headless/server 路径才用那个）。
+                                    xyz.mederi.browser.BrowserRegistry.register(
+                                        name = "jcef",
+                                        kind = xyz.mederi.browser.BrowserKind.JCEF,
+                                        factory = { taskId -> host.createAiTab(taskId) }
+                                    )
                                 }
                             }
+                            // kb == null → JCEF 不支持（headless 无 Xvfb 等）：inkcompose 降级源码展示，无浏览器面板
                         }
                     }
 

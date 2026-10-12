@@ -534,10 +534,12 @@ sequenceDiagram
     Note over MA: 用户问"任务怎样了?" → 主代理查 browser(STATUS, taskId)
 ```
 
-> 浏览器选择（2026-09）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认。
-> 内置 JCEF 浏览器宿主已移除，Camoufox（BiDiBrowserControl）是唯一注册源、即默认；
-> 任意 BROWSER_TASK_STARTED 都会把浏览器面板展开为 Camoufox 任务监控视图。浏览器面板在所有端均可展开
-> （不再依赖内置 JCEF 宿主，遥控端/wasm 同样适用）。
+> 浏览器选择（2026-09）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认
+> （defaultName 优先 → 内置 JCEF 优先 → 第一个注册的）。2026-10 起 JCEF（JcefBrowserControl）
+> 重新注册为主力引擎（MederiAiCore 在 kBrowser 非空时条件注册），Camoufox（BiDiBrowserControl）
+> 降级为可选 backup；headless server 无 JCEF 时默认 camoufox。
+> 任意 BROWSER_TASK_STARTED 都会把浏览器面板展开为浏览器任务监控视图（jcef 任务由 UI host 上报 tab 状态）。
+> 浏览器面板在所有端均可展开（遥控端/wasm 同样适用）。
 
 > 浏览器子代理模型解析（2026-09-23）：browser(RUN) 派发时，RunBrowserTaskTool 直传父会话模型/推理档
 > （不再按浏览器名解析）；BrowserTaskManager.runTask 后台按角色独立解析——操作者
@@ -545,7 +547,7 @@ sequenceDiagram
 > 各取配置的独立模型/推理档（设置页 Agents 面板与 Executor/Researcher 同款卡片可配模型+推理档+恢复继承），
 > 配置了独立模型/推理档则覆盖父会话，否则继承；operator/brain 各建独立 llmCaller
 > （BrowserLLMHelper 或注入的 llmCallerProvider），Operator 按操作者模型执行、Brain 按大脑模型执行。
-> 浏览器实现（现仅 Camoufox）仍由 browser(RUN) 的 browser 参数选择，与角色配置无关。
+> 浏览器实现（jcef 主力 + camoufox backup）仍由 browser(RUN) 的 browser 参数选择，与角色配置无关。
 
 ## 9. 会话自动改名（SessionTitleService）
 
@@ -621,7 +623,6 @@ sequenceDiagram
     participant SVC as 子服务
 
     M->>M: PtyTerminalHub() → terminalManager
-    M->>M: 后台 CoroutineScope(Dispatchers.Default).launch { DesktopBrowserRuntime.ensureInitialized() } 预热 KBrowser（供 inkcompose mermaid/导出）
     M->>APP: setContent { App() }
     APP->>ST: 创建 AppState(AiCoreProvider.default(), preferences)
     APP->>MAC: initialize()
@@ -629,7 +630,8 @@ sequenceDiagram
     MED->>MED: MederiPaths.ensureDirectories + handleLegacyFiles(旧文件须批准)
     MED->>MED: 双库 driver + Schema.create + 7 Store 装配
     MED->>MED: Manager 层 + API 层装配
-    MED->>MED: Camoufox BrowserRegistry.register(BiDi 浏览器源, 浏览器任务唯一注册源)
+    MAC->>MAC: KBrowserRuntime.ensureInitialized() → _kBrowser（JCEF 不可用/失败 → null 降级）
+    MAC->>MAC: BrowserRegistry.register(camoufox, backup) + 条件注册 jcef（_kBrowser 非空时, 主力引擎）
     MAC->>MAC: cleanupLegacyBuiltinProviders / cleanupStaleRunningSessions / syncBuiltinProviders
     MAC->>MAC: refreshGlobalState(4 个 StateFlow) → isReady=true
     MAC->>SVC: modelCatalog.start()(models.dev 每小时刷新)
@@ -639,6 +641,7 @@ sequenceDiagram
     MAC->>SVC: startCamoufoxUpdateCheck()(后台 Camoufox 更新检查)
     APP->>ST: hydrate()(恢复偏好, 列表就绪后 3s 内回填选中态)
     APP->>APP: MainScreen 组合 Sidebar+Workspace, WorkspaceViewModel.attach(选中会话)
+    M->>M: onAppStateReady: aiCore.kBrowser 非空 → 注入 inkcompose（SingleMermaidWorker/MarkdownExporter）+ uiBrowserHost = JcefBrowserHost(kBrowser)
     M->>M: 观察 remoteControlEnabled → 自动启停内嵌 Server
 ```
 

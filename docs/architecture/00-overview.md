@@ -13,7 +13,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │       ├── store/ + store/sqlite/       ← Store 层（纯持久化，InMemory + Sqlite 双实现）
 │       ├── koog/ + infrastructure/koog/ ← Koog 执行引擎适配（TurnExecutor 等）
 │       ├── tools/                       ← 工具系统（FS/Shell/Plan/Verify/Subagent/Sandbox/Diff/Office/Process(list_processes, stop_process)/Browser 单入口）
-│       ├── browser/ + browser/bidi/ + browser/install/  ← 浏览器自动化模块（BrowserControl/BrowserOperator/BrowserBrain/BrowserTaskManager + BrowserSettingsManager/CamoufoxSettingsMapping 设置链 + BiDi 层 + Camoufox 下载安装）
+│       ├── browser/ + browser/bidi/ + browser/install/  ← 浏览器自动化模块（BrowserControl/BrowserOperator/BrowserBrain/BrowserTaskManager + JcefBrowserControl/KBrowserRuntime（jvmMain）+ BrowserSettingsManager/CamoufoxSettingsMapping 设置链 + BiDi 层 + Camoufox 下载安装）
 │       ├── office/                      ← Office 工具（OfficeTools/OfficeConverter，docx/xlsx/pptx ↔ markdown）
 │       ├── skills/ + skills/domain/     ← 技能发现/解析（SkillManager/SkillDiscovery/SkillFrontmatterParser + 领域模型）
 │       ├── http/                        ← HTTP 客户端工厂（MederiHttpClientFactory/SseIdleTimeoutException）
@@ -117,8 +117,8 @@ flowchart TB
 | `AiCoreProvider.default()` | `MederiAiCore("~/.mederi")` | （main 直接 new MederiAiCore） | `ServerAiCore`（baseUrl/密码读 SharedPrefs） | `ServerAiCore`（暂硬编码 127.0.0.1:8081） | `ServerAiCore`（origin 自身，密码 localStorage，dev 可 `?server=`） |
 | preferences 实现 | `JsonFilePreferencesStore(~/.mederi/preferences.json)` | —（headless） | `SharedPrefsPreferencesStore` | 沙盒 Documents `preferences.json` | `WasmJsPreferencesStore`（localStorage，前缀 `mederi.pref.`，禁用时降级内存） |
 | 终端 TerminalManager | `PtyTerminalHub`（pty4j） | `PtyTerminalHub` | null（遥控） | null（遥控） | null（遥控） |
-| 浏览器自动化 BrowserControl | **`Camoufox`（core 注册，`BiDiBrowserControl`，唯一注册源；设置走 `BrowserSettingsManager`/SettingsStore key `browser.camoufox.settings`，设置页 BROWSER tab 配置）** | 同 desktop（core 注册） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） |
-| inkcompose 渲染运行时（KBrowser） | **`DesktopBrowserRuntime` 全局单例（`useOsr=true`；供 mermaid 渲染 / Markdown 导出，非浏览器自动化宿主）** | null | null | null | null |
+| 浏览器自动化 BrowserControl | **`JCEF` 主力 + `Camoufox` backup**（core 注册：`jcef`=`JcefBrowserControl`（KBrowser 可用时条件注册）优先；`camoufox`=`BiDiBrowserControl` 可选；设置走 `BrowserSettingsManager`/SettingsStore key `browser.camoufox.settings`，设置页 BROWSER tab 配置） | **同 desktop（core 注册；JCEF 需 headless + Xvfb，无 Xvfb 时仅 camoufox）** | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） | 经契约遥控（无本地实例） |
+| inkcompose 渲染运行时（KBrowser） | **`MederiAiCore.kBrowser`（`KBrowserRuntime.ensureInitialized()`，core jvmMain；main.kt 注入 inkcompose 供 mermaid 渲染 / Markdown 导出 + 创建 `JcefBrowserHost` 可见浏览器）** | **`MederiAiCore.kBrowser` 可能可用（headless+Xvfb），但不注入 inkcompose（无 UI 渲染需求）；仅供 jcef 浏览器自动化** | null | null | null |
 | RemoteControlHooks | `DesktopRemoteControlHooks`（Server + cloudflared 隧道） | 本身即 server | — | — | — |
 | Mermaid 缓存目录 | `~/.mederi/mermaid/` | — | `cacheDir`（MainActivity 注入） | NSCachesDirectory | no-op（同文档 DOM 渲染） |
 | RemoteGate 密码门 | 无 | 无 | 无 | 无 | **有**（包在 MederiApp 外层） |
