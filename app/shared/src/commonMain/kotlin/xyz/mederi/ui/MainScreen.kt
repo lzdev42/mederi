@@ -47,6 +47,7 @@ import mederi.app.shared.generated.resources.sidebar_edge_handle
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.SidebarViewModel
 import xyz.mederi.ui.UiEffect
+import xyz.mederi.ui.RightDockPanel
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.LocalMederiColors
@@ -81,6 +82,14 @@ fun MainScreen() {
                 is UiEffect.ShowCompactionNotice -> compactionNotice = effect
                 else -> {}
             }
+        }
+    }
+
+    // 设置页打开时收回浏览器面板：JCEF 是原生重量级窗口（heavyweight），
+    // 永远渲染在 Compose 轻量级内容之上，不收回会穿透覆盖设置对话框。
+    LaunchedEffect(isSettingsVisible) {
+        if (isSettingsVisible && workspaceViewModel.activeDockPanel == RightDockPanel.BROWSER) {
+            workspaceViewModel.closeDockPanel()
         }
     }
 
