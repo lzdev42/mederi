@@ -4,7 +4,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,7 +37,10 @@ import xyz.kbrowser.webview.KBWebView
 import xyz.kbrowser.webview.LoadingState
 import xyz.kbrowser.webview.PermissionRequest
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.ui.browser.BrowserAutomationUiState
+import xyz.mederi.ui.browser.BrowserFlowStep
 import xyz.mederi.ui.browser.UiBrowserHost
+import xyz.mederi.ui.components.BrowserAutomationFlowPanel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -49,7 +54,8 @@ import java.util.concurrent.atomic.AtomicLong
  *    后退/前进/刷新与停止合一按钮、顶部 2dp 加载进度条；
  * 4. **页面加载错误覆层**：遇到网络/证书/DNS 错误时展示可读错误页与重试按钮；
  * 5. **JS 对话框与文件上传**：桥接 `alert`/`confirm`/`prompt` 到 Mederi 弹窗组件，桥接 `<input type="file">` 到系统原生文件选择器；
- * 6. **页面缩放控制**：支持 50% ~ 200% 缩放调节与一键重置 100%。
+ * 6. **页面缩放控制**：支持 50% ~ 200% 缩放调节与一键重置 100%；
+ * 7. **右侧自动化操作流程视图**：自动化执行时在网页区右侧弹出可拖拽调宽的流程面板（自动化期间锁定不可关闭）。
  */
 class JcefBrowserHost(private val browser: xyz.kbrowser.webview.KBrowser) : UiBrowserHost {
 
@@ -70,7 +76,14 @@ class JcefBrowserHost(private val browser: xyz.kbrowser.webview.KBrowser) : UiBr
     override val isAvailable: Boolean get() = true
 
     @Composable
-    override fun BrowserContent(colors: MederiColors) {
+    override fun BrowserContent(
+        colors: MederiColors,
+        automationState: BrowserAutomationUiState,
+        onToggleAutomationPanel: () -> Unit,
+        onCloseAutomationPanel: () -> Unit,
+        onResizeAutomationPanel: (Float) -> Unit,
+        onPreviewScreenshot: (BrowserFlowStep.Screenshot?) -> Unit,
+    ) {
         if (!isAvailable) {
             BrowserUnavailableView(colors = colors)
             return
@@ -163,6 +176,8 @@ class JcefBrowserHost(private val browser: xyz.kbrowser.webview.KBrowser) : UiBr
                 onZoomReset = {
                     selectedTab?.zoomPercent = 100
                 },
+                automationState = automationState,
+                onToggleAutomationPanel = onToggleAutomationPanel,
             )
 
             // ── 3. 顶部 2dp 线性加载进度条 ──
@@ -187,42 +202,70 @@ class JcefBrowserHost(private val browser: xyz.kbrowser.webview.KBrowser) : UiBr
                 }
             }
 
-            // ── 4. 主内容区（KBWebView 或错误状态页）──
-            Box(
+            // ── 4. 主内容区（左侧 KBWebView/错误页 + 右侧可拖拽调宽的自动化流程面板）──
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .background(colors.surfaceWorkspace),
             ) {
-                if (selectedTab != null) {
-                    val activeError = (loadingState as? LoadingState.Error)
-                        ?.takeIf { it.errorCode != CEF_ERR_ABORTED && it != selectedTab.dismissedError }
+                // 保证左侧网页区最少保留 220dp 可视宽度
+                val maxFlowPanelWidthDp = (maxWidth.value - 220f).coerceIn(
+                    BrowserAutomationUiState.MIN_PANEL_WIDTH_DP,
+                    BrowserAutomationUiState.MAX_PANEL_WIDTH_DP,
+                )
 
-                    if (activeError != null) {
-                        BrowserErrorView(
-                            error = activeError,
-                            colors = colors,
-                            onRetry = {
-                                selectedTab.dismissedError = activeError
-                                val retryUrl = activeError.failingUrl.takeIf { it.isNotBlank() }
-                                    ?: currentUrl?.takeIf { it.isNotBlank() }
-                                if (retryUrl != null) {
-                                    selectedTab.page.webView.loadUrl(retryUrl)
-                                } else {
-                                    selectedTab.page.webView.reload()
+                Row(modifier = Modifier.fillMaxSize()) {
+                    // 左侧：网页视图区
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .background(colors.surfaceWorkspace),
+                    ) {
+                        if (selectedTab != null) {
+                            val activeError = (loadingState as? LoadingState.Error)
+                                ?.takeIf { it.errorCode != CEF_ERR_ABORTED && it != selectedTab.dismissedError }
+
+                            if (activeError != null) {
+                                BrowserErrorView(
+                                    error = activeError,
+                                    colors = colors,
+                                    onRetry = {
+                                        selectedTab.dismissedError = activeError
+                                        val retryUrl = activeError.failingUrl.takeIf { it.isNotBlank() }
+                                            ?: currentUrl?.takeIf { it.isNotBlank() }
+                                        if (retryUrl != null) {
+                                            selectedTab.page.webView.loadUrl(retryUrl)
+                                        } else {
+                                            selectedTab.page.webView.reload()
+                                        }
+                                    },
+                                )
+                            } else {
+                                // key(selectedTab.id) 确保切换 tab 时 SwingPanel 正确绑定对应 KBWebView
+                                key(selectedTab.id) {
+                                    KBWebView(
+                                        webView = selectedTab.page.webView,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(colors.surfaceWorkspace),
+                                    )
                                 }
-                            },
-                        )
-                    } else {
-                        // key(selectedTab.id) 确保切换 tab 时 SwingPanel 正确绑定对应 KBWebView
-                        key(selectedTab.id) {
-                            KBWebView(
-                                webView = selectedTab.page.webView,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(colors.surfaceWorkspace),
-                            )
+                            }
                         }
+                    }
+
+                    // 右侧（红框位置）：自动化操作流程视图（自动化期间强制弹出且不可关闭）
+                    if (automationState.isVisible) {
+                        BrowserAutomationFlowPanel(
+                            state = automationState,
+                            colors = colors,
+                            onClose = onCloseAutomationPanel,
+                            onResize = onResizeAutomationPanel,
+                            onPreviewScreenshot = { shot -> onPreviewScreenshot(shot) },
+                            maxWidthDp = maxFlowPanelWidthDp,
+                        )
                     }
                 }
             }

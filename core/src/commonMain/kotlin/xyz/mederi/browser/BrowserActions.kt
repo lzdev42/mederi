@@ -76,7 +76,8 @@ sealed class BrowserAction {
     object NoOp : BrowserAction()
 }
 
-/** action 执行结果（进 step history）。 */
+/** action 执行结果（进 step history；@Serializable 供事件 payload 序列化）。 */
+@Serializable
 data class ActionResult(
     val action: String,
     val success: Boolean,

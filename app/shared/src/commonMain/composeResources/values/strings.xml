@@ -784,4 +784,20 @@
     <string name="subagent_live_waiting">等待子 Agent 产生输出…</string>
     <string name="subagent_live_empty">（无实时输出记录）</string>
     <string name="browser_not_available">当前端不可用</string>
+    <!-- 浏览器自动化操作流程视图（BrowserAutomationPanel.kt） -->
+    <string name="browser_flow_button">流程</string>
+    <string name="browser_flow_title_running">自动化操作中</string>
+    <string name="browser_flow_title_completed">自动化已完成</string>
+    <string name="browser_flow_title_idle">自动化流程</string>
+    <string name="browser_flow_running_locked">执行中</string>
+    <string name="browser_flow_close">关闭流程视图</string>
+    <string name="browser_flow_step_in_progress">进行中...</string>
+    <string name="browser_flow_step_failed">失败</string>
+    <string name="browser_flow_screenshot_default">网页截图</string>
+    <string name="browser_flow_zoom_in_hint">点击放大查看</string>
+    <string name="browser_flow_waiting_steps">正在等待自动化操作步骤…</string>
+    <string name="browser_flow_empty">暂无自动化操作流程</string>
+    <string name="browser_flow_footer_steps">共 %1$d 步</string>
+    <string name="browser_flow_footer_steps_with_shots">共 %1$d 步（含 %2$d 张截图）</string>
+    <string name="browser_flow_lightbox_close">关闭预览</string>
 </resources>

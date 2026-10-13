@@ -21,9 +21,19 @@ interface UiBrowserHost {
     /** 当前端是否可渲染内置浏览器（遥控端/wasm 为 false）。 */
     val isAvailable: Boolean
 
-    /** 渲染浏览器内容（tab 栏 + 当前 tab 的 KBPage 视图）。仅可用端被调用。 */
+    /**
+     * 渲染浏览器内容（tab 栏 + 导航栏 + 当前 tab 的 KBPage 视图 + 右侧自动化操作流程视图）。
+     * 仅可用端被调用。
+     */
     @Composable
-    fun BrowserContent(colors: MederiColors)
+    fun BrowserContent(
+        colors: MederiColors,
+        automationState: BrowserAutomationUiState = BrowserAutomationUiState(),
+        onToggleAutomationPanel: () -> Unit = {},
+        onCloseAutomationPanel: () -> Unit = {},
+        onResizeAutomationPanel: (Float) -> Unit = {},
+        onPreviewScreenshot: (BrowserFlowStep.Screenshot?) -> Unit = {},
+    )
 
     /**
      * 在新 tab 中加载任意 HTML 字符串（用于 Office 文档预览等）。

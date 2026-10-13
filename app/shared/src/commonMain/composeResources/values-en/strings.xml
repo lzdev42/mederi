@@ -775,5 +775,21 @@
     <string name="subagent_live_waiting">Waiting for subagent output…</string>
     <string name="subagent_live_empty">(No live output recorded)</string>
     <string name="browser_not_available">Not available on this end</string>
+    <!-- Browser automation flow panel (BrowserAutomationPanel.kt) -->
+    <string name="browser_flow_button">Flow</string>
+    <string name="browser_flow_title_running">Automating</string>
+    <string name="browser_flow_title_completed">Automation Done</string>
+    <string name="browser_flow_title_idle">Automation Flow</string>
+    <string name="browser_flow_running_locked">Running</string>
+    <string name="browser_flow_close">Close flow panel</string>
+    <string name="browser_flow_step_in_progress">Running...</string>
+    <string name="browser_flow_step_failed">Failed</string>
+    <string name="browser_flow_screenshot_default">Page Screenshot</string>
+    <string name="browser_flow_zoom_in_hint">Click to zoom in</string>
+    <string name="browser_flow_waiting_steps">Waiting for automation steps…</string>
+    <string name="browser_flow_empty">No automation steps yet</string>
+    <string name="browser_flow_footer_steps">%1$d steps</string>
+    <string name="browser_flow_footer_steps_with_shots">%1$d steps (%2$d screenshots)</string>
+    <string name="browser_flow_lightbox_close">Close preview</string>
 </resources>
 

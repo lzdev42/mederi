@@ -26,6 +26,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okio.ByteString.Companion.toByteString
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
@@ -35,6 +41,10 @@ import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.appstate.AppState
 import xyz.mederi.ui.appstate.McpStore
 import xyz.mederi.ui.appstate.SkillStore
+import xyz.mederi.ui.browser.BrowserActionKind
+import xyz.mederi.ui.browser.BrowserAutomationUiState
+import xyz.mederi.ui.browser.BrowserFlowStep
+import xyz.mederi.ui.browser.BrowserStepStatus
 
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.err_create_conversation_failed
@@ -107,6 +117,229 @@ class WorkspaceViewModel(
 
     /** 内置浏览器宿主（桌面端注入 UiBrowserHost；遥控端/wasm 为 null，UI 渲染占位） */
     val uiBrowserHost get() = appState.uiBrowserHost
+
+    // ==========================================
+    // 浏览器自动化流程视图（MVVM 状态与动作入口）
+    // ==========================================
+
+    /**
+     * 浏览器面板右侧「自动化操作流程视图」的唯一 MVVM 状态源。
+     * - `isAutomating == true` 时强制弹出且不可关闭；
+     * - 支持拖拽调宽、展示 AI 旁白 / 动作 / 截图缩略图，以及点击截图弹出大图预览。
+     */
+    var browserAutomationState by mutableStateOf(BrowserAutomationUiState())
+        private set
+
+    /**
+     * 启动浏览器自动化流程（弹出流程视图并锁定为不可关闭，同时展开右侧网页面板）。
+     * 供业务侧在浏览器自动化任务开始时调用。
+     */
+    fun startBrowserAutomation(taskSummary: String? = null, clearPrevious: Boolean = true) {
+        val now = xyz.mederi.currentTimeMillis()
+        browserAutomationState = browserAutomationState.copy(
+            isAutomating = true,
+            isPanelOpen = true,
+            startedAtMillis = now,
+            completedAtMillis = null,
+            taskSummary = taskSummary ?: if (clearPrevious) null else browserAutomationState.taskSummary,
+            steps = if (clearPrevious) emptyList() else browserAutomationState.steps,
+        )
+        if (activeDockPanel != RightDockPanel.BROWSER) {
+            openDockPanel(RightDockPanel.BROWSER)
+        }
+    }
+
+    /**
+     * 结束浏览器自动化流程（解除不可关闭锁定，并将未结束的 RUNNING 动作标记为 COMPLETED）。
+     * 供业务侧在浏览器自动化任务完成或终止时调用。
+     */
+    fun finishBrowserAutomation(completedAtMillis: Long = xyz.mederi.currentTimeMillis()) {
+        val updatedSteps = browserAutomationState.steps.map { step ->
+            if (step is BrowserFlowStep.Action && step.status == BrowserStepStatus.RUNNING) {
+                step.copy(status = BrowserStepStatus.COMPLETED)
+            } else {
+                step
+            }
+        }
+        browserAutomationState = browserAutomationState.copy(
+            isAutomating = false,
+            completedAtMillis = completedAtMillis,
+            steps = updatedSteps,
+        )
+    }
+
+    /**
+     * 向浏览器自动化流程时间线追加一个节点（AI 旁白 [BrowserFlowStep.Narration] /
+     * 动作 [BrowserFlowStep.Action] / 截图 [BrowserFlowStep.Screenshot]）。
+     */
+    fun appendBrowserFlowStep(step: BrowserFlowStep) {
+        browserAutomationState = browserAutomationState.copy(
+            isPanelOpen = true,
+            steps = browserAutomationState.steps + step,
+        )
+    }
+
+    /**
+     * 更新已有浏览器动作节点的状态、耗时或目标描述。
+     */
+    fun updateBrowserFlowAction(
+        stepId: String,
+        status: BrowserStepStatus,
+        durationMs: Long? = null,
+        target: String? = null,
+    ) {
+        val updatedSteps = browserAutomationState.steps.map { step ->
+            if (step is BrowserFlowStep.Action && step.id == stepId) {
+                step.copy(
+                    status = status,
+                    durationMs = durationMs ?: step.durationMs,
+                    target = target ?: step.target,
+                )
+            } else {
+                step
+            }
+        }
+        browserAutomationState = browserAutomationState.copy(steps = updatedSteps)
+    }
+
+    /** 直接整体更新浏览器自动化 UI 状态（供业务聚合器或预览使用）。 */
+    fun updateBrowserAutomationState(state: BrowserAutomationUiState) {
+        browserAutomationState = state
+    }
+
+    /** 切换浏览器自动化流程面板显隐（自动化进行中不可关闭，直接忽略关闭请求）。 */
+    fun toggleBrowserAutomationPanel() {
+        if (browserAutomationState.isAutomating) {
+            browserAutomationState = browserAutomationState.copy(isPanelOpen = true)
+            return
+        }
+        browserAutomationState = browserAutomationState.copy(
+            isPanelOpen = !browserAutomationState.isPanelOpen,
+        )
+    }
+
+    /** 显式展开浏览器自动化流程面板。 */
+    fun openBrowserAutomationPanel() {
+        browserAutomationState = browserAutomationState.copy(isPanelOpen = true)
+    }
+
+    /** 关闭浏览器自动化流程面板（自动化进行中不可关闭）。 */
+    fun closeBrowserAutomationPanel() {
+        if (!browserAutomationState.canClose) return
+        browserAutomationState = browserAutomationState.copy(isPanelOpen = false)
+    }
+
+    /** 拖拽调整浏览器自动化流程面板宽度（自动钳制在合法区间）。 */
+    fun resizeBrowserAutomationPanel(widthDp: Float) {
+        browserAutomationState = browserAutomationState.copy(
+            panelWidthDp = BrowserAutomationUiState.clampWidthDp(widthDp),
+        )
+    }
+
+    /** 点击流程内截图缩略图，打开高清大图预览弹窗（Lightbox）。 */
+    fun openBrowserScreenshotPreview(screenshot: BrowserFlowStep.Screenshot?) {
+        browserAutomationState = browserAutomationState.copy(previewScreenshot = screenshot)
+    }
+
+    /** 关闭截图高清大图预览弹窗。 */
+    fun closeBrowserScreenshotPreview() {
+        browserAutomationState = browserAutomationState.copy(previewScreenshot = null)
+    }
+
+    // ── 浏览器任务事件 → UI 流程步骤映射（core emit → 事件流 → 此处消费）──
+
+    /**
+     * 处理 [CoreEventType.BROWSER_TASK_STEP] 事件：把 Operator 的 thought（旁白）
+     * 和 results（动作列表）映射为 [BrowserFlowStep] 追加到流程时间线。
+     *
+     * - `thought` 非空 → 追加 [BrowserFlowStep.Narration]（AI 旁白）
+     * - `resultsJson` 非空 → 解码为动作列表，每个动作追加 [BrowserFlowStep.Action]
+     * - 仅 `message`（如"启动浏览器"）→ 追加为 [BrowserFlowStep.Narration]
+     */
+    private fun handleBrowserStepEvent(event: CoreEvent) {
+        val taskId = event.payload["taskId"] ?: return
+        val stepNum = event.payload["step"]?.toIntOrNull() ?: 0
+        val thought = event.payload["thought"]
+        val resultsJson = event.payload["resultsJson"]
+        val message = event.payload["message"]
+        val now = xyz.mederi.currentTimeMillis()
+
+        // 1. AI 旁白（thought 非空时追加）
+        if (!thought.isNullOrBlank()) {
+            appendBrowserFlowStep(
+                BrowserFlowStep.Narration(
+                    id = "${taskId}_s${stepNum}_narr",
+                    text = thought,
+                    timestampMillis = now,
+                )
+            )
+        }
+
+        // 2. 动作结果卡片（resultsJson 非空时解码并逐条追加）
+        if (!resultsJson.isNullOrBlank()) {
+            runCatching {
+                val arr = Json.parseToJsonElement(resultsJson).jsonArray
+                arr.forEachIndexed { i, el ->
+                    val obj = el.jsonObject
+                    val action = obj["action"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+                    val success = obj["success"]?.jsonPrimitive?.booleanOrNull ?: false
+                    val detail = obj["detail"]?.jsonPrimitive?.contentOrNull ?: ""
+                    appendBrowserFlowStep(
+                        BrowserFlowStep.Action(
+                            id = "${taskId}_s${stepNum}_a${i}",
+                            kind = mapActionKind(action),
+                            title = actionLabel(action),
+                            target = detail.takeIf { it.isNotBlank() },
+                            status = if (success) BrowserStepStatus.COMPLETED else BrowserStepStatus.FAILED,
+                            timestampMillis = now,
+                        )
+                    )
+                }
+            }.onFailure {
+                DebugLog.error("BrowserUI", "Failed to parse resultsJson: ${it.message}")
+            }
+        } else if (thought.isNullOrBlank() && !message.isNullOrBlank()) {
+            // thought 为空但 message 有值（如"启动浏览器"启动步骤）→ 追加为旁白
+            appendBrowserFlowStep(
+                BrowserFlowStep.Narration(
+                    id = "${taskId}_s${stepNum}_narr",
+                    text = message,
+                    timestampMillis = now,
+                )
+            )
+        }
+    }
+
+    /** Operator 动作字符串 → [BrowserActionKind] 映射（决定步骤卡片图标）。 */
+    private fun mapActionKind(action: String): BrowserActionKind = when (action) {
+        "navigate" -> BrowserActionKind.NAVIGATE
+        "click" -> BrowserActionKind.CLICK
+        "type" -> BrowserActionKind.INPUT
+        "scroll" -> BrowserActionKind.SCROLL
+        "screenshot" -> BrowserActionKind.SNAPSHOT
+        "wait_for" -> BrowserActionKind.WAIT
+        else -> BrowserActionKind.OTHER
+    }
+
+    /** Operator 动作字符串 → 中文标签（步骤卡片标题）。 */
+    private fun actionLabel(action: String): String = when (action) {
+        "navigate" -> "导航"
+        "click" -> "点击"
+        "type" -> "输入"
+        "scroll" -> "滚动"
+        "screenshot" -> "截图"
+        "wait_for" -> "等待"
+        "judge" -> "判定"
+        "drill" -> "脚本执行"
+        "done" -> "完成"
+        "sleep" -> "休眠"
+        "close" -> "关闭"
+        "back" -> "后退"
+        "tabs" -> "标签操作"
+        "noop" -> "无操作"
+        "llm" -> "决策"
+        else -> action
+    }
 
     /** 项目列表与选中项目（窄访问器，供文件树等派生 UI 使用；与 TerminalViewModel 同款转发） */
     val projects: StateFlow<List<Project>> = appState.projects
@@ -1231,14 +1464,44 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 .maxByOrNull { it.updatedAt }
             if (recent != null) applySessionSettings(recent)
         }
-        // 浏览器任务监听：外部自动化浏览器任务启动 → 自动展开浏览器面板展示执行流程
+        // 浏览器任务监听：STARTED→弹出流程视图；STEP→追加步骤卡片；COMPLETED/ERROR/STOPPED→收尾
         viewModelScope.launch {
             appState.aiCore.isReady.first { it }
             appState.aiCore.events()
-                .filter { it.type == xyz.mederi.core.contract.models.CoreEventType.BROWSER_TASK_STARTED }
-                .collect {
-                    if (activeDockPanel != RightDockPanel.BROWSER) {
-                        openDockPanel(RightDockPanel.BROWSER)
+                .filter {
+                    it.type in setOf(
+                        CoreEventType.BROWSER_TASK_STARTED,
+                        CoreEventType.BROWSER_TASK_STEP,
+                        CoreEventType.BROWSER_TASK_COMPLETED,
+                        CoreEventType.BROWSER_TASK_ERROR,
+                        CoreEventType.BROWSER_TASK_STOPPED,
+                    )
+                }
+                .collect { event ->
+                    when (event.type) {
+                        CoreEventType.BROWSER_TASK_STARTED -> {
+                            startBrowserAutomation(taskSummary = event.payload["task"])
+                        }
+                        CoreEventType.BROWSER_TASK_STEP -> {
+                            handleBrowserStepEvent(event)
+                        }
+                        CoreEventType.BROWSER_TASK_COMPLETED,
+                        CoreEventType.BROWSER_TASK_ERROR,
+                        CoreEventType.BROWSER_TASK_STOPPED -> {
+                            val message = event.payload["message"]
+                            val taskId = event.payload["taskId"] ?: "bt"
+                            if (!message.isNullOrBlank()) {
+                                appendBrowserFlowStep(
+                                    BrowserFlowStep.Narration(
+                                        id = "${taskId}_final",
+                                        text = message,
+                                        timestampMillis = xyz.mederi.currentTimeMillis(),
+                                    )
+                                )
+                            }
+                            finishBrowserAutomation()
+                        }
+                        else -> {}
                     }
                 }
         }

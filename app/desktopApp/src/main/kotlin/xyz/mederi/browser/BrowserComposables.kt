@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -77,6 +78,7 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.browser_back
 import mederi.app.shared.generated.resources.browser_clear_url
 import mederi.app.shared.generated.resources.browser_close_tab
+import mederi.app.shared.generated.resources.browser_flow_button
 import mederi.app.shared.generated.resources.browser_forward
 import mederi.app.shared.generated.resources.browser_js_alert_title
 import mederi.app.shared.generated.resources.browser_js_confirm_title
@@ -98,6 +100,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.kbrowser.webview.LoadingState
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiRadius
+import xyz.mederi.ui.browser.BrowserAutomationUiState
 import xyz.mederi.ui.components.atoms.ConfirmDialog
 import xyz.mederi.ui.components.atoms.MederiDialog
 import xyz.mederi.ui.components.atoms.MederiGhostButton
@@ -349,6 +352,8 @@ internal fun BrowserNavToolbar(
     onZoomOut: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomReset: () -> Unit,
+    automationState: BrowserAutomationUiState = BrowserAutomationUiState(),
+    onToggleAutomationPanel: () -> Unit = {},
 ) {
     val webView = selectedTab?.page?.webView
     val canGoBack by (webView?.canGoBack?.collectAsState() ?: remember { mutableStateOf(false) })
@@ -586,6 +591,74 @@ internal fun BrowserNavToolbar(
                 onClick = onZoomIn,
             )
         }
+
+        // 右侧自动化流程面板开关按钮（自动化进行中锁定为高亮展开态）
+        BrowserAutomationToggleChip(
+            state = automationState,
+            colors = colors,
+            onClick = onToggleAutomationPanel,
+        )
+    }
+}
+
+/**
+ * 导航栏最右侧「流程」切换胶囊按钮（26dp 高）：
+ * - 面板展开或自动化进行中时使用 `accentBg` + `accentBorder` + `accentText` 高亮；
+ * - 左侧状态点反映当前自动化状态（运行中=琥珀色、有记录=翠绿色、无记录=次级灰色）。
+ */
+@Composable
+private fun BrowserAutomationToggleChip(
+    state: BrowserAutomationUiState,
+    colors: MederiColors,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+
+    val isActive = state.isVisible
+    val shape = RoundedCornerShape(6.dp)
+    val bgColor = when {
+        isActive -> colors.accentBg
+        isHovered -> colors.surfaceHover
+        else -> colors.surfaceInput
+    }
+    val borderColor = if (isActive) colors.accentBorder else colors.surfaceCardBorder
+    val textColor = if (isActive) colors.accentText else colors.textSecondary
+    val dotColor = when {
+        state.isAutomating -> colors.statusWorking
+        state.steps.isNotEmpty() -> colors.accentSuccess
+        else -> colors.textMuted
+    }
+
+    Row(
+        modifier = Modifier
+            .height(26.dp)
+            .clip(shape)
+            .background(bgColor)
+            .border(1.dp, borderColor, shape)
+            .hoverable(interactionSource)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(dotColor),
+        )
+        Text(
+            text = stringResource(Res.string.browser_flow_button),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = textColor,
+        )
     }
 }
 

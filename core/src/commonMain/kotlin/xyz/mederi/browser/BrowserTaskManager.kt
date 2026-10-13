@@ -5,6 +5,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import xyz.mederi.browser.drill.DrillExecutor
 import xyz.mederi.debug.DebugLog
@@ -420,7 +421,10 @@ class BrowserTaskManager(
                     browser?.let { put("browser", it) }
                     step?.let { put("step", it.toString()) }
                     thought?.let { put("thought", it) }
-                    results?.let { put("results", it.joinToString(";") { "${it.action}:${it.success}" }) }
+                    results?.let {
+                        put("results", it.joinToString(";") { "${it.action}:${it.success}" })
+                        put("resultsJson", Json.encodeToString(ListSerializer(ActionResult.serializer()), it))
+                    }
                     message?.let { put("message", it) }
                 },
                 timestamp = Instant.now().toString()
