@@ -58,7 +58,7 @@ ORDER BY updated_at DESC;
 
 -- 更新会话 todo 列表（整体替换；唯一真理源 = sessions.todos 列）
 updateSessionTodos:
-UPDATE sessions SET todos = ?, updated_at = ?
+UPDATE sessions SET todos = ?
 WHERE id = ?;
 
 -- 更新会话状态
@@ -68,7 +68,7 @@ WHERE id = ?;
 
 -- 更新会话标题
 updateSessionTitle:
-UPDATE sessions SET title = ?, updated_at = ?
+UPDATE sessions SET title = ?
 WHERE id = ?;
 
 -- 更新会话 Agent 配置（COALESCE 使 NOT NULL 的列可接受 null 参数）
@@ -78,7 +78,7 @@ WHERE id = ?;
 
 -- 全量覆盖写会话 compose state（非 COALESCE：null 写 null，用于输入框设置统一保存）
 updateSessionComposeState:
-UPDATE sessions SET agent_mode = ?, ai_model = ?, reasoning_level = ?, api_key_id = ?, draft_text = ?, updated_at = ?
+UPDATE sessions SET agent_mode = ?, ai_model = ?, reasoning_level = ?, api_key_id = ?, draft_text = ?
 WHERE id = ?;
 
 -- 删除会话

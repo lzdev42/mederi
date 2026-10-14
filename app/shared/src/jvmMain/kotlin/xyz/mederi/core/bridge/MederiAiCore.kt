@@ -149,6 +149,19 @@ class MederiAiCore(
     /** 会话终态错误内存注册表：MESSAGE_ERROR 写入，MESSAGE_COMPLETED/新 turn 清除。跨 re-attach 水合用。 */
     private val lastErrorBySessionId = ConcurrentHashMap<String, LastSessionError>()
 
+    /**
+     * 子代理运行中集合（sessionId -> agentId 集合）：SUBAGENT_STARTED 记入、终态移出。
+     * MESSAGE_COMPLETED 时若集合非空则保持 Working（主 turn 结束但子代理仍在跑）。
+     * 仅 startSessionStatusSync 的 collect 协程内读写（单协程串行，无需并发容器）。
+     */
+    private val runningSubagentIds = mutableMapOf<String, MutableSet<String>>()
+
+    /**
+     * 主 turn 是否活跃（sessionId -> Boolean）：SESSION_UPDATED 置 true，MESSAGE_COMPLETED/ERROR 置 false。
+     * 子代理全部结束后仅在主 turn 不活跃时才回 Idle，避免主 turn 运行中被错误置闲。
+     */
+    private val mainTurnActive = mutableMapOf<String, Boolean>()
+
     /** 会话自动命名服务（首条消息发出后生成标题），随 initialize 挂载事件流；依赖 mederi（lateinit），lazy 推迟到 start() 时构造 */
     private val autotitleService by lazy {
         SessionTitleService(mederi, onRenamed = { refreshProjects() }, preferredApiKeyId = lastApiKeyIdByProvider::get)
@@ -316,10 +329,49 @@ class MederiAiCore(
     private fun startSessionStatusSync() {
         scope.launch {
             mederi.sessions.events().collect { event ->
+                // 子代理运行中跟踪：STARTED 记入集合并置 Working；终态移出集合，
+                // 集合清空且主 turn 不活跃时才回 Idle（主 turn 运行中由 SESSION_UPDATED/MESSAGE_COMPLETED 驱动状态）。
+                when (event.type) {
+                    xyz.mederi.domain.model.EventType.SUBAGENT_STARTED -> {
+                        val agentId = event.payload["agentId"]
+                        if (agentId != null) {
+                            runningSubagentIds.getOrPut(event.sessionId) { mutableSetOf() }.add(agentId)
+                            updateConversationStatus(event.sessionId, ConversationStatus.Working)
+                        }
+                    }
+                    xyz.mederi.domain.model.EventType.SUBAGENT_COMPLETED,
+                    xyz.mederi.domain.model.EventType.SUBAGENT_ERROR,
+                    xyz.mederi.domain.model.EventType.SUBAGENT_STOPPED,
+                    xyz.mederi.domain.model.EventType.SUBAGENT_DISCARDED -> {
+                        val agentId = event.payload["agentId"]
+                        if (agentId != null) {
+                            val set = runningSubagentIds[event.sessionId]
+                            if (set != null) {
+                                set.remove(agentId)
+                                if (set.isEmpty()) {
+                                    runningSubagentIds.remove(event.sessionId)
+                                    if (mainTurnActive[event.sessionId] != true) {
+                                        updateConversationStatus(event.sessionId, ConversationStatus.Idle)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else -> {}
+                }
                 val newStatus = when (event.type) {
-                    xyz.mederi.domain.model.EventType.SESSION_UPDATED -> ConversationStatus.Working
-                    xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED -> ConversationStatus.Idle
+                    xyz.mederi.domain.model.EventType.SESSION_UPDATED -> {
+                        // 新 turn 开始：主 turn 活跃；若仍有子代理在跑，维持 Working
+                        mainTurnActive[event.sessionId] = true
+                        ConversationStatus.Working
+                    }
+                    xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED -> {
+                        // 主 turn 结束：子代理集合非空时保持 Working（子代理仍在跑），否则回 Idle
+                        mainTurnActive[event.sessionId] = false
+                        if (runningSubagentIds[event.sessionId]?.isNotEmpty() == true) null else ConversationStatus.Idle
+                    }
                     xyz.mederi.domain.model.EventType.MESSAGE_ERROR -> {
+                        mainTurnActive[event.sessionId] = false
                         // 优先读 payload["finalStatus"]（TurnExecutor.emit() 注入的权威会话终态），
                         // 兜底 sessionStore 读取（过渡期 payload 缺失时）；取不到时保守回退 Error。
                         val finalStatus = event.payload["finalStatus"]
@@ -730,6 +782,22 @@ class MederiAiCore(
             // 重启/翻历史恢复：当前活跃计划（审批模式待批准 / 自动模式已自动审批），UI 自由决定卡片渲染位置
             pendingPlanApproval = initialPlanApproval(conversationId),
             planApprovals = initialPlanApprovals(conversationId),
+            // 重启/翻历史恢复：当前会话在跑/已结束的子代理（静态元数据补齐；
+            // currentActivity/currentTool/outputText 等实时进度字段留 null，由 SUBAGENT_* 事件流更新）
+            subagents = mederi.sessions.listSubagentsForSession(conversationId).map { bg ->
+                xyz.mederi.core.contract.models.SubagentState(
+                    agentId = bg.agentId,
+                    parentSessionId = bg.parentSessionId,
+                    role = bg.role.name,
+                    modelId = bg.aiModel?.id ?: "",
+                    modelName = bg.aiModel?.name ?: "",
+                    reasoningLevel = bg.reasoningLevel?.name,
+                    task = bg.task,
+                    briefing = bg.briefing,
+                    status = bg.status.name,
+                    startedAt = bg.startedAt
+                )
+            },
             requestCount = backfill.requestCount,
             lastRequestUsage = backfill.lastRequestUsage
         )
@@ -1471,6 +1539,7 @@ class MederiAiCore(
                 modelId = it.modelId,
                 modelName = it.modelName,
                 reasoningLevel = it.reasoningLevel?.name,
+                apiKeyId = it.apiKeyId,
                 isInheriting = it.isInheriting
             )
         }
@@ -1488,7 +1557,8 @@ class MederiAiCore(
             subagentRole,
             xyz.mederi.api.UpdateSubagentConfigRequest(
                 modelId = input.modelId,
-                reasoningLevel = reasoningLevel
+                reasoningLevel = reasoningLevel,
+                apiKeyId = input.apiKeyId
             )
         )
     }

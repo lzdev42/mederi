@@ -4,10 +4,12 @@ import kotlinx.coroutines.runBlocking
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.SubagentModelConfig
 import xyz.mederi.domain.model.SubagentRole
+import xyz.mederi.provider.API_KEY_ROTATION_ID
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.store.InMemorySettingsStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -204,5 +206,53 @@ class SubagentConfigManagerTest {
             fail("expected IllegalArgumentException for -1")
         } catch (_: IllegalArgumentException) {
         }
+    }
+
+    @Test
+    fun `configWithApiKeyIdIsPersisted`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val manager = SubagentConfigManager(settingsStore, FakeProviderManager(emptyMap()))
+
+        manager.set(
+            SubagentRole.EXECUTOR,
+            SubagentModelConfig(modelId = null, reasoningLevel = null, apiKeyId = "key_abc")
+        )
+
+        val config = manager.get(SubagentRole.EXECUTOR)
+        assertEquals("key_abc", config.apiKeyId)
+        // 只配 apiKeyId 不算"完全继承"，必须持久化
+        assertFalse(config.isInheriting)
+    }
+
+    @Test
+    fun `configWithApiKeyRotationSentinel`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val manager = SubagentConfigManager(settingsStore, FakeProviderManager(emptyMap()))
+
+        manager.set(
+            SubagentRole.RESEARCHER,
+            SubagentModelConfig(apiKeyId = API_KEY_ROTATION_ID)
+        )
+
+        val config = manager.get(SubagentRole.RESEARCHER)
+        assertEquals(API_KEY_ROTATION_ID, config.apiKeyId)
+        assertFalse(config.isInheriting)
+    }
+
+    @Test
+    fun `isInheritingIncludesApiKeyId`() = runBlocking {
+        val settingsStore = InMemorySettingsStore()
+        val manager = SubagentConfigManager(settingsStore, FakeProviderManager(emptyMap()))
+        // 直接构造（不经 set）验证 isInheriting 语义纳入 apiKeyId
+        val config = SubagentModelConfig(modelId = null, reasoningLevel = null, apiKeyId = "some-key")
+        assertFalse(config.isInheriting)
+
+        // apiKeyId 为 null 时仍为完全继承
+        val inheriting = SubagentModelConfig(modelId = null, reasoningLevel = null, apiKeyId = null)
+        assertTrue(inheriting.isInheriting)
+
+        // 经 set/get 往返后同样生效
+        manager.set(SubagentRole.EXECUTOR, config)
+        assertFalse(manager.get(SubagentRole.EXECUTOR).isInheriting)
     }
 }

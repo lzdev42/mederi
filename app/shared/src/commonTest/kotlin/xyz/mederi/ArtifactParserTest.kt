@@ -77,4 +77,26 @@ class ArtifactParserTest {
         assertNull(result.artifact)
         assertEquals(input, result.preamble)
     }
+
+    @Test
+    fun testLongMarkdownWithCodeBlockShouldNotBeExtractedAsArtifact() {
+        val input = buildString {
+            appendLine("这是分析前言。")
+            appendLine("## 当前结构的根本问题")
+            appendLine("当前结构是扁平的：")
+            appendLine("```")
+            appendLine("# 计划")
+            appendLine("## 需要确认 / 默认决策")
+            appendLine("```")
+            appendLine("问题在于：")
+            repeat(40) { i ->
+                appendLine("$i. 详细说明第 $i 点的原因与分析...")
+            }
+        }
+        val result = ArtifactParser.parse(input, isStreaming = false)
+        println("LOG_OUTPUT: artifact=${result.artifact?.title}, lineCount=${result.artifact?.lineCount}")
+        println("LOG_OUTPUT: preamble_tail=${result.preamble.takeLast(30).replace("\n", "\\n")}")
+        assertNull(result.artifact, "没有 <artifact> 标签的长文本不应被提取为 Artifact，否则会切断代码块")
+        assertEquals(input, result.preamble)
+    }
 }

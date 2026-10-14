@@ -197,7 +197,9 @@ class PlanTools(
         @LLMDescription("Indices of subtasks this depends on (0-based).")
         val dependsOn: List<Int> = emptyList(),
         @LLMDescription("Whether this can run in parallel with other subtasks.")
-        val parallelizable: Boolean = false
+        val parallelizable: Boolean = false,
+        @LLMDescription("Optional. Subtask-level technical appendix for reviewers/controllers: current logic, code evidence, root cause, fix preview (pseudo-code or real code), business logic. High information density — no full source dumps, only key code lines + core contradiction + key pseudocode. Leave empty for simple subtasks (new files, mechanical changes). This is the argument version (why), distinct from spec (how).")
+        val appendix: String? = null,
     )
 
     @KeepGeneratedSerializer
@@ -274,6 +276,8 @@ class PlanTools(
                 "Omit when no research was done."
         )
         val researchNotes: String = "",
+        @LLMDescription("Optional. Plan-level technical context: cross-subtask shared background, plan-level key decisions/changes/data. Omit when there is no cross-subtask content.")
+        val appendix: String? = null,
         @LLMDescription("Subtask list (the skeleton). Each must include name, brief intent, targetFiles, and verification. Detailed implementation specs are generated after approval via generate_spec.")
         val subtasks: List<SubtaskArg>
     )
@@ -361,6 +365,7 @@ class PlanTools(
                 successCriteria = args.successCriteria,
                 architecture = args.architecture,
                 researchNotes = args.researchNotes,
+                appendix = args.appendix,
                 subtasks = args.subtasks.mapIndexed { i, st ->
                     Subtask(
                         index = i,
@@ -377,7 +382,8 @@ class PlanTools(
                             expectStdoutNotContains = st.verificationExpectStdoutNotContains,
                         ),
                         dependsOn = st.dependsOn,
-                        parallelizable = st.parallelizable
+                        parallelizable = st.parallelizable,
+                        appendix = st.appendix
                     )
                 },
                 status = if (agentMode == AgentMode.AUTONOMOUS) PlanStatus.APPROVED else PlanStatus.PENDING_APPROVAL,
@@ -489,7 +495,8 @@ class PlanTools(
                         expectStdoutNotContains = st.verificationExpectStdoutNotContains,
                     ),
                     dependsOn = st.dependsOn,
-                    parallelizable = st.parallelizable
+                    parallelizable = st.parallelizable,
+                    appendix = st.appendix
                 )
             }
 
@@ -638,11 +645,6 @@ class PlanTools(
             )
         val isGreenfield = args.projectContext.equals("GREENFIELD", ignoreCase = true)
         // 二值不变量校验：只检查"有没有"，不限制"写多少"（篇幅交给提示词约束）
-        if (args.businessLogic.isBlank())
-            errors.add(
-                "Business logic is required: entry point, before/after behavior, " +
-                    "and where the new logic hooks into the call chain."
-            )
         if (args.inScope.isEmpty())
             errors.add("In Scope is required: what will this plan do?")
         if (args.keyDecisions.isEmpty())

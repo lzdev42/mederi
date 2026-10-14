@@ -68,6 +68,8 @@ class SubagentManager(
         /** 主代理派发的命令（task）与补充说明（briefing）——SUBAGENT_STARTED payload。 */
         val task: String = "",
         val briefing: String? = null,
+        /** spawn 时间戳（ISO 8601，java.time.Instant），列表排序键。 */
+        val startedAt: String = "",
         /** 子代理的 plan 归属（EXECUTOR 与有活跃 plan 的 RESEARCHER 都传入）。
          *  用于丢失后恢复：executor 据此查 touchedFiles，researcher 据此恢复报告路径认知。 */
         val planId: String? = null,
@@ -167,6 +169,7 @@ class SubagentManager(
             reasoningLevel = reasoningLevel,
             task = task,
             briefing = briefing,
+            startedAt = java.time.Instant.now().toString(),
             planId = planId,
             executorSubtaskIndex = executorSubtaskIndex,
             planStore = planStore
@@ -414,6 +417,15 @@ class SubagentManager(
      */
     fun runningCountForSession(parentSessionId: String): Int =
         agents.values.count { it.parentSessionId == parentSessionId && it.status == SubagentStatus.RUNNING }
+
+    /**
+     * 列出指定父会话的全部子代理（RUNNING + 未丢弃的终态），按 [BackgroundAgent.startedAt] 排序。
+     *
+     * 数据源 = [agents] 内存表（含 COMPLETED/ERROR/STOPPED 未丢弃的终态记录）。
+     * 不查 [retired] 表——retired 是丢弃/回滚后的兜底恢复记录，字段不全。
+     */
+    fun listForSession(parentSessionId: String): List<BackgroundAgent> =
+        agents.values.filter { it.parentSessionId == parentSessionId }.sortedBy { it.startedAt }
 
     /**
      * 回滚对话历史时，丢弃在回滚目标消息时尚未创立的子 Agent。

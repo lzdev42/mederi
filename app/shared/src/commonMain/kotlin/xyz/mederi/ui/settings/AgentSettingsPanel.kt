@@ -13,7 +13,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
@@ -116,12 +118,12 @@ fun AgentSettingsPanel(isCompact: Boolean = false) {
                     parentModel = parentModel,
                     isCompact = isCompact,
                     colors = colors,
-                    onUpdate = { modelId, reasoningLevel ->
-                        DebugLog.info("AgentSettingsPanel", "Update config for role=${item.role}: modelId=$modelId, reasoningLevel=$reasoningLevel")
+                    onUpdate = { modelId, reasoningLevel, apiKeyId ->
+                        DebugLog.info("AgentSettingsPanel", "Update config for role=${item.role}: modelId=$modelId, reasoningLevel=$reasoningLevel, apiKeyId=$apiKeyId")
                         scope.launch {
                             appState.aiCore.updateSubagentConfig(
                                 item.role,
-                                UpdateSubagentConfigInput(modelId = modelId, reasoningLevel = reasoningLevel)
+                                UpdateSubagentConfigInput(modelId = modelId, reasoningLevel = reasoningLevel, apiKeyId = apiKeyId)
                             )
                             refreshConfigs()
                         }
@@ -144,7 +146,7 @@ private fun AgentConfigCard(
     parentModel: ModelOption?,
     isCompact: Boolean,
     colors: MederiColors,
-    onUpdate: (modelId: String?, reasoningLevel: String?) -> Unit
+    onUpdate: (modelId: String?, reasoningLevel: String?, apiKeyId: String?) -> Unit
 ) {
     val currentSelectedModel = remember(item.modelId, availableModels) {
         item.modelId?.let { id -> availableModels.find { it.id == id } }
@@ -241,7 +243,7 @@ private fun AgentConfigCard(
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .clickable { onUpdate(null, null) }
+                                .clickable { onUpdate(null, null, null) }
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
@@ -295,7 +297,7 @@ private fun AgentConfigCard(
                         buttonLabel = stringResource(Res.string.settings_agents_custom_action),
                         onSelect = { selectedModel ->
                             if (selectedModel != null) {
-                                onUpdate(selectedModel.id, null)
+                                onUpdate(selectedModel.id, null, item.apiKeyId)
                             }
                         }
                     )
@@ -325,13 +327,13 @@ private fun AgentConfigCard(
                                 colors = colors,
                                 onSelect = { selectedModel ->
                                     if (selectedModel == null) {
-                                        onUpdate(null, null)
+                                        onUpdate(null, null, null)
                                     } else {
                                         val newLevels = selectedModel.reasoningLevels
                                         val validReasoning = if (selectedModel.supportsThinking && item.reasoningLevel != null && newLevels.contains(item.reasoningLevel)) {
                                             item.reasoningLevel
                                         } else null
-                                        onUpdate(selectedModel.id, validReasoning)
+                                        onUpdate(selectedModel.id, validReasoning, item.apiKeyId)
                                     }
                                 }
                             )
@@ -351,7 +353,7 @@ private fun AgentConfigCard(
                                     currentReasoningLevel = item.reasoningLevel,
                                     levels = reasoningLevels,
                                     colors = colors,
-                                    onSelect = { lvl -> onUpdate(item.modelId, lvl) }
+                                    onSelect = { lvl -> onUpdate(item.modelId, lvl, item.apiKeyId) }
                                 )
                             }
                         }
@@ -381,13 +383,13 @@ private fun AgentConfigCard(
                                 colors = colors,
                                 onSelect = { selectedModel ->
                                     if (selectedModel == null) {
-                                        onUpdate(null, null)
+                                        onUpdate(null, null, null)
                                     } else {
                                         val newLevels = selectedModel.reasoningLevels
                                         val validReasoning = if (selectedModel.supportsThinking && item.reasoningLevel != null && newLevels.contains(item.reasoningLevel)) {
                                             item.reasoningLevel
                                         } else null
-                                        onUpdate(selectedModel.id, validReasoning)
+                                        onUpdate(selectedModel.id, validReasoning, item.apiKeyId)
                                     }
                                 }
                             )
@@ -408,8 +410,145 @@ private fun AgentConfigCard(
                                     currentReasoningLevel = item.reasoningLevel,
                                     levels = reasoningLevels,
                                     colors = colors,
-                                    onSelect = { lvl -> onUpdate(item.modelId, lvl) }
+                                    onSelect = { lvl -> onUpdate(item.modelId, lvl, item.apiKeyId) }
                                 )
+                            }
+                        }
+                    }
+                }
+
+                // API Key 选择器行：仅当生效模型所在供应商配置了 key 时显示
+                val effectiveProvider = effectiveModel?.let { m -> providers.find { it.id == m.provider } }
+                val keys = effectiveProvider?.apiKeys.orEmpty()
+                if (effectiveProvider != null && keys.isNotEmpty()) {
+                    val currentApiKeyId = item.apiKeyId
+                    var apiKeyExpanded by remember { mutableStateOf(false) }
+
+                    // "继承父会话"是设置项名称；运行时由 ApiKeyResolver 处理：
+                    // 同供应商→继承父的 key ID；不同供应商→父的 key 归属不通过，回落默认 key
+                    val apiKeyLabel = currentApiKeyId?.let { id ->
+                        keys.find { it.id == id }?.name
+                    } ?: stringResource(Res.string.settings_agents_apikey_inherit)
+
+                    SettingsRow(
+                        title = stringResource(Res.string.settings_agents_apikey_label),
+                        icon = FeatherIcons.Key,
+                        iconTint = colors.accentPrimary,
+                        colors = colors
+                    ) {
+                        Box {
+                            ChipSelectorPill(
+                                icon = FeatherIcons.Key,
+                                label = apiKeyLabel,
+                                onClick = { apiKeyExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = apiKeyExpanded,
+                                onDismissRequest = { apiKeyExpanded = false },
+                                containerColor = colors.surfaceCard,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .widthIn(min = 220.dp, max = 280.dp)
+                                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+                            ) {
+                                // 继承父会话（apiKeyId = null）
+                                val isKeyInheritSelected = currentApiKeyId == null
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = stringResource(Res.string.settings_agents_apikey_inherit),
+                                                fontSize = 12.sp,
+                                                fontWeight = if (isKeyInheritSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isKeyInheritSelected) colors.accentPrimary else colors.textPrimary
+                                            )
+                                            if (isKeyInheritSelected) {
+                                                Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
+                                            }
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    onClick = {
+                                        onUpdate(item.modelId, item.reasoningLevel, null)
+                                        apiKeyExpanded = false
+                                    }
+                                )
+
+                                if (keys.isNotEmpty()) {
+                                    HorizontalDivider(
+                                        color = colors.divider.copy(alpha = 0.6f),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+
+                                // 各个具体 key
+                                keys.forEach { key ->
+                                    val isSelected = currentApiKeyId == key.id
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(
+                                                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = key.name,
+                                                            fontSize = 12.sp,
+                                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                                            color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        if (key.isDefault) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .clip(RoundedCornerShape(4.dp))
+                                                                    .background(colors.accentSecondary.copy(alpha = 0.15f))
+                                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                            ) {
+                                                                Text(
+                                                                    stringResource(Res.string.input_default_tag),
+                                                                    fontSize = 9.sp,
+                                                                    color = colors.accentSecondary,
+                                                                    fontWeight = FontWeight.Medium,
+                                                                    maxLines = 1
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                    Text(
+                                                        text = key.maskedValue,
+                                                        fontSize = 10.sp,
+                                                        fontFamily = FontFamily.Monospace,
+                                                        color = colors.textMuted,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                                if (isSelected) {
+                                                    Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
+                                                }
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        onClick = {
+                                            onUpdate(item.modelId, item.reasoningLevel, key.id)
+                                            apiKeyExpanded = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }

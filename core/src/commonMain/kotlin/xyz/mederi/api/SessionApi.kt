@@ -85,6 +85,9 @@ interface SessionApi {
     /** 读取子代理任务汇报。找不到或未生成时返回 null。 */
     suspend fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData?
 
+    /** 列出指定会话的全部子代理（RUNNING + 未丢弃终态，按 startedAt 排序）。 */
+    suspend fun listSubagentsForSession(sessionId: String): List<xyz.mederi.tools.subagent.SubagentManager.BackgroundAgent>
+
     /** 停止指定的子代理。 */
     suspend fun stopSubagent(agentId: String)
 

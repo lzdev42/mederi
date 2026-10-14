@@ -116,11 +116,11 @@ class MockAiCore(
 
     override suspend fun renameConversation(conversationId: String, title: String): Result<Unit> = runCatching {
         conversations[conversationId]?.let { sf ->
-            val conv = sf.value.conversation.copy(title = title, updatedAt = currentTimeMillis())
+            val conv = sf.value.conversation.copy(title = title)
             sf.value = sf.value.copy(conversation = conv)
         }
         _projects.value = _projects.value.map { p ->
-            p.copy(conversations = p.conversations.map { if (it.id == conversationId) it.copy(title = title, updatedAt = currentTimeMillis()) else it })
+            p.copy(conversations = p.conversations.map { if (it.id == conversationId) it.copy(title = title) else it })
         }
     }
 
@@ -537,7 +537,8 @@ class MockAiCore(
             modelId = input.modelId,
             modelName = modelName,
             reasoningLevel = input.reasoningLevel,
-            isInheriting = input.modelId == null && input.reasoningLevel == null
+            apiKeyId = input.apiKeyId,
+            isInheriting = input.modelId == null && input.reasoningLevel == null && input.apiKeyId == null
         )
     }
 

@@ -45,12 +45,12 @@ class ProviderManagerImpl(
     // ==================== Provider ====================
 
     override suspend fun list(): List<Provider> =
-        providerStore.list().map { it.copy(apiKeys = apiKeyStore.listByProvider(it.id)) }
+        providerStore.list().map { it.copy(apiKeys = withRotationKey(apiKeyStore.listByProvider(it.id))) }
 
     override suspend fun listWithoutKeys(): List<Provider> = providerStore.list()
 
     override suspend fun get(id: String): Provider? =
-        providerStore.get(id)?.copy(apiKeys = apiKeyStore.listByProvider(id))
+        providerStore.get(id)?.copy(apiKeys = withRotationKey(apiKeyStore.listByProvider(id)))
 
     override suspend fun require(id: String): Provider =
         get(id) ?: throw NoSuchElementException("Provider not found: $id")
@@ -121,7 +121,7 @@ class ProviderManagerImpl(
     // ==================== API Key ====================
 
     override suspend fun listKeys(providerId: String): List<ProviderApiKey> =
-        apiKeyStore.listByProvider(providerId)
+        withRotationKey(apiKeyStore.listByProvider(providerId))
 
     override suspend fun addKey(
         providerId: String,
@@ -134,18 +134,22 @@ class ProviderManagerImpl(
     }
 
     override suspend fun deleteKey(providerId: String, keyId: String) {
+        if (keyId == API_KEY_ROTATION_ID) return
         apiKeyStore.delete(providerId, keyId)
     }
 
     override suspend fun setDefaultKey(providerId: String, keyId: String) {
+        if (keyId == API_KEY_ROTATION_ID) return
         apiKeyStore.setDefault(providerId, keyId)
     }
 
     override suspend fun getDefaultKeyValue(providerId: String): String? =
         apiKeyStore.getDefaultValue(providerId)
 
-    override suspend fun getKeyValue(providerId: String, keyId: String): String? =
-        apiKeyStore.getValue(providerId, keyId)
+    override suspend fun getKeyValue(providerId: String, keyId: String): String? {
+        if (keyId == API_KEY_ROTATION_ID) return API_KEY_ROTATION_ID
+        return apiKeyStore.getValue(providerId, keyId)
+    }
 
     // ==================== Model ====================
 
@@ -360,4 +364,17 @@ class ProviderManagerImpl(
     private suspend fun saveProviderInternal(provider: Provider) {
         providerStore.save(provider.copy(apiKeys = emptyList()))
     }
+
+    /**
+     * 当供应商有 >1 个真实 key 时，追加虚拟"轮询"key 条目。
+     * 此 key 由代码添加，不可从供应商设置编辑/删除。
+     * id = [API_KEY_ROTATION_ID]，value 也是 [API_KEY_ROTATION_ID]（TurnExecutor 检测到此值走重试换 key）。
+     */
+    private fun withRotationKey(keys: List<ProviderApiKey>): List<ProviderApiKey> =
+        if (keys.size > 1) keys + ProviderApiKey(
+            id = API_KEY_ROTATION_ID,
+            name = "轮询",
+            maskedValue = "***",
+            isDefault = false
+        ) else keys
 }

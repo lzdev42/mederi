@@ -240,6 +240,9 @@ class SessionManagerImpl(
     override fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? =
         turnExecutor.getSubagentReport(agentId)
 
+    override fun listSubagentsForSession(sessionId: String): List<xyz.mederi.tools.subagent.SubagentManager.BackgroundAgent> =
+        turnExecutor.listSubagentsForSession(sessionId)
+
     override fun stopSubagent(agentId: String, reason: String): String =
         turnExecutor.stopSubagent(agentId, reason)
 

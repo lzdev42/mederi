@@ -129,6 +129,11 @@ class ServerAiCore(
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
     override val projects: StateFlow<List<Project>> = _projects.asStateFlow()
 
+    // 子代理运行中跟踪（与 MederiAiCore 镜像）：sessionId → 运行中子代理 agentId 集合；
+    // mainTurnActive = 主 turn 是否在跑（SESSION_UPDATED 置 true，MESSAGE_COMPLETED/ERROR 置 false）
+    private val runningSubagentIds = mutableMapOf<String, MutableSet<String>>()
+    private val mainTurnActive = mutableMapOf<String, Boolean>()
+
     private val _providers = MutableStateFlow<List<ProviderConfig>>(emptyList())
     override val providers: StateFlow<List<ProviderConfig>> = _providers.asStateFlow()
 
@@ -279,10 +284,49 @@ class ServerAiCore(
     private fun startSessionStatusSync() {
         scope.launch {
             events().collect { event ->
+                // 子代理运行中跟踪：STARTED 记入集合并置 Working；终态移出集合，
+                // 集合清空且主 turn 不活跃时才回 Idle（主 turn 运行中由 SESSION_UPDATED/MESSAGE_COMPLETED 驱动状态）。
+                when (event.type) {
+                    CoreEventType.SUBAGENT_STARTED -> {
+                        val agentId = event.payload["agentId"]
+                        if (agentId != null) {
+                            runningSubagentIds.getOrPut(event.sessionId) { mutableSetOf() }.add(agentId)
+                            updateConversationStatus(event.sessionId, ConversationStatus.Working)
+                        }
+                    }
+                    CoreEventType.SUBAGENT_COMPLETED,
+                    CoreEventType.SUBAGENT_ERROR,
+                    CoreEventType.SUBAGENT_STOPPED,
+                    CoreEventType.SUBAGENT_DISCARDED -> {
+                        val agentId = event.payload["agentId"]
+                        if (agentId != null) {
+                            val set = runningSubagentIds[event.sessionId]
+                            if (set != null) {
+                                set.remove(agentId)
+                                if (set.isEmpty()) {
+                                    runningSubagentIds.remove(event.sessionId)
+                                    if (mainTurnActive[event.sessionId] != true) {
+                                        updateConversationStatus(event.sessionId, ConversationStatus.Idle)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else -> {}
+                }
                 val newStatus = when (event.type) {
-                    CoreEventType.SESSION_UPDATED -> ConversationStatus.Working
-                    CoreEventType.MESSAGE_COMPLETED -> ConversationStatus.Idle
+                    CoreEventType.SESSION_UPDATED -> {
+                        // 新 turn 开始：主 turn 活跃；若仍有子代理在跑，维持 Working
+                        mainTurnActive[event.sessionId] = true
+                        ConversationStatus.Working
+                    }
+                    CoreEventType.MESSAGE_COMPLETED -> {
+                        // 主 turn 结束：子代理集合非空时保持 Working（子代理仍在跑），否则回 Idle
+                        mainTurnActive[event.sessionId] = false
+                        if (runningSubagentIds[event.sessionId]?.isNotEmpty() == true) null else ConversationStatus.Idle
+                    }
                     CoreEventType.MESSAGE_ERROR -> {
+                        mainTurnActive[event.sessionId] = false
                         // 读 payload["finalStatus"]（TurnExecutor.emit() 注入的权威会话终态），
                         // ERROR→红点，IDLE（transient 可恢复）→蓝点；payload 缺失时保守回退 Error。
                         val fs = event.payload["finalStatus"]

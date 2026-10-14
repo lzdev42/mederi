@@ -30,7 +30,7 @@ class InMemorySessionStore : SessionStore {
             s.copy(
                 status = status ?: s.status,
                 title = title ?: s.title,
-                updatedAt = java.time.Instant.now().toString()
+                updatedAt = if (status != null) java.time.Instant.now().toString() else s.updatedAt
             )
         } ?: return
     }
@@ -67,8 +67,7 @@ class InMemorySessionStore : SessionStore {
                 aiModel = aiModel,
                 reasoningLevel = reasoningLevel,
                 apiKeyId = apiKeyId,
-                draftText = draftText,
-                updatedAt = java.time.Instant.now().toString()
+                draftText = draftText
             )
         } ?: return
     }
@@ -76,8 +75,7 @@ class InMemorySessionStore : SessionStore {
     override suspend fun updateTodos(id: String, todos: List<TodoItem>) {
         sessions[id] = sessions[id]?.let { s ->
             s.copy(
-                todos = todos,
-                updatedAt = java.time.Instant.now().toString()
+                todos = todos
             )
         } ?: return
     }

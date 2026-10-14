@@ -369,10 +369,14 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 
 ### 删库规矩（硬性义务）
 
-**产品未发布，开发期允许破坏性数据结构变更**——改 schema 可以直接删 `data/data.db` 重建，
-**但是删除任何用户数据文件（data.db、config.db、旧版 JSON）之前，必须先通知用户、经用户批准才能执行，
-不可以问都不问擅自主张。** 启动检测到旧版文件时走 `ConfigMigrationRequester` 审批流程；
-AI 会话中做此类操作同样适用此规矩。
+**data.db 不再允许删除重建**——数据库已有大量真实任务数据，必须用版本化迁移保留：
+
+- **迁移机制**：`Mederi.kt` 的 `migrateDataDb()`（`core/src/commonMain/kotlin/xyz/mederi/Mederi.kt`）用 `PRAGMA user_version` 跟踪 schema 版本，低于当前版本则按顺序跑迁移脚本（每条幂等 ALTER，列已存在时 `runCatching` 吞掉），跑完写新版本号
+- **当前版本号** = `DATA_DB_VERSION`（`Mederi.kt` 中的常量）
+- **新增 schema 变更流程**：① 改 `.sq`（全新库用）② 在 `migrateDataDb` 的 migrations map 加一条 ALTER 脚本 ③ 递增 `DATA_DB_VERSION`
+- **开发期特征**：每次新增迁移脚本时，可以将前一个迁移脚本删掉（因为 dev 自己的数据库已经跑过那些迁移了），只保留最新一条迁移脚本。这不是删数据库，是删迁移代码——迁移是单向的，跑过的不会再跑
+- config.db 仍用 `Schema.create`（IF NOT EXISTS），无迁移机制；config.db 无用户任务数据，必要时可删重建（仍需通知用户）
+- **删除任何用户数据文件（data.db、config.db、旧版 JSON）之前，仍必须先通知用户、经用户批准才能执行，不可以问都不问擅自主张。** AI 会话中做此类操作同样适用此规矩。
 
 ## 6. AiCore 契约（app/shared ⇆ server）
 

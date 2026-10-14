@@ -98,10 +98,10 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         when {
             status != null && title != null -> {
                 queries.updateSessionStatus(status.name, now, id)
-                queries.updateSessionTitle(title, now, id)
+                queries.updateSessionTitle(title, id)
             }
             status != null -> queries.updateSessionStatus(status.name, now, id)
-            title != null -> queries.updateSessionTitle(title, now, id)
+            title != null -> queries.updateSessionTitle(title, id)
         }
     }
 
@@ -136,13 +136,12 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             reasoningLevel?.name,
             apiKeyId,
             draftText,
-            Instant.now().toString(),
             id
         )
     }
 
     override suspend fun updateTodos(id: String, todos: List<TodoItem>): Unit = withContext(Dispatchers.IO) {
-        queries.updateSessionTodos(todos.encodeTodos(), Instant.now().toString(), id)
+        queries.updateSessionTodos(todos.encodeTodos(), id)
     }
 
     override suspend fun delete(id: String): Unit = withContext(Dispatchers.IO) {

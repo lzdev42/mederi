@@ -465,6 +465,8 @@
     <string name="settings_stepper_decrease">Decrease</string>
     <string name="settings_stepper_increase">Increase</string>
     <string name="settings_agents_custom_action">Customize model</string>
+    <string name="settings_agents_apikey_label">API Key</string>
+    <string name="settings_agents_apikey_inherit">Inherit session</string>
     <string name="sidebar_automation">Automation</string>
     <string name="sidebar_cancel">Cancel</string>
     <string name="sidebar_close">Close sidebar</string>

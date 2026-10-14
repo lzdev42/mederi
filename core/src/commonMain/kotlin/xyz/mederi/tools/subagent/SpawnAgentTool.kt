@@ -107,6 +107,10 @@ class SpawnAgentTool(
             fallbackReasoning = parentReasoning
         ) ?: (parentModel to parentReasoning)
 
+        // apiKeyId：子代理独立配置指定了就覆盖父会话的 apiKeyId，否则继承父会话的
+        val subagentConfig = subagentConfigManager?.get(SubagentRole.EXECUTOR)
+        val effectiveApiKeyId = subagentConfig?.apiKeyId ?: apiKeyId
+
         // 无 plan 路径（ad-hoc 执行）：task+briefing 直接派 executor，跳过 plan/spec/IN_PROGRESS。
         // 用于小改动、多文件编辑等自包含任务——不需要 plan 流程，只省上下文。
         if (args.planId.isBlank()) {
@@ -121,7 +125,7 @@ class SpawnAgentTool(
                     reasoningLevel = effectiveReasoningLevel,
                     projectId = projectId,
                     parentSessionId = parentSessionId,
-                    apiKeyId = apiKeyId,
+                    apiKeyId = effectiveApiKeyId,
                     planId = null,
                     executorSubtaskIndex = null,
                     planStore = null
@@ -203,7 +207,7 @@ class SpawnAgentTool(
                 reasoningLevel = effectiveReasoningLevel,
                 projectId = projectId,
                 parentSessionId = parentSessionId,
-                apiKeyId = apiKeyId,
+                apiKeyId = effectiveApiKeyId,
                 planId = args.planId,
                 executorSubtaskIndex = args.subtaskIndex,
                 planStore = planStore
@@ -274,6 +278,9 @@ class SpawnResearcherTool(
             fallbackModel = parentModel,
             fallbackReasoning = parentReasoning
         ) ?: (parentModel to parentReasoning)
+        // apiKeyId：子代理独立配置指定了就覆盖父会话的 apiKeyId，否则继承父会话的
+        val subagentConfig = subagentConfigManager?.get(SubagentRole.RESEARCHER)
+        val effectiveApiKeyId = subagentConfig?.apiKeyId ?: apiKeyId
         // 查活跃 plan：有 plan 时把 planId 传下去，researcher 完成时把报告落盘到 {planId}/research.md；
         // 无 plan（分诊阶段调研，plan 尚未建）时 planId=null，保持原有行为（全文回灌父上下文）。
         val activePlanId = planStore?.loadBySession(parentSessionId)?.id
@@ -288,7 +295,7 @@ class SpawnResearcherTool(
                 reasoningLevel = effectiveReasoningLevel,
                 projectId = projectId,
                 parentSessionId = parentSessionId,
-                apiKeyId = apiKeyId,
+                apiKeyId = effectiveApiKeyId,
                 planId = activePlanId,
                 planStore = planStore
             )

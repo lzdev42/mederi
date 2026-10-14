@@ -395,13 +395,6 @@ class PlanStore(private val projectDirectories: List<String>) {
         sb.appendLine(plan.overview)
         sb.appendLine()
 
-        // 业务逻辑段（CODE 模式必填，WORK 模式留空不渲染）
-        if (plan.businessLogic.isNotBlank()) {
-            sb.appendLine("## 业务逻辑（Business Logic）")
-            sb.appendLine(plan.businessLogic)
-            sb.appendLine()
-        }
-
         if (plan.inScope.isNotEmpty()) {
             sb.appendLine("## 范围（Scope）")
             sb.appendLine("### 本次做（In Scope）")
@@ -414,35 +407,6 @@ class PlanStore(private val projectDirectories: List<String>) {
             }
         }
 
-        if (plan.keyDecisions.isNotEmpty()) {
-            sb.appendLine("## 关键决策（Key Decisions）")
-            plan.keyDecisions.forEach { d ->
-                sb.appendLine("- **${d.question}** -> ${d.choice}")
-                sb.appendLine("  - 理由：${d.rationale}")
-                sb.appendLine("  - 备选：${d.alternatives}")
-            }
-            sb.appendLine()
-        }
-
-        if (plan.changes.isNotEmpty()) {
-            sb.appendLine("## 改动清单（Changes）")
-            plan.changes.groupBy { it.module }.forEach { (module, changes) ->
-                sb.appendLine("### $module")
-                changes.forEach { c ->
-                    sb.appendLine("- **[${c.action}]** `${c.filePath}`：${c.description}")
-                    sb.appendLine("  - 理由：${c.rationale}")
-                }
-            }
-            sb.appendLine()
-        }
-
-        // 数据与参数段（可选，不涉及数据/参数的任务整段省略）
-        if (plan.dataAndParams.isNotEmpty()) {
-            sb.appendLine("## 数据与参数（Data & Parameters）")
-            plan.dataAndParams.forEach { sb.appendLine("- $it") }
-            sb.appendLine()
-        }
-
         if (plan.risks.isNotEmpty()) {
             sb.appendLine("## 风险（Risks）")
             plan.risks.forEach { sb.appendLine("- $it") }
@@ -452,14 +416,6 @@ class PlanStore(private val projectDirectories: List<String>) {
         if (plan.successCriteria.isNotEmpty()) {
             sb.appendLine("## 成功标准（Success Criteria）")
             plan.successCriteria.forEach { sb.appendLine("- $it") }
-            sb.appendLine()
-        }
-
-        plan.architecture?.let {
-            sb.appendLine("## 架构（Architecture）")
-            sb.appendLine("```mermaid")
-            sb.appendLine(it)
-            sb.appendLine("```")
             sb.appendLine()
         }
 
@@ -479,6 +435,12 @@ class PlanStore(private val projectDirectories: List<String>) {
             sb.appendLine("#### 简述（Brief）")
             sb.appendLine(st.planDetail)
             sb.appendLine()
+            // 子任务级技术附录：论证版（为什么），spec 是执行清单（怎么做），层次递进；空则不渲染
+            if (!st.appendix.isNullOrBlank()) {
+                sb.appendLine("#### 技术附录（Technical Appendix）")
+                sb.appendLine(st.appendix)
+                sb.appendLine()
+            }
             if (!st.spec.isNullOrBlank()) {
                 sb.appendLine("#### 执行清单（Spec）")
                 sb.appendLine(st.spec)
@@ -530,6 +492,56 @@ class PlanStore(private val projectDirectories: List<String>) {
                     sb.appendLine("```")
                 }
             }
+            sb.appendLine()
+        }
+
+        sb.appendLine("---")
+        sb.appendLine()
+
+        // ===== Part 3: 计划级附录区域（给控制者看的技术深水区，顶部概要的可选项）=====
+        // 计划级技术附录（自由文本，跨子任务共享技术上下文；空则不渲染）
+        if (!plan.appendix.isNullOrBlank()) {
+            sb.appendLine("## 计划级附录（Plan Appendix）")
+            sb.appendLine(plan.appendix)
+            sb.appendLine()
+        }
+        // Business Logic（降级：从顶部移到底部，非空才渲染）
+        if (plan.businessLogic.isNotBlank()) {
+            sb.appendLine("## 业务逻辑（Business Logic）")
+            sb.appendLine(plan.businessLogic)
+            sb.appendLine()
+        }
+        if (plan.keyDecisions.isNotEmpty()) {
+            sb.appendLine("## 关键决策（Key Decisions）")
+            plan.keyDecisions.forEach { d ->
+                sb.appendLine("- **${d.question}** -> ${d.choice}")
+                sb.appendLine("  - 理由：${d.rationale}")
+                sb.appendLine("  - 备选：${d.alternatives}")
+            }
+            sb.appendLine()
+        }
+        if (plan.changes.isNotEmpty()) {
+            sb.appendLine("## 改动清单（Changes）")
+            plan.changes.groupBy { it.module }.forEach { (module, changes) ->
+                sb.appendLine("### $module")
+                changes.forEach { c ->
+                    sb.appendLine("- **[${c.action}]** `${c.filePath}`：${c.description}")
+                    sb.appendLine("  - 理由：${c.rationale}")
+                }
+            }
+            sb.appendLine()
+        }
+        // 数据与参数段（可选，不涉及数据/参数的任务整段省略）
+        if (plan.dataAndParams.isNotEmpty()) {
+            sb.appendLine("## 数据与参数（Data & Parameters）")
+            plan.dataAndParams.forEach { sb.appendLine("- $it") }
+            sb.appendLine()
+        }
+        plan.architecture?.let {
+            sb.appendLine("## 架构（Architecture）")
+            sb.appendLine("```mermaid")
+            sb.appendLine(it)
+            sb.appendLine("```")
             sb.appendLine()
         }
         return sb.toString().trimEnd()

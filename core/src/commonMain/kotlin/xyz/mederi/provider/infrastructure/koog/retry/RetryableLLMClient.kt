@@ -53,20 +53,35 @@ class RetryableLLMClient(
     private val maxDelayMs: Long = 10_000,
     private val statusBus: MutableSharedFlow<MederiEvent>? = null,
     private val sessionIdProvider: () -> String? = { null },
-    private val random: Random = Random.Default
+    private val random: Random = Random.Default,
+    /**
+     * 重试时换 key 的 client 提供器。首次请求用 [delegate]，重试时（attempt > 0）调此函数取新 client。
+     * null = 不换 key，所有重试都用原始 delegate（原有行为）。
+     * 用于 API Key 轮询：重试换 key 才最准确——首次请求不换，失败重试时才换下一个 key。
+     */
+    private val retryDelegateProvider: (() -> LLMClient?)? = null
 ) : LLMClient() {
 
     /** 暴露内部 delegate——TurnExecutor 读取 [MederiOpenAILLMClient.lastStreamDiagnostics] 用 */
     fun delegate(): LLMClient = delegate
 
-    override val clientName: String = "Retryable(${delegate.clientName})"
+    override val clientName: String =
+        if (retryDelegateProvider != null) "Retryable+Rotate(${delegate.clientName})"
+        else "Retryable(${delegate.clientName})"
 
     override fun llmProvider() = delegate.llmProvider()
 
     override fun close() = delegate.close()
 
+    /**
+     * 按 attempt 号取 client：首次（attempt=0）用原始 delegate，重试时用 [retryDelegateProvider] 取下一个。
+     */
+    private fun clientForAttempt(attempt: Int): LLMClient =
+        if (attempt == 0) delegate
+        else retryDelegateProvider?.invoke() ?: delegate
+
     override suspend fun execute(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant =
-        retrying("execute") { delegate.execute(prompt, model, tools) }
+        retrying("execute") { attempt -> clientForAttempt(attempt).execute(prompt, model, tools) }
 
     override fun executeStreaming(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Flow<StreamFrame> =
         flow {
@@ -74,7 +89,7 @@ class RetryableLLMClient(
             for (attempt in 0..maxRetries) {
                 var emitted = false
                 try {
-                    delegate.executeStreaming(prompt, model, tools).collect { frame ->
+                    clientForAttempt(attempt).executeStreaming(prompt, model, tools).collect { frame ->
                         emitted = true
                         emit(frame)
                     }
@@ -109,7 +124,7 @@ class RetryableLLMClient(
         }
 
     override suspend fun executeMultipleChoices(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): LLMChoice =
-        retrying("executeMultipleChoices") { delegate.executeMultipleChoices(prompt, model, tools) }
+        retrying("executeMultipleChoices") { attempt -> clientForAttempt(attempt).executeMultipleChoices(prompt, model, tools) }
 
     override suspend fun moderate(prompt: Prompt, model: LLModel) = delegate.moderate(prompt, model)
 
@@ -123,11 +138,11 @@ class RetryableLLMClient(
     // 重试内核（非流式路径）
     // ------------------------------------------------------------------
 
-    private suspend fun <T> retrying(op: String, block: suspend () -> T): T {
+    private suspend fun <T> retrying(op: String, block: suspend (attempt: Int) -> T): T {
         var lastError: Throwable? = null
         for (attempt in 0..maxRetries) {
             try {
-                return block()
+                return block(attempt)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {

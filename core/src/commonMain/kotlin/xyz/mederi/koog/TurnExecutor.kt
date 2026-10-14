@@ -59,6 +59,7 @@ import xyz.mederi.koog.manualCompactionSkipReason
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.prompt.EnvironmentInfoProvider
 import xyz.mederi.prompt.SystemPrompts
+import xyz.mederi.provider.API_KEY_ROTATION_ID
 import xyz.mederi.provider.ApiKeyResolver
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
@@ -472,13 +473,13 @@ class TurnExecutor(
         DebugLog.data("TurnExec", "model (from provider)", "${model.id} (${model.name}), providerModelId=${model.providerModelId}")
 
         // 回写 Session 的 Agent 配置（记住用户最后一次选择）：
-        // 发送时随 model/agent/reasoning 一并回写会话级 apiKeyId（null = 该供应商默认 key）。
+        // apiKeyId 是 UI 层数据，由 updateComposeState 唯一写入；TurnExecutor 不回写，
+        // 避免内部消息轮（计划批准/事件唤醒）用 currentKeyId() 取到的残留值覆盖用户选择。
         sessionStore.updateAgentConfig(
             sessionId,
             agentMode = agentMode,
             aiModel = effectiveModel,
             reasoningLevel = effectiveReasoningLevel,
-            apiKeyId = activeApiKeyId
         )
 
         val inputText = request.parts.filterIsInstance<MessagePart.Text>()
@@ -655,6 +656,9 @@ class TurnExecutor(
 
     fun getSubagentReport(agentId: String): xyz.mederi.tools.subagent.SubagentManager.SubagentReportData? =
         subagentManager.getReport(agentId)
+
+    fun listSubagentsForSession(sessionId: String): List<xyz.mederi.tools.subagent.SubagentManager.BackgroundAgent> =
+        subagentManager.listForSession(sessionId)
 
     fun stopSubagent(agentId: String, reason: String = SubagentManager.REASON_STOPPED_BY_USER): String =
         subagentManager.stop(agentId, reason = reason)
@@ -858,9 +862,33 @@ class TurnExecutor(
         systemPrompt: String,
         apiKeyId: String? = null
     ) {
-        val apiKey = apiKeyResolver.resolve(provider.id, apiKeyId).value
+        val resolvedKey = apiKeyResolver.resolve(provider.id, apiKeyId)
+        val apiKey = resolvedKey.value
 
-        val client = retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
+        // 轮询：resolved value 为 __rotate__ 时走重试换 key（与 runTurn 共用同一计数器）
+        val client: ai.koog.prompt.executor.clients.LLMClient =
+            if (apiKey == API_KEY_ROTATION_ID) {
+                val keys = providerManager.listKeys(provider.id)
+                    .filter { it.id != API_KEY_ROTATION_ID }
+                    .mapNotNull { k -> providerManager.getKeyValue(provider.id, k.id) }
+                    .filter { it.isNotBlank() }
+                if (keys.isNotEmpty()) {
+                    val counter = rotationCounters.computeIfAbsent(session.id) {
+                        java.util.concurrent.atomic.AtomicInteger()
+                    }
+                    retryWrapped(
+                        KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)]),
+                        session.id,
+                        retryDelegateProvider = {
+                            KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)])
+                        }
+                    )
+                } else {
+                    retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
+                }
+            } else {
+                retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
+            }
         val executor = PromptExecutorBuilder()
             .addClient(client)
             .build()
@@ -988,7 +1016,33 @@ class TurnExecutor(
         try {
             // 统一经 ApiKeyResolver 解析（显式归属命中→写记忆 / 记忆 / 默认 key 三级兜底；
             // 全无则抛 IllegalStateException，不静默伪装成功）
-            val apiKey = apiKeyResolver.resolve(provider.id, apiKeyId).value
+            val resolvedKey = apiKeyResolver.resolve(provider.id, apiKeyId)
+            val apiKey = resolvedKey.value
+
+            // 轮询：resolved value 为 __rotate__ 时走重试换 key（首次用第一个，重试轮换下一个）
+            val llmClient: ai.koog.prompt.executor.clients.LLMClient =
+                if (apiKey == API_KEY_ROTATION_ID) {
+                    val keys = providerManager.listKeys(provider.id)
+                        .filter { it.id != API_KEY_ROTATION_ID }
+                        .mapNotNull { k -> providerManager.getKeyValue(provider.id, k.id) }
+                        .filter { it.isNotBlank() }
+                    if (keys.isNotEmpty()) {
+                        val counter = rotationCounters.computeIfAbsent(sessionId) {
+                            java.util.concurrent.atomic.AtomicInteger()
+                        }
+                        retryWrapped(
+                            KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)]),
+                            sessionId,
+                            retryDelegateProvider = {
+                                KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)])
+                            }
+                        )
+                    } else {
+                        retryWrapped(KoogClientFactory.create(provider, apiKey), sessionId)
+                    }
+                } else {
+                    retryWrapped(KoogClientFactory.create(provider, apiKey), sessionId)
+                }
 
             DebugLog.section("TurnExec", "TurnExecutor.runTurn")
             DebugLog.data("TurnExec", "apiKey", "${apiKey.take(4)}****${apiKey.takeLast(4)}")
@@ -1050,7 +1104,7 @@ class TurnExecutor(
             val agent = buildTurnAgent(
                 sessionId = sessionId,
                 provider = provider,
-                apiKey = apiKey,
+                llmClient = llmClient,
                 model = model,
                 reasoningLevel = reasoningLevel,
                 systemPrompt = systemPrompt,
@@ -1388,11 +1442,14 @@ class TurnExecutor(
     }
 
     /**
-     * 限流/临时故障重试包装：LLM 请求层面的自动重试（默认 10 次，随机 1~10s 退避），
-     * 重试进度经 STATUS 事件推给 UI（状态栏"重试中"）。core 业务流程零感知——
-     * 对 agent 来说只是一次变慢的请求；maxRetries=0 时直通原 client，零开销。
+     * 限流/临时故障重试包装。maxRetries=0 时直通原 client。
+     * [retryDelegateProvider] 非 null 时，重试换 key（用于 API Key 轮询）。
      */
-    private fun retryWrapped(client: ai.koog.prompt.executor.clients.LLMClient, sessionId: String): ai.koog.prompt.executor.clients.LLMClient {
+    private fun retryWrapped(
+        client: ai.koog.prompt.executor.clients.LLMClient,
+        sessionId: String,
+        retryDelegateProvider: (() -> ai.koog.prompt.executor.clients.LLMClient?)? = null
+    ): ai.koog.prompt.executor.clients.LLMClient {
         if (LlmRetryConfig.maxRetries <= 0) return client
         return RetryableLLMClient(
             delegate = client,
@@ -1400,15 +1457,19 @@ class TurnExecutor(
             minDelayMs = LlmRetryConfig.minDelayMs,
             maxDelayMs = LlmRetryConfig.maxDelayMs,
             statusBus = eventBus,
-            sessionIdProvider = { sessionId }
+            sessionIdProvider = { sessionId },
+            retryDelegateProvider = retryDelegateProvider
         )
     }
+
+    /** 会话级轮询计数器（内存态，重启归零） */
+    private val rotationCounters = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
 
     /** 组装本轮对话 agent：client/executor/model/params/prompt/config + 工具注册表 + 压缩/流式安装 */
     private fun buildTurnAgent(
         sessionId: String,
         provider: xyz.mederi.provider.domain.model.Provider,
-        apiKey: String,
+        llmClient: ai.koog.prompt.executor.clients.LLMClient,
         model: AIModel,
         reasoningLevel: ReasoningLevel,
         systemPrompt: String,
@@ -1421,7 +1482,7 @@ class TurnExecutor(
         clientRef: AtomicReference<ai.koog.prompt.executor.clients.LLMClient?> = AtomicReference(null),
         diagnostics: MessageDiagnostics = MessageDiagnostics()
     ): AIAgent<String, String> {
-        val client = retryWrapped(KoogClientFactory.create(provider, apiKey), sessionId)
+        val client = llmClient
         clientRef.set(client)
         DebugLog.data("TurnExec", "client", client::class.simpleName)
 

@@ -116,11 +116,13 @@ Hard rules — violating any wastes the whole turn:
 3. Any plan-tool Error → STOP and fix that call (validation errors list every missing item).
    Never continue to dependent calls after a failure; never report plan progress that never ran.
 
-create_plan takes ONE JSON object. CODE required fields: title, overview, businessLogic,
-languageStack, inScope, keyDecisions, changes, successCriteria, subtasks. Optional: summary,
-projectContext (default BROWNFIELD), outScope, dataAndParams, risks, architecture. List fields
-are arrays of strings. Every subtask: name, planDetail, targetFiles, verification; dependsOn is
-an array of 0-based indices.
+create_plan takes ONE JSON object. CODE required fields: title, overview, languageStack,
+inScope, keyDecisions, changes, successCriteria, subtasks. Optional: summary, businessLogic,
+projectContext (default BROWNFIELD), outScope, dataAndParams, risks, architecture, appendix
+(plan-level), subtask appendix. List fields are arrays of strings. Every subtask: name,
+planDetail, targetFiles, verification; dependsOn is an array of 0-based indices.
+overview = concise narrative (see PLAN_OVERVIEW_GUIDE). subtask appendix = technical reasoning
+for controllers (see PLAN_APPENDIX_GUIDE); leave empty for simple subtasks.
 
 Example (shape to follow; content from your real task):
 
@@ -128,8 +130,8 @@ Example (shape to follow; content from your real task):
 {
   "title": "Add subtraction feature",
   "summary": "One sentence: what changes and to what end.",
-  "overview": "Background and goals, 1-2 sentences.",
-  "businessLogic": "Entry point, before/after behavior, where logic hooks into the call chain.",
+  "overview": "Background and goals, 1-2 sentences.",  // overview: concise narrative — background, problem, approach, expected outcome (see PLAN_OVERVIEW_GUIDE)
+  "businessLogic": "",  // optional now (demoted to plan-level appendix; business logic goes in subtask appendix)
   "languageStack": "Python 3.12",
   "inScope": ["Add sub(a,b) to pkg/calc.py", "Export sub in pkg/api.py"],
   "outScope": ["No CLI changes"],
@@ -145,13 +147,60 @@ Example (shape to follow; content from your real task):
      "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",
      "verificationCwd": null,        // optional: verification working dir (relative to project root); null = project root
      "verificationTimeoutSeconds": 30, // optional: verification timeout seconds; verification must be a single ASCII command (prose rejected)
-     "dependsOn": [], "parallelizable": false}]
+     "dependsOn": [], "parallelizable": false,  // "appendix": "Optional. Subtask technical reasoning: current logic, code evidence, root cause, fix preview."
+     }],
+     // "appendix": "Optional. Plan-level technical context shared across subtasks."
 }
 ```
 
 After approval, per subtask: generate_spec(planId, subtaskIndex, spec) as an ordered checklist,
 then subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background, END YOUR TURN —
 you will be auto-woken with the result), then verify_subtask(planId, subtaskIndex, status, evidence).
+""".trimIndent()
+
+    /**
+     * 计划概要（overview）撰写指引：目标驱动，读者只看概要就能做批准/拒绝决定，不强制模板。
+     */
+    val PLAN_OVERVIEW_GUIDE: String = """
+# Overview Writing Guide
+
+The overview is written for someone who will approve or reject based on it alone.
+
+After reading the overview, the reader must be able to answer:
+- What happened (enough context to not feel lost)
+- What is wrong or missing (the problem, stated directly)
+- What the fix does (the approach, not the implementation)
+- What will be different after (the outcome, not test details)
+
+Quality bar:
+- If removing a sentence doesn't make any of the four points harder to understand, remove it.
+- If after reading, a reader CANNOT answer the four questions, the overview is too short — add back the minimum.
+- Do NOT use fixed headings ("Background:" / "Cause:" / "Fix:" / "Expected:"). Write as natural prose.
+- Decide what each task needs: some need more context on the problem, some on the approach. Adjust per task.
+- If the reader needs to scroll to the appendix to decide approve/reject, the overview failed.
+""".trimIndent()
+
+    /**
+     * 技术附录（appendix）撰写指引：subtask 级与 plan 级，论证版（WHY），与 spec（HOW）区分。
+     */
+    val PLAN_APPENDIX_GUIDE: String = """
+# Appendix Writing Guide (subtask-level & plan-level)
+
+The appendix is the argument version (WHY), distinct from the spec (HOW).
+
+Content for subtask appendix:
+- Current logic: how the code currently works (key code lines, not full source)
+- Code evidence: which line/branch/condition causes the problem
+- Root cause: WHY this code produces the wrong behavior
+- Fix preview: what the fixed code looks like (pseudo-code or real code)
+- Business logic: the business rules in play
+
+Density rules (prevent token bloat):
+- HIGH information density — no full source dumps, only key code lines + core contradiction
+- Pin the key lines/branches, not the whole function
+- Pseudo-code is preferred over real code for fix previews
+- Leave appendix EMPTY for simple subtasks (new files, mechanical changes, migrations) — do not pad
+- If the appendix doesn't add reasoning beyond what the spec already says, leave it empty
 """.trimIndent()
 
     /**

@@ -134,6 +134,10 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.getSubagentReport(agentId)
     }
 
+    override suspend fun listSubagentsForSession(sessionId: String): List<xyz.mederi.tools.subagent.SubagentManager.BackgroundAgent> = mederiCall {
+        sessionManager.listSubagentsForSession(sessionId)
+    }
+
     override suspend fun stopSubagent(agentId: String) = mederiCall {
         sessionManager.stopSubagent(agentId)
         Unit

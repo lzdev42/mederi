@@ -31,6 +31,15 @@ object ReasoningLevels {
     fun isActiveLevel(level: String): Boolean = !level.equals("NONE", ignoreCase = true)
 }
 
+/**
+ * API Key 轮询哨兵值。当 apiKeyId 等于此值时，表示用户选择了"轮询"模式——
+ * 每次请求按顺序换用该供应商的全部 key。
+ *
+ * 与 core 的 [xyz.mederi.provider.API_KEY_ROTATION_ID] 同值（"__rotate__"），
+ * 因 core 是 JVM-only 模块、app:shared 的 wasmJs 目标无法引用 core，故契约层镜像一份。
+ */
+const val API_KEY_ROTATION_ID = "__rotate__"
+
 enum class ProviderType { Builtin, Custom }
 
 @Serializable

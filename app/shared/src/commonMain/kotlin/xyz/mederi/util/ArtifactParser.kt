@@ -89,56 +89,7 @@ object ArtifactParser {
             )
         }
 
-        // 2. 若没有显式标签，且不处于流式状态，进行启发式长文兜底检测
-        if (!isStreaming && text.length >= 800) {
-            val heuristic = tryHeuristicExtraction(text)
-            if (heuristic != null) return heuristic
-        }
-
         return ArtifactParseResult(preamble = text, artifact = null)
-    }
-
-    /**
-     * 启发式长文分割：当检测到明显的大纲标题（如 `# 标题`）且主体超过阈值时自动拆分。
-     */
-    private fun tryHeuristicExtraction(text: String): ArtifactParseResult? {
-        val lines = text.lines()
-        if (lines.size < 25) return null
-
-        // 寻找首个一级标题行（# 开头）
-        val headingIndex = lines.indexOfFirst { line ->
-            line.startsWith("# ") && !line.startsWith("##")
-        }
-
-        if (headingIndex == -1) return null
-
-        val preamble = lines.subList(0, headingIndex).joinToString("\n").trim()
-        val docLines = lines.subList(headingIndex, lines.size)
-        val docContent = docLines.joinToString("\n").trim()
-
-        // 主体长文必须占大部分比重且自身达到长文标准
-        if (docContent.length < 600 || docContent.length < text.length * 0.6) {
-            return null
-        }
-
-        val headingTitle = lines[headingIndex].removePrefix("#").trim()
-        val effectiveTitle = headingTitle.ifBlank { "长篇分析文档" }
-
-        val artifact = ParsedArtifact(
-            identifier = "doc_${effectiveTitle.hashCode().toUInt()}",
-            title = effectiveTitle,
-            type = "text/markdown",
-            content = docContent,
-            isCompleted = true,
-            lineCount = docLines.size,
-            charCount = docContent.length,
-        )
-
-        return ArtifactParseResult(
-            preamble = preamble,
-            artifact = artifact,
-            postscript = "",
-        )
     }
 
     private fun extractFirstHeading(content: String): String? {

@@ -15,6 +15,8 @@ data class ConversationSnapshot(
     val pendingPlanApproval: PlanApprovalRequest? = null,
     val planApprovals: List<PlanApprovalRequest> = emptyList(),
     val todos: List<TodoItem> = emptyList(),
+    /** 当前会话的子代理列表（SUBAGENT_* 事件流聚合；core listForSession 快照回填）。 */
+    val subagents: List<SubagentState> = emptyList(),
     val childConversations: List<Conversation> = emptyList(),
     val errorMessage: String? = null,
     /**

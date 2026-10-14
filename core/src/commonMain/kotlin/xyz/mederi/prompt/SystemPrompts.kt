@@ -465,6 +465,8 @@ current via update_todo (one call replaces the whole list).
                 CORE_PRINCIPLES.trimIndent() + "\n\n" +
                 TOOL_GUIDELINES.trimIndent() + "\n\n" +
                 PromptGuides.PLAN_TOOL_GUIDE + "\n\n" +
+                PromptGuides.PLAN_OVERVIEW_GUIDE + "\n\n" +
+                PromptGuides.PLAN_APPENDIX_GUIDE + "\n\n" +
                 PromptGuides.SUBAGENT_REPORT_VERIFICATION + "\n\n" +
                 WORKING_DIRECTORY.trimIndent() + "\n\n" +
                 PromptGuides.SANDBOX_USAGE + "\n\n" +

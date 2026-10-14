@@ -40,14 +40,9 @@ object SubagentTracker {
                 val delta = event.payload["delta"].orEmpty()
                 val isMessage = event.payload["isMessage"] == "true"
                 states.updated(agentId) { current ->
-                    val newRecent = if (delta.isNotBlank()) {
-                        val combined = (current.recentOutput.orEmpty() + delta)
-                        if (combined.length > 1000) combined.takeLast(1000) else combined
-                    } else current.recentOutput
-
-                    val newLastMsg = if (isMessage && delta.isNotBlank()) {
-                        extractLastSentence(current.lastMessage, delta)
-                    } else current.lastMessage
+                    val newOutput = if (isMessage && delta.isNotBlank()) {
+                        current.outputText.orEmpty() + delta
+                    } else current.outputText
 
                     current.copy(
                         currentActivity = activity ?: current.currentActivity,
@@ -58,8 +53,7 @@ object SubagentTracker {
                             tool != null -> tool
                             else -> current.currentTool
                         },
-                        recentOutput = newRecent,
-                        lastMessage = newLastMsg
+                        outputText = newOutput
                     )
                 }
             }
@@ -79,13 +73,6 @@ object SubagentTracker {
                 states - agentId
             else -> states
         }
-    }
-
-    private fun extractLastSentence(prev: String?, delta: String): String {
-        val combined = (prev.orEmpty() + delta)
-        val lines = combined.lines().filter { it.isNotBlank() }
-        val lastLine = lines.lastOrNull().orEmpty().trim()
-        return if (lastLine.length > 200) lastLine.takeLast(200) else lastLine
     }
 
     /** 终态事件先于 STARTED 到达（理论上不该发生）时安全跳过。 */

@@ -38,7 +38,7 @@ sequenceDiagram
 
     rect rgb(235, 244, 255)
         note over TE,LLM: runTurn（后台协程）
-        TE->>TE: 解析 apiKey = activeApiKeyId?.let{getKeyValue(provider,it)} ?: getDefaultKeyValue(provider)<br/>(选定 key 优先，未选回退默认；压缩/子代理/浏览器同类同源)
+        TE->>TE: ApiKeyResolver.resolve(provider, activeApiKeyId)<br/>命中轮询哨兵(API_KEY_ROTATION_ID="__rotate__")?<br/>→ listKeys 全量明文建 RotatingLLMClient(getCounter(rotationSessionId))<br/>→ retryWrapped 包 RetryableLLMClient<br/>未命中 → 单 key client + RetryableLLMClient<br/>(哨兵不校验归属: 记忆/默认 key 兜底链另见 01-core §9.1;<br/>compressOnce 同源哨兵感知, 与 runTurn 共用同一计数器)
         TE->>TE: preflightCompressionIfNeeded<br/>(contextUsedTokens > 70% 窗口 → compressOnce，带 apiKeyId)
         TE->>TE: CustomToolRegistry.buildAll() 收集 UI 层注册的自定义工具
         TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪, customTools+mcpTools旁路合并)<br/>透传 AgentsSubtreeDiscovery: read/list 工具访问路径上<br/>发现未注入过的 AGENTS.md 时追加进工具返回文本(会话级去重)
@@ -309,6 +309,8 @@ sequenceDiagram
 
 **子代理汇报取数链（2026-09）**：全量报告可随时拉取——`AiCore.getSubagentReport(agentId)` → `SessionManager.getSubagentReport` → `SubagentManager.getReport`：磁盘读报告全文（`{planId}/reports/NN-executor.md` / `research.md`），文件缺失时回退内存 result 或 `AgentRecoveryInfo`（retired）记录；遥控端对应路由 `GET /v1/subagents/{agentId}/report`。`<event_message>` 唤醒消息的 UI 通道：对话流内由 `EventMessageCard`（系统事件卡）渲染——读落盘报告全文/摘要展示，**非**仅 SubagentTracker 卡片。
 
+**子代理快照水合（2026-10 新增）**：getSnapshot 从 SubagentManager.agents 内存表读出该会话全部子代理（listForSession → 按 parentSessionId 过滤 + startedAt 排序），映射成 contract SubagentState 放入 ConversationSnapshot.subagents。UI applySnapshot 收到快照后，将 subagents 中 subagentStates 缺失的条目补入（不覆盖已有——实时事件更准）。事件流（SubagentTracker）继续做增量更新（progress/status 变化），快照只做初始补齐——与 planApprovals 的水合模式完全同构。修复切会话/重连/SSE 丢事件后子代理面板显示 0 的问题（replay=0 事件流不可恢复，快照是真理源兜底）。
+
 ## 5. 上下文压缩流程（自动 + 手动）
 
 ```mermaid
@@ -428,8 +430,8 @@ sequenceDiagram
     else planId 为空（ad-hoc 执行）
         M->>M: task+briefing 直接派 executor<br/>(跳过 spec/IN_PROGRESS/PLAN_PROGRESS)
     end
-    M->>M: SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER,<br/>fallbackModel=会话模型, fallbackReasoning=会话推理档)<br/>→ 配置了独立模型/推理档则覆盖父会话, 否则继承
-    M->>SM: spawn(task, briefing(简化: 只 task + planDetail, 不再注入 researchNotes/appendix), plan=st.spec, role=EXECUTOR, planId, executorSubtaskIndex, planStore)
+    M->>M: SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER,<br/>fallbackModel=会话模型, fallbackReasoning=会话推理档)<br/>→ 配置了独立模型/推理档则覆盖父会话, 否则继承<br/>apiKeyId: effective = config.apiKeyId ?: 父会话 apiKeyId<br/>(null=继承 / keyId=指定 / "__rotate__"=轮询 原样透传)
+    M->>SM: spawn(task, briefing(简化: 只 task + planDetail, 不再注入 researchNotes/appendix), plan=st.spec, role=EXECUTOR, planId, executorSubtaskIndex, planStore, apiKeyId=effectiveApiKeyId)
     SM->>SM: agents[agentId]=RUNNING<br/>scope.launch 后台协程跑子代理, 不阻塞调用方
     SM->>EB: SUBAGENT_STARTED(agentId, role, modelId, modelName, reasoningLevel, task, briefing?)
     SM-->>M: 立即返回 {"agentId":"sub_xxx","status":"RUNNING"} (不阻塞)
@@ -460,7 +462,7 @@ sequenceDiagram
 
 **briefing 简化 + 报告落盘（方案A 2026-09-24）**：SpawnAgentTool 拼装 briefing 时只注入 ①`task`（来自调用方参数）②`planDetail`（子任务意图/brief，恒不变）——不再注入 `researchNotes` 全文、不再注入 `appendix` 摘录（appendix 字段已删）。executor 是干脏活的便宜模型，需要调研结论时自己 `read_file .mederi/plans/{planId}/research.md`，需要原文件认知时直接 `read_file` 该路径。executor 完成时报告落盘到 `{planId}/reports/NN-executor.md`，父上下文只收尾部 1500 字符 + 路径（尾部捕获 SPEC_FEEDBACK）；researcher 报告**始终落盘**——有活跃 plan 时写 `{planId}/research.md`，无活跃 plan 时经 `PlanStore.writeStandaloneResearchReport` 写 `.mederi/research/{timestamp}.md`，两种情况父上下文都只收头部 800 字符 + 路径（全量报告不再有回灌通道；详情一律 read_file 取盘）。EXECUTOR 无 planId/planStore 或写盘失败时才回退全文回灌。子代理 TurnExecutor 透传 `onTurnDiff` 回调，结束时把文件改动经 `ParentDiffRegistry` 合并进父 turn 的 diffTracker（见 §4 diff 合并说明）。
 
-**per-role 模型解析（2026-09）**：`SpawnAgentTool` / `SpawnResearcherTool` 派发时经 `SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER, fallbackModel=会话模型, fallbackReasoning=会话推理档)` 覆盖父会话模型——配置了独立模型/推理档则覆盖，否则继承。
+**per-role 模型解析（2026-09）**：`SpawnAgentTool` / `SpawnResearcherTool` 派发时经 `SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER, fallbackModel=会话模型, fallbackReasoning=会话推理档)` 覆盖父会话模型——配置了独立模型/推理档则覆盖，否则继承。**apiKeyId 同策略（2026-10）**：派发时读 `SubagentConfigManager.get(role)?.apiKeyId`，非 null 则 `effectiveApiKeyId = config.apiKeyId` 覆盖父会话 apiKeyId（null=继承父），轮询哨兵 `API_KEY_ROTATION_ID`（`"__rotate__"`）原样透传；`SubagentManager.spawn(apiKeyId=effectiveApiKeyId)` → 子代理 TurnExecutor（构造传 `rotationSessionId = parentSessionId`，与父共享轮询计数器）在 resolve 后检测哨兵建 `RotatingLLMClient`（见 §1 runTurn 与 01-core §9.1）。
 
 ## 8. 回滚（rollbackMessage）流程
 
@@ -689,7 +691,7 @@ flowchart LR
 
 **Session 状态机**：`IDLE → (sendMessage) RUNNING → (正常) IDLE`；`RUNNING → (可重试错误) IDLE(限流提示)`；`RUNNING → (致命错误) ERROR → (下次 sendMessage 前校验失败)`；`RUNNING → (abort) IDLE`。
 
-**契约层会话状态（ConversationStatus，SnapshotReducer）**：4 值 `Idle / Working / Error / WaitingUser`——`QUESTION_REQUESTED`/`PLAN_APPROVAL_REQUESTED` → **WaitingUser**（同时把流式占位消息 isStreaming 置 false，交互挂起），对应 `QUESTION_RESOLVED`/`PLAN_APPROVAL_RESOLVED` → Working；双侧（进程内与 SSE 遥控端）经 `startSessionStatusSync` 同步驱动侧边栏状态点。
+**契约层会话状态（ConversationStatus，SnapshotReducer）**：4 值 `Idle / Working / Error / WaitingUser`——`QUESTION_REQUESTED`/`PLAN_APPROVAL_REQUESTED` → **WaitingUser**（同时把流式占位消息 isStreaming 置 false，交互挂起），对应 `QUESTION_RESOLVED`/`PLAN_APPROVAL_RESOLVED` → Working；双侧（进程内与 SSE 遥控端）经 `startSessionStatusSync` 同步驱动侧边栏状态点。**子代理延长 Working（jvm 桥 + SSE 遥控端，2026-10）**：`SUBAGENT_STARTED` → Working（agentId 记入 `runningSubagentIds`，MederiAiCore 用 core `EventType`、ServerAiCore 用契约 `CoreEventType`，逻辑一致）；子代理终态（COMPLETED/ERROR/STOPPED/DISCARDED）移出集合，集合清空且主 turn 不活跃（`mainTurnActive=false`，MESSAGE_COMPLETED/ERROR 置 false、SESSION_UPDATED 置 true）才回 Idle；**MESSAGE_COMPLETED 时子代理集合非空 → 保持 Working**（主 turn 结束但子代理仍在后台跑，侧边栏不误闪 Idle）。
 
 **排队/引导（Steering，见 §2.1）**：`RUNNING` 中 `steerMessage` → `pendingSteerings` 入队（发 `STATUS(steering_queued)`，SnapshotReducer 按代码现状忽略）→ 工具边界 `pollSteering` 注入；turn 收尾残留降级新 turn；UI 侧 turn 结束回 Idle 时排队队列自动出队。
 

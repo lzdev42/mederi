@@ -1265,18 +1265,12 @@ class WorkspaceViewModel(
         private set
 
     /**
-     * 是否有子智能体正在工作（当前会话存在 RUNNING 状态的子代理，或有正在运行/流式的子代理工具调用）。
-     * 状态判定复用 `ui/SubagentLifecycleNotification.kt` 的纯函数 [hasRunningSubagents]（同一谓词单一真理源），
-     * 这里只叠加 chatItems 层的「流式/运行中工具调用」判定。
+     * 是否有子智能体正在工作（当前会话存在 RUNNING 状态的子代理）。
+     * 状态判定复用 `ui/SubagentLifecycleNotification.kt` 的纯函数 [hasRunningSubagents]（同一谓词单一真理源，
+     * 以 SUBAGENT_* 事件驱动），不再叠加 chatItems 层判定，保证浮条与概览的 SubAgentManagementCard 同步。
      */
     val hasRunningSubagents: Boolean by derivedStateOf {
-        hasRunningSubagents(subagents) || chatItems.any { item ->
-            when (item) {
-                is ChatListItem.SubagentCalls -> item.isRunning || item.isStreaming
-                is ChatListItem.WorkTraceBlock -> item.items.filterIsInstance<ChatListItem.SubagentCalls>().any { it.isRunning || it.isStreaming }
-                else -> false
-            }
-        }
+        hasRunningSubagents(subagents)
     }
 
     /** 是否应当展示子智能体正在工作的浮条：有在工作的子智能体，且用户未手动关闭 */
@@ -1704,6 +1698,17 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         val prevSnap = sessionCache.snapshotCache[id]
         val wasWorking = prevSnap?.conversation?.status == ConversationStatus.Working
         sessionCache.snapshotCache[id] = snap
+        // 快照水合子代理初始态：补入 subagentStates 中缺失的条目（不覆盖已有——实时事件更准）
+        if (snap.subagents.isNotEmpty()) {
+            val existing = subagentStates
+            val merged = snap.subagents.fold(existing) { acc, sa ->
+                if (sa.agentId in acc) acc else acc + (sa.agentId to sa)
+            }
+            if (merged !== existing) {
+                subagentStates = merged
+                allSubagents = merged.values.sortedBy { it.startedAt }
+            }
+        }
         if (conversationId == id) {
             snapshot = snap
             isAttached = true

@@ -60,6 +60,50 @@ class SubagentTrackerAndReportTest {
     }
 
     @Test
+    fun `tracker accumulates outputText from message deltas without truncation`() {
+        var states: Map<String, SubagentState> = emptyMap()
+
+        // STARTED
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_STARTED, "sub_out",
+            "role" to "EXECUTOR", "modelId" to "m1", "modelName" to "ModelA",
+            "task" to "test task"
+        ))
+
+        // PROGRESS: 正文 delta（isMessage=true）→ 应累积到 outputText
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_out",
+            "activity" to "OUTPUT", "delta" to "Hello ", "isMessage" to "true"
+        ))
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_out",
+            "activity" to "OUTPUT", "delta" to "world!", "isMessage" to "true"
+        ))
+
+        val s = states.getValue("sub_out")
+        assertEquals("Hello world!", s.outputText)
+    }
+
+    @Test
+    fun `tracker does not accumulate non-message deltas into outputText`() {
+        var states: Map<String, SubagentState> = emptyMap()
+
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_STARTED, "sub_nm",
+            "role" to "EXECUTOR", "task" to "test"
+        ))
+
+        // 推理 delta（isMessage 不为 true）→ 不应累积到 outputText
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_nm",
+            "activity" to "THINKING", "delta" to "thinking content"
+        ))
+
+        val s = states.getValue("sub_nm")
+        assertNull(s.outputText)
+    }
+
+    @Test
     fun `report markdown renders completed wait_agent result`() {
         val json = """
             {"agentId":"sub_1","status":"COMPLETED","progress":"completed",

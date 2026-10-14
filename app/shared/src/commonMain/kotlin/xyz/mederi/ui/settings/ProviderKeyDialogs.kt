@@ -55,6 +55,7 @@ import mederi.app.shared.generated.resources.settings_panel_save_reconnect
 import mederi.app.shared.generated.resources.settings_panel_set_default
 import mederi.app.shared.generated.resources.settings_panel_set_default_key
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.contract.models.API_KEY_ROTATION_ID
 import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.components.atoms.ConfirmDialog
@@ -238,7 +239,7 @@ internal fun ApiKeyManagementDialog(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
-                        provider.apiKeys.forEach { keyOpt ->
+                        provider.apiKeys.filter { it.id != API_KEY_ROTATION_ID }.forEach { keyOpt ->
                             // 非卡片壳（surfaceInput 输入井容器 + 动态默认描边），MederiCard 底色固定 surfaceCard 不适用，等价 Box 链
                             Box(
                                 modifier = Modifier

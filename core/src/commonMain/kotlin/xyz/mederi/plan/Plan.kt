@@ -199,6 +199,9 @@ data class PlannedChange(
  * [verificationResult] 由 verify_subtask 工具回写（含机器真实输出，未经模型转述）。
  * [verificationChanges] 由 update_verification 工具回写——严格 append-only：每次修正追加一条
  * 变更记录并保存**完整旧/新契约**，人类可事后查证。
+ * [appendix] 是子任务级技术附录（给控制者看的论证文档）：现有逻辑、代码证据、根因分析、
+ * 修复预览（伪代码/真代码）、业务逻辑讲解。create_plan 时填写。与 [spec] 边界清晰：
+ * appendix = 论证版（为什么），spec = 执行清单（怎么做）。可选：简单子任务可为 null。
  */
 @Serializable
 data class Subtask(
@@ -216,7 +219,8 @@ data class Subtask(
     val executorTouchedFiles: List<String> = emptyList(),
     val executorProgress: String? = null,
     val dependsOn: List<Int> = emptyList(),
-    val parallelizable: Boolean = false
+    val parallelizable: Boolean = false,
+    val appendix: String? = null
 )
 
 /**
@@ -242,6 +246,8 @@ enum class ProjectContextType { GREENFIELD, BROWNFIELD }
  *
  * [sessionId] 将 plan 与对话记录关联，TurnExecutor 按 sessionId 加载活跃计划。
  * [architecture] 可选，存放 Mermaid 代码块（InkCompose 唯一可渲染的图表格式，其他语法只降级为源码展示）。
+ * [appendix] 可选：计划级技术上下文（跨子任务的共享技术背景、计划级改动清单/决策/数据参数）。
+ * 无跨子任务内容时为 null，buildMarkdown 不渲染该段。
  */
 @Serializable
 data class Plan(
@@ -280,6 +286,7 @@ data class Plan(
      * 可选：无调研结论时为空。
      */
     val researchNotes: String = "",
+    val appendix: String? = null,
     val subtasks: List<Subtask>,
     val status: PlanStatus = PlanStatus.PENDING_APPROVAL,
     val createdAt: String,

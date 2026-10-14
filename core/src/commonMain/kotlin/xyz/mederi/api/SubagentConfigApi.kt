@@ -2,6 +2,7 @@ package xyz.mederi.api
 
 import kotlinx.serialization.Serializable
 import xyz.mederi.domain.model.SubagentRole
+import xyz.mederi.provider.API_KEY_ROTATION_ID
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
 /**
@@ -36,17 +37,27 @@ data class SubagentRoleConfigDto(
     val modelId: String? = null,
     val modelName: String? = null,
     val reasoningLevel: ReasoningLevel? = null,
+    /**
+     * 子代理的 API Key 策略：null=继承父会话选定 key；具体 keyId=指定 key；
+     * [API_KEY_ROTATION_ID]（`xyz.mederi.provider.API_KEY_ROTATION_ID`）=轮询。
+     */
+    val apiKeyId: String? = null,
     val isInheriting: Boolean = true
 )
 
 /**
  * 更新角色配置请求。
- * [modelId] 与 [reasoningLevel] 均为 null 时恢复为继承。
+ * [modelId]、[reasoningLevel] 与 [apiKeyId] 均为 null 时恢复为继承。
  */
 @Serializable
 data class UpdateSubagentConfigRequest(
     val modelId: String? = null,
-    val reasoningLevel: ReasoningLevel? = null
+    val reasoningLevel: ReasoningLevel? = null,
+    /**
+     * 子代理的 API Key 策略：null=继承父会话选定 key；具体 keyId=指定 key；
+     * [API_KEY_ROTATION_ID]（`xyz.mederi.provider.API_KEY_ROTATION_ID`）=轮询。
+     */
+    val apiKeyId: String? = null
 )
 
 /**

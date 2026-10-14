@@ -3,6 +3,17 @@ package xyz.mederi.provider
 import java.util.concurrent.ConcurrentHashMap
 
 /**
+ * API Key 轮询标记值。
+ *
+ * 作为一个虚拟 API Key 条目的值存在于供应商的 key 列表中（由 [ProviderManager.listKeys]
+ * 在 >1 个真实 key 时自动追加）。用户在输入框选择"轮询"时，apiKeyId 即为此值，
+ * 经现有管道（Session → ChatPromptInput → SendMessageRequest → TurnExecutor）自然流转。
+ *
+ * TurnExecutor 在 [ApiKeyResolver.resolve] 返回的 value 等于此值时，走重试换 key 逻辑。
+ */
+const val API_KEY_ROTATION_ID = "__rotate__"
+
+/**
  * 已解析出的 API Key 实体。
  *
  * 与 [xyz.mederi.provider.domain.model.ProviderApiKey] 不同：后者只携带脱敏值、供 UI 展示；

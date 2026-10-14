@@ -33,10 +33,8 @@ data class SubagentState(
     val currentActivity: String? = null,
     /** 当前调用的工具名称（若有）。 */
     val currentTool: String? = null,
-    /** 提取的最新一句话 / 最后一句话。 */
-    val lastMessage: String? = null,
-    /** 最近尾部输出内容（流式蹦字视窗用，上限 1000 字符）。 */
-    val recentOutput: String? = null,
+    /** 完整正文输出（流式累积，只含 isMessage=true 的正文 delta，不截断；详情弹窗 MarkdownView 渲染用）。 */
+    val outputText: String? = null,
     /** 终态时间戳（ISO 8601），用于计算最终工作总耗时。 */
     val completedAt: String? = null
 )
@@ -79,6 +77,11 @@ data class SubagentConfigItem(
     val modelId: String? = null,
     val modelName: String? = null,
     val reasoningLevel: String? = null,
+    /**
+     * 子代理的 API Key 策略：null=继承父会话选定 key；具体 keyId=指定 key；
+     * "API_KEY_ROTATION"=轮询（core `API_KEY_ROTATION_ID` 常量）。
+     */
+    val apiKeyId: String? = null,
     val isInheriting: Boolean = true
 )
 
@@ -88,7 +91,12 @@ data class SubagentConfigItem(
 @Serializable
 data class UpdateSubagentConfigInput(
     val modelId: String? = null,
-    val reasoningLevel: String? = null
+    val reasoningLevel: String? = null,
+    /**
+     * 子代理的 API Key 策略：null=继承父会话选定 key；具体 keyId=指定 key；
+     * "API_KEY_ROTATION"=轮询（core `API_KEY_ROTATION_ID` 常量）。
+     */
+    val apiKeyId: String? = null
 )
 
 /**

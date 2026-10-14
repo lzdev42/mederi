@@ -35,6 +35,7 @@ class SubagentConfigApiImpl(
             modelId = config.modelId,
             modelName = model?.name,
             reasoningLevel = config.reasoningLevel,
+            apiKeyId = config.apiKeyId,
             isInheriting = config.isInheriting
         )
     }
@@ -44,7 +45,8 @@ class SubagentConfigApiImpl(
             role,
             SubagentModelConfig(
                 modelId = request.modelId,
-                reasoningLevel = request.reasoningLevel
+                reasoningLevel = request.reasoningLevel,
+                apiKeyId = request.apiKeyId
             )
         )
     }

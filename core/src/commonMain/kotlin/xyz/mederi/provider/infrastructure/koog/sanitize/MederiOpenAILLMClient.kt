@@ -3,6 +3,7 @@ package xyz.mederi.provider.infrastructure.koog.sanitize
 import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientException
+import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.llm.LLMCapability
@@ -63,6 +64,16 @@ class MederiOpenAILLMClient(
 
     override val clientName: String = "MederiOpenAILLMClient"
 
+    /**
+     * 从 Prompt.id 提取 prompt_cache_key（OpenAI 请求级前缀缓存键）。
+     *
+     * Prompt.id 由 TurnExecutor 设为 Session.id（Mederi 会话 ID），两者是同一个值——
+     * Prompt.id 是 Koog 层的载体，Session.id 是 Mederi 层的载体，值一致。
+     * 为空时不发送（返回 null → Koog explicitNulls=false 自动省略该字段）。
+     */
+    private fun promptCacheKey(prompt: Prompt): String? =
+        prompt.id.takeIf { it.isNotBlank() }
+
     companion object {
         /**
          * SSE 空闲超时：连续这么久没收到**任何一行**（含 keep-alive 注释行 `: ping` /
@@ -108,12 +119,15 @@ class MederiOpenAILLMClient(
         val messages = convertPromptToMessages(prompt, model)
         val llmTools = tools.map { it.toOpenAIChatTool() }
         val toolChoice = prompt.params.toolChoice?.toOpenAIToolChoice()
+        val cacheKeyParams = (prompt.params as? OpenAIChatParams)
+            ?.let { p -> promptCacheKey(prompt)?.let { p.copy(promptCacheKey = it) } }
+            ?: prompt.params
         val requestJson = super.serializeProviderChatRequest(
             messages = messages,
             model = model,
             tools = llmTools.takeIf { it.isNotEmpty() },
             toolChoice = toolChoice,
-            params = prompt.params,
+            params = cacheKeyParams,
             stream = false
         )
         DebugLog.event("SSE", "POST $chatCompletionsPath (stream=false)")
@@ -190,12 +204,15 @@ class MederiOpenAILLMClient(
         val messages = convertPromptToMessages(prompt, model)
         val llmTools = tools.map { it.toOpenAIChatTool() }
         val toolChoice = prompt.params.toolChoice?.toOpenAIToolChoice()
+        val cacheKeyParams = (prompt.params as? OpenAIChatParams)
+            ?.let { p -> promptCacheKey(prompt)?.let { p.copy(promptCacheKey = it) } }
+            ?: prompt.params
         val requestJson = super.serializeProviderChatRequest(
             messages = messages,
             model = model,
             tools = llmTools.takeIf { it.isNotEmpty() },
             toolChoice = toolChoice,
-            params = prompt.params,
+            params = cacheKeyParams,
             stream = true
         )
         DebugLog.event("SSE", "POST $chatCompletionsPath (stream=true)")
@@ -394,6 +411,7 @@ class MederiOpenAILLMClient(
         stream: Boolean
     ): String = buildJsonObject {
         put("model", model.id)
+        promptCacheKey(prompt)?.let { put("prompt_cache_key", it) }
         if (tools.isNotEmpty()) {
             // Responses API 工具是扁平结构（type/name/description/parameters 在根级），
             // 与 Chat 的 {type:function, function:{...}} 嵌套不同；参数 schema 复用 Chat 的转换

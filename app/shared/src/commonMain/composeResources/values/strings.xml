@@ -474,6 +474,8 @@
     <string name="settings_stepper_decrease">减少</string>
     <string name="settings_stepper_increase">增加</string>
     <string name="settings_agents_custom_action">指定独立模型</string>
+    <string name="settings_agents_apikey_label">API Key</string>
+    <string name="settings_agents_apikey_inherit">继承父会话</string>
     <string name="sidebar_automation">自动化</string>
     <string name="sidebar_cancel">取消</string>
     <string name="sidebar_close">关闭侧边栏</string>

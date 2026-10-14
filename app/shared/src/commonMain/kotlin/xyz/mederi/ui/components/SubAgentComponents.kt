@@ -81,6 +81,8 @@ import xyz.mederi.ui.components.atoms.WorkingAnimationStyle
 import xyz.mederi.ui.components.atoms.workingAnimation
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.MederiMarkdownConfig
+import xyz.mederi.theme.rememberMederiMarkdownTheme
 
 /**
  * 运行中动态微视觉指示器（平滑顺畅旋转的 Loader，精致且低能耗）
@@ -750,42 +752,12 @@ fun SubAgentDetailDialog(
                             }
                         }
 
-                        // 最后一句话高亮卡片
-                        if (!subagent.lastMessage.isNullOrBlank()) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(colors.surfaceWorkspace)
-                                    .border(1.dp, colors.accentPrimary.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 10.dp, vertical = 8.dp)
-                            ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    Text(
-                                        text = stringResource(Res.string.subagent_live_last_message),
-                                        color = colors.accentPrimary,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    SelectionContainer {
-                                        Text(
-                                            text = subagent.lastMessage.orEmpty(),
-                                            color = colors.textPrimary,
-                                            fontSize = 11.5.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            lineHeight = 16.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // 实时流滚动视窗
+                        // 实时输出窗口（MarkdownView 流式渲染，跟正常对话输出一样）
                         val liveScrollState = rememberScrollState()
-                        val recentText = subagent.recentOutput.orEmpty()
+                        val outputContent = subagent.outputText.orEmpty()
 
-                        LaunchedEffect(recentText) {
-                            if (recentText.isNotEmpty()) {
+                        LaunchedEffect(outputContent) {
+                            if (outputContent.isNotEmpty()) {
                                 liveScrollState.scrollTo(liveScrollState.maxValue)
                             }
                         }
@@ -793,25 +765,25 @@ fun SubAgentDetailDialog(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(min = 70.dp, max = 150.dp)
+                                .height(280.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(colors.surfaceWorkspace)
                                 .border(1.dp, colors.divider, RoundedCornerShape(8.dp))
                                 .padding(10.dp)
                         ) {
-                            if (recentText.isNotBlank()) {
-                                SelectionContainer {
-                                    Text(
-                                        text = recentText,
-                                        color = colors.textSecondary,
-                                        fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        lineHeight = 16.sp,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .verticalScroll(liveScrollState)
-                                    )
-                                }
+                            if (outputContent.isNotBlank()) {
+                                MarkdownView(
+                                    content = outputContent,
+                                    sessionKey = subagent.agentId,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .verticalScroll(liveScrollState),
+                                    isStreaming = isRunning,
+                                    enableScrollOverride = false,
+                                    markdownTheme = rememberMederiMarkdownTheme(),
+                                    markdownConfig = MederiMarkdownConfig,
+                                    onLinkClick = { url -> viewModel.openLink(url) }
+                                )
                             } else {
                                 Text(
                                     text = if (isRunning) stringResource(Res.string.subagent_live_waiting) else stringResource(Res.string.subagent_live_empty),

@@ -30,6 +30,7 @@ import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.Folder
 import compose.icons.feathericons.Key
 import compose.icons.feathericons.Plus
+import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.X
 import mederi.app.shared.generated.resources.Res
