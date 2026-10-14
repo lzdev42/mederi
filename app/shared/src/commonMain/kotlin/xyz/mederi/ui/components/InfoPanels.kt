@@ -39,8 +39,6 @@ import mederi.app.shared.generated.resources.overview_context_usage_title
 import mederi.app.shared.generated.resources.dock_cost_title
 import mederi.app.shared.generated.resources.dock_diff_empty
 import mederi.app.shared.generated.resources.dock_diff_empty_hint
-import mederi.app.shared.generated.resources.dock_plan_empty
-import mederi.app.shared.generated.resources.dock_plan_empty_hint
 import mederi.app.shared.generated.resources.dock_refresh_changes
 import mederi.app.shared.generated.resources.dock_requests_title
 import mederi.app.shared.generated.resources.overview_approve_btn
@@ -161,43 +159,6 @@ internal fun DiffPanelContent(
     }
 }
 
-@Composable
-internal fun PlanPanelContent(
-    viewModel: WorkspaceViewModel,
-    colors: MederiColors
-) {
-    // 读 VM 派生属性（pendingPlanApproval），不直探内部 snapshot 表示
-    val pending = viewModel.pendingPlanApproval
-    val currentPlan = viewModel.currentPlan
-    val planContent = currentPlan?.content
-        ?: pending?.planContent
-        ?: (if (pending != null) "# ${pending.title}\n\n${pending.summary}" else null)
-
-    if (planContent.isNullOrBlank()) {
-        PanelEmptyState(
-            icon = FeatherIcons.FileText,
-            title = stringResource(Res.string.dock_plan_empty),
-            hint = stringResource(Res.string.dock_plan_empty_hint)
-        )
-    } else {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            MarkdownView(
-                content = planContent,
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .widthIn(max = ChatLayout.contentMaxWidth)
-                    .fillMaxWidth(),
-                enableScrollOverride = true,
-                markdownTheme = rememberMederiMarkdownTheme(style = RenderStyle.Github)
-            )
-        }
-    }
-}
 
 @Composable
 internal fun ArtifactsPanelContent(

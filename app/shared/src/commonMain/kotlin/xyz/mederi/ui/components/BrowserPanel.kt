@@ -124,7 +124,6 @@ internal fun rightDockPanelTitle(panel: RightDockPanel): String = stringResource
     when (panel) {
         RightDockPanel.OVERVIEW -> Res.string.rightdock_overview
         RightDockPanel.DIFF -> Res.string.rightdock_diff
-        RightDockPanel.PLAN -> Res.string.rightdock_plan
         RightDockPanel.ARTIFACTS -> Res.string.rightdock_artifacts
         RightDockPanel.TERMINAL -> Res.string.rightdock_terminal
         RightDockPanel.BROWSER -> Res.string.rightdock_browser

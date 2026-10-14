@@ -222,6 +222,18 @@ class AppState(
                 delay(1000)
             }
         }
+
+        // 观察可用模型列表：自愈机制（列表重建后重指向同款新实例，保持 supportsImages / reasoningLevels 等字段与最新状态同步）
+        scope.launch {
+            availableModels.collect { models ->
+                val current = _selectedModel.value ?: return@collect
+                val matched = models.find { it.id == current.id && it.provider == current.provider }
+                    ?: models.find { it.id == current.id }
+                if (matched != null && matched !== current) {
+                    _selectedModel.value = matched
+                }
+            }
+        }
     }
 
     // ───── C. 写侧 action(同步更新内部值 + 异步持久化) ─────

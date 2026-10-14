@@ -160,6 +160,7 @@ fun computeChatItems(
         // 按真实自然时序收集本轮的消息块
         val rawChronologicalItems = mutableListOf<ChatListItem>()
         var planApprovalEmitted = false
+        var questionCardEmitted = false
 
         for ((msgIndex, msg) in turnMessages.withIndex()) {
             val messageImages = msg.blocks.filterIsInstance<ChatBlock.File>()
@@ -287,14 +288,18 @@ fun computeChatItems(
                             snapshot?.pendingQuestion != null
                         ) {
                             // ask_user 挂起中：内联问答卡片取代该工具的 ToolCalls 行（消除"等待用户回答…"重复标签）；
-                            // 回答后（pendingQuestion 清空）工具出参 → 非 Running，回归正常 ToolCalls 行
-                            rawChronologicalItems.add(
-                                ChatListItem.QuestionCard(
-                                    key = "${msg.id}_${block.id}_q",
-                                    request = snapshot.pendingQuestion,
-                                    isTurnStart = false,
+                            // 回答后（pendingQuestion 清空）工具出参 → 非 Running，回归正常 ToolCalls 行。
+                            // 单轮内仅发射一次，防止多 toolCall 或时序分裂导致重复卡片。
+                            if (!questionCardEmitted) {
+                                rawChronologicalItems.add(
+                                    ChatListItem.QuestionCard(
+                                        key = "${msg.id}_${block.id}_q",
+                                        request = snapshot.pendingQuestion,
+                                        isTurnStart = false,
+                                    )
                                 )
-                            )
+                                questionCardEmitted = true
+                            }
                         } else {
                             rawChronologicalItems.add(
                                 ChatListItem.ToolCalls(
@@ -411,6 +416,7 @@ fun computeChatItems(
 
                         is ChatListItem.TextMessage -> {
                             val isFinalDeliverableText =
+                                !isIntermediateTurnInCycle &&
                                 idx > lastToolIdx &&
                                 (idx == lastTextIdx || rawChronologicalItems.getOrNull(idx + 1) is ChatListItem.DocumentCard)
                             if (isFinalDeliverableText) {
@@ -465,6 +471,7 @@ fun computeChatItems(
 
                 // 交付内容（最终答复正文）
                 deliverableItems.forEach { item ->
+                    if (item is ChatListItem.QuestionCard && result.any { it is ChatListItem.QuestionCard }) return@forEach
                     result.add(item.withTurnStart(!turnHasFirstItem))
                     turnHasFirstItem = true
                 }

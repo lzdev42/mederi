@@ -37,8 +37,6 @@ import mederi.app.shared.generated.resources.rightdock_artifacts
 import mederi.app.shared.generated.resources.rightdock_browser
 import mederi.app.shared.generated.resources.rightdock_diff
 import mederi.app.shared.generated.resources.rightdock_overview
-import mederi.app.shared.generated.resources.rightdock_plan
-import mederi.app.shared.generated.resources.rightdock_settings
 import mederi.app.shared.generated.resources.rightdock_terminal
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.DebugLog
@@ -57,7 +55,6 @@ data class DockItemData(
 fun RightDock(
     activePanel: RightDockPanel?,
     onSelectPanel: (RightDockPanel) -> Unit,
-    onOpenSettings: () -> Unit,
     hasRunningSubagents: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -66,8 +63,7 @@ fun RightDock(
     val dockItems = listOf(
         DockItemData(RightDockPanel.OVERVIEW, FeatherIcons.Activity),
         DockItemData(RightDockPanel.DIFF, FeatherIcons.GitCommit),
-        DockItemData(RightDockPanel.PLAN, FeatherIcons.FileText),
-        DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.File),
+        DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.FileText),
         DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal),
         DockItemData(RightDockPanel.BROWSER, FeatherIcons.Globe)
     )
@@ -87,7 +83,6 @@ fun RightDock(
             val label = when (item.panel) {
                 RightDockPanel.OVERVIEW -> stringResource(Res.string.rightdock_overview)
                 RightDockPanel.DIFF -> stringResource(Res.string.rightdock_diff)
-                RightDockPanel.PLAN -> stringResource(Res.string.rightdock_plan)
                 RightDockPanel.ARTIFACTS -> stringResource(Res.string.rightdock_artifacts)
                 RightDockPanel.TERMINAL -> stringResource(Res.string.rightdock_terminal)
                 RightDockPanel.BROWSER -> stringResource(Res.string.rightdock_browser)
@@ -103,18 +98,6 @@ fun RightDock(
             )
             Spacer(modifier = Modifier.height(6.dp))
         }
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        // 底部设置按钮
-        DockIconButton(
-            icon = FeatherIcons.Sliders,
-            label = stringResource(Res.string.rightdock_settings),
-            isActive = false,
-            hasBadge = false,
-            colors = colors,
-            onClick = onOpenSettings
-        )
     }
 }
 

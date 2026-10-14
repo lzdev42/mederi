@@ -61,8 +61,8 @@ fun RightExtensionPanel(
     LaunchedEffect(currentPanel) {
         if (currentPanel != null) {
             panelToDisplay = currentPanel
-            // 切换到计划等阅读面板时，若当前宽度较小，默认展开至 2/3 窗口宽度以提供最佳阅读体验
-            if (currentPanel == RightDockPanel.PLAN && readerWidthDp < defaultReaderWidthDp) {
+            // 切换到阅读面板时，若当前宽度较小，默认展开至 2/3 窗口宽度以提供最佳阅读体验
+            if (currentPanel == RightDockPanel.ARTIFACTS && readerWidthDp < defaultReaderWidthDp) {
                 readerWidthDp = defaultReaderWidthDp
             }
         }
@@ -142,8 +142,7 @@ private fun RightExtensionPanelContent(
     val panelIcon = when (panel) {
         RightDockPanel.OVERVIEW -> FeatherIcons.Activity
         RightDockPanel.DIFF -> FeatherIcons.Folder
-        RightDockPanel.PLAN -> FeatherIcons.FileText
-        RightDockPanel.ARTIFACTS -> FeatherIcons.File
+        RightDockPanel.ARTIFACTS -> FeatherIcons.FileText
         RightDockPanel.TERMINAL -> FeatherIcons.Terminal
         RightDockPanel.BROWSER -> FeatherIcons.Globe
     }
@@ -216,10 +215,6 @@ private fun RightExtensionPanelContent(
                         colors = colors
                     )
                     RightDockPanel.DIFF -> FilesPanelContent(
-                        viewModel = viewModel,
-                        colors = colors
-                    )
-                    RightDockPanel.PLAN -> PlanPanelContent(
                         viewModel = viewModel,
                         colors = colors
                     )

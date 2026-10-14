@@ -47,6 +47,7 @@ import mederi.app.shared.generated.resources.reasoning_level_minimal
 import mederi.app.shared.generated.resources.reasoning_level_none
 import mederi.app.shared.generated.resources.reasoning_level_xhigh
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.ui.WorkspaceViewModel.DocumentTarget
 import xyz.mederi.ui.components.command.SlashCommandTransformation
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -462,13 +463,18 @@ fun ChatInputCard(
                         colors = colors,
                         onRemoveImage = { viewModel.removeImage(it) },
                         onRemovePastedText = { viewModel.removePastedText(it) },
-                        onOpenImage = { title, img -> viewModel.openImageInExtension(title, img.base64DataUrl) },
+                        onOpenImage = { title, img ->
+                            viewModel.openDocument(DocumentTarget.Image(title, img.base64DataUrl))
+                        },
                         onOpenPastedText = { title, item ->
-                            viewModel.openTextInExtension(
-                                title = title,
-                                content = item.text,
-                                lineCount = item.lineCount,
-                                charCount = item.charCount
+                            viewModel.openDocument(
+                                DocumentTarget.Content(
+                                    id = "draft_pasted_${title.hashCode()}",
+                                    title = title,
+                                    content = item.text,
+                                    lineCount = item.lineCount,
+                                    charCount = item.charCount
+                                )
                             )
                         }
                     )

@@ -722,7 +722,7 @@ class WorkspaceViewModel(
     fun openLink(url: String) {
         val localPath = LinkTargetClassifier.localPathOrNull(url)
         if (localPath != null) {
-            openFile(localPath)
+            openDocument(DocumentTarget.Path(localPath))
         } else {
             openUrl(url)
         }
@@ -733,9 +733,57 @@ class WorkspaceViewModel(
      * 走 [openFile]（md → INTERNAL_TEXT → ARTIFACTS 阅读器）；遥控端/wasm 文件在 server 机器上，
      * 盲走 openFile 只会弹无用的「打开所在目录」，故保留 [openPlanFile] 走内存 planContent 兜底。
      */
+    /**
+     * 统一定义需要阅读或打开的文档目标载体。
+     */
+    sealed interface DocumentTarget {
+        /** 磁盘上的物理路径（源码文件、已落盘的 plan.md、子代理报告等） */
+        data class Path(val filePath: String) : DocumentTarget
+
+        /** 内存中的文本内容（虚拟文档、用户粘贴文本、未落盘的 Plan/Spec/Artifact） */
+        data class Content(
+            val id: String,
+            val title: String,
+            val content: String,
+            val lineCount: Int = 0,
+            val charCount: Int = 0,
+            val isStreaming: Boolean = false,
+        ) : DocumentTarget
+
+        /** 图片资源（网络链接或本地图片路径） */
+        data class Image(val title: String, val url: String) : DocumentTarget
+    }
+
+    /**
+     * 整个工作区统一的文档/文件打开入口 Action。
+     * 所有入口（Markdown 链接、计划卡、Spec、改动文件、用户粘贴大文本、产物文档、文件树）一律收敛于此。
+     */
+    fun openDocument(target: DocumentTarget) {
+        when (target) {
+            is DocumentTarget.Path -> openFile(target.filePath)
+            is DocumentTarget.Content -> openTextInExtension(
+                title = target.title,
+                content = target.content,
+                lineCount = target.lineCount,
+                charCount = target.charCount,
+                id = target.id,
+                isStreaming = target.isStreaming,
+            )
+            is DocumentTarget.Image -> openImageInExtension(
+                title = target.title,
+                imageUrl = target.url,
+            )
+        }
+    }
+
+    /**
+     * 计划全文打开路由（平台分流）：桌面端（有本地文件树 provider 且 planPath 在盘上）
+     * 走 [openFile]（md → INTERNAL_TEXT → ARTIFACTS 阅读器）；遥控端/wasm 文件在 server 机器上，
+     * 盲走 openFile 只会弹无用的「打开所在目录」，故保留 [openPlanFile] 走内存 planContent 兜底。
+     */
     fun openPlanItem(item: PlanOverviewItem) {
         if (item.planPath.isNotBlank() && appState.fileTreeProvider != null) {
-            openFile(item.planPath)
+            openDocument(DocumentTarget.Path(item.planPath))
         } else {
             openPlanFile(item)
         }
@@ -786,12 +834,21 @@ class WorkspaceViewModel(
     }
 
     fun openPlanInExtension(planId: String, title: String, content: String) {
+        val displayTitle = if (title.isNotBlank()) "计划: $title" else "计划详情"
         currentPlan = PlanItem(
             id = planId,
-            title = if (title.isNotBlank()) "计划: $title" else "计划详情",
+            title = displayTitle,
             content = content
         )
-        openDockPanel(RightDockPanel.PLAN)
+        openDocument(
+            DocumentTarget.Content(
+                id = "plan_$planId",
+                title = displayTitle,
+                content = content,
+                lineCount = content.count { it == '\n' } + 1,
+                charCount = content.length
+            )
+        )
         DebugLog.event("UI", "openPlanInExtension: planId=$planId, title='$title', contentLen=${content.length}")
     }
 
@@ -808,7 +865,7 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 在右侧阅读器打开子任务的执行清单（Spec）
+     * 在右侧统一阅读器打开子任务的执行清单（Spec）
      */
     fun openSpecInExtension(planId: String, planTitle: String, subtaskIndex: Int, subtaskName: String, specContent: String?) {
         val title = "步骤 ${subtaskIndex + 1} Spec: $subtaskName"
@@ -827,7 +884,15 @@ class WorkspaceViewModel(
             title = title,
             content = fullContent
         )
-        openDockPanel(RightDockPanel.PLAN)
+        openDocument(
+            DocumentTarget.Content(
+                id = "spec_${planId}_$subtaskIndex",
+                title = title,
+                content = fullContent,
+                lineCount = fullContent.count { it == '\n' } + 1,
+                charCount = fullContent.length
+            )
+        )
         DebugLog.event("UI", "openSpecInExtension: planId=$planId, subtask=$subtaskIndex, specLen=${specContent?.length ?: 0}")
     }
 

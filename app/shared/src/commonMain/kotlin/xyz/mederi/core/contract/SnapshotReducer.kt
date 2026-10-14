@@ -444,13 +444,22 @@ object SnapshotReducer {
                 // 等待 TOOL_CALLED（带完整 args）覆盖；不设 output（真实 output 由 TOOL_RESULT 提供）。
                 val name = payload["name"] ?: "tool"
                 val input = if (content.isBlank()) emptyMap() else parseToolArgs(content)
-                val lastBlock = updatedBlocks.lastOrNull()
-                if (lastBlock is ChatBlock.ToolCall && lastBlock.state is ToolCallState.Running) {
-                    updatedBlocks[updatedBlocks.lastIndexOf(lastBlock)] = lastBlock.copy(
-                        name = name,
-                        state = ToolCallState.Running(input = input)
+                val existing = (if (name != "tool") {
+                    updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
+                        .lastOrNull { (it.name == name || it.name == "tool") && it.state is ToolCallState.Running }
+                } else null)
+                    ?: (if (updatedBlocks.lastOrNull() is ChatBlock.ToolCall && (updatedBlocks.last() as ChatBlock.ToolCall).state is ToolCallState.Running) {
+                        updatedBlocks.last() as ChatBlock.ToolCall
+                    } else null)
+
+                if (existing != null) {
+                    val prevInput = (existing.state as? ToolCallState.Running)?.input
+                    val effectiveInput = if (input.isEmpty() && !prevInput.isNullOrEmpty()) prevInput else input
+                    updatedBlocks[updatedBlocks.lastIndexOf(existing)] = existing.copy(
+                        name = if (name != "tool") name else existing.name,
+                        state = ToolCallState.Running(input = effectiveInput)
                     )
-                } else {
+                } else if (this.conversation.status != ConversationStatus.WaitingUser) {
                     updatedBlocks.add(
                         ChatBlock.ToolCall(
                             id = "${placeholder.id}_tool_${updatedBlocks.size}",
@@ -481,8 +490,13 @@ object SnapshotReducer {
 
         currentMessages.add(placeholder.copy(blocks = updatedBlocks))
 
+        val targetStatus = if (this.conversation.status == ConversationStatus.WaitingUser) {
+            ConversationStatus.WaitingUser
+        } else {
+            ConversationStatus.Working
+        }
         return this.copy(
-            conversation = this.conversation.copy(status = ConversationStatus.Working),
+            conversation = this.conversation.copy(status = targetStatus),
             messages = currentMessages
         )
     }

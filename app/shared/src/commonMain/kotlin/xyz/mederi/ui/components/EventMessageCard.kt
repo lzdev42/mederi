@@ -29,7 +29,7 @@ import xyz.mederi.ui.host.LocalProjectFileTreeProvider
  * 通用事件消息卡片 (EventMessageCard)
  *
  * 极简单行微条：单行显示子代理终态（完成 / 失败 / 被手动取消）+ 角色名，低空间占用。
- * 报告摘要不再塞进状态行——点击整行直接滑开右侧阅读器（RightDockPanel.PLAN / Reader）查看完整 Markdown 汇报。
+ * 报告摘要不再塞进状态行——点击整行直接滑开右侧阅读器（ARTIFACTS / Reader）查看完整 Markdown 汇报。
  *
  * 职责边界：本组件**只负责三件事**——
  * ① 终态判定（三档语义色映射）、② 报告正文取数（注入的文件树 provider，失败回落 summary）、

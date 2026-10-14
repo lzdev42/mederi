@@ -8,7 +8,6 @@ package xyz.mederi.ui
 enum class RightDockPanel {
     OVERVIEW,
     DIFF,
-    PLAN,
     ARTIFACTS,
     TERMINAL,
     BROWSER

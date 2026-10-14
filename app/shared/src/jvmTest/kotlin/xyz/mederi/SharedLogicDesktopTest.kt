@@ -2583,6 +2583,72 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testLateDeltaDuringWaitingUserPreservesStatusAndDeduplicatesQuestionCard() {
+        val initialSnap = testSnapshot("conv_q_late_delta").copy(
+            conversation = testSnapshot("conv_q_late_delta").conversation.copy(status = ConversationStatus.Working)
+        )
+
+        // 1. Text delta + tool delta
+        var snap = xyz.mederi.core.contract.SnapshotReducer.apply(initialSnap, xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_DELTA,
+            sessionId = "conv_q_late_delta",
+            payload = mapOf("type" to "text", "content" to "请确认以下问题：\n")
+        ))
+        snap = xyz.mederi.core.contract.SnapshotReducer.apply(snap, xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_DELTA,
+            sessionId = "conv_q_late_delta",
+            payload = mapOf("type" to "tool_call", "name" to "ask_user", "content" to "")
+        ))
+
+        // 2. TOOL_CALLED
+        snap = xyz.mederi.core.contract.SnapshotReducer.apply(snap, xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.TOOL_CALLED,
+            sessionId = "conv_q_late_delta",
+            payload = mapOf(
+                "tool" to "ask_user",
+                "toolCallId" to "call_ask_late",
+                "args" to """{"questions":[{"id":"q1","prompt":"范围？"}]}"""
+            )
+        ))
+
+        // 3. QUESTION_REQUESTED
+        snap = xyz.mederi.core.contract.SnapshotReducer.apply(snap, xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.QUESTION_REQUESTED,
+            sessionId = "conv_q_late_delta",
+            payload = mapOf(
+                "questionId" to "q_ask_late",
+                "questions" to """[{"id":"q1","prompt":"范围？"}]"""
+            )
+        ))
+        assertEquals(ConversationStatus.WaitingUser, snap.conversation.status)
+
+        // 4. 模拟流式消费协程晚到的 TextDelta 与 ToolCallDelta
+        snap = xyz.mederi.core.contract.SnapshotReducer.apply(snap, xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_DELTA,
+            sessionId = "conv_q_late_delta",
+            payload = mapOf("type" to "text", "content" to "\n")
+        ))
+        assertEquals(ConversationStatus.WaitingUser, snap.conversation.status, "晚到 TextDelta 绝不能将 WaitingUser 刷回 Working")
+
+        snap = xyz.mederi.core.contract.SnapshotReducer.apply(snap, xyz.mederi.core.contract.models.CoreEvent(
+            type = xyz.mederi.core.contract.models.CoreEventType.MESSAGE_DELTA,
+            sessionId = "conv_q_late_delta",
+            payload = mapOf("type" to "tool_call", "name" to "ask_user", "content" to """{"questions":[{"id":"q1","prompt":"范围？"}]}""")
+        ))
+        assertEquals(ConversationStatus.WaitingUser, snap.conversation.status, "晚到 ToolCallDelta 绝不能将 WaitingUser 刷回 Working")
+        assertEquals(1, snap.messages.size, "绝不能分裂产生第二条 Assistant 消息")
+
+        val assistantMsg = snap.messages.first()
+        val toolBlocks = assistantMsg.blocks.filterIsInstance<ChatBlock.ToolCall>()
+        assertEquals(1, toolBlocks.size, "消息内必须只有 1 个 ToolCall 块，不得产生重复块")
+
+        // 5. 校验 computeChatItems 严格只发射 1 个 QuestionCard
+        val items = xyz.mederi.ui.computeChatItems(snap.messages, isWorking = false, snapshot = snap)
+        val qCards = items.filterIsInstance<xyz.mederi.ui.ChatListItem.QuestionCard>()
+        assertEquals(1, qCards.size, "单轮内必须且只能发射 1 个 QuestionCard")
+    }
+
+    @Test
     fun testSnapshotReducerQuestionResolvedThenToolResult() {
         val initialSnap = testSnapshot("conv_q_flow").copy(
             conversation = testSnapshot("conv_q_flow").conversation.copy(status = ConversationStatus.Working)
@@ -3165,7 +3231,7 @@ class SharedLogicDesktopTest {
             subtaskName = p1.subtasks[0].name,
             specContent = p1.subtasks[0].spec
         )
-        assertEquals(xyz.mederi.ui.RightDockPanel.PLAN, viewModel.activeDockPanel)
+        assertEquals(xyz.mederi.ui.RightDockPanel.ARTIFACTS, viewModel.activeDockPanel)
         assertNotNull(viewModel.currentPlan)
         assertTrue(viewModel.currentPlan!!.title.contains("步骤 1 Spec"))
         assertTrue(viewModel.currentPlan!!.content.contains("扫描所有 gradle 依赖"))
@@ -3471,5 +3537,48 @@ Summary: 子任务 0 执行完毕
             workTraces[1].items.map { it::class.simpleName },
             "第二轮 WorkTraceBlock 内部子项必须严格保持原始发生时序"
         )
+    }
+
+    @Test
+    fun testUnifiedOpenDocumentAction() = kotlinx.coroutines.runBlocking {
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
+            mockAiCore.initialize()
+            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
+            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            appState.hydrate()
+            val viewModel = WorkspaceViewModel(appState)
+
+            // 1. 测试 Content 载体打开
+            viewModel.openDocument(
+                WorkspaceViewModel.DocumentTarget.Content(
+                    id = "test_doc_1",
+                    title = "设计方案",
+                    content = "# 标题\n这是正文",
+                    lineCount = 2,
+                    charCount = 9
+                )
+            )
+            assertEquals(xyz.mederi.ui.RightDockPanel.ARTIFACTS, viewModel.activeDockPanel)
+            val textItem = viewModel.artifactItems.find { it.id == "test_doc_1" }
+            assertNotNull(textItem)
+            assertTrue(textItem is xyz.mederi.ui.ArtifactItem.Text)
+            assertEquals("设计方案", textItem.title)
+
+            // 2. 测试 Image 载体打开
+            viewModel.openDocument(
+                WorkspaceViewModel.DocumentTarget.Image(
+                    title = "架构图",
+                    url = "https://example.com/arch.png"
+                )
+            )
+            assertEquals(xyz.mederi.ui.RightDockPanel.ARTIFACTS, viewModel.activeDockPanel)
+            val imgItem = viewModel.artifactItems.filterIsInstance<xyz.mederi.ui.ArtifactItem.Image>().find { it.imageUrl == "https://example.com/arch.png" }
+            assertNotNull(imgItem)
+            assertEquals("架构图", imgItem.title)
+        } finally {
+            testScope.cancel()
+        }
     }
 }

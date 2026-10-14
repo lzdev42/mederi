@@ -149,7 +149,6 @@ fun MainScreen() {
                     isLeftSidebarOpen = isMobileDrawerOpen,
                     onToggleLeftSidebar = { isMobileDrawerOpen = !isMobileDrawerOpen },
                     onOpenProjectPicker = openProjectPicker,
-                    onOpenSettings = { workspaceViewModel.openSettings() },
                     imeOverlayActive = isSettingsVisible || compactionNotice != null
                 )
 
@@ -261,7 +260,6 @@ fun MainScreen() {
                         isLeftSidebarOpen = true,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(false) },
                         onOpenProjectPicker = openProjectPicker,
-                        onOpenSettings = { workspaceViewModel.openSettings() },
                         imeOverlayActive = isSettingsVisible || compactionNotice != null
                     )
                 }
@@ -278,7 +276,6 @@ fun MainScreen() {
                         isLeftSidebarOpen = isHoverRevealed,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(true) },
                         onOpenProjectPicker = openProjectPicker,
-                        onOpenSettings = { workspaceViewModel.openSettings() },
                         imeOverlayActive = isSettingsVisible || compactionNotice != null
                     )
 

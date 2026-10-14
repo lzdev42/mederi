@@ -59,6 +59,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.Project
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.WorkspaceViewModel.DocumentTarget
 import xyz.mederi.ui.components.atoms.FileType
 import xyz.mederi.ui.host.FileNode
 import xyz.mederi.ui.host.LocalProjectFileTreeProvider
@@ -221,9 +222,9 @@ internal fun TreePanelContent(
                         },
                         onOpen = { n ->
                             activePath = n.path
-                            // 走 openFile 统一路由：读盘 + 二进制守卫都在路由内部，
+                            // 走 openDocument 统一路由：读盘 + 二进制守卫都在路由内部，
                             // 内部能看的开 ARTIFACTS，其余弹外部打开/揭示目录确认框
-                            viewModel.openFile(n.path)
+                            viewModel.openDocument(DocumentTarget.Path(n.path))
                         },
                     )
                 }

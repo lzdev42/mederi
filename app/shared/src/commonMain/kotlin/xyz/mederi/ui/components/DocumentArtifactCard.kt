@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -32,6 +33,7 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.attachment_lines
 import mederi.app.shared.generated.resources.attachment_reader
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.formatMessageTime
 import xyz.mederi.theme.LocalMederiColors
 
 /**
@@ -64,51 +66,84 @@ fun DocumentArtifactCard(
     val bg by animateColorAsState(
         targetValue = if (hovered) colors.surfaceHover else colors.surfaceCard,
         animationSpec = tween(120),
-        label = "artifactChipBg",
+        label = "artifactCardBg",
     )
     val border by animateColorAsState(
-        targetValue = if (hovered) colors.borderStrong else colors.divider,
+        targetValue = if (hovered) colors.accentBorder else colors.divider,
         animationSpec = tween(120),
-        label = "artifactChipBorder",
+        label = "artifactCardBorder",
     )
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(bg)
-            .border(1.dp, border, RoundedCornerShape(8.dp))
+            .border(1.dp, border, RoundedCornerShape(10.dp))
             .clickable(interactionSource = interactionSource, onClick = { onOpenInExtension() })
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // 生成中：小状态指示；完成：文件图标
-        if (isRunning) {
-            CircularProgressIndicator(
-                color = colors.statusWorking,
-                strokeWidth = 1.3.dp,
-                modifier = Modifier.size(10.dp)
-            )
-        } else {
-            Icon(
-                imageVector = FeatherIcons.FileText,
-                contentDescription = null,
-                tint = colors.accentText,
-                modifier = Modifier.size(13.dp)
-            )
+        // 左侧 38x38dp 独立图标容器，扎实质感
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(colors.accentBg)
+                .border(1.dp, colors.accentBorder.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isRunning) {
+                CircularProgressIndicator(
+                    color = colors.statusWorking,
+                    strokeWidth = 1.6.dp,
+                    modifier = Modifier.size(16.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = FeatherIcons.FileText,
+                    contentDescription = null,
+                    tint = colors.accentText,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(
-                text = title,
-                color = colors.textPrimary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+        // 中间主信息：标题与元数据
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = title,
+                    color = colors.textPrimary,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(colors.surfaceWorkspace)
+                        .border(0.5.dp, colors.divider, RoundedCornerShape(3.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = "DOC",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.textMuted
+                    )
+                }
+            }
 
-            val timeStr = if (createdAt > 0) xyz.mederi.formatMessageTime(createdAt) else ""
+            val timeStr = if (createdAt > 0) formatMessageTime(createdAt) else ""
             val meta = listOfNotNull(
                 timeStr.takeIf { it.isNotBlank() },
                 stringResource(Res.string.attachment_lines, lineCount),
@@ -117,27 +152,33 @@ fun DocumentArtifactCard(
             Text(
                 text = meta,
                 color = colors.textSecondary,
-                fontSize = 11.sp,
+                fontSize = 11.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
 
-        // 尾部“阅读器”胶囊（icon + 文案，accentText）
+        // 右侧操作 CTA 胶囊按钮
         Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (hovered) colors.accentPrimary else colors.accentBg)
+                .border(1.dp, if (hovered) colors.accentPrimary else colors.accentBorder, RoundedCornerShape(6.dp))
+                .padding(horizontal = 9.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Icon(
-                imageVector = FeatherIcons.Sidebar,
-                contentDescription = null,
-                tint = colors.accentText,
-                modifier = Modifier.size(11.dp)
-            )
             Text(
                 text = stringResource(Res.string.attachment_reader),
-                color = colors.accentText,
-                fontSize = 11.sp
+                color = if (hovered) colors.onInverted else colors.accentText,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Icon(
+                imageVector = FeatherIcons.ExternalLink,
+                contentDescription = null,
+                tint = if (hovered) colors.onInverted else colors.accentText,
+                modifier = Modifier.size(11.dp)
             )
         }
     }

@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.delay
+import xyz.mederi.formatMessageTime
 import xyz.mederi.util.rememberClipboardCopy
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.action_rollback
@@ -194,7 +195,7 @@ fun UserMessageFooter(
                 modifier = Modifier.size(11.dp)
             )
             Text(
-                text = xyz.mederi.formatMessageTime(createdAt),
+                text = formatMessageTime(createdAt),
                 color = colors.textMuted.copy(alpha = 0.8f),
                 fontSize = 10.5.sp,
                 fontFamily = FontFamily.Monospace
@@ -269,7 +270,7 @@ fun AssistantMessageFooter(
         if (ms > 0) segments.add(formatSeconds(ms))
     }
     footer.completedAtMs?.let { ms ->
-        if (ms > 0) segments.add(stringResource(Res.string.footer_completed, xyz.mederi.formatMessageTime(ms)))
+        if (ms > 0) segments.add(stringResource(Res.string.footer_completed, formatMessageTime(ms)))
     }
 
     if (segments.isEmpty() && lastMessageText.isBlank() && fullTurnText.isBlank()) return

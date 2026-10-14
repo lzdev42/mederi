@@ -42,6 +42,7 @@ import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.RawMessagesViewModel
 import xyz.mederi.ui.TerminalViewModel
 import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.WorkspaceViewModel.DocumentTarget
 import xyz.mederi.ui.appstate.LocalAppState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.feathericons.Sidebar
@@ -113,7 +114,6 @@ fun Workspace(
     isLeftSidebarOpen: Boolean = true,
     onToggleLeftSidebar: () -> Unit = {},
     onOpenProjectPicker: () -> Unit = {},
-    onOpenSettings: () -> Unit = {},
     imeOverlayActive: Boolean = false
 ) {
     val colors = LocalMederiColors.current
@@ -411,7 +411,6 @@ fun Workspace(
                     RightDock(
                         activePanel = viewModel.activeDockPanel,
                         onSelectPanel = { panel -> viewModel.toggleDockPanel(panel) },
-                        onOpenSettings = onOpenSettings,
                         hasRunningSubagents = viewModel.hasRunningSubagents
                     )
                 }
@@ -651,7 +650,13 @@ private fun MessageList(
                             EventMessageCard(
                                 item = item,
                                 onOpenReport = { title, content ->
-                                    viewModel.openPlanInExtension(item.agentId, title, content)
+                                    viewModel.openDocument(
+                                        DocumentTarget.Content(
+                                            id = "report_${item.agentId}",
+                                            title = title,
+                                            content = content
+                                        )
+                                    )
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -674,7 +679,13 @@ private fun MessageList(
                                 onOpenInExtension = {
                                     val content = item.request.planContent
                                         ?: "# ${item.request.title}\n\n${item.request.summary}"
-                                    viewModel.openPlanInExtension(item.request.id, item.request.title, content)
+                                    viewModel.openDocument(
+                                        DocumentTarget.Content(
+                                            id = "plan_${item.request.id}",
+                                            title = item.request.title,
+                                            content = content
+                                        )
+                                    )
                                 },
                                 modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
                             )
@@ -723,13 +734,15 @@ private fun MessageList(
                                 isStreaming = item.isStreaming,
                                 isCompleted = item.isCompleted,
                                 onOpenInExtension = {
-                                    viewModel.openTextInExtension(
-                                        title = item.title,
-                                        content = item.content,
-                                        lineCount = item.lineCount,
-                                        charCount = item.charCount,
-                                        id = item.artifactId,
-                                        isStreaming = item.isStreaming,
+                                    viewModel.openDocument(
+                                        DocumentTarget.Content(
+                                            id = item.artifactId,
+                                            title = item.title,
+                                            content = item.content,
+                                            lineCount = item.lineCount,
+                                            charCount = item.charCount,
+                                            isStreaming = item.isStreaming,
+                                        )
                                     )
                                 },
                                 modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
@@ -855,10 +868,10 @@ private fun MessageList(
                             onReviewClick = {
                                 viewModel.openDiff(item.messageId, null)
                             },
-                            // 文件行点击 = 打开文件本身（走 viewModel.openFile 统一路由：内部能看的直接开，
+                            // 文件行点击 = 打开文件本身（走 viewModel.openDocument 统一路由：内部能看的直接开，
                             // 其余弹「用 XXX 打开 / 打开所在目录」）；审阅按钮才看 diff
                             onFileClick = { filePath ->
-                                viewModel.openFile(filePath)
+                                viewModel.openDocument(DocumentTarget.Path(filePath))
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -909,7 +922,7 @@ private fun MessageList(
                                                         .heightIn(max = 180.dp)
                                                         .clip(RoundedCornerShape(8.dp))
                                                         .clickable {
-                                                            viewModel.openImageInExtension(imageTitle, imgUrl)
+                                                            viewModel.openDocument(DocumentTarget.Image(imageTitle, imgUrl))
                                                         }
                                                 )
                                             }
@@ -928,11 +941,14 @@ private fun MessageList(
                                                 UserPastedTextCard(
                                                     attachment = pasted,
                                                     onOpenInExtension = {
-                                                        viewModel.openTextInExtension(
-                                                            title = pastedTitle,
-                                                            content = pasted.text,
-                                                            lineCount = pasted.lineCount,
-                                                            charCount = pasted.charCount
+                                                        viewModel.openDocument(
+                                                            DocumentTarget.Content(
+                                                                id = "pasted_${pasted.index}",
+                                                                title = pastedTitle,
+                                                                content = pasted.text,
+                                                                lineCount = pasted.lineCount,
+                                                                charCount = pasted.charCount
+                                                            )
                                                         )
                                                     }
                                                 )
@@ -1051,7 +1067,12 @@ private fun AssistantImagesView(
                     .background(colors.surfaceCard)
                     .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
                     .clickable {
-                        viewModel.openImageInExtension(generatedTitle, imgUrl)
+                        viewModel.openDocument(
+                            DocumentTarget.Image(
+                                title = generatedTitle,
+                                url = imgUrl
+                            )
+                        )
                     }
             ) {
                 InkImage(
