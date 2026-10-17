@@ -232,7 +232,19 @@ enum class CoreEventType {
     SUBAGENT_COMPLETED,
     SUBAGENT_ERROR,
     SUBAGENT_STOPPED,
-    SUBAGENT_DISCARDED
+    SUBAGENT_DISCARDED,
+
+    /**
+     * 后台任务生命周期事件（与 core EventType.BACKGROUND_TASK_* 同名对齐，EnumMirrorContractTest
+     * 锁死两侧枚举名集合相等，必须两侧同时加）。语义：STARTED = 后台命令/定时器已启动；
+     * COMPLETED = 正常完成；ERROR = 失败/超时；STOPPED = 被用户/AI 主动停止。
+     * payload: taskId/taskType(command|timer)/status(command|timer)/command?/description?/
+     * pid?/exitCode?/output?(截断 ~4000 字符)/startedAt/completedAt?。UI 后台任务面板消费。
+     */
+    BACKGROUND_TASK_STARTED,
+    BACKGROUND_TASK_COMPLETED,
+    BACKGROUND_TASK_ERROR,
+    BACKGROUND_TASK_STOPPED
 }
 
 /**

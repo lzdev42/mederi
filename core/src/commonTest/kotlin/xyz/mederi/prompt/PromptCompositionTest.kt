@@ -22,12 +22,15 @@ class PromptCompositionTest {
     }
 
     @Test
-    fun executor_containsGeneralAndCodingPrinciples() {
+    fun executor_hasIndependentPrompt() {
         val prompt = SystemPrompts.forSubagent(SubagentRole.EXECUTOR)
-        assertTrue(prompt.contains("# General Principles"), "Executor 应包含通用原则")
-        assertTrue(prompt.contains("# Coding Principles"), "Executor 应包含编码原则")
-        assertTrue(prompt.contains("Fix root causes, never suppress symptoms"), "Executor 应强化根因解决")
-        assertTrue(prompt.contains("Minimal surgical edits"), "Executor 应包含最小化修改原则")
+        assertTrue(prompt.contains("Executor Subagent"), "Executor 应包含独立身份标识")
+        assertTrue(prompt.contains("Compile, Not Test"), "Executor 应包含编译约束")
+        assertTrue(prompt.contains("SPEC_FEEDBACK"), "Executor 应包含 SPEC_FEEDBACK 格式")
+        assertTrue(prompt.contains("Do NOT explore the codebase"), "Executor 应包含读码边界约束")
+        assertFalse(prompt.contains("# General Principles"), "Executor 不应包含通用原则（主代理的）")
+        assertFalse(prompt.contains("# Coding Principles"), "Executor 不应包含编码原则（主代理的）")
+        assertFalse(prompt.contains("do NOT transcribe"), "Executor 不应包含旧 spec 转录约束")
     }
 
     @Test

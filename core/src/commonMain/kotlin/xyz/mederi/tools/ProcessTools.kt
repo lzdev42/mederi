@@ -8,7 +8,7 @@ import kotlinx.serialization.Serializable
 import xyz.mederi.tools.sandbox.ProcessRegistry
 
 /**
- * 进程管理工具：管理 mederi 通过 execute_command 启动的进程组。
+ * 进程管理工具：管理 mederi 通过 bash 启动的进程组。
  *
  * 为什么需要（docs/sandbox-plan.md）：macOS Seatbelt 无 process-signal 操作，沙箱内命令
  * 无法 kill 任何进程（连自己 spawn 的都不行）。list_processes / stop_process 在宿主侧
@@ -25,8 +25,8 @@ class ProcessTools {
 
     inner class ListProcessesTool : SimpleTool<ListProcessesArgs>(
         argsType = typeToken<ListProcessesArgs>(),
-        name = "list_processes",
-        description = "List process groups started by mederi via execute_command that are still running (pid / command / working dir / start time). The pid output is used by stop_process."
+        name = ToolName.LIST_PROCESSES.value,
+        description = "List process groups started by mederi via bash that are still running (pid / command / working dir / start time). The pid output is used by stop_process."
     ) {
         override suspend fun execute(args: ListProcessesArgs): String {
             val entries = ProcessRegistry.list()
@@ -52,14 +52,14 @@ class ProcessTools {
 
     inner class StopProcessTool : SimpleTool<StopProcessArgs>(
         argsType = typeToken<StopProcessArgs>(),
-        name = "stop_process",
-        description = "Stop a process started by mederi via execute_command (and its whole child tree). Only processes started by mederi (listable via list_processes) can be stopped."
+        name = ToolName.STOP_PROCESS.value,
+        description = "Stop a process started by mederi via bash (and its whole child tree). Only processes started by mederi (listable via list_processes) can be stopped."
     ) {
         override suspend fun execute(args: StopProcessArgs): String {
             if (args.pid <= 0) return "Error: pid must be a positive number from list_processes."
             val entry = ProcessRegistry.get(args.pid)
                 ?: return "Error: pid ${args.pid} is not a mederi-managed process (nothing to stop). " +
-                    "Only processes started via execute_command and still running are manageable."
+                    "Only processes started via bash and still running are manageable."
             if (!entry.isAlive()) {
                 ProcessRegistry.remove(args.pid)
                 return "Process ${args.pid} has already exited."

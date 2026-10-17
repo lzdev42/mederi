@@ -117,6 +117,9 @@ class MederiConfig {
      */
     var userAgent: String = "Mederi/dev"
 
+    /** 自动压缩触发阈值百分比 provider（默认 70%）。MederiAiCore 注入 MutableStateFlow 读取 lambda。 */
+    var compactionThresholdPercent: () -> Int = { 70 }
+
     // 预留扩展点，例如：
     // var eventStore: EventStore? = null
     // var clock: Clock = Clock.System

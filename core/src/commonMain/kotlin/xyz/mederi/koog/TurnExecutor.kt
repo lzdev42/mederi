@@ -90,7 +90,7 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * Koog JVM 的 AIAgentConfigBuilder 默认 JacksonSerializer()——裸 ObjectMapper 没注册
  * KotlinModule，无法反序列化 Kotlin data class（症状："no Creators, like default
- * constructor, exist"，所有带嵌套参数的工具调用必炸，如 create_plan）。
+ * constructor, exist"，所有带嵌套参数的工具调用必炸，如 write_plan）。
  * 显式换 KotlinxSerializer：与工具 Args 的 kotlinx @Serializable 同源，且
  * ignoreUnknownKeys/coerceInputValues/explicitNulls=false 对 LLM 生成的参数健壮
  * （多传字段忽略、null 当缺省、非法枚举回退默认）。
@@ -143,7 +143,8 @@ class TurnExecutor(
      * 合并进父会话当前活跃 turn 的 tracker——修复"turn 改动摘要不含子代理改动"。
      */
     private val onTurnDiff: ((xyz.mederi.tools.diff.TurnDiff) -> Unit)? = null,
-    private val subagentConfigManager: SubagentConfigManager? = null
+    private val subagentConfigManager: SubagentConfigManager? = null,
+    private val compactionThresholdPercent: () -> Int = { 70 },
 ) {
 
     /**
@@ -157,7 +158,8 @@ class TurnExecutor(
         providerManager = providerManager,
         projectManager = projectManager,
         mcpConnector = mcpConnector,
-        skills = skills
+        skills = skills,
+        compactionThresholdPercent = compactionThresholdPercent  // 新增
     )
 
     private val subagentManager = SubagentManager(
@@ -169,12 +171,25 @@ class TurnExecutor(
         maxConcurrentProvider = subagentConfigManager?.let { cfg -> { cfg.getMaxConcurrentSubagents() } }
     )
 
+    // 后台任务管理（Command / Timer）：照搬 subagentManager 旁——挂在全局 scope 上，
+    // 生命周期事件（BACKGROUND_TASK_STARTED/COMPLETED/ERROR/STOPPED）经 eventBus 发射，
+    // 终态时本类组装 <event_message> 唤醒父 turn；abort/rollback 级联收割（stopAllForSession）。
+    private val backgroundTaskManager = xyz.mederi.tools.background.BackgroundTaskManager(
+        scope = scope,
+        eventBus = eventBus
+    )
+
     /** 事件消息等待队列（按 parentSessionId 分组）：子代理终态时暂存，父 turn 空闲时冲刷唤醒新 turn。 */
     private val pendingEventMessages = ConcurrentHashMap<String, MutableList<String>>()
     private val eventMessageLock = Mutex()
 
     /** 引导消息等待队列（按 sessionId 分组）：用户在 turn 运行时插话，工具边界时注入 prompt。 */
     private val pendingSteerings = ConcurrentHashMap<String, java.util.concurrent.ConcurrentLinkedQueue<SteeringItem>>()
+
+    /** 当前正在进行上下文压缩的会话集合（排他互斥，防止压缩被新轮次/事件抢占打断）。 */
+    private val compactingSessions = ConcurrentHashMap.newKeySet<String>()
+
+    fun isCompacting(sessionId: String): Boolean = compactingSessions.contains(sessionId)
 
     init {
         // 监听系统事件总线：当子代理（或未来其他异步任务）产生终态事件时，组装 <event_message> 唤醒父 turn
@@ -187,6 +202,14 @@ class TurnExecutor(
                         EventType.SUBAGENT_STOPPED -> {
                             handleSubagentTerminalEvent(event)
                         }
+                        EventType.BACKGROUND_TASK_COMPLETED,
+                        EventType.BACKGROUND_TASK_ERROR -> {
+                            handleBackgroundTaskTerminalEvent(event)
+                        }
+                        // BACKGROUND_TASK_STOPPED 不唤醒 AI：用户手动停止任务后
+                        // 通常想自己说话，无需 AI 被推过来。停止信息经
+                        // EnvironmentInfoProvider 注入下轮 Runtime Environment 段，
+                        // AI 在用户下次发消息时自然得知。
                         else -> { /* 其余事件暂不转化为 event_message */ }
                     }
                 }
@@ -279,6 +302,26 @@ class TurnExecutor(
         DebugLog.data("TurnExec", "sessionId", sessionId)
         DebugLog.data("TurnExec", "session.status", session.status)
 
+        // 正在压缩中：引导消息直接入队 pendingSteerings，等压缩完成后的工具边界消费，不触发 sendMessage 竞争
+        if (compactingSessions.contains(sessionId)) {
+            val text = request.parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.Text>()
+                .joinToString("\n") { it.text }
+            val item = SteeringItem(
+                sessionId = sessionId,
+                text = text,
+                request = request,
+                timestamp = System.currentTimeMillis()
+            )
+            val queue = pendingSteerings.computeIfAbsent(sessionId) { java.util.concurrent.ConcurrentLinkedQueue() }
+            queue.offer(item)
+            DebugLog.event("TurnExec", "steering item enqueued while compacting for session $sessionId: text='$text', queueSize=${queue.size}")
+            emit(sessionId, EventType.STATUS, payload = mapOf(
+                "status" to "steering_queued",
+                "message" to text
+            ))
+            return
+        }
+
         // 若会话当前非 RUNNING 且无活跃 job，直接回退走正常 sendMessage
         if (session.status != SessionStatus.RUNNING && activeJobs[sessionId]?.isActive != true) {
             DebugLog.info("TurnExec", "Session $sessionId is not running a turn; falling back to sendMessage")
@@ -325,16 +368,23 @@ class TurnExecutor(
         DebugLog.data("TurnExec", "session.aiModel", "${session.aiModel?.id} (${session.aiModel?.name}), providerModelId=${session.aiModel?.providerModelId}")
         DebugLog.data("TurnExec", "session.reasoningLevel", session.reasoningLevel)
 
+        if (compactingSessions.contains(sessionId)) {
+            throw IllegalStateException(
+                "Session $sessionId is currently compacting. Wait for it to complete or abort it first."
+            )
+        }
+
         val hasPendingQuestion = questionRequesters[sessionId]?.hasPending() == true
         val hasPendingPlanApproval = planApprovalRequesters[sessionId]?.hasPending() == true
         if (hasPendingQuestion || hasPendingPlanApproval) {
             DebugLog.info("TurnExec", "User sent message while question/plan approval pending for session $sessionId; aborting previous turn cleanly")
-            // 计划待批准时用户直接继续对话 ≠ 拒绝（三条硬规则之一）：先给挂起的 create_plan
+            // 计划待批准时用户直接继续对话 ≠ 拒绝（三条硬规则之一）：先给挂起的 write_plan
             // 工具调用补写一条中性 ToolResult 落库（非批准/非拒绝/非作废），再中止旧 turn。
             // 这样下一轮 AI 视图无悬空 tool call，且明确知道计划仍 PENDING_APPROVAL——绝不会
             // 被误解成"拒绝"而反问用户为什么。abort 会取消 plan 工具协程（其返回不落盘），
             // 这里的主动落库是中性结果的唯一权威写入，确定性由它保证。
             if (hasPendingPlanApproval) injectNeutralPlanToolResult(sessionId)
+            if (hasPendingQuestion) injectAskUserDeclinedToolResult(sessionId)
             abortAndJoin(sessionId)
         } else {
             if (session.status == SessionStatus.RUNNING) {
@@ -428,20 +478,27 @@ class TurnExecutor(
         } else basePrompt
         // AGENTS.md 指令链注入（代码级自动读取）：git 根 → 项目目录浅→深。
         // 每轮重建（文件可能被用户/模型改过）；读取失败不阻塞 turn。
-        val systemPromptBase = runCatching {
-            SystemPrompts.withProjectRules(
-                systemPromptWithSkills,
-                agentsFileLoader.loadInstructionChain(project.directory)
-            )
-        }.getOrElse { e ->
-            DebugLog.error("TurnExec", "加载 AGENTS.md 失败（不阻塞 turn）: ${e.message}", e)
+        // 仅主代理（subagentRole == null）注入；子代理（executor/researcher）不注入——
+        // 项目规则由主代理在 spec 中编入。
+        val systemPromptBase = if (subagentRole == null) {
+            runCatching {
+                SystemPrompts.withProjectRules(
+                    systemPromptWithSkills,
+                    agentsFileLoader.loadInstructionChain(project.directory)
+                )
+            }.getOrElse { e ->
+                DebugLog.error("TurnExec", "加载 AGENTS.md 失败（不阻塞 turn）: ${e.message}", e)
+                systemPromptWithSkills
+            }
+        } else {
             systemPromptWithSkills
         }
         // 装配顺序不变量 = 静态骨架 → skills → AGENTS.md → 动态 plan/todo + 环境信息后缀。
         // 顺序被 TurnExecutorPromptOrderTest 锁定（OpenAI 按最长前缀缓存，动态内容必须永远在最后）。
         val commandSandbox = xyz.mederi.tools.sandbox.CommandSandbox(projectDirs)
         val planTodoSuffix = if (subagentRole == null) SystemPrompts.dynamicSuffix(activePlanContent, activeTodoContent) else ""
-        val envSuffix = EnvironmentInfoProvider.build(commandSandbox, projectDirs)
+        val stoppedTasks = backgroundTaskManager.consumeStoppedForSession(sessionId)
+        val envSuffix = EnvironmentInfoProvider.build(commandSandbox, projectDirs, stoppedTasks)
         val dynamicSuffix = planTodoSuffix + envSuffix
         val systemPrompt = systemPromptBase + dynamicSuffix
         DebugLog.data("TurnExec", "agentMode", agentMode)
@@ -581,6 +638,8 @@ class TurnExecutor(
         if (stoppedSubagents > 0) {
             DebugLog.event("TurnExec", "abort: cascade-stopped $stoppedSubagents subagent(s) of session $sessionId")
         }
+        // 后台任务（Command / Timer）同样挂在全局 scope 上，不随父 turn job 取消而亡——一并级联收割
+        backgroundTaskManager.stopAllForSession(sessionId)
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         pendingEventMessages.remove(sessionId)
@@ -612,6 +671,8 @@ class TurnExecutor(
         // 与 abort 同语义：回滚 = 撤销到目标消息，其后发生的一切都不该继续——
         // 后台子代理一并收割（幂等，abort 路径已收过的这里是 0）
         subagentManager.stopAllForSession(sessionId)
+        // 后台任务一并收割（幂等，abort 路径已收过的这里是 0）
+        backgroundTaskManager.stopAllForSession(sessionId)
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         pendingEventMessages.remove(sessionId)
@@ -638,6 +699,8 @@ class TurnExecutor(
         if (discarded.isNotEmpty()) {
             DebugLog.event("TurnExec", "rollbackAndJoin: silently discarded ${discarded.size} subagent(s) of session $sessionId: $discarded")
         }
+        // 后台任务一并收割（回滚点之后启动的后台命令/定时器不再继续）
+        backgroundTaskManager.stopAllForSession(sessionId)
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         pendingEventMessages.remove(sessionId)
@@ -663,30 +726,19 @@ class TurnExecutor(
     fun stopSubagent(agentId: String, reason: String = SubagentManager.REASON_STOPPED_BY_USER): String =
         subagentManager.stop(agentId, reason = reason)
 
+    fun listBackgroundTasksForSession(sessionId: String): List<xyz.mederi.tools.background.BackgroundTaskManager.BackgroundTaskEntry> =
+        backgroundTaskManager.listForSession(sessionId)
+
+    fun stopBackgroundTask(taskId: String): String? =
+        backgroundTaskManager.stop(taskId)
+
     suspend fun resolvePlanApproval(
         sessionId: String,
         planId: String,
-        approved: Boolean,
-        aiModel: AIModel? = null,
-        reasoningLevel: ReasoningLevel? = null
+        approved: Boolean
     ): Boolean {
-        // 批准模型 = 用户批准时刻输入框选中的模型：写入 session（"最后一次选择"语义，
-        // updateAgentConfig 的 null=不覆盖，agentMode 保持原值）。
-        // 场景：create_plan（模型A）挂起等批准期间用户切到模型B再点批准——
-        // 同一 turn 后续 spawn_agent 动态读 session 拿到 B，子代理按 B 执行。
-        // 仅批准时写入；拒绝不动（拒绝后的修订走新 turn，sendMessage 自带模型）。
-        if (approved && aiModel != null) {
-            sessionStore.updateAgentConfig(
-                sessionId,
-                aiModel = aiModel,
-                reasoningLevel = reasoningLevel
-            )
-            DebugLog.data(
-                "TurnExec", "plan approval model override",
-                "sessionId=$sessionId, planId=$planId, model=${aiModel.id} (${aiModel.name}), reasoning=$reasoningLevel"
-            )
-        }
-        // 同 turn 批准：requester 存活时走内存 CompletableDeferred 唤醒挂起的 create_plan 工具协程，
+        DebugLog.info("TurnExec", "resolvePlanApproval: sessionId=$sessionId, planId=$planId, approved=$approved")
+        // 同 turn 批准：requester 存活时走内存 CompletableDeferred 唤醒挂起的 write_plan 工具协程，
         // AI 在同一 turn 内立即收到"已批准、去执行"，不落内部消息。
         val requester = planApprovalRequesters[sessionId]
         if (requester != null && requester.hasPending()) {
@@ -697,7 +749,7 @@ class TurnExecutor(
         // 无法唤醒任何挂起协程。此时把目标计划改 APPROVED 落盘，再以一条内部消息（UI 隐藏、AI 可见）
         // 启动新 turn，让 AI 读到 Active Plan 已是 APPROVED 后自行走执行链（generate_spec → spawn → verify）。
         // 拒绝（approved=false）无存活 turn 可唤醒、无状态无需变更，直接返回 false（计划保持 PENDING_APPROVAL，
-        // 由用户继续对话或下个 create_plan 处理）。批准模型写入逻辑在上面已统一执行。
+        // 由用户继续对话或下个 write_plan 处理）。批准模型写入逻辑在上面已统一执行。
         if (!approved) return false
 
         val session = sessionStore.get(sessionId) ?: return false
@@ -734,7 +786,7 @@ class TurnExecutor(
                 "Plan '$approvedPlan.title' (id=$planId) has been approved by the user. " +
                 "Execute it now: for each pending subtask, call generate_spec then subagent(SPAWN, planId=$planId, ...), " +
                 "then verify_subtask. Do not re-create or re-ask for approval."
-        val effectiveModel = aiModel ?: session.aiModel
+        val effectiveModel = session.aiModel
         val providerId = effectiveModel?.let { model ->
             providerManager.listWithoutKeys().firstOrNull { p -> p.models.any { it.id == model.id } }?.id
         }
@@ -744,7 +796,7 @@ class TurnExecutor(
                 agentConfig = xyz.mederi.api.AgentConfig(
                     agentMode = session.agentMode,
                     aiModel = effectiveModel,
-                    reasoningLevel = reasoningLevel ?: session.reasoningLevel
+                    reasoningLevel = session.reasoningLevel
                 ),
                 parts = listOf(MessagePart.Text(internalPrompt)),
                 // 内部消息轮沿用会话当前模型所属供应商记忆中的选定 key（无记忆则 null → 回落默认 key）
@@ -755,7 +807,7 @@ class TurnExecutor(
     }
 
     /**
-     * 计划待批准时用户直接继续对话：给挂起的 create_plan 工具调用补写一条中性
+     * 计划待批准时用户直接继续对话：给挂起的 write_plan 工具调用补写一条中性
      * [xyz.mederi.tools.PlanTools.USER_REPLIED_NEUTRAL] ToolResult 落库。
      *
      * 背景：plan 工具悬在 approval requester 时，其 ToolCall 已由增量持久化落库，但结果未写。
@@ -782,7 +834,37 @@ class TurnExecutor(
             status = xyz.mederi.domain.model.MessageStatus.COMPLETED,
             createdAt = java.time.Instant.now().toString()
         ))
-        DebugLog.event("TurnExec", "injected neutral ToolResult for pending create_plan call id=${pendingCall.id}")
+        DebugLog.event("TurnExec", "injected neutral ToolResult for pending write_plan call id=${pendingCall.id}")
+    }
+
+    /**
+     * ask_user 挂起时用户直接继续对话：给挂起的 ask_user 工具调用补写一条 declined
+     * ToolResult 落库（与 [injectNeutralPlanToolResult] 对称）。
+     *
+     * 背景：ask_user 工具悬在 QuestionRequester 时，其 ToolCall 已落库但结果未写。
+     * 若直接 abort，下一轮 Koog 加载历史会看到"无结果的 tool call"，UI 也会误显"已回答"
+     * （Pending 状态被 ToolCallsBlock 当作已回答）。这里主动补写 declined 结果，
+     * 让下一轮 AI 视图有完整工具循环，UI 工具行正确显示"已拒绝回答"。
+     */
+    private suspend fun injectAskUserDeclinedToolResult(sessionId: String) {
+        val history = historyStore.load(sessionId)
+        val pendingCall = history.asReversed().firstNotNullOfOrNull { msg ->
+            msg.parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.ToolCall>()
+                .firstOrNull { it.tool == "ask_user" }
+        } ?: return
+        historyStore.append(sessionId, xyz.mederi.domain.model.Message(
+            id = "msg_${java.util.UUID.randomUUID().toString().take(8)}",
+            sessionId = sessionId,
+            role = xyz.mederi.domain.model.MessageRole.USER,
+            parts = listOf(xyz.mederi.domain.model.MessagePart.ToolResult(
+                id = pendingCall.id,
+                tool = pendingCall.tool,
+                output = "User declined to answer the questions."
+            )),
+            status = xyz.mederi.domain.model.MessageStatus.COMPLETED,
+            createdAt = java.time.Instant.now().toString()
+        ))
+        DebugLog.event("TurnExec", "injected declined ToolResult for pending ask_user call id=${pendingCall.id}")
     }
 
     /**
@@ -832,7 +914,14 @@ class TurnExecutor(
         emit(sessionId, EventType.SESSION_UPDATED)
 
         try {
-            compressOnce(session, provider, model, effectiveReasoningLevel, SystemPrompts.build(session.agentMode))
+            compressOnce(
+                session = session,
+                provider = provider,
+                model = model,
+                reasoningLevel = effectiveReasoningLevel,
+                systemPrompt = SystemPrompts.build(session.agentMode),
+                keepLastMessages = MANUAL_KEEP_LAST_MESSAGES
+            )
         } catch (e: Throwable) {
             val record = ErrorCollector.collect(e, ErrorContext(
                 phase = "compression",
@@ -860,75 +949,89 @@ class TurnExecutor(
         model: AIModel,
         reasoningLevel: ReasoningLevel,
         systemPrompt: String,
-        apiKeyId: String? = null
+        apiKeyId: String? = null,
+        keepLastMessages: Int? = null
     ) {
-        val resolvedKey = apiKeyResolver.resolve(provider.id, apiKeyId)
-        val apiKey = resolvedKey.value
+        compactingSessions.add(session.id)
+        try {
+            val resolvedKey = apiKeyResolver.resolve(provider.id, apiKeyId)
+            val apiKey = resolvedKey.value
 
-        // 轮询：resolved value 为 __rotate__ 时走重试换 key（与 runTurn 共用同一计数器）
-        val client: ai.koog.prompt.executor.clients.LLMClient =
-            if (apiKey == API_KEY_ROTATION_ID) {
-                val keys = providerManager.listKeys(provider.id)
-                    .filter { it.id != API_KEY_ROTATION_ID }
-                    .mapNotNull { k -> providerManager.getKeyValue(provider.id, k.id) }
-                    .filter { it.isNotBlank() }
-                if (keys.isNotEmpty()) {
-                    val counter = rotationCounters.computeIfAbsent(session.id) {
-                        java.util.concurrent.atomic.AtomicInteger()
-                    }
-                    retryWrapped(
-                        KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)]),
-                        session.id,
-                        retryDelegateProvider = {
-                            KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)])
+            // 轮询：resolved value 为 __rotate__ 时走重试换 key（与 runTurn 共用同一计数器）
+            val client: ai.koog.prompt.executor.clients.LLMClient =
+                if (apiKey == API_KEY_ROTATION_ID) {
+                    val keys = providerManager.listKeys(provider.id)
+                        .filter { it.id != API_KEY_ROTATION_ID }
+                        .mapNotNull { k -> providerManager.getKeyValue(provider.id, k.id) }
+                        .filter { it.isNotBlank() }
+                    if (keys.isNotEmpty()) {
+                        val counter = rotationCounters.computeIfAbsent(session.id) {
+                            java.util.concurrent.atomic.AtomicInteger()
                         }
-                    )
+                        retryWrapped(
+                            KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)]),
+                            session.id,
+                            retryDelegateProvider = {
+                                KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)])
+                            }
+                        )
+                    } else {
+                        retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
+                    }
                 } else {
                     retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
                 }
-            } else {
-                retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
+            val executor = PromptExecutorBuilder()
+                .addClient(client)
+                .build()
+
+            val koogModel = KoogModelBuilder.build(model, provider.type)
+            val params = KoogParamsBuilder.build(
+                type = provider.type,
+                reasoningLevel = reasoningLevel,
+                reasoningParameter = provider.reasoningParameter,
+                maxTokens = model.maxTokens
+            )
+
+            val koogPrompt = prompt(session.id, params = params) {
+                system(systemPrompt)
             }
-        val executor = PromptExecutorBuilder()
-            .addClient(client)
-            .build()
 
-        val koogModel = KoogModelBuilder.build(model, provider.type)
-        val params = KoogParamsBuilder.build(
-            type = provider.type,
-            reasoningLevel = reasoningLevel,
-            reasoningParameter = provider.reasoningParameter,
-            maxTokens = model.maxTokens
-        )
+            // Koog planner 每执行一个节点 iterations+1，超过 maxAgentIterations 抛
+            // AIAgentMaxNumberOfIterationsReachedException。compressOnlyStrategy 要跑
+            // nodeStart → nodeCompress → nodeFinish 共 3 个节点，1 必然抛错（压缩根本不会执行）。
+            // 给足余量：10。
+            val agentConfig = AIAgentConfig.builder()
+                .model(koogModel)
+                .prompt(koogPrompt)
+                .maxAgentIterations(10)
+                .serializer(mederiToolSerializer)
+                .build()
 
-        val koogPrompt = prompt(session.id, params = params) {
-            system(systemPrompt)
+            // 压缩与实际发送一致：图片按当前模型能力剔除
+            val historyProvider = HistoryStoreChatHistoryProvider(historyStore, includeImages = model.supportsImages)
+
+            val agent = AIAgent.builder()
+                .promptExecutor(executor)
+                .agentConfig(agentConfig)
+                .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy(
+                    contextWindow = model.contextWindow,
+                    keepLastMessages = keepLastMessages,
+                    eventBus = eventBus,
+                    sessionId = session.id
+                )))
+                .install(ChatMemory.Feature) { config ->
+                    config.chatHistoryProvider = historyProvider
+                }
+                .build()
+
+            agent.run("", sessionId = session.id)
+        } finally {
+            compactingSessions.remove(session.id)
+            scope.launch {
+                dispatchPendingEventMessages(session.id)
+            }
         }
-
-        // Koog planner 每执行一个节点 iterations+1，超过 maxAgentIterations 抛
-        // AIAgentMaxNumberOfIterationsReachedException。compressOnlyStrategy 要跑
-        // nodeStart → nodeCompress → nodeFinish 共 3 个节点，1 必然抛错（压缩根本不会执行）。
-        // 给足余量：10。
-        val agentConfig = AIAgentConfig.builder()
-            .model(koogModel)
-            .prompt(koogPrompt)
-            .maxAgentIterations(10)
-            .serializer(mederiToolSerializer)
-            .build()
-
-        // 压缩与实际发送一致：图片按当前模型能力剔除
-        val historyProvider = HistoryStoreChatHistoryProvider(historyStore, includeImages = model.supportsImages)
-
-        val agent = AIAgent.builder()
-            .promptExecutor(executor)
-            .agentConfig(agentConfig)
-            .graphStrategy(compressOnlyStrategy(MederiCompressionStrategy(model.contextWindow, keepLastMessages = MANUAL_KEEP_LAST_MESSAGES, eventBus = eventBus, sessionId = session.id)))
-            .install(ChatMemory.Feature) { config ->
-                config.chatHistoryProvider = historyProvider
-            }
-            .build()
-
-        agent.run("", sessionId = session.id)
     }
 
     private suspend fun runTurn(
@@ -1051,8 +1154,7 @@ class TurnExecutor(
             DebugLog.data("TurnExec", "provider.type", provider.type)
             DebugLog.data("TurnExec", "provider.baseUrl", provider.baseUrl)
 
-            val preflightWarning = preflightCompressionIfNeeded(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
-            if (preflightWarning != null) streamWarning.compareAndSet(null, preflightWarning)
+            preflightCompressionIfNeeded(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
 
             val questionRequester = xyz.mederi.question.QuestionRequester(sessionId, eventBus)
             questionRequesters[sessionId] = questionRequester
@@ -1096,10 +1198,11 @@ class TurnExecutor(
                 agentsDiscovery = agentsDiscovery,
                 onFileTouched = onFileTouched,
                 apiKeyId = apiKeyId,
-                subagentConfigManager = subagentConfigManager
+                subagentConfigManager = subagentConfigManager,
+                backgroundTaskManager = backgroundTaskManager
             )
 
-            val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics)
+            val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics, eventBus)
 
             val agent = buildTurnAgent(
                 sessionId = sessionId,
@@ -1249,31 +1352,16 @@ class TurnExecutor(
                     DebugLog.error("TurnExec", "关闭 MCP 连接失败: ${e.message}", e)
                 }
             }
-            // 串行冲刷事件消息 + steering 残留，避免并发争抢 RUNNING 守卫导致丢消息
+            // 冲刷子代理事件消息
             scope.launch {
-                // 1. 子代理事件消息（dispatchPendingEventMessages 内部有 requeue 保护）
                 if (pendingEventMessages.containsKey(sessionId)) {
                     dispatchPendingEventMessages(sessionId)
                 }
-                // 2. 未被工具边界消费的引导消息——降级为新 turn 触发。
-                //    event 派发可能已起新 turn → sendMessage 撞 RUNNING → 放回队列等下次冲刷
-                val remainingSteers = pendingSteerings.remove(sessionId)
-                if (!remainingSteers.isNullOrEmpty()) {
-                    val toRequeue = mutableListOf<SteeringItem>()
-                    for (item in remainingSteers) {
-                        try {
-                            sendMessage(sessionId, item.request)
-                        } catch (e: IllegalStateException) {
-                            toRequeue.add(item)
-                        }
-                    }
-                    if (toRequeue.isNotEmpty()) {
-                        val queue = pendingSteerings.computeIfAbsent(sessionId) {
-                            java.util.concurrent.ConcurrentLinkedQueue()
-                        }
-                        toRequeue.forEach { queue.offer(it) }
-                    }
-                }
+            }
+            // 若 turn 因异常/中止退出，清理未消费的插话残留
+            val leftoverSteers = pendingSteerings.remove(sessionId)
+            if (!leftoverSteers.isNullOrEmpty()) {
+                DebugLog.info("TurnExec", "Cleared ${leftoverSteers.size} unconsumed steering items on turn exit for session $sessionId")
             }
         }
     }
@@ -1402,15 +1490,14 @@ class TurnExecutor(
     }
 
     /**
-     * 发送前压缩（pre-flight）：已占用上下文 > 70% 窗口时，
+     * 发送前压缩（pre-flight）：已占用上下文 > 阈值（默认 70%）窗口时，
      * 先压缩（生成 TLDR、插标记）再发送。保证到达 AI 的第一个请求就不携带
      * 臃肿历史——压缩发生在请求之前，而不是超限请求发出之后。
      * durable-first 后用户消息已在 [HistoryStoreChatHistoryProvider.aiViewWindow] 窗口内，
      * 直接按窗口估算即可，不再单独累加新消息 token。
-     * 压缩失败不阻塞本轮对话（安全兜底）：照常发送，运行期检查仍会兜底；
-     * 但失败原因回灌 streamWarning 对用户可见。
-     *
-     * @return 压缩失败原因（人类可读，非空=压缩失败）；null=未触发压缩或压缩成功
+     * 自动压缩走 token 预算规划（keepLastMessages = null）。
+     * 若压缩失败或压缩后仍超出窗口硬上限，直接抛出异常阻断本轮，由 runTurn 统一上报并停止对话，
+     * 严禁带着超限上下文继续发给 LLM。
      */
     private suspend fun preflightCompressionIfNeeded(
         session: xyz.mederi.domain.model.Session,
@@ -1419,26 +1506,31 @@ class TurnExecutor(
         reasoningLevel: ReasoningLevel,
         systemPrompt: String,
         apiKeyId: String? = null
-    ): String? {
-        val contextWindow = model.contextWindow ?: return null
+    ) {
+        val contextWindow = model.contextWindow ?: return
         // 上下文占用口径（空窗口 / SUMMARY 分支等）统一由唯一真理源给出
         val usedTokens = aiViewContextUsedTokens(historyStore, session.id, model.supportsImages)
-        val budget = (contextWindow * 0.70).toInt()
-        if (usedTokens <= budget) return null
+        val budget = (contextWindow * (compactionThresholdPercent() / 100.0)).toInt()
+        if (usedTokens <= budget) return
 
         DebugLog.event(
             "TurnExec",
             "pre-flight compression triggered: used=$usedTokens > budget=$budget"
         )
-        return runCatching {
-            compressOnce(session, provider, model, reasoningLevel, systemPrompt, apiKeyId)
-        }.fold(
-            onSuccess = { null },
-            onFailure = { e ->
-                DebugLog.error("TurnExec", "pre-flight compression failed: ${e.message}", e)
-                "自动压缩失败：${(e.message?.take(200)?.ifBlank { null } ?: e::class.simpleName) ?: "未知错误"}。上下文可能过长，请尝试手动压缩或切换更大窗口的模型。"
-            }
+        compressOnce(
+            session = session,
+            provider = provider,
+            model = model,
+            reasoningLevel = reasoningLevel,
+            systemPrompt = systemPrompt,
+            apiKeyId = apiKeyId,
+            keepLastMessages = null
         )
+
+        val remainingTokens = aiViewContextUsedTokens(historyStore, session.id, model.supportsImages)
+        if (remainingTokens > contextWindow) {
+            throw IllegalStateException("Context window exceeded after compression: $remainingTokens > $contextWindow tokens")
+        }
     }
 
     /**
@@ -1540,9 +1632,15 @@ class TurnExecutor(
                     // 端点不报告 inputTokens 时才回退加权估算（统一在 TokenEstimator）
                     val usedTokens = contextUsedTokens(prompt.messages)
                     // 70%：上下文越满注意力越分散，且留出发送前压缩的判定余量
-                    usedTokens > (contextWindow * 0.70).toInt()
+                    usedTokens > (contextWindow * (compactionThresholdPercent() / 100.0)).toInt()
                 },
-                compressionStrategy = MederiCompressionStrategy(contextWindow, eventBus = eventBus, sessionId = sessionId),
+                compressionStrategy = MederiCompressionStrategy(
+                    contextWindow = contextWindow,
+                    eventBus = eventBus,
+                    sessionId = sessionId,
+                    onCompactionStart = { compactingSessions.add(sessionId) },
+                    onCompactionEnd = { compactingSessions.remove(sessionId) }
+                ),
                 retrievalModel = null
             )
         }
@@ -1724,6 +1822,23 @@ class TurnExecutor(
         }
     }
 
+    private fun handleBackgroundTaskTerminalEvent(event: MederiEvent) {
+        val parentSessionId = event.sessionId
+        if (parentSessionId.isBlank()) return
+
+        val msgText = formatBackgroundTaskEventMessage(event)
+        DebugLog.event("TurnExec", "handleBackgroundTaskTerminalEvent: session=$parentSessionId, taskId=${event.payload["taskId"]}, type=${event.type}")
+
+        val list = pendingEventMessages.computeIfAbsent(parentSessionId) {
+            java.util.Collections.synchronizedList(mutableListOf())
+        }
+        list.add(msgText)
+
+        scope.launch {
+            dispatchPendingEventMessages(parentSessionId)
+        }
+    }
+
     private fun formatSubagentEventMessage(event: MederiEvent): String {
         val eventTypeStr = when (event.type) {
             EventType.SUBAGENT_COMPLETED -> "subagent_completed"
@@ -1759,12 +1874,47 @@ class TurnExecutor(
         }
     }
 
+    private fun formatBackgroundTaskEventMessage(event: MederiEvent): String {
+        val eventTypeStr = when (event.type) {
+            EventType.BACKGROUND_TASK_COMPLETED -> "background_task_completed"
+            EventType.BACKGROUND_TASK_ERROR -> "background_task_error"
+            EventType.BACKGROUND_TASK_STOPPED -> "background_task_stopped"
+            else -> "background_task_event"
+        }
+        val taskId = event.payload["taskId"] ?: "unknown"
+        val taskType = event.payload["taskType"] ?: "unknown"
+        val status = event.payload["status"] ?: "UNKNOWN"
+        val command = event.payload["command"]
+        val description = event.payload["description"]
+        val exitCode = event.payload["exitCode"]
+        val output = event.payload["output"].orEmpty()
+
+        return buildString {
+            appendLine("""<event_message type="$eventTypeStr" taskId="$taskId" taskType="$taskType" status="$status">""")
+            if (taskType == "timer") {
+                appendLine("⏰ Timer fired: ${description ?: ""}")
+            } else {
+                appendLine("Background command completed: ${command ?: ""}")
+                if (exitCode != null) appendLine("Exit code: $exitCode")
+                if (output.isNotBlank()) {
+                    appendLine("Output:")
+                    appendLine(output)
+                }
+            }
+            append("</event_message>")
+        }
+    }
+
     private suspend fun dispatchPendingEventMessages(sessionId: String) {
         eventMessageLock.withLock {
             val list = pendingEventMessages[sessionId]
             if (list.isNullOrEmpty()) return
 
             val session = sessionStore.get(sessionId) ?: return
+            if (compactingSessions.contains(sessionId)) {
+                DebugLog.debug("TurnExec", "dispatchPendingEventMessages: session $sessionId is compacting, deferring dispatch")
+                return
+            }
             if (session.status == SessionStatus.RUNNING || activeJobs[sessionId]?.isActive == true) {
                 DebugLog.debug("TurnExec", "dispatchPendingEventMessages: session $sessionId is RUNNING, deferring dispatch")
                 return
@@ -1777,6 +1927,13 @@ class TurnExecutor(
             val runningSubagents = subagentManager.runningCountForSession(sessionId)
             if (runningSubagents > 0) {
                 DebugLog.debug("TurnExec", "dispatchPendingEventMessages: $sessionId has $runningSubagents running subagent(s), deferring dispatch")
+                return
+            }
+
+            // 仍有 RUNNING 后台任务时延后派发：等其终态事件一起聚合（与子代理同语义）
+            val runningBackgroundTasks = backgroundTaskManager.runningCountForSession(sessionId)
+            if (runningBackgroundTasks > 0) {
+                DebugLog.debug("TurnExec", "dispatchPendingEventMessages: $sessionId has $runningBackgroundTasks running background task(s), deferring dispatch")
                 return
             }
 

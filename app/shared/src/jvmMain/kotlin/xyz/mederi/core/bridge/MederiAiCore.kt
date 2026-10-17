@@ -41,6 +41,7 @@ import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.core.contract.dto.CreateProjectInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.models.ApiKeyOption
+import xyz.mederi.core.contract.models.BackgroundTaskInfo
 import xyz.mederi.core.contract.models.BrowserStatus
 import xyz.mederi.core.contract.models.CamoufoxSettings
 import xyz.mederi.core.contract.models.CamoufoxUpdate
@@ -146,6 +147,12 @@ class MederiAiCore(
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val stateMutex = Mutex()
 
+    private val _compactionThresholdPercent = MutableStateFlow(70)
+    override val compactionThresholdPercent: StateFlow<Int> = _compactionThresholdPercent.asStateFlow()
+    override suspend fun setCompactionThresholdPercent(percent: Int) {
+        _compactionThresholdPercent.value = percent.coerceIn(1, 100)
+    }
+
     /** 会话终态错误内存注册表：MESSAGE_ERROR 写入，MESSAGE_COMPLETED/新 turn 清除。跨 re-attach 水合用。 */
     private val lastErrorBySessionId = ConcurrentHashMap<String, LastSessionError>()
 
@@ -227,6 +234,8 @@ class MederiAiCore(
                 configDir = this@MederiAiCore.configDir
                 // 出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带上 Mederi 身份头
                 userAgent = AppInfo.userAgent
+                // 自动压缩阈值：UI 拖拽写入 MutableStateFlow，core 压缩判定读此 lambda
+                compactionThresholdPercent = { _compactionThresholdPercent.value }
             }
             // KBrowser 初始化（JCEF 可用且运行环境支持时非 null；headless 无 Xvfb 时为 null）
             // core 拥有 KBrowser 单例，注入给 inkcompose（渲染）和 UI（可见浏览器），也用于 JcefBrowserControl 自动化
@@ -405,6 +414,14 @@ class MederiAiCore(
                         }
                     xyz.mederi.domain.model.EventType.SESSION_UPDATED ->
                         lastErrorBySessionId.remove(event.sessionId)
+                    else -> {}
+                }
+                // 终端事件：从 DB 重读全量会话数据（updatedAt/status/title 均为 DB 真理源），
+                // 驱动侧边栏列表重排与相对时间刷新。比内存 patch 更简单可靠。
+                when (event.type) {
+                    xyz.mederi.domain.model.EventType.SESSION_UPDATED,
+                    xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED,
+                    xyz.mederi.domain.model.EventType.MESSAGE_ERROR -> refreshProjects()
                     else -> {}
                 }
             }
@@ -695,6 +712,10 @@ class MederiAiCore(
             val session = mederi.sessions.get(conversationId)
             val project = mederi.projects.get(session.projectId)
             val plan = xyz.mederi.plan.PlanStore(listOf(project.directory)).loadBySession(conversationId) ?: return@runCatching null
+            // pendingPlanApproval 语义仅限当前正在等待用户审批的计划；非 PENDING 计划绝不能作为待审批项
+            if (plan.agentMode != AgentMode.APPROVAL || plan.status != xyz.mederi.plan.PlanStatus.PENDING_APPROVAL) {
+                return@runCatching null
+            }
             val planPath = xyz.mederi.plan.PlanStore(listOf(project.directory)).getPlanAbsolutePath(plan.id)
             xyz.mederi.core.contract.models.PlanApprovalRequest(
                 id = plan.id,
@@ -704,9 +725,7 @@ class MederiAiCore(
                 summary = plan.summary,
                 subtaskCount = plan.subtasks.size,
                 planContent = planPath?.let { p -> runCatching { java.io.File(p).readText() }.getOrNull() },
-                status = if (plan.agentMode == AgentMode.APPROVAL &&
-                    plan.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL
-                ) "PENDING" else "AUTO_APPROVED",
+                status = "PENDING",
                 subtasks = plan.subtasks.map { st ->
                     xyz.mederi.core.contract.models.PlanSubtaskItem(
                         index = st.index,
@@ -772,9 +791,16 @@ class MederiAiCore(
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
 
         val backfill = MederiModelMapper.toUsageBackfill(messages)
+        val mappedMessages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) }
+        // store 重建快照时 hydrate pendingQuestion：session 为 RUNNING 且有 ask_user Pending → 恢复挂起的提问
+        val hydratedQuestion = if (session.status == xyz.mederi.domain.model.SessionStatus.RUNNING) {
+            MederiEventAggregator.hydratePendingQuestion(mappedMessages, conversationId)
+        } else null
         val base = ConversationSnapshot(
-            conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }),
-            messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
+            conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }).let { conv ->
+                if (hydratedQuestion != null) conv.copy(status = ConversationStatus.WaitingUser) else conv
+            },
+            messages = mappedMessages,
             tokenUsage = MederiModelMapper.toTokenUsage(messages),
             contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong(),
             cost = MederiModelMapper.toCostSummary(),
@@ -798,6 +824,7 @@ class MederiAiCore(
                     startedAt = bg.startedAt
                 )
             },
+            pendingQuestion = hydratedQuestion,
             requestCount = backfill.requestCount,
             lastRequestUsage = backfill.lastRequestUsage
         )
@@ -1024,18 +1051,9 @@ class MederiAiCore(
     override suspend fun resolvePlanApproval(
         conversationId: String,
         planId: String,
-        approved: Boolean,
-        model: ModelOption?,
-        thinkingLevel: String?
+        approved: Boolean
     ): Result<Unit> = runCatching {
-        // 契约 ModelOption → core AIModel（与 sendMessage 同转换：按 id 从供应商解析），
-        // thinkingLevel → ReasoningLevel（复用 mapper；null = 不带，core 保留 session 原值）
-        val coreModel = model?.let { findCoreModel(it.id) }
-        mederi.sessions.resolvePlanApproval(
-            conversationId, planId, approved,
-            aiModel = coreModel,
-            reasoningLevel = MederiInputMapper.toReasoningLevel(thinkingLevel)
-        )
+        mederi.sessions.resolvePlanApproval(conversationId, planId, approved)
     }
 
     override suspend fun updateConversationSettings(
@@ -1600,5 +1618,32 @@ class MederiAiCore(
             _isReady.first { it }
         }
         mederi.sessions.stopSubagent(agentId)
+    }
+
+    override suspend fun listBackgroundTasks(sessionId: String): Result<List<BackgroundTaskInfo>> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.sessions.listBackgroundTasksForSession(sessionId).map { entry ->
+            BackgroundTaskInfo(
+                taskId = entry.taskId,
+                taskType = entry.type.name.lowercase(),
+                status = entry.status.name.lowercase(),
+                command = entry.command,
+                description = entry.description,
+                pid = entry.pid,
+                exitCode = entry.exitCode,
+                startedAt = entry.startedAt,
+                completedAt = entry.completedAt,
+                durationSeconds = entry.durationSeconds
+            )
+        }
+    }
+
+    override suspend fun stopBackgroundTask(taskId: String): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.sessions.stopBackgroundTask(taskId) ?: Unit
     }
 }

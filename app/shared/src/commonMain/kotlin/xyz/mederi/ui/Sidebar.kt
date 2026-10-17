@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -20,6 +21,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -75,6 +80,7 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiRadius
 import xyz.mederi.theme.MederiTypeScale
+import xyz.mederi.util.TimeFormatter
 
 class SidebarInteractionState {
     var activeCount by mutableStateOf(0)
@@ -120,6 +126,7 @@ fun Sidebar(
 ) {
     val appState = LocalAppState.current
     val colors = LocalMederiColors.current
+    val leftSidebarWidth by appState.leftSidebarWidth.collectAsState()
     val projects by viewModel.filteredProjects.collectAsState()
     val selectedProjectId by appState.selectedProjectId.collectAsState()
     val selectedConversationId by appState.selectedConversationId.collectAsState()
@@ -145,7 +152,7 @@ fun Sidebar(
         Column(
             modifier = modifier
                 .fillMaxHeight()
-                .then(if (isCompact) Modifier.fillMaxWidth() else Modifier.width(245.dp))
+                .then(if (isCompact) Modifier.fillMaxWidth() else Modifier.width(leftSidebarWidth.dp))
                 .background(colors.surfaceSidebar)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
@@ -843,6 +850,8 @@ private fun ConversationTreeRow(
         animationSpec = tween(120),
         label = "conversationRowText",
     )
+    // 相对活动时间随 nowTick（60s 周期）定时刷新
+    val nowMillis by viewModel.nowTick.collectAsState()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -869,6 +878,16 @@ private fun ConversationTreeRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
+        )
+
+        // 相对活动时间（无 weight 自然宽度，标题 weight(1f) 自动截断让出空间）
+        Text(
+            text = remember(conversation.updatedAt, nowMillis) {
+                TimeFormatter.formatRelativeActivity(conversation.updatedAt)
+            },
+            color = colors.textMuted,
+            fontSize = 10.sp,
+            maxLines = 1
         )
 
         // 右置 MoreVertical 20×20 ghost：保留重命名/删除菜单，hover surfaceHover
@@ -954,4 +973,38 @@ private fun ConversationTreeRow(
             onDismiss = { isDeleteOpen = false },
         )
     }
+}
+
+/**
+ * 侧边栏右边缘拖拽改宽 handle（大屏 pinned 与 overlay 模式共用）。
+ * 4dp 宽竖条，hover 高亮，detectHorizontalDragGestures 调 onDragDelta 更新宽度。
+ */
+@Composable
+fun SidebarResizeHandle(
+    onDragDelta: (deltaDp: Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val colors = LocalMederiColors.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val bg by animateColorAsState(
+        targetValue = if (hovered) colors.borderStrong else Color.Transparent,
+        animationSpec = tween(120),
+        label = "resizeHandleBg",
+    )
+    Box(
+        modifier = modifier
+            .width(4.dp)
+            .fillMaxHeight()
+            .hoverable(interactionSource)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .background(bg)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures { _, dragAmount ->
+                    val deltaDp = with(density) { dragAmount.toDp().value }
+                    onDragDelta(deltaDp)
+                }
+            }
+    )
 }

@@ -3,8 +3,8 @@ package xyz.mederi.prompt
 /**
  * 编码核心原则常量。
  *
- * 唯一真理源（SSOT）：主代理与 EXECUTOR 子代理共享，集中维护代码编写、修改与调试纪律。
- * RESEARCHER 等只读角色不挂载本原则。
+ * 唯一真理源（SSOT）：主代理使用。EXECUTOR 子代理使用独立提示词，不挂载本原则。
+ * RESEARCHER 等只读角色不挂载。
  */
 object CodingPrompts {
     val PRINCIPLES: String = """

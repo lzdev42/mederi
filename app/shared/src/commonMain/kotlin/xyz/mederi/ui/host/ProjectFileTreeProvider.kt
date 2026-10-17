@@ -15,6 +15,8 @@ interface ProjectFileTreeProvider {
     fun rootNode(): FileNode
     fun listChildren(dirPath: String): List<FileNode>
     fun readText(path: String): String?
+    fun isDirectory(path: String): Boolean = false
+    fun resolvePath(path: String): String = path
 }
 
 val LocalProjectFileTreeProvider = staticCompositionLocalOf<ProjectFileTreeProvider?> { null }

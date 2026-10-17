@@ -18,12 +18,17 @@ class BrowserTaskToolNamesTest {
     @Test
     fun `browser 合并入口在名单中且 ALL_TOOL_NAMES 包含它`() {
         assertEquals(
-            listOf("browser"),
+            listOf(ToolName.BROWSER),
             ToolFactory.BROWSER_TASK_TOOL_NAMES
         )
-        assertTrue("browser must be in ALL_TOOL_NAMES", "browser" in ToolFactory.ALL_TOOL_NAMES)
+        assertTrue("browser must be in ALL_TOOL_NAMES", ToolName.BROWSER in ToolFactory.ALL_TOOL_NAMES)
         // 旧名不得残留（残留 = 静默丢弃的幽灵注册）
-        listOf("run_browser_task", "browser_task_status", "stop_browser_task", "browser_info").forEach {
+        listOf(
+            ToolName.RUN_BROWSER_TASK,
+            ToolName.BROWSER_TASK_STATUS,
+            ToolName.STOP_BROWSER_TASK,
+            ToolName.BROWSER_INFO
+        ).forEach {
             assertTrue("$it must NOT be in ALL_TOOL_NAMES after the merge", it !in ToolFactory.ALL_TOOL_NAMES)
         }
     }

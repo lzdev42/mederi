@@ -4,7 +4,12 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import xyz.mederi.core.contract.dto.ConversationSnapshot
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import xyz.mederi.core.contract.dto.ConversationState
 import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.ChatMessage
@@ -20,38 +25,43 @@ import xyz.mederi.core.contract.models.TodoItem
 import xyz.mederi.core.contract.models.TodoWireItem
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.currentTimeMillis
+import xyz.mederi.ui.RightDockPanel
+import xyz.mederi.ui.browser.BrowserActionKind
+import xyz.mederi.ui.browser.BrowserAutomationUiState
+import xyz.mederi.ui.browser.BrowserFlowStep
+import xyz.mederi.ui.browser.BrowserStepStatus
 
 /**
- * 把契约层 [CoreEvent] 应用到 [ConversationSnapshot] 上的纯逻辑（跨平台）。
+ * 把契约层 [CoreEvent] 应用到 [ConversationState] 上的纯逻辑状态机（跨平台）。
  *
  * 同一份聚合逻辑服务两端：
  * - JVM（desktop 进程内 / server 进程内）：MederiEventAggregator 提供 core 数据源
- * - wasmJs（浏览器）：ServerAiCore 提供 HTTP 数据源
+ * - wasmJs（浏览器）：ServerAiCore 提供 HTTP/SSE 数据源
  *
- * 规则（从 jvm 桥接层原样迁移）：
+ * 聚合规则：
  * - [CoreEventType.MESSAGE_DELTA] 追加到当前 streaming Assistant 占位消息
  * - [CoreEventType.MESSAGE_COMPLETED] 标记占位消息完成，再回查落库数据对齐
  * - [CoreEventType.MESSAGE_ERROR] 设置 errorMessage 并回查落库数据
  * - [CoreEventType.TOOL_CALLED] / [CoreEventType.TOOL_RESULT] 维护 ToolCall block 状态机
- * - APPROVAL / QUESTION / PLAN_APPROVAL 系列事件维护 pending 状态
- * - [CoreEventType.LLM_REQUEST_COMPLETED] 累加 requestCount、更新 lastRequestUsage（实时，不走 refreshPage；
- *   落库对齐仍由 MESSAGE_COMPLETED / SESSION_UPDATED / MESSAGE_ERROR 的回查分支负责，
- *   这些回查分支的 copy 会携带 page.requestCount / page.lastRequestUsage 与 DB 对齐）
+ * - APPROVAL / QUESTION / PLAN_APPROVAL 系列事件维护 pending 状态与全生命周期投影
+ * - [CoreEventType.LLM_REQUEST_COMPLETED] 累加 requestCount、更新 lastRequestUsage
+ * - [CoreEventType.SUBAGENT_*] 事件由 [SubagentTracker] 原子更新 [ConversationState.subagents]
+ * - [CoreEventType.BROWSER_TASK_*] 事件更新 [ConversationState.browserAutomation] 与 [ConversationState.activeDockPanel]
  */
-object SnapshotReducer {
+object ConversationStateReducer {
 
     /**
-     * 应用单个事件，返回**要发出的快照序列**（1 或 2 个）。
+     * 应用单个事件，返回**要发出的状态序列**（1 或 2 个）。
      *
-     * MESSAGE_COMPLETED 先发出"完成状态"快照（按钮立即变化），再回查 [refreshPage]
-     * 落库数据发出对齐后的最终快照；MESSAGE_ERROR 同理回查但只发最终一个。
+     * MESSAGE_COMPLETED 先发出"完成状态"（按钮立即变化），再回查 [refreshPage]
+     * 落库数据发出对齐后的最终状态；MESSAGE_ERROR 同理回查但只发最终一个。
      * 其余事件只发一个。回查失败（[refreshPage] 返回 null 或抛异常）时跳过对齐。
      */
     suspend fun applyWithRefresh(
-        snapshot: ConversationSnapshot,
+        snapshot: ConversationState,
         event: CoreEvent,
         refreshPage: suspend () -> MessagesPage?,
-    ): List<ConversationSnapshot> = when (event.type) {
+    ): List<ConversationState> = when (event.type) {
         CoreEventType.MESSAGE_COMPLETED -> {
             // 1. 先发出完成状态（按钮立即变化），保留流式累积的内容，标记 streaming 结束
             val idle = apply(snapshot, event)
@@ -71,7 +81,7 @@ object SnapshotReducer {
         CoreEventType.SESSION_UPDATED -> {
             val updated = apply(snapshot, event)
             // 新 turn 开始（包含 durable-first 用户消息刚落库）：
-            // 立即回查对齐落库消息，使快照立刻包含刚发送的用户消息
+            // 立即回查对齐落库消息，使状态立刻包含刚发送的用户消息
             val page = runCatching { refreshPage() }.getOrNull()
             listOf(page?.let { p ->
                 updated.copy(
@@ -86,7 +96,7 @@ object SnapshotReducer {
 
         CoreEventType.MESSAGE_ERROR -> {
             val errored = apply(snapshot, event)
-            // 回查落库数据对齐（失败保持错误快照），只发最终一个
+            // 回查落库数据对齐（失败保持错误状态），只发最终一个
             val page = runCatching { refreshPage() }.getOrNull()
             listOf(page?.let { p ->
                 errored.copy(
@@ -103,9 +113,9 @@ object SnapshotReducer {
     }
 
     /**
-     * 应用单个事件到快照（不含落库回查）。
+     * 应用单个事件到状态（不含落库回查）。
      */
-    fun apply(snapshot: ConversationSnapshot, event: CoreEvent): ConversationSnapshot = when (event.type) {
+    fun apply(snapshot: ConversationState, event: CoreEvent): ConversationState = when (event.type) {
         CoreEventType.SESSION_CREATED -> snapshot
 
         CoreEventType.SESSION_UPDATED -> snapshot.copy(
@@ -118,17 +128,17 @@ object SnapshotReducer {
             },
             errorMessage = null,
             pendingQuestion = null,
-            pendingPlanApproval = null
+            pendingPlanApproval = null,
+            errorId = null,
+            errorDiagnostic = null,
+            errorIsStreamInterrupted = false,
+            statusHint = null
         )
 
         CoreEventType.MESSAGE_DELTA -> snapshot.withDelta(event.payload).copy(statusHint = null, errorIsStreamInterrupted = false)
 
         CoreEventType.MESSAGE_COMPLETED -> {
             val now = currentTimeMillis()
-            // 流式传输异常（如"流式连接提前中断"）随完成事件以 ErrorRecord payload 到达
-            // （error/errorId/fullDiagnostic）：内容照常落库展示，错误统一进 ErrorBoard
-            // （输入框上方），statusHint 只保留给运转过程提示（限流重试），不再承载警告。
-            // failureMode=PREMATURE_CLOSE 标记断流 → UI 显示"继续"按钮（重发 Continue 续写）。
             val streamInterrupted = event.payload["failureMode"] == "PREMATURE_CLOSE"
             val turnDiffJson = event.payload["turnDiffSummary"]
             val diffSummary = turnDiffJson?.let {
@@ -183,11 +193,9 @@ object SnapshotReducer {
             if (event.payload["scope"] == "provider" && event.payload["code"] == "RETRYING") {
                 val attempt = event.payload["attempt"] ?: "?"
                 val max = event.payload["maxAttempts"] ?: "?"
-                // message 是 Core 传来的真实错误原因（如 "Insufficient Balance"、"Engine overloaded"），
-                // 直接保留到 statusHint，由 UI 层决定怎么渲染，不在这里写死文案。
                 val serverMsg = event.payload["message"]?.takeIf { it.isNotBlank() }
                 val delayMs = event.payload["delayMs"]?.toLongOrNull()
-                val retryAt = delayMs?.let { xyz.mederi.currentTimeMillis() + it }
+                val retryAt = delayMs?.let { currentTimeMillis() + it }
                 snapshot.copy(
                     statusHint = buildString {
                         append("$attempt/$max")
@@ -222,12 +230,10 @@ object SnapshotReducer {
             val questions = runCatching {
                 questionWireJson.decodeFromString(questionListSerializer, rawQuestions)
             }.getOrElse { ex ->
-                xyz.mederi.ui.DebugLog.error("SnapshotReducer", "Failed to decode questions: ${ex.message}", ex)
                 emptyList()
             }
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.WaitingUser),
-                // 交互挂起 = 当前 step 生成完毕，暂停等待用户，不再属于流式中
                 messages = snapshot.messages.map { msg ->
                     if (msg.isStreaming) msg.copy(isStreaming = false) else msg
                 },
@@ -277,7 +283,6 @@ object SnapshotReducer {
             val updatedList = (snapshot.planApprovals.filter { it.id != req.id } + req)
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.WaitingUser),
-                // 审批挂起 = 当前计划生成完毕，暂停等待用户审批，不再属于流式中
                 messages = snapshot.messages.map { msg ->
                     if (msg.isStreaming) msg.copy(isStreaming = false) else msg
                 },
@@ -344,25 +349,77 @@ object SnapshotReducer {
             )
         }
 
-        // 浏览器任务事件不改变会话快照（UI 通过事件 payload 直接消费：browser=="jcef" 时自动展开面板）
-        CoreEventType.BROWSER_TASK_STARTED,
-        CoreEventType.BROWSER_TASK_STEP,
+        // 浏览器任务生命周期与步骤事件（收敛入状态机）
+        CoreEventType.BROWSER_TASK_STARTED -> {
+            val browser = event.payload["browser"]
+            val current = snapshot.browserAutomation ?: BrowserAutomationUiState()
+            val updated = current.copy(
+                isAutomating = true,
+                isPanelOpen = true,
+                startedAtMillis = currentTimeMillis(),
+                completedAtMillis = null,
+                taskSummary = event.payload["thought"] ?: event.payload["message"],
+                steps = emptyList()
+            )
+            snapshot.copy(
+                browserAutomation = updated,
+                activeDockPanel = if (browser == "jcef") RightDockPanel.BROWSER else snapshot.activeDockPanel
+            )
+        }
+
+        CoreEventType.BROWSER_TASK_STEP -> {
+            val current = snapshot.browserAutomation ?: BrowserAutomationUiState(isAutomating = true, isPanelOpen = true)
+            val updatedSteps = parseBrowserStep(event, current.steps)
+            snapshot.copy(browserAutomation = current.copy(steps = updatedSteps))
+        }
+
         CoreEventType.BROWSER_TASK_COMPLETED,
         CoreEventType.BROWSER_TASK_ERROR,
-        CoreEventType.BROWSER_TASK_STOPPED -> snapshot
+        CoreEventType.BROWSER_TASK_STOPPED -> {
+            val current = snapshot.browserAutomation
+            if (current != null) {
+                val updatedSteps = current.steps.map { step ->
+                    if (step is BrowserFlowStep.Action && step.status == BrowserStepStatus.RUNNING) {
+                        step.copy(
+                            status = if (event.type == CoreEventType.BROWSER_TASK_COMPLETED) {
+                                BrowserStepStatus.COMPLETED
+                            } else {
+                                BrowserStepStatus.FAILED
+                            }
+                        )
+                    } else step
+                }
+                snapshot.copy(
+                    browserAutomation = current.copy(
+                        isAutomating = false,
+                        completedAtMillis = currentTimeMillis(),
+                        steps = updatedSteps
+                    )
+                )
+            } else snapshot
+        }
 
-        // 子代理生命周期事件不改变会话快照（子代理状态由独立的 SubagentTracker 聚合，
-        // ViewModel 持缓存；会话快照只反映主代理视角）
+        // 子代理生命周期事件（收敛入状态机，彻底消除 ViewModel 旁路 Map）
         CoreEventType.SUBAGENT_STARTED,
+        CoreEventType.SUBAGENT_PROGRESS,
         CoreEventType.SUBAGENT_COMPLETED,
         CoreEventType.SUBAGENT_ERROR,
         CoreEventType.SUBAGENT_STOPPED,
-        CoreEventType.SUBAGENT_PROGRESS,
-        CoreEventType.SUBAGENT_DISCARDED -> snapshot
+        CoreEventType.SUBAGENT_DISCARDED -> {
+            val currentMap = snapshot.subagents.associateBy { it.agentId }
+            val updatedMap = SubagentTracker.apply(currentMap, event)
+            snapshot.copy(subagents = updatedMap.values.sortedBy { it.startedAt })
+        }
+
+        // 后台任务生命周期事件（暂时保持不变）
+        CoreEventType.BACKGROUND_TASK_STARTED,
+        CoreEventType.BACKGROUND_TASK_COMPLETED,
+        CoreEventType.BACKGROUND_TASK_ERROR,
+        CoreEventType.BACKGROUND_TASK_STOPPED -> snapshot
     }
 
     // ------------------------------------------------------------------
-    // 私有：Todo 投影解码（TODO_UPDATED 使用，无状态整体替换；todo-list 与 plan 已解耦）
+    // 私有：Todo 投影解码（TODO_UPDATED 使用，无状态整体替换）
     // ------------------------------------------------------------------
 
     private val todoWireJson = Json { ignoreUnknownKeys = true }
@@ -376,26 +433,104 @@ object SnapshotReducer {
     }
     private val questionListSerializer = ListSerializer(QuestionRequest.Question.serializer())
 
-    /**
-     * 事件 payload → 契约 Todo 列表（与 core 侧唯一编码点 encodeTodos 的 JSON 形状对齐）。
-     * id 是渲染 key：在投影边界按序合成（"t$index"），不持久化不交换。
-     * 解码失败返回 null（调用方丢弃该事件、保留先前快照）——禁止字符串手术挽救畸形数据。
-     * 空列表是合法值（= 清空 todo）。
-     */
     private fun decodeTodoProjection(raw: String): List<TodoItem>? = runCatching {
         todoWireJson.decodeFromString(todoWireSerializer, raw)
             .mapIndexed { i, w -> TodoItem(id = "t$i", content = w.content, status = w.status) }
     }.getOrNull()
 
     // ------------------------------------------------------------------
-    // 私有：消息/block 状态机（与原 jvm MederiEventAggregator 逐行等价）
+    // 私有：浏览器步骤解析（将 BROWSER_TASK_STEP 映射为时间线节点）
     // ------------------------------------------------------------------
 
-    /**
-     * 在当前 streaming Assistant 占位消息上追加 delta。
-     * 如果不存在或最后一条不是 streaming Assistant，则新建一条占位消息。
-     */
-    private fun ConversationSnapshot.withDelta(payload: Map<String, String>): ConversationSnapshot {
+    private fun parseBrowserStep(event: CoreEvent, existingSteps: List<BrowserFlowStep>): List<BrowserFlowStep> {
+        val taskId = event.payload["taskId"] ?: return existingSteps
+        val stepNum = event.payload["step"]?.toIntOrNull() ?: 0
+        val thought = event.payload["thought"]
+        val resultsJson = event.payload["resultsJson"]
+        val message = event.payload["message"]
+        val now = currentTimeMillis()
+
+        val newSteps = mutableListOf<BrowserFlowStep>()
+
+        // 1. AI 旁白
+        if (!thought.isNullOrBlank()) {
+            newSteps.add(
+                BrowserFlowStep.Narration(
+                    id = "${taskId}_s${stepNum}_narr",
+                    text = thought,
+                    timestampMillis = now,
+                )
+            )
+        }
+
+        // 2. 动作结果卡片
+        if (!resultsJson.isNullOrBlank()) {
+            runCatching {
+                val arr = Json.parseToJsonElement(resultsJson).jsonArray
+                arr.forEachIndexed { i, el ->
+                    val obj = el.jsonObject
+                    val action = obj["action"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+                    val success = obj["success"]?.jsonPrimitive?.booleanOrNull ?: false
+                    val detail = obj["detail"]?.jsonPrimitive?.contentOrNull ?: ""
+                    newSteps.add(
+                        BrowserFlowStep.Action(
+                            id = "${taskId}_s${stepNum}_a${i}",
+                            kind = mapBrowserActionKind(action),
+                            title = mapBrowserActionLabel(action),
+                            target = detail.takeIf { it.isNotBlank() },
+                            status = if (success) BrowserStepStatus.COMPLETED else BrowserStepStatus.FAILED,
+                            timestampMillis = now,
+                        )
+                    )
+                }
+            }
+        } else if (thought.isNullOrBlank() && !message.isNullOrBlank()) {
+            newSteps.add(
+                BrowserFlowStep.Narration(
+                    id = "${taskId}_s${stepNum}_narr",
+                    text = message,
+                    timestampMillis = now,
+                )
+            )
+        }
+
+        return existingSteps + newSteps
+    }
+
+    private fun mapBrowserActionKind(action: String): BrowserActionKind = when (action) {
+        "navigate" -> BrowserActionKind.NAVIGATE
+        "click" -> BrowserActionKind.CLICK
+        "type" -> BrowserActionKind.INPUT
+        "scroll" -> BrowserActionKind.SCROLL
+        "screenshot" -> BrowserActionKind.SNAPSHOT
+        "wait_for" -> BrowserActionKind.WAIT
+        else -> BrowserActionKind.OTHER
+    }
+
+    private fun mapBrowserActionLabel(action: String): String = when (action) {
+        "navigate" -> "导航"
+        "click" -> "点击"
+        "type" -> "输入"
+        "scroll" -> "滚动"
+        "screenshot" -> "截图"
+        "wait_for" -> "等待"
+        "judge" -> "判定"
+        "drill" -> "脚本执行"
+        "done" -> "完成"
+        "sleep" -> "休眠"
+        "close" -> "关闭"
+        "back" -> "后退"
+        "tabs" -> "标签操作"
+        "noop" -> "无操作"
+        "llm" -> "决策"
+        else -> action
+    }
+
+    // ------------------------------------------------------------------
+    // 私有：消息/block 状态机
+    // ------------------------------------------------------------------
+
+    private fun ConversationState.withDelta(payload: Map<String, String>): ConversationState {
         val type = payload["type"] ?: "text"
         val content = payload["content"] ?: ""
         val currentMessages = this.messages.toMutableList()
@@ -404,8 +539,6 @@ object SnapshotReducer {
         val updatedBlocks = placeholder.blocks.toMutableList()
 
         when (type) {
-            // 块按事件到达顺序排列（最后一块 = 最近活动）：只有当最后一块是同类型时才合并，
-            // 否则新开块。跨轮的 reasoning/text 各自成块，deriveTurnStatus 才能按"最近活动块"判态。
             "text" -> {
                 val lastBlock = updatedBlocks.lastOrNull()
                 if (lastBlock is ChatBlock.Text) {
@@ -439,9 +572,6 @@ object SnapshotReducer {
             }
 
             "tool_call" -> {
-                // 增量阶段：LLM 正在流式生成 tool call args。
-                // content 可能是片段（非完整 JSON），parseToolArgs 失败时 input 留空，
-                // 等待 TOOL_CALLED（带完整 args）覆盖；不设 output（真实 output 由 TOOL_RESULT 提供）。
                 val name = payload["name"] ?: "tool"
                 val input = if (content.isBlank()) emptyMap() else parseToolArgs(content)
                 val existing = (if (name != "tool") {
@@ -501,11 +631,8 @@ object SnapshotReducer {
         )
     }
 
-    /**
-     * 取得（必要时创建）当前 streaming Assistant 占位消息，并从 [currentMessages] 中移除以便后续改完再加回。
-     */
     @OptIn(ExperimentalUuidApi::class)
-    private fun ConversationSnapshot.ensureStreamingPlaceholder(currentMessages: MutableList<ChatMessage>): ChatMessage {
+    private fun ConversationState.ensureStreamingPlaceholder(currentMessages: MutableList<ChatMessage>): ChatMessage {
         val last = currentMessages.lastOrNull()
         if (last != null && last.role == ChatRole.Assistant && (last.isStreaming || this.conversation.status == ConversationStatus.WaitingUser)) {
             currentMessages.removeLast()
@@ -526,17 +653,11 @@ object SnapshotReducer {
         )
     }
 
-    /**
-     * 处理 TOOL_CALLED 事件：LLM 已生成完整 args，工具开始执行。
-     *
-     * 用完整 args 更新 input（可靠解析出 path/content 等），状态置 Running。
-     * 匹配上一个 delta 增量创建的占位 block；找不到则新建。
-     */
-    private fun ConversationSnapshot.withToolCalled(
+    private fun ConversationState.withToolCalled(
         toolCallId: String,
         name: String,
         args: String
-    ): ConversationSnapshot {
+    ): ConversationState {
         val input = parseToolArgs(args)
         val currentMessages = this.messages.toMutableList()
         val placeholder = ensureStreamingPlaceholder(currentMessages)
@@ -551,8 +672,6 @@ object SnapshotReducer {
             ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
                 .lastOrNull { it.state is ToolCallState.Running || it.state is ToolCallState.Pending }
 
-        // 防御：args 解析失败（ToolArgParser 返回空 map）时保留已有 block 的非空 input，
-        // 避免"坏数据覆盖好数据"——上游一旦再出序列化缺陷，已显示的路径/命令不丢。
         val prevInput = (existing?.state as? ToolCallState.Running)?.input
         val effectiveInput = if (input.isEmpty() && !prevInput.isNullOrEmpty()) prevInput else input
         if (existing != null) {
@@ -581,22 +700,14 @@ object SnapshotReducer {
         )
     }
 
-    /**
-     * 处理 TOOL_RESULT 事件：工具执行完成。
-     *
-     * 填入真实 output，状态改 Completed/Failed。保留之前的 input。
-     * 按 toolCallId 精确匹配 block（TOOL_CALLED 时 block id 即 "tool_{toolCallId}"），
-     * 否则回退到最后一个 Running/Pending 的同名 block。
-     */
-    private fun ConversationSnapshot.withToolResult(
+    private fun ConversationState.withToolResult(
         toolCallId: String,
         name: String,
         output: String,
         isError: Boolean
-    ): ConversationSnapshot {
+    ): ConversationState {
         val currentMessages = this.messages.toMutableList()
 
-        // 优先在已有消息中倒序查找匹配的目标 ToolCall
         var found = false
         for (i in currentMessages.indices.reversed()) {
             val msg = currentMessages[i]
@@ -666,21 +777,14 @@ object SnapshotReducer {
         )
     }
 
-    /**
-     * 解析审批事件的工具参数 JSON。
-     * 工具参数是扁平的键值对对象（如 {"path":"...","content":"..."}）。
-     * 走 [ToolArgParser] 宽容解析（容忍数字/布尔等非字符串值，避免整条参数丢失）；
-     * 非对象结构或解析失败返回空 map，不崩溃（审批卡片入参区显示为空即可）。
-     */
     private fun parseToolArgs(args: String): Map<String, String> = ToolArgParser.parse(args)
 
-    /**
-     * LLM_REQUEST_COMPLETED payload → [LastRequestUsage]。
-     * 沿用诚实原则：cachedTokens 缺省（payload 无该 key）→ null，不用 0 伪装；inputTokens/outputTokens 缺省为 0。
-     */
     private fun CoreEvent.toLastRequestUsage(): LastRequestUsage = LastRequestUsage(
         inputTokens = payload["inputTokens"]?.toLongOrNull() ?: 0,
         outputTokens = payload["outputTokens"]?.toLongOrNull() ?: 0,
         cachedTokens = payload["cachedTokens"]?.toLongOrNull()
     )
 }
+
+/** 渐进迁移类型别名，确保历史引用向后兼容。 */
+typealias SnapshotReducer = ConversationStateReducer

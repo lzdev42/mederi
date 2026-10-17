@@ -122,7 +122,6 @@ internal fun BrowserPanelContent(
 @Composable
 internal fun rightDockPanelTitle(panel: RightDockPanel): String = stringResource(
     when (panel) {
-        RightDockPanel.OVERVIEW -> Res.string.rightdock_overview
         RightDockPanel.DIFF -> Res.string.rightdock_diff
         RightDockPanel.ARTIFACTS -> Res.string.rightdock_artifacts
         RightDockPanel.TERMINAL -> Res.string.rightdock_terminal

@@ -124,7 +124,7 @@ class VerifyTools(
 
     inner class VerifySubtaskTool : SimpleTool<VerifySubtaskArgs>(
         argsType = typeToken<VerifySubtaskArgs>(),
-        name = "verify_subtask",
+        name = ToolName.VERIFY_SUBTASK.value,
         description = "Verifies a subtask result against the plan's stored verification contract. The contract's " +
             "command is ALWAYS executed and its exit code + machine-checked output literals decide the machine " +
             "verdict; declaring PASS while the machine verdict fails is refused. Records PASS/PARTIAL/FAIL with " +

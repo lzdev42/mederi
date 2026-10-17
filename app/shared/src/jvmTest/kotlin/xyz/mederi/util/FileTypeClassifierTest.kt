@@ -38,11 +38,11 @@ class FileTypeClassifierTest {
         assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath("a.patch"))
     }
 
-    /** Dockerfile 没有扩展名 → 不能当内部文本（断言它**不是** INTERNAL_TEXT）。 */
+    /** Dockerfile / Makefile / 配置等非明确外部格式归为 INTERNAL_TEXT 候选。 */
     @Test
-    fun dockerfileHasNoExtensionSoItIsNotInternalText() {
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("Dockerfile"))
-        assertEquals(false, classifyFilePath("Dockerfile") == FileOpenTarget.INTERNAL_TEXT)
+    fun dockerfileAndMakefileAreInternalTextCandidates() {
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath("Dockerfile"))
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath("Makefile"))
     }
 
     @Test
@@ -68,14 +68,12 @@ class FileTypeClassifierTest {
     /** 同扩展名不同大小写结果必须完全一致。 */
     @Test
     fun imageClassificationIsCaseInsensitive() {
-        // 注意裸串 "PNG" 没有点 → 无扩展名 → REVEAL；带点才谈扩展名大小写
         assertEquals(FileOpenTarget.INTERNAL_IMAGE, classifyFilePath("a.PNG"))
         assertEquals(FileOpenTarget.INTERNAL_IMAGE, classifyFilePath("a.png"))
         assertEquals(
             classifyFilePath("a.PNG"),
             classifyFilePath("a.png")
         )
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("PNG"))
         assertEquals(
             classifyFilePath("a.png"),
             classifyFilePath("B.PNG")
@@ -105,35 +103,16 @@ class FileTypeClassifierTest {
         assertEquals(false, classifyFilePath("page.html") == FileOpenTarget.INTERNAL_TEXT)
     }
 
-    // ---------------- REVEAL_IN_FOLDER ----------------
+    // ---------------- 文本候选（非明确外部格式均可进入内容探测） ----------------
 
     @Test
-    fun revealForFilesWithoutExtension() {
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("Makefile"))
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("noext"))
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath(""))
-    }
-
-    @Test
-    fun revealForUnknownExtension() {
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("a.unknownext"))
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("weird.zzz"))
-    }
-
-    /**
-     * 隐藏文件陷阱：`substringAfterLast('.')` 对 `a.gitignore` 得到 `gitignore`、
-     * 对 `.gitignore` 同样得到 `gitignore`——都不在内部文本清单里 → REVEAL_IN_FOLDER。
-     */
-    @Test
-    fun revealForDotFilesWhoseDerivedExtensionLooksTextual() {
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("a.gitignore"))
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath(".gitignore"))
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath("/repo/.gitattributes"))
-        assertEquals(FileOpenTarget.REVEAL_IN_FOLDER, classifyFilePath(".bashrc"))
-        assertEquals(
-            false,
-            classifyFilePath(".gitignore") == FileOpenTarget.INTERNAL_TEXT
-        )
+    fun textCandidateForFilesWithoutExtensionOrUnknown() {
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath("Makefile"))
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath("noext"))
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath("a.sq"))
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath("b.proto"))
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath(".gitignore"))
+        assertEquals(FileOpenTarget.INTERNAL_TEXT, classifyFilePath(".bashrc"))
     }
 
     // ---------------- codeFenceLanguageFor ----------------
@@ -189,31 +168,29 @@ class FileTypeClassifierTest {
         assertEquals("r", codeFenceLanguageFor("a.r"))
         assertEquals("diff", codeFenceLanguageFor("a.diff"))
         assertEquals("diff", codeFenceLanguageFor("a.patch"))
+        // 2026-10 增强映射
+        assertEquals("makefile", codeFenceLanguageFor("Makefile"))
+        assertEquals("makefile", codeFenceLanguageFor("makefile"))
+        assertEquals("dockerfile", codeFenceLanguageFor("Dockerfile"))
+        assertEquals("sql", codeFenceLanguageFor("schema.sq"))
+        assertEquals("protobuf", codeFenceLanguageFor("service.proto"))
+        assertEquals("bash", codeFenceLanguageFor(".env"))
+        assertEquals("ini", codeFenceLanguageFor("config.ini"))
+        assertEquals("html", codeFenceLanguageFor("App.vue"))
     }
 
     /**
-     * 无词法器后缀 / 无扩展名 → null：调用方自行决定裸围栏（``` 不带语言）还是
-     * 直接按纯文本渲染。INTERNAL_TEXT 里能进查看器但没有词法器的后缀在此锁定。
+     * 无词法器后缀 / 空串 → null：调用方自行决定裸围栏（``` 不带语言）还是
+     * 直接按纯文本渲染。
      */
     @Test
     fun codeFenceLanguageForReturnsNullForUnknownOrNoExtension() {
-        // INTERNAL_TEXT 有、词法器无（能看但不指定围栏语言）
         assertEquals(null, codeFenceLanguageFor("a.txt"))
         assertEquals(null, codeFenceLanguageFor("a.log"))
-        assertEquals(null, codeFenceLanguageFor("a.ini"))
-        assertEquals(null, codeFenceLanguageFor("a.conf"))
-        assertEquals(null, codeFenceLanguageFor("a.cfg"))
-        assertEquals(null, codeFenceLanguageFor("a.env"))
-        assertEquals(null, codeFenceLanguageFor("a.properties"))
         assertEquals(null, codeFenceLanguageFor("build.gradle"))
         assertEquals(null, codeFenceLanguageFor("a.cs"))
-        assertEquals(null, codeFenceLanguageFor("a.scss"))
-        assertEquals(null, codeFenceLanguageFor("a.less"))
-        assertEquals(null, codeFenceLanguageFor("makefile"))
         assertEquals(null, codeFenceLanguageFor(".gitignore"))
-        // 未知扩展名 / 无扩展名 / 空串
         assertEquals(null, codeFenceLanguageFor("a.unknownext"))
-        assertEquals(null, codeFenceLanguageFor("Makefile"))
         assertEquals(null, codeFenceLanguageFor(""))
     }
 

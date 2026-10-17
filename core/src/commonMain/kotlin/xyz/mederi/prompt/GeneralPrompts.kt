@@ -3,7 +3,7 @@ package xyz.mederi.prompt
 /**
  * 通用提示词常量（与具体编码任务无关的底线纪律）。
  *
- * 唯一真理源（SSOT）：主代理与所有子代理共享。
+ * 主代理与 RESEARCHER 子代理共享。EXECUTOR 子代理使用独立提示词，不挂载本原则。
  */
 object GeneralPrompts {
     val PRINCIPLES: String = """

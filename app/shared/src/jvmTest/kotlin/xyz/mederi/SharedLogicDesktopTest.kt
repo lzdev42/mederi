@@ -34,7 +34,7 @@ import xyz.mederi.provider.domain.model.ProviderType
 
 class SharedLogicDesktopTest {
 
-    /** 工具参数宽容解析：数字/布尔等非字符串值不能导致整条参数丢失（read_file.max_lines / execute_command.timeout_seconds 等） */
+    /** 工具参数宽容解析：数字/布尔等非字符串值不能导致整条参数丢失（read_file.max_lines / bash.timeout_seconds 等） */
     @Test
     fun toolArgParserToleratesNonStringValues() {
         assertEquals(mapOf("pid" to "2627"), ToolArgParser.parse("""{"pid":2627}"""))
@@ -59,8 +59,8 @@ class SharedLogicDesktopTest {
     @Test
     fun testExactSeq385MederiModelMapper() {
         val json = Json { ignoreUnknownKeys = true }
-        val asstStr = """{"id":"msg_5179b7f3","sessionId":"sess_e87fb0d8","role":"ASSISTANT","parts":[{"type":"xyz.mederi.domain.model.MessagePart.Reasoning","content":["test"],"summary":null,"encrypted":null,"id":null},{"type":"xyz.mederi.domain.model.MessagePart.ToolCall","id":"call_s6jt43g1ewfzzdt8f7gnh72k","tool":"execute_command","args":"{\"command\":\"grep -n \\\"SUMMARY\\\\|Summary\\\\|ChatMessage(\\\" mederi/app/shared/src/jvmMain/kotlin/xyz/mederi/core/bridge/MederiModelMapper.kt | head -30\"}"}],"status":"COMPLETED","createdAt":"2026-09-20T08:50:20.029062Z"}"""
-        val userStr = """{"id":"msg_df9c3231","sessionId":"sess_e87fb0d8","role":"USER","parts":[{"type":"xyz.mederi.domain.model.MessagePart.ToolResult","id":"call_s6jt43g1ewfzzdt8f7gnh72k","tool":"execute_command","output":"12:import ...","isError":false,"status":null,"durationMs":null,"error":null}],"status":"COMPLETED","createdAt":"2026-09-20T08:50:20.077755Z"}"""
+        val asstStr = """{"id":"msg_5179b7f3","sessionId":"sess_e87fb0d8","role":"ASSISTANT","parts":[{"type":"xyz.mederi.domain.model.MessagePart.Reasoning","content":["test"],"summary":null,"encrypted":null,"id":null},{"type":"xyz.mederi.domain.model.MessagePart.ToolCall","id":"call_s6jt43g1ewfzzdt8f7gnh72k","tool":"bash","args":"{\"command\":\"grep -n \\\"SUMMARY\\\\|Summary\\\\|ChatMessage(\\\" mederi/app/shared/src/jvmMain/kotlin/xyz/mederi/core/bridge/MederiModelMapper.kt | head -30\"}"}],"status":"COMPLETED","createdAt":"2026-09-20T08:50:20.029062Z"}"""
+        val userStr = """{"id":"msg_df9c3231","sessionId":"sess_e87fb0d8","role":"USER","parts":[{"type":"xyz.mederi.domain.model.MessagePart.ToolResult","id":"call_s6jt43g1ewfzzdt8f7gnh72k","tool":"bash","output":"12:import ...","isError":false,"status":null,"durationMs":null,"error":null}],"status":"COMPLETED","createdAt":"2026-09-20T08:50:20.077755Z"}"""
         val asstMsg = json.decodeFromString<CoreMessage>(asstStr)
         val userMsg = json.decodeFromString<CoreMessage>(userStr)
         val toolResults = xyz.mederi.core.bridge.MederiModelMapper.buildToolResultsById(listOf(asstMsg, userMsg))
@@ -1796,7 +1796,7 @@ class SharedLogicDesktopTest {
                 role = xyz.mederi.core.contract.models.ChatRole.Assistant,
                 blocks = listOf(
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "分析中..."),
-                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc1", "execute_command", xyz.mederi.core.contract.models.ToolCallState.Running(mapOf("command" to "git status")))
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc1", "bash", xyz.mederi.core.contract.models.ToolCallState.Running(mapOf("command" to "git status")))
                 ),
                 createdAt = 1000L,
                 completedAt = null,
@@ -1818,7 +1818,7 @@ class SharedLogicDesktopTest {
                 completedAt = 2000L,
                 blocks = listOf(
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "分析完毕"),
-                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc1", "execute_command", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git status"), "On branch main")),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall("tc1", "bash", xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git status"), "On branch main")),
                     xyz.mederi.core.contract.models.ChatBlock.Text("t_done", "检查完成，当前分支为 main。")
                 )
             )
@@ -2441,12 +2441,12 @@ class SharedLogicDesktopTest {
                 blocks = listOf(
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r1", "思考步骤1"),
                     xyz.mederi.core.contract.models.ChatBlock.ToolCall(
-                        "tc1", "execute_command",
+                        "tc1", "bash",
                         xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git status"), "clean")
                     ),
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r2", "思考步骤2"),
                     xyz.mederi.core.contract.models.ChatBlock.ToolCall(
-                        "tc2", "execute_command",
+                        "tc2", "bash",
                         xyz.mederi.core.contract.models.ToolCallState.Completed(mapOf("command" to "git diff"), "")
                     ),
                     xyz.mederi.core.contract.models.ChatBlock.Reasoning("r3", "思考步骤3"),
@@ -3111,6 +3111,131 @@ class SharedLogicDesktopTest {
     }
 
     @Test
+    fun testWritePlanCardPlacementReproduction() {
+        val planTitle = "SWE-bench Lite 自动化评测（10 条 pilot）"
+        val planId = "plan_91037268"
+
+        val userTurn1 = xyz.mederi.core.contract.models.ChatMessage(
+            id = "msg_user_1",
+            conversationId = "conv_test",
+            role = xyz.mederi.core.contract.models.ChatRole.User,
+            blocks = listOf(ChatBlock.Text(id = "b_u1", text = "就按 10 条 pilot 来")),
+            createdAt = 1000L,
+            completedAt = 1000L,
+            parentMessageId = null,
+            model = null,
+            agent = null,
+            isStreaming = false
+        )
+
+        // 真实 core 中大模型调用的工具是 write_plan
+        val writePlanToolCall = ChatBlock.ToolCall(
+            id = "b_tool_1",
+            name = "write_plan",
+            state = ToolCallState.Completed(
+                input = mapOf(
+                    "title" to planTitle,
+                    "summary" to "只跑 10 条 pilot"
+                ),
+                output = "Plan approved. Plan ID: $planId. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
+            )
+        )
+        val asstTurn1 = xyz.mederi.core.contract.models.ChatMessage(
+            id = "msg_asst_1",
+            conversationId = "conv_test",
+            role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+            blocks = listOf(
+                ChatBlock.Reasoning(id = "b_r1", text = "重新建计划"),
+                writePlanToolCall
+            ),
+            createdAt = 2000L,
+            completedAt = 3000L,
+            parentMessageId = "msg_user_1",
+            model = "deepseek",
+            agent = null,
+            isStreaming = false
+        )
+
+        val userTurn2 = xyz.mederi.core.contract.models.ChatMessage(
+            id = "msg_user_2",
+            conversationId = "conv_test",
+            role = xyz.mederi.core.contract.models.ChatRole.User,
+            blocks = listOf(ChatBlock.Text(id = "b_u2", text = "停止测试然后给我个汇报")),
+            createdAt = 4000L,
+            completedAt = 4000L,
+            parentMessageId = null,
+            model = null,
+            agent = null,
+            isStreaming = false
+        )
+
+        val asstTurn2 = xyz.mederi.core.contract.models.ChatMessage(
+            id = "msg_asst_2",
+            conversationId = "conv_test",
+            role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+            blocks = listOf(
+                ChatBlock.Reasoning(id = "b_r2", text = "思考汇报"),
+                ChatBlock.Text(id = "b_t2", text = "收尾状态维持：6 个确认完整的 patch……到此为止。")
+            ),
+            createdAt = 5000L,
+            completedAt = 6000L,
+            parentMessageId = "msg_user_2",
+            model = "deepseek",
+            agent = null,
+            isStreaming = false
+        )
+
+        val planRequest = xyz.mederi.core.contract.models.PlanApprovalRequest(
+            id = planId,
+            conversationId = "conv_test",
+            planPath = "/path/to/plan.md",
+            title = planTitle,
+            summary = "只跑 10 条 pilot",
+            subtaskCount = 6,
+            status = "APPROVED"
+        )
+
+        val snapshot = xyz.mederi.core.contract.dto.ConversationSnapshot(
+            conversation = xyz.mederi.core.contract.models.Conversation(
+                id = "conv_test",
+                projectId = "proj_1",
+                title = "Test",
+                status = xyz.mederi.core.contract.models.ConversationStatus.Idle,
+                createdAt = 1000L,
+                updatedAt = 6000L
+            ),
+            messages = listOf(userTurn1, asstTurn1, userTurn2, asstTurn2),
+            tokenUsage = xyz.mederi.core.contract.models.TokenUsage(),
+            cost = xyz.mederi.core.contract.models.CostSummary(),
+            pendingPlanApproval = planRequest, // 模拟 initialPlanApproval 错误回填了非 PENDING 计划
+            planApprovals = listOf(planRequest)
+        )
+
+        val items = xyz.mederi.ui.computeChatItems(
+            msgs = listOf(userTurn1, asstTurn1, userTurn2, asstTurn2),
+            isWorking = false,
+            snapshot = snapshot
+        )
+
+        println("=== [DEBUG_LOG_PLAN_CARD_REPRODUCTION] items count: ${items.size} ===")
+        items.forEachIndexed { i, item ->
+            println("[$i] ${item::class.simpleName}: key=${item.key}")
+        }
+
+        val planCard = items.filterIsInstance<ChatListItem.PlanApproval>().firstOrNull()
+        val planCardIdx = items.indexOfFirst { it is ChatListItem.PlanApproval }
+        val userTurn2Idx = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("停止测试") }
+        val asstTurn2TextIdx = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("收尾状态维持") }
+
+        println("=== [DEBUG_LOG_PLAN_CARD_REPRODUCTION] planCardIdx=$planCardIdx, userTurn2Idx=$userTurn2Idx, asstTurn2TextIdx=$asstTurn2TextIdx ===")
+        assertNotNull(planCard, "计划卡片必须存在")
+        assertEquals(planId, planCard.request.id)
+        assertTrue(planCardIdx < userTurn2Idx, "计划卡片必须在第一轮（userTurn2 之前），而不是跑到会话最底下！planCardIdx=$planCardIdx, userTurn2Idx=$userTurn2Idx")
+        assertEquals(1, items.filterIsInstance<ChatListItem.PlanApproval>().size, "计划卡片严格只能出现 1 次，不得在末尾重复兜底")
+    }
+
+    @Test
+
     fun testPlanOverviewAndSubtaskSpecMapping() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {
@@ -3577,6 +3702,75 @@ Summary: 子任务 0 执行完毕
             val imgItem = viewModel.artifactItems.filterIsInstance<xyz.mederi.ui.ArtifactItem.Image>().find { it.imageUrl == "https://example.com/arch.png" }
             assertNotNull(imgItem)
             assertEquals("架构图", imgItem.title)
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    @Test
+    fun testInterruptedTurnWithoutDeliverablesOmitsFooter() = kotlinx.coroutines.runBlocking {
+        // 当轮次因中途插话截断且仅包含工具调用（无最终文本交付项）时，
+        // 只应生成 WorkTraceBlock 折叠项，不生成孤立的沉底 Footer（避免时间倒流与空复制按钮）
+        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val userMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_u1",
+                conversationId = "conv_1",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text(id = "b1", text = "原任务")),
+                createdAt = 1000L,
+                completedAt = 1000L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+            val asstMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_a1",
+                conversationId = "conv_1",
+                role = xyz.mederi.core.contract.models.ChatRole.Assistant,
+                blocks = listOf(
+                    xyz.mederi.core.contract.models.ChatBlock.Reasoning(id = "b2", text = "排查中..."),
+                    xyz.mederi.core.contract.models.ChatBlock.ToolCall(
+                        id = "call_1",
+                        name = "read_file",
+                        state = xyz.mederi.core.contract.models.ToolCallState.Completed(
+                            input = mapOf("path" to "test.txt"),
+                            output = "content"
+                        )
+                    )
+                ),
+                createdAt = 1010L,
+                completedAt = 1050L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false,
+                durationMs = 40L
+            )
+            val steerUserMsg = xyz.mederi.core.contract.models.ChatMessage(
+                id = "msg_u2",
+                conversationId = "conv_1",
+                role = xyz.mederi.core.contract.models.ChatRole.User,
+                blocks = listOf(xyz.mederi.core.contract.models.ChatBlock.Text(id = "b4", text = "改要新模板")),
+                createdAt = 1030L,
+                completedAt = 1030L,
+                parentMessageId = null,
+                model = null,
+                agent = null,
+                isStreaming = false
+            )
+
+            val items = xyz.mederi.ui.computeChatItems(listOf(userMsg, asstMsg, steerUserMsg), isWorking = false, snapshot = null)
+            val firstUserIdx = items.indexOfFirst { it is xyz.mederi.ui.ChatListItem.TextMessage && it.messageId == "msg_u1" }
+            val workTraceIdx = items.indexOfFirst { it is xyz.mederi.ui.ChatListItem.WorkTraceBlock }
+            val secondUserIdx = items.indexOfFirst { it is xyz.mederi.ui.ChatListItem.TextMessage && it.messageId == "msg_u2" }
+            val footers = items.filterIsInstance<xyz.mederi.ui.ChatListItem.Footer>()
+
+            assertTrue(firstUserIdx >= 0, "应有第一条用户消息")
+            assertTrue(workTraceIdx > firstUserIdx, "应有工作过程")
+            assertTrue(secondUserIdx > workTraceIdx, "第二条用户插话紧随工作过程")
+            assertTrue(footers.isEmpty(), "被插话截断且无交付正文的轮次，不应输出孤立的 Footer")
         } finally {
             testScope.cancel()
         }

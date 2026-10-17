@@ -65,8 +65,8 @@ classDiagram
     class TodoItem { +content +status: TodoStatus }
     class Plan {
         +id +title +summary +sessionId
-        +overview +keyDecisions +changes +risks +successCriteria
-        +userReviewRequired: List~String~ +openQuestions: List~String~ +researchNotes: String
+        +background +problemAnalysis +approach +expectedOutcome +testMethod +keyDecisions +changes +risks +successCriteria
+        +userReviewRequired: List~String~（停用） +openQuestions: List~String~ +researchNotes: String
         +architecture(Mermaid) +subtasks: List~Subtask~
         +status: PlanStatus +agentMode
     }
@@ -110,6 +110,7 @@ classDiagram
 | `FileChangeStatus` | `ADDED, MODIFIED, DELETED` | diff 用 |
 | `ProviderType` | `OPENAI_CHAT, OPENAI_RESPONSES, GOOGLE` | |
 | `ReasoningLevel` | `NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX` | |
+| `ToolName` | `READ_FILE, WRITE_FILE, EDIT_FILE, LIST_DIRECTORY, APPLY_PATCH, BASH, WEB_SEARCH, WEB_FETCH, UPDATE_TODO, ASK_USER, GET_CONTEXT_REMAINING, NEW_CONTEXT, CREATE_PLAN, WRITE_PLAN, GENERATE_SPEC, WRITE_LOG, CONVERGE_PLAN, UPDATE_VERIFICATION, VERIFY_SUBTASK, SUBAGENT, SPAWN_AGENT, SPAWN_RESEARCHER, AGENT_STATUS, STOP_AGENT, BROWSER, RUN_BROWSER_TASK, BROWSER_TASK_STATUS, STOP_BROWSER_TASK, BROWSER_INFO, OFFICE_READ, OFFICE_WRITE, LIST_PROCESSES, STOP_PROCESS, SET_TIMER` | 内置工具名称字符串枚举（`@Serializable`，wire 对应小写蛇形字符串，含 `val value: String` 与伴生 `fromValue(value)`） |
 
 ### 2.3 关键 data class 字段（穷尽）
 
@@ -150,14 +151,15 @@ suspend fun rollbackToMessage(id: String, messageId: String)   // abortAndJoin �
 suspend fun updateComposeState(id: String, agentMode: AgentMode, aiModel: AIModel?, reasoningLevel: ReasoningLevel?, apiKeyId: String?, draftText: String)
 % 全量覆盖写会话 compose state（非 COALESCE：null 写 null，清空语义），用于输入框设置统一保存
 suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
-suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean, aiModel: AIModel? = null, reasoningLevel: ReasoningLevel? = null)
-% 批准 + aiModel 非 null 时先 updateAgentConfig 写 session（"最后一次选择"语义）再 resolve requester——
-% create_plan 挂起等批准期间用户切模型，同 turn 后续 spawn 动态读到新模型；拒绝/null 不写
+suspend fun resolvePlanApproval(id: String, planId: String, approved: Boolean)
+% 计划审批仅批准技术方案，绝不修改会话模型与推理档位（session.aiModel / reasoningLevel 保持不变）
 % 跨 turn 批准路径（requester 已随旧 turn 消亡/进程重启，见 §6.2）：批准且计划仍 PENDING_APPROVAL 非终态时
 % 落盘 APPROVED + PLAN_APPROVAL_RESOLVED + 一条 UI 隐藏内部消息（UI_HIDDEN_MARKER 开头）启动新 turn，
 % AI 读到 Active Plan=APPROVED 自行走执行链；拒绝 → 直接 false，计划保持 PENDING_APPROVAL
 fun getSubagentReport(agentId: String): SubagentReportData?   // 子代理汇报直读（优先落盘文件，供 Server/UI）
 fun listSubagentsForSession(sessionId: String): List<BackgroundAgent>  // 会话全部子代理（RUNNING + 未丢弃终态，按 startedAt 排序）；getSnapshot 水合 subagents 用
+fun listBackgroundTasksForSession(sessionId: String): List<BackgroundTaskEntry>  // 会话全部后台任务（Command / Timer，按 startedAt 倒序；TurnExecutor → BackgroundTaskManager.listForSession）
+fun stopBackgroundTask(taskId: String): String?  // 停止指定后台任务（先置 STOPPED 再取消协程/杀进程组）；taskId 不存在返回 null
 suspend fun compressHistory(id: String)
 suspend fun contextUsedTokens(id: String): Int   // 当前上下文占用唯一入口 = aiViewContextUsedTokens(historyStore, id, session.aiModel?.supportsImages ?: true)
 % UI 概览 / getSnapshot / listMessagesPage / GetContextRemainingTool 取「当前上下文占用」统一走这里；SessionApi 同名方法转发（SessionApiImpl → sessionManager.contextUsedTokens）
@@ -229,7 +231,7 @@ suspend fun uninstall(name: String)                    // 删除根目录下对�
 
 | API | 方法（Impl 全部薄转调 + mederiCall） | 特别逻辑 |
 |---|---|---|
-| `SessionApi` | list / create(CreateSessionRequest) / get / rename / delete / abort / abortAndJoin / sendMessage(SendMessageRequest) / steerMessage(SendMessageRequest) / getSubagentReport(agentId)(→SubagentReportData?) / listSubagentsForSession(sessionId)(→List<BackgroundAgent>) / stopSubagent(agentId) / rollbackToMessage / resolveQuestion / resolvePlanApproval / compressHistory / listMessages / getMessage / listRawMessages(→RawMessageDto) / getFileDiffs / events | RawMessageRecord→Dto 转换 |
+| `SessionApi` | list / create(CreateSessionRequest) / get / rename / delete / abort / abortAndJoin / sendMessage(SendMessageRequest) / steerMessage(SendMessageRequest) / getSubagentReport(agentId)(→SubagentReportData?) / listSubagentsForSession(sessionId)(→List<BackgroundAgent>) / stopSubagent(agentId) / **listBackgroundTasksForSession(sessionId)(→List<BackgroundTaskEntry>)** / **stopBackgroundTask(taskId)(→String?)** / rollbackToMessage / resolveQuestion / resolvePlanApproval / compressHistory / listMessages / getMessage / listRawMessages(→RawMessageDto) / getFileDiffs / events | RawMessageRecord→Dto 转换 |
 | `SessionApi`（续，输入框设置 + 会话控制） | updateAgentConfig(sessionId, agentMode?, aiModel?, reasoningLevel?, apiKeyId?)（COALESCE：null 不改） / **updateComposeState(sessionId, agentMode, aiModel?, reasoningLevel?, apiKeyId?, draftText)**（全量覆盖写含 draftText，非 COALESCE） / contextUsedTokens(sessionId) / stopSubagent(agentId) | 输入框设置统一保存；updateComposeState 为全量 SET 语义（null 写 null、清空） |
 | `ProjectApi` | list / create / get / delete / rename / addDirectory / removeDirectory | |
 | `ProviderApi` | list / create / get / update / delete / addKey / listKeys / deleteKey / setDefaultKey / listModels / addModel / updateModel / deleteModel / **refreshModels** / **autoSetupModels** | refresh 只新增远端新模型（DEFAULT_VISIBLE_MODEL_LIMIT=10 补足启用）不碰存量元数据；autoSetupModels=目录元数据进存量 FETCHED 模型唯一通道；type 字符串解析失败抛 Validation |
@@ -322,6 +324,7 @@ classDiagram
         -questionRequesters / planApprovalRequesters
         -subagentRunner: SubagentRunnerImpl
         -subagentManager: SubagentManager   % 异步子代理生命周期管理（spawn 返回 agentId 不阻塞）
+        -backgroundTaskManager: BackgroundTaskManager  % 后台任务（Command / Timer）生命周期管理：终态经 eventBus → handleBackgroundTaskTerminalEvent 组装 <event_message> 唤醒父 turn；abort/abortAndJoin/rollbackAndJoin 级联 stopAllForSession
         -apiKeyResolver: ApiKeyResolver     % API Key 统一真理源解析器（进程级共享记忆）
         -browserTaskManager: BrowserTaskService?  % 浏览器任务管理（持有 BrowserRegistry）
         -onTurnDiff: ((TurnDiff) -> Unit)?  % turn 结束 diff 回调（子代理用此把改动合并进父 turn）
@@ -329,6 +332,8 @@ classDiagram
         +sendMessage(sessionId, request, subagentRole?)
         +steerMessage(sessionId, request) +pollSteering(sessionId) SteeringItem?  % Steering 工具边界注入（见 §6.2）
         +getSubagentReport(agentId) SubagentReportData?
+        +listBackgroundTasksForSession(sessionId) List<BackgroundTaskEntry>  % 后台任务直读（→ BackgroundTaskManager.listForSession）
+        +stopBackgroundTask(taskId) String?  % 后台任务主动停止（→ BackgroundTaskManager.stop）
         -sendMessageInternal()   % durable-first: 用户消息先落库
         -runTurn()               % preflight 压缩 → ToolFactory → buildTurnAgent → agent.run
         -buildTurnAgent()        % KoogClientFactory/ModelBuilder/ParamsBuilder + Strategy + ChatMemory
@@ -471,20 +476,22 @@ token 估算统一入口（真实值优先，估算兜底）：`estimateTokens/c
 
 ### 7.1 ToolFactory（object，`…/tools/ToolFactory.kt`）
 
+> **工具名强类型枚举（2026-10）**：内置工具名称收敛至 `ToolName` 字符串枚举（`…/tools/ToolName.kt`），`ToolFactory.*_TOOL_NAMES` 列表与 `build` 入参 `toolNames` 均为 `List<ToolName>`。各工具实现构造时传 `ToolName.XXX.value`。
+
 ```text
-FS_TOOL_NAMES      = [read_file, write_file, edit_file, list_directory, execute_command]   # apply_patch 已注销（实现保留，2026-09：模型不用，单文件场景 edit_file+replace_all 覆盖）
-AGENT_TOOL_NAMES   = [update_todo, ask_user]          # get_context_remaining / new_context 已实现未开放
-PLAN_TOOL_NAMES    = [create_plan, generate_spec, write_log, converge_plan, update_verification]
-SUBAGENT_TOOL_NAMES= [subagent]   # 6→1 单一入口（2026-09），action 分流封装原 spawn_agent/spawn_researcher/agent_status/stop_agent（wait_agent 已删 2026-09-25，子代理完成自动唤醒），仅主代理
-BROWSER_TASK_TOOL_NAMES= [browser]   # 4→1 单一入口（2026-09），action 分流封装原 run_browser_task/browser_task_status/stop_browser_task/browser_info，仅主代理
-OFFICE_TOOL_NAMES      = [office_read, office_write]  # Office 文档读写，主代理 + EXECUTOR
-VERIFY_TOOL_NAMES  = [verify_subtask]
-PROCESS_TOOL_NAMES = [list_processes, stop_process]   # 宿主侧进程管理，主代理 + EXECUTOR
-RESEARCHER_TOOL_NAMES= [web_search, web_fetch]   # 仅 RESEARCHER 子代理（curl HTTP GET 只读网络搜索/抓取，isResearcher 时注册），主代理/EXECUTOR 不注册
-ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFICE + PROCESS + RESEARCHER_TOOL_NAMES   # 无 SUBAGENT_MGMT（已并入 subagent）
+FS_TOOL_NAMES      = [READ_FILE, WRITE_FILE, EDIT_FILE, LIST_DIRECTORY, BASH]   # apply_patch 已注销（实现保留，2026-09：模型不用，单文件场景 edit_file+replace_all 覆盖）
+AGENT_TOOL_NAMES   = [UPDATE_TODO, ASK_USER]          # get_context_remaining / new_context 已实现未开放
+PLAN_TOOL_NAMES    = [CREATE_PLAN, GENERATE_SPEC, WRITE_LOG, CONVERGE_PLAN, UPDATE_VERIFICATION]
+SUBAGENT_TOOL_NAMES= [SUBAGENT]   # 6→1 单一入口（2026-09），action 分流封装原 spawn_agent/spawn_researcher/agent_status/stop_agent（wait_agent 已删 2026-09-25，子代理完成自动唤醒），仅主代理
+BROWSER_TASK_TOOL_NAMES= [BROWSER]   # 4→1 单一入口（2026-09），action 分流封装原 run_browser_task/browser_task_status/stop_browser_task/browser_info，仅主代理
+OFFICE_TOOL_NAMES      = [OFFICE_READ, OFFICE_WRITE]  # Office 文档读写，主代理 + EXECUTOR
+VERIFY_TOOL_NAMES  = [VERIFY_SUBTASK]
+PROCESS_TOOL_NAMES = [LIST_PROCESSES, STOP_PROCESS]   # 宿主侧进程管理，主代理 + EXECUTOR
+RESEARCHER_TOOL_NAMES= [WEB_SEARCH, WEB_FETCH]   # 仅 RESEARCHER 子代理（curl HTTP GET 只读网络搜索/抓取，isResearcher 时注册），主代理/EXECUTOR 不注册
+ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFICE + PROCESS + RESEARCHER_TOOL_NAMES   # List<ToolName>，无 SUBAGENT_MGMT（已并入 subagent）
 ```
 
-`build(toolNames, directories, sessionId, historyStore, eventBus, modelContextWindow, newContextWindowFlag, diffTracker?, subagentManager?, browserTaskService?, aiModel?, reasoningLevel?, projectId?, questionRequester?, agentMode=AUTONOMOUS, subagentRole?, planApprovalRequester?, planStore?, notebook?, commandSandbox?, sessionStore?, mcpTools, agentsDiscovery?, apiKeyId?, onFileTouched?, subagentConfigManager?, customTools): ToolRegistry`（`apiKeyId` 继承父会话选定 key；`onFileTouched` 由 SubagentRunnerImpl 挂起收集执行器文件改动；`subagentConfigManager` 供 spawn 时按角色解析独立模型）
+`build(toolNames: List<ToolName> = ALL_TOOL_NAMES, directories, sessionId, historyStore, eventBus, modelContextWindow, newContextWindowFlag, diffTracker?, subagentManager?, browserTaskService?, aiModel?, reasoningLevel?, projectId?, questionRequester?, agentMode=AUTONOMOUS, subagentRole?, planApprovalRequester?, planStore?, notebook?, commandSandbox?, sessionStore?, mcpTools, agentsDiscovery?, apiKeyId?, onFileTouched?, subagentConfigManager?, customTools): ToolRegistry`（`apiKeyId` 继承父会话选定 key；`onFileTouched` 由 SubagentRunnerImpl 挂起收集执行器文件改动；`subagentConfigManager` 供 spawn 时按角色解析独立模型）
 
 **裁剪规则**：RESEARCHER 只给 read_file/list_directory/web_search/web_fetch（只读网络搜索/抓取）；web_search/web_fetch 注册条件 = `isResearcher || !isSubagent`（主代理 + RESEARCHER，EXECUTOR 不注册）；子代理（isSubagent）无 plan/spawn/verify/ask_user/todo 工具；主代理 canPlan/canSpawn/canAskUser/canTodo 依赖相应依赖项非空。浏览器任务工具（`browser`，action=RUN/STATUS/STOP/INFO）**仅主代理**，且 `browserTaskService != null` 才注册——子代理（含 BROWSER agent）不派发浏览器任务。
 
@@ -498,10 +505,10 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 | 文件 | 工具/类 | 要点 |
 |---|---|---|
 | `FileSystemTools.kt` | read_file(path, offset=0, max_lines=2000) / write_file / edit_file(original 唯一匹配，多处报错；replace_all 全量替换) / list_directory / apply_patch(patch)（**已注销，不注册给 AI**） | `resolveForRead` **全盘可读**（相对路径在项目目录解析）；`resolveForWrite` **必须在项目目录内**（containment 白名单，代码强制）；write/edit→diffTracker.recordWrite；**write/edit 落盘前经 `FileWriteRegistry` try-lock**（同文件并发写硬拒绝，见 §7.2 FileWriteRegistry 行）；**read_file 支持 offset（0-based 分页）**：返回区间 `[start, end)` 前闭后开，end 即续读的下一 offset，超界/空文件有明确返回；apply_patch 三阶段=PatchParser.parse → verifyHunks（dry-run 全部校验，失败磁盘零改动）→ applyHunks（产出 A/M/D + `List<PatchChange>` → diffTracker.trackPatch）；**read/list 成功后触发 `AgentsSubtreeDiscovery` 回调**（构造参数，AGENTS.md 子树懒发现，见 §7.4） |
-| `ShellTools.kt` | execute_command(command, cwd="", timeout_seconds=120) → `CommandResult(output, exitCode)`；**web_search(query, max_chars=8000, timeout_seconds=30)**（inner class `WebSearchTool`，仅 RESEARCHER 子代理注册）→ Bing 搜索结果结构化（title/URL/snippet，提取失败兜底原始 HTML 截断）；**web_fetch(url, max_chars=8000, timeout_seconds=30)**（inner class `WebFetchTool`，仅 RESEARCHER 子代理注册）→ 页面清洗文本 | `runCommand`：sandbox.wrap 包装、**cwd 可指定**（空=项目主目录，底层 runCommand 本就支持、2026-09 工具层补暴露）、**启动即注册 ProcessRegistry**（进程组回收）、超时 destroyForcibly **+ 整组 SIGKILL**、警告前缀。**web 工具拆分（2026-10）**：共享类级 `BROWSER_UA`（Chrome 120 桌面 UA）与私有 helper `curlGet(url, timeoutSeconds)`（`curl -sL --max-time N -A '<UA>' -- 'url'`，复用 `runCommand`——**沙箱包装/进程注册/超时处理全一致**），实体解码 `decodeHtmlEntities` / 截断 `truncate` 亦共享。`WebSearchTool`（web_search）= query URL 编码 → `https://www.bing.com/search?q=…&count=20` → 正则提取 `<li class="b_algo">` 块的 title（h2>a）/URL（cite）/snippet（p.b_lineclamp2）→ 格式化输出。`WebFetchTool`（web_fetch）= url 抓取 → `cleanHtml`（移除 script/style/svg/noscript/head 块、自闭合标签 link/meta/img/br/hr/source/input/col/area/base/param、剥离剩余标签、解码实体、压缩空白）。安全约束：web_search 拒绝空/含单引号 query；web_fetch 拒绝空、非 http(s)、含单引号 URL（防 shell 注入，拒绝 file://、ftp:// 等）；`--` 终止选项解析、不传 `-o`（不写文件）/`-d`/`-X`（不发送数据、不改方法）；结果截断到 maxChars（下限 100） |
+| `ShellTools.kt` | bash(command, cwd="", timeout_seconds=120) → `CommandResult(output, exitCode)`；**web_search(query, max_chars=8000, timeout_seconds=30)**（inner class `WebSearchTool`，仅 RESEARCHER 子代理注册）→ Bing 搜索结果结构化（title/URL/snippet，提取失败兜底原始 HTML 截断）；**web_fetch(url, max_chars=8000, timeout_seconds=30)**（inner class `WebFetchTool`，仅 RESEARCHER 子代理注册）→ 页面清洗文本 | `runCommand`：sandbox.wrap 包装、**cwd 可指定**（空=项目主目录，底层 runCommand 本就支持、2026-09 工具层补暴露）、**启动即注册 ProcessRegistry**（进程组回收）、超时 destroyForcibly **+ 整组 SIGKILL**、警告前缀。**web 工具拆分（2026-10）**：共享类级 `BROWSER_UA`（Chrome 120 桌面 UA）与私有 helper `curlGet(url, timeoutSeconds)`（`curl -sL --max-time N -A '<UA>' -- 'url'`，复用 `runCommand`——**沙箱包装/进程注册/超时处理全一致**），实体解码 `decodeHtmlEntities` / 截断 `truncate` 亦共享。`WebSearchTool`（web_search）= query URL 编码 → `https://www.bing.com/search?q=…&count=20` → 正则提取 `<li class="b_algo">` 块的 title（h2>a）/URL（cite）/snippet（p.b_lineclamp2）→ 格式化输出。`WebFetchTool`（web_fetch）= url 抓取 → `cleanHtml`（移除 script/style/svg/noscript/head 块、自闭合标签 link/meta/img/br/hr/source/input/col/area/base/param、剥离剩余标签、解码实体、压缩空白）。安全约束：web_search 拒绝空/含单引号 query；web_fetch 拒绝空、非 http(s)、含单引号 URL（防 shell 注入，拒绝 file://、ftp:// 等）；`--` 终止选项解析、不传 `-o`（不写文件）/`-d`/`-X`（不发送数据、不改方法）；结果截断到 maxChars（下限 100） |
 | `ProcessTools.kt` | list_processes(filter?) / stop_process(pid, force=false) | **宿主侧进程回收**（沙箱外）：list 惰性剔除已死组、输出 pid/命令/工作目录/启动时间；stop 只按 ProcessRegistry 定向 kill -- -pgid（TERM→轮询→force 时 SIGKILL），**查不到 pid 即拒绝**，只杀 mederi 自己启动的进程 |
 | `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED（与 Plan 解耦，plan 期间也可记录 plan 之外事项）。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
-| `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan / update_verification | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：先 `voidActivePlans` 作废该会话全部非终态旧计划（逐一发 PLAN_PROGRESS(action=voided)）→ validatePlan 聚合校验（businessLogic 不再必填，字段保留）→ PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（subtasksJson 全量 Subtask JSON 随事件）（superseded/approved/rejected）→ notebook.append → emitPlanProgress（PLAN_PROGRESS：planId/action/subtasks，不携带 todos）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）；覆盖既有 spec 必须给 reason——完整旧 spec 文本追加进 Subtask.specChanges（append-only 审计，零销毁）；发 PLAN_PROGRESS("spec-generated", subtasks)。converge_plan：append-only 追加补救子任务（同 SubtaskArg 结构，含验证契约 6 字段）；update_verification：对非 COMPLETED 子任务原子编辑**全契约**（command/cwd/timeoutSeconds/expected/expectStdoutContains/expectStdoutNotContains，null 字段=保留现值，reason 必填）+ 追加 VerificationChange（完整旧/新契约）到 Subtask.verificationChanges（审计留痕）；发 PLAN_PROGRESS("verification-updated", oldCommand/newCommand/reason）。**验证硬门禁（companion internal helper，2026-10）**：`checkLiteralRequired(st)` = 规则 1（每子任务 `verificationExpectStdoutContains` 必须 ≥1 字面量，validatePlan per-subtask 块调用，LLMDescription 已改 REQUIRED）；`checkParallelizableModuleOverlap(subtasks)` + `moduleOf(path)`（`substringBefore("/src/")` 缺省取第一级目录）= 规则 4（两 parallelizable 子任务共享 gradle 模块 → 验证编译竞争，validatePlan 末尾逐对 reject）；`isVerificationDowngrade(old, new)` + `reasonIndicatesDecisionChange(reason)` = 规则 3（update_verification 写前降级检测：新契约丢命令段 `./gradlew`/`assert`/` test ` 或字面量数量减少，且 reason 无 `decision|disposition|restated|changed`（大小写不敏感）关键词 → 拒写，append-only 审计与 updatePlan 原子性不受影响）。**Args 数据类**：`CreatePlanArgs`：`userReviewRequired` / `openQuestions` / `researchNotes` / `appendix`（可选：计划级技术上下文；传入 Plan.appendix）；`SubtaskArg`（create_plan 与 converge_plan 共用）：`name/planDetail/targetFiles/decisions/verification(命令)` + `appendix`（可选：子任务级技术附录，论证版 vs spec 执行版；传入 Subtask.appendix） + 验证契约 5 个扩展参数 `verificationCwd` / `verificationTimeoutSeconds` / `verificationExpected`（人类可读预期，必填，审批卡片可见）/ `verificationExpectStdoutContains`（**必填 ≥1 字面量**，规则 1 代码强制）/ `verificationExpectStdoutNotContains`（机器硬校验字面量，LenientStringList 容错）；`GenerateSpecArgs`：`spec` + `reason`（修正既有 spec 时必填） |
+| `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan / update_verification | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：先 `voidActivePlans` 作废该会话全部非终态旧计划（逐一发 PLAN_PROGRESS(action=voided)）→ validatePlan 聚合校验（强制 approach/keyDecisions/changes/languageStack；不再强制 background/problemAnalysis/expectedOutcome/testMethod/inScope/successCriteria；businessLogic 不再必填，字段保留）→ PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（subtasksJson 全量 Subtask JSON 随事件）（superseded/approved/rejected）→ notebook.append → emitPlanProgress（PLAN_PROGRESS：planId/action/subtasks，不携带 todos）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）；覆盖既有 spec 必须给 reason——完整旧 spec 文本追加进 Subtask.specChanges（append-only 审计，零销毁）；发 PLAN_PROGRESS("spec-generated", subtasks)。converge_plan：append-only 追加补救子任务（同 SubtaskArg 结构，含验证契约 6 字段）；update_verification：对非 COMPLETED 子任务原子编辑**全契约**（command/cwd/timeoutSeconds/expected/expectStdoutContains/expectStdoutNotContains，null 字段=保留现值，reason 必填）+ 追加 VerificationChange（完整旧/新契约）到 Subtask.verificationChanges（审计留痕）；发 PLAN_PROGRESS("verification-updated", oldCommand/newCommand/reason）。**验证硬门禁（companion internal helper，2026-10）**：`checkLiteralRequired(st)` = 规则 1（每子任务 `verificationExpectStdoutContains` 必须 ≥1 字面量，validatePlan per-subtask 块调用，LLMDescription 已改 REQUIRED）；`checkParallelizableModuleOverlap(subtasks)` + `moduleOf(path)`（`substringBefore("/src/")` 缺省取第一级目录）= 规则 4（两 parallelizable 子任务共享 gradle 模块 → 验证编译竞争，validatePlan 末尾逐对 reject）；`isVerificationDowngrade(old, new)` + `reasonIndicatesDecisionChange(reason)` = 规则 3（update_verification 写前降级检测：新契约丢命令段 `./gradlew`/`assert`/` test ` 或字面量数量减少，且 reason 无 `decision|disposition|restated|changed`（大小写不敏感）关键词 → 拒写，append-only 审计与 updatePlan 原子性不受影响）。**Args 数据类**：`CreatePlanArgs`：`userReviewRequired`（停用） / `openQuestions` / `researchNotes` / `appendix`（可选：计划级技术上下文；传入 Plan.appendix）；`SubtaskArg`（create_plan 与 converge_plan 共用）：`name/planDetail/targetFiles/decisions/verification(命令)` + `appendix`（可选：子任务级技术附录，论证版 vs spec 执行版；传入 Subtask.appendix） + 验证契约 5 个扩展参数 `verificationCwd` / `verificationTimeoutSeconds` / `verificationExpected`（人类可读预期，必填，审批卡片可见）/ `verificationExpectStdoutContains`（**必填 ≥1 字面量**，规则 1 代码强制）/ `verificationExpectStdoutNotContains`（机器硬校验字面量，LenientStringList 容错）；`GenerateSpecArgs`：`spec` + `reason`（修正既有 spec 时必填） |
 | `VerifyTools.kt` | verify_subtask(planId, subtaskIndex, status: PASS/PARTIAL/FAIL, evidence, rootCause?: IMPLEMENTATION/PLAN, remediation?) | **机器硬校验（2026-09-24）**：子任务存了 verification 命令即**无条件执行**（shellTools.runCommand，timeoutSeconds 默认 30、cwd 可配）——exit 0 且 `expectStdoutContains` 全部命中、`expectStdoutNotContains` 全未命中 = 机器 PASS；exit 非零 / 必须字面量缺失 / 命中禁止字面量 = 机器 FAIL（声明 PASS 时**拒绝存储**，把真实输出摆到桌面要求重判）；超时 = inconclusive（不存 PASS 也不硬拒，暖缓存重验）。PARTIAL/FAIL 必须给 rootCause（判定顺序硬性：先核实现再核计划）——IMPLEMENTATION → `converge_plan` 追加补救；PLAN → append-only 修订（update_verification / generate_spec reason=，见 §8）。机器 PASS 而模型坚持未通过 → 记非 PASS + `machineMismatch=true`（异常态，返回文本强制主代理如实告知用户）。真实证据落盘：`commandOutput`（截断 4000 字符）/ `commandExitCode`（超时 null）与模型自述 evidence 分开存。同时读 Subtask.executorTouchedFiles vs targetFiles 报告 scope 越界（追加 evidence，非硬拒）；PASS→COMPLETED、PARTIAL/FAIL→FAILED；**updatePlan 原子写入**验证结果+状态；全部 COMPLETED → plan 置 COMPLETED + `writeWalkthrough` + `planStore.archive`；发 PLAN_PROGRESS("verified", subtasks/lastSubtaskIndex/lastSubtaskStatus/lastSubtaskRootCause) |
 | `subagent/SubagentTool.kt` | subagent(action: SPAWN/SPAWN_RESEARCHER/STATUS/STOP, task?, briefing?, planId?, subtaskIndex?, agentId?) → JSON | **6→1 单一入口（2026-09）**，action 分流：SPAWN=委托 `SpawnAgentTool`——**planId 可选**：带 planId+subtaskIndex = 计划路径（硬校验 spec 存在性→`updatePlan` 原子置计划与子任务 IN_PROGRESS→PLAN_PROGRESS("subtask-started", subtasks 投影)→派 executor 执行存储的 spec，返回 `{agentId,status,modelName}`）；**无 planId = ad-hoc 执行路径**（task+briefing 直接派 executor，无 spec 门禁、不要求 subtaskIndex，用于小改动/自包含任务）；模型/推理档位动态读 session（批准时用户可能切了模型），角色独立配置时 SubagentConfigManager 优先（§3.5）；SPAWN_RESEARCHER=委托 `SpawnResearcherTool`（只读，无计划门禁）；STATUS/STOP=委托 `SubagentManager.status/stop`（agentId 空返回 Error 文本；STOP 传 `operator = "MAIN_AGENT"` 标记为 `"已被主agent关闭"`，区别于用户手动关闭的 `"被用户关闭"`）。**返回值增强 + STATUS 轮询拦截（2026-10）**：构造函数接收 `parentSessionId`；SPAWN/SPAWN_RESEARCHER 成功（非 Error）时在 JSON 后追加 `\nSubagent dispatched. N subagent(s) running. End your turn... Do NOT call subagent(STATUS) to poll.`（N = `manager.runningCountForSession(parentSessionId)`，spawn 已注册故含刚派出的这个；Error 含并发上限拒绝原样透传不追加）；STATUS 先查 `manager.runningCountForSession(parentSessionId) > 0`——本会话仍有 RUNNING 子代理时返回合成引导文案 `"Subagents are still running. Do NOT poll — end your turn now. You will be automatically woken when all results are in."` 而非实际状态，全部终态后才返回真实 status（NOT_FOUND + AgentRecoveryInfo 逻辑不变）。无 WAIT——子代理完成经事件链自动唤醒父 turn（§13）。仅主代理注册（canSpawn） |
 | `subagent/SubagentManager.kt` | spawn / status / stop(agentId, operator?=null, reason=...) / stopAllForSession / rollbackSubagents(parentSessionId, keptAgentIds) / runningCountForSession(parentSessionId) / getReport | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态（含 parentSessionId/aiModel/reasoningLevel/task/briefing/planId/executorSubtaskIndex/planStore/stopReason/isDiscarded 元数据）；stop = cancel job（`operator` 非空如 `"MAIN_AGENT"` 时默认 `reason="已被主agent关闭"`，未传 `operator` 时默认 `reason="被用户关闭"`，在协程捕获时写入 result，发 SUBAGENT_STOPPED 汇报给主 AI）；**rollbackSubagents(parentSessionId, keptAgentIds)** = 回退历史时静默丢弃在目标回滚点时尚未创立的子代理（标记 isDiscarded 并 cancel，发 SUBAGENT_DISCARDED 通知前端移除，**坚决不发** SUBAGENT_STOPPED，不进 pendingEventMessages，不告知 AI）；**stopAllForSession(parentSessionId)** = abort/abortAndJoin 级联收割本会话 RUNNING 子代理（幂等）；**runningCountForSession(parentSessionId)** = 查询父会话当前 RUNNING 子代理数（纯读 ConcurrentHashMap 无需加锁；STATUS 轮询拦截 / SPAWN 返回值 runningCount / TurnExecutor 事件冲刷延后判断共用）；`getReport(agentId)` = SubagentReportData{agentId, role, status, reportPath?, content}；agent 已不在内存表时 status/getReport 经 `retired` 恢复部分认知；**生命周期事件**（可选注入 eventBus）：spawn 发 SUBAGENT_STARTED → 终态发 SUBAGENT_COMPLETED/ERROR/STOPPED（驱动父 turn 自动唤醒）/ SUBAGENT_DISCARDED（无感丢弃） |
@@ -509,7 +516,7 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 | `subagent/SubagentRunner(Impl).kt` | 接口 + 实现 | Impl 依赖 ProviderManager+ProjectManager+**mcpConnector+skills（由父 TurnExecutor 注入，仅透传；实际开关在 runTurn 的 AgentCapabilities 表）**；内存 InMemorySessionStore/HistoryStore + 独立 eventBus(replay=64) + 临时 Session(`sub_xxxxxxxx`, AUTONOMOUS) → 独立 TurnExecutor（**scope 继承调用方协程上下文**，取消可级联）→ 按角色拼 inputText（EXECUTOR: spec 清单自顶向下 + SPEC_FEEDBACK 回报机制；RESEARCHER: 只读调研）→ sendMessage(subagentRole=role) → 等 MESSAGE_COMPLETED/ERROR 终态 → 取最后 ASSISTANT 文本；**CancellationException 重新抛出**（标记 STOPPED）；异常转 "[subagent error] ..."。**轮询作用域（2026-10）**：子代理 TurnExecutor 构造传 `rotationSessionId = parentSessionId`——子代理轮与父轮共享同一个轮询计数器（多 key 轮询序连续） |
 | `sandbox/CommandSandbox.kt` | `CommandSandbox(projectDirs)` + `SandboxStatus` | **永远开、无开关**；读全盘放行、写锁白名单（项目目录 + SandboxConfig.extraWritablePaths + 临时目录 + 构建缓存 ~/.gradle ~/.m2 ~/.cache ~/.konan ~/Library/Caches ~/Library/Java + /dev）；shell 探测链 bash→sh（Windows bash.exe→cmd）；`wrap(command)` → `WrappedCommand(argv, warning, processGroupLeader)`：macOS Seatbelt（sandbox-exec -f，SBPL profile 按白名单 hash 缓存）+ **进程组长包装**（macOS perl `setpgrp(0,0)`+exec / Linux setsid，使整条命令树共享 PGID=直接子进程 pid）/ Linux bwrap 功能烟测（只检测不代装）/ Windows 降级警告（无进程组）；companion `environmentNote()` 注入环境块（含 Process control 行） |
 | `sandbox/ProcessRegistry.kt` | object（全局单例） | **进程组注册表**：`register(pid, pgid, command, workDir)` 只在 runCommand 启动点写入；`list()` 惰性剔除已死组；`killGroup(pid, pgid, force)` 宿主侧 kill -- -pgid / Windows taskkill /T；`isAlive` = kill -0 组探测。安全边界：只杀 mederi spawn 的进程，沙箱内命令无法写注册表 |
-| `FileWriteRegistry.kt` | object（进程级单例） | **同文件并发写注册表**（2026-09）：`tryAcquire(paths): File?` 在 synchronized 块内整体检查+登记（任一冲突则一个都不登记，返回冲突文件）；`release(paths)` 幂等释放。键 = canonical absolute path；语义 = try-lock + 拒绝（不排队）——占用中的文件直接返回 Error，AI 下轮自行重排。write_file/edit_file 落盘全程持锁（try/finally，异常必释放）；跨 turn/跨子代理/跨 session 生效（实例级锁防不住并行子代理）。execute_command 与 MCP 工具是外部进程，不在管辖内 |
+| `FileWriteRegistry.kt` | object（进程级单例） | **同文件并发写注册表**（2026-09）：`tryAcquire(paths): File?` 在 synchronized 块内整体检查+登记（任一冲突则一个都不登记，返回冲突文件）；`release(paths)` 幂等释放。键 = canonical absolute path；语义 = try-lock + 拒绝（不排队）——占用中的文件直接返回 Error，AI 下轮自行重排。write_file/edit_file 落盘全程持锁（try/finally，异常必释放）；跨 turn/跨子代理/跨 session 生效（实例级锁防不住并行子代理）。bash 与 MCP 工具是外部进程，不在管辖内 |
 | `sandbox/SandboxConfig.kt` | object | `@Volatile extraWritablePaths` 进程级全局白名单（UI 写穿、下个 turn 生效） |
 | `diff/TurnDiffTracker.kt` | trackPatch / recordWrite / recordDelete / captureSnapshot / buildDiff / **mergeChanges** | MAX_FILE_SIZE=512KB + skipDirs(.git/.gradle/build/node_modules…)；captureSnapshot 刷新已追踪文件磁盘内容兜底；**全部公开方法加 @Synchronized**；`mergeChanges(changes)` 合并外部 FileChange 列表进 tracker（子代理 turn 改动合并入口） |
 | `diff/TurnDiffTracker.kt`（含 `ParentDiffRegistry`） | `ParentDiffRegistry`（object，进程级注册表）：register(sessionId, tracker) / unregister(sessionId) / mergeInto(parentSessionId, changes)；主 turn runTurn 开头 register、finally 里 unregister；子代理 turn 结束时经此把文件改动合并进父 turn 的 diffTracker，修复"turn 改动摘要不含子代理改动"的 bug |
@@ -588,10 +595,10 @@ classDiagram
     class Plan {
         +id +title +summary +sessionId
         +projectContext: ProjectContextType
-        +languageStack +businessLogic +overview
+        +languageStack +businessLogic +background +problemAnalysis +approach +expectedOutcome +testMethod
         +inScope +outScope +keyDecisions: List~Decision~
         +changes: List~PlannedChange~ +dataAndParams +risks +successCriteria
-        +userReviewRequired: List~String~ +openQuestions: List~String~ +researchNotes: String
+        +userReviewRequired: List~String~（停用） +openQuestions: List~String~ +researchNotes: String
         +architecture: String?  % Mermaid 代码，InkCompose 渲染
         +subtasks: List~Subtask~ +status: PlanStatus
         +createdAt +agentMode
@@ -658,7 +665,7 @@ classDiagram
     PlanApprovalRequester --> Plan : 审批事件桥
 ```
 
-- **PlanStore 存储**（`…/plan/PlanStore.kt`，2026-09-24 目录重组）：项目主目录 `.mederi/plans/{planId}/` 一个计划一个目录，下挂 `plan.json`（机器真理源）+ `plan.md`（人读 Markdown，`buildMarkdown` 渲染含 `#### Verification` 段——验证标准在批准时即对用户可见）+ 可选 `research.md`（researcher 报告）+ 可选 `reports/NN-executor.md`（executor 报告 per-subtask）+ 完成时 `walkthrough.md`。归档到 `.mederi/plans-done/{planId}/`（整目录复制），作废到 `.mederi/plans-voided/{planId}/`（整目录移动，`copyRecursively`+`deleteRecursively`）。模块级函数 `findMederiDir`（只读）/`ensureMederiDir`（自愈建 plans/plans-done/notebook.md）。**`buildMarkdown` 渲染段名改中文+英文括注**（如 `## 概览（Overview）`、`## 关键决策（Key Decisions）`），置顶两个可选段：`## 需要你确认（User Review Required）`（渲染 Plan.userReviewRequired）与 `## 默认决策（Open Questions）`（渲染 Plan.openQuestions），非空才输出。**两层结构（2026-10）**：第一个 `---` 分隔符之前 = 自足概要（项目背景/summary/需确认/默认决策/概览/范围/风险/成功标准）；子任务段每项在 `Brief` 与 `Spec` 之间插入 `#### 技术附录（Technical Appendix）`（渲染 Subtask.appendix，非空才渲染）；第二个 `---` 之后 = 计划级附录区域（`## 计划级附录（Plan Appendix）` 渲染 Plan.appendix，随后 `业务逻辑（Business Logic）`/`关键决策（Key Decisions）`/`改动清单（Changes）`/`数据与参数（Data & Parameters）`/`架构（Architecture）`，均非空才渲染）。**`writeWalkthrough(plan)`**：计划完成（全子任务 COMPLETED）时自动装配 Walkthrough 文档 → 写 `plans/{planId}/walkthrough.md`（archive 随之移动）；`buildWalkthrough(plan)` 负责组装内容（聚合 plan/subtask/spec/verification/changes 等）。
+- **PlanStore 存储**（`…/plan/PlanStore.kt`，2026-09-24 目录重组）：项目主目录 `.mederi/plans/{planId}/` 一个计划一个目录，下挂 `plan.json`（机器真理源）+ `plan.md`（人读 Markdown，`buildMarkdown` 渲染含 `#### Verification` 段——验证标准在批准时即对用户可见）+ 可选 `research.md`（researcher 报告）+ 可选 `reports/NN-executor.md`（executor 报告 per-subtask）+ 完成时 `walkthrough.md`。归档到 `.mederi/plans-done/{planId}/`（整目录复制），作废到 `.mederi/plans-voided/{planId}/`（整目录移动，`copyRecursively`+`deleteRecursively`）。模块级函数 `findMederiDir`（只读）/`ensureMederiDir`（自愈建 plans/plans-done/notebook.md）。**`buildMarkdown` 渲染段名改中文+英文括注**（如 `## 目标（Goal）`、`## 实现方案（Approach）`、`## 验证计划（Verification Plan）`、`## 关键决策（Key Decisions）`）。**Part 1 人读区（2026-10）**：第一个 `---` 分隔符之前 = 人读区（项目背景/summary/默认决策（Open Questions，可选）/`## 目标（Goal）`（background+problemAnalysis+expectedOutcome 合并单段叙事，任一非空才渲染）/`## 实现方案（Approach）`（必填，无条件渲染，业务逻辑硬核）/`## 验证计划（Verification Plan）`（可选，testMethod 非空才渲染）/范围/风险/成功标准（均条件渲染））。**User Review 段已移除**——需用户拍板的破坏性决策走 pre-plan ask_user，计划只反映已定结果。子任务段每项在 `Brief` 与 `Spec` 之间插入 `#### 技术附录（Technical Appendix）`（渲染 Subtask.appendix，非空才渲染）；第二个 `---` 之后 = 计划级附录区域（`## 计划级附录（Plan Appendix）` 渲染 Plan.appendix，随后 `业务逻辑（Business Logic）`/`关键决策（Key Decisions）`/`改动清单（Changes）`/`数据与参数（Data & Parameters）`/`架构（Architecture）`，均非空才渲染）。**`writeWalkthrough(plan)`**：计划完成（全子任务 COMPLETED）时自动装配 Walkthrough 文档 → 写 `plans/{planId}/walkthrough.md`（archive 随之移动）；`buildWalkthrough(plan)` 负责组装内容（聚合 plan/subtask/spec/verification/changes 等）。
 - **方案A 落盘策略（2026-09-24）**：主↔子代理交互只传简介+路径，全量内容落盘到 `.mederi/plans/{planId}/` 下，谁需要谁 `read_file` 全。
   - `researcher` 报告**一律落盘**：有活跃 plan → `{planId}/research.md`（`writeResearchReport`）；无活跃 plan（分诊阶段）→ `.mederi/research/{timestamp}.md`（`writeStandaloneResearchReport`）——父上下文两种情况都只收**头部 800 字符 + 路径**，全量报告不再进父上下文（需要详情时 `read_file`）
   - `executor` 报告 → `{planId}/reports/NN-executor.md`；父上下文只收尾部 1500 字符 + 路径（捕获 SPEC_FEEDBACK）；无 plan 上下文/写盘失败时兜底全文回灌
@@ -938,7 +945,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 flowchart LR
     subgraph SP["SystemPrompts（骨架）"]
         C["configSection(agentMode)<br/>一行显式配置声明(最前)"]
-        COMMON["COMMON = IDENTITY + CORE_PRINCIPLES<br/>(GeneralPrompts + CodingPrompts + 冲突处理)<br/>+ TOOL_GUIDELINES + PromptGuides.PLAN_TOOL_GUIDE<br/>+ PromptGuides.PLAN_OVERVIEW_GUIDE + PromptGuides.PLAN_APPENDIX_GUIDE<br/>+ WORKING_DIRECTORY + PromptGuides.SANDBOX_USAGE<br/>+ PLANNING_DISCIPLINE(Triage+PlanLoop七步)<br/>+ OUTPUT_FORMAT + PromptGuides.MARKDOWN_FORMAT"]
+        COMMON["COMMON = IDENTITY + CORE_PRINCIPLES<br/>(GeneralPrompts + CodingPrompts + 冲突处理)<br/>+ TOOL_GUIDELINES + PromptGuides.PLAN_TOOL_GUIDE<br/>+ PromptGuides.PLAN_OVERVIEW_GUIDE + PromptGuides.PLAN_APPENDIX_GUIDE<br/>+ PromptGuides.SPEC_WRITING_GUIDE + PromptGuides.SUBAGENT_REPORT_VERIFICATION<br/>+ WORKING_DIRECTORY + PromptGuides.SANDBOX_USAGE<br/>+ PLANNING_DISCIPLINE(Triage+PlanLoop七步)<br/>+ OUTPUT_FORMAT + PromptGuides.MARKDOWN_FORMAT"]
         W["workflowSection(agentMode)<br/>APPROVAL/AUTONOMOUS 唯一差异=计划批准者"]
         MODE["AGENT_MODE_SECTION（# Your Mode）"]
         PLAN["# Active Plan 段(如有活跃计划)<br/>Current: Subtask N 指针 + Progress + 活跃spec"]
@@ -949,8 +956,10 @@ flowchart LR
         G2["MARKDOWN_FORMAT(GFM/file链接/vlr/KaTeX/Alerts)"]
         G3["MERMAID_GUIDELINES(语法安全+结构图拆分,唯一一份)"]
         G4["PLAN_TOOL_GUIDE(计划工具硬规则+create_plan字段清单+精简JSON范例)<br/>businessLogic 已降级 optional(2026-10),附录字段 appendix 入列"]
-        G5["PLAN_OVERVIEW_GUIDE(概要=批准/拒绝依据,四问质量条,不强制模板)"]
+        G5["PLAN_OVERVIEW_GUIDE(段=菜单非清单,Goal 叙事+Approach 必填硬核+验证计划拆自动/手动,省略无信息量段禁注水,User Review 走 pre-plan ask_user)"]
         G6["PLAN_APPENDIX_GUIDE(技术论证版WHY:现状/证据/根因/修复预览/业务逻辑,密度规则)"]
+        G7["SPEC_WRITING_GUIDE(执行器零项目上下文,spec=唯一知识来源;引导式嵌入规则/签名,AI自定包含量,2026-10)"]
+        G8["SUBAGENT_REPORT_VERIFICATION(子代理汇报核验纪律,静态素材归位2026-10)"]
     end
     subgraph CP["独立原则库（SSOT 单一真理源）"]
         GP["GeneralPrompts.PRINCIPLES<br/>通用底线: 简洁/事实核查/静默执行/禁旁白/保密/语言规则(SSOT)"]
@@ -964,7 +973,7 @@ flowchart LR
     W --> OUT
     PLAN --> OUT
     TODO --> OUT
-    OUT2["forSubagent(role)"] --> EXEC["Executor: Config+SUBAGENT_IDENTITY<br/>+GeneralPrompts+CodingPrompts<br/>+EXECUTOR_TOOL_GUIDELINES+WORKING_DIRECTORY+SANDBOX_USAGE<br/>+OUTPUT_FORMAT"]
+    OUT2["forSubagent(role)"] --> EXEC["Executor: 独立精简提示词(独立身份/执行纪律/读码边界/编译约束/SPEC_FEEDBACK)<br/>不再拼 GeneralPrompts/CodingPrompts/SANDBOX_USAGE/OUTPUT_FORMAT"]
     OUT2 --> RES["Researcher: Config+SUBAGENT_IDENTITY<br/>+GeneralPrompts(无编码原则)<br/>+RESEARCHER_TOOL_GUIDELINES+RESEARCH_DISCIPLINE<br/>+OUTPUT_FORMAT+MERMAID_GUIDELINES"]
 ```
 
@@ -973,13 +982,14 @@ flowchart LR
 - **编码硬纪律强化**：
   - **根因优先，严禁掩耳盗铃**：`Fix root causes, never suppress symptoms`，明确禁止吞异常（swallow exceptions）、盲加空检查/降级兜底、压制警告、弱化断言或修改测试来虚假通过（fake pass）。
   - **最小化修改**：`Minimal surgical edits`，强制最小 blast radius，严禁无关重构与格式化干扰。
-- **角色差异化挂载**：主代理挂载通用 + 编码 + 需求冲突处理；Executor 挂载通用 + 编码；Researcher 仅挂载通用原则（只读探查，不注入编码规则）。
+- **角色差异化挂载**：主代理挂载通用 + 编码 + 需求冲突处理；Researcher 仅挂载通用原则（只读探查，不注入编码规则）。
+- **Executor 独立精简提示词（2026-10-15）**：`forSubagentExecutor()` 重写为完全独立的精简提示词（身份/执行纪律/读码边界/编译约束/SPEC_FEEDBACK），删除 `EXECUTOR_PRINCIPLES` 与 `EXECUTOR_TOOL_GUIDELINES` 成员，不再拼装 GeneralPrompts/CodingPrompts/SANDBOX_USAGE/OUTPUT_FORMAT/WORKING_DIRECTORY/SUBAGENT_IDENTITY；主代理 `CORE_PRINCIPLES` 改为直接内联 GeneralPrompts.PRINCIPLES + CodingPrompts.PRINCIPLES（内容不变）。
 - **调研纪律重写（2026-10）**：`RESEARCH_DISCIPLINE`（Researcher 拼接段，见上方流程图）重写为 **知识来源铁律（Knowledge Source Rule, ABSOLUTE）+ 必须汇报内容（Report Content）**——铁律：报告每个结论必须来自实际读过的来源（read_file / web_search / web_fetch / MCP 搜索结果），**禁止基于自身训练知识下结论**（训练知识只允许指引往哪找——该读哪些文件、抓哪些 URL、搜什么词——永远不能作为报告里的结论或发现），查不到证据必须明写"未找到证据"；源码引用 `file_path:line_number`、网页引用 URL + 页面标题，来源超过 6 个月须标明日期并标记可能过时；缺失/矛盾必须明说，禁止编造。必须汇报内容（Markdown 格式，AI 自定结构）= ① 分析结果（从来源得出的结论）② 信息来源（代码：文件路径:行号；网页：URL + 页面标题）③ 具体证据（代码段 / 文本原文）；其余内容（开放问题、置信度等）AI 自行决定是否包含。随 web 工具拆分（§7.2 ShellTools 行）配套注入 RESEARCHER 提示词。
 
 **提示词变更（2026-09-23）**：
-- **工具描述**：`create_plan` / `generate_spec` 工具描述更新——`create_plan` 描述 `userReviewRequired` / `openQuestions` / `researchNotes` 字段语义；`generate_spec` 描述过摘录列表参数与 `AppendixEntryArg` 结构（后续 2026-09-24 方案A 重构删除，见下）。
-- **Plan Loop 七步指引**：第 2/4/7 步新增指引——第 2 步（create_plan）要求填 `userReviewRequired`/`openQuestions`/`researchNotes`；第 4 步（generate_spec）历史要求带关键文件摘录（2026-09-24 起删除：executor 自己 `read_file`，spec 只写路径引用）；第 7 步（计划完成）提示自动生成 walkthrough（`writeWalkthrough`）。
-- **计划内容语言规范**：语言规则 SSOT 统一在 `GeneralPrompts.PRINCIPLES` #6（用用户 input 语言、技术术语括注英文、代码/命令/路径保持 ASCII），`IDENTITY`/`PLANNING_DISCIPLINE`/`MARKDOWN_FORMAT` 中的重复叮嘱已清除。`PlanStore.buildMarkdown` 渲染段名保持中英双语括注（如"概览（Overview）"）。
+- **工具描述**：`create_plan` / `generate_spec` 工具描述更新——`create_plan` 描述 `openQuestions` / `researchNotes` 字段语义；`generate_spec` 描述过摘录列表参数与 `AppendixEntryArg` 结构（后续 2026-09-24 方案A 重构删除，见下）。
+- **Plan Loop 七步指引**：第 2/4/7 步新增指引——第 2 步（create_plan）要求填 `openQuestions`/`researchNotes`；第 4 步（generate_spec）历史要求带关键文件摘录（2026-09-24 起删除：executor 自己 `read_file`，spec 只写路径引用）；第 7 步（计划完成）提示自动生成 walkthrough（`writeWalkthrough`）。
+- **计划内容语言规范**：语言规则 SSOT 统一在 `GeneralPrompts.PRINCIPLES` #6（用用户 input 语言、技术术语括注英文、代码/命令/路径保持 ASCII），`IDENTITY`/`PLANNING_DISCIPLINE`/`MARKDOWN_FORMAT` 中的重复叮嘱已清除。`PlanStore.buildMarkdown` 渲染段名保持中英双语括注（如"目标（Goal）"、"实现方案（Approach）"、"验证计划（Verification Plan）"）。
 
 **方案A 重构（2026-09-24，减 token / 主↔子代理交互只传简介+路径）**：
 - **删除** Subtask 摘录列表字段（`AppendixEntry` 类、`PlanTools.AppendixEntryArg` 类、`GenerateSpecArgs` 对应参数一并删除）。executor 直接 `read_file` 原文件，不再要求模型在 generate_spec 时手工转录文件摘录（消除输出 token 浪费）。

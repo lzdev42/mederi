@@ -105,15 +105,10 @@ data class ResolveQuestionInput(val answers: List<List<String>>)
 
 /**
  * resolvePlanApproval：POST /v1/sessions/{id}/plans/{planId}/approve
- *
- * model/thinkingLevel = 批准时刻输入框选中的模型与推理档位（可选，旧客户端不传 = 不改变）：
- * core 在批准时写入 session，同一 turn 后续 spawn 的子代理按此模型执行。
  */
 @Serializable
 data class ResolvePlanApprovalInput(
-    val approved: Boolean,
-    val model: xyz.mederi.core.contract.models.ModelOption? = null,
-    val thinkingLevel: String? = null
+    val approved: Boolean
 )
 
 /** server 错误响应体 */

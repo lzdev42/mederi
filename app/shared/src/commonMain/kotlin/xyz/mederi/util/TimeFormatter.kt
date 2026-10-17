@@ -4,6 +4,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Instant
+import xyz.mederi.currentTimeMillis
 
 /**
  * 统一时间格式化工具类（KMP 纯 Kotlin 跨平台实现）。
@@ -14,6 +15,30 @@ import kotlin.time.Instant
  * 3. 健壮容错：支持 Epoch 毫秒、标准 ISO-8601、空格分隔时间串等，解析失败安全降级不崩溃。
  */
 object TimeFormatter {
+
+    /**
+     * 格式化为相对活动时间 "Xm"/"Xh"/"Xd"/"Xmo"/"Xy"（整数 floor 分档）。
+     * 适用于：侧边栏会话列表最近活动时间展示。
+     * 单位：m(分钟) / h(小时) / d(天) / mo(月, 30天) / y(年, 365天)。
+     * 不足 1 分钟返回 "0m"；时间差为负（时钟偏差）也返回 "0m"。
+     */
+    fun formatRelativeActivity(epochMillis: Long): String {
+        val nowMillis = currentTimeMillis()
+        val diffMillis = nowMillis - epochMillis
+        if (diffMillis < 0) return "0m"
+        val minutes = diffMillis / 60_000
+        val hours = minutes / 60
+        val days = hours / 24
+        val months = days / 30
+        val years = days / 365
+        return when {
+            hours < 1L -> "${minutes}m"
+            days < 1L -> "${hours}h"
+            months < 1L -> "${days}d"
+            years < 1L -> "${months}mo"
+            else -> "${years}y"
+        }
+    }
 
     /**
      * 格式化为短时刻 "HH:mm"（如 "14:25"）。

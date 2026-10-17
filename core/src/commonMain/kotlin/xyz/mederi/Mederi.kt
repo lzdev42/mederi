@@ -264,7 +264,8 @@ class Mederi private constructor(
                 diffStore = diffStore,
                 mcpConnector = mcpConnector,
                 skills = skillManager,
-                subagentConfigManager = subagentConfigManager
+                subagentConfigManager = subagentConfigManager,
+                compactionThresholdPercent = config.compactionThresholdPercent  // 新增
             )
 
             // === API 层装配 ===

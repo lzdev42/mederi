@@ -308,12 +308,13 @@ internal fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
     val providerId = provider.id
     val selectedId = selectedApiKeys[providerId]
     val selectedKey = keys.find { it.id == selectedId }
+    val defaultKey = keys.find { it.isDefault } ?: keys.firstOrNull()
     var expanded by remember { mutableStateOf(false) }
 
     Box {
         ChipSelectorPill(
             icon = FeatherIcons.Key,
-            label = selectedKey?.name ?: stringResource(Res.string.input_default_key),
+            label = selectedKey?.name ?: defaultKey?.name ?: stringResource(Res.string.input_default_key),
             onClick = { expanded = true }
         )
         DropdownMenu(
@@ -325,32 +326,6 @@ internal fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
                 .widthIn(min = 220.dp, max = 280.dp)
                 .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
         ) {
-            // 供应商默认 key（未选定）
-            DropdownMenuItem(
-                text = {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.input_provider_default),
-                            fontSize = 12.sp,
-                            fontWeight = if (selectedId == null) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (selectedId == null) colors.accentPrimary else colors.textPrimary
-                        )
-                        if (selectedId == null) {
-                            Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
-                        }
-                    }
-                },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                onClick = {
-                    viewModel.selectApiKey(providerId, null)
-                    expanded = false
-                }
-            )
-            if (keys.isNotEmpty()) HorizontalDivider(color = colors.divider.copy(alpha = 0.6f), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
             keys.forEach { key ->
                 val isSelected = selectedId == key.id
                 DropdownMenuItem(

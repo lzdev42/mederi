@@ -32,28 +32,40 @@ object ToolFactory {
 
     // apply_patch 不注册给 AI（2026-09 裁定：模型实际不用，单文件场景 edit_file + replace_all 全覆盖）；
     // 实现保留在 FileSystemTools.ApplyPatchTool，恢复时在此列表与下方注册表各加回一行
-    val FS_TOOL_NAMES = listOf("read_file", "write_file", "edit_file", "list_directory", "execute_command")
-    // get_context_remaining / new_context 未开放给 AI（AgentTools 实现保留），恢复时取消注释
-    val AGENT_TOOL_NAMES = listOf(
-        "update_todo",
-        // "get_context_remaining",
-        // "new_context",
-        "ask_user"
+    val FS_TOOL_NAMES: List<ToolName> = listOf(
+        ToolName.READ_FILE,
+        ToolName.WRITE_FILE,
+        ToolName.EDIT_FILE,
+        ToolName.LIST_DIRECTORY,
+        ToolName.BASH
     )
-    val PLAN_TOOL_NAMES = listOf("create_plan", "generate_spec", "write_log", "converge_plan", "update_verification")
+    // get_context_remaining / new_context 未开放给 AI（AgentTools 实现保留），恢复时取消注释
+    val AGENT_TOOL_NAMES: List<ToolName> = listOf(
+        ToolName.UPDATE_TODO,
+        // ToolName.GET_CONTEXT_REMAINING,
+        // ToolName.NEW_CONTEXT,
+        ToolName.ASK_USER
+    )
+    val PLAN_TOOL_NAMES: List<ToolName> = listOf(
+        ToolName.WRITE_PLAN,
+        ToolName.GENERATE_SPEC,
+        ToolName.WRITE_LOG,
+        ToolName.CONVERGE_PLAN,
+        ToolName.UPDATE_VERIFY
+    )
     // subagent 单一入口：封装原 spawn_agent/spawn_researcher/agent_status/stop_agent/wait_agent（action 分流）
-    val SUBAGENT_TOOL_NAMES = listOf("subagent")
+    val SUBAGENT_TOOL_NAMES: List<ToolName> = listOf(ToolName.SUBAGENT)
     // browser 单一入口：封装原 run_browser_task/browser_task_status/stop_browser_task/browser_info（action 分流）
-    val BROWSER_TASK_TOOL_NAMES = listOf("browser")
-    val OFFICE_TOOL_NAMES = listOf("office_read", "office_write")
-    val VERIFY_TOOL_NAMES = listOf("verify_subtask")
-    val PROCESS_TOOL_NAMES = listOf("list_processes", "stop_process")
+    val BROWSER_TASK_TOOL_NAMES: List<ToolName> = listOf(ToolName.BROWSER)
+    val OFFICE_TOOL_NAMES: List<ToolName> = listOf(ToolName.OFFICE_READ, ToolName.OFFICE_WRITE)
+    val VERIFY_TOOL_NAMES: List<ToolName> = listOf(ToolName.VERIFY_SUBTASK)
+    val PROCESS_TOOL_NAMES: List<ToolName> = listOf(ToolName.LIST_PROCESSES, ToolName.STOP_PROCESS, ToolName.SET_TIMER)
     // web_search/web_fetch：主代理 + 研究员子代理可用（Bing 搜索 + URL 抓取，curl GET 只读）
-    val WEB_TOOL_NAMES = listOf("web_search", "web_fetch")
-    val ALL_TOOL_NAMES = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES + WEB_TOOL_NAMES
+    val WEB_TOOL_NAMES: List<ToolName> = listOf(ToolName.WEB_SEARCH, ToolName.WEB_FETCH)
+    val ALL_TOOL_NAMES: List<ToolName> = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES + WEB_TOOL_NAMES
 
     fun build(
-        toolNames: List<String>,
+        toolNames: List<ToolName> = ALL_TOOL_NAMES,
         directories: List<String>,
         sessionId: String,
         historyStore: HistoryStore,
@@ -81,10 +93,11 @@ object ToolFactory {
         onFileTouched: ((String) -> Unit)? = null,
         subagentConfigManager: SubagentConfigManager? = null,
         /** 自定义工具（CustomToolRegistry.buildAll() 收集）：旁路合并，不参与 toolNames 裁剪。 */
-        customTools: List<ToolBase<*, *>> = emptyList()
+        customTools: List<ToolBase<*, *>> = emptyList(),
+        backgroundTaskManager: xyz.mederi.tools.background.BackgroundTaskManager? = null,
     ): ToolRegistry {
         val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched)
-        val shellTools = ShellTools(directories, commandSandbox)
+        val shellTools = ShellTools(directories, commandSandbox, backgroundTaskManager, sessionId)
         val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester)
 
         // 主代理：全量工具（Triage Flow——是否建计划由 AI 判断，无代码门禁）。子代理按角色裁剪：
@@ -101,49 +114,57 @@ object ToolFactory {
         val canTodo = !isSubagent && sessionStore != null
 
         // 文件系统工具
-        val fsToolMap = mutableMapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-            "read_file" to { fsTools.ReadFileTool() },
-            "list_directory" to { fsTools.ListDirectoryTool() }
+        val fsToolMap = mutableMapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+            ToolName.READ_FILE to { fsTools.ReadFileTool() },
+            ToolName.LIST_DIRECTORY to { fsTools.ListDirectoryTool() }
         )
         if (canWrite) {
             // write_file/edit_file 属于非高危操作（可由 diff 追踪回滚），不触发授权
-            fsToolMap["write_file"] = { fsTools.WriteFileTool() }
-            fsToolMap["edit_file"] = { fsTools.EditFileTool() }
+            fsToolMap[ToolName.WRITE_FILE] = { fsTools.WriteFileTool() }
+            fsToolMap[ToolName.EDIT_FILE] = { fsTools.EditFileTool() }
         }
         if (canExecute) {
             // 非破坏命令自由执行；OS 沙箱（macOS Seatbelt / Linux bwrap）锁写白名单
-            fsToolMap["execute_command"] = { shellTools.ExecuteCommandTool() }
+            fsToolMap[ToolName.BASH] = { shellTools.BashTool() }
         }
         // web_search / web_fetch：主代理 + 研究员子代理（curl GET 只读网络搜索/抓取，复用 ShellTools.runCommand）
         if (isResearcher || !isSubagent) {
-            fsToolMap["web_search"] = { shellTools.WebSearchTool() }
-            fsToolMap["web_fetch"] = { shellTools.WebFetchTool() }
+            fsToolMap[ToolName.WEB_SEARCH] = { shellTools.WebSearchTool() }
+            fsToolMap[ToolName.WEB_FETCH] = { shellTools.WebFetchTool() }
         }
 
         // 进程管理：只对能执行命令的角色开放（主代理 + EXECUTOR）。
         // 宿主侧按 ProcessRegistry 回收 mederi 自己启动的进程组（沙箱内无法互杀，见 sandbox-plan.md）
         val processTools = ProcessTools()
         val processToolMap = if (canExecute) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "list_processes" to { processTools.ListProcessesTool() },
-                "stop_process" to { processTools.StopProcessTool() }
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.LIST_PROCESSES to { processTools.ListProcessesTool() },
+                ToolName.STOP_PROCESS to { processTools.StopProcessTool() }
+            )
+        } else emptyMap()
+
+        // 后台任务工具：set_timer（依赖 BackgroundTaskManager，未注入时不注册）
+        val backgroundTaskTools = backgroundTaskManager?.let { xyz.mederi.tools.background.BackgroundTaskTools(it, sessionId) }
+        val backgroundToolMap = if (canExecute && backgroundTaskTools != null) {
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.SET_TIMER to { backgroundTaskTools.SetTimerTool() }
             )
         } else emptyMap()
 
         val agentToolMap = if (canTodo) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "update_todo" to { agentTools.UpdateTodoTool() }
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.UPDATE_TODO to { agentTools.UpdateTodoTool() }
             )
         } else {
             // 未开放给 AI：AgentTools 实现保留，恢复时取消注释
-            // "get_context_remaining" to { agentTools.GetContextRemainingTool() },
-            // "new_context" to { agentTools.NewContextWindowTool() },
+            // ToolName.GET_CONTEXT_REMAINING to { agentTools.GetContextRemainingTool() },
+            // ToolName.NEW_CONTEXT to { agentTools.NewContextWindowTool() },
             emptyMap()
         }
 
         val askUserToolMap = if (canAskUser) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "ask_user" to { agentTools.AskUserTool() }
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.ASK_USER to { agentTools.AskUserTool() }
             )
         } else emptyMap()
 
@@ -151,12 +172,12 @@ object ToolFactory {
             PlanTools(sessionId, agentMode, planStore!!, planApprovalRequester!!, notebook!!, eventBus)
         } else null
         val planToolMap = if (planTools != null) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "create_plan" to { planTools.CreatePlanTool() },
-                "generate_spec" to { planTools.GenerateSpecTool() },
-                "write_log" to { planTools.WriteLogTool() },
-                "converge_plan" to { planTools.ConvergePlanTool() },
-                "update_verification" to { planTools.UpdateVerificationTool() }
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.WRITE_PLAN to { planTools.WritePlanTool() },
+                ToolName.GENERATE_SPEC to { planTools.GenerateSpecTool() },
+                ToolName.WRITE_LOG to { planTools.WriteLogTool() },
+                ToolName.CONVERGE_PLAN to { planTools.ConvergePlanTool() },
+                ToolName.UPDATE_VERIFY to { planTools.UpdateVerificationTool() }
             )
         } else emptyMap()
 
@@ -164,14 +185,14 @@ object ToolFactory {
             VerifyTools(sessionId, planStore!!, eventBus, shellTools)
         } else null
         val verifyToolMap = if (verifyTools != null) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "verify_subtask" to { verifyTools.VerifySubtaskTool() }
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.VERIFY_SUBTASK to { verifyTools.VerifySubtaskTool() }
             )
         } else emptyMap()
 
         val subagentToolMap = if (canSpawn) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "subagent" to {
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.SUBAGENT to {
                     val mgr = subagentManager!!
                     SubagentTool(
                         spawnExecutor = SpawnAgentTool(
@@ -194,8 +215,8 @@ object ToolFactory {
 
         // 浏览器任务工具：仅主代理（子代理不派发浏览器任务），4→1 单一入口（action 分流）
         val browserTaskToolMap = if (!isSubagent && browserTaskService != null && aiModel != null && reasoningLevel != null && projectId != null) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "browser" to {
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.BROWSER to {
                     val svc = browserTaskService!!
                     BrowserTool(
                         run = RunBrowserTaskTool(
@@ -218,25 +239,25 @@ object ToolFactory {
         // Office 文档工具（主代理 + EXECUTOR 可用，RESEARCHER 只读）
         val officeTools = OfficeTools(directories)
         val officeToolMap = if (canWrite) {
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "office_read" to { officeTools.OfficeReadTool() },
-                "office_write" to { officeTools.OfficeWriteTool() }
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.OFFICE_READ to { officeTools.OfficeReadTool() },
+                ToolName.OFFICE_WRITE to { officeTools.OfficeWriteTool() }
             )
         } else if (!isResearcher) {
             // EXECUTOR 可读不可写？实际上 EXECUTOR canWrite=true。此处保守留空。
-            mapOf<String, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                "office_read" to { officeTools.OfficeReadTool() }
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.OFFICE_READ to { officeTools.OfficeReadTool() }
             )
         } else {
             emptyMap()
         }
 
-        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + browserTaskToolMap + officeToolMap + processToolMap
+        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + browserTaskToolMap + officeToolMap + processToolMap + backgroundToolMap
         val requested = if (toolNames.isEmpty()) allAvailableMaps.keys.toList() else toolNames
 
         val built = ToolRegistry {
-            requested.forEach { name ->
-                allAvailableMaps[name]?.let { tool(it()) }
+            requested.forEach { toolName ->
+                allAvailableMaps[toolName]?.let { tool(it()) }
             }
         }
 

@@ -47,7 +47,9 @@ class MederiCompressionStrategy(
     private val contextWindow: Int? = null,
     private val keepLastMessages: Int? = null,
     private val eventBus: MutableSharedFlow<MederiEvent> = MutableSharedFlow(),
-    private val sessionId: String = ""
+    private val sessionId: String = "",
+    private val onCompactionStart: (() -> Unit)? = null,
+    private val onCompactionEnd: (() -> Unit)? = null
 ) : HistoryCompressionStrategy() {
 
     /**
@@ -60,6 +62,7 @@ class MederiCompressionStrategy(
         llmSession: AIAgentLLMWriteSession,
         memoryMessages: List<Message>
     ) {
+        onCompactionStart?.invoke()
         // 压缩是三种触发（手动 compressHistory / preflight / turn 中 isHistoryTooBig 节点）的
         // 唯一共同终点：进入即发 RUNNING，结束（含异常/早退）由 finally 保证发 IDLE。
         emitCompaction("RUNNING")
@@ -99,7 +102,11 @@ class MederiCompressionStrategy(
             llmSession.prompt = llmSession.prompt.withMessages { _ -> compressedMessages }
         } finally {
             // 含异常/早退（olderBatches 空、旧消息 < 2）一律发 IDLE，靠 finally 覆盖
-            emitCompaction("IDLE")
+            try {
+                emitCompaction("IDLE")
+            } finally {
+                onCompactionEnd?.invoke()
+            }
         }
     }
 

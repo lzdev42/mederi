@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 进程注册表：记录 mederi 通过 execute_command 启动的进程组。
+ * 进程注册表：记录 mederi 通过 bash 启动的进程组。
  *
  * 背景（docs/sandbox-plan.md）：macOS Seatbelt 无 `process-signal` 操作（macOS 26.6.2
  * 实测 profile 编译报 unbound variable），沙箱内进程之间、乃至父对子都无法发信号——

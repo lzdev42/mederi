@@ -87,7 +87,7 @@ class DependencyTreeTool(
 ### 内置工具名（注册时避免冲突）
 
 ```
-read_file, write_file, edit_file, list_directory, execute_command
+read_file, write_file, edit_file, list_directory, bash
 update_todo, ask_user
 create_plan, generate_spec, write_log, converge_plan, update_verification
 verify_subtask
@@ -245,7 +245,7 @@ class LongRunningTool(
 | 工具 | 文件 | 看点 |
 |---|---|---|
 | `list_processes` / `stop_process` | `core/.../tools/ProcessTools.kt` | 最简完整示例：参数定义、错误返回、进程交互 |
-| `execute_command` | `core/.../tools/ShellTools.kt` | 复杂参数、沙箱集成、长进程管理 |
+| `bash` | `core/.../tools/ShellTools.kt` | 复杂参数、沙箱集成、长进程管理 |
 | `verify_subtask` | `core/.../tools/VerifyTools.kt` | 带外部依赖注入（PlanStore）、多步骤执行 |
 
 ## 7. 注意事项
@@ -255,7 +255,7 @@ class LongRunningTool(
 3. **不参与角色裁剪**：自定义工具对主代理和所有子代理（EXECUTOR / RESEARCHER）都可见。如果某个工具只该给主代理用，在 `execute()` 内自行判断调用上下文
 4. **工具名唯一**：同名注册后者覆盖前者；与内置工具名冲突会导致不可预期的行为
 5. **description 是给 LLM 看的**：写得越清楚，模型调用越准确。说明工具做什么、参数含义、什么时候该用、什么时候不该用
-6. **不要在工具里做权限决策**：工具的执行不受 AGENTS.md §5.5 沙盒约束（沙盒只管 `execute_command` 和文件工具）。自定义工具的安全边界由开发者自行保障
+6. **不要在工具里做权限决策**：工具的执行不受 AGENTS.md §5.5 沙盒约束（沙盒只管 `bash` 和文件工具）。自定义工具的安全边界由开发者自行保障
 
 ## 8. 测试
 

@@ -15,7 +15,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * validatePlan 命令格式校验直测（validatePlan 是 private，经 CreatePlanTool.execute 绕道）：
+ * validatePlan 命令格式校验直测（validatePlan 是 private，经 WritePlanTool.execute 绕道）：
  * - 含 CJK 的 verification（散文描述）→ 拒绝，报错含子任务索引与字段提示
  * - 纯 ASCII 命令 → 通过
  * - SubtaskArg 的 verificationCwd/verificationTimeoutSeconds → 构造出的 VerificationSpec 字段正确
@@ -50,11 +50,11 @@ class PlanValidationTest {
 
     @Test
     fun `CJK prose verification is rejected`() = runBlocking {
-        val result = planTools().CreatePlanTool().execute(
-            PlanTools.CreatePlanArgs(
+        val result = planTools().WritePlanTool().execute(
+            PlanTools.WritePlanArgs(
                 title = "test plan",
                 summary = "test summary",
-                overview = "test overview",
+                background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
                 subtasks = listOf(
                     PlanTools.SubtaskArg(
                         name = "run tests",
@@ -71,11 +71,11 @@ class PlanValidationTest {
 
     @Test
     fun `pure ASCII command passes validation`() = runBlocking {
-        val result = planTools().CreatePlanTool().execute(
-            PlanTools.CreatePlanArgs(
+        val result = planTools().WritePlanTool().execute(
+            PlanTools.WritePlanArgs(
                 title = "test plan",
                 summary = "test summary",
-                overview = "test overview",
+                background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
                 businessLogic = "Entry: CLI command; before: no grep check exists; after: runs the grep assertion and reports the result.",
                 inScope = listOf("Add grep check"),
                 keyDecisions = listOf(
@@ -113,11 +113,11 @@ class PlanValidationTest {
 
     @Test
     fun `cwd and timeout flow into VerificationSpec`() = runBlocking {
-        val result = planTools().CreatePlanTool().execute(
-            PlanTools.CreatePlanArgs(
+        val result = planTools().WritePlanTool().execute(
+            PlanTools.WritePlanArgs(
                 title = "test plan",
                 summary = "test summary",
-                overview = "test overview",
+                background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
                 businessLogic = "Entry: CLI command; before: no check exists; after: runs the compile assertion and reports the result.",
                 inScope = listOf("Add compile check"),
                 keyDecisions = listOf(

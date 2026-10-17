@@ -1,5 +1,6 @@
 package xyz.mederi.prompt
 
+import xyz.mederi.tools.background.BackgroundTaskManager
 import xyz.mederi.tools.sandbox.CommandSandbox
 import xyz.mederi.tools.sandbox.SandboxConfig
 import java.io.File
@@ -19,7 +20,11 @@ import java.util.Locale
  */
 object EnvironmentInfoProvider {
 
-    fun build(commandSandbox: CommandSandbox?, directories: List<String>): String {
+    fun build(
+        commandSandbox: CommandSandbox?,
+        directories: List<String>,
+        stoppedBackgroundTasks: List<BackgroundTaskManager.BackgroundTaskEntry> = emptyList()
+    ): String {
         val now = Instant.now()
         val tz = ZoneId.systemDefault()
         val utc = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
@@ -40,6 +45,14 @@ object EnvironmentInfoProvider {
             SandboxConfig.extraWritablePaths.takeIf { it.isNotEmpty() }
                 ?.let { appendLine("Extra writable paths: ${it.joinToString(", ")}") }
             appendLine("Mederi workdir: ${File(directories.first(), ".mederi").absolutePath}")
+            // 用户停止的后台任务（consumeStoppedForSession 取出即消费，下轮不再显示）
+            if (stoppedBackgroundTasks.isNotEmpty()) {
+                appendLine("Recently stopped background tasks:")
+                for (task in stoppedBackgroundTasks) {
+                    val desc = task.command ?: task.description ?: task.taskId
+                    appendLine("- ${task.taskId} (${task.type.name.lowercase()}): $desc [stopped by user]")
+                }
+            }
         }
     }
 }

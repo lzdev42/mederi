@@ -169,7 +169,7 @@ mederi.agents.update(
     aiModel = model,
     reasoningLevel = ReasoningLevel.MEDIUM,
     systemPrompt = "You are a specialized coding assistant.",
-    tools = listOf("read_file", "write_file", "execute_command")
+    tools = listOf("read_file", "write_file", "bash")
 )
 ```
 
@@ -268,7 +268,7 @@ mederi.sessions.events(session.id)
 | `MESSAGE_ERROR` | AI 运行出错 |
 | `TOOL_CALLED` | 工具即将执行（含工具名和参数） |
 | `TOOL_RESULT` | 工具执行完成或失败（含结果和错误标志） |
-| `APPROVAL_REQUESTED` | 工具请求用户审批（write_file/edit_file/apply_patch/execute_command） |
+| `APPROVAL_REQUESTED` | 工具请求用户审批（write_file/edit_file/apply_patch/bash） |
 | `APPROVAL_RESOLVED` | 用户回复审批（批准或拒绝） |
 
 `MESSAGE_COMPLETED` 的 `messageId` 是最终 assistant 消息在历史中的 ID。
@@ -304,7 +304,7 @@ mederi.sessions.resolveApproval(
 )
 ```
 
-受审批控制的工具：`write_file`、`edit_file`、`apply_patch`、`execute_command`。
+受审批控制的工具：`write_file`、`edit_file`、`apply_patch`、`bash`。
 
 ### 6.6 中止运行
 

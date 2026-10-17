@@ -16,11 +16,11 @@ class WebSearchToolTest {
     @Test
     fun `web 工具在 WEB_TOOL_NAMES 与 ALL_TOOL_NAMES 中`() {
         assertEquals(
-            listOf("web_search", "web_fetch"),
+            listOf(ToolName.WEB_SEARCH, ToolName.WEB_FETCH),
             ToolFactory.WEB_TOOL_NAMES
         )
-        assertTrue("web_search must be in ALL_TOOL_NAMES", "web_search" in ToolFactory.ALL_TOOL_NAMES)
-        assertTrue("web_fetch must be in ALL_TOOL_NAMES", "web_fetch" in ToolFactory.ALL_TOOL_NAMES)
+        assertTrue("web_search must be in ALL_TOOL_NAMES", ToolName.WEB_SEARCH in ToolFactory.ALL_TOOL_NAMES)
+        assertTrue("web_fetch must be in ALL_TOOL_NAMES", ToolName.WEB_FETCH in ToolFactory.ALL_TOOL_NAMES)
     }
 
     @Test

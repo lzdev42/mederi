@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.SimpleTool
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
+import xyz.mederi.tools.ToolName
 import java.io.File
 
 /**
@@ -43,7 +44,7 @@ class OfficeTools(
     /** 读取 Office 文档，返回 markdown 文本。 */
     inner class OfficeReadTool : SimpleTool<OfficeReadArgs>(
         argsType = typeToken<OfficeReadArgs>(),
-        name = "office_read",
+        name = ToolName.OFFICE_READ.value,
         description = "Read an Office document (.docx/.xlsx/.pptx) and convert it to markdown text."
     ) {
         override suspend fun execute(args: OfficeReadArgs): String {
@@ -64,7 +65,7 @@ class OfficeTools(
     /** 从 markdown 内容生成/覆盖 Office 文档。 */
     inner class OfficeWriteTool : SimpleTool<OfficeWriteArgs>(
         argsType = typeToken<OfficeWriteArgs>(),
-        name = "office_write",
+        name = ToolName.OFFICE_WRITE.value,
         description = "Generate or overwrite an Office document (.docx/.xlsx) from markdown content. docx: #/##/### headings, - lists, | tables, paragraphs; xlsx: ## sheet names, | rows. The content fully replaces the file; the path must be inside project directories."
     ) {
         override suspend fun execute(args: OfficeWriteArgs): String {

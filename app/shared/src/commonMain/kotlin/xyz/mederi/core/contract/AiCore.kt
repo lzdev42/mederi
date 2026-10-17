@@ -89,11 +89,13 @@ interface AiCore {
     suspend fun resolvePlanApproval(
         conversationId: String,
         planId: String,
-        approved: Boolean,
-        model: ModelOption? = null,
-        thinkingLevel: String? = null
+        approved: Boolean
     ): Result<Unit>
     suspend fun compressHistory(conversationId: String): Result<Unit>
+    /** 自动压缩触发阈值百分比（1-100，默认 70）。UI 拖拽设置，core TurnExecutor 压缩判定读取此值。 */
+    val compactionThresholdPercent: StateFlow<Int>
+    /** 设置自动压缩触发阈值百分比。core 端即时生效（下次压缩判定即用新值）。 */
+    suspend fun setCompactionThresholdPercent(percent: Int)
     suspend fun listMessages(conversationId: String): Result<List<ChatMessage>>
     /** 消息页：消息列表 + token 统计（快照流对齐落库数据用；wasmJs 无法从契约消息重算 token）。 */
     suspend fun listMessagesPage(conversationId: String): Result<MessagesPage>
@@ -148,6 +150,13 @@ interface AiCore {
     suspend fun getSubagentReport(agentId: String): Result<SubagentReportDto> =
         Result.failure(IllegalStateException("getSubagentReport not implemented for agent: $agentId"))
     suspend fun stopSubagent(agentId: String): Result<Unit> = Result.success(Unit)
+
+    // ==========================================
+    // 后台任务管理（UI 概览面板查询/停止后台命令和定时器）
+    // ==========================================
+    suspend fun listBackgroundTasks(sessionId: String): Result<List<BackgroundTaskInfo>> =
+        Result.success(emptyList())
+    suspend fun stopBackgroundTask(taskId: String): Result<Unit> = Result.success(Unit)
 
     // ==========================================
     // 浏览器设置契约（UI 薄触发，浏览器管理在 core）

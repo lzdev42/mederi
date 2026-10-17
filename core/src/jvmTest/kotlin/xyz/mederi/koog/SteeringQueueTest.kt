@@ -145,4 +145,22 @@ class SteeringQueueTest {
         }
         assertNull(executor.pollSteering(sessionId), "非 RUNNING 状态下不应入队 steering 队列")
     }
+
+    @Test
+    fun testPersistSteeringUserMessageRetainsAccurateTimestamp() = runBlocking {
+        val historyStore = InMemoryHistoryStore()
+        val persister = xyz.mederi.infrastructure.koog.TurnIncrementalPersister(
+            sessionId = "sess_steer_ts",
+            historyStore = historyStore,
+            eventBus = MutableSharedFlow()
+        )
+        val fixedTs = 1760000000000L
+        persister.persistSteeringUserMessage("Focus on this now", id = "msg_steer_1", timestamp = fixedTs)
+
+        val messages = historyStore.load("sess_steer_ts")
+        assertEquals(1, messages.size)
+        val msg = messages.first()
+        assertEquals(expected = "msg_steer_1", actual = msg.id)
+        assertEquals(expected = java.time.Instant.ofEpochMilli(fixedTs).toString(), actual = msg.createdAt)
+    }
 }

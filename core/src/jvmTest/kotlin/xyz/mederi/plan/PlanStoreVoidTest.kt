@@ -34,7 +34,7 @@ class PlanStoreVoidTest {
         createdAt: String = "2026-09-08T00:00:00Z"
     ): Plan = Plan(
         id = "plan_${UUID.randomUUID().toString().take(8)}",
-        title = "t", summary = "s", sessionId = sessionId, overview = "o",
+        title = "t", summary = "s", sessionId = sessionId, background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
         status = status, createdAt = createdAt, agentMode = AgentMode.APPROVAL,
         subtasks = emptyList()
     )

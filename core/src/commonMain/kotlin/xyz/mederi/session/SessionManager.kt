@@ -74,9 +74,7 @@ interface SessionManager {
     suspend fun resolvePlanApproval(
         id: String,
         planId: String,
-        approved: Boolean,
-        aiModel: xyz.mederi.domain.model.AIModel? = null,
-        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel? = null
+        approved: Boolean
     )
     suspend fun compressHistory(id: String)
     suspend fun listMessages(id: String): List<Message>
@@ -96,6 +94,12 @@ interface SessionManager {
 
     /** 停止指定的子代理。 */
     fun stopSubagent(agentId: String, reason: String = "被用户关闭"): String
+
+    /** 列出指定会话的全部后台任务（Command / Timer，按 startedAt 倒序）。 */
+    fun listBackgroundTasksForSession(sessionId: String): List<xyz.mederi.tools.background.BackgroundTaskManager.BackgroundTaskEntry>
+
+    /** 停止指定的后台任务；taskId 不存在时返回 null。 */
+    fun stopBackgroundTask(taskId: String): String?
 
     suspend fun getFileDiffs(id: String, messageId: String? = null): List<FileDiff>
 

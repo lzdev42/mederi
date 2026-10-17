@@ -332,7 +332,7 @@ Diff 功能单独成文，详见《[diff实现计划.md](./diff实现计划.md)�
 core 已实现：
 - `TurnDiffTracker`：Codex 风格，记录每个 turn 的文件变更；
 - `DiffStore` + SQLDelight `diffs` 表：持久化；
-- `FileSystemTools` / `ToolFactory` / `TurnExecutor`：工具自动上报 + `execute_command` 目录快照兜底；
+- `FileSystemTools` / `ToolFactory` / `TurnExecutor`：工具自动上报 + `bash` 目录快照兜底；
 - `SessionApi.getFileDiffs(sessionId, messageId?)`：API 暴露。
 
 Bridge 工作：

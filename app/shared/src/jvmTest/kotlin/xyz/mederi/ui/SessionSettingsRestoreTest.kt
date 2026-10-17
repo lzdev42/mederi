@@ -154,13 +154,11 @@ class SessionSettingsRestoreTest {
     }
 
     /**
-     * 【Test D】冷启动 → 最近会话默认（best-effort，方案 1）：
-     * 全新 AppState+ViewModel（_selectedModel 初始为 null），等待 init 冷启动兜底
-     * 从"最近修改的已发送会话"恢复模型。数据推导 gets `maxByOrNull { updatedAt }`，
-     * 若 init 时序 flaky，可降级为只断言数据推导（见 spec 方案 2）。
+     * 【Test D】未打开会话时，绝不从 recent 会话窃取并覆盖模型：
+     * 模型设置严格跟随会话，只有用户显式 attach/切入某个会话时才读取该会话设置。
      */
     @Test
-    fun coldStartSelectsRecentConversationModel() = runBlocking {
+    fun unattachedStateDoesNotPolluteSelectedModelFromRecentSessions() = runBlocking {
         val testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             // 制造一个有 modelId 的会话（updatedAt = now，晚于种子会话）
@@ -172,7 +170,7 @@ class SessionSettingsRestoreTest {
                 UpdateConversationSettingsInput(model = mockAiCore.availableModels.value.first { it.id == "claude-sonnet-4" })
             )
 
-            // 全新 AppState + ViewModel（_selectedModel 初始为 null），冷启动兜底应读到最近会话
+            // 全新 AppState + ViewModel（_selectedModel 初始为 null），未选中任何会话时不应被 recent 污染
             val prefs = InMemoryPreferencesStore()
             val appState = AppState(
                 aiCore = mockAiCore,
@@ -182,26 +180,82 @@ class SessionSettingsRestoreTest {
             appState.hydrate()
             val viewModel = WorkspaceViewModel(appState)
 
-            // 模型已就绪（initialize 已填充）；等 init 冷启动兜底异步执行完
+            // 模型已就绪
             withTimeout(5_000) { appState.availableModels.first { it.isNotEmpty() } }
-            withTimeout(5_000) { appState.selectedModel.first { it != null } }
+            kotlinx.coroutines.delay(200)
 
             assertEquals(
-                "claude-sonnet-4",
-                appState.selectedModel.value?.id,
-                "冷启动（无选择）应默认取最近修改的已发送会话的模型"
+                null,
+                appState.selectedModel.value,
+                "未选中会话时，selectedModel 绝不被 recent 会话污染"
             )
+            assertEquals(true, viewModel.conversationId == null, "未 attach 任何会话")
+        } finally {
+            testScope.cancel()
+        }
+    }
 
-            // 数据推导复核（方案 2 的断言，兼作冷启动读取源的验证）：
-            // 冷启动所读 = projects 中 modelId != null 且 updatedAt 最大的会话
-            val recentModelId = appState.projects.value
-                .flatMap { it.conversations }
-                .filter { it.modelId != null }
-                .maxByOrNull { it.updatedAt }
-                ?.modelId
-            assertEquals("claude-sonnet-4", recentModelId, "冷启动读取的最近会话数据应正确")
-            assertEquals(conv.id, appState.projects.value.flatMap { it.conversations }.filter { it.modelId != null }.maxByOrNull { it.updatedAt }?.id)
-            assertEquals(true, viewModel.conversationId == null, "冷启动兜底不改变会话选择")
+    /** 【Test E】新创建对话选定自定义 API Key 发送消息 → 新会话继承该 Key，绝不回弹为默认 key (null)。 */
+    @Test
+    fun newConversationInheritsSelectedApiKeyOnSend() = runBlocking {
+        val testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val ctx = newCtx(testScope)
+            ctx.appState.selectProject("proj_1")
+            ctx.appState.selectConversation(null)
+            val model = claudeSonnet(ctx)
+            ctx.viewModel.selectModel(model)
+            ctx.viewModel.selectApiKey(model.provider, "key_custom_w")
+
+            assertEquals("key_custom_w", ctx.appState.getApiKeyId(model.provider), "发送前选定了自定义 key_custom_w")
+
+            // 发送消息自动创建新会话
+            ctx.viewModel.send("Hello world")
+
+            // 等待会话创建并 attach 完成
+            withTimeout(5_000) {
+                while (ctx.viewModel.conversationId == null) delay(50)
+            }
+            val newConvId = ctx.viewModel.conversationId!!
+            awaitAttached(ctx, newConvId)
+
+            assertEquals(
+                "key_custom_w",
+                ctx.appState.getApiKeyId(model.provider),
+                "发送后新建会话必须继承自定义 key，不得回弹为默认 key"
+            )
+            // 验证会话数据库/快照中的存储值
+            val snapshot = ctx.mockAiCore.getSnapshot(newConvId).getOrThrow()
+            assertEquals("key_custom_w", snapshot.conversation.apiKeyId, "数据库中新会话的 apiKeyId 必须是 key_custom_w")
+        } finally {
+            testScope.cancel()
+        }
+    }
+
+    /** 【Test F】未绑定会话打草稿，切换去已有会话后再切回未绑定会话，草稿依然存在。 */
+    @Test
+    fun unattachedDraftPreservedAcrossSessionSwitches() = runBlocking {
+        val testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val ctx = newCtx(testScope)
+            val conv = ctx.mockAiCore.createConversation("proj_1", null).getOrThrow()
+
+            // 1. 在未绑定会话输入草稿
+            ctx.appState.selectConversation(null)
+            ctx.viewModel.updateInputDraft(androidx.compose.ui.text.input.TextFieldValue("draft for new session"))
+            assertEquals("draft for new session", ctx.viewModel.inputDraft.text)
+
+            // 2. 切到已有会话
+            ctx.appState.selectConversation(conv.id)
+            awaitAttached(ctx, conv.id)
+
+            // 3. 切回未绑定会话
+            ctx.appState.selectConversation(null)
+            withTimeout(5_000) {
+                while (ctx.viewModel.conversationId != null) delay(50)
+            }
+            delay(100)
+            assertEquals("draft for new session", ctx.viewModel.inputDraft.text, "切回未绑定会话后草稿应保留")
         } finally {
             testScope.cancel()
         }

@@ -76,6 +76,7 @@
     <string name="tool_action_ask_answered">Answered</string>
     <string name="tool_action_ask_answered_many">Answered %1$d questions</string>
     <string name="tool_action_ask_declined">Declined</string>
+    <string name="tool_action_ask_unanswered">Unanswered</string>
     <string name="tool_action_todo_running">Updating todo list…</string>
     <string name="tool_action_other_target">Called %1$s</string>
     <string name="tool_action_other_running">Running tools…</string>
@@ -739,12 +740,32 @@
     <string name="event_message_strip_failed_role">Subagent (%1$s) task failed</string>
     <string name="event_message_strip_stopped">Subagent task cancelled</string>
     <string name="event_message_strip_stopped_role">Subagent (%1$s) task cancelled</string>
+    <!-- Background task event card (EventMessageCard.kt, background_task_* event types) -->
+    <string name="event_message_bg_task_title">Background task</string>
+    <string name="event_message_bg_task_completed">Background command completed</string>
+    <string name="event_message_bg_task_error">Background task failed</string>
+    <string name="event_message_bg_task_stopped">Background task cancelled</string>
+    <string name="event_message_bg_task_timer_fired">Timer fired</string>
     <string name="subagent_dialog_detail_title">Subagent Task Details</string>
     <!-- Overview panel (OverviewPanel.kt, S7 i18n; status_idle/mcp_tools_count already exist, not duplicated) -->
     <string name="overview_title">Overview</string>
+    <!-- Overview floating window (FloatingOverviewWindow.kt, subtask 0) -->
+    <string name="overview_window_title">Overview</string>
+    <string name="overview_minimize">Minimize</string>
+    <string name="overview_usage_row_title">Usage</string>
+    <!-- Overview usage row summary (OverviewUsageRow.kt, subtask 1) -->
+    <string name="overview_usage_row_count">%1$d requests</string>
+    <string name="overview_usage_row_cache_rate">· cache %1$d</string>
+    <string name="overview_mcp_enabled_count">%1$d / %2$d enabled</string>
     <string name="overview_section_conversation">Conversation</string>
     <string name="overview_section_plan">Plan</string>
     <string name="overview_context_usage_title">Context Usage</string>
+    <string name="overview_compaction_threshold">Auto-compression threshold</string>
+    <!-- Overview running task row (OverviewRunningTaskRow.kt, subtask 5) -->
+    <string name="overview_running_task_title">Background</string>
+    <string name="overview_running_task_count">%1$d running</string>
+    <string name="overview_running_task_empty">No background tasks</string>
+    <string name="overview_running_task_stop">Stop</string>
     <string name="status_working">Working</string>
     <string name="status_waiting">Waiting</string>
     <string name="status_error">Error</string>
@@ -763,6 +784,7 @@
     <string name="file_open_confirm_with_app">Open with %1$s?</string>
     <string name="file_open_confirm_generic">Open with the default app?</string>
     <string name="file_open_confirm_reveal">Reveal in folder?</string>
+    <string name="file_open_confirm_directory">Open this directory?</string>
     <string name="file_open_open">Open</string>
     <string name="file_open_failed">Failed to open with the default app. If the desktop app was launched from a shell, macOS sandbox blocks system open; launch from the IDE and retry.</string>
     <!-- Subagent detail timer and live stream -->

@@ -2,9 +2,18 @@ package xyz.mederi.core.contract.dto
 
 import kotlinx.serialization.Serializable
 import xyz.mederi.core.contract.models.*
+import xyz.mederi.ui.RightDockPanel
+import xyz.mederi.ui.browser.BrowserAutomationUiState
 
+/**
+ * 会话全量运行时状态（唯一真理源）。
+ *
+ * 在标准 MVVM 架构中，本类是会话的 Model；
+ * [xyz.mederi.core.contract.ConversationStateReducer] 根据 Core 事件演化该状态；
+ * UI 纯声明式绑定展示。
+ */
 @Serializable
-data class ConversationSnapshot(
+data class ConversationState(
     val conversation: Conversation,
     val messages: List<ChatMessage>,
     val tokenUsage: TokenUsage,
@@ -15,8 +24,12 @@ data class ConversationSnapshot(
     val pendingPlanApproval: PlanApprovalRequest? = null,
     val planApprovals: List<PlanApprovalRequest> = emptyList(),
     val todos: List<TodoItem> = emptyList(),
-    /** 当前会话的子代理列表（SUBAGENT_* 事件流聚合；core listForSession 快照回填）。 */
+    /** 当前会话的子代理列表（SUBAGENT_* 事件流聚合，或 Core listSubagentsForSession 初始水合）。 */
     val subagents: List<SubagentState> = emptyList(),
+    /** 当前会话右侧 Dock 展开面板状态（DIFF / ARTIFACTS / TERMINAL / BROWSER，null 表示折叠收起）。 */
+    val activeDockPanel: RightDockPanel? = null,
+    /** 当前会话关联的浏览器自动化流程状态（BROWSER_TASK_* 事件驱动）。 */
+    val browserAutomation: BrowserAutomationUiState? = null,
     val childConversations: List<Conversation> = emptyList(),
     val errorMessage: String? = null,
     /**
@@ -52,6 +65,9 @@ data class ConversationSnapshot(
     val errorIsStreamInterrupted: Boolean = false,
 )
 
+/** 渐进迁移类型别名，确保历史引用向后兼容。 */
+typealias ConversationSnapshot = ConversationState
+
 /**
  * 会话消息页：消息列表 + token 统计。
  *
@@ -62,12 +78,11 @@ data class ConversationSnapshot(
 data class MessagesPage(
     val messages: List<ChatMessage>,
     val tokenUsage: TokenUsage,
-    /** 当前上下文真实占用（token）= 最近一条 Assistant 的 inputTokens */
     val contextUsedTokens: Long = 0,
-    /** 主会话 LLM HTTP 请求累计次数（= assistant 消息数），与 [ConversationSnapshot.requestCount] 同义 */
+    /** 主会话 LLM HTTP 请求累计次数（= assistant 消息数），与 [ConversationState.requestCount] 同义 */
     val requestCount: Int = 0,
-    /** 最近一次 LLM 请求的用量（取最后一条带 usage 的 assistant 消息）；null = 尚无 */
-    val lastRequestUsage: LastRequestUsage? = null,
+    /** 最近一次 LLM 请求的用量（取最后一条 assistant 的 usage，无则 null），与 [ConversationState.lastRequestUsage] 同义 */
+    val lastRequestUsage: LastRequestUsage? = null
 )
 
 /**

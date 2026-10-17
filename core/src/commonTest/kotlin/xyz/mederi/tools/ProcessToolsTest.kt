@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 
 /**
  * 进程管理端到端测试（macOS Seatbelt 实测链路）：
- * execute_command 沙箱内后台起 dev server → list_processes 可见 → stop_process 沙箱外整组回收。
+ * bash 沙箱内后台起 dev server → list_processes 可见 → stop_process 沙箱外整组回收。
  *
  * 这正是本次要修的真实场景：沙箱内命令互杀必失败（Operation not permitted），
  * 只有宿主侧 stop_process 能回收。测试跳过非 macOS 平台。

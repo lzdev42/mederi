@@ -71,7 +71,24 @@ enum class EventType {
      * 子代理无感丢弃事件（对话回退时，目标消息之后创立的子代理被关闭且无感丢弃）。
      * payload: agentId。UI 从缓存列表中移除，主会话不转化 event_message、不通知 AI。
      */
-    SUBAGENT_DISCARDED
+    SUBAGENT_DISCARDED,
+
+    /**
+     * 后台任务生命周期事件（BackgroundTaskManager 管理 Command / Timer 两种后台任务）。
+     * 与 SUBAGENT_* / BROWSER_TASK_* 同模式：UI 后台任务面板消费，父代理只经工具查状态。
+     * 语义：STARTED = 后台命令/定时器已启动；COMPLETED = 正常完成；
+     * ERROR = 失败/超时；STOPPED = 被用户/AI 主动停止。
+     * sessionId = 发起会话 ID；payload 约定（key 统一 camelCase）：
+     * - STARTED: taskId, taskType(command|timer), status(running), command?/description?,
+     *   durationSeconds?(timer 型), startedAt(ISO 8601)
+     * - COMPLETED / ERROR / STOPPED: taskId, taskType, status(completed|error|stopped),
+     *   command?/description?, pid?, exitCode?(command 型), output?(command 型，截断 ~4000 字符),
+     *   startedAt, completedAt(ISO 8601)
+     */
+    BACKGROUND_TASK_STARTED,
+    BACKGROUND_TASK_COMPLETED,
+    BACKGROUND_TASK_ERROR,
+    BACKGROUND_TASK_STOPPED
 }
 
 /**

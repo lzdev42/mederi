@@ -65,7 +65,7 @@ class AgentTools(
 
     inner class UpdateTodoTool : SimpleTool<UpdateTodoArgs>(
         argsType = typeToken<UpdateTodoArgs>(),
-        name = "update_todo",
+        name = ToolName.UPDATE_TODO.value,
         description = "Replace the entire current todo list. One call sets the whole list (passing an empty " +
             "list clears it); at most one item may be in_progress."
     ) {
@@ -123,7 +123,7 @@ class AgentTools(
 
     inner class GetContextRemainingTool : SimpleTool<GetContextRemainingArgs>(
         argsType = typeToken<GetContextRemainingArgs>(),
-        name = "get_context_remaining",
+        name = ToolName.GET_CONTEXT_REMAINING.value,
         description = "Get the remaining tokens in the current context window."
     ) {
         override suspend fun execute(args: GetContextRemainingArgs): String {
@@ -155,7 +155,7 @@ class AgentTools(
 
     inner class NewContextWindowTool : SimpleTool<NewContextWindowArgs>(
         argsType = typeToken<NewContextWindowArgs>(),
-        name = "new_context",
+        name = ToolName.NEW_CONTEXT.value,
         description = "Start a new context window. Does not clear, reset, or otherwise affect environment state."
     ) {
         override suspend fun execute(args: NewContextWindowArgs): String {
@@ -201,7 +201,7 @@ class AgentTools(
 
     inner class AskUserTool : SimpleTool<AskUserArgs>(
         argsType = typeToken<AskUserArgs>(),
-        name = "ask_user",
+        name = ToolName.ASK_USER.value,
         description = "Ask the user one or more questions. Use this when you need clarification, " +
             "confirmation, or a decision from the user. Supports multiple questions, " +
             "multiple choice, and multi-select."

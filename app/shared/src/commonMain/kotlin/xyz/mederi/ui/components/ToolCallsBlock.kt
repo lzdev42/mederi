@@ -30,6 +30,7 @@ import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.tool_detail_report
 import mederi.app.shared.generated.resources.tool_action_ask_answered
 import mederi.app.shared.generated.resources.tool_action_ask_answered_many
+import mederi.app.shared.generated.resources.tool_action_ask_unanswered
 import mederi.app.shared.generated.resources.tool_action_ask_declined
 import mederi.app.shared.generated.resources.tool_action_ask_many
 import mederi.app.shared.generated.resources.tool_action_ask_one
@@ -175,6 +176,8 @@ fun ToolActionGroupRow(
         output?.contains("declined", ignoreCase = true) == true
     }
 
+    val isAskPending = group.kind == ToolActionKind.ASK && group.calls.any { it.state is ToolCallState.Pending }
+
     // 图标与颜色
     val (iconVector, iconTint) = when {
         isFailed -> Pair(FeatherIcons.AlertCircle, colors.accentDanger)
@@ -232,10 +235,10 @@ fun ToolActionGroupRow(
                 ToolActionKind.SUBAGENT -> singleTarget?.let { stringResource(Res.string.tool_action_subagent_target, it) }
                     ?: stringResource(Res.string.tool_action_subagent_one)
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_target, singleTarget ?: firstCall.name)
-                ToolActionKind.ASK -> if (isAskDeclined) {
-                    stringResource(Res.string.tool_action_ask_declined)
-                } else {
-                    stringResource(Res.string.tool_action_ask_answered)
+                ToolActionKind.ASK -> when {
+                    isAskDeclined -> stringResource(Res.string.tool_action_ask_declined)
+                    isAskPending -> stringResource(Res.string.tool_action_ask_unanswered)
+                    else -> stringResource(Res.string.tool_action_ask_answered)
                 }
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_one)
                 ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_target, it) }
@@ -250,10 +253,10 @@ fun ToolActionGroupRow(
                 ToolActionKind.LIST -> stringResource(Res.string.tool_action_list_many, count)
                 ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_many, count)
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_many, count)
-                ToolActionKind.ASK -> if (isAskDeclined) {
-                    stringResource(Res.string.tool_action_ask_declined)
-                } else {
-                    stringResource(Res.string.tool_action_ask_answered_many, count)
+                ToolActionKind.ASK -> when {
+                    isAskDeclined -> stringResource(Res.string.tool_action_ask_declined)
+                    isAskPending -> stringResource(Res.string.tool_action_ask_unanswered)
+                    else -> stringResource(Res.string.tool_action_ask_answered_many, count)
                 }
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_many, count)
                 ToolActionKind.VERIFY -> stringResource(Res.string.tool_action_verify_many, count)

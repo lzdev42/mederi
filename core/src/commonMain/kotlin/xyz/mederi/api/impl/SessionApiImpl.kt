@@ -90,11 +90,9 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
     override suspend fun resolvePlanApproval(
         sessionId: String,
         planId: String,
-        approved: Boolean,
-        aiModel: AIModel?,
-        reasoningLevel: ReasoningLevel?
+        approved: Boolean
     ) = mederiCall {
-        sessionManager.resolvePlanApproval(sessionId, planId, approved, aiModel, reasoningLevel)
+        sessionManager.resolvePlanApproval(sessionId, planId, approved)
     }
 
     override suspend fun compressHistory(sessionId: String) = mederiCall {
@@ -141,6 +139,14 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
     override suspend fun stopSubagent(agentId: String) = mederiCall {
         sessionManager.stopSubagent(agentId)
         Unit
+    }
+
+    override suspend fun listBackgroundTasksForSession(sessionId: String): List<xyz.mederi.tools.background.BackgroundTaskManager.BackgroundTaskEntry> = mederiCall {
+        sessionManager.listBackgroundTasksForSession(sessionId)
+    }
+
+    override suspend fun stopBackgroundTask(taskId: String): String? = mederiCall {
+        sessionManager.stopBackgroundTask(taskId)
     }
 
     override suspend fun getFileDiffs(sessionId: String, messageId: String?): List<FileDiff> = mederiCall {

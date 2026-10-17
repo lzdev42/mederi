@@ -21,11 +21,9 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
 import mederi.app.shared.generated.resources.compaction_completed_notice
 import mederi.app.shared.generated.resources.file_open_failed
-import mederi.app.shared.generated.resources.subagent_strip_view_overview
 import mederi.app.shared.generated.resources.subagent_strip_working
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.ui.RightDockPanel
 import xyz.mederi.ui.TurnStatus
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.components.atoms.StatusStrip
@@ -37,8 +35,9 @@ import xyz.mederi.ui.components.atoms.StatusStrip
  * 不推挤消息列表周围布局。
  *
  * 承载三类非消息正文的运转与通知态：
- * 1. 子智能体工作态单一浮动条：当前有子智能体在工作时显示一行固定通知，
- *    支持 [查看概览 ↗] 跳转查看详情，支持用户手动点 [✕] 关闭，无子智能体工作时自动关闭。
+ * 1. 子智能体工作态单一浮动条：当前有子智能体在工作时显示一行固定通知
+ *    （概览已改为浮动窗常驻，不再提供"查看概览"跳转），支持用户手动点 [✕] 关闭，
+ *    无子智能体工作时自动关闭。
  * 2. 压缩完成一次性提示条：压缩成功结束后短暂显示"已压缩会话"（复用 StatusStrip 样式）。
  * 3. 对话轮次状态栏 (StatusBar)：Option 3 Linear Tech Capsule 极简胶囊，
  *    实时指示当前 AI 运转态（排队/思考中/工具调用/生成中/重试中）。
@@ -83,8 +82,6 @@ fun WorkspaceFloatingOverlay(
                         borderColor = colors.accentSecondary.copy(alpha = 0.35f),
                         spinning = false,
                         animated = true,
-                        actionLabel = stringResource(Res.string.subagent_strip_view_overview),
-                        onAction = { viewModel.openDockPanel(RightDockPanel.OVERVIEW) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

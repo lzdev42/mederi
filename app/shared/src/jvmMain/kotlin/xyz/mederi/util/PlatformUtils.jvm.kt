@@ -3,14 +3,14 @@
  *
  * 与 pty4j 终端 / cloudflared 隧道同类：这些能力在 iOS/Android/wasm 上没有 KMP 替代品（那是 JS/Obj-C/JNI 的活），
  * 只在 desktop 宿主进程里用 JVM 标准库（java.awt.Desktop / ProcessBuilder）实现即可，**不引 JNI/JNA**。
- * 由 UI 宿主进程自身发起，**不走 AI execute_command 的 Seatbelt 沙箱**（属宿主能力，同 openFile 先例）。
+ * 由 UI 宿主进程自身发起，**不走 AI bash 的 Seatbelt 沙箱**（属宿主能力，同 openFile 先例）。
  *
  * 铁律：
  * 1. 外部命令一律 `ProcessBuilder(List<String>)` 数组传参，**禁拼 shell 字符串** → 空格/中文/引号安全、免注入；
  * 2. 全部 `runCatching` 兜底，`defaultAppNameFor` / `revealInFolder` **绝不抛异常**（调用方只判 null/false）；
  * 3. Windows `explorer /select,"path"` 是**单个参数**，不能拆成两个；
  * 4. Windows `assoc`/`ftype` 输出会本地化，**只抓 ProgID 与 exe 路径**，不解析本地化说明文字；
- * 5. macOS `defaultAppNameFor` 直接返回 null（纯命令拿不到精确应用名，走泛称，不引 JNA）。
+ * 5. macOS `defaultAppNameFor` 经 JXA 查询原生关联应用名，未关联返回 null。
  */
 package xyz.mederi.util
 
@@ -78,12 +78,27 @@ private val WINDOWS_FRIENDLY_APP_NAMES: Map<String, String> = mapOf(
 
 actual fun defaultAppNameFor(path: String): String? = runCatching {
     when {
-        isMacOs -> null // macOS 无干净 CLI 可取默认应用名（NSWorkspace 需原生）→ 走泛称
+        isMacOs -> macDefaultAppName(path)
         isWindowsOs -> windowsDefaultAppName(path)
         isLinuxOs -> linuxDefaultAppName(path)
         else -> null
     }
 }.getOrNull()
+
+/**
+ * macOS：通过 JXA (osascript -l JavaScript) 调用 NSWorkspace.URLForApplicationToOpenURL
+ * 与 NSFileManager.displayNameAtPath 查询系统原生本地化的默认打开软件名。
+ * 未安装或未关联时返回 null。
+ */
+private const val MAC_APP_NAME_JXA_SCRIPT =
+    "function run(argv) { ObjC.import('AppKit'); const url = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.fileURLWithPath(argv[0])); return (url.isNil() || !url.path) ? '' : $.NSFileManager.defaultManager.displayNameAtPath(url.path).js; }"
+
+private fun macDefaultAppName(path: String): String? {
+    val file = File(path)
+    if (!file.exists()) return null
+    val output = runCommand("osascript", "-l", "JavaScript", "-e", MAC_APP_NAME_JXA_SCRIPT, file.absolutePath)?.trim()
+    return output.takeIf { !it.isNullOrBlank() }
+}
 
 /**
  * Linux：xdg-mime → .desktop 的 `Name[zh_CN]=` / `Name=`。

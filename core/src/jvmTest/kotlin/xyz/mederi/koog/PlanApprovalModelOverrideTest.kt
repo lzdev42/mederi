@@ -17,10 +17,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * 计划批准携带模型（P2）行为锁定：
- * - 批准 + 带模型 → session 的 aiModel / reasoningLevel 更新为批准时刻的选择
- *   （"最后一次选择"语义；agentMode 不被触碰）
- * - 拒绝（approved=false）或模型为 null → session 保持不变（旧客户端兼容）
+ * 计划批准行为验证：
+ * - 计划审批仅批准技术方案，绝不修改会话模型与推理档位（session.aiModel / reasoningLevel 保持不变）
  */
 class PlanApprovalModelOverrideTest {
 
@@ -87,37 +85,31 @@ class PlanApprovalModelOverrideTest {
     }
 
     @Test
-    fun `approval with model overrides session model and reasoning`() = runBlocking {
+    fun `approval never modifies session model or reasoning`() = runBlocking {
         val store = InMemorySessionStore()
         val sessionId = insertSession(store)
         val executor = newExecutor(store)
 
-        // 无活跃 requester 也应先完成 session 写入（requester 消费与否不改变"用户已选择"事实）
         executor.resolvePlanApproval(
-            sessionId, "plan_x", approved = true,
-            aiModel = model("B"), reasoningLevel = ReasoningLevel.HIGH
+            sessionId, "plan_x", approved = true
         )
 
         val session = store.get(sessionId)!!
-        assertEquals("B", session.aiModel?.id, "批准后 session 模型应为 B（批准时刻选择）")
-        assertEquals(ReasoningLevel.HIGH, session.reasoningLevel, "批准后推理档位应为 HIGH")
-        assertEquals(AgentMode.APPROVAL, session.agentMode, "agentMode 不被触碰")
+        assertEquals("A", session.aiModel?.id, "批准绝不修改 session 模型，仍为 A")
+        assertEquals(ReasoningLevel.LOW, session.reasoningLevel, "批准绝不修改推理档位，仍为 LOW")
+        assertEquals(AgentMode.APPROVAL, session.agentMode, "agentMode 保持不变")
     }
 
     @Test
-    fun `rejection or null model leaves session unchanged`() = runBlocking {
+    fun `rejection leaves session unchanged`() = runBlocking {
         val store = InMemorySessionStore()
         val sessionId = insertSession(store)
         val executor = newExecutor(store)
 
-        // 拒绝时即使带模型也不写（拒绝后的修订走新 turn，sendMessage 自带模型）
-        executor.resolvePlanApproval(sessionId, "plan_x", approved = false, aiModel = model("B"))
-        // 批准但模型为 null（旧客户端）也不写
-        executor.resolvePlanApproval(sessionId, "plan_x", approved = true, aiModel = null)
+        executor.resolvePlanApproval(sessionId, "plan_x", approved = false)
 
         val session = store.get(sessionId)!!
         assertEquals("A", session.aiModel?.id, "session 模型应保持 A")
         assertEquals(ReasoningLevel.LOW, session.reasoningLevel, "session 推理档位应保持 LOW")
-        assertNull(session.reasoningLevel.takeIf { it == ReasoningLevel.HIGH })
     }
 }

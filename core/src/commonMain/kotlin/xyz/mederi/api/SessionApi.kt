@@ -60,17 +60,11 @@ interface SessionApi {
      * @param sessionId 会话 ID。
      * @param planId 计划 ID。
      * @param approved true=批准。
-     * @param aiModel 批准时刻用户输入框选中的模型（批准手势携带的"最后一次选择"）：
-     *   非null 且批准时写入 session——同一 turn 后续 spawn_agent 动态读取，
-     *   子代理用批准时刻的模型执行（用户可能在 create_plan 挂起等批准期间切换了模型）。
-     * @param reasoningLevel 批准时刻的推理档位，与 [aiModel] 成对。
      */
     suspend fun resolvePlanApproval(
         sessionId: String,
         planId: String,
-        approved: Boolean,
-        aiModel: AIModel? = null,
-        reasoningLevel: ReasoningLevel? = null
+        approved: Boolean
     )
     suspend fun compressHistory(sessionId: String)
     suspend fun listMessages(sessionId: String): List<Message>
@@ -90,6 +84,12 @@ interface SessionApi {
 
     /** 停止指定的子代理。 */
     suspend fun stopSubagent(agentId: String)
+
+    /** 列出指定会话的全部后台任务（Command / Timer，按 startedAt 倒序）。 */
+    suspend fun listBackgroundTasksForSession(sessionId: String): List<xyz.mederi.tools.background.BackgroundTaskManager.BackgroundTaskEntry>
+
+    /** 停止指定的后台任务；taskId 不存在时返回 null。 */
+    suspend fun stopBackgroundTask(taskId: String): String?
 
     suspend fun getFileDiffs(sessionId: String, messageId: String? = null): List<FileDiff>
 

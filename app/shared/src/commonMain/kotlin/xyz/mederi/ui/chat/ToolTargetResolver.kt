@@ -5,7 +5,7 @@ import xyz.mederi.core.contract.dto.ConversationSnapshot
 /**
  * 按工具名探测目标摘要：
  * - 文件工具（read/write/edit/list）→ 路径（会话目录内显示相对路径，目录外保留绝对路径；读取文件时追加 #L$start-$end 行号）；
- * - 命令工具（execute_command/bash）→ 命令原文；
+ * - 命令工具（bash）→ 命令原文；
  * - apply_patch → 补丁内涉及的文件清单（Add/Update/Delete/Move 去重取前 3）；
  * - todo 工具 → 返回 null（UI 仅显示“更新待办清单”，不显示内容）；
  * - 其余 → 回退到 path/file/command 等常见键，最后兜底第一个参数值（拦截任何以 [ 或 { 开头的复合 JSON 文本）。
@@ -38,7 +38,7 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
             input["task"]?.lines()?.firstOrNull { it.isNotBlank() } ?: input["briefing"]?.lines()?.firstOrNull { it.isNotBlank() }
         name == "apply_patch" ->
             input["patch"]?.let { extractPatchFiles(it, snapshot) }?.takeIf { it.isNotBlank() }
-        name == "execute_command" || name == "bash" ->
+        name == "bash" ->
             input["command"]?.takeIf { it.isNotBlank() } ?: input["cmd"]?.takeIf { it.isNotBlank() }
         name == "ask_user" ->
             extractAskUserSummary(input)
@@ -57,7 +57,7 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
         }
         name == "write_log" ->
             ".mederi/notebook.md"
-        name == "create_plan" ->
+        name == "write_plan" || name == "create_plan" ->
             input["title"]?.takeIf { it.isNotBlank() }
         searchQuery != null ->
             searchQuery

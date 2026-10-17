@@ -57,7 +57,7 @@ class UpdateVerificationTest {
             title = "test plan",
             summary = "test",
             sessionId = "sess_test",
-            overview = "test overview",
+            background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
             status = PlanStatus.IN_PROGRESS,
             createdAt = "2026-09-08T00:00:00Z",
             agentMode = AgentMode.AUTONOMOUS,

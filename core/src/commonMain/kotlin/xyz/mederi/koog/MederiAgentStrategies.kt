@@ -228,7 +228,7 @@ private fun nodeLLMSendToolResultsPersistable(
                 appendPrompt {
                     message(steerUserMsg)
                 }
-                persister?.persistSteeringUserMessage(steer.text, id = steerId)
+                persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
                 steer = pollSteering?.invoke()
             }
             // 流式与 nodeCallLLM 对齐：requestLLM() 是非流式——工具轮之后的
@@ -270,9 +270,26 @@ fun mederiSingleRunStrategy(
         val nodeExecuteTool by nodeExecuteTools(parallel = true)
         val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister, pollSteering)
 
+        val nodeCheckSteering by node<String, String>("check_steering") { lastText ->
+            val steer = pollSteering?.invoke()
+            if (steer != null) {
+                val steerMeta = xyz.mederi.prompt.SteeringPrompt.wrap(steer.text)
+                val steerId = "msg_${java.util.UUID.randomUUID().toString().take(8)}"
+                llm.writeSession {
+                    appendPrompt {
+                        message(Message.User(content = steerMeta, id = steerId, metaInfo = RequestMetaInfo.create(KoogClock.System)))
+                    }
+                }
+                persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
+                MEDERI_INPUT_PERSISTED
+            } else {
+                lastText
+            }
+        }
+
         edge(nodeStart forwardTo nodeCallLLM)
         edge(nodeCallLLM forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeCallLLM forwardTo nodeFinish onTextMessage { true })
+        edge(nodeCallLLM forwardTo nodeCheckSteering onTextMessage { true })
         edge(nodeExecuteTool forwardTo nodeSendToolResult)
         // 边选择按注册顺序取第一条命中（AIAgentNode.resolveEdge）。模型常把解释文本
         // 与工具调用混排在同一条消息（parts = [Text, Call, ...]）——此时 onTextMessage
@@ -280,7 +297,9 @@ fun mederiSingleRunStrategy(
         // 结束，工具调用被静默丢弃（端到端实测抓到：edit_file 报成功但从未执行）。
         // 所以"执行 vs 结束"的每个分支点必须 onToolCalls 先注册。
         edge(nodeSendToolResult forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeSendToolResult forwardTo nodeFinish onTextMessage { true })
+        edge(nodeSendToolResult forwardTo nodeCheckSteering onTextMessage { true })
+        edge(nodeCheckSteering forwardTo nodeCallLLM onCondition { it == MEDERI_INPUT_PERSISTED })
+        edge(nodeCheckSteering forwardTo nodeFinish onCondition { it != MEDERI_INPUT_PERSISTED })
     }
 
 /**
@@ -319,23 +338,26 @@ fun mederiSingleRunStrategyWithCompression(
             retrievalModel = config.retrievalModel
         )
 
-        // 压缩后发送工具结果给 LLM（流式对齐 nodeSendToolResult，见其注释）
-        val nodeSendCompressedHistory by node<ReceivedToolResults, Message.Assistant>("send_compressed") {
-            llm.writeSession {
-                // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
-                val startNs = System.nanoTime()
-                val response = requestLLMStreaming().toList().toAssistantMessageSafe()
-                val durationMs = (System.nanoTime() - startNs) / 1_000_000
-                appendPrompt { message(response) }
-                // 增量持久化（与 nodeCallLLM / nodeSendToolResult 一致）
-                persister?.persistAssistant(response, durationMs)
-                response
+        val nodeCheckSteering by node<String, String>("check_steering") { lastText ->
+            val steer = pollSteering?.invoke()
+            if (steer != null) {
+                val steerMeta = xyz.mederi.prompt.SteeringPrompt.wrap(steer.text)
+                val steerId = "msg_${java.util.UUID.randomUUID().toString().take(8)}"
+                llm.writeSession {
+                    appendPrompt {
+                        message(Message.User(content = steerMeta, id = steerId, metaInfo = RequestMetaInfo.create(KoogClock.System)))
+                    }
+                }
+                persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
+                MEDERI_INPUT_PERSISTED
+            } else {
+                lastText
             }
         }
 
         edge(nodeStart forwardTo nodeCallLLM)
         edge(nodeCallLLM forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeCallLLM forwardTo nodeFinish onTextMessage { true })
+        edge(nodeCallLLM forwardTo nodeCheckSteering onTextMessage { true })
 
         edge(nodeExecuteTool forwardTo nodeCompressHistory onCondition {
             llm.readSession { config.isHistoryTooBig(prompt) }
@@ -343,14 +365,15 @@ fun mederiSingleRunStrategyWithCompression(
         edge(nodeExecuteTool forwardTo nodeSendToolResult onCondition {
             llm.readSession { !config.isHistoryTooBig(prompt) }
         })
-        edge(nodeCompressHistory forwardTo nodeSendCompressedHistory)
+        // 压缩完成后流向 nodeSendToolResult：正常持久化工具结果、注入 prompt 与引导消息并流式发送
+        edge(nodeCompressHistory forwardTo nodeSendToolResult)
 
         // 同 mederiSingleRunStrategy：onToolCalls 必须先于 onTextMessage 注册，
         // 否则 Text+Call 混排消息会直接结束 turn、工具调用被静默丢弃。
         edge(nodeSendToolResult forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeSendToolResult forwardTo nodeFinish onTextMessage { true })
-        edge(nodeSendCompressedHistory forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeSendCompressedHistory forwardTo nodeFinish onTextMessage { true })
+        edge(nodeSendToolResult forwardTo nodeCheckSteering onTextMessage { true })
+        edge(nodeCheckSteering forwardTo nodeCallLLM onCondition { it == MEDERI_INPUT_PERSISTED })
+        edge(nodeCheckSteering forwardTo nodeFinish onCondition { it != MEDERI_INPUT_PERSISTED })
     }
 
 /**

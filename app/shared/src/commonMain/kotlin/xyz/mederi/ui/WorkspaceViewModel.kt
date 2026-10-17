@@ -35,6 +35,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import okio.ByteString.Companion.toByteString
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
+import xyz.mederi.core.contract.dto.ConversationState
 import xyz.mederi.core.contract.dto.FileAttachment
 import xyz.mederi.core.contract.dto.UpdateConversationSettingsInput
 import xyz.mederi.core.contract.models.*
@@ -68,6 +69,7 @@ import xyz.mederi.util.revealInFolder
 import xyz.mederi.util.LinkTargetClassifier
 import xyz.mederi.util.openFile as openFileInOs
 import xyz.mederi.util.openUrl
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 聊天工作区 ViewModel（首页主会话区的数据层）。
@@ -122,13 +124,34 @@ class WorkspaceViewModel(
     // 浏览器自动化流程视图（MVVM 状态与动作入口）
     // ==========================================
 
+    /** 未绑定会话时的浏览器自动化 UI 状态兜底 */
+    private var unattachedBrowserAutomation by mutableStateOf(BrowserAutomationUiState())
+
     /**
      * 浏览器面板右侧「自动化操作流程视图」的唯一 MVVM 状态源。
-     * - `isAutomating == true` 时强制弹出且不可关闭；
-     * - 支持拖拽调宽、展示 AI 旁白 / 动作 / 截图缩略图，以及点击截图弹出大图预览。
+     * 直接绑定/代理到当前会话的 [conversationState.browserAutomation]（切会话天然隔离）。
      */
-    var browserAutomationState by mutableStateOf(BrowserAutomationUiState())
-        private set
+    val browserAutomationState: BrowserAutomationUiState
+        get() = conversationState?.browserAutomation ?: unattachedBrowserAutomation
+
+    /**
+     * 单向更新浏览器自动化 UI 状态：
+     * 若已绑定会话，同时写入 [conversationState] 及 [sessionCache.conversationStates]；
+     * 否则写入未绑定兜底状态。
+     */
+    private fun updateBrowserAutomation(transform: (BrowserAutomationUiState) -> BrowserAutomationUiState) {
+        val convId = conversationId
+        val current = conversationState
+        if (convId != null && current != null) {
+            val currentUi = current.browserAutomation ?: BrowserAutomationUiState()
+            val updatedUi = transform(currentUi)
+            val updatedState = current.copy(browserAutomation = updatedUi)
+            conversationState = updatedState
+            sessionCache.conversationStates[convId] = updatedState
+        } else {
+            unattachedBrowserAutomation = transform(unattachedBrowserAutomation)
+        }
+    }
 
     /**
      * 启动浏览器自动化流程（弹出流程视图并锁定为不可关闭，同时展开右侧网页面板）。
@@ -136,14 +159,16 @@ class WorkspaceViewModel(
      */
     fun startBrowserAutomation(taskSummary: String? = null, clearPrevious: Boolean = true) {
         val now = xyz.mederi.currentTimeMillis()
-        browserAutomationState = browserAutomationState.copy(
-            isAutomating = true,
-            isPanelOpen = true,
-            startedAtMillis = now,
-            completedAtMillis = null,
-            taskSummary = taskSummary ?: if (clearPrevious) null else browserAutomationState.taskSummary,
-            steps = if (clearPrevious) emptyList() else browserAutomationState.steps,
-        )
+        updateBrowserAutomation { state ->
+            state.copy(
+                isAutomating = true,
+                isPanelOpen = true,
+                startedAtMillis = now,
+                completedAtMillis = null,
+                taskSummary = taskSummary ?: if (clearPrevious) null else state.taskSummary,
+                steps = if (clearPrevious) emptyList() else state.steps,
+            )
+        }
         if (activeDockPanel != RightDockPanel.BROWSER) {
             openDockPanel(RightDockPanel.BROWSER)
         }
@@ -154,18 +179,20 @@ class WorkspaceViewModel(
      * 供业务侧在浏览器自动化任务完成或终止时调用。
      */
     fun finishBrowserAutomation(completedAtMillis: Long = xyz.mederi.currentTimeMillis()) {
-        val updatedSteps = browserAutomationState.steps.map { step ->
-            if (step is BrowserFlowStep.Action && step.status == BrowserStepStatus.RUNNING) {
-                step.copy(status = BrowserStepStatus.COMPLETED)
-            } else {
-                step
+        updateBrowserAutomation { state ->
+            val updatedSteps = state.steps.map { step ->
+                if (step is BrowserFlowStep.Action && step.status == BrowserStepStatus.RUNNING) {
+                    step.copy(status = BrowserStepStatus.COMPLETED)
+                } else {
+                    step
+                }
             }
+            state.copy(
+                isAutomating = false,
+                completedAtMillis = completedAtMillis,
+                steps = updatedSteps,
+            )
         }
-        browserAutomationState = browserAutomationState.copy(
-            isAutomating = false,
-            completedAtMillis = completedAtMillis,
-            steps = updatedSteps,
-        )
     }
 
     /**
@@ -173,10 +200,12 @@ class WorkspaceViewModel(
      * 动作 [BrowserFlowStep.Action] / 截图 [BrowserFlowStep.Screenshot]）。
      */
     fun appendBrowserFlowStep(step: BrowserFlowStep) {
-        browserAutomationState = browserAutomationState.copy(
-            isPanelOpen = true,
-            steps = browserAutomationState.steps + step,
-        )
+        updateBrowserAutomation { state ->
+            state.copy(
+                isPanelOpen = true,
+                steps = state.steps + step,
+            )
+        }
     }
 
     /**
@@ -188,157 +217,67 @@ class WorkspaceViewModel(
         durationMs: Long? = null,
         target: String? = null,
     ) {
-        val updatedSteps = browserAutomationState.steps.map { step ->
-            if (step is BrowserFlowStep.Action && step.id == stepId) {
-                step.copy(
-                    status = status,
-                    durationMs = durationMs ?: step.durationMs,
-                    target = target ?: step.target,
-                )
-            } else {
-                step
+        updateBrowserAutomation { state ->
+            val updatedSteps = state.steps.map { step ->
+                if (step is BrowserFlowStep.Action && step.id == stepId) {
+                    step.copy(
+                        status = status,
+                        durationMs = durationMs ?: step.durationMs,
+                        target = target ?: step.target,
+                    )
+                } else {
+                    step
+                }
             }
+            state.copy(steps = updatedSteps)
         }
-        browserAutomationState = browserAutomationState.copy(steps = updatedSteps)
     }
 
     /** 直接整体更新浏览器自动化 UI 状态（供业务聚合器或预览使用）。 */
     fun updateBrowserAutomationState(state: BrowserAutomationUiState) {
-        browserAutomationState = state
+        updateBrowserAutomation { state }
     }
 
     /** 切换浏览器自动化流程面板显隐（自动化进行中不可关闭，直接忽略关闭请求）。 */
     fun toggleBrowserAutomationPanel() {
-        if (browserAutomationState.isAutomating) {
-            browserAutomationState = browserAutomationState.copy(isPanelOpen = true)
-            return
+        updateBrowserAutomation { state ->
+            if (state.isAutomating) {
+                state.copy(isPanelOpen = true)
+            } else {
+                state.copy(isPanelOpen = !state.isPanelOpen)
+            }
         }
-        browserAutomationState = browserAutomationState.copy(
-            isPanelOpen = !browserAutomationState.isPanelOpen,
-        )
     }
 
     /** 显式展开浏览器自动化流程面板。 */
     fun openBrowserAutomationPanel() {
-        browserAutomationState = browserAutomationState.copy(isPanelOpen = true)
+        updateBrowserAutomation { it.copy(isPanelOpen = true) }
     }
 
     /** 关闭浏览器自动化流程面板（自动化进行中不可关闭）。 */
     fun closeBrowserAutomationPanel() {
-        if (!browserAutomationState.canClose) return
-        browserAutomationState = browserAutomationState.copy(isPanelOpen = false)
+        updateBrowserAutomation { state ->
+            if (!state.canClose) state else state.copy(isPanelOpen = false)
+        }
     }
 
     /** 拖拽调整浏览器自动化流程面板宽度（自动钳制在合法区间）。 */
     fun resizeBrowserAutomationPanel(widthDp: Float) {
-        browserAutomationState = browserAutomationState.copy(
-            panelWidthDp = BrowserAutomationUiState.clampWidthDp(widthDp),
-        )
+        updateBrowserAutomation { state ->
+            state.copy(
+                panelWidthDp = BrowserAutomationUiState.clampWidthDp(widthDp),
+            )
+        }
     }
 
     /** 点击流程内截图缩略图，打开高清大图预览弹窗（Lightbox）。 */
     fun openBrowserScreenshotPreview(screenshot: BrowserFlowStep.Screenshot?) {
-        browserAutomationState = browserAutomationState.copy(previewScreenshot = screenshot)
+        updateBrowserAutomation { it.copy(previewScreenshot = screenshot) }
     }
 
     /** 关闭截图高清大图预览弹窗。 */
     fun closeBrowserScreenshotPreview() {
-        browserAutomationState = browserAutomationState.copy(previewScreenshot = null)
-    }
-
-    // ── 浏览器任务事件 → UI 流程步骤映射（core emit → 事件流 → 此处消费）──
-
-    /**
-     * 处理 [CoreEventType.BROWSER_TASK_STEP] 事件：把 Operator 的 thought（旁白）
-     * 和 results（动作列表）映射为 [BrowserFlowStep] 追加到流程时间线。
-     *
-     * - `thought` 非空 → 追加 [BrowserFlowStep.Narration]（AI 旁白）
-     * - `resultsJson` 非空 → 解码为动作列表，每个动作追加 [BrowserFlowStep.Action]
-     * - 仅 `message`（如"启动浏览器"）→ 追加为 [BrowserFlowStep.Narration]
-     */
-    private fun handleBrowserStepEvent(event: CoreEvent) {
-        val taskId = event.payload["taskId"] ?: return
-        val stepNum = event.payload["step"]?.toIntOrNull() ?: 0
-        val thought = event.payload["thought"]
-        val resultsJson = event.payload["resultsJson"]
-        val message = event.payload["message"]
-        val now = xyz.mederi.currentTimeMillis()
-
-        // 1. AI 旁白（thought 非空时追加）
-        if (!thought.isNullOrBlank()) {
-            appendBrowserFlowStep(
-                BrowserFlowStep.Narration(
-                    id = "${taskId}_s${stepNum}_narr",
-                    text = thought,
-                    timestampMillis = now,
-                )
-            )
-        }
-
-        // 2. 动作结果卡片（resultsJson 非空时解码并逐条追加）
-        if (!resultsJson.isNullOrBlank()) {
-            runCatching {
-                val arr = Json.parseToJsonElement(resultsJson).jsonArray
-                arr.forEachIndexed { i, el ->
-                    val obj = el.jsonObject
-                    val action = obj["action"]?.jsonPrimitive?.contentOrNull ?: "unknown"
-                    val success = obj["success"]?.jsonPrimitive?.booleanOrNull ?: false
-                    val detail = obj["detail"]?.jsonPrimitive?.contentOrNull ?: ""
-                    appendBrowserFlowStep(
-                        BrowserFlowStep.Action(
-                            id = "${taskId}_s${stepNum}_a${i}",
-                            kind = mapActionKind(action),
-                            title = actionLabel(action),
-                            target = detail.takeIf { it.isNotBlank() },
-                            status = if (success) BrowserStepStatus.COMPLETED else BrowserStepStatus.FAILED,
-                            timestampMillis = now,
-                        )
-                    )
-                }
-            }.onFailure {
-                DebugLog.error("BrowserUI", "Failed to parse resultsJson: ${it.message}")
-            }
-        } else if (thought.isNullOrBlank() && !message.isNullOrBlank()) {
-            // thought 为空但 message 有值（如"启动浏览器"启动步骤）→ 追加为旁白
-            appendBrowserFlowStep(
-                BrowserFlowStep.Narration(
-                    id = "${taskId}_s${stepNum}_narr",
-                    text = message,
-                    timestampMillis = now,
-                )
-            )
-        }
-    }
-
-    /** Operator 动作字符串 → [BrowserActionKind] 映射（决定步骤卡片图标）。 */
-    private fun mapActionKind(action: String): BrowserActionKind = when (action) {
-        "navigate" -> BrowserActionKind.NAVIGATE
-        "click" -> BrowserActionKind.CLICK
-        "type" -> BrowserActionKind.INPUT
-        "scroll" -> BrowserActionKind.SCROLL
-        "screenshot" -> BrowserActionKind.SNAPSHOT
-        "wait_for" -> BrowserActionKind.WAIT
-        else -> BrowserActionKind.OTHER
-    }
-
-    /** Operator 动作字符串 → 中文标签（步骤卡片标题）。 */
-    private fun actionLabel(action: String): String = when (action) {
-        "navigate" -> "导航"
-        "click" -> "点击"
-        "type" -> "输入"
-        "scroll" -> "滚动"
-        "screenshot" -> "截图"
-        "wait_for" -> "等待"
-        "judge" -> "判定"
-        "drill" -> "脚本执行"
-        "done" -> "完成"
-        "sleep" -> "休眠"
-        "close" -> "关闭"
-        "back" -> "后退"
-        "tabs" -> "标签操作"
-        "noop" -> "无操作"
-        "llm" -> "决策"
-        else -> action
+        updateBrowserAutomation { it.copy(previewScreenshot = null) }
     }
 
     /** 项目列表与选中项目（窄访问器，供文件树等派生 UI 使用；与 TerminalViewModel 同款转发） */
@@ -484,38 +423,32 @@ class WorkspaceViewModel(
         val convId = conversationId ?: return
         val currentPending = snapshot?.pendingPlanApproval
         DebugLog.event("UI", "approvePlan called: planId=$planId, approved=$approved, currentPendingId=${currentPending?.id}")
-        // 批准时刻输入框选中的模型/推理档位随批准手势传给 core（写入 session，
-        // 同一 turn 后续 spawn 的子代理按此模型执行）——与 send() 取值同源
-        // （selectedModel / effectiveThinkingLevel 唯一真理源）
-        val selectedModel = appState.selectedModel.value
-        val thinkingLevel = computeEffectiveThinkingLevel()
         viewModelScope.launch {
-            // 统一走 core 的 resolvePlanApproval：core 内部先判"同 turn"（内存 requester 存活，
-            // 直接唤醒挂起的 create_plan，AI 同 turn 执行）再判"跨 turn/重启"（把 PENDING_APPROVAL
-            // 计划改 APPROVED，以 UI 隐藏的内部消息启动新执行 turn）。不再在 UI 层用发送用户消息
-            // "请批准..." 兜底——那会污染对话，也不走跨 turn 执行链。
-            appState.aiCore.resolvePlanApproval(convId, planId, approved, selectedModel, thinkingLevel)
+            appState.aiCore.resolvePlanApproval(convId, planId, approved)
         }
     }
 
     var conversationId by mutableStateOf<String?>(null); internal set
-    var snapshot by mutableStateOf<ConversationSnapshot?>(null); private set
+    var conversationState by mutableStateOf<ConversationState?>(null); private set
+
+    /** 向后兼容快照访问器：直接重定向到 conversationState */
+    val snapshot: ConversationState? get() = conversationState
+
     var isAttached by mutableStateOf(false); private set
 
     /**
-     * 会话级缓存族（乐观消息 / 计时锚点 / 快照缓存 / 观察 Job）——内部存储收敛为
+     * 会话级缓存族（乐观消息 / 计时锚点 / 状态机池 / 观察 Job）——内部存储收敛为
      * 单一 [SessionUiCache] 实例（字段不对外暴露，对外读取仍走原属性）。
      *
-     * 快照缓存解决会话切换闪烁问题（Bug 1 根因）：切换会话时不再 `snapshot = null`
-     * 再从 store 重建——而是缓存当前快照，切回来时立即渲染缓存（含正在流式的推理/消息），
-     * 再由事件流持续更新。缓存仅在会话离开 Working 后清理（turn 结束/出错/删除）。
+     * 状态机池解决会话切换闪烁问题：切换会话时不再 `conversationState = null`
+     * 再从 store 重建——而是缓存当前状态机，切回来时立即渲染（含正在流式的推理/消息），
+     * 再由事件流持续更新。
      */
     private val sessionCache = SessionUiCache()
     var reasoningExpanded by mutableStateOf<Map<String, Boolean>>(emptyMap()); private set
 
     // ------------------------------------------------------------------
-    // diff 面板状态（内部收敛为单一 diffState；对外属性名/类型不变。
-    // activeDockPanel 同时服务全部 dock 面板且多处逻辑依赖，保守保留独立状态）
+    // diff 面板状态（内部收敛为单一 diffState；对外属性名/类型不变）
     // ------------------------------------------------------------------
 
     /** diff 面板内部存储（items/selectedPath/showPanel 单点状态） */
@@ -530,27 +463,51 @@ class WorkspaceViewModel(
     /** diff 面板是否展开 */
     val showDiffPanel: Boolean get() = diffState.showPanel
 
-    /** 右侧独立功能活动栏当前激活的面板（null 表示收起关闭）。写操作只经下方动作方法（单向数据流） */
-    var activeDockPanel by mutableStateOf<RightDockPanel?>(null); private set
+    /** 未绑定会话时的 Dock 面板激活状态兜底 */
+    private var unattachedDockPanel by mutableStateOf<RightDockPanel?>(null)
+
+    /**
+     * 右侧独立功能活动栏当前激活的面板（null 表示收起关闭）。
+     * 绑定到当前会话的 [conversationState.activeDockPanel]，切会话天然隔离。
+     */
+    val activeDockPanel: RightDockPanel?
+        get() = if (conversationId != null) conversationState?.activeDockPanel else unattachedDockPanel
 
     /** 右侧面板是否展开（派生：activeDockPanel != null） */
     val isRightPanelOpen: Boolean
         get() = activeDockPanel != null
 
+    /**
+     * 更新当前活动栏激活面板：写入当前会话状态机与缓存。
+     */
+    private fun updateActiveDockPanel(panel: RightDockPanel?) {
+        val convId = conversationId
+        val current = conversationState
+        DebugLog.event("UI-Dock", "updateActiveDockPanel: convId=$convId, panel=$panel")
+        if (convId != null && current != null) {
+            val updated = current.copy(activeDockPanel = panel)
+            conversationState = updated
+            sessionCache.conversationStates[convId] = updated
+        } else {
+            unattachedDockPanel = panel
+        }
+    }
+
     fun toggleDockPanel(panel: RightDockPanel) {
-        activeDockPanel = if (activeDockPanel == panel) null else {
+        val target = if (activeDockPanel == panel) null else {
             if (panel == RightDockPanel.DIFF) openDiff()
             panel
         }
+        updateActiveDockPanel(target)
     }
 
     fun openDockPanel(panel: RightDockPanel) {
         if (panel == RightDockPanel.DIFF) openDiff()
-        activeDockPanel = panel
+        updateActiveDockPanel(panel)
     }
 
     fun closeDockPanel() {
-        activeDockPanel = null
+        updateActiveDockPanel(null)
     }
 
     /**
@@ -664,25 +621,34 @@ class WorkspaceViewModel(
      * 命令等待带超时（PlatformUtils 侧），绝不在点击回调里同步起进程。
      */
     fun openFile(path: String) {
-        val fileName = path.substringAfterLast('/').ifBlank { path }
-        when (classifyFilePath(path)) {
-            FileOpenTarget.INTERNAL_IMAGE -> openImageInExtension(title = fileName, imageUrl = path)
+        val resolvedPath = appState.fileTreeProvider?.resolvePath(path) ?: path
+        val fileName = resolvedPath.substringAfterLast('/').ifBlank { resolvedPath }
+
+        // 1. 目录点击处理（Directory Target）：桌面端弹窗提示打开该目录；非桌面端忽略
+        if (appState.fileTreeProvider?.isDirectory(resolvedPath) == true) {
+            if (isDesktopPlatform) {
+                pendingFileOpen = PendingFileOpen.OpenDirectory(resolvedPath)
+            }
+            return
+        }
+
+        when (classifyFilePath(resolvedPath)) {
+            FileOpenTarget.INTERNAL_IMAGE -> openImageInExtension(title = fileName, imageUrl = resolvedPath)
             FileOpenTarget.INTERNAL_TEXT -> {
                 val requestId = ++fileOpenRequestSeq
                 viewModelScope.launch {
-                    val content = withContext(Dispatchers.Default) { appState.fileTreeProvider?.readText(path) }
+                    val content = withContext(Dispatchers.Default) { appState.fileTreeProvider?.readText(resolvedPath) }
                     if (requestId != fileOpenRequestSeq) return@launch // 已被更新的点击取代
                     if (content == null || content.contains('\u0000')) {
-                        // 二进制 / 读不到 → 降级走外部打开或揭示目录（不塞进 MarkdownView）
-                        // 判二进制只能用 NUL 扫描：readText 对二进制返回 U+FFFD 乱码而非 null，
-                        // ==null 只表示「不存在 / IO 异常」。
-                        routeExternalOrReveal(path, requestId)
+                        // 二进制 / 读不到 → 若为桌面端则尝试查询应用或打开目录；非桌面端直接忽略
+                        if (!isDesktopPlatform) return@launch
+                        routeExternalOrReveal(resolvedPath, requestId)
                     } else {
                         // md/markdown 原样直出（查看器按 Markdown 渲染）；其余按词法器语言标签
                         // 包进代码围栏（有标签 → ```lang 高亮；无标签 → 裸 ``` 等宽不高亮）。
                         // 只包 content 本身，不改 lineCount/charCount —— 信息条按文件真实行列。
-                        val ext = path.substringAfterLast('.', "").lowercase().trim()
-                        val fence = codeFenceLanguageFor(path)
+                        val ext = resolvedPath.substringAfterLast('.', "").lowercase().trim()
+                        val fence = codeFenceLanguageFor(resolvedPath)
                         val rendered = if (ext == "md" || ext == "markdown") {
                             content
                         } else {
@@ -698,20 +664,30 @@ class WorkspaceViewModel(
                     }
                 }
             }
-            FileOpenTarget.EXTERNAL -> routeExternalOrReveal(path, ++fileOpenRequestSeq)
-            FileOpenTarget.REVEAL_IN_FOLDER -> pendingFileOpen = PendingFileOpen.RevealInFolder(path)
+            FileOpenTarget.EXTERNAL -> {
+                if (isDesktopPlatform) {
+                    routeExternalOrReveal(resolvedPath, ++fileOpenRequestSeq)
+                }
+            }
+            FileOpenTarget.REVEAL_IN_FOLDER -> {
+                if (isDesktopPlatform) {
+                    pendingFileOpen = PendingFileOpen.RevealInFolder(resolvedPath)
+                }
+            }
         }
     }
 
-    /** EXTERNAL 档：查系统默认应用名，有则「用 XXX 打开」，查不到降级「打开所在目录」。 */
+    /** EXTERNAL 档：查系统默认应用名，有则「用 [appName] 打开」，查不到降级「打开文件所在目录？」。非桌面端不弹。 */
     private fun routeExternalOrReveal(path: String, requestId: Int) {
+        if (!isDesktopPlatform) return
         viewModelScope.launch {
-            val appName = withContext(Dispatchers.Default) { defaultAppNameFor(path) } // mac 恒 null → 走泛称
+            val appName = withContext(Dispatchers.Default) { defaultAppNameFor(path) }
             if (requestId != fileOpenRequestSeq) return@launch // 已被更新的点击取代
-            // 查不到应用名**不等于**不打开：macOS 上 defaultAppNameFor 恒 null（拿不到精确应用名），
-            // 若在此降级成 RevealInFolder，mac 用户就永远拿不到「打开」这一档——只能揭示目录。
-            // 故 null 一律保留为 OpenExternally(path, null)，由 UI 用泛称文案问「用系统默认应用打开？」。
-            pendingFileOpen = PendingFileOpen.OpenExternally(path, appName)
+            pendingFileOpen = if (appName != null) {
+                PendingFileOpen.OpenExternally(path, appName)
+            } else {
+                PendingFileOpen.RevealInFolder(path)
+            }
         }
     }
 
@@ -806,6 +782,11 @@ class WorkspaceViewModel(
                 }
             }
             is PendingFileOpen.RevealInFolder -> revealInFolder(pending.path)
+            is PendingFileOpen.OpenDirectory -> {
+                if (!openFileInOs(pending.path)) {
+                    revealInFolder(pending.path)
+                }
+            }
         }
         pendingFileOpen = null
     }
@@ -939,9 +920,10 @@ class WorkspaceViewModel(
 
     fun toggleRightPanel() {
         if (activeDockPanel != null) {
-            activeDockPanel = null
+            updateActiveDockPanel(null)
         } else {
-            activeDockPanel = RightDockPanel.OVERVIEW
+            // 概览已迁出 Dock（浮动窗常驻），打开 DIFF 作为默认面板
+            updateActiveDockPanel(RightDockPanel.DIFF)
         }
     }
     // ------------------------------------------------------------------
@@ -1051,14 +1033,36 @@ class WorkspaceViewModel(
      */
     var inputDraft by mutableStateOf(TextFieldValue("")); private set
 
+    /** 未绑定会话（conversationId == null）时的草稿文本，切走再切回新会话时恢复 */
+    private var unattachedDraft: String = ""
+
+    /** 草稿输入防抖 Job：连续打字 300ms 无新输入后自动保存到当前会话 */
+    private var draftDebounceJob: kotlinx.coroutines.Job? = null
+
     fun updateInputDraft(value: TextFieldValue) {
         imageStrippedNotice = null // 下次输入时清空"图片已剔除"轻提示
         remoteCapabilityNotice = null // 下次输入时清空"遥控端剪贴板不可用"轻提示
         inputDraft = value
+        val convId = conversationId
+        if (convId == null) {
+            unattachedDraft = value.text
+        } else {
+            draftDebounceJob?.cancel()
+            draftDebounceJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(300)
+                saveComposeState()
+            }
+        }
     }
 
     fun clearInputDraft() {
         inputDraft = TextFieldValue("")
+        draftDebounceJob?.cancel()
+        if (conversationId != null) {
+            saveComposeState()
+        } else {
+            unattachedDraft = ""
+        }
     }
 
     /**
@@ -1081,18 +1085,41 @@ class WorkspaceViewModel(
         )
     }
 
+    /** 切换会话水合设置期间为 true，禁止回写触发脏写。 */
+    private var isHydratingSettings = false
+
     /**
-     * 统一保存当前会话的 compose state（设置类变化时调用，fire-and-forget）。
-     * 读全量当前值 → 全量覆盖写到会话数据库。会话未绑定（conversationId == null）时跳过。
-     *
-     * 无需同步更新缓存：Idle 会话的缓存已被 [applySnapshot] 清除，切回来走 getSnapshot 读 DB 真理源。
-     * Working 会话的缓存由观察流持续更新，用户改设置时缓存会被下个事件覆盖。
+     * 保存当前会话的 compose state（全量覆盖写）。
+     * 单一入口：同步更新内存快照缓存（UI 零延迟即时生效）+ 后台协程同步到数据库。
+     * 会话未绑定（conversationId == null）或水合中时跳过。
      */
     fun saveComposeState() {
+        if (isHydratingSettings) return
         val convId = conversationId ?: return
         val input = buildComposeStateInput()
+        updateConversationStateCache(convId, input)
         viewModelScope.launch {
             appState.aiCore.updateConversationSettings(convId, input)
+        }
+    }
+
+    /**
+     * 同步更新会话状态机中的 Conversation 对象，使切回来时 [applySessionSettings] 能读到最新值。
+     * 状态机不存在时 no-op（切回来走 getSnapshot 从库读）。
+     */
+    private fun updateConversationStateCache(convId: String, input: UpdateConversationSettingsInput) {
+        sessionCache.conversationStates[convId]?.let { cached ->
+            val conv = cached.conversation
+            sessionCache.conversationStates[convId] = cached.copy(
+                conversation = conv.copy(
+                    draftText = input.draftText,
+                    apiKeyId = input.apiKeyId,
+                    thinkingLevel = input.thinkingLevel,
+                    modelId = input.model?.id ?: conv.modelId,
+                    modelProvider = input.model?.provider ?: conv.modelProvider,
+                    agent = input.agent?.mode?.name ?: conv.agent,
+                )
+            )
         }
     }
 
@@ -1101,7 +1128,10 @@ class WorkspaceViewModel(
      */
     private suspend fun flushComposeState() {
         val convId = conversationId ?: return
-        appState.aiCore.updateConversationSettings(convId, buildComposeStateInput())
+        draftDebounceJob?.cancel()
+        val input = buildComposeStateInput()
+        updateConversationStateCache(convId, input)
+        appState.aiCore.updateConversationSettings(convId, input)
     }
 
     // ───── 输入容量预算（业务规则归口 VM，UI 只渲染提示） ─────
@@ -1200,13 +1230,18 @@ class WorkspaceViewModel(
         if (opts.isEmpty()) return base
         val result = base.toMutableList()
         for (opt in opts) {
-            // 因果时序防护：只有在 base 中存在"时间戳在 opt 之后且正在流式中"的回复（即确由 opt 触发的流式响应），
-            // 才能把 opt 插在它前面；早于 opt 的历史消息（无论是否残留流式标记）绝对不可被 opt 抢占前面。
-            val streamingIndex = result.indexOfFirst { it.isStreaming && it.createdAt >= opt.createdAt }
-            if (streamingIndex >= 0) {
-                result.add(streamingIndex, opt)
-            } else {
+            val isSteering = opt.id.startsWith("optimistic_steer_")
+            if (isSteering) {
+                // 插话（Steering）：用户在运行中插入的消息，排列在当前已有内容之后（即正在流式的上一轮回复之后）
                 result.add(opt)
+            } else {
+                // 常规用户消息：若已有正在流式的回复（由本条消息触发），应显示在流式回复之前
+                val streamingIndex = result.indexOfFirst { it.isStreaming }
+                if (streamingIndex >= 0) {
+                    result.add(streamingIndex, opt)
+                } else {
+                    result.add(opt)
+                }
             }
         }
         return result
@@ -1216,6 +1251,10 @@ class WorkspaceViewModel(
 
     /** 当前上下文真实占用（token）：最近一次请求 API 报告的 prompt 大小，与自动压缩触发同源 */
     val contextUsedTokens: Long get() = snapshot?.contextUsedTokens ?: 0L
+
+    /** 自动压缩阈值百分比（30-95），UI Slider 直接转发 AppState（persist + aiCore 透传异步） */
+    val compactionThresholdPercent: StateFlow<Int> = appState.compactionThresholdPercent
+    fun setCompactionThreshold(value: Int) = appState.setCompactionThreshold(value)
 
     /** 主会话 LLM HTTP 请求累计次数（事件累加 + 历史回填，见 SnapshotReducer/MederiModelMapper） */
     val requestCount: Int get() = snapshot?.requestCount ?: 0
@@ -1264,30 +1303,38 @@ class WorkspaceViewModel(
     val conversation: Conversation? get() = snapshot?.conversation
 
     // ------------------------------------------------------------------
-    // 子代理 MVVM 缓存（P4）：SUBAGENT_* 事件 → SubagentTracker → SubagentState
+    // 子代理 MVVM 状态：直接收敛入 ConversationState（单一真理源）
     // UI 读 [subagents]（当前会话）渲染追踪器卡片/详情；读 [allSubagents] 渲染全局列表。
     // 汇报正文不进这里——它在 subagent(WAIT) 的 tool result 里（数据库），
     // UI 用 SubagentReportMarkdown.fromToolResult(toolName, resultJson) 转 markdown 展开渲染。
     // ------------------------------------------------------------------
 
-    /** 全部会话的子代理（按启动时间排序）；compose state，事件驱动实时更新。 */
-    var allSubagents by mutableStateOf<List<xyz.mederi.core.contract.models.SubagentState>>(emptyList())
-        private set
+    /** 全部会话的子代理（从缓存中所有会话的 conversationState.subagents 汇总派生，按启动时间排序）。 */
+    val allSubagents: List<xyz.mederi.core.contract.models.SubagentState>
+        get() = sessionCache.conversationStates.values
+            .flatMap { it.subagents }
+            .distinctBy { it.agentId }
+            .sortedBy { it.startedAt }
 
-    /** 聚合中间态：agentId → SubagentState（SubagentTracker.apply 的累积表）。 */
-    private var subagentStates by mutableStateOf<Map<String, xyz.mederi.core.contract.models.SubagentState>>(emptyMap())
-
-    /** 当前会话的子代理列表（读取 allSubagents + conversationId 两个 state，天然响应式）。 */
+    /** 当前会话的子代理列表（直接来自当前会话状态机，天然响应式）。 */
     val subagents: List<xyz.mederi.core.contract.models.SubagentState>
-        get() = allSubagents.filter { it.parentSessionId == conversationId }
+        get() = conversationState?.subagents.orEmpty()
 
-    /** 查询单个子代理详情数据（点开详情 UI 的只读数据源；不在缓存 = 已重启丢失，UI 降级只显示汇报）。 */
-    fun subagent(agentId: String): xyz.mederi.core.contract.models.SubagentState? =
-        subagentStates[agentId]
+    /** 查询单个子代理详情数据（优先当前会话，其次从所有会话状态机中查找）。 */
+    fun subagent(agentId: String): xyz.mederi.core.contract.models.SubagentState? {
+        return conversationState?.subagents?.find { it.agentId == agentId }
+            ?: sessionCache.conversationStates.values
+                .flatMap { it.subagents }
+                .find { it.agentId == agentId }
+    }
 
     /** subagent / wait_agent / agent_status 工具结果 → 汇报 markdown（null = 非子代理汇报，普通工具卡片渲染）。 */
     fun subagentReportMarkdown(toolName: String, resultJson: String): String? =
         SubagentReportMarkdown.fromToolResult(toolName, resultJson)
+
+    /** 后台任务列表（命令+定时器）；2 秒轮询 listBackgroundTasks，仅在概览窗可见时轮询。 */
+    var backgroundTasks by mutableStateOf<List<xyz.mederi.core.contract.models.BackgroundTaskInfo>>(emptyList())
+        private set
 
     /**
      * 展平后的聊天列表（派生缓存）。
@@ -1474,15 +1521,6 @@ class WorkspaceViewModel(
         questionPage = 0
     }
 
-/** 子代理生命周期事件集（init 订阅过滤用；SubagentTracker 消费）。 */
-private val SUBAGENT_EVENT_TYPES = setOf(
-    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STARTED,
-    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_PROGRESS,
-    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_COMPLETED,
-    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_ERROR,
-    xyz.mederi.core.contract.models.CoreEventType.SUBAGENT_STOPPED
-)
-
     /**
      * 展平后的聊天列表（实现已抽至 core/ui/chat/ChatItemsBuilder.kt 顶层 computeChatItems，
      * 此处保留同名成员薄转发，供既有调用点——chatItems 派生缓存与测试——使用）。
@@ -1495,13 +1533,11 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         probeToolTarget(name, input, snapshot)
 
     // 会话后台观察 Job（sessionCache.observeJobs）已收敛进 [sessionCache]（SessionUiCache，见文件底部）：
-    // **核心机制：会话一旦被 attach 过，就常驻一条观察流持续更新快照缓存，
+    // **核心机制：会话一旦被 attach 过，就常驻一条观察流持续更新会话状态机，
     // 切走不 cancel、切回不重建。** SSE 事件来了 → observeConversation 流 emit →
     // applySnapshot 写入缓存 → 当前会话时同步渲染。切换会话只是把 [conversationId]
-    // 指向另一个缓存的键，UI 立即渲染最新缓存（零闪烁、不丢 streaming 增量）。
+    // 指向另一个缓存的键，UI 立即渲染最新状态机（零闪烁、不丢 streaming 增量、保持子代理与扩展面板）。
     // 生命周期：随 viewModelScope 销毁；会话观察抛异常（如会话被删除）时移除并清缓存。
-    // 会话离开 Working（turn 结束/出错）后缓存清除（数据已完整落库，下次切回从 store 重建即可），
-    // 但观察流保留——新 turn 的事件仍持续聚合。
     // 乐观消息对账日志去重：同一会话的 matched/unmatched 结论只打一次（状态翻转时重置）
     private val pendingOptReconciled = mutableSetOf<String>()
 
@@ -1510,59 +1546,6 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             appState.selectedConversationId.collect { id ->
                 if (id != conversationId) attach(id)
             }
-        }
-        // 冷启动兜底（只跑一次）：应用刚启动且尚无选中模型（新/空会话 attach 不再推导默认值）时，
-        // 从已加载到内存的项目列表中取最近修改的已发送会话（modelId != null，ORDER BY updatedAt DESC LIMIT 1 语义），
-        // 直接读其四列恢复模型/Agent/Key/推理档位设置。数据已在内存（appState.projects），非遍历数据库。
-        viewModelScope.launch {
-            appState.aiCore.isReady.first { it }
-            if (appState.selectedModel.value != null) return@launch
-            val recent = appState.projects.value
-                .flatMap { it.conversations }
-                .filter { it.modelId != null }
-                .maxByOrNull { it.updatedAt }
-            if (recent != null) applySessionSettings(recent)
-        }
-        // 浏览器任务监听：STARTED→弹出流程视图；STEP→追加步骤卡片；COMPLETED/ERROR/STOPPED→收尾
-        viewModelScope.launch {
-            appState.aiCore.isReady.first { it }
-            appState.aiCore.events()
-                .filter {
-                    it.type in setOf(
-                        CoreEventType.BROWSER_TASK_STARTED,
-                        CoreEventType.BROWSER_TASK_STEP,
-                        CoreEventType.BROWSER_TASK_COMPLETED,
-                        CoreEventType.BROWSER_TASK_ERROR,
-                        CoreEventType.BROWSER_TASK_STOPPED,
-                    )
-                }
-                .collect { event ->
-                    when (event.type) {
-                        CoreEventType.BROWSER_TASK_STARTED -> {
-                            startBrowserAutomation(taskSummary = event.payload["task"])
-                        }
-                        CoreEventType.BROWSER_TASK_STEP -> {
-                            handleBrowserStepEvent(event)
-                        }
-                        CoreEventType.BROWSER_TASK_COMPLETED,
-                        CoreEventType.BROWSER_TASK_ERROR,
-                        CoreEventType.BROWSER_TASK_STOPPED -> {
-                            val message = event.payload["message"]
-                            val taskId = event.payload["taskId"] ?: "bt"
-                            if (!message.isNullOrBlank()) {
-                                appendBrowserFlowStep(
-                                    BrowserFlowStep.Narration(
-                                        id = "${taskId}_final",
-                                        text = message,
-                                        timestampMillis = xyz.mederi.currentTimeMillis(),
-                                    )
-                                )
-                            }
-                            finishBrowserAutomation()
-                        }
-                        else -> {}
-                    }
-                }
         }
 
         // 手动压缩预检旁路：core 判定"没有可压缩内容"时只发 STATUS 事件（scope=compaction），
@@ -1604,30 +1587,17 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     }
                 }
         }
-
-        // 子代理生命周期监听（app 级，不绑定会话）：SUBAGENT_* 事件 → SubagentTracker 聚合进
-        // MVVM 缓存（每个子代理一个 SubagentState）。UI（未来）读 [allSubagents] / [subagents]
-        // 渲染子代理追踪器与详情——"正在干活"的真实状态 + 主代理派发的命令 + 实际使用的模型。
-        viewModelScope.launch {
-            appState.aiCore.isReady.first { it }
-            appState.aiCore.events()
-                .filter { it.type in SUBAGENT_EVENT_TYPES }
-                .collect {
-                    subagentStates = xyz.mederi.core.contract.SubagentTracker.apply(subagentStates, it)
-                    allSubagents = subagentStates.values.sortedBy { s -> s.startedAt }
-                    if (subagents.none { s -> s.status.equals("RUNNING", ignoreCase = true) }) {
-                        isSubagentBannerDismissed = false
-                    }
-                }
-        }
     }
 
     fun attach(id: String?) {
         DebugLog.event("UI", "attach: id=$id")
-        // 切换前保存旧会话的 compose state（含草稿文本）
+        draftDebounceJob?.cancel()
+        // 切换前保存旧会话的 compose state（含草稿文本）。
+        // 同步更新缓存（切回来走缓存路径时能读到最新草稿/设置）+ fire-and-forget 写 DB。
         val oldConvId = conversationId
         if (oldConvId != null && oldConvId != id) {
             val input = buildComposeStateInput()
+            updateConversationStateCache(oldConvId, input)
             viewModelScope.launch {
                 appState.aiCore.updateConversationSettings(oldConvId, input)
             }
@@ -1639,11 +1609,12 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         compactionCompletedNotice = false
         if (id == null) {
             conversationId = null
-            snapshot = null
+            conversationState = null
             isAttached = false
             pendingOptReconciled.clear()
             // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted）
             errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
+            inputDraft = TextFieldValue(unattachedDraft)
             return
         }
         conversationId = id
@@ -1651,12 +1622,12 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted，由后续 applySnapshot 覆盖）
         errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
 
-        // 切换只换渲染源：立即用该会话的缓存快照渲染（后台观察流一直在持续更新它），
-        // 不再 snapshot = null 再从 store 重建，也绝不 cancel 该会话的观察 Job——
-        // 这样切回正在流式的会话时 UI 零闪烁、流式增量一个不丢。
-        val cached = sessionCache.snapshotCache[id]
+        // 切换只换渲染源：立即用该会话的缓存状态机渲染（后台观察流一直在持续更新它），
+        // 不再 conversationState = null 再从 store 重建，也绝不 cancel 该会话的观察 Job——
+        // 这样切回正在流式的会话时 UI 零闪烁、流式增量一个不丢，子代理与 Dock 展开状态完整保留。
+        val cached = sessionCache.conversationStates[id]
         if (cached != null) {
-            snapshot = cached
+            conversationState = cached
             isAttached = true
             errorState = errorState.copy(
                 message = cached.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
@@ -1664,26 +1635,27 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 id = cached.errorId,
                 isStreamInterrupted = cached.errorIsStreamInterrupted,
             )
-            // 切换到已缓存的会话时，观察流不会重发快照（无新事件→不触发 applySnapshot→不恢复设置），
+            // 切换到已缓存的会话时，观察流不会重发状态（无新事件→不触发 applySnapshot→不恢复设置），
             // 故此处显式按缓存会话对象直接恢复四项设置（model / agent / apiKey / thinkingLevel）。
             // 会话是真理源：已绑定模型则覆盖，否则（modelId==null）保留用户当前选择，不写库。
             applySessionSettings(cached.conversation)
-            DebugLog.event("UI", "attach: rendered from cache (status=${cached.conversation.status}, messages=${cached.messages.size})")
+            DebugLog.event(
+                "UI",
+                "attach: rendered from state pool (status=${cached.conversation.status}, messages=${cached.messages.size}, subagents=${cached.subagents.size}, dock=${cached.activeDockPanel})"
+            )
         } else {
-            // 无缓存（首次打开 / 已 Idle 清理）：异步拉一次初始快照渲染，再交给观察流持续更新
-            snapshot = null
+            // 无缓存（首次打开）：异步拉一次初始状态机渲染，再交给观察流持续更新
+            conversationState = null
             isAttached = false
             viewModelScope.launch {
-                // 竞态防护：异步返回期间用户可能已切走，旧结果一律丢弃（applySnapshot 内部也有会话判，
-                // 但设置恢复要在它之后单独执行，故这里显式记 reqId 作一次性一致性检查）
                 val reqId = id
                 val snap = appState.aiCore.getSnapshot(reqId).getOrNull()
                 if (snap == null) {
                     DebugLog.event("UI", "attach: conversation $reqId not found, clearing stale selection")
-                    sessionCache.snapshotCache.remove(reqId)
+                    sessionCache.conversationStates.remove(reqId)
                     if (conversationId == reqId) {
                         conversationId = null
-                        snapshot = null
+                        conversationState = null
                         isAttached = false
                         appState.selectConversation(null)
                     }
@@ -1702,7 +1674,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
      * 确保该会话有一条常驻观察流（幂等：已有活跃 Job 则不动）。
      *
      * 观察流 = [AiCore.observeConversation]（从 store 构建初始快照 + 订阅该会话事件聚合）。
-     * 它持续把最新快照写入 [sessionCache.snapshotCache]（及当前会话的渲染状态）——即使 UI 已切到别的会话，
+     * 它持续把最新状态机写入 [sessionCache.conversationStates]（及当前会话的渲染状态）——即使 UI 已切到别的会话，
      * 这条流也不会被取消，所以该会话的流式增量（推理/正文/tool delta）始终完整、始终最新。
      */
     private fun ensureObserving(id: String) {
@@ -1717,7 +1689,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             } catch (e: Exception) {
                 DebugLog.error("UI", "observe conversation $id failed: ${e.message}", e)
                 sessionCache.observeJobs.remove(id)
-                sessionCache.snapshotCache.remove(id)
+                sessionCache.conversationStates.remove(id)
             }
         }
     }
@@ -1725,8 +1697,8 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     /**
      * 将新快照写入缓存，若该会话是当前渲染会话则同步到 UI 状态（attach/后台观察流共用）。
      */
-    private fun applySnapshot(id: String, snap: ConversationSnapshot) {
-        DebugLog.debug("UI", "snapshot received: status=${snap.conversation.status}, messages=${snap.messages.size}")
+    private fun applySnapshot(id: String, snap: ConversationState) {
+        DebugLog.debug("UI", "snapshot received: status=${snap.conversation.status}, messages=${snap.messages.size}, subagents=${snap.subagents.size}")
         if (conversationId != id && snap.conversation.status == ConversationStatus.Error) {
             DebugLog.event(
                 "UI",
@@ -1760,22 +1732,19 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 }
             }
         }
-        val prevSnap = sessionCache.snapshotCache[id]
+        val prevSnap = sessionCache.conversationStates[id]
         val wasWorking = prevSnap?.conversation?.status == ConversationStatus.Working
-        sessionCache.snapshotCache[id] = snap
-        // 快照水合子代理初始态：补入 subagentStates 中缺失的条目（不覆盖已有——实时事件更准）
-        if (snap.subagents.isNotEmpty()) {
-            val existing = subagentStates
-            val merged = snap.subagents.fold(existing) { acc, sa ->
-                if (sa.agentId in acc) acc else acc + (sa.agentId to sa)
-            }
-            if (merged !== existing) {
-                subagentStates = merged
-                allSubagents = merged.values.sortedBy { it.startedAt }
-            }
-        }
+        // 保留会话专属的本地 UI 状态（activeDockPanel 与 browserAutomation）与子代理，防被来自 Core 的空值冲刷
+        val effectiveSnap = snap.copy(
+            activeDockPanel = snap.activeDockPanel ?: prevSnap?.activeDockPanel,
+            browserAutomation = snap.browserAutomation ?: prevSnap?.browserAutomation,
+            subagents = if (snap.subagents.isEmpty() && !prevSnap?.subagents.isNullOrEmpty()) {
+                prevSnap.subagents
+            } else snap.subagents
+        )
+        sessionCache.conversationStates[id] = effectiveSnap
         if (conversationId == id) {
-            snapshot = snap
+            conversationState = effectiveSnap
             isAttached = true
             errorState = errorState.copy(
                 message = snap.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
@@ -1790,34 +1759,31 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             }
             checkAndTriggerAutoContinue(id, snap)
         }
-        // Working 状态保留缓存（切回零闪烁、不丢流式增量）；
-        // 非 Working（Idle/Error）清缓存——数据已在库，缓存无价值只会变成 stale 副本
-        //（切回走 getSnapshot 读 DB 真理源，草稿/设置自动正确，无需手动同步缓存）。
-        if (snap.conversation.status != ConversationStatus.Working) {
-            // turn 结束（Working → Idle/Error）时清计时锚点 + 排队出队
-            if (wasWorking) {
-                DebugLog.debug("UI-Timer", "turn ended for $id (newStatus=${snap.conversation.status}), removing timer and snapshotCache")
-                sessionCache.turnStartByConv.remove(id)
-                // 排队模式：当前 turn 结束恢复 Idle 时自动出队消费
-                if (snap.conversation.status == ConversationStatus.Idle) {
-                    val queue = sessionCache.queuedMessagesByConv[id]
-                    if (!queue.isNullOrEmpty()) {
-                        val nextMsg = queue.removeAt(0)
-                        sendQueuedMessage(nextMsg)
-                    }
+        // 仅在真实离开 Working 状态（turn 结束）时清除 StatusBar 计时锚点；
+        // 状态机保留在 sessionCache.conversationStates 池中，保证切走切回零闪烁并保持子代理与 Dock 展开状态
+        if (wasWorking && snap.conversation.status != ConversationStatus.Working && snap.conversation.status != ConversationStatus.WaitingUser) {
+            DebugLog.debug("UI-Timer", "turn ended for $id (wasWorking=$wasWorking, newStatus=${snap.conversation.status}), removing timer")
+            sessionCache.turnStartByConv.remove(id)
+
+            // 排队模式：当前 turn 结束恢复 Idle 时自动出队消费
+            if (snap.conversation.status == ConversationStatus.Idle) {
+                val queue = sessionCache.queuedMessagesByConv[id]
+                if (!queue.isNullOrEmpty()) {
+                    val nextMsg = queue.removeAt(0)
+                    sendQueuedMessage(nextMsg)
                 }
             }
-            sessionCache.snapshotCache.remove(id)
         }
-        }
+    }
 
     /**
      * 流式闲置超时/中途断流后，若模型已吐出部分内容，UI 层自动替用户补发一句 "Continue"（且严格只发一次）。
      * 若未吐出内容，Core 层已在内部静默重试，此处不处理。
      */
-    private fun checkAndTriggerAutoContinue(id: String, snap: ConversationSnapshot) {
+    private fun checkAndTriggerAutoContinue(id: String, snap: ConversationState) {
         if (!snap.errorIsStreamInterrupted) return
         if (snap.conversation.status == ConversationStatus.Working) return
+        if (isCompacting) return
 
         val count = sessionCache.autoContinueCountByConv.getOrElse(id) { 0 }
         val lastAssistant = snap.messages.lastOrNull { it.role == ChatRole.Assistant }
@@ -1841,7 +1807,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             DebugLog.info("UI-AutoContinue", "scheduling auto-continue for conversation $id (attempt ${count + 1}/1)")
             autoContinueJob?.cancel()
             autoContinueJob = viewModelScope.launch {
-                delay(300L)
+                delay(300L.milliseconds)
                 if (conversationId == id && snapshot?.conversation?.status != ConversationStatus.Working) {
                     isAutoContinuing = true
                     try {
@@ -1867,27 +1833,32 @@ private val SUBAGENT_EVENT_TYPES = setOf(
      * - 全新未发送会话（modelId == null）→ 不覆盖选择器（保留用户当前选择）；冷启动兜底在 init。
      */
     private fun applySessionSettings(conv: Conversation) {
-        // 恢复草稿文本（即使无模型也要恢复）
-        inputDraft = TextFieldValue(conv.draftText ?: "")
-        if (conv.modelId == null) return
-        val all = appState.availableModels.value
-        val model = all.find { it.id == conv.modelId && it.provider == conv.modelProvider }
-            ?: all.find { it.id == conv.modelId }
+        isHydratingSettings = true
+        try {
+            // 恢复草稿文本（即使无模型也要恢复）
+            inputDraft = TextFieldValue(conv.draftText ?: "")
+            if (conv.modelId == null) return
+            val all = appState.availableModels.value
+            val model = all.find { it.id == conv.modelId && it.provider == conv.modelProvider }
+                ?: all.find { it.id == conv.modelId }
 
-        val agent: AgentOption? = conv.agent?.let { agentOrMode ->
-            val mode = runCatching { AgentMode.valueOf(agentOrMode) }.getOrNull()
-            if (mode != null) {
-                appState.availableAgents.value.find { it.mode == mode }
-            } else {
-                appState.availableAgents.value.find { it.id == agentOrMode }
+            val agent: AgentOption? = conv.agent?.let { agentOrMode ->
+                val mode = runCatching { AgentMode.valueOf(agentOrMode) }.getOrNull()
+                if (mode != null) {
+                    appState.availableAgents.value.find { it.mode == mode }
+                } else {
+                    appState.availableAgents.value.find { it.id == agentOrMode }
+                }
             }
-        }
-        // model 解析不出（模型已下架/未加载）时保持当前 selection 不清空；agent 仍按会话恢复
-        model?.let { appState.selectModel(it) }
-        agent?.let { appState.selectAgent(it.id) }
-        model?.let { m ->
-            appState.selectApiKey(m.provider, conv.apiKeyId)
-            appState.setModelReasoningLevel(m.id, conv.thinkingLevel)
+            // model 解析不出（模型已下架/未加载）时保持当前 selection 不清空；agent 仍按会话恢复
+            model?.let { appState.selectModel(it) }
+            agent?.let { appState.selectAgent(it.id) }
+            model?.let { m ->
+                appState.selectApiKey(m.provider, conv.apiKeyId)
+                appState.setModelReasoningLevel(m.id, conv.thinkingLevel)
+            }
+        } finally {
+            isHydratingSettings = false
         }
     }
 
@@ -2052,8 +2023,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
             val targetConvId = if (convId != null) {
                 convId
             } else {
-                val pid = projectId
-                if (pid == null) return@launch
+                val pid = projectId ?: return@launch
                 val created = appState.aiCore.createConversation(pid, agent)
                 if (created.isFailure) {
                     val ex = created.exceptionOrNull()
@@ -2071,6 +2041,10 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                 if (!pendingOpts.isNullOrEmpty()) {
                     pendingOpts.forEach { sessionCache.addPendingUserMessage(conv.id, it.copy(conversationId = conv.id)) }
                 }
+                // 新建会话第一步：立即将当前界面选好的全量配置（模型、Key、推理档位、草稿等）写入该新会话
+                val initialInput = buildComposeStateInput()
+                appState.aiCore.updateConversationSettings(conv.id, initialInput)
+                unattachedDraft = ""
                 appState.selectProject(pid)
                 appState.selectConversation(conv.id)
                 conv.id
@@ -2308,6 +2282,37 @@ private val SUBAGENT_EVENT_TYPES = setOf(
         }
     }
 
+    /** 轮询后台任务列表（概览窗可见时每 2 秒调用）。 */
+    fun pollBackgroundTasks() {
+        val convId = conversationId ?: return
+        viewModelScope.launch {
+            try {
+                appState.aiCore.isReady.first { it }
+                val result = appState.aiCore.listBackgroundTasks(convId)
+                result.onSuccess { tasks ->
+                    backgroundTasks = tasks
+                }.onFailure { e ->
+                    DebugLog.error("UI", "pollBackgroundTasks failed: ${e.message}", e)
+                }
+            } catch (e: Exception) {
+                DebugLog.error("UI", "pollBackgroundTasks exception: ${e.message}", e)
+            }
+        }
+    }
+
+    /** 停止后台任务（UI 停止按钮调用）。 */
+    fun stopBackgroundTask(taskId: String) {
+        viewModelScope.launch {
+            val r = appState.aiCore.stopBackgroundTask(taskId)
+            if (r.isFailure) {
+                val ex = r.exceptionOrNull()
+                DebugLog.error("UI", "stopBackgroundTask failed: ${ex?.message}", ex)
+            }
+            // 立即刷新列表
+            pollBackgroundTasks()
+        }
+    }
+
     /**
      * 断流"继续"：重发英文 Continue 走正常发消息流程（新 turn），
      * 历史里的半截 assistant 回复让模型自然续写。
@@ -2346,7 +2351,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                     selectedPath = initialFilePath ?: items.firstOrNull()?.filePath,
                     showPanel = true,
                 )
-                activeDockPanel = RightDockPanel.DIFF
+                updateActiveDockPanel(RightDockPanel.DIFF)
             }
         }
     }
@@ -2358,7 +2363,7 @@ private val SUBAGENT_EVENT_TYPES = setOf(
     fun closeDiff() {
         diffState = diffState.copy(showPanel = false)
         if (activeDockPanel == RightDockPanel.DIFF) {
-            activeDockPanel = null
+            updateActiveDockPanel(null)
         }
     }
 
@@ -2450,11 +2455,17 @@ private val SUBAGENT_EVENT_TYPES = setOf(
                         else -> emptyList()
                     }
                 }.toSet()
-                val prevCount = subagentStates.size
-                subagentStates = subagentStates.filterKeys { it in keptIds }
-                allSubagents = subagentStates.values.sortedBy { s -> s.startedAt }
-                DebugLog.info("UI", "rollbackMessage: locally slicing messages from ${currentSnap.messages.size} down to ${remaining.size}, subagents from $prevCount to ${subagentStates.size}")
-                snapshot = currentSnap.copy(messages = remaining)
+                val remainingSubagents = currentSnap.subagents.filter { it.agentId in keptIds }
+                DebugLog.info(
+                    "UI",
+                    "rollbackMessage: locally slicing messages from ${currentSnap.messages.size} down to ${remaining.size}, subagents from ${currentSnap.subagents.size} to ${remainingSubagents.size}"
+                )
+                val updatedState = currentSnap.copy(
+                    messages = remaining,
+                    subagents = remainingSubagents
+                )
+                conversationState = updatedState
+                sessionCache.conversationStates[conversationId] = updatedState
             }
         }
 
@@ -2532,8 +2543,11 @@ private class SessionUiCache {
     /** StatusBar 计时锚点：conversationId → 发送请求时刻（epoch ms） */
     val turnStartByConv = mutableMapOf<String, Long>()
 
-    /** 按会话缓存的快照（conversationId → 最后一次的 ConversationSnapshot） */
-    val snapshotCache = mutableStateMapOf<String, ConversationSnapshot>()
+    /** 按会话缓存的状态机池（conversationId → 当前全量 ConversationState） */
+    val conversationStates = mutableStateMapOf<String, ConversationState>()
+
+    /** 向后兼容快照缓存访问器别名 */
+    val snapshotCache: androidx.compose.runtime.snapshots.SnapshotStateMap<String, ConversationState> get() = conversationStates
 
     /** 各会话的后台观察 Job（conversationId → Job） */
     val observeJobs = mutableMapOf<String, Job>()

@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.SimpleTool
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
+import xyz.mederi.tools.ToolName
 import xyz.mederi.tools.subagent.SpawnAgentArgs
 import xyz.mederi.tools.subagent.SpawnResearcherArgs
 
@@ -72,7 +73,7 @@ class SubagentTool(
     private val parentSessionId: String
 ) : SimpleTool<SubagentArgs>(
     argsType = typeToken<SubagentArgs>(),
-    name = "subagent",
+    name = ToolName.SUBAGENT.value,
     description = "Single tool to delegate and manage asynchronous sub-agents: SPAWN executes a task " +
         "(planned spec or ad-hoc), SPAWN_RESEARCHER runs a read-only investigation, " +
         "and STATUS/STOP query or cancel a spawned sub-agent. SPAWN / SPAWN_RESEARCHER are non-blocking " +

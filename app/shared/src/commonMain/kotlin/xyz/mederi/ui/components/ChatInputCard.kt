@@ -272,7 +272,7 @@ fun ChatInputCard(
     // 压缩进行中：输入框禁用、发送按钮禁用（isStreaming 排除 isCompacting，
     // 使按钮显示发送图标而非停止图标——压缩中不应允许 abort）
     val isCompacting = viewModel.isCompacting
-    val isStreaming = viewModel.isWorking && !isWaitingPlanApproval && !isCompacting
+    val isStreaming = viewModel.isWorking && !isWaitingPlanApproval && !isCompacting && viewModel.pendingQuestion == null
     val errorMessage = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }
     // 输入框 placeholder（wasmJs 走 textarea 的 placeholder 属性 + CSS，其他平台走 Compose placeholder）
     val placeholderText = stringResource(Res.string.input_placeholder)

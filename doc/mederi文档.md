@@ -481,7 +481,7 @@ mederi.agents.update(
     aiModel = model,
     reasoningLevel = ReasoningLevel.MEDIUM,
     systemPrompt = "You are a specialized coding assistant.",
-    tools = listOf("read_file", "write_file", "execute_command")
+    tools = listOf("read_file", "write_file", "bash")
 )
 ```
 

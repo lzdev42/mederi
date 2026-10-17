@@ -45,7 +45,6 @@ fun RightExtensionPanel(
     maxPanelWidth: Dp = Dp.Infinity,
     modifier: Modifier = Modifier
 ) {
-    val defaultOverviewWidthDp = 410f
     val defaultReaderWidthDp = remember(screenWidth, maxPanelWidth) {
         (screenWidth.value * (2f / 3f)).coerceAtMost(maxPanelWidth.value).coerceAtLeast(340f)
     }
@@ -53,9 +52,8 @@ fun RightExtensionPanel(
     val currentPanel = viewModel.activeDockPanel
     // 关闭动画期间保持上一个面板渲染（收缩动画中内容不闪空）。
     // 副作用经 LaunchedEffect，不在组合期直接写状态
-    var panelToDisplay by remember { mutableStateOf(currentPanel ?: RightDockPanel.OVERVIEW) }
+    var panelToDisplay by remember { mutableStateOf(currentPanel ?: RightDockPanel.DIFF) }
 
-    var overviewWidthDp by remember { mutableStateOf(defaultOverviewWidthDp) }
     var readerWidthDp by remember { mutableStateOf(defaultReaderWidthDp) }
 
     LaunchedEffect(currentPanel) {
@@ -68,7 +66,7 @@ fun RightExtensionPanel(
         }
     }
 
-    val currentWidthDp = if (panelToDisplay == RightDockPanel.OVERVIEW) overviewWidthDp else readerWidthDp
+    val currentWidthDp = readerWidthDp
     // 布局期钳制：面板拖宽后窗口缩小、或面板打开时窗口较窄，面板让位给对话区（不超 maxPanelWidth）
     val effectivePanelWidthDp = currentWidthDp.coerceAtMost(maxPanelWidth.value)
 
@@ -76,12 +74,7 @@ fun RightExtensionPanel(
 
     val handleWidthChange: (Float) -> Unit = { newWidth ->
         // 不设固定上限：宽度上限 = maxPanelWidth，保证对话区 ≥ 手机宽度
-        val clamped = newWidth.coerceAtLeast(240f).coerceAtMost(maxPanelWidth.value)
-        if (panelToDisplay == RightDockPanel.OVERVIEW) {
-            overviewWidthDp = clamped
-        } else {
-            readerWidthDp = clamped
-        }
+        readerWidthDp = newWidth.coerceAtLeast(240f).coerceAtMost(maxPanelWidth.value)
     }
 
     if (isCompact) {
@@ -140,7 +133,6 @@ private fun RightExtensionPanelContent(
     val onWidthChangeState = rememberUpdatedState(onWidthChange)
 
     val panelIcon = when (panel) {
-        RightDockPanel.OVERVIEW -> FeatherIcons.Activity
         RightDockPanel.DIFF -> FeatherIcons.Folder
         RightDockPanel.ARTIFACTS -> FeatherIcons.FileText
         RightDockPanel.TERMINAL -> FeatherIcons.Terminal
@@ -208,12 +200,6 @@ private fun RightExtensionPanelContent(
                     .weight(1f)
             ) {
                 when (panel) {
-                    RightDockPanel.OVERVIEW -> OverviewTabContent(
-                        panelWidthDp = panelWidthDp,
-                        viewModel = viewModel,
-                        rawVm = rawMessagesViewModel,
-                        colors = colors
-                    )
                     RightDockPanel.DIFF -> FilesPanelContent(
                         viewModel = viewModel,
                         colors = colors

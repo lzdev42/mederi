@@ -23,7 +23,7 @@ sequenceDiagram
     SM->>TE: TurnExecutor.sendMessage(sessionId, request)
     TE->>TE: activeApiKeyId = request.apiKeyId（本 turn 唯一真理源）
     TE->>TE: 校验 IDLE → 读 Project → PlanStore.loadBySession<br/>组装 activePlanContent/spec指针/activeTodoContent(互斥)
-    TE->>TE: 系统提示词装配：静态骨架(build) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深) → dynamicSuffix(plan/todo) + EnvironmentInfoProvider(环境信息)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）
+    TE->>TE: 系统提示词装配：静态骨架(build/forSubagent) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链,<br/>向上:git根→项目目录 + 向下:项目目录直接子目录一层, 浅→深) → dynamicSuffix(plan/todo) + EnvironmentInfoProvider(环境信息)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）<br/>注: 仅主代理(subagentRole==null)注入 AGENTS.md；子代理(executor/researcher)跳过, 项目规则由主代理编入 spec
     TE->>TE: effectiveModel/effectiveReasoningLevel → sessionStore.updateAgentConfig
     TE->>HS: append(用户消息+durable时间戳) 【durable-first】
     TE->>EB: SESSION_UPDATED (客户端 refreshPage 即时回查, 新 turn 用户消息立即可见)
@@ -55,8 +55,8 @@ sequenceDiagram
             K->>HS: TurnIncrementalPersister.persistAssistant（增量落库防崩丢）
             K->>K: nodeExecuteTools: 执行工具<br/>(文件写白名单/沙盒命令/office_read/office_write(pptx 只读)/<br/>list_processes/stop_process/Plan/Verify/ask_user...)
             K-->>EB: TOOL_CALLED / TOOL_RESULT 事件
-            K->>K: 工具边界 (nodeSendToolResult) pollSteering 出队<br/>→ SteeringItem 注入工具结果消息 (引导模式插话)
-            alt ask_user / create_plan(APPROVAL)
+            K->>K: 工具边界 (nodeSendToolResult) pre-LLM pollSteering 出队<br/>→ SteeringItem 注入工具结果消息 (引导模式插话)<br/>各 LLM 节点 post-LLM pollSteering 出队→注入并再发一轮 LLM
+            alt ask_user / write_plan(APPROVAL)
                 K-->>EB: QUESTION_REQUESTED / PLAN_APPROVAL_REQUESTED (工具协程挂起)
                 UI-->>AC: resolveQuestion / resolvePlanApproval
                 AC->>TE: resolveQuestion/resolvePlanApproval → deferred.complete
@@ -69,7 +69,7 @@ sequenceDiagram
         TE->>TE: diffTracker.captureSnapshot → diffStore.save(TurnDiff)<br/>装配 turnDiffSummary (files/additions/deletions 单轮文件变更汇总)<br/>回填最后一条 assistant 消息.turnDiffSummary (UI TurnDiffCard)
         TE->>TE: sessionStore.updateStatus(IDLE)
         TE->>EB: MESSAGE_COMPLETED (可选 warning)<br/>有文件变更时携 turnDiffSummary/diffMessageId
-        TE->>TE: finally 冲刷: pendingEventMessages 补发 + pendingSteerings 残留降级新 turn<br/>(撞 RUNNING 放回队列)
+        TE->>TE: finally 冲刷: pendingEventMessages 补发 + pendingSteerings 残留降级新 turn<br/>(sendMessageInternal 避免 ERROR 污染, 撞 RUNNING 放回队列)
     end
     UI->>UI: SnapshotReducer.applyWithRefresh + refreshPage 回查落库对齐
 ```
@@ -81,9 +81,12 @@ sequenceDiagram
 - **切换会话**（`WorkspaceViewModel.hydrateSelectionFromConversation`，在 `!selectionHydrated` 守卫内触发）：
   - 会话已绑定模型（`conv.modelId != null`）→ 调 `appState.applyConversationSettings(model, agent, apiKeyId=conv.apiKeyId, thinkingLevel=conv.thinkingLevel, hasSessionModel=true)` **按会话快照覆盖**全局内存态（只改内存、不写偏好文件）——模型、Agent、API Key（按模型供应商写入 selectedApiKeyIds，null=默认 key）、推理档位（写入 modelReasoningLevels，effectiveThinkingLevel 推导链唯一输入）四项全部恢复。
   - 全新未发送会话（`conv.modelId == null`）→ 调 `applyRecentConversationDefaults()`（新/空会话默认取最近修改会话的设置）：`appState.projects` 拍平 → 筛 `modelId != null` 的会话 → `maxByOrNull { it.updatedAt }`（跨项目最近修改会话）→ 递归复用 `hydrateSelectionFromConversation(recent)` 恢复其设置；recent == null（无任何已发送会话）→ 不填，由 AppState.hydrate first-available 兜底。
-- **选择器改动统一保存到当前会话**（2026-10：统一全量覆盖写）：`selectModel` / `selectApiKey` / `selectAgent` / `selectAgentMode` / `updateThinkingLevel` 在改动 AppState 后统一调 `saveComposeState()` → 读全量当前值（`buildComposeStateInput()`）→ fire-and-forget 调 `aiCore.updateConversationSettings(convId, input)` 全量覆盖写到该会话。底层 `updateComposeState` SQL 做 SET（非 COALESCE），null 直接写 null（清空语义）——不再有 null 守卫跳过、不再有"null=不改"的 COALESCE 歧义。`conversationId == null`（会话未建立）时跳过。
-- **草稿文本持久化**（新增）：`inputDraft.text` 在两个生命周期节点落库，不用定时器：
-  - **切换会话时**：`attach(newId)` 在切换前用 `buildComposeStateInput()` 同步捕获旧会话全量值（含草稿），fire-and-forget 写旧 convId。
+- **选择器改动统一保存到当前会话**（2026-10：统一全量覆盖写）：`selectModel` / `selectApiKey` / `selectAgent` / `selectAgentMode` / `updateThinkingLevel` 在改动 AppState 后统一调 `saveComposeState()` → 读全量当前值（`buildComposeStateInput()`）→ 同步更新快照缓存（UI 零延迟）+ 后台协程调用 `aiCore.updateConversationSettings(convId, input)` 全量覆盖写到该会话。底层 `updateComposeState` SQL 做 SET（非 COALESCE），null 直接写 null（清空语义）。`conversationId == null`（会话未建立）时跳过。
+- **新会话创建继承机制**：`send()` 自动创建新会话后，在 `selectConversation(conv.id)` 触发 `attach` 之前，立即调用 `updateConversationSettings(conv.id, buildComposeStateInput())` 将当前 UI 选好的模型、Key、推理档位一次性全量写入新会话；杜绝新建空记录覆盖用户界面选择。
+- **草稿文本持久化**：
+  - **已绑定会话输入**：`updateInputDraft` 携带 300ms 防抖，连续打字暂停后自动触发 `saveComposeState()` 同步缓存与落库。
+  - **未绑定会话输入**：`conversationId == null` 时草稿暂存 `unattachedDraft`，切换至已有会话再切回未绑定会话（`attach(null)`）时自动恢复；发送创建会话后清空。
+  - **切换会话时**：`attach(newId)` 在切换前取消防抖并捕获旧会话全量值（含草稿），同步更新快照缓存 + fire-and-forget 写旧 convId。
   - **程序关闭时**：VM init 注册 `appState.registerFlushCallback { flushComposeState() }`；`main.kt` onCloseRequest 调 `runBlocking { appState.flushAll() }`（先跑 flush 回调保存 compose state，再 flushPreferences）。
 - **草稿恢复**：`applySessionSettings(conv)` 在 modelId null check 之前 `inputDraft = TextFieldValue(conv.draftText ?: "")`——无模型也恢复草稿。
 - **不再有全局偏好模板**：`workspace.lastModelId` / `workspace.lastModelProviderId` / `workspace.lastAgentId` / `workspace.apiKey.$provider` / `workspace.reasoningLevel.$modelId` 不再 persist/hydrate——`selectModel` / `selectAgent` / `selectApiKey` / `setModelReasoningLevel` 只改内存镜像；启动 `hydrate()` 仅保留首启 first-available 兜底（模型/Agent 列表就绪后限时 3s 填首个可用项）。导航偏好 `workspace.lastProjectId` / `workspace.lastConversationId` 保留（选中态恢复）。
@@ -96,11 +99,11 @@ flowchart TD
     S["sendMessage(sessionId, request, subagentRole?)"] --> V{"会话状态 == IDLE?"}
     S2["steerMessage(sessionId, request) 引导模式"] --> RQ{"会话 RUNNING<br/>且 activeJobs 活跃?"}
     RQ -- "否" --> S
-    RQ -- "是" --> STQ["pendingSteerings 入队 (STATUS steering_queued)<br/>工具边界 nodeSendToolResult 经 pollSteering 出队注入<br/>turn 收尾残留: finally 冲刷降级新 turn (见 2.1)"]
+    RQ -- "是" --> STQ["pendingSteerings 入队 (STATUS steering_queued)<br/>pre-LLM(工具边界) 或文本输出后 nodeCheckSteering 出队注入<br/>有插话转回 nodeCallLLM 继续流式生成；无插话走向 nodeFinish 结束"]
     STQ --> RUN
     V -- "否" --> E1["上抛异常(上游包装 MederiException)"]
     V -- "是" --> PREP["组装上下文: Project/PlanStore/Notebook<br/>activePlanContent(计划+spec指针+活跃spec)<br/>activeTodoContent(仅无活跃Plan)"]
-    PREP --> SP["系统提示词装配：静态骨架(build/forSubagent) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深) → dynamicSuffix(plan/todo) + EnvironmentInfoProvider(环境信息)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）"]
+    PREP --> SP["系统提示词装配：静态骨架(build/forSubagent) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深) → dynamicSuffix(plan/todo) + EnvironmentInfoProvider(环境信息)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）<br/>注: 仅主代理(subagentRole==null)注入 AGENTS.md；子代理(executor/researcher)跳过, 项目规则由主代理编入 spec"]
     SP --> CFG["解析 effectiveModel + effectiveReasoningLevel<br/>回写 sessionStore.updateAgentConfig"]
     CFG --> DF["durable-first: buildUserMessage(注入 NOT_FOR_UI 时间戳)<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
     DF --> BG["scope.launch runTurn"]
@@ -132,8 +135,10 @@ Core 侧链路（`TurnExecutor`）：
 | 链路环节 | 行为 |
 |---|---|
 | `steerMessage` | 会话 RUNNING 且 activeJobs 活跃 → `SteeringItem` 入 `pendingSteerings` 队列 + 发 `STATUS(status=steering_queued)`（SnapshotReducer 忽略该事件，见 §3）；非 RUNNING → 安全降级 `sendMessage` |
-| 工具边界注入 | `graphStrategy`（`mederiSingleRunStrategy*`）的 `nodeSendToolResult` 调 `pollSteering` 出队，有项则生成确定性 ID 并把插话包成 `<user_intervention>` 追加进本轮工具结果消息，LLM 下一步即可见并据此调整，增量落库与 ChatMemory store 避免重复 |
-| turn 收尾冲刷 | turn 结束 finally 冲刷未被工具边界消费的残留 `pendingSteerings`（逐条降级 `sendMessage` 开新 turn，撞 RUNNING 冲突放回队列） |
+| pre-LLM 注入(工具边界) | `graphStrategy`（`mederiSingleRunStrategy*`）的 `nodeSendToolResult` 调 `pollSteering` 出队，有项则生成确定性 ID 并把插话包成 `<user_intervention>` 追加进本轮工具结果消息，LLM 下一步即可见并据此调整；增量落库时显式携带 `steer.timestamp` 真实时刻，保持时间戳单调因果序 |
+| post-LLM 注入(文本输出后 nodeCheckSteering) | 文本消息产生时，边转向 `nodeCheckSteering` 节点：调 `pollSteering` 出队，有插话则包装注入 Prompt + `persistSteeringUserMessage`（携带真实 `timestamp`，发射 `SESSION_UPDATED` 即刻落库对齐），转回 `nodeCallLLM` 继续流式生成；无插话则走向 `nodeFinish` 正常结束 turn |
+| UI 轮次与 Footer 衔接 | 轮次因中途插话截断且全为工具调用（无最终交付文本）时，`ChatItemsBuilder` 仅输出 `WorkTraceBlock`，省略孤立沉底 `Footer`，避免错误完成时间倒流与空复制按钮；插话与后续新回答自然紧密衔接 |
+| turn 收尾清理 | turn 结束若因异常/abort 退出，安全清理残留 `pendingSteerings` 并记日志，不再异步降级起新 turn，杜绝并发竞态与状态锁冲突 |
 
 ```mermaid
 sequenceDiagram
@@ -146,19 +151,19 @@ sequenceDiagram
     Note over VM,K: 当前 turn RUNNING，用户输入插话
     VM->>VM: enqueueCurrentInput 压入会话队列(队列横幅可见)
     alt 引导模式(立即注入运行中 turn)
-        VM->>VM: 乐观消息入 pendingUserMessages (UI 立即呈现用户气泡)
+        VM->>VM: 乐观消息入 pendingUserMessages (追加在流式消息之后)
         VM->>AC: steerMessage(convId, input)
         AC->>TE: steerMessage
         TE->>TE: RUNNING → pendingSteerings 入队<br/>+ STATUS(steering_queued)
-        K->>K: 工具边界 (nodeSendToolResult) pollSteering 出队<br/>→ 确定性 ID 注入 <user_intervention> 工具结果消息，LLM 下一步可见
+        K->>K: pre-LLM(工具边界) 或文本输出后 nodeCheckSteering 出队<br/>→ 注入 <user_intervention>, 落库并触发 SESSION_UPDATED<br/>→ 转回 nodeCallLLM 继续流式生成回复
         Note over VM: 快照对账: 真实消息落库后移除乐观消息<br/>UI/回退层剥离 <user_intervention> 标签
     else 排队模式(turn 先结束)
-        Note over TE: turn 结束 finally: 未消费的残留 steering<br/>降级 sendMessage 开新 turn
+        Note over TE: turn 结束 Idle
         VM->>VM: Idle → 自动出队 sendQueuedMessage(普通 sendMessage)
     end
 ```
 
-## 3. 事件 → UI 快照聚合流程
+## 3. 事件 → UI 状态机聚合流程
 
 ```mermaid
 flowchart TD
@@ -167,26 +172,28 @@ flowchart TD
     MAP --> CH2["GET /v1/events SSE<br/>(15s 心跳注释帧, Bearer 鉴权)"]
     CH1 & CH2 --> CLIENT["客户端 (commonMain)"]
     CLIENT --> OB["observeConversation(id)"]
-    OB --> INIT["初始: getSnapshot 构建完整快照<br/>(Aggregator: Session+历史Message+initialTodos hydration: session.todos)"]
+    OB --> INIT["初始: getSnapshot 构建完整状态机<br/>(Aggregator: Session+历史Message+initialTodos+subagents hydration)"]
     INIT --> LOOP
-    LOOP["事件循环"] --> SR["SnapshotReducer.applyWithRefresh(snapshot, event, refreshPage)"]
+    LOOP["事件循环"] --> SR["ConversationStateReducer.applyWithRefresh(state, event, refreshPage)"]
     SR --> SW{"event type"}
-    SW -- "MESSAGE_DELTA" --> D["在 streaming Assistant 占位消息上<br/>合并 Text/Reasoning 块 / 增量 ToolCall / 新建 File 块"]
-    SW -- "MESSAGE_COMPLETED" --> C1["先发完成状态快照"]
-    C1 --> C2["refreshPage() 回查 listMessagesPage<br/>(token统计/contextUsedTokens 对齐落库) → 发第二个快照"]
-    SW -- "MESSAGE_ERROR" --> ER["写 errorMessage/errorId/errorDiagnostic,<br/>回查后发最终快照(status=Error)"]
+    SW -- "MESSAGE_DELTA" --> D["在 streaming Assistant 占位消息上<br/>合并 Text/Reasoning 块 / 增量 ToolCall / 新建 File 块 / 复位中断标记"]
+    SW -- "MESSAGE_COMPLETED" --> C1["先发完成状态，回填 turnDiffSummary 变更摘要"]
+    C1 --> C2["refreshPage() 回查 listMessagesPage<br/>(token统计/contextUsedTokens 对齐落库) → 发第二个状态"]
+    SW -- "MESSAGE_ERROR" --> ER["写 errorMessage/errorId/errorDiagnostic,<br/>回查后发最终状态(status=Error)"]
     SW -- "TOOL_CALLED/RESULT" --> TO["按 toolCallId 精确匹配更新 ToolCall block"]
     SW -- "QUESTION_*/PLAN_APPROVAL_*" --> PE["写/清 pendingQuestion / pendingPlanApproval"]
     SW -- "TODO_UPDATED" --> TD["解码 payload.todos 整体替换(失败丢弃事件)"]
+    SW -- "SUBAGENT_*" --> SA["增量维护 state.subagents (生命周期/动态/流式输出/耗时统计)"]
+    SW -- "BROWSER_TASK_*" --> BA["维护 state.browserAutomation (STARTED 自动设置 activeDockPanel=BROWSER)"]
     SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max|serverMsg|retryAt'(serverMsg=供应商真实报错; retryAt=delayMs+当前时间)<br/>UI StatusBar 重试态第二行渲染"]
     SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage<br/>+ refreshPage 即时回查 listMessagesPage(新 turn 用户消息立即可见)"]
     SW -- "STATUS(steering_queued 引导)" --> SIG["忽略: payload 形状与 RETRYING 约定 key 不符(代码现状)<br/>steering 提示仅入队侧日志, 不渲染 StatusBar"]
-    D & C2 & ER & TO & PE & TD & ST & SU --> UI["WorkspaceViewModel.snapshot<br/>→ chatItems(derivedStateOf 展平渲染)"]
+    D & C2 & ER & TO & PE & TD & SA & BA & ST & SU --> UI["WorkspaceViewModel.conversationState<br/>→ chatItems(derivedStateOf 展平渲染)"]
 ```
 
 **`contextUsedTokens` 口径（与自动压缩同源）**：refreshPage 回查落库的 `contextUsedTokens` 现走 `SessionManager.contextUsedTokens`（→ `aiViewContextUsedTokens`），口径 = AI 视图窗口（首条 SUMMARY 走估算、否则最近一条 Assistant inputTokens 真值）——故手动压缩结尾的 MESSAGE_COMPLETED 触发 refreshPage 时，界面当场拿到压缩后的小值，不再滞后一轮。
 
-**BROWSER_TASK_* 事件**：`BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` 不经 `SnapshotReducer` 聚合，由 `WorkspaceViewModel` 侧直接消费（展开浏览器面板 / 更新步骤列表）。
+**BROWSER_TASK_* 与 SUBAGENT_* 全量收敛（2026-10）**：`SUBAGENT_*` 与 `BROWSER_TASK_*` 全量收敛入 `ConversationStateReducer` 驱动 `ConversationState` 更新，彻底废除了 ViewModel 内部的旁路协程和私有缓存 Map；会话切换直接从状态机池（`sessionCache.conversationStates`）恢复，各会话的子代理列表、Dock 展开状态、浏览器自动化流程天然隔离且绝不丢失。
 
 ## 4. Plan Loop（复杂改动主流程）
 
@@ -196,7 +203,7 @@ flowchart TD
     T -- "纯读" --> R1["直接读文件回答<br/>不够深 → subagent(SPAWN_RESEARCHER) → 报告(始终落盘, 父收摘要+路径) → 回答"]
     T -- "小改动(已知根因/几行代码)" --> R2["主代理直接 edit/write<br/>进度走 update_todo(无Plan)"]
     T -- "复杂改动" --> RES["(理解不足先 subagent(SPAWN_RESEARCHER))"]
-    RES --> CP["create_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>前置 voidActivePlans 作废同会话旧计划（发 PLAN_PROGRESS 'voided'）<br/>validatePlan 硬门禁: 每子任务 expectStdoutContains≥1 字面量(规则1)、两 parallelizable 子任务同 gradle 模块 reject(规则4)<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
+    RES --> CP["write_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>前置 voidActivePlans 作废同会话旧计划（发 PLAN_PROGRESS 'voided'）<br/>validatePlan 硬门禁: 每子任务 expectStdoutContains≥1 字面量(规则1)、两 parallelizable 子任务同 gradle 模块 reject(规则4)<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
     CP --> MODE{"agentMode"}
     MODE -- "AUTONOMOUS" --> AUTO["自动 APPROVED"]
     MODE -- "APPROVAL" --> WAIT["PLAN_APPROVAL_REQUESTED → UI PlanApprovalCard<br/>用户批准/拒绝(resolvePlanApproval)"]
@@ -218,7 +225,7 @@ flowchart TD
     CONV & REGEN --> SPAWN
 ```
 
-**并行执行（2026-09，2026-09-14 异步化，2026-09 并发上限硬门禁）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行；**子代理单会话并发受限**（设置页可配，默认 2，见下述并发门禁），同父会话内 EXECUTOR 与 RESEARCHER 同池计数，达到上限时 spawn 工具返回指导文案让模型结束 turn 等待唤醒；浏览器任务不经 SubagentManager，天然排除在外。约束：`create_plan` 单独发；**禁止同消息混发 generate_spec 与 subagent(SPAWN)**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 subagent(SPAWN)/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）+ 主动上报（2026-09-25）**：子代理统一为单一 `subagent` 工具 action 分流（SPAWN/SPAWN_RESEARCHER/STATUS/STOP，原 6 个独立工具封装合并；`agent_status`/`stop_agent` 工具类保留但不向 AI 注册）。`subagent(SPAWN)` 支持 planId 可选：有 planId 走计划流程（spec 硬校验+IN_PROGRESS），无 planId 走 ad-hoc 路径（task+briefing 直接派 executor，跳过 spec/IN_PROGRESS）。派工异步（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；子代理终态经主 eventBus 发 `SUBAGENT_COMPLETED/ERROR/STOPPED` 事件（NonCancellable emit），父 TurnExecutor 订阅后 `handleSubagentTerminalEvent` 合成 `<event_message>` 入 `pendingEventMessages` 队列，父 turn 空闲时 `dispatchPendingEventMessages` 批量合并成一条内部消息自动唤起新 turn（同会话多个完成合并成一次 turn；竞态（父会话正忙）时放回队列等 turn 收尾 finally 冲刷；abortAndJoin 清空该会话队列）。agent 丢失/归档（不在内存表）时 `subagent(STATUS)` 返回 NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），父代理据此判断已改动文件（与 targetFiles 比对查越界）再决定重跑或接受部分成果。`wait_agent` 枚举值已删，父代理不再阻塞拉取。**轮询拦截 + 返回值增强 + 冲刷延后（2026-10）**：`subagent(STATUS)` 先查 `SubagentManager.runningCountForSession(parentSessionId)`——本会话仍有 RUNNING 子代理时返回合成引导文案（"Subagents are still running. Do NOT poll — end your turn now..."）而非实际状态，杜绝父代理 STATUS 轮询；`SPAWN/SPAWN_RESEARCHER` 成功返回在 JSON 后追加 `\nSubagent dispatched. N subagent(s) running. End your turn... Do NOT call subagent(STATUS) to poll.`（N = 派工后的 runningCount，含刚派出的这个；Error 原样透传）；`dispatchPendingEventMessages` 冲刷前查 runningCount>0 则延后派发（不加定时器/轮询——最后一个子代理终态事件触发再次冲刷，此时 runningCount=0 才真正唤醒），使同会话多个并发子代理完成只唤醒父代理一次、父代理拿到的是一次性聚合结果。**diff 合并子代理改动（2026-09-23）**：主 turn runTurn 开头 `ParentDiffRegistry.register`，子代理 turn 结束时把文件改动经 `onTurnDiff` 回调 + `ParentDiffRegistry.mergeInto` 合并进父 turn 的 `TurnDiffTracker`（`mergeChanges`），finally 里 `unregister`——修复"turn 改动摘要不含子代理改动"的 bug。子代理自身 diff 仍独立落库（其临时 InMemory store），合并只影响父 turn 的 TurnDiff 聚合。**walkthrough 自动生成（2026-09-23）**：计划全部子任务 COMPLETED 时，`PlanStore.writeWalkthrough(plan)` 自动装配 walkthrough 文档写至 `plans/{planId}/walkthrough.md`（archive 时随整个计划目录移到 `plans-done/{planId}/walkthrough.md`，内容由 `buildWalkthrough` 聚合 plan/subtask/spec/verification/changes；`verify_subtask` 全 PASS 文案亦指向该路径）。
+**并行执行（2026-09，2026-09-14 异步化，2026-09 并发上限硬门禁）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行；**子代理单会话并发受限**（设置页可配，默认 2，见下述并发门禁），同父会话内 EXECUTOR 与 RESEARCHER 同池计数，达到上限时 spawn 工具返回指导文案让模型结束 turn 等待唤醒；浏览器任务不经 SubagentManager，天然排除在外。约束：`write_plan` 单独发；`write_plan` 支持 update 路径：planId 非空时更新已有 PENDING_APPROVAL 计划（不新建，空字段保留原值）；**禁止同消息混发 generate_spec 与 subagent(SPAWN)**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 subagent(SPAWN)/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）+ 主动上报（2026-09-25）**：子代理统一为单一 `subagent` 工具 action 分流（SPAWN/SPAWN_RESEARCHER/STATUS/STOP，原 6 个独立工具封装合并；`agent_status`/`stop_agent` 工具类保留但不向 AI 注册）。`subagent(SPAWN)` 支持 planId 可选：有 planId 走计划流程（spec 硬校验+IN_PROGRESS），无 planId 走 ad-hoc 路径（task+briefing 直接派 executor，跳过 spec/IN_PROGRESS）。派工异步（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；子代理终态经主 eventBus 发 `SUBAGENT_COMPLETED/ERROR/STOPPED` 事件（NonCancellable emit），父 TurnExecutor 订阅后 `handleSubagentTerminalEvent` 合成 `<event_message>` 入 `pendingEventMessages` 队列，父 turn 空闲时 `dispatchPendingEventMessages` 批量合并成一条内部消息自动唤起新 turn（同会话多个完成合并成一次 turn；竞态（父会话正忙）时放回队列等 turn 收尾 finally 冲刷；abortAndJoin 清空该会话队列）。agent 丢失/归档（不在内存表）时 `subagent(STATUS)` 返回 NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），父代理据此判断已改动文件（与 targetFiles 比对查越界）再决定重跑或接受部分成果。`wait_agent` 枚举值已删，父代理不再阻塞拉取。**轮询拦截 + 返回值增强 + 冲刷延后（2026-10）**：`subagent(STATUS)` 先查 `SubagentManager.runningCountForSession(parentSessionId)`——本会话仍有 RUNNING 子代理时返回合成引导文案（"Subagents are still running. Do NOT poll — end your turn now..."）而非实际状态，杜绝父代理 STATUS 轮询；`SPAWN/SPAWN_RESEARCHER` 成功返回在 JSON 后追加 `\nSubagent dispatched. N subagent(s) running. End your turn... Do NOT call subagent(STATUS) to poll.`（N = 派工后的 runningCount，含刚派出的这个；Error 原样透传）；`dispatchPendingEventMessages` 冲刷前查 runningCount>0 则延后派发（不加定时器/轮询——最后一个子代理终态事件触发再次冲刷，此时 runningCount=0 才真正唤醒），使同会话多个并发子代理完成只唤醒父代理一次、父代理拿到的是一次性聚合结果。**diff 合并子代理改动（2026-09-23）**：主 turn runTurn 开头 `ParentDiffRegistry.register`，子代理 turn 结束时把文件改动经 `onTurnDiff` 回调 + `ParentDiffRegistry.mergeInto` 合并进父 turn 的 `TurnDiffTracker`（`mergeChanges`），finally 里 `unregister`——修复"turn 改动摘要不含子代理改动"的 bug。子代理自身 diff 仍独立落库（其临时 InMemory store），合并只影响父 turn 的 TurnDiff 聚合。**walkthrough 自动生成（2026-09-23）**：计划全部子任务 COMPLETED 时，`PlanStore.writeWalkthrough(plan)` 自动装配 walkthrough 文档写至 `plans/{planId}/walkthrough.md`（archive 时随整个计划目录移到 `plans-done/{planId}/walkthrough.md`，内容由 `buildWalkthrough` 聚合 plan/subtask/spec/verification/changes；`verify_subtask` 全 PASS 文案亦指向该路径）。
 
 **Plan 审批时序（APPROVAL 模式）**：
 
@@ -237,11 +244,7 @@ sequenceDiagram
     PAR->>PAR: 取消当前 pending(superseded)
     PAR->>EB: PLAN_APPROVAL_REQUESTED(payload 含 planContent)
     EB-->>UI: SnapshotReducer → pendingPlanApproval + planApprovals
-    Note over M: CompletableDeferred.await() 挂起<br/>(turn 保持 RUNNING)
-    UI->>TE: resolvePlanApproval(convId, planId, approved, model, thinkingLevel)
-    Note over UI: model/thinkingLevel = 批准时刻输入框选中值<br/>(与 send() 同源: selectedModel/effectiveThinkingLevel)
-    TE->>TE: 批准且 model≠null → sessionStore.updateAgentConfig<br/>写入 session.aiModel/reasoningLevel("最后一次选择"语义)
-    Note over TE: create_plan 挂起等批准期间用户可能切了模型——<br/>同 turn 后续 subagent(SPAWN) 动态读 session 拿到新模型
+    UI->>TE: resolvePlanApproval(convId, planId, approved)
     TE->>PAR: resolve(planId, approved) → deferred.complete
     PAR->>EB: PLAN_APPROVAL_RESOLVED
     EB-->>UI: 清 pendingPlanApproval, 对应项 status=APPROVED/REJECTED
@@ -254,9 +257,9 @@ sequenceDiagram
 ```
 
 **跨 turn / 重启后批准（"批准与 turn 解耦"）**（2026-09）：
-上面是同 turn 批准——requester（内存 CompletableDeferred）存活，`resolvePlanApproval` 直接唤醒挂起的 create_plan，AI 同 turn 执行。
+上面是同 turn 批准——requester（内存 CompletableDeferred）存活，`resolvePlanApproval` 直接唤醒挂起的 write_plan，AI 同 turn 执行。
 翻历史 / 进程重启后 requester 已消亡，无法唤醒任何挂起协程，走**跨 turn 分支**（`TurnExecutor.resolvePlanApproval`）：
-1. 批准模型写入 session（同上），拒绝（approved=false）无存活 turn 可唤醒、无状态变更，直接返回 false（计划保持 PENDING_APPROVAL）；
+1. 审批仅批准技术方案，不修改会话模型与配置；拒绝（approved=false）无存活 turn 可唤醒、无状态变更，直接返回 false（计划保持 PENDING_APPROVAL）；
 2. 从 PlanStore 按 planId `load` 并校验：会话匹配、非终态、PENDING_APPROVAL——不满足则跳过（作废/已完成/他会话计划不可批）；
 3. `updatePlan` 置 APPROVED 落盘 → 发 `PLAN_APPROVAL_RESOLVED` 事件；
 4. 以一条 **UI 隐藏内部消息**（整条文本以 `<<<NOT_FOR_UI>>>` 开头，UI 渲染 `substringBefore` 得空串 → 用户不可见、AI 可见）经 `sendMessageInternal` 启动新执行 turn，AI 读到 Active Plan 已是 APPROVED 后自行走 generate_spec → spawn → verify。
@@ -309,31 +312,42 @@ sequenceDiagram
 
 **子代理汇报取数链（2026-09）**：全量报告可随时拉取——`AiCore.getSubagentReport(agentId)` → `SessionManager.getSubagentReport` → `SubagentManager.getReport`：磁盘读报告全文（`{planId}/reports/NN-executor.md` / `research.md`），文件缺失时回退内存 result 或 `AgentRecoveryInfo`（retired）记录；遥控端对应路由 `GET /v1/subagents/{agentId}/report`。`<event_message>` 唤醒消息的 UI 通道：对话流内由 `EventMessageCard`（系统事件卡）渲染——读落盘报告全文/摘要展示，**非**仅 SubagentTracker 卡片。
 
-**子代理快照水合（2026-10 新增）**：getSnapshot 从 SubagentManager.agents 内存表读出该会话全部子代理（listForSession → 按 parentSessionId 过滤 + startedAt 排序），映射成 contract SubagentState 放入 ConversationSnapshot.subagents。UI applySnapshot 收到快照后，将 subagents 中 subagentStates 缺失的条目补入（不覆盖已有——实时事件更准）。事件流（SubagentTracker）继续做增量更新（progress/status 变化），快照只做初始补齐——与 planApprovals 的水合模式完全同构。修复切会话/重连/SSE 丢事件后子代理面板显示 0 的问题（replay=0 事件流不可恢复，快照是真理源兜底）。
+**子代理状态机水合与全量收敛（2026-10 新增）**：getSnapshot 从 SubagentManager.agents 内存表读出该会话全部子代理（listForSession → 按 parentSessionId 过滤 + startedAt 排序），映射成 contract SubagentState 放入 `ConversationState.subagents`。UI 端废除散落的 `subagentStates` 私有 Map 与独立协程监听，改由 `ConversationStateReducer` 统一消费增量事件并直接写进 `state.subagents`。切换会话直接从状态机池（`sessionCache.conversationStates`）恢复，彻底根治切换会话丢失子代理或状态错位的问题。
 
-## 5. 上下文压缩流程（自动 + 手动）
+## 5. 上下文压缩流程（自动 + 手动）与并发互斥保护
 
 ```mermaid
 flowchart TD
     A["触发1: runTurn 前 preflight<br/>aiViewContextUsedTokens > 70% 窗口(与 UI 同源)"]
     B["触发2: graphStrategy 节点内<br/>isHistoryTooBig(prompt) > 70%"]
     C["触发3: 用户手动 compressHistory()"]
-    A & B --> D["MederiCompressionStrategy.compress(llmSession, memory)"]
+    A --> P1["preflight 压缩: compressOnce(keepLastMessages=null)<br/>失败/超限直接阻断本轮(抛错走 MESSAGE_ERROR, 不带超限上下文继续对话)"]
+    B --> D["MederiCompressionStrategy.compress(llmSession, memory)<br/>(图策略内 nodeCompressHistory 直连 nodeSendToolResult, 保证工具结果与引导不丢失)"]
     C --> P["手动压缩预检(在翻状态机之前)<br/>window = HistoryStoreChatHistoryProvider.aiViewWindow(...)<br/>→ KoogMessageMapper.toKoogMessages(includeImages=model.supportsImages)<br/>→ manualCompactionSkipReason(koogWindow, model.contextWindow)<br/>(手动模式: keepLastMessages 条数切分 + 16k 绝对门槛)"]
     P --> S{"skipReason != null?"}
-    S -- "否(值得压)" --> D
+    S -- "否(值得压)" --> P2["compressOnce(keepLastMessages=3)"]
+    P1 & P2 --> D
     S -- "是 low_tokens / too_few" --> X["emit STATUS{scope=compaction, code=SKIPPED, reason} 后直接 return<br/>不翻 RUNNING、不发 SESSION_UPDATED / MESSAGE_COMPLETED → UI 无闪屏"]
     X -. 裸事件旁路.-> U["WorkspaceViewModel.init 收集器(仿 BROWSER_TASK_STARTED, 不经快照)<br/>filter: STATUS && payload.scope==compaction && sessionId==当前会话<br/>→ 清 sessionCache.turnStartByConv 锚点(StatusBar 计时不留'已耗时 0')<br/>→ trySend(UiEffect.ShowCompactionNotice(code, reason))"]
     U -.-> V["MainScreen effects.collect → 本地 compactionNotice 状态 → 模态<br/>文案 composeResources: compaction_skipped_title +<br/>compaction_skipped_low_tokens / _too_few(values/ 与 values-en/ 双份)"]
-    D --> D1["STATUS{scope=compaction, code=RUNNING}<br/>(compress 进入即发; TurnExecutor 两处构造注入 eventBus+sessionId)"]
+    D --> D1["STATUS{scope=compaction, code=RUNNING} + 加入 compactingSessions 互斥保护<br/>(onCompactionStart / compressOnce 登记; 拦截新消息/事件唤醒/AutoContinue, 引导消息入队暂存)"]
     D1 --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner(自动模式): 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim<br/>CompressionPlanner(手动模式 keepLastMessages): 保留段 = 最后 3 条消息原文, 其余全部旧消息压成 TLDR"]
     E --> F["逐批 requestLLMWithoutTools 生成小结 → combineBatchSummaries 合并为单条 TLDR:(五节)"]
     F --> G["新历史 = system + TLDR:... + recent<br/>(head-trim 仅影响 AI 视图, HistoryStore 全量不删)"]
-    G --> H1["STATUS{scope=compaction, code=IDLE}<br/>(try-finally 兜底: 正常/异常/早退一律发)"]
+    G --> H1["STATUS{scope=compaction, code=IDLE} + 移出 compactingSessions 互斥保护<br/>(try-finally 兜底: 正常/异常/早退一律发, 并触发冲刷积压的事件消息)"]
     H1 --> H["ChatMemory 回写 store → HistoryStoreChatHistoryProvider.reconcile<br/>检测首条 TLDR 未落库 → TLDR 之后的保留段与库尾指纹对齐(用 id 过滤前的全量 incoming)<br/>→ SUMMARY 插在保留段起点(压缩点)之前, 不删任何已有消息"]
     H --> I["效果: message_history 全量保留(UI 可见/回滚可用)<br/>aiViewWindow = SUMMARY + 保留段原文 + 之后新消息 → AI 视图变小"]
-    A -. preflight 压缩失败(不阻塞).-> W["自动压缩失败(原因回灌 streamWarning)<br/>MESSAGE_COMPLETED/MESSAGE_ERROR.warning 对用户可见"]
 ```
+
+**压缩互斥与暂停保护（2026-10，防止压缩被打断或空转重入）**：
+- **`compactingSessions` 排他集合**：`TurnExecutor` 维护 `compactingSessions` 集合。在 `compressOnce` 全程以及 `MederiCompressionStrategy` 执行图策略内联压缩（`onCompactionStart` / `onCompactionEnd`）期间，当前会话处于压缩保护状态；
+- **全链路互斥保护**：
+  1. `sendMessageInternal`：若会话在 `compactingSessions` 中，直接拒绝并提示等待压缩完成；
+  2. `steerMessage`：用户插话在压缩期间直接进入 `pendingSteerings` 等待队列，不打断压缩，待压缩完成进入下一个工具边界时消费；
+  3. `dispatchPendingEventMessages`：子代理/后台任务终态事件在压缩期间暂缓唤醒，压缩 finally 移出 `compactingSessions` 时自动冲刷唤醒；
+  4. `WorkspaceViewModel.checkAndTriggerAutoContinue`：流式断流续跑检测到 `isCompacting` 时直接 return，严禁并发打断压缩；
+- **预检压缩阻断（废除过度兜底）**：`preflightCompressionIfNeeded` 在上下文 > 70% 触发时执行 `compressOnce(keepLastMessages = null)`（自动走 token 预算规划）。若压缩失败或压缩后上下文仍超过模型窗口硬上限，**直接抛出异常阻断本轮**，由 `runTurn` 统一发射 `MESSAGE_ERROR` 并置会话 `IDLE`，严禁带着超限上下文盲目向 LLM 发送请求；
+- **图策略直连**：`mederiSingleRunStrategyWithCompression` 中，`nodeCompressHistory` 直接连接 `nodeSendToolResult`，消除旧的 `nodeSendCompressedHistory` 丢失工具结果回传、持久化与引导注入的缺陷。
 
 **手动压缩预检（2026-09，"无需压缩"提醒，触发3 专属）**：手动 `compressHistory` 在**翻状态机之前**先用 `manualCompactionSkipReason(aiViewWindow → KoogMessages, model.contextWindow)` 预检，判定口径为：
 - a. `aiViewWindow` 估算总 tokens 低于 **16k 绝对门槛** → `low_tokens`（手动是"按需一次压到位"，不跟随窗口大小浮动）；
@@ -350,7 +364,7 @@ flowchart TD
 
 UI 侧走**裸事件旁路**（core 只发事实，不认识模态）：`WorkspaceViewModel.init` 里仿 `BROWSER_TASK_STARTED` 的收集器直接订阅 `aiCore.events()`，按 `type==STATUS && payload["scope"]=="compaction" && sessionId==当前会话` 过滤（按会话过滤防串台）——**`code=RUNNING` → 置本地 `isCompacting=true`（压缩中 StatusBar 覆盖为"压缩中"，见下）、`code=IDLE` → `isCompacting=false`（压缩结束复位，不清 turnStart 锚点）**；命中 `SKIPPED` 时先清 `sessionCache.turnStartByConv` 里 `requestCompaction` 事先设的锚点（否则 StatusBar 计时挂着一个"已耗时 0"），再 `trySend(UiEffect.ShowCompactionNotice(code, reason))`；`MainScreen` 的 `effects.collect` 收该 effect 落成本地 `compactionNotice` 状态渲染**本地化模态**（`compaction_skipped_title` + 按 `reason` 选 `compaction_skipped_low_tokens` / `compaction_skipped_too_few`，values/ 与 values-en/ 双份），"确定"关闭是纯本地 UI 动作不走效果通道。
 
-**快照零污染**：`SnapshotReducer` 对非 provider scope 的 STATUS 一律返回快照不变（该分支只认 `scope=provider && code=RETRYING`），故 compaction STATUS（SKIPPED 与 RUNNING/IDLE 同）既不写 `statusHint` 也不碰状态机——"core 发机器码事实 / UI 渲染"的解耦是这条链路的设计要点（core 不需要知道 UI 有没有模态；UI 不靠快照而靠裸事件旁路接事实）。自动触发1/2 的 preflight(70%) 与 streamWarning 那条老路径不受本次改动影响。
+**快照零污染**：`SnapshotReducer` 对非 provider scope 的 STATUS 一律返回快照不变（该分支只认 `scope=provider && code=RETRYING`），故 compaction STATUS（SKIPPED 与 RUNNING/IDLE 同）既不写 `statusHint` 也不碰状态机——"core 发机器码事实 / UI 渲染"的解耦是这条链路的设计要点（core 不需要知道 UI 有没有模态；UI 不靠快照而靠裸事件旁路接事实）。
 
 **压缩中状态栏（2026-10）**：压缩进行中（`STATUS{scope=compaction, code=RUNNING}` → `WorkspaceViewModel.isCompacting=true`）UI StatusBar 经**裸事件旁路**显示"压缩中"（`TurnStatus.Compacting`）：`WorkspaceFloatingOverlay` 渲染期 `if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus` 优先覆盖派生状态，`shouldDisplayInStatusBar=true` 持续显示压缩耗时，文案 `status_compacting`（"压缩中"/"Compacting"）+ 图标 FeatherIcons.Archive——**零快照污染**（SnapshotReducer 不认 compaction STATUS，快照只随 SESSION_UPDATED 走 Working，不额外闪烁）。`isCompacting` 三重复位：IDLE 事件 / 切会话（`attach` 复位，防别的会话压缩事件串台）/ snapshot 已 Idle/Error（IDLE 事件丢失时按快照状态兜底复位）。
 
@@ -389,6 +403,14 @@ sequenceDiagram
     end
 ```
 
+**ask_user 状态恢复与 ToolResult 补写（2026-10）**：
+- **store 重建快照 hydrate pendingQuestion**：`MederiAiCore.getSnapshot` / `MederiEventAggregator.observe` 初始快照构建时，若 session 为 RUNNING 且最后 assistant 轮次有 ask_user 工具调用处于 `Pending`（无 ToolResult），则从工具入参解析 questions 构造 `QuestionRequest`（`MederiEventAggregator.hydratePendingQuestion`），并设会话状态为 `WaitingUser`。重启后 session 被 `cleanupStaleRunningSessions` 复位为 IDLE → 不触发（工具行走"未回答"显示）；用户绕过提问发消息后 session 被 `abortAndJoin` 复位 → 不触发；仅在"切走再切回"（app 仍运行、QuestionRequester 仍在内存）时恢复可交互卡片。
+- **ChatItemsBuilder 对 Pending 状态渲染 QuestionCard**：ask_user 内联 `QuestionCard` 条件从 `is Running` 扩展为 `is Running || is Pending`，使 store 重建（Pending）时也能渲染卡片。
+- **applySnapshot 缓存清除排除 WaitingUser**：`WaitingUser`（ask_user 挂起 / 计划待批准）是交互挂起态 ≠ turn 结束，缓存保留。
+- **isStreaming 排除 pendingQuestion**：`ChatInputCard.isStreaming` 加 `&& viewModel.pendingQuestion == null`（与 `!isWaitingPlanApproval` 对称），防御性确保挂起提问时不阻塞输入。
+- **用户绕过提问时补写 declined ToolResult**：`TurnExecutor.sendMessageInternal` 中 `hasPendingQuestion` 时，在 `abortAndJoin` 前调 `injectAskUserDeclinedToolResult`（与 `injectNeutralPlanToolResult` 对称），主动落库 "User declined to answer the questions." 结果，确保工具调用不留 Pending、下一轮 AI 视图有完整工具循环、UI 工具行正确显示"已拒绝回答"。
+- **ToolCallsBlock 对 Pending 状态显示"未回答"**：ASK kind 加 `isAskPending` 判断（calls 有 `ToolCallState.Pending`），Pending 时显示 `tool_action_ask_unanswered`（"未回答"/"Unanswered"），覆盖重启后 session 复位 IDLE、工具调用残留 Pending 但无 pendingQuestion 的边界场景。
+
 ## 7. 子代理（subagent 工具 action 分流 / 异步管理 / 主动上报）时序
 
 > 2026-09-14：spawn 改为**异步派工**——单一 `subagent` 工具（`ToolFactory.SUBAGENT_TOOL_NAMES`，
@@ -404,6 +426,12 @@ sequenceDiagram
 > RUNNING 子代理时返回引导文案而非实际状态（SPAWN 返回值也带 runningCount 与 end-turn 指令，
 > 提示词同步简化为"SPAWN 后下一条必须是纯文本收尾"）；`dispatchPendingEventMessages` 冲刷前查
 > `runningCountForSession>0` 则延后，等全部子代理终态聚合一次唤醒父代理。
+> 2026-10：**后台任务终态同样唤醒父 turn（与子代理同模式）**——`BackgroundTaskManager` 终态
+> （BACKGROUND_TASK_COMPLETED/ERROR/STOPPED，Command/Timer 两种）经 eventBus 发射，TurnExecutor
+> init 订阅 `handleBackgroundTaskTerminalEvent` 组 `<event_message>`（type/taskId/taskType/status/
+> command?/description?/exitCode?/output?）入 `pendingEventMessages`；冲刷前同样查
+> `backgroundTaskManager.runningCountForSession>0` 则延后；abort/abortAndJoin/rollbackAndJoin
+> 级联 `stopAllForSession` 收割本会话 RUNNING 后台任务（COMMAND 型整组杀进程）。
 > **子代理关闭来源区分（用户 vs 主 Agent）**：UI 针对运行中的子代理提供关闭按钮（`WorkspaceViewModel.stopSubagent` → `AiCore.stopSubagent(agentId)` → `SubagentManager.stop(agentId)`，不传 `operator`），默认设置 `stopReason = "被用户关闭"`；当主 Agent 通过工具调用 `subagent(action=STOP)` 时传 `operator = "MAIN_AGENT"`，设置 `stopReason = "已被主agent关闭"`。子代理退出时发射携带对应 `result`（`"被用户关闭"` 或 `"已被主agent关闭"`）的 `SUBAGENT_STOPPED` 事件，进入父会话 `pendingEventMessages` 汇报给 AI。
 > agent 丢失/归档（不在内存表）后无超时卡死类通知机制（代码无该实现）——`subagent(STATUS)` 返回
 > NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），
@@ -693,11 +721,11 @@ flowchart LR
 
 **契约层会话状态（ConversationStatus，SnapshotReducer）**：4 值 `Idle / Working / Error / WaitingUser`——`QUESTION_REQUESTED`/`PLAN_APPROVAL_REQUESTED` → **WaitingUser**（同时把流式占位消息 isStreaming 置 false，交互挂起），对应 `QUESTION_RESOLVED`/`PLAN_APPROVAL_RESOLVED` → Working；双侧（进程内与 SSE 遥控端）经 `startSessionStatusSync` 同步驱动侧边栏状态点。**子代理延长 Working（jvm 桥 + SSE 遥控端，2026-10）**：`SUBAGENT_STARTED` → Working（agentId 记入 `runningSubagentIds`，MederiAiCore 用 core `EventType`、ServerAiCore 用契约 `CoreEventType`，逻辑一致）；子代理终态（COMPLETED/ERROR/STOPPED/DISCARDED）移出集合，集合清空且主 turn 不活跃（`mainTurnActive=false`，MESSAGE_COMPLETED/ERROR 置 false、SESSION_UPDATED 置 true）才回 Idle；**MESSAGE_COMPLETED 时子代理集合非空 → 保持 Working**（主 turn 结束但子代理仍在后台跑，侧边栏不误闪 Idle）。
 
-**排队/引导（Steering，见 §2.1）**：`RUNNING` 中 `steerMessage` → `pendingSteerings` 入队（发 `STATUS(steering_queued)`，SnapshotReducer 按代码现状忽略）→ 工具边界 `pollSteering` 注入；turn 收尾残留降级新 turn；UI 侧 turn 结束回 Idle 时排队队列自动出队。
+**排队/引导（Steering，见 §2.1）**：`RUNNING` 中 `steerMessage` → `pendingSteerings` 入队（发 `STATUS(steering_queued)`）→ pre-LLM（工具边界 `nodeSendToolResult`）或 post-LLM（文本输出后 `nodeCheckSteering` 节点）`pollSteering` 注入；有插话转回 `nodeCallLLM` 继续流式生成回复，落库触发 `SESSION_UPDATED` 实时对账；无插话走向 `nodeFinish`；turn 异常/abort 退出时清理残留；UI 侧 turn 结束回 Idle 时排队队列自动出队。
 
 **Message 状态机**：`PROCESSING(streaming 占位) → COMPLETED / ERROR`；快照里 isStreaming 对应 PROCESSING。
 
-**Plan 状态机**：`PENDING_APPROVAL → (批准) APPROVED → (spawn 首子任务) IN_PROGRESS → (全子任务 COMPLETED) COMPLETED → archive(plans-done/)`；`PENDING_APPROVAL/APPROVED/IN_PROGRESS → (create_plan 前置 voidActivePlans) VOIDED → .mederi/plans-voided/`；`PENDING_APPROVAL → (拒绝) 停留/用户重试`。
+**Plan 状态机**：`PENDING_APPROVAL → (批准) APPROVED → (spawn 首子任务) IN_PROGRESS → (全子任务 COMPLETED) COMPLETED → archive(plans-done/)`；`PENDING_APPROVAL/APPROVED/IN_PROGRESS → (write_plan 前置 voidActivePlans) VOIDED → .mederi/plans-voided/`；`PENDING_APPROVAL → (拒绝) 停留/用户重试`。
 
 **Subtask 状态机**：`PENDING → (spawn) IN_PROGRESS → (verify PASS) COMPLETED`；`IN_PROGRESS → (verify FAIL/PARTIAL) FAILED → (converge_plan 追加补救 或 regenerate spec) 重执行`。
 

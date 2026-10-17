@@ -97,6 +97,7 @@ fun MainScreen() {
     val selectedConversationId by appState.selectedConversationId.collectAsState()
     val isReady by appState.isReady.collectAsState()
     val isPinned by appState.leftSidebarPinned.collectAsState()
+    val leftSidebarWidth by appState.leftSidebarWidth.collectAsState()
 
     // 选中会话时自动展开其所属项目（覆盖程序化选择：自动创建会话、子代理跳转等，用户手点必在已展开项目内）
     LaunchedEffect(selectedConversationId, filteredProjects) {
@@ -179,7 +180,7 @@ fun MainScreen() {
                     Sidebar(
                         modifier = Modifier
                             .fillMaxHeight()
-                            .width(minOf(300.dp, screenWidth * 0.85f)),
+                            .width(screenWidth * 0.75f),
                         viewModel = sidebarViewModel,
                         isCompact = true,
                         isDrawer = true,
@@ -253,6 +254,11 @@ fun MainScreen() {
                         onOpenSettings = { workspaceViewModel.openSettings() },
                         onOpenProjectPicker = openProjectPicker
                     )
+                    SidebarResizeHandle(
+                        onDragDelta = { delta ->
+                            appState.setLeftSidebarWidth(appState.leftSidebarWidth.value + delta.toInt())
+                        }
+                    )
                     Workspace(
                         modifier = Modifier.weight(1f),
                         viewModel = workspaceViewModel,
@@ -318,7 +324,7 @@ fun MainScreen() {
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                .width(245.dp)
+                                .width(leftSidebarWidth.dp)
                                 .hoverable(drawerInteraction)
                                 .background(colors.surfaceSidebar)
                                 .border(BorderStroke(1.dp, colors.divider))
@@ -339,6 +345,12 @@ fun MainScreen() {
                                     closeDrawer()
                                 },
                                 onOpenProjectPicker = { openProjectPicker(); closeDrawer() }
+                            )
+                            SidebarResizeHandle(
+                                onDragDelta = { delta ->
+                                    appState.setLeftSidebarWidth(appState.leftSidebarWidth.value + delta.toInt())
+                                },
+                                modifier = Modifier.align(Alignment.CenterEnd)
                             )
                         }
                     }

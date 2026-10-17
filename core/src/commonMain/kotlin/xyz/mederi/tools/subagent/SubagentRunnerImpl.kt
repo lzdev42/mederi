@@ -43,7 +43,8 @@ class SubagentRunnerImpl(
     private val providerManager: ProviderManager,
     private val projectManager: ProjectManager,
     private val mcpConnector: McpConnector? = null,
-    private val skills: SkillManager? = null
+    private val skills: SkillManager? = null,
+    private val compactionThresholdPercent: () -> Int = { 70 },
 ) : SubagentRunner {
     override suspend fun run(
         task: String,
@@ -104,7 +105,8 @@ class SubagentRunnerImpl(
             // 父 turn 已结束时 mergeInto 按注册表缺失丢弃并记日志（见 ParentDiffRegistry）。
             onTurnDiff = { diff ->
                 xyz.mederi.tools.diff.ParentDiffRegistry.mergeInto(parentSessionId, diff.changes)
-            }
+            },
+            compactionThresholdPercent = compactionThresholdPercent  // 新增
         )
 
         val inputText = when (role) {
@@ -117,10 +119,10 @@ class SubagentRunnerImpl(
                     append("as written, stop rather than improvise, and say so explicitly in your final answer ")
                     append("under a line 'SPEC_FEEDBACK: <what in the spec contradicts reality>'.\n\n")
                 } else {
-                    append("Execute the task to completion. Read files first to understand the codebase ")
-                    append("before making changes. If something proves impossible, stop and report it ")
-                    append("in your final answer.\n\n")
+                    append("Execute the task to completion. Only read files directly needed for the changes. ")
+                    append("If something proves impossible, stop and report it in your final answer.\n\n")
                 }
+                append("Verify compilation only (e.g. ./gradlew :module:compileKotlin). Do NOT run tests.\n\n")
                 append(task)
                 if (!briefing.isNullOrBlank()) {
                     append("\n\nAdditional info:\n")

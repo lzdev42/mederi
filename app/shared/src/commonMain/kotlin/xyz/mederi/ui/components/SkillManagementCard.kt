@@ -1,14 +1,8 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -18,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -26,25 +19,15 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.models.SkillItem
-import xyz.mederi.ui.appstate.SkillStore
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.theme.MederiColors
-import xyz.mederi.ui.components.atoms.CardHeader
-import xyz.mederi.ui.components.atoms.MederiCompatBadge
 import xyz.mederi.ui.components.atoms.MederiGhostButton
-import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
-import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
 import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
-import xyz.mederi.ui.components.atoms.MederiTabBadge
-import xyz.mederi.ui.components.atoms.PanelCard
-import xyz.mederi.ui.components.atoms.PanelEmptyState
 import xyz.mederi.util.pickDirectory
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.cancel
 import mederi.app.shared.generated.resources.pick_directory_title
 import mederi.app.shared.generated.resources.skill_deleting
-import mederi.app.shared.generated.resources.skill_empty
-import mederi.app.shared.generated.resources.skill_empty_hint
 import mederi.app.shared.generated.resources.skill_install
 import mederi.app.shared.generated.resources.skill_install_action
 import mederi.app.shared.generated.resources.skill_install_failed
@@ -52,298 +35,21 @@ import mederi.app.shared.generated.resources.skill_install_prompt
 import mederi.app.shared.generated.resources.skill_installing
 import mederi.app.shared.generated.resources.skill_path_required
 import mederi.app.shared.generated.resources.skill_pick_dir_native
-import mederi.app.shared.generated.resources.skill_refresh
-import mederi.app.shared.generated.resources.skill_root_dir
 import mederi.app.shared.generated.resources.skill_root_prompt
 import mederi.app.shared.generated.resources.skill_root_prompt_remote
 import mederi.app.shared.generated.resources.skill_save
 import mederi.app.shared.generated.resources.skill_save_dir_failed
 import mederi.app.shared.generated.resources.skill_saving
-import mederi.app.shared.generated.resources.skill_set_root_desc
 import mederi.app.shared.generated.resources.skill_set_root_title
 import mederi.app.shared.generated.resources.skill_set_root_title_remote
-import mederi.app.shared.generated.resources.skill_title
-import mederi.app.shared.generated.resources.skill_uninstall
 import mederi.app.shared.generated.resources.skill_uninstall_confirm
 import mederi.app.shared.generated.resources.skill_uninstall_confirm_action
 import mederi.app.shared.generated.resources.skill_uninstall_title
 import mederi.app.shared.generated.resources.skill_url_required
 import org.jetbrains.compose.resources.stringResource
 
-/**
- * 概览面板内的 Skill 管理卡片：具备展示列表、刷新、安装、设定根目录与卸载能力。
- *
- * 依赖全局唯一真理源 [SkillStore]，与未来的 Skill 市场等其他组件实时共享状态。
- */
 @Composable
-fun SkillManagementCard(
-    skillStore: SkillStore,
-    colors: MederiColors,
-    modifier: Modifier = Modifier
-) {
-    var isAddDialogOpen by remember { mutableStateOf(false) }
-    var isRootDialogOpen by remember { mutableStateOf(false) }
-    var uninstallTarget by remember { mutableStateOf<SkillItem?>(null) }
-    var isExpanded by remember { mutableStateOf(false) }
-
-    val skills by skillStore.skills.collectAsState()
-    val isRefreshing by skillStore.isRefreshing.collectAsState()
-    val skillsRoot by skillStore.skillsRoot.collectAsState()
-    val isOperating by skillStore.isOperating.collectAsState()
-
-    val coroutineScope = rememberCoroutineScope()
-    val pickDirectoryTitle = stringResource(Res.string.skill_set_root_title)
-
-    val onSelectDirectory = {
-        coroutineScope.launch {
-            if (isDesktopPlatform) {
-                val picked = pickDirectory(pickDirectoryTitle)
-                if (!picked.isNullOrBlank()) {
-                    skillStore.setRootDirectory(picked)
-                }
-            } else {
-                isRootDialogOpen = true
-            }
-        }
-    }
-
-    PanelCard(modifier = modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // 卡片 Header
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(4.dp))
-                .clickable { isExpanded = !isExpanded }
-        ) {
-            CardHeader(
-                icon = FeatherIcons.Package,
-                title = stringResource(Res.string.skill_title),
-                count = {
-                    MederiTabBadge(count = skills.size)
-                },
-                actions = {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 设定根目录按钮（收敛为 MederiPanelHeaderIconButton；优先调用系统原生选择器）
-                        MederiPanelHeaderIconButton(
-                            icon = FeatherIcons.Folder,
-                            onClick = { onSelectDirectory() },
-                            contentDescription = stringResource(Res.string.skill_set_root_desc),
-                        )
-
-                        // 刷新按钮内联保留：isRefreshing → accent 高亮为状态反馈，atom 暂无状态色参数，待对齐
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { skillStore.refresh() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.RefreshCw,
-                                contentDescription = stringResource(Res.string.skill_refresh),
-                                tint = if (isRefreshing) colors.accentPrimary else colors.textMuted,
-                                modifier = Modifier.size(12.dp)
-                            )
-                        }
-
-                        // 安装按钮（收敛为 MederiPanelHeaderIconButton）
-                        MederiPanelHeaderIconButton(
-                            icon = FeatherIcons.Plus,
-                            onClick = { isAddDialogOpen = true },
-                            contentDescription = stringResource(Res.string.skill_install),
-                        )
-
-                        // 折叠/展开箭头
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                                contentDescription = null,
-                                tint = colors.textMuted,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-            )
-        }
-
-        // 展开内容区域（支持平滑折叠）
-        AnimatedVisibility(visible = isExpanded) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // 当前目录提示小字（内联保留：folder 图标 + 单行 ellipsis + 整行点击重选目录，MederiProjectPill 无图标/ellipsis/onClick，待配色迁移时对齐）
-                if (skillsRoot.isNotBlank()) {
-                    // hover 状态源：整行可点重选目录；hover 时文字提亮 textPrimary、底色向 surfaceWorkspace 偏移制造反馈
-                    val interactionSource = remember { MutableInteractionSource() }
-                    val isHovered by interactionSource.collectIsHoveredAsState()
-                    val barBg by animateColorAsState(
-                        if (isHovered) colors.surfaceWorkspace else colors.surfaceHover,
-                        tween(120)
-                    )
-                    val barTextColor by animateColorAsState(
-                        if (isHovered) colors.textPrimary else colors.textMuted,
-                        tween(120)
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(barBg)
-                            .clickable(interactionSource = interactionSource, indication = null) { onSelectDirectory() }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Folder,
-                            contentDescription = null,
-                            tint = colors.textMuted,
-                            modifier = Modifier.size(10.dp)
-                        )
-                        Text(
-                            text = stringResource(Res.string.skill_root_dir, skillsRoot),
-                            color = barTextColor,
-                            fontSize = 10.5.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                // 列表区
-                if (skills.isEmpty()) {
-                    PanelEmptyState(
-                        icon = FeatherIcons.Package,
-                        title = stringResource(Res.string.skill_empty),
-                        hint = stringResource(Res.string.skill_empty_hint)
-                    )
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        skills.forEach { skill ->
-                            SkillItemRow(
-                                skill = skill,
-                                colors = colors,
-                                onUninstall = { uninstallTarget = skill }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        }
-    }
-
-    // 安装 Skill 弹窗
-    if (isAddDialogOpen) {
-        InstallSkillDialog(
-            onDismiss = { isAddDialogOpen = false },
-            onConfirm = { url -> skillStore.install(url) },
-            colors = colors
-        )
-    }
-
-    // 设置根目录弹窗
-    if (isRootDialogOpen) {
-        SetSkillRootDialog(
-            initialPath = skillsRoot,
-            onDismiss = { isRootDialogOpen = false },
-            onConfirm = { path -> skillStore.setRootDirectory(path) },
-            colors = colors
-        )
-    }
-
-    // 卸载确认弹窗
-    uninstallTarget?.let { target ->
-        UninstallSkillConfirmDialog(
-            skill = target,
-            isDeleting = isOperating,
-            onDismiss = { uninstallTarget = null },
-            onConfirm = {
-                val res = skillStore.uninstall(target.name)
-                if (res.isSuccess) {
-                    uninstallTarget = null
-                }
-            },
-            colors = colors
-        )
-    }
-}
-
-@Composable
-private fun SkillItemRow(
-    skill: SkillItem,
-    colors: MederiColors,
-    onUninstall: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(colors.surfaceWorkspace)
-            .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // Skill 信息
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = skill.name,
-                    color = colors.textPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                skill.compatibility?.takeIf { it.isNotBlank() }?.let { compat ->
-                    // 兼容性徽标：收敛为 MederiCompatBadge（warning 软底 + 描边，对齐标准 §3.6）
-                    MederiCompatBadge(text = compat)
-                }
-            }
-
-            if (skill.description.isNotBlank()) {
-                Text(
-                    text = skill.description,
-                    color = colors.textSecondary,
-                    fontSize = 10.sp,
-                    lineHeight = 13.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        // 卸载按钮（收敛为 MederiMinimalIconButton：透明方形 + hover 反馈）
-        MederiMinimalIconButton(
-            icon = FeatherIcons.Trash2,
-            onClick = { onUninstall() },
-            contentDescription = stringResource(Res.string.skill_uninstall),
-        )
-    }
-}
-
-@Composable
-private fun InstallSkillDialog(
+internal fun InstallSkillDialog(
     onDismiss: () -> Unit,
     onConfirm: suspend (String) -> Result<SkillItem>,
     colors: MederiColors
@@ -458,7 +164,7 @@ private fun InstallSkillDialog(
 }
 
 @Composable
-private fun SetSkillRootDialog(
+internal fun SetSkillRootDialog(
     initialPath: String,
     onDismiss: () -> Unit,
     onConfirm: suspend (String) -> Result<Unit>,
@@ -594,7 +300,7 @@ private fun SetSkillRootDialog(
 }
 
 @Composable
-private fun UninstallSkillConfirmDialog(
+internal fun UninstallSkillConfirmDialog(
     skill: SkillItem,
     isDeleting: Boolean,
     onDismiss: () -> Unit,

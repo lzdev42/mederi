@@ -12,6 +12,7 @@ import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import xyz.mederi.tools.ToolName
 import java.time.Instant
 
 /**
@@ -24,7 +25,7 @@ import java.time.Instant
  */
 @Serializable
 data class SpawnAgentArgs(
-    @LLMDescription("Task description for the sub-agent; clear, specific, independently executable.")
+    @LLMDescription("Task description for the sub-agent; clear, specific, independently executable. Implementation steps only — the executor compiles to verify, do not instruct it to run tests.")
     val task: String = "",
     @LLMDescription("Extra context from the parent: key constraints and relevant file paths.")
     val briefing: String = "",
@@ -47,8 +48,7 @@ data class SpawnAgentArgs(
  * - 无 planId：ad-hoc 执行，task+briefing 直接派 executor（小改动、多文件编辑等自包含任务）。
  *
  * **模型动态读取**：spawn 用的模型/推理档位以 session 现值为准（构造时捕获的 turn 模型仅作
- * session 缺失的 fallback）——计划批准时用户可能已切换模型（resolvePlanApproval 把批准时刻
- * 的选择写入 session），同 turn 后续 spawn 必须用新模型，否则出现"批准了模型B、干活的还是A"。
+ * session 缺失的 fallback）——严格读取 session 数据库中持久化的模型配置。
  *
  * @param subagentManager 子 Agent 生命周期管理器（异步）。
  * @param directories 项目目录列表，子 Agent 工具的作用域。
@@ -74,7 +74,7 @@ class SpawnAgentTool(
     private val subagentConfigManager: SubagentConfigManager? = null
 ) : SimpleTool<SpawnAgentArgs>(
     argsType = typeToken<SpawnAgentArgs>(),
-    name = "spawn_agent",
+    name = ToolName.SPAWN_AGENT.value,
     description = "Asynchronously creates a subagent to handle a sub-task. Returns immediately with an " +
         "agentId — the subagent runs in the background. With planId+subtaskIndex: executes the exact " +
         "spec stored by generate_spec (plan workflow). Without planId: ad-hoc execution from task+briefing " +
@@ -257,7 +257,7 @@ class SpawnResearcherTool(
     private val planStore: PlanStore? = null
 ) : SimpleTool<SpawnResearcherArgs>(
     argsType = typeToken<SpawnResearcherArgs>(),
-    name = "spawn_researcher",
+    name = ToolName.SPAWN_RESEARCHER.value,
     description = "Asynchronously creates a read-only subagent to investigate the codebase: read files, " +
         "explore the directory structure, and synthesize a structured summary for the parent. " +
         "Returns immediately with an agentId — you will be automatically woken up when it finishes. " +

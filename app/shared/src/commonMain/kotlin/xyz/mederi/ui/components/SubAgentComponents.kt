@@ -30,9 +30,7 @@ import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.copy_done
-import mederi.app.shared.generated.resources.subagent_card_title
 import mederi.app.shared.generated.resources.subagent_dialog_detail_title
-import mederi.app.shared.generated.resources.subagent_running_count
 import mederi.app.shared.generated.resources.subagentui_agent_id
 import mederi.app.shared.generated.resources.subagentui_briefing
 import mederi.app.shared.generated.resources.subagentui_empty
@@ -58,7 +56,6 @@ import mederi.app.shared.generated.resources.subagent_activity_tool
 import mederi.app.shared.generated.resources.subagent_duration_label
 import mederi.app.shared.generated.resources.subagent_duration_total_label
 import mederi.app.shared.generated.resources.subagent_live_empty
-import mederi.app.shared.generated.resources.subagent_live_last_message
 import mederi.app.shared.generated.resources.subagent_live_title
 import mederi.app.shared.generated.resources.subagent_live_waiting
 import org.jetbrains.compose.resources.stringResource
@@ -70,15 +67,9 @@ import xyz.mederi.core.contract.models.SubagentToolResult
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.ui.SubagentReportMarkdown
 import xyz.mederi.ui.WorkspaceViewModel
-import xyz.mederi.ui.components.atoms.CardHeader
 import xyz.mederi.ui.components.atoms.MederiCard
 import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
 import xyz.mederi.ui.components.atoms.MederiRoleTag
-import xyz.mederi.ui.components.atoms.MederiRunningPulseBadge
-import xyz.mederi.ui.components.atoms.MederiTabBadge
-import xyz.mederi.ui.components.atoms.PanelCard
-import xyz.mederi.ui.components.atoms.WorkingAnimationStyle
-import xyz.mederi.ui.components.atoms.workingAnimation
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiMarkdownConfig
@@ -115,165 +106,6 @@ private fun RunningStatusIndicator(
             tint = color,
             modifier = Modifier.size(12.dp).rotate(rotation)
         )
-    }
-}
-
-/**
- * 单个子 Agent 任务行（借鉴 GitHub Actions / Linear 极简状态设计，清晰直观）
- */
-@Composable
-private fun SubAgentTaskRow(
-    subagent: SubagentState,
-    colors: MederiColors,
-    onClick: () -> Unit,
-    onStop: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
-) {
-    val isResearcher = subagent.role.equals("RESEARCHER", ignoreCase = true)
-    val roleLabel = if (isResearcher) stringResource(Res.string.subagentui_role_researcher) else stringResource(Res.string.subagentui_role_executor)
-
-    val modelLabel = buildString {
-        append(subagent.modelName.ifBlank { subagent.modelId })
-        if (!subagent.reasoningLevel.isNullOrBlank()) {
-            append(" (${subagent.reasoningLevel})")
-        }
-    }
-
-    val timeLabel = remember(subagent.startedAt) { TimeFormatter.formatTimeWithSeconds(subagent.startedAt) }
-    val isRunning = subagent.status.equals("RUNNING", ignoreCase = true)
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.divider.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // 状态微视觉（告别冗长笨重的文字框，采用高辨识度精致图形与色彩语义）
-        // 待配色迁移时对齐标准 badge：任务行状态为 20dp 图标指示器（旋转/勾/叹号/减号），与 MederiStatusDot 静态圆点差异大，暂保留内联
-        when (subagent.status.uppercase()) {
-            "RUNNING" -> RunningStatusIndicator(color = colors.accentPrimary, backgroundColor = colors.accentBg)
-            "COMPLETED" -> Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(colors.accentSuccess.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.CheckCircle,
-                    contentDescription = null,
-                    tint = colors.accentSuccess,
-                    modifier = Modifier.size(12.dp)
-                )
-            }
-            "ERROR" -> Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(colors.accentDanger.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.AlertCircle,
-                    contentDescription = null,
-                    tint = colors.accentDanger,
-                    modifier = Modifier.size(12.dp)
-                )
-            }
-            else -> Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(colors.textMuted.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.MinusCircle,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(12.dp)
-                )
-            }
-        }
-
-        // 中间文本内容
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            // 第一行：角色微标 + 模型标识 + 启动时刻
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // 角色标签（MederiRoleTag：gray-4 底 + 10sp Medium textPrimary，对齐标准 §3.6）
-                MederiRoleTag(text = roleLabel)
-
-                // 模型
-                Text(
-                    text = modelLabel,
-                    color = colors.textSecondary,
-                    fontSize = 10.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-
-                // 启动时间
-                if (timeLabel.isNotBlank()) {
-                    Text(
-                        text = timeLabel,
-                        color = colors.textMuted,
-                        fontSize = 10.5.sp
-                    )
-                }
-            }
-
-            // 第二行：主 AI 派发的任务目标或简报预览
-            val previewText = subagent.task.ifBlank { subagent.briefing.orEmpty() }
-            if (previewText.isNotBlank()) {
-                Text(
-                    text = previewText.replace("\n", " "),
-                    color = colors.textPrimary.copy(alpha = 0.8f),
-                    fontSize = 11.5.sp,
-                    lineHeight = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        // 右侧操作：运行中展示关闭按钮，否则展示提示小箭头
-        if (isRunning && onStop != null) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(colors.accentDanger.copy(alpha = 0.12f))
-                    .clickable { onStop() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.X,
-                    contentDescription = stringResource(Res.string.subagentui_stop_task),
-                    tint = colors.accentDanger,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        } else {
-            Icon(
-                imageVector = FeatherIcons.ChevronRight,
-                contentDescription = null,
-                tint = colors.textMuted.copy(alpha = 0.7f),
-                modifier = Modifier.size(14.dp)
-            )
-        }
     }
 }
 
@@ -796,116 +628,6 @@ fun SubAgentDetailDialog(
                 }
             }
         }
-    }
-}
-
-/**
- * 概览面板内的子 Agent 任务管理卡片（支持折叠、实施状态视觉监控与点击大弹窗）
- */
-@Composable
-fun SubAgentManagementCard(
-    subagents: List<SubagentState>,
-    viewModel: WorkspaceViewModel,
-    colors: MederiColors = LocalMederiColors.current,
-    modifier: Modifier = Modifier
-) {
-    var isExpanded by remember { mutableStateOf(false) }
-    var selectedSubagent by remember { mutableStateOf<SubagentState?>(null) }
-
-    val runningCount = subagents.count { it.status.equals("RUNNING", ignoreCase = true) }
-
-    PanelCard(
-        modifier = modifier
-            .fillMaxWidth()
-            .workingAnimation(
-                style = WorkingAnimationStyle.BorderBeam,
-                enabled = runningCount > 0,
-                shape = RoundedCornerShape(8.dp),
-                primaryColor = colors.accentPrimary,
-                secondaryColor = colors.accentSecondary
-            )
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // 卡片 Header（整行可点击折叠）
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable { isExpanded = !isExpanded }
-            ) {
-                CardHeader(
-                    icon = FeatherIcons.Users,
-                    title = stringResource(Res.string.subagent_card_title),
-                    count = { MederiTabBadge(count = subagents.size) },
-                    actions = {
-                        // 运行中微标（MederiRunningPulseBadge：Pill 底 + accent 描边 + 脉冲点，对齐标准 §3.6）
-                        if (runningCount > 0) {
-                            MederiRunningPulseBadge(text = stringResource(Res.string.subagent_running_count, runningCount))
-                        }
-                        // 折叠/展开箭头
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (isExpanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                                contentDescription = null,
-                                tint = colors.textMuted,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                )
-            }
-
-            // 列表区（支持平滑折叠）
-            AnimatedVisibility(visible = isExpanded) {
-                if (subagents.isEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.subagentui_empty),
-                            color = colors.textSecondary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        // 倒序展示：最新启动的子任务排在最前
-                        val sortedList = remember(subagents) { subagents.reversed() }
-                        sortedList.forEach { subagent ->
-                            SubAgentTaskRow(
-                                subagent = subagent,
-                                colors = colors,
-                                onClick = { selectedSubagent = subagent },
-                                onStop = { viewModel.stopSubagent(subagent.agentId) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 详情大弹窗
-    selectedSubagent?.let { agent ->
-        SubAgentDetailDialog(
-            subagent = agent,
-            viewModel = viewModel,
-            colors = colors,
-            onDismiss = { selectedSubagent = null }
-        )
     }
 }
 

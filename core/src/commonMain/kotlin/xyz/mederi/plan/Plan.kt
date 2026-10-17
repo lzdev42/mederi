@@ -200,7 +200,7 @@ data class PlannedChange(
  * [verificationChanges] 由 update_verification 工具回写——严格 append-only：每次修正追加一条
  * 变更记录并保存**完整旧/新契约**，人类可事后查证。
  * [appendix] 是子任务级技术附录（给控制者看的论证文档）：现有逻辑、代码证据、根因分析、
- * 修复预览（伪代码/真代码）、业务逻辑讲解。create_plan 时填写。与 [spec] 边界清晰：
+ * 修复预览（伪代码/真代码）、业务逻辑讲解。write_plan 时填写。与 [spec] 边界清晰：
  * appendix = 论证版（为什么），spec = 执行清单（怎么做）。可选：简单子任务可为 null。
  */
 @Serializable
@@ -235,7 +235,7 @@ enum class ProjectContextType { GREENFIELD, BROWNFIELD }
  * 执行计划。
  *
  * 包含两部分：
- * - Part 1（人读）：[businessLogic]、[overview]、[inScope]、[outScope]、[keyDecisions]、[changes]、
+ * - Part 1（人读）：[background]、[problemAnalysis]、[approach]、[expectedOutcome]、[testMethod]、[businessLogic]、[inScope]、[outScope]、[keyDecisions]、[changes]、
  *   [dataAndParams]、[risks]、[successCriteria]、[architecture]
  * - Part 2（子任务）：每个 [Subtask] 含批准时可见的 [Subtask.planDetail]（brief）与
  *   批准后派生的 [Subtask.spec]（执行清单）
@@ -258,7 +258,12 @@ data class Plan(
     val projectContext: ProjectContextType = ProjectContextType.BROWNFIELD,
     val languageStack: String = "",
     val businessLogic: String = "",
-    val overview: String,
+    /** 5 个概览元素——各自独立渲染为 plan.md 的顶级段，给人快速扫描。 */
+    val background: String = "",
+    val problemAnalysis: String = "",
+    val approach: String = "",
+    val expectedOutcome: String = "",
+    val testMethod: String = "",
     val inScope: List<String> = emptyList(),
     val outScope: List<String> = emptyList(),
     /**

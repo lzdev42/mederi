@@ -11,6 +11,10 @@ import xyz.mederi.util.ArtifactParser
 /** 子代理工具名集合（computeChatItems 区分主代理工具与子代理调用）。 */
 val SUBAGENT_TOOL_NAMES = setOf("subagent")
 
+/** 计划创建/更新工具名集合（write_plan 为核心工具名，兼容历史/别名 create_plan）。 */
+val PLAN_CREATION_TOOL_NAMES = setOf("write_plan", "create_plan")
+
+
 /**
  * 展平后的聊天列表派生算法（纯函数，从 WorkspaceViewModel 抽出的展示逻辑）：
  * snapshot 消息列表 → List<ChatListItem>，View 零逻辑。
@@ -79,6 +83,7 @@ fun computeChatItems(
                                     role = parsedEvent.role,
                                     subtaskInfo = parsedEvent.subtaskInfo,
                                     reportPath = parsedEvent.reportPath,
+                                    taskType = parsedEvent.taskType,
                                     summary = parsedEvent.summary,
                                     isTurnStart = true,
                                     messageId = msg.id,
@@ -139,7 +144,7 @@ fun computeChatItems(
         // 预解析计划审批卡片匹配
         val allToolCalls = turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
             .map { toToolCallUi(it, snapshot) }
-        val createPlanCall = allToolCalls.find { it.name == "create_plan" }
+        val createPlanCall = allToolCalls.find { it.name in PLAN_CREATION_TOOL_NAMES }
         val (planIdFromTool, planTitleFromTool) = when (val s = createPlanCall?.state) {
             is ToolCallState.Completed -> {
                 val idFromInput = s.input["planId"]
@@ -155,7 +160,9 @@ fun computeChatItems(
         val matchedPlan = snapshot?.planApprovals?.find {
             (planIdFromTool != null && it.id == planIdFromTool) ||
                 (!planTitleFromTool.isNullOrBlank() && it.title == planTitleFromTool)
-        } ?: if (turnMessages == lastAssistantTurn) snapshot?.pendingPlanApproval else null
+        } ?: if (turnMessages == lastAssistantTurn) {
+            snapshot?.pendingPlanApproval?.takeIf { it.status == "PENDING" || it.status == "PENDING_APPROVAL" }
+        } else null
 
         // 按真实自然时序收集本轮的消息块
         val rawChronologicalItems = mutableListOf<ChatListItem>()
@@ -284,11 +291,12 @@ fun computeChatItems(
                                 )
                             )
                         } else if (toolUi.name == "ask_user" &&
-                            toolUi.state is ToolCallState.Running &&
+                            (toolUi.state is ToolCallState.Running || toolUi.state is ToolCallState.Pending) &&
                             snapshot?.pendingQuestion != null
                         ) {
                             // ask_user 挂起中：内联问答卡片取代该工具的 ToolCalls 行（消除"等待用户回答…"重复标签）；
-                            // 回答后（pendingQuestion 清空）工具出参 → 非 Running，回归正常 ToolCalls 行。
+                            // Running = 实时事件流中工具正在跑；Pending = store 重建（切走切回 / 重启）时工具无 result。
+                            // 回答后（pendingQuestion 清空）工具出参 → 非 Running/Pending，回归正常 ToolCalls 行。
                             // 单轮内仅发射一次，防止多 toolCall 或时序分裂导致重复卡片。
                             if (!questionCardEmitted) {
                                 rawChronologicalItems.add(
@@ -312,8 +320,8 @@ fun computeChatItems(
                                     isRunning = isStreaming && toolUi.state is ToolCallState.Running,
                                 )
                             )
-                            // 若为 create_plan 且已匹配到计划卡片，紧随其后就地挂载计划审批卡片
-                            if (toolUi.name == "create_plan" && matchedPlan != null && !planApprovalEmitted) {
+                            // 若为计划创建/更新工具且已匹配到计划卡片，紧随其后就地挂载计划审批卡片
+                            if (toolUi.name in PLAN_CREATION_TOOL_NAMES && matchedPlan != null && !planApprovalEmitted) {
                                 rawChronologicalItems.add(
                                     ChatListItem.PlanApproval(
                                         key = "plan_${matchedPlan.id}",
@@ -388,6 +396,7 @@ fun computeChatItems(
             // Turn 已完成：判定本轮是否为用户指令周期内的中间轮次（紧随其后的是同一用户周期内的 <event_message> 唤醒消息）
             val isIntermediateTurnInCycle = hasLaterTurnInSameCycle(turns, turnIndex)
 
+            var hasDeliverablesInTurn = !hasAnyToolCallInTurn
             if (!hasAnyToolCallInTurn) {
                 // 无工具调用：全时序输出（无论是否中间轮次——纯文本/推理回复不应折叠）
                 rawChronologicalItems.forEachIndexed { idx, item ->
@@ -475,6 +484,7 @@ fun computeChatItems(
                     result.add(item.withTurnStart(!turnHasFirstItem))
                     turnHasFirstItem = true
                 }
+                hasDeliverablesInTurn = deliverableItems.isNotEmpty() || effectivePlan != null
             }
 
             // 单轮文件变更汇总卡片
@@ -492,8 +502,10 @@ fun computeChatItems(
                 turnHasFirstItem = true
             }
 
-            // 轮次底部的诊断与状态栏
-            if (lastMsg != null && !isStreaming) {
+            // 轮次底部的诊断与状态栏：仅当轮次有面对用户的交付项（正文/卡片）或无工具轮次时输出。
+            // 若整轮全部为工具过程被折叠且无交付项（如中途被 Steering 插话打断），则不输出孤立的 Footer，避免时间倒流与空复制按钮。
+            val hasDeliverableItems = hasDeliverablesInTurn || (turnDiffSummary != null && turnDiffSummary.files.isNotEmpty())
+            if (lastMsg != null && !isStreaming && hasDeliverableItems) {
                 val lastMessageText = turnMessages
                     .flatMap { it.blocks }
                     .filterIsInstance<ChatBlock.Text>()
@@ -540,7 +552,7 @@ fun computeChatItems(
         }
     }
 
-    val pending = snapshot?.pendingPlanApproval
+    val pending = snapshot?.pendingPlanApproval?.takeIf { it.status == "PENDING" || it.status == "PENDING_APPROVAL" }
     if (pending != null && result.none { it is ChatListItem.PlanApproval && it.request.id == pending.id }) {
         result.add(
             ChatListItem.PlanApproval(
@@ -612,6 +624,7 @@ data class ParsedEventMessage(
     val role: String,
     val subtaskInfo: String?,
     val reportPath: String?,
+    val taskType: String?,
     val summary: String
 )
 
@@ -619,44 +632,57 @@ private val EVENT_MESSAGE_REGEX = Regex(
     """<event_message\s+type="([^"]+)"\s+agentId="([^"]+)"\s+status="([^"]+)">([\s\S]*?)</event_message>"""
 )
 
+private val BACKGROUND_TASK_EVENT_MESSAGE_REGEX = Regex(
+    """<event_message\s+type="([^"]+)"\s+taskId="([^"]+)"\s+taskType="([^"]+)"\s+status="([^"]+)">([\s\S]*?)</event_message>"""
+)
+
 /** 解析 <event_message> 标签文本 */
 fun parseEventMessage(text: String): ParsedEventMessage? {
     val trimmed = text.trim()
-    val match = EVENT_MESSAGE_REGEX.find(trimmed) ?: return null
-    val eventType = match.groupValues[1]
-    val agentId = match.groupValues[2]
-    val status = match.groupValues[3]
-    val body = match.groupValues[4]
+    // 先试子代理形态（agentId 属性）
+    EVENT_MESSAGE_REGEX.find(trimmed)?.let { match ->
+        val eventType = match.groupValues[1]
+        val agentId = match.groupValues[2]
+        val status = match.groupValues[3]
+        val body = match.groupValues[4]
 
-    var role = "AGENT"
-    var subtaskInfo: String? = null
-    var reportPath: String? = null
+        var role = "AGENT"
+        var subtaskInfo: String? = null
+        var reportPath: String? = null
 
-    val roleMatch = Regex("""^Role:\s*(.*)$""", RegexOption.MULTILINE).find(body)
-    if (roleMatch != null) role = roleMatch.groupValues[1].trim()
+        Regex("""^Role:\s*(.*)$""", RegexOption.MULTILINE).find(body)?.let { roleMatch ->
+            role = roleMatch.groupValues[1].trim()
+        }
+        Regex("""^Subtask:\s*(.*)$""", RegexOption.MULTILINE).find(body)?.let { subtaskMatch ->
+            subtaskInfo = subtaskMatch.groupValues[1].trim()
+        }
+        Regex("""^ReportPath:\s*(.*)$""", RegexOption.MULTILINE).find(body)?.let { reportPathMatch ->
+            reportPath = reportPathMatch.groupValues[1].trim()
+        }
 
-    val subtaskMatch = Regex("""^Subtask:\s*(.*)$""", RegexOption.MULTILINE).find(body)
-    if (subtaskMatch != null) subtaskInfo = subtaskMatch.groupValues[1].trim()
+        val summaryIdx = body.indexOf("Summary:")
+        val summary = if (summaryIdx != -1) body.substring(summaryIdx + "Summary:".length).trim() else body.trim()
 
-    val reportPathMatch = Regex("""^ReportPath:\s*(.*)$""", RegexOption.MULTILINE).find(body)
-    if (reportPathMatch != null) reportPath = reportPathMatch.groupValues[1].trim()
-
-    val summaryIdx = body.indexOf("Summary:")
-    val summary = if (summaryIdx != -1) {
-        body.substring(summaryIdx + "Summary:".length).trim()
-    } else {
-        body.trim()
+        return ParsedEventMessage(
+            eventType = eventType, agentId = agentId, status = status,
+            role = role, subtaskInfo = subtaskInfo, reportPath = reportPath,
+            taskType = null, summary = summary
+        )
     }
+    // 再试后台任务形态（taskId/taskType 属性）
+    BACKGROUND_TASK_EVENT_MESSAGE_REGEX.find(trimmed)?.let { match ->
+        val eventType = match.groupValues[1]
+        val taskType = match.groupValues[3]
+        val status = match.groupValues[4]
+        val body = match.groupValues[5].trim()
 
-    return ParsedEventMessage(
-        eventType = eventType,
-        agentId = agentId,
-        status = status,
-        role = role,
-        subtaskInfo = subtaskInfo,
-        reportPath = reportPath,
-        summary = summary
-    )
+        return ParsedEventMessage(
+            eventType = eventType, agentId = "", status = status,
+            role = "BACKGROUND_TASK", subtaskInfo = null, reportPath = null,
+            taskType = taskType, summary = body
+        )
+    }
+    return null
 }
 
 /** 判定一条 User 消息是否纯由 <event_message> 组成（后台子代理唤醒事件，非人类用户消息）。 */

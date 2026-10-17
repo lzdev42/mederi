@@ -79,7 +79,7 @@ FLOW_FAIL 只认 harness 自己才会吐的特征串，不认模型也能吐的�
 **支柱四：必需行为断言（EXPECT_TOOLS）。**
 "没出错"是弱证据，"该发生的发生了"才是强证据。`EXPECT_TOOLS="create_plan,generate_spec,spawn_agent,verify_subtask"`
 要求这些工具**必须被真实调用过**，缺失任何即 FLOW_FAIL——即使产物正确。
-防的攻击面：模型绕过计划循环用 `execute_command`（shell）直接改文件达成产物，
+防的攻击面：模型绕过计划循环用 `bash`（shell）直接改文件达成产物，
 计划闭环根本没被测到。实测证明了这个威胁是真的（见 §5 M1：模型确实会用 `cat` 绕过坏工具）。
 
 **支柱五：变异测试（判定器自己的考试）。**
@@ -321,7 +321,7 @@ EXPECT_TOOLS="create_plan,generate_spec,spawn_agent,verify_subtask" TIMEOUT=300 
 |---|---|---|---|
 | 1 | `List<DecisionArg>` / `List<PlannedChangeArg>` 无宽松化：模型把对象列表发成 JSON 字符串或裸对象时，kotlinx 解析直接崩（`Expected JsonArray, but had JsonLiteral`），模型通常自愈但浪费 1-2 轮。根治方案 = 描述符驱动的参数整形（在 decodeArgs 前按序列化器描述符把字符串/裸对象 coerce 成数组），改动面较大 | 中 | 待办 |
 | 2 | 子代理写文件不回滚到父会话 diffTracker——报告"流程记录 diff"为空（改动走了子代理），UI 差异面板对计划路径的改动不可见 | 中 | 设计取舍待定 |
-| 3 | `execute_command`/shell 直改文件不经 diffTracker（与 #2 同根）：diff 面板只覆盖文件工具路径 | 中 | 设计取舍待定 |
+| 3 | `bash`/shell 直改文件不经 diffTracker（与 #2 同根）：diff 面板只覆盖文件工具路径 | 中 | 设计取舍待定 |
 | 4 | 模型收尾纪律弱（agnes-2.5-flash）：计划没全 PASS 就 write_log 收工；首调参数形状错后自愈。harness 可加"结束前计划必须收敛"的软门禁提示词 | 低 | 观察中 |
 | 5 | verify_subtask 计数文案从 1 开始（`Subtask ${index+1}`）与 0 基索引错位，读日志时易混淆 | 低 | 待办（化妆性） |
 | 6 | **assistant 消息在 turn 末尾才持久化**：turn 中途崩溃（限流重试耗尽、供应商断流）时，本轮已执行的 assistant 消息与工具调用全部丢失——事件流里可见（TOOL_CALLED 3 次）、raw 消息里为空。已落盘的文件改动成为"无历史的改动"，下轮模型不知道自己做了什么。修复方向：按 LLM 响应增量持久化 | 高 | 待办 |

@@ -105,6 +105,9 @@ class AppState(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** 偏好存储暴露（概览浮动窗等基础设施层持久化用；普通写侧 action 仍建议走上方封装方法） */
+    val preferencesStore: PreferencesStore get() = preferences
+
     /** 宿主启动后注入；null = 平台不支持遥控（UI 提示走 remote_unsupported 资源） */
     var remoteControl: RemoteControlHooks? = null
 
@@ -150,6 +153,10 @@ class AppState(
     private val _leftSidebarPinned = MutableStateFlow(false)
     val leftSidebarPinned: StateFlow<Boolean> = _leftSidebarPinned.asStateFlow()
 
+    /** 左侧边栏宽度（大屏拖拽改宽，设备本地偏好，默认 245dp） */
+    private val _leftSidebarWidth = MutableStateFlow(245)
+    val leftSidebarWidth: StateFlow<Int> = _leftSidebarWidth.asStateFlow()
+
     /** 远程遥控开关状态（desktop 内嵌 server）；启停执行由 [remoteControl] hooks 完成 */
     private val _remoteControlEnabled = MutableStateFlow(false)
     val remoteControlEnabled: StateFlow<Boolean> = _remoteControlEnabled.asStateFlow()
@@ -177,6 +184,10 @@ class AppState(
     /** 隧道公网域名（用户填写，用于 UI 展示公网地址；不参与 cloudflared 命令参数） */
     private val _tunnelDomain = MutableStateFlow("")
     val tunnelDomain: StateFlow<String> = _tunnelDomain.asStateFlow()
+
+    /** 自动压缩触发阈值百分比（默认 70，范围 30-95；写状态 + 持久化 + 透传 core 即时生效） */
+    private val _compactionThresholdPercent = MutableStateFlow(70)
+    val compactionThresholdPercent: StateFlow<Int> = _compactionThresholdPercent.asStateFlow()
 
     private val _selectedProjectId = MutableStateFlow<String?>(null)
     val selectedProjectId: StateFlow<String?> = _selectedProjectId.asStateFlow()
@@ -290,6 +301,21 @@ class AppState(
     fun setLeftSidebarPinned(value: Boolean) {
         _leftSidebarPinned.value = value
         persist("ui.sidebar.pinned", value) { it.toString() }
+    }
+
+    /** 设置左侧边栏宽度（钳制 200-500，写状态 + 持久化） */
+    fun setLeftSidebarWidth(value: Int) {
+        val clamped = value.coerceIn(200, 500)
+        _leftSidebarWidth.value = clamped
+        persist("ui.sidebar.width", clamped) { it.toString() }
+    }
+
+    /** 设置自动压缩触发阈值百分比（30-95，写状态 + 持久化 + 透传 core 即时生效） */
+    fun setCompactionThreshold(value: Int) {
+        val clamped = value.coerceIn(10, 95)
+        _compactionThresholdPercent.value = clamped
+        persist("app.compaction.threshold", clamped) { it.toString() }
+        scope.launch { aiCore.setCompactionThresholdPercent(clamped) }
     }
 
     /**
@@ -505,6 +531,7 @@ class AppState(
         _theme.value = AppThemeMode.fromString(preferences.getString("app.theme"))
         _language.value = AppLanguage.fromString(preferences.getString("app.language"))
         _leftSidebarPinned.value = preferences.getBoolean("ui.sidebar.pinned", false)
+        _leftSidebarWidth.value = preferences.getString("ui.sidebar.width")?.toIntOrNull() ?: 245
 
         _remoteControlEnabled.value = preferences.getBoolean("remote.enabled")
         _remoteControlPassword.value = preferences.getString("remote.password")
@@ -512,6 +539,8 @@ class AppState(
 
         _tunnelToken.value = preferences.getString("tunnel.token") ?: ""
         _tunnelDomain.value = preferences.getString("tunnel.domain") ?: ""
+
+        _compactionThresholdPercent.value = preferences.getString("app.compaction.threshold")?.toIntOrNull() ?: 70
 
         preferences.getString("sandbox.extraPaths")?.let { jsonStr ->
             runCatching { json.decodeFromString<List<String>>(jsonStr) }.getOrNull()
@@ -522,6 +551,9 @@ class AppState(
 
         _selectedProjectId.value = preferences.getString("workspace.lastProjectId")
         _selectedConversationId.value = preferences.getString("workspace.lastConversationId")
+
+        // 把持久化的阈值同步给 core（重启后 core 也用持久化的值）
+        scope.launch { aiCore.setCompactionThresholdPercent(_compactionThresholdPercent.value) }
     }
 }
 

@@ -45,7 +45,7 @@ Long-running processes: background them and redirect output to a file under the 
 
 Track with list_processes (mederi-spawned pids), stop with stop_process(pid). macOS
 Seatbelt forbids ALL cross-process signals — `kill`/`pkill`/`kill -9` inside
-execute_command fail. stop_process runs outside the sandbox and only touches
+bash fail. stop_process runs outside the sandbox and only touches
 mederi-started processes, so it is the only reliable way to stop your servers.
 """.trimIndent()
 
@@ -99,39 +99,30 @@ consecutively or nest.
 """.trimIndent()
 
     /**
-     * create_plan 参数纪律：字段清单 + 精简范例 + 时序硬规则。
+     * write_plan 参数纪律：字段清单 + 精简范例 + 时序硬规则。
      *
      * 压缩原则：与 SystemPrompts.PLANNING_DISCIPLINE 的重复内容（"别编造 planId"、
      * "顺序执行"）收敛到这里，PLANNING_DISCIPLINE 只讲流程判断；两个文件各讲各的。
      */
     val PLAN_TOOL_GUIDE: String = """
-# Plan Tool Discipline (create_plan / generate_spec / subagent(SPAWN) / verify_subtask)
+# Plan Tool Discipline (write_plan / generate_spec / subagent(SPAWN) / verify_subtask)
 
 Hard rules — violating any wastes the whole turn:
-1. Plan tools are STRICTLY SEQUENTIAL, one per message step: create_plan must SUCCEED before
+1. Plan tools are STRICTLY SEQUENTIAL, one per message step: write_plan must SUCCEED before
    generate_spec, generate_spec before subagent(SPAWN). Never fire later steps in the same message
    as an earlier one.
-2. A planId exists ONLY after create_plan succeeds. If you have no real planId, the only correct
-   call is create_plan. NEVER invent an id.
+2. A planId exists ONLY after write_plan succeeds. If you have no real planId, the only correct
+   call is write_plan. NEVER invent an id.
 3. Any plan-tool Error → STOP and fix that call (validation errors list every missing item).
    Never continue to dependent calls after a failure; never report plan progress that never ran.
 
-create_plan takes ONE JSON object. CODE required fields: title, overview, languageStack,
-inScope, keyDecisions, changes, successCriteria, subtasks. Optional: summary, businessLogic,
-projectContext (default BROWNFIELD), outScope, dataAndParams, risks, architecture, appendix
-(plan-level), subtask appendix. List fields are arrays of strings. Every subtask: name,
-planDetail, targetFiles, verification; dependsOn is an array of 0-based indices.
-overview = concise narrative (see PLAN_OVERVIEW_GUIDE). subtask appendix = technical reasoning
-for controllers (see PLAN_APPENDIX_GUIDE); leave empty for simple subtasks.
+
 
 Example (shape to follow; content from your real task):
 
 ```json
 {
-  "title": "Add subtraction feature",
-  "summary": "One sentence: what changes and to what end.",
-  "overview": "Background and goals, 1-2 sentences.",  // overview: concise narrative — background, problem, approach, expected outcome (see PLAN_OVERVIEW_GUIDE)
-  "businessLogic": "",  // optional now (demoted to plan-level appendix; business logic goes in subtask appendix)
+
   "languageStack": "Python 3.12",
   "inScope": ["Add sub(a,b) to pkg/calc.py", "Export sub in pkg/api.py"],
   "outScope": ["No CLI changes"],
@@ -144,7 +135,7 @@ Example (shape to follow; content from your real task):
   "successCriteria": ["Verification command for the last subtask passes"],
   "subtasks": [{"name": "Implement sub", "planDetail": "Add sub(a,b) to pkg/calc.py.",
      "targetFiles": ["pkg/calc.py"],
-     "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",
+     "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",  // command YOU run via verify_subtask after executor completes — NOT something the executor runs
      "verificationCwd": null,        // optional: verification working dir (relative to project root); null = project root
      "verificationTimeoutSeconds": 30, // optional: verification timeout seconds; verification must be a single ASCII command (prose rejected)
      "dependsOn": [], "parallelizable": false,  // "appendix": "Optional. Subtask technical reasoning: current logic, code evidence, root cause, fix preview."
@@ -159,48 +150,81 @@ you will be auto-woken with the result), then verify_subtask(planId, subtaskInde
 """.trimIndent()
 
     /**
-     * 计划概要（overview）撰写指引：目标驱动，读者只看概要就能做批准/拒绝决定，不强制模板。
+     * 计划概览撰写指引：菜单式取舍（非固定填表）；Goal 单段叙事；Approach 必填硬核；
+     * 验证计划拆自动/手动；破坏性决策走 pre-plan ask_user；Open Questions 非阻塞默认。
      */
     val PLAN_OVERVIEW_GUIDE: String = """
-# Overview Writing Guide
+# Plan Overview Writing Guide
 
-The overview is written for someone who will approve or reject based on it alone.
+The plan document's Part 1 (human-readable, above the first ---) is NOT a fixed schema to fill —
+it is a MENU of sections. Include only sections that carry information for THIS task; leave
+irrelevant fields empty (the renderer skips empty fields — do NOT pad). Every plan should look
+different because every task is different.
 
-After reading the overview, the reader must be able to answer:
-- What happened (enough context to not feel lost)
-- What is wrong or missing (the problem, stated directly)
-- What the fix does (the approach, not the implementation)
-- What will be different after (the outcome, not test details)
+## Section menu (renderer behavior)
+- ## 目标（Goal）: rendered from background + problemAnalysis + expectedOutcome merged into ONE
+  narrative section (any one non-blank → section renders). Write it as a flowing story:
+  the problem + background + what this change accomplishes. Do NOT split into sub-headers.
+- ## 实现方案（Approach）: REQUIRED, always rendered (even if you write little — empty is visible,
+  which is intentional). This is the hard core Antigravity-style skeletons lack. Spell out the
+  business logic / how it works: entry point, call chain (before vs after), rules, data flow,
+  key algorithms. Match the internal structure to the task type:
+    * algorithm task → algorithm steps
+    * refactor → call-chain before/after
+    * cleanup → delete list
+    * new feature → data flow + rules
+  Never collapse this to a one-liner.
+- ## 验证计划（Verification Plan）: optional (rendered only if testMethod non-blank). Split into
+  ### 自动测试（Automated Tests） with exact commands, and ### 人工验证（Manual Verification）
+  with what the user should manually check.
+- ## 范围 / ## 风险 / ## 成功标准: optional, render only when there is real content.
+- ## 默认决策（Open Questions）: optional, for non-blocking defaults you took without asking
+  ("Chose X because Y — disagree? say so in chat").
 
-Quality bar:
-- If removing a sentence doesn't make any of the four points harder to understand, remove it.
-- If after reading, a reader CANNOT answer the four questions, the overview is too short — add back the minimum.
-- Do NOT use fixed headings ("Background:" / "Cause:" / "Fix:" / "Expected:"). Write as natural prose.
-- Decide what each task needs: some need more context on the problem, some on the approach. Adjust per task.
-- If the reader needs to scroll to the appendix to decide approve/reject, the overview failed.
+## Hard rules
+- NEVER include a "需要你确认 / User Review Required" section — that field is removed. Anything
+  requiring user sign-off (breaking changes, major trade-offs) MUST be resolved via ask_user
+  BEFORE write_plan; the plan only reflects already-decided outcomes.
+- Omit sections that add no information for this task; do not pad to fill structure.
+- Use diffs / mermaid / code snippets inline where they help (mermaid goes in the architecture
+  field). Omit rich media for trivial changes.
+- The detailed file-level changes (MODIFY/NEW/DELETE grouped by component) belong in the Changes
+  appendix below the first ---, not in the overview.
 """.trimIndent()
 
     /**
      * 技术附录（appendix）撰写指引：subtask 级与 plan 级，论证版（WHY），与 spec（HOW）区分。
      */
     val PLAN_APPENDIX_GUIDE: String = """
-# Appendix Writing Guide (subtask-level & plan-level)
+# Appendix Writing Guide
 
-The appendix is the argument version (WHY), distinct from the spec (HOW).
+The appendix is the detailed implementation section — for thorough reviewers who want to
+understand exactly what will change. Unlike the concise overview, be substantive here.
 
-Content for subtask appendix:
-- Current logic: how the code currently works (key code lines, not full source)
-- Code evidence: which line/branch/condition causes the problem
-- Root cause: WHY this code produces the wrong behavior
-- Fix preview: what the fixed code looks like (pseudo-code or real code)
-- Business logic: the business rules in play
+## Changes
+- For each file, describe WHAT specifically changes — not just "Add function X" but
+  "Add function X that does Y, called from Z". For [MODIFY]: what exists now and what it
+  becomes. For [NEW]: what it does and why a new file is needed (vs modifying existing).
+  For [DELETE]: what it contained and why it's removed.
 
-Density rules (prevent token bloat):
-- HIGH information density — no full source dumps, only key code lines + core contradiction
-- Pin the key lines/branches, not the whole function
-- Pseudo-code is preferred over real code for fix previews
-- Leave appendix EMPTY for simple subtasks (new files, mechanical changes, migrations) — do not pad
-- If the appendix doesn't add reasoning beyond what the spec already says, leave it empty
+## Subtask Briefs (planDetail)
+- Describe the approach for this subtask — not just the task title. The user reviews
+  this to understand HOW the subtask will be done before approving. Include: which files
+  are touched, what the key change is, any tricky parts.
+
+## Key Decisions
+- Surface real trade-offs, not obvious choices. Each decision should have a genuine
+  alternative that was considered and rejected for a stated reason.
+
+## Architecture (optional)
+- Include a Mermaid diagram when the approach benefits from visualization (data flow,
+  architecture, sequence). Omit for trivial changes.
+
+## Subtask Appendix (free-text, optional)
+- For complex subtasks: current logic, code evidence, root cause, fix preview.
+- HIGH information density — no full source dumps, only key code lines + core contradiction.
+- Pseudo-code is preferred over real code for fix previews.
+- Omit for simple subtasks (new files, mechanical changes).
 """.trimIndent()
 
     /**
@@ -222,5 +246,25 @@ assuming success.
   unfinished work.
 - If in doubt, read the report file (ReportPath, e.g. `.mederi/plans/{planId}/reports/NN-executor.md`)
   or the touched files before continuing the plan.
+""".trimIndent()
+
+    /**
+     * Spec 撰写引导：执行器零项目上下文，spec 是其唯一知识来源。
+     * 引导式（非硬约束）——AI 自行决定包含多少上下文。
+     */
+    val SPEC_WRITING_GUIDE: String = """
+# Spec Writing Guide
+
+The executor subagent has NO project context — it does not see AGENTS.md, architecture docs,
+or any coding principles. The spec is its only source of project knowledge. When writing a
+spec, include any rules the executor needs to make correct edits without guessing: coding
+conventions, architectural constraints (e.g. "tests must not hit the production database",
+"all public APIs must have integration tests"), dependency choices, and style expectations
+relevant to this task. Embed key
+signatures or data structures the executor will work with. You decide how much to include —
+the goal is executor efficiency: the executor should follow the spec without re-investigating
+the codebase. A one-line fix needs almost none; a multi-file refactor needs more.
+Specs are implementation steps only. The executor ensures its code compiles — do NOT include
+test-running steps. You run tests via verify_subtask after the executor completes.
 """.trimIndent()
 }

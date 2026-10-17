@@ -11,7 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * 验证 coerceObjectListField + LenientCreatePlanArgs/LenientSubtaskArg 的形状矫正。
+ * 验证 coerceObjectListField + LenientWritePlanArgs/LenientSubtaskArg 的形状矫正。
  *
  * 测试背景：P0-2 修复了 List<DecisionArg>/List<PlannedChangeArg> 的宽松化（模型把
  * keyDecisions 发成 JSON 字符串、decisions 发成裸对象时 kotlinx 默认序列化器崩溃）。
@@ -22,13 +22,17 @@ class LenientCreatePlanArgsTest {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    // 最小合法 CreatePlanArgs（只含必填字段）
+    // 最小合法 WritePlanArgs（只含必填字段）
     private fun baseArgs(extra: Map<String, String> = emptyMap()): String {
         val fields = mutableMapOf(
             "title" to "\"t\"",
             "summary" to "\"s\"",
             "projectContext" to "\"BROWNFIELD\"",
-            "overview" to "\"o\"",
+            "background" to "\"b\"",
+            "problemAnalysis" to "\"p\"",
+            "approach" to "\"a\"",
+            "expectedOutcome" to "\"e\"",
+            "testMethod" to "\"t\"",
             "keyDecisions" to "[]",
             "changes" to "[]",
             "inScope" to "[\"a\"]",
@@ -46,7 +50,7 @@ class LenientCreatePlanArgsTest {
         val args = baseArgs(mapOf(
             "keyDecisions" to "\"[{\\\"question\\\":\\\"q\\\",\\\"choice\\\":\\\"c\\\"}]\""
         ))
-        val parsed = json.decodeFromString(PlanTools.CreatePlanArgs.serializer(), args)
+        val parsed = json.decodeFromString(PlanTools.WritePlanArgs.serializer(), args)
         assertEquals(1, parsed.keyDecisions.size)
         assertEquals("q", parsed.keyDecisions[0].question)
         assertEquals("c", parsed.keyDecisions[0].choice)
@@ -58,7 +62,7 @@ class LenientCreatePlanArgsTest {
         val args = baseArgs(mapOf(
             "subtasks" to "[{\"name\":\"s0\",\"planDetail\":\"d\",\"targetFiles\":[],\"verification\":\"v\",\"decisions\":{\"question\":\"q\",\"choice\":\"c\"}}]"
         ))
-        val parsed = json.decodeFromString(PlanTools.CreatePlanArgs.serializer(), args)
+        val parsed = json.decodeFromString(PlanTools.WritePlanArgs.serializer(), args)
         assertEquals(1, parsed.subtasks[0].decisions.size)
         assertEquals("q", parsed.subtasks[0].decisions[0].question)
     }
@@ -68,7 +72,7 @@ class LenientCreatePlanArgsTest {
         val args = baseArgs(mapOf(
             "changes" to "\"[{\\\"module\\\":\\\"core\\\",\\\"action\\\":\\\"MODIFY\\\",\\\"filePath\\\":\\\"f\\\",\\\"description\\\":\\\"d\\\",\\\"rationale\\\":\\\"r\\\"}]\""
         ))
-        val parsed = json.decodeFromString(PlanTools.CreatePlanArgs.serializer(), args)
+        val parsed = json.decodeFromString(PlanTools.WritePlanArgs.serializer(), args)
         assertEquals(1, parsed.changes.size)
         assertEquals("f", parsed.changes[0].filePath)
     }
@@ -79,7 +83,7 @@ class LenientCreatePlanArgsTest {
         val args = baseArgs(mapOf(
             "keyDecisions" to "[{\"question\":\"q1\",\"choice\":\"c1\"},{\"question\":\"q2\",\"choice\":\"c2\"}]"
         ))
-        val parsed = json.decodeFromString(PlanTools.CreatePlanArgs.serializer(), args)
+        val parsed = json.decodeFromString(PlanTools.WritePlanArgs.serializer(), args)
         assertEquals(2, parsed.keyDecisions.size)
         assertEquals("q2", parsed.keyDecisions[1].question)
     }

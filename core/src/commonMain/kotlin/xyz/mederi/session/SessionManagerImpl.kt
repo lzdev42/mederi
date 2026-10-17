@@ -52,7 +52,8 @@ class SessionManagerImpl(
     ),
     private val mcpConnector: McpConnector? = null,
     private val skills: SkillManager? = null,
-    private val subagentConfigManager: xyz.mederi.tools.subagent.SubagentConfigManager? = null
+    private val subagentConfigManager: xyz.mederi.tools.subagent.SubagentConfigManager? = null,
+    private val compactionThresholdPercent: () -> Int = { 70 },
 ) : SessionManager {
 
     private val turnExecutor = TurnExecutor(
@@ -64,7 +65,8 @@ class SessionManagerImpl(
         diffStore = diffStore,
         mcpConnector = mcpConnector,
         skills = skills,
-        subagentConfigManager = subagentConfigManager
+        subagentConfigManager = subagentConfigManager,
+        compactionThresholdPercent = compactionThresholdPercent  // 新增
     )
 
     override suspend fun list(): List<Session> = sessionStore.list()
@@ -215,11 +217,9 @@ class SessionManagerImpl(
     override suspend fun resolvePlanApproval(
         id: String,
         planId: String,
-        approved: Boolean,
-        aiModel: xyz.mederi.domain.model.AIModel?,
-        reasoningLevel: xyz.mederi.provider.domain.model.ReasoningLevel?
+        approved: Boolean
     ) {
-        turnExecutor.resolvePlanApproval(id, planId, approved, aiModel, reasoningLevel)
+        turnExecutor.resolvePlanApproval(id, planId, approved)
     }
 
     override suspend fun compressHistory(id: String) {
@@ -245,6 +245,12 @@ class SessionManagerImpl(
 
     override fun stopSubagent(agentId: String, reason: String): String =
         turnExecutor.stopSubagent(agentId, reason)
+
+    override fun listBackgroundTasksForSession(sessionId: String): List<xyz.mederi.tools.background.BackgroundTaskManager.BackgroundTaskEntry> =
+        turnExecutor.listBackgroundTasksForSession(sessionId)
+
+    override fun stopBackgroundTask(taskId: String): String? =
+        turnExecutor.stopBackgroundTask(taskId)
 
     override suspend fun getMessage(id: String, messageId: String): Message {
         return historyStore.load(id).firstOrNull { it.id == messageId }

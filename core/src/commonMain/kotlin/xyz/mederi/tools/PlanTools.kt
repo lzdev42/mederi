@@ -75,12 +75,12 @@ private fun coerceObjectListField(element: JsonElement, fieldName: String): Json
     return kotlinx.serialization.json.JsonObject(element.toMutableMap().apply { put(fieldName, fixed) })
 }
 
-/** 复合列表字段名（SubtaskArg + CreatePlanArgs，形状矫正目标） */
+/** 复合列表字段名（SubtaskArg + WritePlanArgs，形状矫正目标） */
 private val OBJECT_LIST_FIELDS = listOf("decisions", "keyDecisions", "changes")
 
-/** create_plan 参数整体形状矫正：先矫正子任务列表里每个 subtask，再矫正顶层字段 */
-private object LenientCreatePlanArgs :
-    JsonTransformingSerializer<PlanTools.CreatePlanArgs>(PlanTools.CreatePlanArgs.generatedSerializer()) {
+/** write_plan 参数整体形状矫正：先矫正子任务列表里每个 subtask，再矫正顶层字段 */
+private object LenientWritePlanArgs :
+    JsonTransformingSerializer<PlanTools.WritePlanArgs>(PlanTools.WritePlanArgs.generatedSerializer()) {
     override fun transformDeserialize(element: JsonElement): JsonElement {
         var result = element
         // subtasks[*].decisions / targetFiles 内层矫正
@@ -146,7 +146,7 @@ class PlanTools(
         val action: String,
         @LLMDescription("File path to be created or modified.")
         val filePath: String,
-        @LLMDescription("What will be changed.")
+        @LLMDescription("What specifically changes in this file — not just 'Add X' but 'Add X that does Y, called from Z'. For MODIFY: what exists now and what it becomes.")
         val description: String,
         @LLMDescription("Why this change is needed here, and why this approach.")
         val rationale: String
@@ -158,9 +158,10 @@ class PlanTools(
         @LLMDescription("Subtask name. Concise action-noun.")
         val name: String,
         @LLMDescription(
-            "Brief intent (1-3 sentences): what this subtask achieves and why it exists. " +
-                "Do NOT write the detailed implementation spec here — the detailed spec is generated " +
-                "AFTER plan approval via generate_spec, grounded in the actual codebase."
+            "Brief: what this subtask achieves, the approach (how), and which files are touched. " +
+                "The user reviews this to understand HOW the subtask will be done before approving. " +
+                "Do NOT write the detailed implementation spec here — that is generated AFTER approval " +
+                "via generate_spec."
         )
         val planDetail: String = "",
         @LLMDescription("Exact file paths that will be created or modified (list them as an array).")
@@ -203,14 +204,15 @@ class PlanTools(
     )
 
     @KeepGeneratedSerializer
-    @Serializable(with = LenientCreatePlanArgs::class)
-    data class CreatePlanArgs(
+    @Serializable(with = LenientWritePlanArgs::class)
+    data class WritePlanArgs(
+        @LLMDescription("Optional. Empty = create a new plan. Non-empty = update an existing PENDING_APPROVAL plan in place — only provide fields you want to change, blank/empty fields keep their existing values.")
+        val planId: String = "",
         @LLMDescription("Plan title.")
         val title: String,
         @LLMDescription(
             "ONE sentence for the approval card: what will change and to what end. " +
-                "Must NOT duplicate the overview — the overview explains background and goals, " +
-                "this is the single-line takeaway."
+                "Must NOT duplicate the Goal/Approach content; this is the single-line takeaway for the approval card."
         )
         val summary: String = "",
         @LLMDescription(
@@ -222,28 +224,28 @@ class PlanTools(
         @LLMDescription("Language and toolchain with version, e.g. 'Go 1.22', 'Kotlin 2.1 + Gradle 8.10'.")
         val languageStack: String = "",
         @LLMDescription(
-            "Business logic in coherent, human-readable prose: where the requirement enters " +
-                "(UI action, API, command — and which function/call chain receives it), how behavior changes " +
-                "(before vs after), and where the new logic hooks into the existing call chain. " +
-                "Write flowing sentences that survive being read aloud once — no telegraphic fragments. "
+            "Optional. Business logic: where the requirement enters (UI/API/command — which " +
+                "function/call chain receives it), how behavior changes (before vs after), where new " +
+                "logic hooks into the call chain. If included, also weave the key business logic into " +
+                "the approach field so the user sees it at a glance."
         )
         val businessLogic: String = "",
-        @LLMDescription("Goal and background: what to build and why.")
-        val overview: String = "",
-        @LLMDescription("In scope: what this plan will do.")
+        @LLMDescription("Optional. Background context; omit when the task has no distinct background. Empty fields are not rendered in plan.md.")
+        val background: String = "",
+        @LLMDescription("Optional. What is wrong or what is needed; omit when redundant with the Goal narrative.")
+        val problemAnalysis: String = "",
+        @LLMDescription("Required. Approach: how you will fix/implement it, including the business logic (rules, data flow, key algorithms). Not line-level implementation — the 'how it works' level.")
+        val approach: String = "",
+        @LLMDescription("Optional. What will be different after; omit when folded into the Goal.")
+        val expectedOutcome: String = "",
+        @LLMDescription("Optional. Verification approach; rendered as '验证计划（Verification Plan）'. Omit for tasks with no verification needs.")
+        val testMethod: String = "",
+        @LLMDescription("Optional. What this plan will do; omit when scope is obvious from the Goal.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val inScope: List<String> = emptyList(),
         @LLMDescription("Out of scope: what this plan will NOT do.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val outScope: List<String> = emptyList(),
-        @LLMDescription(
-            "Optional. Items the user should pay attention to BEFORE approving: breaking changes, " +
-                "major trade-offs, risky/irreversible operations. One item per entry, in the user's language. " +
-                "Prefix critical items with a GitHub alert tag ([!IMPORTANT]/[!WARNING]/[!CAUTION]). " +
-                "Omit entirely when nothing needs special attention."
-        )
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
-        val userReviewRequired: List<String> = emptyList(),
         @LLMDescription(
             "Optional. Non-blocking defaults you chose WITHOUT asking the user. Each entry reads like " +
                 "'Chose X because Y — if you disagree, just say so in chat.' In the user's language. " +
@@ -253,7 +255,7 @@ class PlanTools(
         val openQuestions: List<String> = emptyList(),
         @LLMDescription("Key decisions: trade-offs, breaking changes, and rationale.")
         val keyDecisions: List<DecisionArg> = emptyList(),
-        @LLMDescription("Proposed changes per module with [MODIFY]/[NEW]/[DELETE] markers.")
+        @LLMDescription("Proposed changes per module with [MODIFY]/[NEW]/[DELETE] markers. For each file, describe what specifically changes — not just the file name.")
         val changes: List<PlannedChangeArg> = emptyList(),
         @LLMDescription(
             "Optional: data sources read or written (tables, files, endpoints, formats) and new or changed " +
@@ -264,16 +266,16 @@ class PlanTools(
         @LLMDescription("Risks and rollback strategy.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val risks: List<String> = emptyList(),
-        @LLMDescription("Success criteria: how to know the task is done. Also the verification basis.")
+        @LLMDescription("Optional. How to know the whole task is done; completion criteria is primarily carried by Approach + per-subtask verification contracts.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val successCriteria: List<String> = emptyList(),
         @LLMDescription("Optional: Mermaid diagram code (without fence) for architecture visualization. Mermaid is the only diagram format the UI renders; do not use PlantUML/DOT or other DSLs.")
         val architecture: String? = null,
         @LLMDescription(
             "Optional. Research conclusions from your investigation (or a researcher sub-agent's report) " +
-                "that the executing sub-agents need to know — key findings, patterns, gotchas, architecture notes. " +
-                "This is injected into each executor's briefing so it doesn't re-investigate the same code. " +
-                "Omit when no research was done."
+                "— key findings, patterns, gotchas, architecture notes. Kept in plan.json as the parent's " +
+                "memory aid. NOT injected into executor briefings — if executors need this info, put it " +
+                "in the spec. Omit when no research was done."
         )
         val researchNotes: String = "",
         @LLMDescription("Optional. Plan-level technical context: cross-subtask shared background, plan-level key decisions/changes/data. Omit when there is no cross-subtask content.")
@@ -291,12 +293,12 @@ class PlanTools(
         val subtaskIndex: Int,
         @LLMDescription(
             "The detailed implementation spec as an ORDERED CHECKLIST: numbered steps (1. 2. 3.), " +
-                "each step concrete and independently verifiable (create X, modify Y, add test Z), " +
-                "in execution order. Include exact function names/signatures grounded in the real code " +
-                "(read the files first), data structures, edge cases, and error handling. " +
-                "The executing subagent works through this checklist top-down, item by item. " +
-                "The executor is a cheap model that reads files directly — do NOT transcribe file " +
-                "excerpts into the spec; just reference paths and let the executor read them."
+                "each step concrete and independently verifiable, in execution order. Include exact " +
+                "function names/signatures grounded in the real code (read the files first), data " +
+                "structures, edge cases, and error handling. The executor has NO project context — " +
+                "include any coding conventions, architectural constraints, and key signatures the " +
+                "executor needs (see Spec Writing Guide). You decide how much to embed. Specs are " +
+                "implementation only — do NOT include test-running steps."
         )
         val spec: String,
         @LLMDescription(
@@ -308,21 +310,128 @@ class PlanTools(
         val reason: String = ""
     )
 
-    inner class CreatePlanTool : SimpleTool<CreatePlanArgs>(
-        argsType = typeToken<CreatePlanArgs>(),
-        name = "create_plan",
-        description = "Create the implementation PLAN (the WHAT): business logic, scope, decisions, changes, " +
-            "and subtask skeletons (name + brief intent + targetFiles + verification). This is what the user " +
-            "approves. Do NOT write detailed implementation specs here — after approval, call generate_spec " +
-            "per subtask to produce the executable spec grounded in the actual codebase. " +
-            "In Approval mode, the plan is saved to a file and the user is notified via event. " +
-            "In Autonomous mode, the plan is auto-approved."
+    inner class WritePlanTool : SimpleTool<WritePlanArgs>(
+        argsType = typeToken<WritePlanArgs>(),
+        name = ToolName.WRITE_PLAN.value,
+        description = "Create a new plan or update an existing PENDING_APPROVAL plan. Without planId: " +
+            "creates a new plan (voids prior active plans in this session). With planId: updates the existing " +
+            "plan in place — only provide fields you want to change, blank/empty fields keep their existing " +
+            "values. Only PENDING_APPROVAL plans can be updated. APPROVED/IN_PROGRESS plans: use converge_plan " +
+            "to append subtasks. VOIDED/COMPLETED plans cannot be modified. In Approval mode, the plan is " +
+            "saved to a file and the user is notified via event. In Autonomous mode, the plan is auto-approved."
     ) {
-        override suspend fun execute(args: CreatePlanArgs): String {
+        override suspend fun execute(args: WritePlanArgs): String {
+            // ===== UPDATE MODE =====
+            if (args.planId.isNotBlank()) {
+                val existing = planStore.load(args.planId)
+                    ?: return "Error: Plan not found: ${args.planId}"
+                if (existing.status != PlanStatus.PENDING_APPROVAL)
+                    return "Error: Cannot update plan — status is ${existing.status}. " +
+                        "Only PENDING_APPROVAL plans can be updated. " +
+                        "APPROVED plans: use converge_plan to append subtasks. " +
+                        "Spec corrections: use generate_spec with reason= (append-only)."
+
+                // 局部校验：只校验提供的字段
+                if (args.subtasks.isNotEmpty()) {
+                    // 校验新提供的子任务（verification/expected/stdoutContains 规则）
+                    args.subtasks.forEachIndexed { i, st ->
+                        if (st.verification.isBlank())
+                            return "Error: Subtask $i (${st.name}): verification is required."
+                        if (st.verificationExpected.isBlank())
+                            return "Error: Subtask $i (${st.name}): verificationExpected is required."
+                    }
+                }
+                if (args.changes.isNotEmpty()) {
+                    for (c in args.changes) {
+                        if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
+                            return "Error: Change ${c.filePath}: action must be MODIFY, NEW, or DELETE."
+                        if (c.action.equals("NEW", ignoreCase = true) && c.rationale.isBlank())
+                            return "Error: Change ${c.filePath}: a [NEW] file must justify why an existing file cannot be modified instead."
+                    }
+                }
+
+                // 应用非空字段，blank/empty = 保持原值
+                val updated = existing.copy(
+                    title = args.title.takeIf { it.isNotBlank() } ?: existing.title,
+                    summary = args.summary.takeIf { it.isNotBlank() } ?: existing.summary,
+                    projectContext = if (args.projectContext.isNotBlank() && args.projectContext.equals("GREENFIELD", ignoreCase = true))
+                        xyz.mederi.plan.ProjectContextType.GREENFIELD else existing.projectContext,
+                    languageStack = args.languageStack.takeIf { it.isNotBlank() } ?: existing.languageStack,
+                    businessLogic = args.businessLogic.takeIf { it.isNotBlank() } ?: existing.businessLogic,
+                    background = args.background.takeIf { it.isNotBlank() } ?: existing.background,
+                    problemAnalysis = args.problemAnalysis.takeIf { it.isNotBlank() } ?: existing.problemAnalysis,
+                    approach = args.approach.takeIf { it.isNotBlank() } ?: existing.approach,
+                    expectedOutcome = args.expectedOutcome.takeIf { it.isNotBlank() } ?: existing.expectedOutcome,
+                    testMethod = args.testMethod.takeIf { it.isNotBlank() } ?: existing.testMethod,
+                    inScope = args.inScope.takeIf { it.isNotEmpty() } ?: existing.inScope,
+                    outScope = args.outScope.takeIf { it.isNotEmpty() } ?: existing.outScope,
+                    openQuestions = args.openQuestions.takeIf { it.isNotEmpty() } ?: existing.openQuestions,
+                    keyDecisions = args.keyDecisions.takeIf { it.isNotEmpty() }?.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) } ?: existing.keyDecisions,
+                    changes = args.changes.takeIf { it.isNotEmpty() }?.map { PlannedChange(it.module.ifBlank { "core" }, it.action.uppercase(), it.filePath, it.description, it.rationale) } ?: existing.changes,
+                    dataAndParams = args.dataAndParams.takeIf { it.isNotEmpty() } ?: existing.dataAndParams,
+                    risks = args.risks.takeIf { it.isNotEmpty() } ?: existing.risks,
+                    successCriteria = args.successCriteria.takeIf { it.isNotEmpty() } ?: existing.successCriteria,
+                    architecture = args.architecture ?: existing.architecture,
+                    researchNotes = args.researchNotes.takeIf { it.isNotBlank() } ?: existing.researchNotes,
+                    appendix = args.appendix ?: existing.appendix,
+                    subtasks = args.subtasks.takeIf { it.isNotEmpty() }?.mapIndexed { i, st ->
+                        Subtask(
+                            index = i,
+                            name = st.name,
+                            planDetail = st.planDetail,
+                            targetFiles = st.targetFiles,
+                            decisions = st.decisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
+                            verification = VerificationSpec(
+                                command = st.verification,
+                                cwd = st.verificationCwd,
+                                timeoutSeconds = st.verificationTimeoutSeconds,
+                                expected = st.verificationExpected,
+                                expectStdoutContains = st.verificationExpectStdoutContains,
+                                expectStdoutNotContains = st.verificationExpectStdoutNotContains,
+                            ),
+                            dependsOn = st.dependsOn,
+                            parallelizable = st.parallelizable,
+                            appendix = st.appendix
+                        )
+                    } ?: existing.subtasks
+                )
+
+                planStore.save(updated)
+
+                val planPath = planStore.getPlanAbsolutePath(updated.id)
+                    ?: return "Error: plan was updated but plan.md could not be read."
+                val planContent = runCatching { java.io.File(planPath).readText() }.getOrDefault("")
+                val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), updated.subtasks)
+
+                return if (agentMode == AgentMode.APPROVAL) {
+                    val result = planApprovalRequester.request(
+                        planId = updated.id,
+                        planPath = planPath,
+                        title = updated.title,
+                        summary = updated.summary,
+                        planContent = planContent,
+                        subtaskCount = updated.subtasks.size,
+                        subtasksJson = subtasksJson
+                    )
+                    if (result.superseded) "Plan superseded by a newer plan request."
+                    else if (result.approved) {
+                        planStore.update(updated.copy(status = PlanStatus.APPROVED))
+                        notebook.append("## ${Instant.now()} — Plan approved: ${updated.title}")
+                        emitPlanProgress(updated.copy(status = PlanStatus.APPROVED), "approved")
+                        "Plan updated and approved. Plan ID: ${updated.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
+                    } else {
+                        "Plan updated; remains PENDING_APPROVAL. Respond to the user's latest message."
+                    }
+                } else {
+                    "Plan updated. Plan ID: ${updated.id}."
+                }
+            }
+
+            // ===== CREATE MODE（现有逻辑，原封不动）=====
             val error = validatePlan(args)
             if (error != null) return "Error: $error"
 
-            // 三条硬规则之二：同一会话只有最新计划可执行——新 create_plan 作废全部非终态旧计划
+            // 三条硬规则之二：同一会话只有最新计划可执行——新 write_plan 作废全部非终态旧计划
             // （含执行中），作废旧计划移入 plans-voided/ 留痕。已完成的 COMPLETED 计划保留不受影响。
             val voidedIds = planStore.voidActivePlans(sessionId)
             if (voidedIds.isNotEmpty()) {
@@ -353,10 +462,13 @@ class PlanTools(
                 languageStack = args.languageStack,
                 sessionId = sessionId,
                 businessLogic = args.businessLogic,
-                overview = args.overview,
+                background = args.background,
+                problemAnalysis = args.problemAnalysis,
+                approach = args.approach,
+                expectedOutcome = args.expectedOutcome,
+                testMethod = args.testMethod,
                 inScope = args.inScope,
                 outScope = args.outScope,
-                userReviewRequired = args.userReviewRequired,
                 openQuestions = args.openQuestions,
                 keyDecisions = args.keyDecisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
                 changes = args.changes.map { PlannedChange(it.module.ifBlank { "core" }, it.action.uppercase(), it.filePath, it.description, it.rationale) },
@@ -397,12 +509,12 @@ class PlanTools(
             val planPath = planStore.getPlanAbsolutePath(plan.id)
                 ?: return "Error: plan was created but could not be persisted under .mederi/plans/ " +
                     "of the project directories. Check that the project's main directory is writable, " +
-                    "then retry create_plan."
+                    "then retry write_plan."
 
             val planContent = runCatching { java.io.File(planPath).readText() }.getOrDefault("")
             DebugLog.data(
                 "PlanTools",
-                "create_plan executed",
+                "write_plan executed",
                 "planId=${plan.id}, title='${plan.title}', summary='${plan.summary}', contentLen=${planContent.length}"
             )
 
@@ -427,9 +539,9 @@ class PlanTools(
                 } else {
                     // 计划无"拒绝"态（只有批准/作废/被无视）。此分支是用户未批准也未作废时的
                     // 兜底：不预设意图、绝不反问"为什么"。让模型回去响应用户最新消息，计划保持
-                    // PENDING_APPROVAL，等用户明确批准或下个 create_plan 作废它。
+                    // PENDING_APPROVAL，等用户明确批准或下个 write_plan 作废它。
                     "Plan was not approved and not voided; it remains PENDING_APPROVAL. " +
-                        "Do not retry create_plan now. Respond to the user's latest message; " +
+                        "Do not retry write_plan now. Respond to the user's latest message; " +
                         "do not ask why they did not approve."
                 }
             } else {
@@ -462,13 +574,13 @@ class PlanTools(
     data class ConvergePlanArgs(
         @LLMDescription("Plan ID to converge.")
         val planId: String,
-        @LLMDescription("Remediation subtasks to append. Same structure as create_plan subtasks.")
+        @LLMDescription("Remediation subtasks to append. Same structure as write_plan subtasks.")
         val remediationSubtasks: List<SubtaskArg>
     )
 
     inner class ConvergePlanTool : SimpleTool<ConvergePlanArgs>(
         argsType = typeToken<ConvergePlanArgs>(),
-        name = "converge_plan",
+        name = ToolName.CONVERGE_PLAN.value,
         description = "When verify_subtask reports PARTIAL or FAIL, append remediation subtasks to the plan. " +
             "Append-only: never rewrites or renumbers existing subtasks."
     ) {
@@ -537,7 +649,7 @@ class PlanTools(
 
     inner class WriteLogTool : SimpleTool<WriteLogArgs>(
         argsType = typeToken<WriteLogArgs>(),
-        name = "write_log",
+        name = ToolName.WRITE_LOG.value,
         description = "Append an entry to the work log (.mederi/notebook.md). Use this to record decisions, findings, and important events."
     ) {
         override suspend fun execute(args: WriteLogArgs): String {
@@ -559,14 +671,16 @@ class PlanTools(
      */
     inner class GenerateSpecTool : SimpleTool<GenerateSpecArgs>(
         argsType = typeToken<GenerateSpecArgs>(),
-        name = "generate_spec",
+        name = ToolName.GENERATE_SPEC.value,
         description = "Generate the detailed implementation spec for ONE subtask of an APPROVED plan, " +
             "grounded in the actual codebase (read the real files first: function names, signatures, " +
             "data structures must match reality). Call this right before spawning an agent for the " +
             "subtask — and re-call it (with reason=) to CORRECT the spec whenever verification shows " +
             "the spec itself is wrong. Corrections are append-only: the full old spec text is preserved " +
             "in the audit trail (specChanges). The spec is stored per (planId, subtaskIndex); " +
-            "subagent(SPAWN) will execute exactly this spec."
+            "subagent(SPAWN) will execute exactly this spec. The spec is implementation steps only " +
+            "— do NOT include test-running steps; the executor compiles to verify, you test via " +
+            "verify_subtask."
     ) {
         override suspend fun execute(args: GenerateSpecArgs): String {
             val plan = planStore.load(args.planId)
@@ -631,22 +745,14 @@ class PlanTools(
      * 计划校验（聚合报错）：一次列出全部问题，模型一轮补齐所有缺失项。
      * 逐条报错的台阶实测爬不完（弱模型 6+ 轮都到不了底），聚合后一轮收敛。
      */
-    private fun validatePlan(args: CreatePlanArgs): String? {
+    private fun validatePlan(args: WritePlanArgs): String? {
         val errors = mutableListOf<String>()
         if (args.subtasks.isEmpty())
             errors.add("Plan must contain at least one subtask.")
-        if (args.overview.isBlank())
-            errors.add("Overview is required: background and goals (1-2 sentences).")
-        // Summary 与 Overview 复读拦截：卡片摘要是一句话结论，Overview 是背景与目标，语义不同
-        if (args.summary.isNotBlank() && args.summary.trim() == args.overview.trim())
-            errors.add(
-                "Summary must not duplicate the Overview. Summary = ONE sentence for the approval " +
-                    "card (what will change); Overview = background and goals (1-2 paragraphs)."
-            )
+        if (args.approach.isBlank())
+            errors.add("Approach is required: how you will fix/implement it, including business logic.")
         val isGreenfield = args.projectContext.equals("GREENFIELD", ignoreCase = true)
         // 二值不变量校验：只检查"有没有"，不限制"写多少"（篇幅交给提示词约束）
-        if (args.inScope.isEmpty())
-            errors.add("In Scope is required: what will this plan do?")
         if (args.keyDecisions.isEmpty())
             errors.add(
                 "Key Decisions is required: surface your assumptions and choices explicitly " +
@@ -657,8 +763,6 @@ class PlanTools(
                 "Changes is required: list every file with [MODIFY]/[NEW]/[DELETE] markers. " +
                     "Every [NEW] file must justify why an existing file cannot be modified instead."
             )
-        if (args.successCriteria.isEmpty())
-            errors.add("Success criteria is required: how do we know the whole task is done?")
         if (args.languageStack.isBlank())
             errors.add("Language stack is required, e.g. 'Go 1.22', 'Kotlin 2.1 + Gradle 8.10'.")
         for (c in args.changes) {
@@ -713,7 +817,7 @@ class PlanTools(
         // 规则 4：两个 parallelizable 子任务若共享 gradle 模块，其验证编译会竞争——同批并行 spawn 直接拒绝
         errors.addAll(checkParallelizableModuleOverlap(args.subtasks))
         if (errors.isEmpty()) return null
-        return "Plan validation failed — fix ALL of the following items, then retry create_plan once with the complete arguments:\n" +
+        return "Plan validation failed — fix ALL of the following items, then retry write_plan once with the complete arguments:\n" +
             errors.mapIndexed { i, e -> "${i + 1}. $e" }.joinToString("\n")
     }
     @Serializable
@@ -740,7 +844,7 @@ class PlanTools(
 
     inner class UpdateVerificationTool : SimpleTool<UpdateVerificationArgs>(
         argsType = typeToken<UpdateVerificationArgs>(),
-        name = "update_verification",
+        name = ToolName.UPDATE_VERIFY.value,
         description = "Amend an existing subtask's verification CONTRACT (command/cwd/timeout/expected/machine-checked " +
             "literals) atomically via PlanStore.updatePlan. Allowed for non-COMPLETED subtasks " +
             "(PENDING/IN_PROGRESS/FAILED). Use when the verification method itself was written wrong and needs " +
@@ -818,8 +922,8 @@ class PlanTools(
     }
 
     companion object {
-        /** create_plan 工具名（TurnExecutor 据此刻意写或找到挂起的计划工具调用）。 */
-        const val PLAN_TOOL = "create_plan"
+        /** write_plan 工具名（TurnExecutor 据此刻意写或找到挂起的计划工具调用）。 */
+        val PLAN_TOOL = ToolName.WRITE_PLAN.value
 
         /** 规则 1：每个子任务的验证契约必须钉至少 1 个期望 stdout 字面量（返错误文本，null = 通过）。
          *  调用方（validatePlan）负责补 "Subtask $i (${st.name}): " 前缀。 */
@@ -870,7 +974,7 @@ class PlanTools(
          * 用户在有计划待批准时直接继续对话的中性结果语料（非批准、非拒绝、非作废）。
          *
          * 这是三条硬规则之一"用户直接回复 ≠ 拒绝"的落库文本：TurnExecutor 在用户继续对话时
-         * 把这条作为 create_plan 的 ToolResult 写入历史，让下一轮 AI 视图无悬空 tool call，
+         * 把这条作为 write_plan 的 ToolResult 写入历史，让下一轮 AI 视图无悬空 tool call，
          * 并明确"计划仍 PENDING_APPROVAL、用户只是继续了对话"——绝不引导模型追问为什么没批准。
          */
         const val USER_REPLIED_NEUTRAL =

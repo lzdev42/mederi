@@ -78,7 +78,7 @@ class SpawnToolDynamicModelTest {
     private fun planStoreWithSpecdSubtask(): Pair<PlanStore, String> {
         val planStore = PlanStore(listOf(tmpDir.toAbsolutePath().toString()))
         val plan = Plan(
-            id = "plan_test", title = "t", sessionId = "sess_parent", overview = "o",
+            id = "plan_test", title = "t", sessionId = "sess_parent", background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
             subtasks = listOf(Subtask(
                 index = 0, name = "s0", status = SubtaskStatus.PENDING,
                 planDetail = "brief", spec = "1. do the thing",

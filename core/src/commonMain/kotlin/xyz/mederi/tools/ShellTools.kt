@@ -6,6 +6,7 @@ import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.net.URLEncoder
+import xyz.mederi.tools.background.BackgroundTaskManager
 import xyz.mederi.tools.sandbox.CommandSandbox
 import xyz.mederi.tools.sandbox.ProcessRegistry
 
@@ -30,11 +31,13 @@ private const val BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) 
  */
 class ShellTools(
     private val allowedDirectories: List<String>,
-    private val sandbox: CommandSandbox? = null
+    private val sandbox: CommandSandbox? = null,
+    private val backgroundTaskManager: BackgroundTaskManager? = null,
+    private val sessionId: String = "",
 ) {
 
     /**
-     * 命令执行结果（输出 + exit code + 超时标志，供 ExecuteCommandTool 格式化和 VerifyTools 判定）。
+     * 命令执行结果（输出 + exit code + 超时标志，供 BashTool 格式化和 VerifyTools 判定）。
      *
      * [timedOut] 为 true 表示进程未在 [ShellTools.runCommand] 的 timeoutSeconds 内完成被强制回收——
      * 与「进程正常退出但 exitCode 非零」的真实失败区分开（VerifyTools 三态判定依赖此标志）。
@@ -44,7 +47,7 @@ class ShellTools(
     /**
      * 执行一条 shell 命令，返回 [CommandResult]。
      *
-     * ExecuteCommandTool 和 VerifyTools 的自动验证共用此方法——
+     * BashTool 和 VerifyTools 的自动验证共用此方法——
      * 沙箱包装、工作目录、输出读取线程、超时处理全一致。
      *
      * @param cwd 命令工作目录（绝对路径）；null 或空白时回退到项目主目录（allowedDirectories.first()）。
@@ -94,23 +97,67 @@ class ShellTools(
             return CommandResult(prefixed, exitCode)
     }
 
+    /**
+     * 非阻塞命令执行：用与 [runCommand] 相同的沙箱包装启动进程，但不等待——
+     * 进程交给 [BackgroundTaskManager] 的后台协程跟踪（waitFor + 输出读取 + 终态事件），
+     * 立即返回 task ID，AI 可继续与用户对话。
+     */
+    private fun startBackgroundCommand(command: String, timeoutSeconds: Int, cwd: String?): String {
+        if (command.isBlank()) return "Error: command is empty"
+
+        return runCatching {
+            val wrapped = sandbox?.wrap(command)
+                ?: xyz.mederi.tools.sandbox.CommandSandbox.WrappedCommand(
+                    listOf(sandbox?.shell ?: "sh", "-c", command), null, false
+                )
+            val workDir = cwd?.takeIf { it.isNotBlank() }?.let { java.io.File(it) } ?: java.io.File(allowedDirectories.first())
+            val builder = ProcessBuilder(wrapped.argv)
+            builder.directory(workDir)
+            builder.redirectErrorStream(true)
+
+            val process = builder.start()
+            xyz.mederi.tools.sandbox.ProcessRegistry.register(
+                pid = process.pid(),
+                pgid = if (wrapped.processGroupLeader) process.pid() else null,
+                command = command,
+                workDir = workDir.absolutePath
+            )
+
+            val taskId = backgroundTaskManager!!.trackCommand(
+                sessionId = sessionId,
+                process = process,
+                command = command,
+                workDir = workDir.absolutePath,
+                timeoutSeconds = timeoutSeconds
+            )
+            "Background task started: $taskId\nCommand: $command\nYou will be notified with the output when it completes. You can continue working with the user."
+        }.getOrElse { e ->
+            "Error starting background command: ${e.message}"
+        }
+    }
+
     @Serializable
-    data class ExecuteCommandArgs(
+    data class BashArgs(
         @LLMDescription("Shell command to execute.")
         val command: String = "",
         @LLMDescription("Working directory (absolute or project-relative path). Empty = project root.")
         val cwd: String = "",
         @LLMDescription("Timeout in seconds; default 120.")
         @kotlinx.serialization.SerialName("timeout_seconds")
-        val timeoutSeconds: Int = 120
+        val timeoutSeconds: Int = 120,
+        @LLMDescription("Set true for long-running commands (compilation, tests, servers). The command runs in the background; you get notified with the output when it completes and can continue working meanwhile. Default false blocks until the command finishes.")
+        val background: Boolean = false
     )
 
-    inner class ExecuteCommandTool : SimpleTool<ExecuteCommandArgs>(
-        argsType = typeToken<ExecuteCommandArgs>(),
-        name = "execute_command",
-        description = "Execute a shell command in the given working directory (empty cwd = project root) and return its stdout and stderr. Writes are sandbox-limited: project directories, temp dirs, and build caches only."
+    inner class BashTool : SimpleTool<BashArgs>(
+        argsType = typeToken<BashArgs>(),
+        name = ToolName.BASH.value,
+        description = "Execute a shell command in the given working directory (empty cwd = project root) and return its stdout and stderr. Writes are sandboxed: project directories, temp dirs, and build caches only. Set background=true for long-running commands (compilation, tests, servers) — runs in background, you get notified with output when done, and can continue working meanwhile. Default background=false blocks until the command finishes."
     ) {
-        override suspend fun execute(args: ExecuteCommandArgs): String {
+        override suspend fun execute(args: BashArgs): String {
+            if (args.background && backgroundTaskManager != null) {
+                return startBackgroundCommand(args.command, args.timeoutSeconds, args.cwd.takeIf { it.isNotBlank() })
+            }
             val result = runCommand(args.command, args.timeoutSeconds, args.cwd.takeIf { it.isNotBlank() })
             val exitPrefix = if (result.exitCode != 0) "[exit code: ${result.exitCode}]\n" else ""
             return exitPrefix + result.output
@@ -196,7 +243,7 @@ class ShellTools(
      */
     inner class WebSearchTool : SimpleTool<WebSearchArgs>(
         argsType = typeToken<WebSearchArgs>(),
-        name = "web_search",
+        name = ToolName.WEB_SEARCH.value,
         description = "Search the web via Bing. Returns structured results: title, URL, snippet for each hit. " +
             "Read-only: no POST/PUT/DELETE, no file writes. Use for finding documentation, API references, " +
             "release notes, and current information."
@@ -263,7 +310,7 @@ class ShellTools(
      */
     inner class WebFetchTool : SimpleTool<WebFetchArgs>(
         argsType = typeToken<WebFetchArgs>(),
-        name = "web_fetch",
+        name = ToolName.WEB_FETCH.value,
         description = "Fetch a URL via curl HTTP GET and return cleaned text content. Strips scripts, styles, SVG, " +
             "and HTML tags to return readable text. Read-only: no POST/PUT/DELETE, no file writes."
     ) {

@@ -6,6 +6,8 @@ import ai.koog.prompt.message.Message as KoogMessage
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.utils.time.KoogClock
 import xyz.mederi.debug.DebugLog
+import xyz.mederi.domain.model.EventType
+import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.store.HistoryStore
 import java.time.Instant
 
@@ -35,7 +37,8 @@ import java.time.Instant
 class TurnIncrementalPersister(
     private val sessionId: String,
     private val historyStore: HistoryStore,
-    private val diagnostics: MessageDiagnostics = MessageDiagnostics()
+    private val diagnostics: MessageDiagnostics = MessageDiagnostics(),
+    private val eventBus: kotlinx.coroutines.flow.MutableSharedFlow<MederiEvent>? = null
 ) {
     val lastAssistantMessageId = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
@@ -82,17 +85,23 @@ class TurnIncrementalPersister(
     }
 
     /** 用户中途引导（Steering）消息落库 */
-    suspend fun persistSteeringUserMessage(text: String, id: String? = null) {
+    suspend fun persistSteeringUserMessage(text: String, id: String? = null, timestamp: Long? = null) {
         runCatching {
             val koogUser = KoogMessage.User(
                 content = text,
                 metaInfo = RequestMetaInfo.create(KoogClock.System),
                 id = id
             )
-            val msg = KoogMessageMapper.fromKoogUserMessage(sessionId, koogUser)
+            val baseMsg = KoogMessageMapper.fromKoogUserMessage(sessionId, koogUser)
                 .withDiagnostics(diagnostics)
+            val msg = if (timestamp != null && timestamp > 0) {
+                baseMsg.copy(createdAt = java.time.Instant.ofEpochMilli(timestamp).toString())
+            } else {
+                baseMsg
+            }
             historyStore.append(sessionId, msg)
-            DebugLog.event("Persist", "steering message appended: id=${msg.id}, text='$text'")
+            DebugLog.event("Persist", "steering message appended: id=${msg.id}, text='$text', createdAt=${msg.createdAt}")
+            eventBus?.emit(MederiEvent(type = EventType.SESSION_UPDATED, sessionId = sessionId, timestamp = Instant.now().toString()))
         }.onFailure { e ->
             DebugLog.error("Persist", "steering message persist failed: ${e.message}", e)
         }

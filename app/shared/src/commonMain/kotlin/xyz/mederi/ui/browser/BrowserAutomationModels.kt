@@ -127,6 +127,7 @@ sealed interface BrowserFlowStep {
  * - **截图点击放大**：[previewScreenshot] 非空时弹出大图预览层（Lightbox）。
  */
 @Immutable
+@Serializable
 data class BrowserAutomationUiState(
     val isAutomating: Boolean = false,
     val isPanelOpen: Boolean = false,

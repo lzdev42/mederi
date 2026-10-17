@@ -14,7 +14,7 @@ data class SandboxStatus(
 )
 
 /**
- * execute_command 的 OS 级写沙箱 + shell 探测链。
+ * bash 的 OS 级写沙箱 + shell 探测链。
  *
  * 设计（docs/sandbox-plan.md）：
  * - **永远开，无开关**：不感知的安全不需要配置；合法扩大写范围的正确姿势是
@@ -202,8 +202,20 @@ class CommandSandbox(
         val tmpDir = System.getenv("TMPDIR")?.takeIf { it.isNotBlank() } ?: "/tmp"
         val builtin = listOf(
             tmpDir, "/tmp", "/private/tmp", "/private/var/folders",
-            "$home/.gradle", "$home/.m2", "$home/.cache", "$home/.konan",
+            // JVM ecosystem
+            "$home/.gradle", "$home/.m2", "$home/.konan",
             "$home/Library/Caches", "$home/Library/Java",
+            // JS/TS ecosystem
+            "$home/.npm", "$home/.bun", "$home/.pnpm-store",
+            // Rust
+            "$home/.cargo",
+            // Go
+            "$home/go",
+            // Python (pip/poetry/pipenv/uv share ~/.cache and ~/.local)
+            "$home/.local",
+            // generic cache (covers pip, Homebrew, etc.)
+            "$home/.cache",
+            // device files
             "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"
         )
         return (projectDirs + SandboxConfig.extraWritablePaths + builtin)
@@ -268,7 +280,6 @@ class CommandSandbox(
                 appendLine("Sandbox: ${if (status.available) status.backend else "none"} — ${status.detail}")
             }
             appendLine("Process control: list_processes / stop_process manage mederi-spawned processes only")
-            appendLine("Java: ${System.getProperty("java.version")}")
         }
     }
 }

@@ -11,58 +11,41 @@ package xyz.mederi.util
  */
 enum class FileOpenTarget { INTERNAL_TEXT, INTERNAL_IMAGE, EXTERNAL, REVEAL_IN_FOLDER }
 
+private val KNOWN_IMAGE_EXTENSIONS = setOf(
+    "png", "jpg", "jpeg", "webp", "bmp", "gif", "ico", "svg", "svgz"
+)
+
+private val KNOWN_EXTERNAL_EXTENSIONS = setOf(
+    // office 新式 / 旧式 / WPS / iWork
+    "docx", "xlsx", "pptx", "doc", "xls", "ppt",
+    "wps", "et", "dps", "pages", "numbers", "key",
+    // PDF 与网页（html 归外部交给系统默认浏览器）
+    "pdf", "html", "htm",
+    // 压缩包
+    "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz",
+    // 二进制 / 可执行
+    "exe", "bin", "dll", "so", "dylib", "class", "jar", "iso", "dmg", "pkg", "apk", "ipa",
+    // 音视频
+    "mp4", "mov", "mkv", "avi", "mp3", "wav", "flac", "aac", "ogg", "webm"
+)
+
 /**
- * 按扩展名把任意文件路径分到 [FileOpenTarget] 四档之一——**对话中文件点击分级的唯一真理源**，
+ * 按扩展名把任意文件路径分到 [FileOpenTarget] 档位——**对话中文件点击分级的唯一真理源**，
  * 被 `WorkspaceViewModel.openFile` 的路由消费。零 I/O，故全平台（jvm/android/ios/wasmJs）
  * 都能直接单测。
  *
  * 判据全部来自扩展名，不读盘、不查 MIME、不调 `PlatformUtils`：
- * - 文本类 = MarkdownView 能渲染的 String 子集（markdown / 纯文本 / 源码配置）；
- * - 图片类 = InkImage（Coil3）支持的本地路径格式；
- * - 其余（office/pdf/html/压缩/二进制/媒体）一律 EXTERNAL——注意 `html/htm` 归 EXTERNAL
- *   是明确口径（交给浏览器开），**不**因为"能当文本看"就归 INTERNAL_TEXT；
- * - 无扩展名（Makefile/Dockerfile）、未知扩展名、以及 `.gitignore` 这类隐藏文件
- *   （`substringAfterLast('.')` 会得到 `gitignore`）都落 [FileOpenTarget.REVEAL_IN_FOLDER]。
+ * - 图片类 = InkImage（Coil3）支持的本地路径格式，归 [FileOpenTarget.INTERNAL_IMAGE]；
+ * - 明确外部格式（Office/PDF/HTML/压缩/二进制/音视频）归 [FileOpenTarget.EXTERNAL]；
+ * - 其余一切（无论常见源码、配置、无后缀如 Makefile/Dockerfile 还是未知扩展名）一律作为
+ *   [FileOpenTarget.INTERNAL_TEXT] 候选——由消费端尝试读取并检测非 NUL 字节，
+ *   是合法文本则在内置查看器直接打开，遇二进制或读取异常再降级外部处理。
  */
 fun classifyFilePath(path: String): FileOpenTarget {
-    // 纯字符串运算：零 I/O。大小写不敏感（.KT / .MD / .PNG 与小写等价），忽略扩展名两端空白。
     val ext = path.substringAfterLast('.', "").lowercase().trim()
-    if (ext.isEmpty()) return FileOpenTarget.REVEAL_IN_FOLDER
-    return when (ext) {
-        // ---- 内部文本查看器（MarkdownView 能渲染的 String 子集）----
-        "md", "markdown", "txt", "log",
-        "kt", "kts", "java", "py", "js", "ts", "jsx", "tsx",
-        "json", "xml", "yaml", "yml", "toml", "gradle", "sql",
-        "sh", "bash", "zsh",
-        "c", "h", "cpp", "hpp", "cc", "cs", "go", "rs", "rb", "swift", "php", "lua",
-        "css", "scss", "less",
-        "properties", "ini", "conf", "cfg", "env",
-        // 纯代码（有词法器、能进查看器；围栏语言见 [codeFenceLanguageFor]）
-        "dart", "scala", "sc", "hs", "ex", "exs", "r", "diff", "patch",
-        "dockerfile", "makefile" -> FileOpenTarget.INTERNAL_TEXT
-
-        // ---- 内部图片查看器（InkImage / Coil3 支持的本地路径格式）----
-        "png", "jpg", "jpeg", "webp", "bmp", "gif", "ico", "svg", "svgz" ->
-            FileOpenTarget.INTERNAL_IMAGE
-
-        // ---- 内部不适合看 → 系统默认程序（PlatformUtils.openFile）----
-        // office 新式 / 旧式
-        "docx", "xlsx", "pptx", "doc", "xls", "ppt",
-        // 金山 WPS / Apple iWork
-        "wps", "et", "dps", "pages", "numbers", "key",
-        // PDF 与网页（html 归外部是明确口径：交给浏览器）
-        "pdf", "html", "htm",
-        // 压缩包
-        "zip", "rar", "7z", "tar", "gz", "bz2", "xz",
-        // 二进制 / 可执行
-        "exe", "bin", "dll", "so", "dylib", "class", "jar",
-        // 音视频
-        "mp4", "mov", "mkv", "avi", "mp3", "wav", "flac", "aac", "ogg" ->
-            FileOpenTarget.EXTERNAL
-
-        // 未知扩展名（含 .gitignore → "gitignore" 这类隐藏文件特例）
-        else -> FileOpenTarget.REVEAL_IN_FOLDER
-    }
+    if (ext in KNOWN_IMAGE_EXTENSIONS) return FileOpenTarget.INTERNAL_IMAGE
+    if (ext in KNOWN_EXTERNAL_EXTENSIONS) return FileOpenTarget.EXTERNAL
+    return FileOpenTarget.INTERNAL_TEXT
 }
 
 /**
@@ -81,6 +64,11 @@ fun classifyFilePath(path: String): FileOpenTarget {
  * @return 围栏语言标签；无词法器对应时返回 null。
  */
 fun codeFenceLanguageFor(path: String): String? {
+    val fileName = path.substringAfterLast('/').lowercase().trim()
+    if (fileName == "makefile") return "makefile"
+    if (fileName == "dockerfile") return "dockerfile"
+    if (fileName == "cmakelists.txt") return "cmake"
+
     val ext = path.substringAfterLast('.', "").lowercase().trim()
     if (ext.isEmpty()) return null
     return when (ext) {
@@ -93,8 +81,9 @@ fun codeFenceLanguageFor(path: String): String? {
         "xml" -> "xml"
         "yaml", "yml" -> "yaml"
         "toml" -> "toml"
-        "sql" -> "sql"
-        "sh", "bash", "zsh" -> "bash"
+        "sql", "sq" -> "sql"
+        "proto" -> "protobuf"
+        "sh", "bash", "zsh", "env" -> "bash"
         "c", "h" -> "c"
         "cpp", "hpp", "cc" -> "cpp"
         "go" -> "go"
@@ -103,7 +92,8 @@ fun codeFenceLanguageFor(path: String): String? {
         "swift" -> "swift"
         "php" -> "php"
         "lua" -> "lua"
-        "css" -> "css"
+        "css", "scss", "less" -> "css"
+        "html", "vue", "svelte", "astro" -> "html"
         "dockerfile" -> "dockerfile"
         "dart" -> "dart"
         "scala", "sc" -> "scala"
@@ -111,6 +101,7 @@ fun codeFenceLanguageFor(path: String): String? {
         "ex", "exs" -> "elixir"
         "r" -> "r"
         "diff", "patch" -> "diff"
+        "properties", "ini", "conf", "cfg" -> "ini"
         else -> null
     }
 }

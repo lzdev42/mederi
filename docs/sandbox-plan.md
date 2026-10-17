@@ -23,7 +23,7 @@
 |---|---|---|---|
 | read_file / list_directory | 全盘可读 | 纯 Kotlin（resolveForRead 无包含校验） | 全平台 |
 | write_file / edit_file（apply_patch 已注销，实现保留） | 只能写白名单路径；同文件并发写硬拒绝（FileWriteRegistry） | 纯 Kotlin（resolveForWrite containment 校验，WindowsPath 大小写不敏感天然兼容） | 全平台 |
-| execute_command | OS 级沙箱：写=白名单，读=全盘，网络/进程放行 | macOS Seatbelt / Linux bwrap / Windows NONE | 按平台降级 |
+| bash | OS 级沙箱：写=白名单，读=全盘，网络/进程放行 | macOS Seatbelt / Linux bwrap / Windows NONE | 按平台降级 |
 | 进程回收 | 只允许回收 mederi 自己 spawn 的进程组（ProcessRegistry 注册表）；沙箱内命令无法写入注册表，查不到 pid 即拒绝 | ProcessRegistry（宿主侧）+ list_processes / stop_process | 全平台 |
 | 是否写文件/建计划 | Triage Flow 分诊判断（提示词强制，见 `AGENTS.md §5.6`），沙盒是唯一代码级安全网 | SystemPrompts | 全平台 |
 
@@ -98,7 +98,7 @@ macOS 沙箱内 gradle 首跑如遇遗漏路径（daemon socket、Xcode licenses
 
 ## 4.5 进程管理与宿主侧回收（2026-09 落地，修 macOS 互杀不可能）
 
-**问题**：macOS 沙箱内命令之间无法发信号 → execute_command 起的 dev server / 后台任务，
+**问题**：macOS 沙箱内命令之间无法发信号 → bash 起的 dev server / 后台任务，
 后续命令 `kill` 必然失败，只能靠会话 teardown 回收。
 
 **机制**：每条命令套**进程组长包装**，使整条命令树共享一个 PGID（= 直接子进程 pid）：
@@ -140,6 +140,6 @@ bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp
   socket 协议收工不受影响，但**中断/超时强杀回退会漏 worker JVM**（恰好能被 stop_process 整组回收）；
   测试内自行 spawn 子进程再 destroy 的场景同样会漏。编译/测试主链路已验证可用。
 - Seatbelt deprecated：Chrome/Anthropic/OpenAI 全在用，短期内不会消失；如被移除则降级警告
-- Windows execute_command 裸跑：文件工具仍是硬边界；git/diff 是回滚网
+- Windows bash 裸跑：文件工具仍是硬边界；git/diff 是回滚网
 - 全局白名单存 PreferencesStore（明文路径，无敏感数据）
 - 读全盘含敏感文件：提示词约束 + 本地应用风险自担（D8 已拍板）

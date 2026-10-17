@@ -130,7 +130,7 @@ class FileSystemTools(
 
     inner class ReadFileTool : SimpleTool<ReadFileArgs>(
         argsType = typeToken<ReadFileArgs>(),
-        name = "read_file",
+        name = ToolName.READ_FILE.value,
         description = "Read a local file and return its text content, starting at offset (1-based) up to max_lines lines. Each line is prefixed by its 1-based line number as `<line>: <content>`. The prefix is for reference and is not part of file content. The result reports the returned line range and the next offset when more remain."
     ) {
         override suspend fun execute(args: ReadFileArgs): String {
@@ -170,7 +170,7 @@ class FileSystemTools(
 
     inner class WriteFileTool : SimpleTool<WriteFileArgs>(
         argsType = typeToken<WriteFileArgs>(),
-        name = "write_file",
+        name = ToolName.WRITE_FILE.value,
         description = "Write content to a file, creating it (and parent directories) if absent, overwriting it if present."
     ) {
         override suspend fun execute(args: WriteFileArgs): String {
@@ -195,7 +195,7 @@ class FileSystemTools(
 
     inner class EditFileTool : SimpleTool<EditFileArgs>(
         argsType = typeToken<EditFileArgs>(),
-        name = "edit_file",
+        name = ToolName.EDIT_FILE.value,
         description = "Replace original text in an existing file. original must be UNIQUE in the file — multiple matches are rejected (provide more context). replace_all=true replaces every occurrence."
     ) {
         override suspend fun execute(args: EditFileArgs): String {
@@ -349,7 +349,7 @@ class FileSystemTools(
 
     inner class ListDirectoryTool : SimpleTool<ListDirectoryArgs>(
         argsType = typeToken<ListDirectoryArgs>(),
-        name = "list_directory",
+        name = ToolName.LIST_DIRECTORY.value,
         description = "List files and subdirectories in a directory. Empty path = project root."
     ) {
         override suspend fun execute(args: ListDirectoryArgs): String {
@@ -377,7 +377,7 @@ class FileSystemTools(
      */
     inner class ApplyPatchTool : SimpleTool<ApplyPatchArgs>(
         argsType = typeToken<ApplyPatchArgs>(),
-        name = "apply_patch",
+        name = ToolName.APPLY_PATCH.value,
         description =
             "应用一份补丁，一次性对多个文件执行新增/修改/删除/移动操作。适合同时修改多个文件、一个文件的多个位置、" +
                 "或新增+修改+删除混合操作；单文件单处小改动用 edit_file 即可。应用前会整体校验，任何一处匹配失败则全部不落盘。"

@@ -6,7 +6,9 @@ import androidx.compose.ui.Modifier
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.Check
+import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Info
+import compose.icons.feathericons.Terminal
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.event_message_no_content
 import mederi.app.shared.generated.resources.event_message_open_report_title
@@ -19,6 +21,11 @@ import mederi.app.shared.generated.resources.event_message_strip_stopped_role
 import mederi.app.shared.generated.resources.event_message_subagent_title
 import mederi.app.shared.generated.resources.event_message_subagent_title_role
 import mederi.app.shared.generated.resources.event_message_view_detail
+import mederi.app.shared.generated.resources.event_message_bg_task_completed
+import mederi.app.shared.generated.resources.event_message_bg_task_error
+import mederi.app.shared.generated.resources.event_message_bg_task_stopped
+import mederi.app.shared.generated.resources.event_message_bg_task_timer_fired
+import mederi.app.shared.generated.resources.event_message_bg_task_title
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.ChatListItem
@@ -59,6 +66,10 @@ fun EventMessageCard(
     // 中性色语义：STOPPED（被取消不是成功，不用成功绿）
     val useNeutralStyle = terminalKind == SubagentTerminalKind.STOPPED
 
+    // 后台任务事件（background_task_*）与子代理事件（subagent_*）走不同文案/标题，
+    // 但共享终态判定（terminalKind）和图标/颜色逻辑。
+    val isBackgroundTask = item.eventType.startsWith("background_task_")
+
     // 读取完整报告正文：优先走注入的 LocalProjectFileTreeProvider（commonMain 禁用 JVM 文件 API，
     // KMP 硬性约束）；provider 为 null（未注入的平台）或读不出内容时回落 item.summary 原文。
     // 注意：CompositionLocal.current 是 @Composable 读，必须在 composable 作用域内取出，
@@ -70,37 +81,58 @@ fun EventMessageCard(
         if (!fileText.isNullOrBlank()) fileText else item.summary
     }
 
+    // hasRole / roleLabel 先无条件计算（hasSpecificRole / roleLabelOf 是 @Composable 函数，
+    // 避免在条件分支内调用 @Composable 的编译器问题），仅子代理路径使用。
     val hasRole = hasSpecificRole(item.role)
     val roleLabel = roleLabelOf(item.role)
-    val displayTitle = if (hasRole) {
-        stringResource(Res.string.event_message_subagent_title_role, roleLabel)
+    val displayTitle = if (isBackgroundTask) {
+        stringResource(Res.string.event_message_bg_task_title)
     } else {
-        stringResource(Res.string.event_message_subagent_title)
+        if (hasRole) {
+            stringResource(Res.string.event_message_subagent_title_role, roleLabel)
+        } else {
+            stringResource(Res.string.event_message_subagent_title)
+        }
     }
     val openReportTitle = stringResource(Res.string.event_message_open_report_title, displayTitle)
 
-    // 状态行 = 纯状态文案（三档，不再拼报告摘要/方括号）；摘要只在右侧阅读器里看
-    val statusText = when (terminalKind) {
-        SubagentTerminalKind.COMPLETED -> if (hasRole) {
-            stringResource(Res.string.event_message_strip_completed_role, roleLabel)
+    // 状态行 = 纯状态文案；后台任务（background_task_*）与子代理事件（subagent_*）分支不同文案，
+    // 但共享终态判定（terminalKind）。摘要只在右侧阅读器里看
+    val statusText = if (isBackgroundTask) {
+        // 后台任务文案：timer 型 COMPLETED 用"定时器已触发"，其余按 terminalKind 走通用文案
+        if (item.taskType == "timer" && terminalKind == SubagentTerminalKind.COMPLETED) {
+            stringResource(Res.string.event_message_bg_task_timer_fired)
         } else {
-            stringResource(Res.string.event_message_strip_completed)
+            when (terminalKind) {
+                SubagentTerminalKind.COMPLETED -> stringResource(Res.string.event_message_bg_task_completed)
+                SubagentTerminalKind.ERROR, SubagentTerminalKind.OTHER ->
+                    stringResource(Res.string.event_message_bg_task_error)
+                SubagentTerminalKind.STOPPED -> stringResource(Res.string.event_message_bg_task_stopped)
+            }
         }
-        SubagentTerminalKind.ERROR -> if (hasRole) {
-            stringResource(Res.string.event_message_strip_failed_role, roleLabel)
-        } else {
-            stringResource(Res.string.event_message_strip_failed)
-        }
-        SubagentTerminalKind.STOPPED -> if (hasRole) {
-            stringResource(Res.string.event_message_strip_stopped_role, roleLabel)
-        } else {
-            stringResource(Res.string.event_message_strip_stopped)
-        }
-        // 兜底按失败展示，绝不回落成「已完成」
-        SubagentTerminalKind.OTHER -> if (hasRole) {
-            stringResource(Res.string.event_message_strip_failed_role, roleLabel)
-        } else {
-            stringResource(Res.string.event_message_strip_failed)
+    } else {
+        when (terminalKind) {
+            SubagentTerminalKind.COMPLETED -> if (hasRole) {
+                stringResource(Res.string.event_message_strip_completed_role, roleLabel)
+            } else {
+                stringResource(Res.string.event_message_strip_completed)
+            }
+            SubagentTerminalKind.ERROR -> if (hasRole) {
+                stringResource(Res.string.event_message_strip_failed_role, roleLabel)
+            } else {
+                stringResource(Res.string.event_message_strip_failed)
+            }
+            SubagentTerminalKind.STOPPED -> if (hasRole) {
+                stringResource(Res.string.event_message_strip_stopped_role, roleLabel)
+            } else {
+                stringResource(Res.string.event_message_strip_stopped)
+            }
+            // 兜底按失败展示，绝不回落成「已完成」
+            SubagentTerminalKind.OTHER -> if (hasRole) {
+                stringResource(Res.string.event_message_strip_failed_role, roleLabel)
+            } else {
+                stringResource(Res.string.event_message_strip_failed)
+            }
         }
     }
 
@@ -108,11 +140,16 @@ fun EventMessageCard(
 
     StatusStrip(
         text = statusText,
-        // 1. 左侧状态图标：COMPLETED=对勾(绿) / STOPPED=Info(中性灰) / ERROR+OTHER=AlertCircle(红)
-        icon = when {
-            useErrorStyle -> FeatherIcons.AlertCircle
-            useNeutralStyle -> FeatherIcons.Info
-            else -> FeatherIcons.Check
+        // 1. 左侧状态图标：COMPLETED=对勾(绿) / STOPPED=Info(中性灰) / ERROR+OTHER=AlertCircle(红)；
+        //    后台任务（background_task_*）按类型用 Terminal/Clock，颜色仍按终态
+        icon = if (isBackgroundTask) {
+            if (item.taskType == "timer") FeatherIcons.Clock else FeatherIcons.Terminal
+        } else {
+            when {
+                useErrorStyle -> FeatherIcons.AlertCircle
+                useNeutralStyle -> FeatherIcons.Info
+                else -> FeatherIcons.Check
+            }
         },
         iconTint = when {
             useErrorStyle -> colors.statusError

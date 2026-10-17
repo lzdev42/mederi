@@ -60,6 +60,7 @@ import xyz.mederi.core.contract.dto.AddModelInput
 import xyz.mederi.core.contract.dto.ApiError
 import xyz.mederi.core.contract.dto.BuiltinProviderInput
 import xyz.mederi.core.contract.dto.ChatPromptInput
+import xyz.mederi.core.contract.dto.CompactionThresholdDto
 import xyz.mederi.core.contract.dto.CreateConversationInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.CreateProjectInput
@@ -320,6 +321,15 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     // 进程资源监控：返回本进程（即被遥控端宿主）真实 CPU/内存占用，遥控端透传展示
     get("/v1/system/stats") { call.respondResult(aiCore.getProcessStats()) }
 
+    // 自动压缩阈值配置
+    get("/v1/config/compaction-threshold") {
+        call.respondData(CompactionThresholdDto(aiCore.compactionThresholdPercent.value))
+    }
+    put("/v1/config/compaction-threshold") {
+        val input = call.receive<CompactionThresholdDto>()
+        call.respondResult(runCatching { aiCore.setCompactionThresholdPercent(input.percent) })
+    }
+
     // ------------------------------------------------------------------
     // Project
     // ------------------------------------------------------------------
@@ -401,9 +411,7 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
             aiCore.resolvePlanApproval(
                 call.parameters["id"]!!,
                 call.parameters["planId"]!!,
-                input.approved,
-                input.model,
-                input.thinkingLevel
+                input.approved
             )
         )
     }
@@ -619,6 +627,20 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     post("/v1/subagents/{agentId}/stop") {
         val agentId = call.parameters["agentId"] ?: return@post call.respond(HttpStatusCode.BadRequest)
         call.respondResult(aiCore.stopSubagent(agentId))
+    }
+
+    // ------------------------------------------------------------------
+    // 后台任务管理（概览面板查询/停止后台命令和定时器）
+    // ------------------------------------------------------------------
+
+    get("/v1/sessions/{sessionId}/background-tasks") {
+        val sessionId = call.parameters["sessionId"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.listBackgroundTasks(sessionId))
+    }
+
+    post("/v1/background-tasks/{taskId}/stop") {
+        val taskId = call.parameters["taskId"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.stopBackgroundTask(taskId))
     }
 }
 

@@ -75,7 +75,7 @@ class PlanCrossTurnApprovalTest {
         Plan(
             id = "plan_${UUID.randomUUID().toString().take(8)}",
             title = "Cross-turn plan", summary = "sum", sessionId = sessionId,
-            overview = "ovr", status = status,
+            background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t", status = status,
             createdAt = java.time.Instant.now().toString(), agentMode = AgentMode.APPROVAL,
             subtasks = emptyList()
         )
@@ -129,7 +129,7 @@ class PlanCrossTurnApprovalTest {
         // 段1与段2在同一调用内：段2 抛异常会被 runCatching 吞掉，getOrNull() 可能为 null。
         // 但"计划被置 APPROVED"在 updatePlan 成功返回、进入 sendMessageInternal 之前已完成——
         // 该断言成立即证明跨 turn 批准段1（校验→置 APPROVED→发事件）完整走通。
-        runCatching { executor.resolvePlanApproval(sessionId, p.id, approved = true, aiModel = null) }
+        runCatching { executor.resolvePlanApproval(sessionId, p.id, approved = true) }
         assertEquals(PlanStatus.APPROVED, planStore.load(p.id)?.status, "计划应被置为 APPROVED（段1已落盘）")
     }
 
@@ -148,8 +148,8 @@ class PlanCrossTurnApprovalTest {
         planStore.save(foreign)
 
         val executor = newExecutor(store, StubProjectManager(project))
-        assertEquals(false, executor.resolvePlanApproval(sessionId, approved.id, true, null), "已 APPROVED 计划不可再批")
-        assertEquals(false, executor.resolvePlanApproval(sessionId, foreign.id, true, null), "他会话计划不可批")
+        assertEquals(false, executor.resolvePlanApproval(sessionId, approved.id, true), "已 APPROVED 计划不可再批")
+        assertEquals(false, executor.resolvePlanApproval(sessionId, foreign.id, true), "他会话计划不可批")
     }
 
     private fun model(id: String) = AIModel(id = id, providerModelId = id, name = "Model $id")

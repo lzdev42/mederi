@@ -78,7 +78,7 @@ class PlanStore(private val projectDirectories: List<String>) {
     /**
      * 按 sessionId 加载该会话最晚的非终态计划（终态 = COMPLETED/VOIDED）。
      *
-     * 计划状态机：每个会话同时最多一条"活跃"（非终态）计划——新 create_plan 作废旧的非终态
+     * 计划状态机：每个会话同时最多一条"活跃"（非终态）计划——新 write_plan 作废旧的非终态
      * 计划（voidActivePlans）并成为新的活跃计划。多份计划目录并列时按 createdAt 取最新，
      * 避免目录乱序读到旧的作废前残本。作废计划已移出 plans/，正常不在此目录；此处仍按
      * [Plan.isTerminal] 兜底排除，兼顾移出失败/历史数据的边界。
@@ -131,7 +131,7 @@ class PlanStore(private val projectDirectories: List<String>) {
      * 作废某会话全部非终态计划（含执行中）：状态置 VOIDED 落盘后连同整个 {planId}/ 目录
      * 移入 `plans-voided/`（与 [archive] 的 plans-done/ 对称，作废计划留痕可查、不删文件）。
      *
-     * 触发时机 = 新 create_plan：同一会话只有最新计划可执行，旧计划（无论 PENDING_APPROVAL /
+     * 触发时机 = 新 write_plan：同一会话只有最新计划可执行，旧计划（无论 PENDING_APPROVAL /
      * APPROVED / IN_PROGRESS）一律作废。已完成的算凭据保留，不受影响。
      *
      * @return 被作废的计划 id列表（由调用方用于发 PLAN_PROGRESS(voided) 事件）。
@@ -366,24 +366,6 @@ class PlanStore(private val projectDirectories: List<String>) {
             sb.appendLine()
         }
 
-        // 置顶两段：用户知情决策的第一落点，先于一切内容段
-        if (plan.userReviewRequired.isNotEmpty()) {
-            sb.appendLine("## 需要你确认（User Review Required）")
-            plan.userReviewRequired.forEach { item ->
-                sb.appendLine()
-                // 条目带 GitHub alert 标签（[!WARNING] 等）时渲染为警示块，否则渲染为普通段落
-                val alertMatch = Regex("^\\[!(IMPORTANT|WARNING|CAUTION|NOTE|TIP)]\\s*(.*)", RegexOption.DOT_MATCHES_ALL)
-                    .matchEntire(item)
-                if (alertMatch != null) {
-                    sb.appendLine("> [!${alertMatch.groupValues[1]}]")
-                    alertMatch.groupValues[2].lines().forEach { sb.appendLine("> $it") }
-                } else {
-                    sb.appendLine(item)
-                }
-            }
-            sb.appendLine()
-        }
-
         if (plan.openQuestions.isNotEmpty()) {
             sb.appendLine("## 默认决策（Open Questions）")
             sb.appendLine("以下默认选择未经你确认——不同意直接在对话里说即可。")
@@ -391,9 +373,32 @@ class PlanStore(private val projectDirectories: List<String>) {
             sb.appendLine()
         }
 
-        sb.appendLine("## 概览（Overview）")
-        sb.appendLine(plan.overview)
+        // Goal：background + problemAnalysis + expectedOutcome 合并为单段叙事（A 类，任一非空才渲染）
+        if (plan.background.isNotBlank() || plan.problemAnalysis.isNotBlank() || plan.expectedOutcome.isNotBlank()) {
+            sb.appendLine("## 目标（Goal）")
+            if (plan.background.isNotBlank()) {
+                sb.appendLine(plan.background)
+                sb.appendLine()
+            }
+            if (plan.problemAnalysis.isNotBlank()) {
+                sb.appendLine(plan.problemAnalysis)
+                sb.appendLine()
+            }
+            if (plan.expectedOutcome.isNotBlank()) {
+                sb.appendLine(plan.expectedOutcome)
+                sb.appendLine()
+            }
+        }
+
+        sb.appendLine("## 实现方案（Approach）")
+        sb.appendLine(plan.approach)
         sb.appendLine()
+
+        if (plan.testMethod.isNotBlank()) {
+            sb.appendLine("## 验证计划（Verification Plan）")
+            sb.appendLine(plan.testMethod)
+            sb.appendLine()
+        }
 
         if (plan.inScope.isNotEmpty()) {
             sb.appendLine("## 范围（Scope）")

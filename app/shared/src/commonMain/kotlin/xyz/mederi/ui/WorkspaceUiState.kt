@@ -44,15 +44,17 @@ data class DiffUiState(
 )
 
 /**
- * 文件打开确认态：[WorkspaceViewModel.openFile] 把 EXTERNAL / REVEAL 档写进
- * [WorkspaceViewModel.pendingFileOpen] 后，由 UI 弹确认框——**文件打开确认态的单一真理源**。
+ * 文件/目录打开确认态：[WorkspaceViewModel.openFile] 触发后，由 UI 弹确认框——**单一真理源**。
  */
 sealed interface PendingFileOpen {
     val path: String
 
-    /** 用系统默认程序打开；[appName] 非空时对话框显示「用 XXX 打开？」，为空走泛称「系统默认应用」。 */
-    data class OpenExternally(override val path: String, val appName: String?) : PendingFileOpen
+    /** 有具体关联软件：提示「是否使用 [appName] 打开？」。[appName] 必非空。 */
+    data class OpenExternally(override val path: String, val appName: String) : PendingFileOpen
 
-    /** 打开所在目录（无注册可打开程序时）。 */
+    /** 无关联软件：提示「是否打开文件所在目录？」（在文件管理器中高亮定位）。 */
     data class RevealInFolder(override val path: String) : PendingFileOpen
+
+    /** 目标本身为目录：提示「是否打开该目录？」（在文件管理器中打开该目录）。 */
+    data class OpenDirectory(override val path: String) : PendingFileOpen
 }

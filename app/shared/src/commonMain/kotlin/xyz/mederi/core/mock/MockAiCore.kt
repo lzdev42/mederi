@@ -391,9 +391,7 @@ class MockAiCore(
     override suspend fun resolvePlanApproval(
         conversationId: String,
         planId: String,
-        approved: Boolean,
-        model: xyz.mederi.core.contract.models.ModelOption?,
-        thinkingLevel: String?
+        approved: Boolean
     ): Result<Unit> = runCatching {
         val sf = conversations[conversationId] ?: return@runCatching
         sf.value = sf.value.copy(
@@ -443,6 +441,12 @@ class MockAiCore(
 
     override suspend fun compressHistory(conversationId: String): Result<Unit> = runCatching {
         // Mock: no-op
+    }
+
+    private val _compactionThresholdPercent = MutableStateFlow(70)
+    override val compactionThresholdPercent: StateFlow<Int> = _compactionThresholdPercent.asStateFlow()
+    override suspend fun setCompactionThresholdPercent(percent: Int) {
+        _compactionThresholdPercent.value = percent.coerceIn(1, 100)
     }
 
     override suspend fun listMessages(conversationId: String): Result<List<ChatMessage>> = runCatching {

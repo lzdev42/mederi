@@ -5,13 +5,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.dto.CreateProjectInput
 import xyz.mederi.core.contract.models.Project
+import xyz.mederi.currentTimeMillis
 import xyz.mederi.ui.appstate.AppState
 import xyz.mederi.theme.AppLanguage
 import xyz.mederi.theme.AppThemeMode
@@ -29,12 +32,22 @@ class SidebarViewModel(
     var uiState by mutableStateOf(SidebarUiState()); private set
 
     /**
-     * 侧边栏项目/会话树（全部展示，按项目创建时间倒序）。
+     * 侧边栏项目/会话树（全部展示，按最近活动时间倒序）。
      */
     val filteredProjects: StateFlow<List<Project>> =
         appState.projects.map { projects ->
-            projects.sortedByDescending { it.createdAt }
+            projects.sortedByDescending { project ->
+                project.conversations.maxOfOrNull { it.updatedAt } ?: project.createdAt
+            }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 60 秒周期 tick，驱动会话列表相对时间刷新（一个 tick 驱动所有行 recompose） */
+    val nowTick: StateFlow<Long> = kotlinx.coroutines.flow.flow {
+        while (true) {
+            emit(xyz.mederi.currentTimeMillis())
+            kotlinx.coroutines.delay(60_000)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, xyz.mederi.currentTimeMillis())
 
     /** 主题模式窄状态（转发 AppState 全局真理源，组件不直操全局单例） */
     val theme: StateFlow<AppThemeMode> = appState.theme

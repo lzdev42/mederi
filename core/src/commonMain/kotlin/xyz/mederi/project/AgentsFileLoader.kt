@@ -160,7 +160,8 @@ class AgentsFileLoader(
 
         /** 向下扫描直接子目录时跳过的生成/依赖目录名（隐藏目录按 `.` 前缀另跳）。 */
         internal val GENERATED_DIR_NAMES = setOf(
-            "build", "node_modules", "dist", "out", "coverage"
+            "build", "node_modules", "dist", "out", "coverage",
+            "target", "vendor", "Pods", "__pycache__", "venv", ".venv"
         )
     }
 }

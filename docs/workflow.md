@@ -53,7 +53,7 @@ AUTONOMOUS → 计划自动批准（自己批准自己），立即执行
 | 层 | 约束 | 生效 |
 |---|---|---|
 | write_file/edit_file | 路径必须在白名单内（`resolveForWrite` containment 校验）；同文件并发写硬拒绝（`FileWriteRegistry`） | 全平台永远 |
-| execute_command | macOS Seatbelt 内核级拒绝 / Linux bubblewrap 挂载 / Windows 降级警告 | 按平台尽力 |
+| bash | macOS Seatbelt 内核级拒绝 / Linux bubblewrap 挂载 / Windows 降级警告 | 按平台尽力 |
 
 > 是否可以写、要不要建计划，由主代理按 Triage Flow 分诊判断（见 `AGENTS.md §5.6`）。
 
@@ -149,7 +149,7 @@ AUTONOMOUS → 计划自动批准（自己批准自己），立即执行
 | 机制 | 作用 | 位置 |
 |---|---|---|
 | `resolveForWrite` | 写路径必须在项目 directories 内（全平台） | `FileSystemTools.kt` |
-| `CommandSandbox` | execute_command 的 OS 写沙箱（macOS Seatbelt / Linux bubblewrap / Windows 降级） | `CommandSandbox.kt` |
+| `CommandSandbox` | bash 的 OS 写沙箱（macOS Seatbelt / Linux bubblewrap / Windows 降级） | `CommandSandbox.kt` |
 | `SpawnAgentTool` spec 校验 | spawn 前检查存储的 spec 存在（Subtask.spec 非空） | `SpawnAgentTool.kt` |
 | `GenerateSpecTool.targetFiles 白名单` | spec 引用的文件 ⊆ 已批准的 targetFiles，越界拒绝 | `PlanTools.kt` |
 | `PlanApprovalRequester` | APPROVAL 模式下 create_plan 挂起等用户批准 | `PlanApprovalRequester.kt` |
@@ -165,7 +165,7 @@ AUTONOMOUS → 计划自动批准（自己批准自己），立即执行
 | `core/.../tools/subagent/SpawnAgentTool.kt` | spawn_agent（硬绑定存储 spec） |
 | `core/.../tools/VerifyTools.kt` | verify_subtask（三分支：PASS/执行错/spec 错） |
 | `core/.../tools/FileSystemTools.kt` | resolveForRead（全盘可读）/ resolveForWrite（写白名单） |
-| `core/.../tools/ShellTools.kt` | execute_command（OS 沙箱包裹） |
+| `core/.../tools/ShellTools.kt` | bash（OS 沙箱包裹） |
 | `core/.../tools/sandbox/CommandSandbox.kt` | 三平台沙箱实现 + shell 探测链 + 环境信息 |
 | `core/.../tools/subagent/SpawnAgentTool.kt` | spawn_agent（EXECUTOR）+ spawn_researcher（RESEARCHER 只读） |
 | `core/.../domain/model/SubagentRole.kt` | 子代理双角色枚举（EXECUTOR / RESEARCHER） |

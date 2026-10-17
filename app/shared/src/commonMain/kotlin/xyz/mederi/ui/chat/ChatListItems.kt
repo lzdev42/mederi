@@ -123,6 +123,7 @@ sealed interface ChatListItem {
         val role: String,
         val subtaskInfo: String?,
         val reportPath: String?,
+        val taskType: String?,
         val summary: String,
         override val isTurnStart: Boolean = false,
         val messageId: String = "",

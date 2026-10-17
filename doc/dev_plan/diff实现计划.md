@@ -11,7 +11,7 @@
 
 - **不依赖单独的 diff 工具**：diff 由所有写工具共同贡献，而不是一个独立工具生成。
 - **以 patch delta tracker 为主**：`apply_patch` / `write_file` / `edit_file` 执行后把变更汇报给 `TurnDiffTracker`。
-- **目录快照兜底**：turn 结束时可选扫描目录，捕获 `execute_command` 等未汇报的变更。
+- **目录快照兜底**：turn 结束时可选扫描目录，捕获 `bash` 等未汇报的变更。
 - **持久化**：diff 与会话绑定，支持按 `sessionId` / `messageId` 查询。
 
 ---
@@ -91,7 +91,7 @@ class TurnDiffTracker(
     /** 记录文件删除 */
     fun recordDelete(path: String, oldContent: String) { ... }
 
-    /** 目录快照兜底，捕获 execute_command 等未汇报变更 */
+    /** 目录快照兜底，捕获 bash 等未汇报变更 */
     fun captureSnapshot() { ... }
 
     /** 生成最终 diff */
@@ -158,9 +158,9 @@ override suspend fun execute(args: EditFileArgs): String {
 }
 ```
 
-### 4.4 execute_command
+### 4.4 bash
 
-`execute_command` 不主动追踪。turn 结束时调用 `TurnDiffTracker.captureSnapshot()` 做兜底扫描，捕获命令行改的文件。
+`bash` 不主动追踪。turn 结束时调用 `TurnDiffTracker.captureSnapshot()` 做兜底扫描，捕获命令行改的文件。
 
 captureSnapshot 逻辑：
 - 扫描 projectDirectories 下的所有文件；
@@ -307,7 +307,7 @@ CREATE INDEX idx_diffs_message_id ON diffs(message_id);
    - `ApplyPatchDiffTest`：apply_patch 后能通过 `getFileDiffs` 查到 diff。
    - `WriteFileDiffTest`：write_file 后能查到 diff。
    - `EditFileDiffTest`：edit_file 后能查到 diff。
-   - `ExecuteCommandDiffTest`：execute_command 改文件后，通过 snapshot 兜底能查到 diff。
+   - `BashDiffTest`：bash 改文件后，通过 snapshot 兜底能查到 diff。
 
 ---
 

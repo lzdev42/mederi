@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import xyz.mederi.tools.ToolName
 
 /**
  * 主代理的浏览器任务工具集。
@@ -53,7 +54,7 @@ class RunBrowserTaskTool(
     private val apiKeyId: String? = null
 ) : SimpleTool<RunBrowserTaskArgs>(
     argsType = typeToken<RunBrowserTaskArgs>(),
-    name = "run_browser_task",
+    name = ToolName.RUN_BROWSER_TASK.value,
     description = buildDescription(service)
 ) {
     override suspend fun execute(args: RunBrowserTaskArgs): String {
@@ -117,7 +118,7 @@ class BrowserTaskStatusTool(
     private val service: BrowserTaskService
 ) : SimpleTool<BrowserTaskStatusArgs>(
     argsType = typeToken<BrowserTaskStatusArgs>(),
-    name = "browser_task_status",
+    name = ToolName.BROWSER_TASK_STATUS.value,
     description = "Queries the current status of a browser task dispatched with run_browser_task: " +
         "STARTED / RUNNING / COMPLETED / ERROR / STOPPED."
 ) {
@@ -139,7 +140,7 @@ class StopBrowserTaskTool(
     private val service: BrowserTaskService
 ) : SimpleTool<StopBrowserTaskArgs>(
     argsType = typeToken<StopBrowserTaskArgs>(),
-    name = "stop_browser_task",
+    name = ToolName.STOP_BROWSER_TASK.value,
     description = "Stops a running browser sub-agent task and closes its browser. The task cannot be " +
         "resumed."
 ) {
@@ -166,7 +167,7 @@ class BrowserInfoTool(
     private val sessionId: String
 ) : SimpleTool<BrowserInfoArgs>(
     argsType = typeToken<BrowserInfoArgs>(),
-    name = "browser_info",
+    name = ToolName.BROWSER_INFO.value,
     description = "Reads the current browser runtime status (no side effects, does NOT dispatch a task). " +
         "Returns per registered browser (jcef built-in visible / camoufox headless — BOTH may be open at " +
         "once): inUse, count of open tabs/instances, each one's current page URL + title, and whether it " +
@@ -233,7 +234,7 @@ class BrowserTool(
     private val service: BrowserTaskService
 ) : SimpleTool<BrowserArgs>(
     argsType = typeToken<BrowserArgs>(),
-    name = "browser",
+    name = ToolName.BROWSER.value,
     description = buildDescription(service)
 ) {
     override suspend fun execute(args: BrowserArgs): String = when (args.action) {

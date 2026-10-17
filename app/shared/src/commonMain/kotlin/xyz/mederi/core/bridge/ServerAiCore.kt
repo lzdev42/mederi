@@ -42,9 +42,11 @@ import kotlin.time.Duration.Companion.seconds
 import xyz.mederi.AppInfo
 import xyz.mederi.currentTimeMillis
 import xyz.mederi.core.contract.AiCore
+import xyz.mederi.core.contract.ConversationStateReducer
 import xyz.mederi.core.contract.SnapshotReducer
 import xyz.mederi.core.contract.dto.ApiError
 import xyz.mederi.core.contract.dto.ChatPromptInput
+import xyz.mederi.core.contract.dto.CompactionThresholdDto
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.CreateConversationInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
@@ -63,6 +65,7 @@ import xyz.mederi.core.contract.dto.RawMessageDto
 import xyz.mederi.core.contract.dto.ReadyInfo
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ApiKeyOption
+import xyz.mederi.core.contract.models.BackgroundTaskInfo
 import xyz.mederi.core.contract.models.BrowserStatus
 import xyz.mederi.core.contract.models.CamoufoxSettings
 import xyz.mederi.core.contract.models.CamoufoxUpdate
@@ -145,6 +148,14 @@ class ServerAiCore(
 
     override var builtinPresets: List<String> = emptyList()
         private set
+
+    private val _compactionThresholdPercent = MutableStateFlow(70)
+    override val compactionThresholdPercent: StateFlow<Int> = _compactionThresholdPercent.asStateFlow()
+
+    override suspend fun setCompactionThresholdPercent(percent: Int) {
+        httpCall("/v1/config/compaction-threshold", io.ktor.http.HttpMethod.Put, CompactionThresholdDto(percent))
+        _compactionThresholdPercent.value = percent.coerceIn(1, 100)
+    }
 
     // ------------------------------------------------------------------
     // HTTP 基础设施
@@ -274,6 +285,8 @@ class ServerAiCore(
         _availableModels.value = httpGet("/v1/models")
         _providers.value = httpGet("/v1/providers")
         _projects.value = httpGet("/v1/projects")
+        runCatching { httpGet<CompactionThresholdDto>("/v1/config/compaction-threshold") }
+            .getOrNull()?.let { _compactionThresholdPercent.value = it.percent.coerceIn(1, 100) }
         _isReady.value = true
         startSessionStatusSync()
     }
@@ -344,6 +357,14 @@ class ServerAiCore(
                 }
                 if (newStatus != null) {
                     updateConversationStatus(event.sessionId, newStatus)
+                }
+                // 终端事件：从远端重读全量会话数据（updatedAt/status/title 均为 server DB 真理源），
+                // 驱动侧边栏列表重排与相对时间刷新。比内存 patch 更简单可靠。
+                when (event.type) {
+                    CoreEventType.SESSION_UPDATED,
+                    CoreEventType.MESSAGE_COMPLETED,
+                    CoreEventType.MESSAGE_ERROR -> refreshProjects()
+                    else -> {}
                 }
             }
         }
@@ -425,7 +446,7 @@ class ServerAiCore(
         var snapshot = httpGet<ConversationSnapshot>("/v1/sessions/$conversationId/snapshot")
         emit(snapshot)
         events().filter { it.sessionId == conversationId }.collect { event ->
-            val emissions = SnapshotReducer.applyWithRefresh(snapshot, event) {
+            val emissions = ConversationStateReducer.applyWithRefresh(snapshot, event) {
                 runCatching { httpGet<MessagesPage>("/v1/sessions/$conversationId/messages") }.getOrNull()
             }
             emissions.forEach { emit(it) }
@@ -594,16 +615,12 @@ class ServerAiCore(
     override suspend fun resolvePlanApproval(
         conversationId: String,
         planId: String,
-        approved: Boolean,
-        model: xyz.mederi.core.contract.models.ModelOption?,
-        thinkingLevel: String?
+        approved: Boolean
     ): Result<Unit> = runCatching {
         httpCall(
             "/v1/sessions/$conversationId/plans/$planId/approve",
             requestBody = xyz.mederi.core.contract.dto.ResolvePlanApprovalInput(
-                approved = approved,
-                model = model,
-                thinkingLevel = thinkingLevel
+                approved = approved
             )
         )
     }
@@ -781,5 +798,13 @@ class ServerAiCore(
 
     override suspend fun stopSubagent(agentId: String): Result<Unit> = runCatching {
         httpCall("/v1/subagents/${agentId.encodeURLParameter()}/stop")
+    }
+
+    override suspend fun listBackgroundTasks(sessionId: String): Result<List<BackgroundTaskInfo>> = runCatching {
+        httpGet<List<BackgroundTaskInfo>>("/v1/sessions/${sessionId.encodeURLParameter()}/background-tasks")
+    }
+
+    override suspend fun stopBackgroundTask(taskId: String): Result<Unit> = runCatching {
+        httpCall("/v1/background-tasks/${taskId.encodeURLParameter()}/stop")
     }
 }

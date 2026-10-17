@@ -11,7 +11,7 @@
 | U1 | **限流重试设定（LlmRetryConfig）** | 进程级单例可写穿，server 侧环境变量 `MEDERI_LLM_RETRY_MAX/_MIN_MS/_MAX_MS` 可用 | 桌面 app 设置页无入口。需要：SettingsScreen 加数字输入框 → AppState → 写穿 LlmRetryConfig（同 SandboxConfig.extraWritablePaths 模式） |
 | U2 | **"重试中"状态显示** | `STATUS` 事件 → SnapshotReducer 写 `statusHint` → `deriveTurnStatus` 返回 `Retrying` —— 代码路径完整编译通过 | **从未启动桌面/wasm UI 视觉确认**"重试中"是否真渲染在状态栏。需要：Compose Hot Reload MCP 启动桌面 app → 触发限流 → `get_semantic_tree` 检查状态栏文案 |
 | U3 | **PlanStatus.IN_PROGRESS 从未设置** | ✅ 已修复（2026-09-08）：spawn_agent 执行前设 SubtaskStatus.IN_PROGRESS + PlanStatus.APPROVED→IN_PROGRESS，verify_subtask 设终态。日志实测 `planStatus=IN_PROGRESS` | UI 的"当前进行中的子任务"现在有数据源了，但 UI 侧是否展示该状态未验证 |
-| U4 | **子代理/shell 写文件不进 diffTracker** | spawn_agent 子代理写的文件、execute_command 用 shell 改的文件都不进父会话 diff 面板 | diff 差异审查面板对计划路径盲区。设计取舍待定：子代理回传 diff 给父代理汇总，或 diff 面板改为磁盘快照对比 |
+| U4 | **子代理/shell 写文件不进 diffTracker** | spawn_agent 子代理写的文件、bash 用 shell 改的文件都不进父会话 diff 面板 | diff 差异审查面板对计划路径盲区。设计取舍待定：子代理回传 diff 给父代理汇总，或 diff 面板改为磁盘快照对比 |
 
 ---
 
@@ -77,7 +77,7 @@
 | P1 | **APPROVAL 模式**（计划批准挂起/恢复） | 整条 suspend/resume 路径零测试：PlanApprovalRequester 挂起 turn、UI 审批卡、resolvePlanApproval endpoint、恢复 turn | 用 APPROVAL agent 建 session，提交一个需要 create_plan 的任务，验证会话挂起等批准 → curl resolvePlanApproval → 恢复 |
 | P1 | **converge_plan 故意 FAIL 分支** | 只自然触发过一次（sess_ccef7dfb），未刻意验证完整链路：verify FAIL → converge_plan → 新 spec → spawn → verify PASS → 归档 | 构造一个 spec 故意写错（如要求创建不存在的文件）→ 验证 FAIL → converge → 修正 → PASS → 归档 |
 | P2 | **spawn_researcher** | 零测试。只读工具集（read_file + list_directory）沙箱是否真限制写、子代理是否真不创建持久 session | 提示词"调研 pkg/ 代码结构并报告"，验证 researcher 只读不写 |
-| P2 | **沙箱拒绝路径** | 只测过"写白名单内成功"。白名单外写入被拒的错误反馈、execute_command 沙箱拒绝 | 提示词"在 /tmp 下创建文件"→ 验证被拒 + 错误信息 |
+| P2 | **沙箱拒绝路径** | 只测过"写白名单内成功"。白名单外写入被拒的错误反馈、bash 沙箱拒绝 | 提示词"在 /tmp 下创建文件"→ 验证被拒 + 错误信息 |
 | P2 | **自动压缩（70% pre-flight）** | 从未触发。SUMMARY 窗口、压缩标记、压缩后行为 | 构造超长对话（重复发消息直到 >70% contextWindow）→ 验证压缩触发 + 后续行为 |
 | P2 | **WORK 模式** | 零测试。WORK 与 CODE 的工具集差异、提示词差异 | 用 WORK agent 建会话，发一个非编码任务 |
 | P2 | **ask_user** | 零测试。问题挂起/恢复流程 | 提示词含模糊指令 → 验证模型调 ask_user → curl resolveQuestion → 恢复 |

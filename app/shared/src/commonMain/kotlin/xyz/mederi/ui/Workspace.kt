@@ -81,6 +81,7 @@ import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
 import xyz.mederi.ui.components.StatusBar
 import xyz.mederi.ui.components.WorkspaceFloatingOverlay
+import xyz.mederi.ui.overview.FloatingOverviewWindow
 import androidx.compose.ui.zIndex
 import xyz.mederi.ui.components.ErrorDetailDialog
 import xyz.mederi.ui.components.UserPastedTextCard
@@ -99,6 +100,7 @@ import xyz.mederi.ui.components.atoms.ConfirmDialog
 import mederi.app.shared.generated.resources.cancel
 import mederi.app.shared.generated.resources.file_open_confirm_generic
 import mederi.app.shared.generated.resources.file_open_confirm_reveal
+import mederi.app.shared.generated.resources.file_open_confirm_directory
 import mederi.app.shared.generated.resources.file_open_confirm_with_app
 import mederi.app.shared.generated.resources.file_open_open
 
@@ -145,13 +147,16 @@ fun Workspace(
             Row(
                 modifier = Modifier.fillMaxSize()
             ) {
-                // 中央主工作区 (包含顶部 Header 与 聊天/消息区域)
-                Column(
+                // 中央主工作区 (包含顶部 Header 与 聊天/消息区域 + 浮动概览窗 overlay)
+                Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         // 对话视图最小宽度 = 手机宽度：扩展面板再宽也不能把对话区压到手机宽度以下
                         .widthIn(min = if (isCompact) Dp.Unspecified else ChatLayout.conversationMinWidth)
+                ) {
+                Column(
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     // 中央区 Header (40dp 高度对齐全屏顶栏线条)
                     Box(
@@ -395,6 +400,14 @@ fun Workspace(
                     }
                 }
 
+                // 浮动概览窗 overlay（固定内容区右上角，非模态）
+                FloatingOverviewWindow(
+                    viewModel = viewModel,
+                    rawVm = rawMessagesViewModel,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                )
+                } // end Box（中央主工作区）
+
                 // 桌面端：独立功能面板与常驻 Dock 栏
                 if (!isCompact) {
                     RightExtensionPanel(
@@ -470,19 +483,13 @@ fun Workspace(
             )
         }
 
-        // 文件打开确认框（openFile 路由落在 EXTERNAL / REVEAL 档时弹出）
+        // 文件/目录打开确认框（openFile 路由落在 EXTERNAL / REVEAL / DIRECTORY 档时弹出）
         viewModel.pendingFileOpen?.let { pending ->
             val fileName = pending.path.substringAfterLast('/').ifBlank { pending.path }
             val message = when (pending) {
-                is PendingFileOpen.OpenExternally -> {
-                    val app = pending.appName
-                    if (app != null) {
-                        stringResource(Res.string.file_open_confirm_with_app, app)
-                    } else {
-                        stringResource(Res.string.file_open_confirm_generic)
-                    }
-                }
+                is PendingFileOpen.OpenExternally -> stringResource(Res.string.file_open_confirm_with_app, pending.appName)
                 is PendingFileOpen.RevealInFolder -> stringResource(Res.string.file_open_confirm_reveal)
+                is PendingFileOpen.OpenDirectory -> stringResource(Res.string.file_open_confirm_directory)
             }
             ConfirmDialog(
                 title = fileName,
@@ -788,7 +795,6 @@ private fun MessageList(
                                             isStreaming = stepItem.isStreaming,
                                             isRunning = stepItem.isRunning,
                                             hasFailed = stepItem.hasFailed,
-                                            onOpenOverview = { viewModel.openDockPanel(RightDockPanel.OVERVIEW) },
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
                                         )
                                     }
