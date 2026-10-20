@@ -2005,37 +2005,6 @@ class SharedLogicDesktopTest {
         assertEquals("c5", groups[4].calls[0].id)
     }
 
-    /**
-     * 验证 ReasoningBlock 展开时滚动容器挂载逻辑：
-     * 当 isUnbounded=true 或 enforceMaxHeight=false 时，绝对不能挂载 verticalScroll，
-     * 否则在 LazyColumn 的无限最大高度 (Constraints.Infinity) 下会触发崩溃。
-     */
-    @Test
-    fun testReasoningScrollConstraintLogic() {
-        // 场景 1：顶层独立展示且未切换为全部展开 -> 启用限高与滚动
-        val scrollDefault = xyz.mederi.ui.components.shouldEnableReasoningScroll(
-            enforceMaxHeight = true,
-            isUnbounded = false
-        )
-        xyz.mederi.ui.DebugLog.info("TEST", "Default reasoning scroll: $scrollDefault (expected true)")
-        assertTrue(scrollDefault)
-
-        // 场景 2：用户点击底部\"展开\"，切换为无界全部展开 -> 禁用内部限高与滚动（由 LazyColumn 自然滚动）
-        val scrollUnbounded = xyz.mederi.ui.components.shouldEnableReasoningScroll(
-            enforceMaxHeight = true,
-            isUnbounded = true
-        )
-        xyz.mederi.ui.DebugLog.info("TEST", "Unbounded reasoning scroll: $scrollUnbounded (expected false, prevents infinity height crash)")
-        assertFalse(scrollUnbounded)
-
-        // 场景 3：处于 WorkTraceCard 内（enforceMaxHeight=false） -> 禁用子项自身限高与滚动
-        val scrollInTrace = xyz.mederi.ui.components.shouldEnableReasoningScroll(
-            enforceMaxHeight = false,
-            isUnbounded = false
-        )
-        xyz.mederi.ui.DebugLog.info("TEST", "In-trace reasoning scroll: $scrollInTrace (expected false)")
-        assertFalse(scrollInTrace)
-    }
 
     /**
      * 验证「展开/收起」高度切换按钮的显隐逻辑（2026-09 动态高度改造）：
@@ -2044,41 +2013,42 @@ class SharedLogicDesktopTest {
     @Test
     fun testHeightToggleVisibility() {
         // 场景 1：顶层独立展示 + 内容未溢出（hasOverflow=false）-> 隐藏按钮（容器已按内容收缩）
-        assertFalse(
-            xyz.mederi.ui.components.shouldShowHeightToggle(
-                enforceMaxHeight = true,
-                isUnbounded = false,
-                hasOverflow = false
-            )
+        val s1 = xyz.mederi.ui.components.shouldShowHeightToggle(
+            enforceMaxHeight = true,
+            isUnbounded = false,
+            hasOverflow = false
         )
+        println("[TEST_LOG] Scene 1 (within limits): showToggle=$s1 (expected false)")
+        assertFalse(s1)
 
         // 场景 2：顶层独立展示 + 内容溢出视口 -> 显示按钮（可切换为全部摊开）
-        assertTrue(
-            xyz.mederi.ui.components.shouldShowHeightToggle(
-                enforceMaxHeight = true,
-                isUnbounded = false,
-                hasOverflow = true
-            )
+        val s2 = xyz.mederi.ui.components.shouldShowHeightToggle(
+            enforceMaxHeight = true,
+            isUnbounded = false,
+            hasOverflow = true
         )
+        println("[TEST_LOG] Scene 2 (overflow): showToggle=$s2 (expected true)")
+        assertTrue(s2)
 
         // 场景 3：已点开全部摊开 -> 恒显示按钮（否则没有收回的入口）
-        assertTrue(
-            xyz.mederi.ui.components.shouldShowHeightToggle(
-                enforceMaxHeight = true,
-                isUnbounded = true,
-                hasOverflow = false
-            )
+        val s3 = xyz.mederi.ui.components.shouldShowHeightToggle(
+            enforceMaxHeight = true,
+            isUnbounded = true,
+            hasOverflow = false
         )
+        println("[TEST_LOG] Scene 3 (unbounded): showToggle=$s3 (expected true)")
+        assertTrue(s3)
 
         // 场景 4：WorkTraceCard 内的推理子项（enforceMaxHeight=false）-> 永不显示（没有自己的高度开关）
-        assertFalse(
-            xyz.mederi.ui.components.shouldShowHeightToggle(
-                enforceMaxHeight = false,
-                isUnbounded = false,
-                hasOverflow = true
-            )
+        val s4 = xyz.mederi.ui.components.shouldShowHeightToggle(
+            enforceMaxHeight = false,
+            isUnbounded = false,
+            hasOverflow = true
         )
+        println("[TEST_LOG] Scene 4 (in trace): showToggle=$s4 (expected false)")
+        assertFalse(s4)
     }
+
 
     @Test
     fun testToolActionKindTodoAndClassification() {

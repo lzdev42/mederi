@@ -257,4 +257,56 @@ class ConversationStateAndSubagentTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun testBrowserTaskCompletedClosesDockPanelForNonTestTask() {
+        val initial = createInitialState("c-1")
+        val reducer = ConversationStateReducer
+
+        // 启动 jcef 任务，应展开 BROWSER dock 面板
+        val startedEvent = CoreEvent(
+            type = CoreEventType.BROWSER_TASK_STARTED,
+            sessionId = "c-1",
+            payload = mapOf("taskId" to "bt-1", "browser" to "jcef", "isTestTask" to "false")
+        )
+        val afterStart = reducer.apply(initial, startedEvent)
+        assertEquals(RightDockPanel.BROWSER, afterStart.activeDockPanel)
+        assertTrue(afterStart.browserAutomation?.isAutomating == true)
+        assertTrue(afterStart.browserAutomation?.isPanelOpen == true)
+
+        // 非测试任务完成：应关闭 BROWSER dock 面板和 automation 面板
+        val completedEvent = CoreEvent(
+            type = CoreEventType.BROWSER_TASK_COMPLETED,
+            sessionId = "c-1",
+            payload = mapOf("taskId" to "bt-1", "status" to "COMPLETED", "isTestTask" to "false")
+        )
+        val afterComplete = reducer.apply(afterStart, completedEvent)
+        assertNull(afterComplete.activeDockPanel, "非测试任务完成应自动关闭浏览器 Dock 面板")
+        assertFalse(afterComplete.browserAutomation?.isAutomating == true)
+        assertFalse(afterComplete.browserAutomation?.isPanelOpen == true, "非测试任务完成应关闭自动化流程面板")
+    }
+
+    @Test
+    fun testBrowserTaskCompletedKeepsDockPanelForTestTask() {
+        val initial = createInitialState("c-1")
+        val reducer = ConversationStateReducer
+
+        val startedEvent = CoreEvent(
+            type = CoreEventType.BROWSER_TASK_STARTED,
+            sessionId = "c-1",
+            payload = mapOf("taskId" to "bt-2", "browser" to "jcef", "isTestTask" to "true")
+        )
+        val afterStart = reducer.apply(initial, startedEvent)
+        assertEquals(RightDockPanel.BROWSER, afterStart.activeDockPanel)
+
+        // 测试任务完成：应保留 BROWSER dock 面板供检查
+        val completedEvent = CoreEvent(
+            type = CoreEventType.BROWSER_TASK_COMPLETED,
+            sessionId = "c-1",
+            payload = mapOf("taskId" to "bt-2", "status" to "COMPLETED", "isTestTask" to "true")
+        )
+        val afterComplete = reducer.apply(afterStart, completedEvent)
+        assertEquals(RightDockPanel.BROWSER, afterComplete.activeDockPanel, "测试任务完成应保留浏览器面板供检查现场")
+    }
 }
+

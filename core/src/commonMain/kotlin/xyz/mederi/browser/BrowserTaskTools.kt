@@ -34,7 +34,9 @@ data class RunBrowserTaskArgs(
     )
     val browser: String = "",
     @LLMDescription("Optional recipe name or rules configuration to mount onto the task for guiding execution and judgment.")
-    val recipe: String = ""
+    val recipe: String = "",
+    @LLMDescription("Whether this is an automated testing task. If true, the browser UI and tabs remain open after completion for user inspection. Defaults to false.")
+    val isTest: Boolean = false
 )
 
 @Serializable
@@ -76,7 +78,8 @@ class RunBrowserTaskTool(
             parentSessionId = sessionId,
             browser = browser,
             apiKeyId = apiKeyId,
-            recipe = recipeObj
+            recipe = recipeObj,
+            isTest = args.isTest
         )
         return Json.encodeToString(
             RunBrowserTaskResult.serializer(),

@@ -48,6 +48,7 @@ import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Code
 import compose.icons.feathericons.Eye
 import compose.icons.feathericons.Globe
+import compose.icons.feathericons.Layers
 import compose.icons.feathericons.MessageSquare
 import compose.icons.feathericons.MousePointer
 import compose.icons.feathericons.Type
@@ -120,6 +121,11 @@ internal fun BrowserFlowTimelineRow(
                     step = step,
                     colors = colors,
                     onClick = { onPreviewScreenshot(step) },
+                )
+
+                is BrowserFlowStep.Memory -> BrowserMemoryStepCard(
+                    step = step,
+                    colors = colors,
                 )
             }
         }
@@ -218,6 +224,24 @@ private fun TimelineStepIndicator(
                 )
             }
         }
+
+        is BrowserFlowStep.Memory -> {
+            Box(
+                modifier = Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(colors.accentBg)
+                    .border(1.dp, colors.accentBorder, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Layers,
+                    contentDescription = null,
+                    tint = colors.accentText,
+                    modifier = Modifier.size(9.dp),
+                )
+            }
+        }
     }
 }
 
@@ -256,6 +280,57 @@ private fun BrowserNarrationStepCard(
                 fontFamily = FontFamily.Monospace,
                 color = colors.textMuted,
             )
+        }
+    }
+}
+
+/**
+ * AI 记忆卡片：浏览器操作员每步自总结的 memory（区别于 [BrowserNarrationStepCard] 的即时思考，
+ * memory 是跨步骤累积的记忆快照）。
+ */
+@Composable
+private fun BrowserMemoryStepCard(
+    step: BrowserFlowStep.Memory,
+    colors: MederiColors,
+) {
+    val shape = RoundedCornerShape(6.dp)
+    val timeLabel = remember(step.timestampMillis) {
+        if (step.timestampMillis > 0L) TimeFormatter.formatTimeWithSeconds(step.timestampMillis) else ""
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.accentBg)
+            .border(1.dp, colors.accentBorder, shape)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = FeatherIcons.Layers,
+            contentDescription = null,
+            tint = colors.accentText,
+            modifier = Modifier.size(12.dp),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = step.text,
+                fontSize = 12.sp,
+                color = colors.accentText,
+            )
+            if (timeLabel.isNotEmpty()) {
+                Text(
+                    text = timeLabel,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.textMuted,
+                )
+            }
         }
     }
 }

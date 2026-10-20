@@ -1,5 +1,6 @@
 package xyz.mederi.browser
 
+import ai.koog.agents.core.tools.ToolBase
 import ai.koog.prompt.dsl.prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
@@ -17,6 +18,24 @@ import xyz.mederi.provider.ProviderManager
 import java.util.Base64
 
 /**
+ * 单次 LLM 工具调用返回的数据封装。
+ */
+data class BrowserToolCall(
+    val id: String?,
+    val name: String,
+    val argsJson: String
+)
+
+/**
+ * 浏览器模块 LLM 调用的结构化回复。
+ */
+data class BrowserLLMResponse(
+    val text: String = "",
+    val toolCalls: List<BrowserToolCall> = emptyList(),
+    val reasoning: String? = null
+)
+
+/**
  * 浏览器模块统一的 LLM 调用抽象。
  *
  * BrowserOperator / BrowserBrain 只依赖这个接口做 LLM 调用（decide / judge / report），
@@ -30,6 +49,20 @@ import java.util.Base64
  */
 interface BrowserLLMCaller {
     suspend fun call(systemPrompt: String, userPrompt: String, image: ByteArray? = null): String
+
+    /**
+     * 携带工具描述的单次非流式 LLM 调用。
+     * 默认实现转调 [call]，以兼顾仅实现 [call] 的测试 Mock（如 FakeLLMCaller）。
+     */
+    suspend fun callWithTools(
+        systemPrompt: String,
+        userPrompt: String,
+        tools: List<ToolBase<*, *>>,
+        image: ByteArray? = null
+    ): BrowserLLMResponse {
+        val text = call(systemPrompt, userPrompt, image)
+        return BrowserLLMResponse(text = text, toolCalls = emptyList())
+    }
 }
 
 /**
@@ -116,6 +149,63 @@ open class BrowserLLMHelper(
             }
         }
         return extractText(activeClient.execute(koogPrompt, koogModel))
+    }
+
+    /**
+     * 携带工具描述的单次非流式 LLM 调用。
+     */
+    override suspend fun callWithTools(
+        systemPrompt: String,
+        userPrompt: String,
+        tools: List<ToolBase<*, *>>,
+        image: ByteArray?
+    ): BrowserLLMResponse {
+        val activeClient = getOrCreateClient() ?: return BrowserLLMResponse(text = "Failed to resolve LLM client")
+
+        val p = provider ?: error("provider not resolved")
+        val koogModel = KoogModelBuilder.build(aiModel, p.type)
+        val params = KoogParamsBuilder.build(
+            type = p.type,
+            reasoningLevel = reasoningLevel,
+            reasoningParameter = p.reasoningParameter,
+            maxTokens = aiModel.maxTokens
+        )
+
+        val sendImage = image != null && aiModel.supportsImages
+        val koogPrompt = prompt("browser_llm", params = params) {
+            system(systemPrompt)
+            if (sendImage) {
+                user {
+                    text(userPrompt)
+                    image(
+                        AttachmentSource.Image(
+                            content = AttachmentContent.URL(
+                                "data:image/png;base64,${Base64.getEncoder().encodeToString(image!!)}"
+                            ),
+                            format = "png"
+                        )
+                    )
+                }
+            } else {
+                user(userPrompt)
+            }
+        }
+
+        val assistant = activeClient.execute(koogPrompt, koogModel, tools = tools.map { it.descriptor })
+        val text = extractText(assistant)
+        val toolCalls = assistant.parts.filterIsInstance<MessagePart.Tool.Call>().map {
+            BrowserToolCall(
+                id = it.id,
+                name = it.tool,
+                argsJson = it.args
+            )
+        }
+        val reasoning = assistant.parts.filterIsInstance<MessagePart.Reasoning>().firstOrNull()?.content?.joinToString("\n")
+        return BrowserLLMResponse(
+            text = text,
+            toolCalls = toolCalls,
+            reasoning = reasoning
+        )
     }
 
     companion object {

@@ -33,12 +33,20 @@ Unless a specific JSON schema is requested in the instruction, respond with:
     fun buildJudgeUserPrompt(
         content: String,
         instruction: String,
-        recipeRules: String = ""
+        recipeRules: String = "",
+        collectedItems: List<BrowserCollectedItem> = emptyList()
     ): String = buildString {
         if (recipeRules.isNotBlank()) {
             append("### [判定规则与背景配置 / Recipe Rules]：\n")
             append(recipeRules.trim())
             append("\n\n")
+        }
+        if (collectedItems.isNotEmpty()) {
+            append("### [已收集资料参考 / Collected Research Items] (${collectedItems.size} 条)：\n")
+            collectedItems.forEachIndexed { idx, item ->
+                append("#### [${idx + 1}] ${item.siteName} (${item.url})\n")
+                append("${item.content.trim()}\n\n")
+            }
         }
         append("### [待分析页面内容 / Raw Content]：\n")
         append(content.trim().ifBlank { "(Empty content)" })
@@ -77,7 +85,8 @@ Respond with STRICT JSON only — no markdown fences:
         taskGoal: String,
         taskHistory: String,
         rawOperatorMessage: String,
-        recipeRules: String = ""
+        recipeRules: String = "",
+        collectedItems: List<BrowserCollectedItem> = emptyList()
     ): String = buildString {
         append("### [任务原始目标 / Task Goal]：\n")
         append(taskGoal.trim())
@@ -86,6 +95,13 @@ Respond with STRICT JSON only — no markdown fences:
             append("### [配方规则 / Recipe Rules]：\n")
             append(recipeRules.trim())
             append("\n\n")
+        }
+        if (collectedItems.isNotEmpty()) {
+            append("### [已收集资料 / Collected Research Items] (${collectedItems.size} 条)：\n")
+            collectedItems.forEachIndexed { idx, item ->
+                append("#### [${idx + 1}] ${item.siteName} (${item.url})\n")
+                append("${item.content.trim()}\n\n")
+            }
         }
         if (rawOperatorMessage.isNotBlank()) {
             append("### [操作员完成信息 / Operator Output]：\n")

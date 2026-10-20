@@ -20,6 +20,7 @@ class BrowserToolTest {
         var lastRunTask: String? = null
         var lastBrowser: String? = null
         var lastRecipe: BrowserRecipe? = null
+        var lastIsTest: Boolean = false
         var statusQueried: String? = null
         var stopped: String? = null
         var statusSessionId: String? = null
@@ -27,11 +28,12 @@ class BrowserToolTest {
         override fun runTask(
             task: String, aiModel: AIModel, reasoningLevel: ReasoningLevel,
             projectId: String, parentSessionId: String, browser: String?, apiKeyId: String?,
-            recipe: BrowserRecipe?
+            recipe: BrowserRecipe?, isTest: Boolean
         ): String {
             lastRunTask = task
             lastBrowser = browser
             lastRecipe = recipe
+            lastIsTest = isTest
             return "task_1"
         }
 

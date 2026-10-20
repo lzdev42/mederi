@@ -419,6 +419,9 @@ class AppState(
             ?.conversations
             ?.map { it.id }
             .orEmpty()
+        deletedProjectConversations.forEach { convId ->
+            uiBrowserHost?.closeSession(convId)
+        }
         if (_selectedConversationId.value in deletedProjectConversations || _selectedProjectId.value == projectId) {
             selectConversation(null)
         }
@@ -443,6 +446,7 @@ class AppState(
      * 会话删除后的状态对齐：被删会话如果处于当前选中状态，则清空选中；同时清理持久化偏好。
      */
     fun handleConversationDeleted(conversationId: String) {
+        uiBrowserHost?.closeSession(conversationId)
         if (_selectedConversationId.value == conversationId) {
             selectConversation(null)
         }

@@ -25,10 +25,14 @@ data class ClipboardImage(
 object PlatformClipboard {
     fun getImage(): ClipboardImage? = platformClipboardGetImage()
     fun getText(): String? = platformClipboardGetText()
+    suspend fun getImageAsync(): ClipboardImage? = platformClipboardGetImageAsync()
+    suspend fun getTextAsync(): String? = platformClipboardGetTextAsync()
 }
 
 internal expect fun platformClipboardGetImage(): ClipboardImage?
 internal expect fun platformClipboardGetText(): String?
+internal expect suspend fun platformClipboardGetImageAsync(): ClipboardImage?
+internal expect suspend fun platformClipboardGetTextAsync(): String?
 internal expect fun plainTextClipEntry(text: String): ClipEntry?
 internal expect suspend fun readPlainTextFromClip(clipEntry: ClipEntry?): String?
 

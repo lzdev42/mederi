@@ -39,14 +39,16 @@ class BrowserBrain(
      * @param content 原始页面抓取文本
      * @param instruction 具体的判定指令或期望的 schema
      * @param recipeRules 挂载在任务上的配方规则（如 Skill 判定逻辑）
+     * @param collectedItems 当前任务已收集的参考资料列表
      */
     suspend fun judge(
         content: String,
         instruction: String,
-        recipeRules: String = ""
+        recipeRules: String = "",
+        collectedItems: List<BrowserCollectedItem> = emptyList()
     ): BrainResult {
         val sysPrompt = BrowserBrainPrompt.buildJudgeSystemPrompt()
-        val userPrompt = BrowserBrainPrompt.buildJudgeUserPrompt(content, instruction, recipeRules)
+        val userPrompt = BrowserBrainPrompt.buildJudgeUserPrompt(content, instruction, recipeRules, collectedItems)
 
         return try {
             val text = llmCaller.call(sysPrompt, userPrompt)
@@ -72,10 +74,11 @@ class BrowserBrain(
         taskHistory: String,
         goal: String,
         rawOperatorMessage: String,
-        recipeRules: String = ""
+        recipeRules: String = "",
+        collectedItems: List<BrowserCollectedItem> = emptyList()
     ): BrainResult {
         val sysPrompt = BrowserBrainPrompt.buildReportSystemPrompt()
-        val userPrompt = BrowserBrainPrompt.buildReportUserPrompt(goal, taskHistory, rawOperatorMessage, recipeRules)
+        val userPrompt = BrowserBrainPrompt.buildReportUserPrompt(goal, taskHistory, rawOperatorMessage, recipeRules, collectedItems)
 
         return try {
             val text = llmCaller.call(sysPrompt, userPrompt)

@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.TextStyle
 import kotlinx.coroutines.CoroutineStart
@@ -544,8 +545,8 @@ private fun MessageList(
             }),
             SelectionMenuAction(pasteLabel, onClick = { _ ->
                 clipboardScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    val clip = readPlainTextFromClip(clipboard.getClipEntry())
-                        ?: PlatformClipboard.getText()
+                    val clip = PlatformClipboard.getTextAsync()
+                        ?: readPlainTextFromClip(clipboard.getClipEntry())
                     if (!clip.isNullOrEmpty()) viewModel.appendToInput(clip)
                 }
             }),
@@ -637,124 +638,100 @@ private fun MessageList(
     ) {
         // 1. 展平后的消息 items（每个文本块/思考面板独立；轮次起点与上一 item 拉开间距）
         itemsIndexed(chatItems, key = { _, item -> item.key }) { index, item ->
+            // 以 item.key 锚定每个 item 的上一帧高度，防 LazyColumn 复用串位
+            var prevHeight by remember(item.key) { mutableIntStateOf(-1) }
             Box(
                 modifier = Modifier
                     .widthIn(max = contentMaxWidth)
                     .fillMaxWidth()
                     .padding(top = if (index > 0 && item.isTurnStart) ChatLayout.turnSpacing else 0.dp)
+                    .onSizeChanged { newSize ->
+                        // 同帧高度补偿：item 长高时同步下滚，保持底部按钮视觉位置不变
+                        val old = prevHeight
+                        prevHeight = newSize.height
+                        if (old >= 0 && newSize.height > old && stickToBottom && !lazyListState.isScrollInProgress) {
+                            lazyListState.dispatchRawDelta((newSize.height - old).toFloat())
+                        }
+                    }
             ) {
                 when (item) {
                     is ChatListItem.EventMessageCard -> {
-                        Box(
-                            modifier = Modifier
-                                .widthIn(max = contentMaxWidth)
-                                .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = 6.dp
-                                )
-                        ) {
-                            EventMessageCard(
-                                item = item,
-                                onOpenReport = { title, content ->
-                                    viewModel.openDocument(
-                                        DocumentTarget.Content(
-                                            id = "report_${item.agentId}",
-                                            title = title,
-                                            content = content
-                                        )
+                        EventMessageCard(
+                            item = item,
+                            onOpenReport = { title, content ->
+                                viewModel.openDocument(
+                                    DocumentTarget.Content(
+                                        id = "report_${item.agentId}",
+                                        title = title,
+                                        content = content
                                     )
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                        )
                     }
 
                     is ChatListItem.PlanApproval -> {
-                        Box(
-                            modifier = Modifier
-                                .widthIn(max = contentMaxWidth)
-                                .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = ChatLayout.thoughtBottomSpacing
-                                )
-                        ) {
-                            PlanApprovalCard(
-                                request = item.request,
-                                onApprove = { viewModel.approvePlan(item.request.id) },
-                                onOpenInExtension = {
-                                    val content = item.request.planContent
-                                        ?: "# ${item.request.title}\n\n${item.request.summary}"
-                                    viewModel.openDocument(
-                                        DocumentTarget.Content(
-                                            id = "plan_${item.request.id}",
-                                            title = item.request.title,
-                                            content = content
-                                        )
+                        PlanApprovalCard(
+                            request = item.request,
+                            onApprove = { viewModel.approvePlan(item.request.id) },
+                            onOpenInExtension = {
+                                val content = item.request.planContent
+                                    ?: "# ${item.request.title}\n\n${item.request.summary}"
+                                viewModel.openDocument(
+                                    DocumentTarget.Content(
+                                        id = "plan_${item.request.id}",
+                                        title = item.request.title,
+                                        content = content
                                     )
-                                },
-                                modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
-                            )
-                        }
+                                )
+                            },
+                            modifier = Modifier
+                                .widthIn(max = ChatLayout.actionCardMaxWidth)
+                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
+                        )
                     }
 
                     is ChatListItem.QuestionCard -> {
-                        Box(
+                        QuestionCard(
+                            question = item.request,
+                            currentIndex = viewModel.questionPage,
+                            selectedAnswers = viewModel.questionAnswers[viewModel.questionPage] ?: emptyList(),
+                            onAnswer = { ans -> viewModel.answerQuestion(viewModel.questionPage, ans) },
+                            onNextPage = viewModel::nextQuestionPage,
+                            onPrevPage = viewModel::prevQuestionPage,
+                            onSubmit = viewModel::submitQuestion,
+                            onCancel = { viewModel.rejectQuestion(item.request.id) },
                             modifier = Modifier
-                                .widthIn(max = contentMaxWidth)
-                                .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = ChatLayout.thoughtBottomSpacing
-                                )
-                        ) {
-                            QuestionCard(
-                                question = item.request,
-                                currentIndex = viewModel.questionPage,
-                                selectedAnswers = viewModel.questionAnswers[viewModel.questionPage] ?: emptyList(),
-                                onAnswer = { ans -> viewModel.answerQuestion(viewModel.questionPage, ans) },
-                                onNextPage = viewModel::nextQuestionPage,
-                                onPrevPage = viewModel::prevQuestionPage,
-                                onSubmit = viewModel::submitQuestion,
-                                onCancel = { viewModel.rejectQuestion(item.request.id) },
-                                modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
-                            )
-                        }
+                                .widthIn(max = ChatLayout.actionCardMaxWidth)
+                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
+                        )
                     }
 
                     is ChatListItem.DocumentCard -> {
-                        Box(
-                            modifier = Modifier
-                                .widthIn(max = contentMaxWidth)
-                                .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = 4.dp
-                                )
-                        ) {
-                            DocumentArtifactCard(
-                                title = item.title,
-                                lineCount = item.lineCount,
-                                charCount = item.charCount,
-                                createdAt = item.createdAt,
-                                isStreaming = item.isStreaming,
-                                isCompleted = item.isCompleted,
-                                onOpenInExtension = {
-                                    viewModel.openDocument(
-                                        DocumentTarget.Content(
-                                            id = item.artifactId,
-                                            title = item.title,
-                                            content = item.content,
-                                            lineCount = item.lineCount,
-                                            charCount = item.charCount,
-                                            isStreaming = item.isStreaming,
-                                        )
+                        DocumentArtifactCard(
+                            title = item.title,
+                            lineCount = item.lineCount,
+                            charCount = item.charCount,
+                            createdAt = item.createdAt,
+                            isStreaming = item.isStreaming,
+                            isCompleted = item.isCompleted,
+                            onOpenInExtension = {
+                                viewModel.openDocument(
+                                    DocumentTarget.Content(
+                                        id = item.artifactId,
+                                        title = item.title,
+                                        content = item.content,
+                                        lineCount = item.lineCount,
+                                        charCount = item.charCount,
+                                        isStreaming = item.isStreaming,
                                     )
-                                },
-                                modifier = Modifier.widthIn(max = ChatLayout.actionCardMaxWidth)
-                            )
-                        }
+                                )
+                            },
+                            modifier = Modifier
+                                .widthIn(max = ChatLayout.actionCardMaxWidth)
+                                .padding(bottom = 4.dp)
+                        )
                     }
 
                     is ChatListItem.WorkTraceBlock -> {
@@ -762,10 +739,7 @@ private fun MessageList(
                             workTrace = item,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = ChatLayout.thoughtBottomSpacing
-                                ),
+                                .padding(bottom = ChatLayout.thoughtBottomSpacing),
                             renderStepItem = { stepItem ->
                                 when (stepItem) {
                                     is ChatListItem.Reasoning -> {
@@ -841,10 +815,7 @@ private fun MessageList(
                             contentKey = item.key,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = ChatLayout.thoughtBottomSpacing
-                                )
+                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
                         )
                     }
 
@@ -857,10 +828,7 @@ private fun MessageList(
                             toolSummary = item.toolSummary,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 0.dp,
-                                    bottom = ChatLayout.thoughtBottomSpacing
-                                )
+                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
                         )
                     }
 
@@ -881,10 +849,7 @@ private fun MessageList(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(
-                                    top = if (item.isTurnStart) ChatLayout.turnSpacing else 4.dp,
-                                    bottom = 4.dp
-                                )
+                                .padding(bottom = 4.dp)
                         )
                     }
 

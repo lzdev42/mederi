@@ -29,7 +29,7 @@ enum class BrowserKind(val label: String) {
 class RegisteredBrowser(
     val name: String,
     val kind: BrowserKind,
-    val factory: suspend (taskId: String) -> BrowserControl,
+    val factory: suspend (taskId: String, sessionId: String) -> BrowserControl,
     /** 可选运行状态上报源（browser_info 用）：JCEF = UI host 上报 tab；Camoufox = null（用任务表）。 */
     val statusSource: BrowserStatusSource? = null
 )
@@ -55,10 +55,19 @@ object BrowserRegistry {
     fun register(
         name: String,
         kind: BrowserKind,
-        factory: suspend (taskId: String) -> BrowserControl,
+        factory: suspend (taskId: String, sessionId: String) -> BrowserControl,
         statusSource: BrowserStatusSource? = null
     ) {
         browsers[name] = RegisteredBrowser(name, kind, factory, statusSource)
+    }
+
+    fun register(
+        name: String,
+        kind: BrowserKind,
+        factory: suspend (taskId: String) -> BrowserControl,
+        statusSource: BrowserStatusSource? = null
+    ) {
+        register(name, kind, { taskId, _ -> factory(taskId) }, statusSource)
     }
 
     fun unregister(name: String) {

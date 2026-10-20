@@ -71,6 +71,7 @@ import androidx.compose.ui.window.PopupProperties
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.ChevronDown
@@ -167,6 +168,7 @@ fun ChatInputCard(
     // 草稿唯一真理源 = WorkspaceViewModel.inputDraft（会话级状态）：
     // 欢迎页/消息列表两个调用点共享，分支切换不丢字；选区菜单追加直接写 VM
     val textValue = viewModel.inputDraft
+    val scope = rememberCoroutineScope()
     // IME 桥接（wasmJs）：透明 <textarea> 覆盖输入框触发 iOS 软键盘，需跟踪输入框在窗口中的矩形。
     // positionInWindow 返回 Compose px（= CSS px * density），wasmJs actual 侧除 density 得 CSS px。
     var imeRect by remember { mutableStateOf<Rect?>(null) }
@@ -324,38 +326,36 @@ fun ChatInputCard(
         }
     }
 
-    // 剪贴板图片统一入口（附件按钮与 Ctrl/Cmd+V 拦截共用）：读取→附加→日志
-    // 门禁在 WorkspaceViewModel.tryAttachImage（模型不支持图片时拒绝入列并给可见反馈）
-    val attachClipboardImageIfPresent: (String) -> Boolean = { logEvent ->
-        val img = PlatformClipboard.getImage()
-        if (img != null) {
-            viewModel.tryAttachImage(
-                name = "image_${xyz.mederi.currentTimeMillis()}.png",
-                mimeType = img.mimeType,
-                bytes = img.bytes,
-                width = img.width,
-                height = img.height
-            )
-            DebugLog.event("UI", "$logEvent, size=${img.bytes.size}")
-        } else if (!isDesktopPlatform) {
-            // 遥控端（iOS/Android/wasmJs）无剪贴板读权限：不静默，给一次性轻提示
-            viewModel.showRemoteCapabilityNotice(RemoteCapabilityNotice.IMAGE_CLIPBOARD)
-        }
-        img != null
-    }
-
+    // 剪贴板图片工具栏点击入口：异步读取（符合 W3C User Gesture / 挂起模型）
     val onAttachImage: () -> Unit = {
-        attachClipboardImageIfPresent("attached image from clipboard")
+        scope.launch {
+            val img = PlatformClipboard.getImageAsync()
+            if (img != null) {
+                viewModel.tryAttachImage(
+                    name = "image_${xyz.mederi.currentTimeMillis()}.png",
+                    mimeType = img.mimeType,
+                    bytes = img.bytes,
+                    width = img.width,
+                    height = img.height
+                )
+                DebugLog.event("UI", "attached image from clipboard, size=${img.bytes.size}")
+            } else if (!isDesktopPlatform) {
+                // 遥控端无剪贴板读权限或未包含图片时轻提示
+                viewModel.showRemoteCapabilityNotice(RemoteCapabilityNotice.IMAGE_CLIPBOARD)
+            }
+        }
     }
 
     val onAttachPastedText: () -> Unit = {
-        val clipboardText = PlatformClipboard.getText()
-        if (clipboardText != null && clipboardText.isNotBlank()) {
-            viewModel.addPastedText(clipboardText)
-            DebugLog.event("UI", "attached text from clipboard, len=${clipboardText.length}")
-        } else if (!isDesktopPlatform) {
-            // 遥控端（iOS/Android/wasmJs）无剪贴板读权限：不静默，给一次性轻提示
-            viewModel.showRemoteCapabilityNotice(RemoteCapabilityNotice.TEXT_CLIPBOARD)
+        scope.launch {
+            val clipboardText = PlatformClipboard.getTextAsync()
+            if (clipboardText != null && clipboardText.isNotBlank()) {
+                viewModel.addPastedText(clipboardText)
+                DebugLog.event("UI", "attached text from clipboard, len=${clipboardText.length}")
+            } else if (!isDesktopPlatform) {
+                // 遥控端无剪贴板读权限或未包含文本时轻提示
+                viewModel.showRemoteCapabilityNotice(RemoteCapabilityNotice.TEXT_CLIPBOARD)
+            }
         }
     }
 
@@ -674,8 +674,17 @@ fun ChatInputCard(
                                         else -> false
                                     }
                                 } else if (keyEvent.key == Key.V && (keyEvent.isCtrlPressed || keyEvent.isMetaPressed)) {
-                                    // 剪贴板拦截：先检查是否有图片
-                                    if (attachClipboardImageIfPresent("pasted image intercepted")) {
+                                    // 剪贴板拦截：先检查是否有图片（仅当确实取到图片时附加，绝不误弹权限缺失警告）
+                                    val img = PlatformClipboard.getImage()
+                                    if (img != null) {
+                                        viewModel.tryAttachImage(
+                                            name = "image_${xyz.mederi.currentTimeMillis()}.png",
+                                            mimeType = img.mimeType,
+                                            bytes = img.bytes,
+                                            width = img.width,
+                                            height = img.height
+                                        )
+                                        DebugLog.event("UI", "pasted image intercepted, size=${img.bytes.size}")
                                         true
                                     } else {
                                         val clipboardText = PlatformClipboard.getText()
@@ -714,6 +723,18 @@ fun ChatInputCard(
                     onSend = imeOnSend,
                     rectPx = imeRect,
                     density = imeDensity,
+                    onPasteImage = { bytes, mimeType ->
+                        viewModel.tryAttachImage(
+                            name = "image_${xyz.mederi.currentTimeMillis()}.png",
+                            mimeType = mimeType,
+                            bytes = bytes,
+                        )
+                        DebugLog.event("UI", "WasmImeBridge attached pasted image, size=${bytes.size}")
+                    },
+                    onPasteLargeText = { largeText ->
+                        viewModel.addPastedText(largeText)
+                        DebugLog.event("UI", "WasmImeBridge attached large text card, len=${largeText.length}")
+                    }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))

@@ -1,3 +1,5 @@
+@file:OptIn(kotlin.js.ExperimentalWasmJsInterop::class, kotlin.io.encoding.ExperimentalEncodingApi::class)
+
 package xyz.mederi.ui.components
 
 import androidx.compose.runtime.Composable
@@ -6,14 +8,25 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import kotlinx.browser.document
+import kotlinx.coroutines.await
+import kotlinx.coroutines.launch
 import org.w3c.dom.HTMLTextAreaElement
+import org.w3c.dom.clipboard.ClipboardEvent
 import org.w3c.dom.events.KeyboardEvent
+import org.w3c.dom.get
+import xyz.mederi.ui.DebugLog
+import xyz.mederi.util.PromptComposer
+import kotlin.io.encoding.Base64
+import kotlin.js.JsAny
+import kotlin.js.JsString
+import kotlin.js.Promise
 
 /**
  * wasmJs actual：DOM <textarea> 作为 Web 端唯一可见文本输入面（single-engine），触发 iOS 软键盘并回灌输入。
@@ -41,12 +54,17 @@ actual fun WasmImeBridge(
     onSend: (() -> Unit)?,
     rectPx: Rect?,
     density: Float,
+    onPasteImage: ((bytes: ByteArray, mimeType: String) -> Unit)?,
+    onPasteLargeText: ((String) -> Unit)?,
 ) {
+    val scope = rememberCoroutineScope()
     // 仅创建一次 DOM 元素（组合刷新不重建）
     val textarea = remember { document.createElement("textarea") as HTMLTextAreaElement }
     // 事件回调闭包捕获最新回调，避免 DisposableEffect 只安装一次导致 stale closure
     val latestOnValueChange = rememberUpdatedState(onValueChange)
     val latestOnSend = rememberUpdatedState(onSend)
+    val latestOnPasteImage = rememberUpdatedState(onPasteImage)
+    val latestOnPasteLargeText = rememberUpdatedState(onPasteLargeText)
     // 组合期标志（JS 事件回调里读写，用快照状态即可，闭包捕获引用）
     val isComposing = remember { mutableStateOf(false) }
 
@@ -61,7 +79,7 @@ actual fun WasmImeBridge(
         style.setProperty("caret-color", cursorColorHex)
         style.background = "transparent"
         style.fontSize = "16px" // 防 iOS 自动缩放（<16px 会触发 focus zoom，破坏覆盖层定位）
-        style.fontFamily = "sans-serif" // 尽量贴近 Canvas 默认无衬线，减少光标横向错位
+        style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', sans-serif" // 尽量贴近 Canvas Roboto/NotoSans，减少光标横向错位
         style.lineHeight = "20px" // 对齐 Canvas textStyle lineHeight（20.sp = 20 CSS px），避免光标/文字错位
         style.border = "0"
         style.padding = "0"
@@ -105,7 +123,46 @@ actual fun WasmImeBridge(
         textarea.addEventListener("input") {
             if (!isComposing.value) flush()
         }
-        // selectionchange 事件（选区单独变化时回灌）：v1 不需要，随 composition/input 一并回传即可
+
+        // 粘贴事件拦截：支持在 Web 端输入框内粘贴图片（文件）与大段文本折叠卡片化
+        textarea.addEventListener("paste") { e ->
+            val pe = e as? ClipboardEvent ?: return@addEventListener
+            val clipboardData = pe.clipboardData ?: return@addEventListener
+            val items = clipboardData.items
+            for (i in 0 until items.length) {
+                val item = items[i] ?: continue
+                if (item.type.startsWith("image/")) {
+                    val file = item.getAsFile()
+                    if (file != null) {
+                        pe.preventDefault()
+                        val mimeType = item.type
+                        scope.launch {
+                            try {
+                                val b64 = readFileAsBase64Promise(file).await<JsString>().toString()
+                                if (b64.isNotEmpty()) {
+                                    val bytes = Base64.Default.decode(b64)
+                                    DebugLog.data("UI", "WasmImeBridge paste image intercepted", "mime=$mimeType, bytesLen=${bytes.size}")
+                                    latestOnPasteImage.value?.invoke(bytes, mimeType)
+                                }
+                            } catch (err: Throwable) {
+                                DebugLog.data("UI", "WasmImeBridge paste image decode error", "${err.message}")
+                            }
+                        }
+                        return@addEventListener
+                    }
+                }
+            }
+
+            val text = clipboardData.getData("text/plain")
+            if (PromptComposer.isLargeText(text)) {
+                val onLarge = latestOnPasteLargeText.value
+                if (onLarge != null) {
+                    pe.preventDefault()
+                    DebugLog.event("UI", "WasmImeBridge paste intercepted large text: len=${text.length}")
+                    onLarge(text)
+                }
+            }
+        }
 
         // Enter 发送：纯 Enter（无 Shift/Ctrl/Meta）触发 onSend（Compose onPreviewKeyEvent 在
         // wasmJs 不会触发——DOM 焦点在 textarea 上，键盘事件不进 Compose），Shift/Ctrl/Cmd+Enter 保留默认换行。
@@ -161,3 +218,20 @@ actual fun WasmImeBridge(
         }
     }
 }
+
+private fun readFileAsBase64Promise(file: org.w3c.files.File): Promise<JsString> = js("""
+    new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const res = reader.result;
+            if (typeof res === 'string') {
+                const idx = res.indexOf(',');
+                resolve(idx >= 0 ? res.substring(idx + 1) : res);
+            } else {
+                resolve('');
+            }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    })
+""")

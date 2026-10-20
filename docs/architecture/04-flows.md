@@ -86,7 +86,7 @@ sequenceDiagram
 - **草稿文本持久化**：
   - **已绑定会话输入**：`updateInputDraft` 携带 300ms 防抖，连续打字暂停后自动触发 `saveComposeState()` 同步缓存与落库。
   - **未绑定会话输入**：`conversationId == null` 时草稿暂存 `unattachedDraft`，切换至已有会话再切回未绑定会话（`attach(null)`）时自动恢复；发送创建会话后清空。
-  - **切换会话时**：`attach(newId)` 在切换前取消防抖并捕获旧会话全量值（含草稿），同步更新快照缓存 + fire-and-forget 写旧 convId。
+  - **切换会话时**：`attach(newId)` 在切换前取消防抖，不再反向盲写旧 convId（用户在旧会话的修改在发生时已实时入库，切走时绝不拿当前界面设置反写旧会话，杜绝跨会话污染）。
   - **程序关闭时**：VM init 注册 `appState.registerFlushCallback { flushComposeState() }`；`main.kt` onCloseRequest 调 `runBlocking { appState.flushAll() }`（先跑 flush 回调保存 compose state，再 flushPreferences）。
 - **草稿恢复**：`applySessionSettings(conv)` 在 modelId null check 之前 `inputDraft = TextFieldValue(conv.draftText ?: "")`——无模型也恢复草稿。
 - **不再有全局偏好模板**：`workspace.lastModelId` / `workspace.lastModelProviderId` / `workspace.lastAgentId` / `workspace.apiKey.$provider` / `workspace.reasoningLevel.$modelId` 不再 persist/hydrate——`selectModel` / `selectAgent` / `selectApiKey` / `setModelReasoningLevel` 只改内存镜像；启动 `hydrate()` 仅保留首启 first-available 兜底（模型/Agent 列表就绪后限时 3s 填首个可用项）。导航偏好 `workspace.lastProjectId` / `workspace.lastConversationId` 保留（选中态恢复）。
@@ -514,8 +514,9 @@ flowchart TD
 ## 8.1 浏览器任务（browser，2026-09-14；2026-09 合并为单一入口）
 
 > 主代理只派发/看状态/停止，浏览器内部对主代理完全透明。BROWSER agent 在后台协程跑
-> 4-phase 循环（perceive→decide→execute→postprocess），页面快照每步新鲜取、用完即丢，
-> memory 是 AI 自总结。细节经 BROWSER_TASK_* 事件给 UI，用户自己看。
+> Koog AIAgent tool-calling 循环（`agent.run` 驱动 call_llm→execute_tools→send_tool_results），
+> nodePerceive 当步注入 a11y 快照（axtree）、用完即丢，记忆走 update_memory 工具。
+> 细节经 BROWSER_TASK_* 事件给 UI，用户自己看。
 > 主代理入口为 `browser` 工具（action=RUN/STATUS/STOP/INFO，委托原 run_browser_task 等四个工具类）。
 
 ```mermaid
@@ -544,32 +545,57 @@ sequenceDiagram
     Note over BTM,BC: 后台执行(与主 turn 并行)
     BTM->>BC: Camoufox: BiDiBrowserControl(binary 已下载)→start()
     BTM->>BO: operator.run(task)
-    loop 4-phase 循环(每步)
-        BO->>BC: snapshot() → 新鲜 a11y tree
-        BO->>BO: LLM 一次调用([system+memory+history+snapshot]) → decision{actions,memory,is_done}
-        opt 需要内容判定 (遇到判定需求 / ask_ai)
-            BO->>BB: judge(content, instruction, recipeRules)
-            BB-->>BO: BrainResult (返回结构化判定)
+    loop AIAgent tool-calling 循环(每步)
+        BO->>BO: agent.run → call_llm(nodePerceive 注入当步 axtree)
+        BO->>BO: LLM 选 tool (judge→BrowserBrain / collect_info→BrowserCollector / update_memory)
+        opt 选到 collect_info (多网站信息检索存入临时存储器)
+            BO->>BO: collector.add(BrowserCollectedItem(url, siteName, content))
         end
-        BO->>BC: 执行 actions(navigate/click/type/scroll/done)
-        BO->>BTM: onStep(step, thought, results)
-        BTM->>EB: BROWSER_TASK_STEP(taskId, step, thought, results, browser)
-        Note over BO: memory = decision.memory(AI自总结)<br/>stepHistory 保留最后10条<br/>snapshot 用完即丢
+        opt 选到 judge (需要内容判定 / ask_ai)
+            BO->>BB: judge(content, instruction, recipeRules, collectedItems)
+            BB-->>BO: BrainResult (参考已收集资料返回结构化判定)
+        end
+        BO->>BC: execute_tools(navigate/click/type/scroll/done... SimpleTool)
+        BO->>BO: send_tool_results(注入新 axtree) → 循环
+        BO->>BTM: onToolEvent(phase, toolName, step, results)
+        BTM->>EB: BROWSER_TASK_STEP(taskId, step, thought=自动文案, results, browser, collectedCount)
+        Note over BO: update_memory 工具写记忆; collect_info 暂存条目<br/>axtree 当步注入用完即丢
     end
-    BO-->>BTM: BrowserTaskResult(success, rawMessage)
-    BTM->>BB: generateFinalReport(taskHistory, goal, rawMessage, recipeRules)
-    BB-->>BTM: BrainResult (一句话简报 + reports/*.md 落盘)
-    BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, executiveSummary, browser)
-    Note over U: 用户在任务面板看细节；主代理查 STATUS 拿到一句话简报<br/>任意 BROWSER_TASK_STARTED 即浏览器面板已自动展开（Camoufox 任务监控面板）
-    Note over MA: 用户问"任务怎样了?" → 主代理查 browser(STATUS, taskId)
+    BO-->>BTM: BrowserTaskResult(success, rawMessage, collectedItems)
+    alt 需要大脑判定 (needsBrainJudgment == true)
+        BTM->>BB: generateFinalReport(taskHistory, goal, rawMessage, recipeRules, collectedItems)
+        BB-->>BTM: BrainResult (结合已收集资料产出一句话简报 + reports/*.md 落盘)
+        Note over BTM,BO: Brain 将判定与简报反馈给操作员，操作员统一准备汇报
+    else 无需大脑判定 (直接汇报)
+        Note over BTM,BO: 操作员直接采用任务执行 message 准备汇报 (含 collectedItems)
+    end
+    BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, role="BROWSER_OPERATOR", summary, reportPath, isTestTask)
+    EB-->>WV: 终态事件 (非测试任务关闭 Dock 面板; 测试任务保留展开)
+    EB-->>MA: TurnExecutor 监听终态 → 组装 <event_message> 自动唤醒主 turn 汇报！
+    opt 非自动化测试任务 (!isTestTask)
+        BTM->>BC: control.close() 关闭底层 Tab
+    end
 ```
 
+> **汇报机制与主代理自动唤醒（2026-10）**：任务结束时复用子 Agent 汇报通道：
+> - **两路汇报**：无需判定内容时，操作员（`BrowserOperator`）直接向主 Agent 汇报；需判定内容时（通过 `needsBrainJudgment` 留口识别，如带 judgeRules 配方），操作员先把提取信息交给大脑（`BrowserBrain`）判定，大脑将判定/简报反馈给操作员后，由操作员统一向主 Agent 汇报。
+> - **自动唤醒**：任务终态发 `BROWSER_TASK_COMPLETED/ERROR/STOPPED`（携带 `role=BROWSER_OPERATOR`），`TurnExecutor` 订阅并组装 `<event_message type="browser_task_completed">` 放入待发队列，自动唤醒主 Agent 开启新 turn 向用户汇报，无需主代理主动轮询。
+> - **生命周期与现场保留**：非测试任务结束后自动关闭对应底层 Tab 并折叠 UI Dock 面板；自动化测试任务（`isTestTask=true` 或命令含测试/断言等关键词）保留底层 Tab 与 UI 面板现场供用户检查。
 > 浏览器选择（2026-09）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认
 > （defaultName 优先 → 内置 JCEF 优先 → 第一个注册的）。2026-10 起 JCEF（JcefBrowserControl）
 > 重新注册为主力引擎（MederiAiCore 在 kBrowser 非空时条件注册），Camoufox（BiDiBrowserControl）
 > 降级为可选 backup；headless server 无 JCEF 时默认 camoufox。
 > 任意 BROWSER_TASK_STARTED 都会把浏览器面板展开为浏览器任务监控视图（jcef 任务由 UI host 上报 tab 状态）。
 > 浏览器面板在所有端均可展开（遥控端/wasm 同样适用）。
+
+> 执行模型（2026-10 重构）：BrowserOperator 遵循 4-phase 循环（perceive → decide → execute → postprocess）。
+> 感知层统一走 **纯 axtree 快照**（`SnapshotMode.CLEAN` YAML，暂时不传截图），单步重建 prompt，杜绝上下文累积与 a11y 快照爆炸；采用 Koog 原生 tool-calling，由 UI 宿主
+> （app:desktopApp）经 `BrowserOperatorToolRegistry` 注册页面物理工具（navigate/click/type/scroll/wait_for/tabs），Core 注册内部工具
+> （done/update_memory/collect_info/judge/execute_drill），删除无用工具（sleep/back/noop/close/screenshot）；支持 `BrowserDecisionParser` 文本 JSON 决策回退；
+> 配备 `BrowserCollector` 临时存储器，支持在多网站查找时调用 `collect_info` 暂存 Markdown 内容（含图片链接），解耦上下文避免 Token 膨胀，并在终态由 Brain / 操作员统一汇总；
+> 开启浏览器面板时，默认宽度占全屏 2/3（受 maxPanelWidth 保护）；
+> 记忆自管理（滑动 stepHistory + update_memory 工具同步至 taskObj.memory），每步发射带真实
+> thought、memory 与 action 结果的 BROWSER_TASK_STEP 事件。
 
 > 浏览器子代理模型解析（2026-09-23）：browser(RUN) 派发时，RunBrowserTaskTool 直传父会话模型/推理档
 > （不再按浏览器名解析）；BrowserTaskManager.runTask 后台按角色独立解析——操作者
@@ -578,6 +604,12 @@ sequenceDiagram
 > 配置了独立模型/推理档则覆盖父会话，否则继承；operator/brain 各建独立 llmCaller
 > （BrowserLLMHelper 或注入的 llmCallerProvider），Operator 按操作者模型执行、Brain 按大脑模型执行。
 > 浏览器实现（jcef 主力 + camoufox backup）仍由 browser(RUN) 的 browser 参数选择，与角色配置无关。
+
+> 会话隔离与 Tab 自治生命周期（2026-10）：
+> 1. 会话硬隔离：BrowserTaskManager.runTask 提取 taskObj.parentSessionId 传给 BrowserRegistry.resolve(browser).factory(taskId, sessionId)。桌面宿主 JcefBrowserHost 按 sessionId 维护独立 BrowserSessionState，一个会话即一个独立的浏览器容器，彼此页面与 Tab 绝对隔离；
+> 2. 后台常驻与视图换绑：所有 Tab 底层 CEF KBPage 均在后台独立常驻运行。切会话时 UI 仅切换挂载对应 sessionId 的激活 Tab，不中断后台 Tab 的生命周期与自动化任务；
+> 3. 子 Agent 自治生命周期：AI 浏览器操作员获取的 JcefSessionBrowserControl 严格受限在其父会话内，支持 tabs(action="NEW/SWITCH/CLOSE/LIST") 自主关闭已完成的 Tab（保留至少一个 Tab 防崩溃）；
+> 4. 资源回收闭环：当用户在侧边栏删除会话或项目时，AppState 级联调用 UiBrowserHost.closeSession(sessionId)，彻底关闭对应会话下所有后台 KBPage 并释放 Chromium 资源。
 
 ## 9. 会话自动改名（SessionTitleService）
 

@@ -20,6 +20,8 @@ actual fun WasmImeBridge(
     onSend: (() -> Unit)?,
     rectPx: Rect?,
     density: Float,
+    onPasteImage: ((bytes: ByteArray, mimeType: String) -> Unit)?,
+    onPasteLargeText: ((String) -> Unit)?,
 ) {
     // no-op
 }

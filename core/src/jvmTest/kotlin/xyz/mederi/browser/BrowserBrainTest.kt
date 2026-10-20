@@ -12,28 +12,47 @@ class BrowserBrainTest {
         val userPrompt = BrowserBrainPrompt.buildJudgeUserPrompt(
             content = "Company: Mederi\nRole: Kotlin Engineer\nRemote: Yes",
             instruction = "Check if remote is allowed",
-            recipeRules = "Rule 1: Only consider remote positions."
+            recipeRules = "Rule 1: Only consider remote positions.",
+            collectedItems = listOf(
+                BrowserCollectedItem(
+                    url = "https://example.com/item",
+                    siteName = "Example",
+                    content = "Previous finding: salary 100k"
+                )
+            )
         )
 
         assertTrue(userPrompt.contains("Recipe Rules"))
         assertTrue(userPrompt.contains("Only consider remote positions"))
         assertTrue(userPrompt.contains("Company: Mederi"))
         assertTrue(userPrompt.contains("Check if remote is allowed"))
+        assertTrue(userPrompt.contains("Previous finding: salary 100k"))
+        assertTrue(userPrompt.contains("Collected Research Items"))
     }
 
     @Test
-    fun `test report prompt building with history`() {
+    fun `test report prompt building with history and collected items`() {
         val userPrompt = BrowserBrainPrompt.buildReportUserPrompt(
             taskGoal = "Find remote jobs",
             taskHistory = "Step 1: Opened site\nStep 2: Scrolled down",
             rawOperatorMessage = "Extracted 5 jobs",
-            recipeRules = "Filter remote"
+            recipeRules = "Filter remote",
+            collectedItems = listOf(
+                BrowserCollectedItem(
+                    url = "https://remoteok.com/job1",
+                    siteName = "RemoteOK",
+                    content = "Job 1: Senior Engineer at Mederi"
+                )
+            )
         )
 
         assertTrue(userPrompt.contains("Find remote jobs"))
         assertTrue(userPrompt.contains("Step 1: Opened site"))
         assertTrue(userPrompt.contains("Extracted 5 jobs"))
         assertTrue(userPrompt.contains("Filter remote"))
+        assertTrue(userPrompt.contains("Collected Research Items"))
+        assertTrue(userPrompt.contains("RemoteOK"))
+        assertTrue(userPrompt.contains("Senior Engineer at Mederi"))
     }
 
     @Test

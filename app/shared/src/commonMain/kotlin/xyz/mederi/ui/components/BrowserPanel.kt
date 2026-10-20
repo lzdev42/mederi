@@ -44,8 +44,10 @@ internal fun BrowserPanelContent(
     val automationState = viewModel.browserAutomationState
 
     if (host != null) {
+        val currentSessionId = viewModel.conversationId.orEmpty()
         Box(modifier = modifier.fillMaxSize()) {
             host.BrowserContent(
+                sessionId = currentSessionId,
                 colors = colors,
                 automationState = automationState,
                 onToggleAutomationPanel = viewModel::toggleBrowserAutomationPanel,

@@ -445,6 +445,8 @@ class WorkspaceViewModel(
      * 再由事件流持续更新。
      */
     private val sessionCache = SessionUiCache()
+    /** 记录已水合过输入框设置的会话 ID 集合。确保每个会话仅在进入/初次打开时水合一次设置，绝不被后续快照倒灌覆盖 */
+    private val hydratedSessions = mutableSetOf<String>()
     var reasoningExpanded by mutableStateOf<Map<String, Boolean>>(emptyMap()); private set
 
     // ------------------------------------------------------------------
@@ -1058,8 +1060,17 @@ class WorkspaceViewModel(
     fun clearInputDraft() {
         inputDraft = TextFieldValue("")
         draftDebounceJob?.cancel()
-        if (conversationId != null) {
-            saveComposeState()
+        val convId = conversationId
+        if (convId != null) {
+            sessionCache.conversationStates[convId]?.let { cached ->
+                sessionCache.conversationStates[convId] = cached.copy(
+                    conversation = cached.conversation.copy(draftText = "")
+                )
+            }
+            viewModelScope.launch {
+                val input = buildComposeStateInput().copy(draftText = "")
+                appState.aiCore.updateConversationSettings(convId, input)
+            }
         } else {
             unattachedDraft = ""
         }
@@ -1592,16 +1603,6 @@ class WorkspaceViewModel(
     fun attach(id: String?) {
         DebugLog.event("UI", "attach: id=$id")
         draftDebounceJob?.cancel()
-        // 切换前保存旧会话的 compose state（含草稿文本）。
-        // 同步更新缓存（切回来走缓存路径时能读到最新草稿/设置）+ fire-and-forget 写 DB。
-        val oldConvId = conversationId
-        if (oldConvId != null && oldConvId != id) {
-            val input = buildComposeStateInput()
-            updateConversationStateCache(oldConvId, input)
-            viewModelScope.launch {
-                appState.aiCore.updateConversationSettings(oldConvId, input)
-            }
-        }
         resetQuestionState()
         isSubagentBannerDismissed = false
         // compaction 本地态不随会话走：切会话复位，防别的会话压缩事件串台
@@ -1635,36 +1636,22 @@ class WorkspaceViewModel(
                 id = cached.errorId,
                 isStreamInterrupted = cached.errorIsStreamInterrupted,
             )
-            // 切换到已缓存的会话时，观察流不会重发状态（无新事件→不触发 applySnapshot→不恢复设置），
-            // 故此处显式按缓存会话对象直接恢复四项设置（model / agent / apiKey / thinkingLevel）。
-            // 会话是真理源：已绑定模型则覆盖，否则（modelId==null）保留用户当前选择，不写库。
+            // 切换到已缓存的会话时，显式按缓存会话对象直接恢复设置（model / agent / apiKey / thinkingLevel）。
+            // 仅在切换回当前对话时允许读一次设置，其他时候绝不允许读取或覆盖。
             applySessionSettings(cached.conversation)
+            hydratedSessions.add(id)
             DebugLog.event(
                 "UI",
                 "attach: rendered from state pool (status=${cached.conversation.status}, messages=${cached.messages.size}, subagents=${cached.subagents.size}, dock=${cached.activeDockPanel})"
             )
         } else {
-            // 无缓存（首次打开）：异步拉一次初始状态机渲染，再交给观察流持续更新
+            // 无缓存（首次打开）：直接从已有的 projects 会话列表寻找该会话恢复设置，并重置渲染态等观察流首帧快照
             conversationState = null
             isAttached = false
-            viewModelScope.launch {
-                val reqId = id
-                val snap = appState.aiCore.getSnapshot(reqId).getOrNull()
-                if (snap == null) {
-                    DebugLog.event("UI", "attach: conversation $reqId not found, clearing stale selection")
-                    sessionCache.conversationStates.remove(reqId)
-                    if (conversationId == reqId) {
-                        conversationId = null
-                        conversationState = null
-                        isAttached = false
-                        appState.selectConversation(null)
-                    }
-                    return@launch
-                }
-                applySnapshot(reqId, snap)
-                // 拿到会话对象后直接读四列设选择器（会话是真理源，不写库、不写偏好文件）。
-                // 用户已切走（conversationId != reqId）时不应用旧会话的设置。
-                if (conversationId == reqId) applySessionSettings(snap.conversation)
+            val projectConv = appState.projects.value.flatMap { it.conversations }.find { it.id == id }
+            if (projectConv != null) {
+                applySessionSettings(projectConv)
+                hydratedSessions.add(id)
             }
         }
         ensureObserving(id)
@@ -1734,8 +1721,22 @@ class WorkspaceViewModel(
         }
         val prevSnap = sessionCache.conversationStates[id]
         val wasWorking = prevSnap?.conversation?.status == ConversationStatus.Working
+        // 保留会话专属的写侧输入设置（model / agent / apiKey / thinkingLevel / draftText），绝不被 Core 推送的快照冲刷
+        val effectiveConv = if (prevSnap != null) {
+            snap.conversation.copy(
+                modelId = prevSnap.conversation.modelId ?: snap.conversation.modelId,
+                modelProvider = prevSnap.conversation.modelProvider ?: snap.conversation.modelProvider,
+                agent = prevSnap.conversation.agent ?: snap.conversation.agent,
+                apiKeyId = prevSnap.conversation.apiKeyId ?: snap.conversation.apiKeyId,
+                thinkingLevel = prevSnap.conversation.thinkingLevel ?: snap.conversation.thinkingLevel,
+                draftText = prevSnap.conversation.draftText ?: snap.conversation.draftText,
+            )
+        } else {
+            snap.conversation
+        }
         // 保留会话专属的本地 UI 状态（activeDockPanel 与 browserAutomation）与子代理，防被来自 Core 的空值冲刷
         val effectiveSnap = snap.copy(
+            conversation = effectiveConv,
             activeDockPanel = snap.activeDockPanel ?: prevSnap?.activeDockPanel,
             browserAutomation = snap.browserAutomation ?: prevSnap?.browserAutomation,
             subagents = if (snap.subagents.isEmpty() && !prevSnap?.subagents.isNullOrEmpty()) {
@@ -1746,6 +1747,10 @@ class WorkspaceViewModel(
         if (conversationId == id) {
             conversationState = effectiveSnap
             isAttached = true
+            // 首次收到快照且该会话尚未水合过设置（冷启动等场景）：水合一次会话设置
+            if (hydratedSessions.add(id)) {
+                applySessionSettings(effectiveConv)
+            }
             errorState = errorState.copy(
                 message = snap.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
                 diagnostic = snap.errorDiagnostic,

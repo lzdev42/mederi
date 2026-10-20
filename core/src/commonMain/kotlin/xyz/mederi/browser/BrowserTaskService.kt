@@ -23,7 +23,8 @@ interface BrowserTaskService {
         parentSessionId: String,
         browser: String? = null,
         apiKeyId: String? = null,
-        recipe: BrowserRecipe? = null
+        recipe: BrowserRecipe? = null,
+        isTest: Boolean = false
     ): String
 
     /** 查询任务状态，返回 JSON（RUNNING/COMPLETED/ERROR/STOPPED/NOT_FOUND + 简短消息 + browser）。 */

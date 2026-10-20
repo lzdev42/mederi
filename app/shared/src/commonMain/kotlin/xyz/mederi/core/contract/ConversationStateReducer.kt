@@ -376,7 +376,13 @@ object ConversationStateReducer {
         CoreEventType.BROWSER_TASK_COMPLETED,
         CoreEventType.BROWSER_TASK_ERROR,
         CoreEventType.BROWSER_TASK_STOPPED -> {
+            val isTestTask = event.payload["isTestTask"]?.toBooleanStrictOrNull() ?: false
             val current = snapshot.browserAutomation
+            val updatedDockPanel = if (!isTestTask && snapshot.activeDockPanel == RightDockPanel.BROWSER) {
+                null
+            } else {
+                snapshot.activeDockPanel
+            }
             if (current != null) {
                 val updatedSteps = current.steps.map { step ->
                     if (step is BrowserFlowStep.Action && step.status == BrowserStepStatus.RUNNING) {
@@ -392,11 +398,15 @@ object ConversationStateReducer {
                 snapshot.copy(
                     browserAutomation = current.copy(
                         isAutomating = false,
+                        isPanelOpen = if (!isTestTask) false else current.isPanelOpen,
                         completedAtMillis = currentTimeMillis(),
                         steps = updatedSteps
-                    )
+                    ),
+                    activeDockPanel = updatedDockPanel
                 )
-            } else snapshot
+            } else {
+                snapshot.copy(activeDockPanel = updatedDockPanel)
+            }
         }
 
         // 子代理生命周期事件（收敛入状态机，彻底消除 ViewModel 旁路 Map）
@@ -446,6 +456,7 @@ object ConversationStateReducer {
         val taskId = event.payload["taskId"] ?: return existingSteps
         val stepNum = event.payload["step"]?.toIntOrNull() ?: 0
         val thought = event.payload["thought"]
+        val memory = event.payload["memory"]
         val resultsJson = event.payload["resultsJson"]
         val message = event.payload["message"]
         val now = currentTimeMillis()
@@ -458,6 +469,17 @@ object ConversationStateReducer {
                 BrowserFlowStep.Narration(
                     id = "${taskId}_s${stepNum}_narr",
                     text = thought,
+                    timestampMillis = now,
+                )
+            )
+        }
+
+        // 1.5 AI 记忆
+        if (!memory.isNullOrBlank()) {
+            newSteps.add(
+                BrowserFlowStep.Memory(
+                    id = "${taskId}_s${stepNum}_mem",
+                    text = memory,
                     timestampMillis = now,
                 )
             )

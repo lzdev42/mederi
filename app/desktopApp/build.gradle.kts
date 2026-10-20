@@ -5,10 +5,13 @@ plugins {
     alias(libs.plugins.kotlinJvm)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
+    alias(libs.plugins.kotlinSerialization)
 }
 
 dependencies {
     implementation(project(":app:shared"))
+    implementation(project(":core"))
+    implementation(libs.koog.agents)
 
     implementation(compose.desktop.currentOs)
     implementation(libs.kotlinx.coroutinesSwing)
@@ -26,6 +29,8 @@ dependencies {
 
     // 图标库：用于浏览器工具栏后退、前进、刷新等图标
     implementation(libs.composeIcons.feather)
+
+    testImplementation(libs.kotlin.test)
 }
 
 // ------------------------------------------------------------------

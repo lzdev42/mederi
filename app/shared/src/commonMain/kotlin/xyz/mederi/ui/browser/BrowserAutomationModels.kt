@@ -77,6 +77,18 @@ sealed interface BrowserFlowStep {
     ) : BrowserFlowStep
 
     /**
+     * AI 记忆节点：浏览器操作员每步自总结的 memory（区别于 [Narration] 的即时思考，
+     * [Memory] 是跨步骤累积的记忆快照，UI 用区别样式渲染，对齐 BrowserPilot 的 OnMemory）。
+     */
+    @Immutable
+    @Serializable
+    data class Memory(
+        override val id: String,
+        val text: String,
+        override val timestampMillis: Long = 0L,
+    ) : BrowserFlowStep
+
+    /**
      * 浏览器执行动作节点（如 `"正在点击"`、`"正在打开网页"`）。
      *
      * @property kind 动作类型（决定图标）

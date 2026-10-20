@@ -46,9 +46,7 @@ data class BrowserActionArg(
     /** tabs：NEW / CLOSE / LIST / SELECT。 */
     val tabAction: String = "",
     /** tabs：目标标签页 id（CLOSE / SELECT 用）。 */
-    val tabId: String = "",
-    /** sleep：休眠毫秒数。 */
-    val sleepMs: Long = 0
+    val tabId: String = ""
 )
 
 /** 解析后的浏览器 action。 */
@@ -65,15 +63,6 @@ sealed class BrowserAction {
     data class WaitFor(val selector: String) : BrowserAction()
     /** tabs：标签页管理（NEW/CLOSE/LIST/SELECT）。 */
     data class Tabs(val action: String, val tabId: String = "") : BrowserAction()
-    /** screenshot：截图（供视觉模型/留档）。 */
-    object Screenshot : BrowserAction()
-    /** navigate_back：返回上一页（当前后端无 navigateBack 时 noop）。 */
-    object NavigateBack : BrowserAction()
-    /** close：关闭浏览器。 */
-    object Close : BrowserAction()
-    /** sleep：休眠指定毫秒数。 */
-    data class Sleep(val ms: Long) : BrowserAction()
-    object NoOp : BrowserAction()
 }
 
 /** action 执行结果（进 step history；@Serializable 供事件 payload 序列化）。 */
@@ -119,10 +108,6 @@ object BrowserDecisionParser {
                 "execute_drill", "drill" -> arg.script?.let { BrowserAction.ExecuteDrill(it) }
                 "wait_for" -> if (arg.selector.isNotBlank()) BrowserAction.WaitFor(arg.selector) else null
                 "tabs", "browser_tabs" -> if (arg.tabAction.isNotBlank()) BrowserAction.Tabs(arg.tabAction, arg.tabId) else null
-                "screenshot" -> BrowserAction.Screenshot
-                "navigate_back", "back" -> BrowserAction.NavigateBack
-                "close" -> BrowserAction.Close
-                "sleep" -> BrowserAction.Sleep(arg.sleepMs)
                 else -> null
             }
         }

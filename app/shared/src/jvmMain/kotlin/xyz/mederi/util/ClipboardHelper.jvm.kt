@@ -44,6 +44,9 @@ internal actual fun platformClipboardGetImage(): ClipboardImage? {
     }
 }
 
+internal actual suspend fun platformClipboardGetImageAsync(): ClipboardImage? =
+    platformClipboardGetImage()
+
 internal actual fun platformClipboardGetText(): String? {
     return try {
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
@@ -56,6 +59,9 @@ internal actual fun platformClipboardGetText(): String? {
         null
     }
 }
+
+internal actual suspend fun platformClipboardGetTextAsync(): String? =
+    platformClipboardGetText()
 
 @OptIn(ExperimentalComposeUiApi::class)
 internal actual fun plainTextClipEntry(text: String): ClipEntry? =

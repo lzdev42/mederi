@@ -85,8 +85,14 @@ fun main() = application {
                                     xyz.mederi.browser.BrowserRegistry.register(
                                         name = "jcef",
                                         kind = xyz.mederi.browser.BrowserKind.JCEF,
-                                        factory = { taskId -> host.createAiTab(taskId) }
+                                        factory = { taskId, sessionId -> host.createControl(taskId, sessionId) }
                                     )
+                                    // 向 Core 注册 JCEF 操作员专属工具集（仅浏览器操作员可见，Core 零耦合）
+                                    xyz.mederi.browser.BrowserOperatorToolRegistry.register(
+                                        xyz.mederi.browser.BrowserConstants.DEFAULT_BROWSER_JCEF
+                                    ) { control ->
+                                        xyz.mederi.browser.tools.buildJcefBrowserTools(control)
+                                    }
                                 }
                             }
                             // kb == null → JCEF 不支持（headless 无 Xvfb 等）：inkcompose 降级源码展示，无浏览器面板

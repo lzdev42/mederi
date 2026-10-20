@@ -1,9 +1,15 @@
 package xyz.mederi.browser
 
+import ai.koog.agents.core.tools.ToolBase
+import ai.koog.agents.core.tools.ToolCallMetadata
+import ai.koog.serialization.JSONObject
+import ai.koog.serialization.kotlinx.KotlinxSerializer
+import ai.koog.serialization.kotlinx.toKoogJSONElement
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import xyz.mederi.browser.drill.DrillExecutor
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.AIModel
@@ -13,13 +19,11 @@ import xyz.mederi.domain.model.AIModel
  *
  * 核心定位：系统的"手和眼"，严格执行页面物理操作与感知。
  * - 遵循 4-phase 循环（perceive → decide → execute → postprocess）。
- * - 简化记忆机制：10 步滑动 StepHistory + AI 自总结 memory（无长上下文堆积，防止快照爆炸）。
- * - 判定外包：遇到复杂判定、准则校验或需要动脑的场景，通过 [BrowserAction.Judge] 交由 [BrowserBrain] 判定。
- * - 确定性脚本：通过 [BrowserAction.ExecuteDrill] 把脚本交给 [DrillExecutor] 批量执行。
- * - 挂载配方：如果挂载了 [BrowserRecipe]，将配方上下文注入提示词，并在需要时传给 Brain。
- *
- * LLM 调用全部走 [BrowserLLMCaller]（由 [BrowserLLMHelper] 默认实现）——Operator 不持有
- * provider/client，vision 门控（截图是否真正发给模型）由 caller 内部按 aiModel.supportsImages 决定。
+ * - 简化记忆机制：滑动 StepHistory + AI 自管理 memory（无长上下文堆积，防止快照爆炸）。
+ * - 判定外包：遇到复杂判定、准则校验或需要动脑的场景，通过 [JudgeTool] / [BrowserAction.Judge] 交由 [BrowserBrain] 判定。
+ * - 确定性脚本：通过 [ExecuteDrillTool] / [BrowserAction.ExecuteDrill] 把脚本交给 [DrillExecutor] 批量执行。
+ * - 页面物理工具由 UI 注册到 [BrowserOperatorToolRegistry]，Core 零耦合消费。
+ * - 原生 Koog tool-calling 优先；保留 [BrowserDecisionParser] 文本 JSON 解析以向下兼容与支持测试 Fake。
  */
 class BrowserOperator(
     private val control: BrowserControl,
@@ -28,12 +32,15 @@ class BrowserOperator(
     private val brain: BrowserBrain? = null,
     private val drillExecutor: DrillExecutor? = null,
     private val recipe: BrowserRecipe? = null,
-    private val maxSteps: Int = 50,
-    private val onStep: (suspend (step: Int, thought: String, results: List<ActionResult>) -> Unit)? = null
+    private val maxSteps: Int = BrowserConstants.DEFAULT_MAX_STEPS,
+    private val browserName: String = BrowserConstants.DEFAULT_BROWSER_JCEF,
+    val collector: BrowserCollector = BrowserCollector(),
+    private val onStep: (suspend (step: Int, thought: String, results: List<ActionResult>) -> Unit)? = null,
+    private val onMemoryUpdate: ((String) -> Unit)? = null
 ) {
 
     /** 系统维护的紧凑 step history（最后 [maxItems] 条）。 */
-    private class StepHistory(private val maxItems: Int = 10) {
+    private class StepHistory(private val maxItems: Int = BrowserConstants.MAX_HISTORY_ITEMS) {
         private val items = mutableListOf<String>()
         fun add(step: Int, thought: String?, results: List<ActionResult>) {
             val resultStr = results.joinToString(", ") { "${it.action}(${if (it.success) "ok" else "fail"})" }
@@ -46,17 +53,46 @@ class BrowserOperator(
     private val stepHistory = StepHistory()
     private var memory: String = ""
     private var lastResults: List<ActionResult> = emptyList()
+    private val serializer = KotlinxSerializer()
+
+    fun getMemory(): String = memory
 
     /**
      * 运行浏览器任务，返回最终结果。
      */
     suspend fun run(task: String): BrowserTaskResult {
         return try {
+            DebugLog.info("BrowserOperator", "Starting task: $task")
             control.start()
             memory = task
+            onMemoryUpdate?.invoke(memory)
+
+            var doneMessage: String? = null
+            var isDone = false
+
+            // 装配 Core 内部工具集
+            val internalTools = mutableListOf<ToolBase<*, *>>()
+            internalTools.add(DoneTool(onDone = { msg ->
+                doneMessage = msg
+                isDone = true
+            }))
+            internalTools.add(UpdateMemoryTool(onMemoryUpdate = { mem ->
+                memory = mem
+                onMemoryUpdate?.invoke(mem)
+            }))
+            internalTools.add(CollectInfoTool(collector = collector, control = control))
+            if (brain != null) {
+                internalTools.add(JudgeTool(brain = brain, recipe = recipe, collector = collector))
+            }
+            if (drillExecutor != null) {
+                internalTools.add(ExecuteDrillTool(drillExecutor = drillExecutor, brain = brain, recipe = recipe))
+            }
+
+            // 从 UI 注册中心拉取当前浏览器的物理操作工具
+            val externalTools = BrowserOperatorToolRegistry.getTools(browserName, control)
+            val allTools: List<ToolBase<*, *>> = externalTools + internalTools
 
             repeat(maxSteps) { step ->
-                // 取消协作点：外部 stop 时及时退出
                 currentCoroutineContext().ensureActive()
                 DebugLog.info("BrowserOperator", "step ${step + 1}/$maxSteps")
 
@@ -67,63 +103,126 @@ class BrowserOperator(
                     DebugLog.error("BrowserOperator", "perceive failed: ${e.message}")
                     return BrowserTaskResult(success = false, message = "浏览器快照失败: ${e.message}")
                 }
-                // 截图尽力而为：视觉后端不可用/失败只影响视觉模型，不阻断整体流程
-                val screenshot = runCatching { control.screenshot() }.getOrNull()
 
                 // ── Phase 2: DECIDE ──
                 val userPrompt = buildUserPrompt(task, snapshot)
-                val decision = try {
-                    val decisionText = llmCaller.call(
+                val response = try {
+                    llmCaller.callWithTools(
                         systemPrompt = BrowserPrompt.build(maxSteps),
                         userPrompt = userPrompt,
-                        // vision 门控（是否真正发送图片）在 llmCaller 内部按 aiModel.supportsImages 决定
-                        image = screenshot
+                        tools = allTools,
+                        image = null
                     )
-                    BrowserDecisionParser.parse(decisionText)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     DebugLog.error("BrowserOperator", "decide failed (step ${step + 1}): ${e.message}")
-                    val err = ActionResult("llm", false, "决策解析失败: ${e.message}")
+                    val err = ActionResult("llm", false, "决策调用失败: ${e.message}")
                     lastResults = listOf(err)
                     stepHistory.add(step + 1, "LLM 决策失败", lastResults)
                     onStep?.invoke(step + 1, "决策失败", lastResults)
                     return BrowserTaskResult(success = false, message = "决策失败: ${e.message}")
                 }
 
-                // 记忆更新（LLM 自总结，无独立调用）
-                if (decision.memory.isNotBlank()) memory = decision.memory
-
                 // ── Phase 3: EXECUTE ──
-                val results = executeActions(decision)
+                val results = mutableListOf<ActionResult>()
+                val thought = response.reasoning ?: response.text.substringBefore("\n{").trim()
+
+                if (response.toolCalls.isNotEmpty()) {
+                    // 原生 Koog tool call 路径
+                    for (toolCall in response.toolCalls) {
+                        val tool = allTools.firstOrNull { it.name == toolCall.name }
+                        if (tool != null) {
+                            val res = executeTool(tool, toolCall.argsJson)
+                            results.add(res)
+                            if (tool.name == BrowserConstants.ToolNames.DONE && doneMessage == null) {
+                                doneMessage = res.detail
+                                isDone = true
+                            }
+                        } else {
+                            results.add(ActionResult(action = toolCall.name, success = false, detail = "Tool '${toolCall.name}' not found"))
+                        }
+                    }
+                } else if (response.text.isNotBlank()) {
+                    // 文本 JSON 决策回退路径（兼容测试与无 tool-calling 模型）
+                    val decision = runCatching { BrowserDecisionParser.parse(response.text) }.getOrNull()
+                    if (decision != null) {
+                        if (decision.memory.isNotBlank()) {
+                            memory = decision.memory
+                            onMemoryUpdate?.invoke(memory)
+                        }
+                        if (decision.isDone) {
+                            isDone = true
+                        }
+                        val actionResults = executeActions(decision)
+                        results.addAll(actionResults)
+                        if (isDone && doneMessage == null) {
+                            val doneAct = actionResults.lastOrNull { it.action == "done" }
+                            doneMessage = doneAct?.detail ?: decision.thought.ifBlank { "任务完成" }
+                        }
+                    } else {
+                        results.add(ActionResult("response", true, response.text.take(200)))
+                    }
+                } else {
+                    results.add(ActionResult("none", false, "没有可执行的动作"))
+                }
+
                 lastResults = results
 
                 // ── Phase 4: POSTPROCESS ──
-                stepHistory.add(step + 1, decision.thought, results)
-                onStep?.invoke(step + 1, decision.thought, results)
+                val effectiveThought = thought.ifBlank { response.text.take(100) }
+                stepHistory.add(step + 1, effectiveThought, results)
+                onStep?.invoke(step + 1, effectiveThought, results)
 
-                // 终止条件
-                if (decision.isDone) {
-                    val done = results.lastOrNull() as? BrowserAction.Done
+                if (isDone) {
                     return BrowserTaskResult(
                         success = true,
-                        message = done?.message ?: decision.thought.ifBlank { "任务完成" }
+                        message = doneMessage ?: effectiveThought.ifBlank { "任务完成" },
+                        collectedItems = collector.list()
                     )
                 }
             }
 
-            BrowserTaskResult(success = false, message = "已达到最大步数 ($maxSteps)，任务未完成。")
+            BrowserTaskResult(
+                success = false,
+                message = "已达到最大步数 ($maxSteps)，任务未完成。",
+                collectedItems = collector.list()
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             DebugLog.error("BrowserOperator", "run failed: ${e.message}")
-            BrowserTaskResult(success = false, message = "浏览器任务异常: ${e.message ?: e::class.simpleName}")
-        } finally {
-            runCatching { control.close() }
+            BrowserTaskResult(
+                success = false,
+                message = "浏览器任务异常: ${e.message ?: e::class.simpleName}",
+                collectedItems = collector.list()
+            )
         }
     }
 
-    /** 执行 LLM 决策里的所有 action，返回每个 action 的结果。 */
+    private suspend fun executeTool(tool: ToolBase<*, *>, argsJson: String): ActionResult {
+        return try {
+            val jsonElement = if (argsJson.isBlank()) {
+                JsonObject(emptyMap())
+            } else {
+                Json.parseToJsonElement(argsJson)
+            }
+            val koogJson = (jsonElement.toKoogJSONElement() as? JSONObject) ?: JSONObject(emptyMap())
+            val decodedArgs = tool.decodeArgs(koogJson, serializer)
+            @Suppress("UNCHECKED_CAST")
+            val result = (tool as ToolBase<Any?, Any?>).execute(decodedArgs, ToolCallMetadata.EMPTY)
+            val resultString = tool.encodeResultToStringUnsafe(result, serializer)
+            val isSuccess = !resultString.startsWith("FAIL") && !resultString.contains("=FAIL:")
+            ActionResult(action = tool.name, success = isSuccess, detail = resultString)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            DebugLog.error("BrowserOperator", "Tool '${tool.name}' execution failed: ${e.message}")
+            ActionResult(action = tool.name, success = false, detail = e.message ?: e::class.simpleName ?: "unknown error")
+        }
+    }
+
+    /** 执行 LLM 决策里的所有 action，返回每个 action 的结果（兼容回退）。 */
     private suspend fun executeActions(decision: BrowserDecision): List<ActionResult> {
         val actions = BrowserDecisionParser.toActions(decision)
         if (actions.isEmpty()) {
@@ -152,7 +251,6 @@ class BrowserOperator(
                     if (drillExecutor == null) {
                         ActionResult("drill", false, "DrillExecutor 未配置")
                     } else {
-                        // 脚本内 ask_ai 判定交给 Brain（未配 Brain 时为 null，ask_ai 步骤会报错）
                         val onJudgeContent: (suspend (String, String) -> BrainResult)? = brain?.let { b ->
                             { c: String, i: String -> b.judge(c, i, recipe?.judgeRules.orEmpty()) }
                         }
@@ -173,25 +271,6 @@ class BrowserOperator(
                         else -> xyz.mederi.browser.bidi.OperationResult.Failure("tabs", "unknown tabAction: ${action.action}")
                     }
                 }
-                is BrowserAction.Screenshot -> {
-                    control.screenshot()
-                    ActionResult("screenshot", true)
-                }
-                is BrowserAction.NavigateBack -> {
-                    // mederi BrowserControl 无 navigateBack；架子阶段 noop（navigate 当前 url 无意义，
-                    // 简化为成功步不崩），ST3 接入后端能力后替换为真实后退。
-                    DebugLog.info("BrowserOperator", "navigateBack not supported, noop")
-                    ActionResult("back", true, "navigateBack not supported, noop")
-                }
-                is BrowserAction.Close -> exec("close") {
-                    control.close()
-                    xyz.mederi.browser.bidi.OperationResult.Success("close")
-                }
-                is BrowserAction.Sleep -> {
-                    delay(action.ms)
-                    ActionResult("sleep", true)
-                }
-                BrowserAction.NoOp -> ActionResult("noop", true)
             }
             DebugLog.info("BrowserOperator", "  action ${result.action} success=${result.success} ${result.detail.take(120)}")
             result
@@ -213,9 +292,9 @@ class BrowserOperator(
     }
 
     private fun buildUserPrompt(task: String, snapshot: PageSnapshot): String = buildString {
-        append("<agent_history>\n")
+        append("<${BrowserConstants.ProtocolTags.AGENT_HISTORY}>\n")
         append(stepHistory.buildDescription())
-        append("\n</agent_history>\n\n")
+        append("\n</${BrowserConstants.ProtocolTags.AGENT_HISTORY}>\n\n")
 
         recipe?.let { r ->
             if (r.name.isNotBlank() || r.description.isNotBlank() || r.operatorContent.isNotBlank()) {
@@ -227,35 +306,38 @@ class BrowserOperator(
             }
         }
 
-        append("<user_request>\n")
+        append("<${BrowserConstants.ProtocolTags.USER_REQUEST}>\n")
         append(task)
-        append("\n</user_request>\n\n")
+        append("\n</${BrowserConstants.ProtocolTags.USER_REQUEST}>\n\n")
 
-        append("<memory>\n")
+        append("<${BrowserConstants.ProtocolTags.AGENT_STATE}>\n")
+        append("  <${BrowserConstants.ProtocolTags.MEMORY}>\n")
         append(if (memory.isBlank()) "No memory yet." else memory)
-        append("\n</memory>\n\n")
+        append("\n  </${BrowserConstants.ProtocolTags.MEMORY}>\n")
+        append("</${BrowserConstants.ProtocolTags.AGENT_STATE}>\n\n")
 
-        append("<last_action_results>\n")
+        append("<${BrowserConstants.ProtocolTags.LAST_ACTION_RESULTS}>\n")
         append(
             if (lastResults.isEmpty()) "No results."
             else lastResults.joinToString("\n") { "${it.action}: ${if (it.success) "ok" else "FAIL - ${it.detail}"}" }
         )
-        append("\n</last_action_results>\n\n")
+        append("\n</${BrowserConstants.ProtocolTags.LAST_ACTION_RESULTS}>\n\n")
 
-        append("<browser_state>\n")
-        append("<url>").append(snapshot.url).append("</url>\n")
-        append("<title>").append(snapshot.title).append("</title>\n")
-        append("<active_tab_snapshot>\n")
+        append("<${BrowserConstants.ProtocolTags.BROWSER_STATE}>\n")
+        append("<${BrowserConstants.ProtocolTags.URL}>").append(snapshot.url).append("</${BrowserConstants.ProtocolTags.URL}>\n")
+        append("<${BrowserConstants.ProtocolTags.TITLE}>").append(snapshot.title).append("</${BrowserConstants.ProtocolTags.TITLE}>\n")
+        append("<${BrowserConstants.ProtocolTags.ACTIVE_TAB_SNAPSHOT}>\n")
         append(snapshot.yaml)
-        append("\n</active_tab_snapshot>\n")
-        append("</browser_state>\n")
+        append("\n</${BrowserConstants.ProtocolTags.ACTIVE_TAB_SNAPSHOT}>\n")
+        append("</${BrowserConstants.ProtocolTags.BROWSER_STATE}>\n")
     }
 }
 
 /** 浏览器任务最终结果。 */
 data class BrowserTaskResult(
     val success: Boolean,
-    val message: String
+    val message: String,
+    val collectedItems: List<BrowserCollectedItem> = emptyList()
 )
 
 /** 向后兼容别名。 */

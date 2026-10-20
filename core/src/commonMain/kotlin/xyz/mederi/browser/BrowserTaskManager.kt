@@ -63,6 +63,7 @@ class BrowserTaskManager(
         val parentSessionId: String,
         val apiKeyId: String? = null,
         val recipe: BrowserRecipe? = null,
+        val isTest: Boolean = false,
         @Volatile var browserName: String,
         @Volatile var job: Job,
         @Volatile var status: TaskStatus,
@@ -73,12 +74,36 @@ class BrowserTaskManager(
         @Volatile var control: BrowserControl? = null,
         @Volatile var lastUrl: String = "",
         @Volatile var lastTitle: String = "",
+        @Volatile var memory: String = "",
         @Volatile var brainResult: BrainResult? = null,
+        val collector: BrowserCollector = BrowserCollector(),
         val steps: MutableList<String> = mutableListOf(),
         val createdAt: String = Instant.now().toString()
     )
 
     private val tasks = ConcurrentHashMap<String, BrowserTask>()
+
+    private fun isAutomatedTestTask(task: String, recipe: BrowserRecipe?, explicitIsTest: Boolean): Boolean {
+        if (explicitIsTest) return true
+        val lowerRecipe = recipe?.name?.lowercase().orEmpty()
+        val lowerTask = task.lowercase()
+        return lowerRecipe.contains("test") ||
+            lowerTask.contains("测试") ||
+            lowerTask.contains("test") ||
+            lowerTask.contains("e2e") ||
+            lowerTask.contains("assert")
+    }
+
+    /**
+     * 判定当前任务是否需要大脑介入进行内容/规则判定。
+     * 留口设计：后续可在此扩展挂载规则、显式声明或动态判定的接入方式。
+     */
+    private fun needsBrainJudgment(recipe: BrowserRecipe?, taskObj: BrowserTask): Boolean {
+        // 1. 如果配方包含判定规则，进入大脑判定
+        if (!recipe?.judgeRules.isNullOrBlank()) return true
+        // 2. 留口：后续可扩展任务挂载的结构化判定信息、显式要求或操作员中间触发等
+        return false
+    }
 
     /**
      * 异步派发浏览器任务，立即返回 taskId（不阻塞）。
@@ -92,7 +117,8 @@ class BrowserTaskManager(
         parentSessionId: String,
         browser: String?,
         apiKeyId: String?,
-        recipe: BrowserRecipe?
+        recipe: BrowserRecipe?,
+        isTest: Boolean
     ): String {
         val resolved = BrowserRegistry.resolve(browser)
             ?: return Json.encodeToString(
@@ -103,6 +129,7 @@ class BrowserTaskManager(
                 )
             )
         val taskId = "bt_${UUID.randomUUID().toString().take(8)}"
+        val isTestTask = isAutomatedTestTask(task, recipe, isTest)
         val taskObj = BrowserTask(
             taskId = taskId,
             task = task,
@@ -112,6 +139,7 @@ class BrowserTaskManager(
             parentSessionId = parentSessionId,
             apiKeyId = apiKeyId,
             recipe = recipe,
+            isTest = isTestTask,
             browserName = resolved.name,
             job = Job(),
             status = TaskStatus.STARTED,
@@ -119,13 +147,29 @@ class BrowserTaskManager(
             error = null
         )
         tasks[taskId] = taskObj
-        emit(taskId, EventType.BROWSER_TASK_STARTED, status = TaskStatus.STARTED, browser = resolved.name, message = "任务已派发")
+        emit(
+            taskId = taskId,
+            type = EventType.BROWSER_TASK_STARTED,
+            status = TaskStatus.STARTED,
+            parentSessionId = taskObj.parentSessionId,
+            browser = resolved.name,
+            message = "任务已派发",
+            isTestTask = isTestTask
+        )
 
         val job = scope.launch {
-            val control = createBrowserControl(resolved, taskId)
+            val control = createBrowserControl(resolved, taskId, taskObj.parentSessionId)
             taskObj.control = control
             taskObj.status = TaskStatus.RUNNING
-            emit(taskId, EventType.BROWSER_TASK_STEP, status = TaskStatus.RUNNING, browser = resolved.name, message = "启动浏览器")
+            emit(
+                taskId = taskId,
+                type = EventType.BROWSER_TASK_STEP,
+                status = TaskStatus.RUNNING,
+                parentSessionId = taskObj.parentSessionId,
+                browser = resolved.name,
+                message = "启动浏览器",
+                isTestTask = isTestTask
+            )
 
             // ST3 完整接线：recipe 解析（RecipeStore）+ LLM caller 注入（llmCallerProvider 优先，
             // 否则 BrowserLLMHelper 真路径）+ workingDir/drillExecutor 真传（Brain 报告落盘、
@@ -175,7 +219,9 @@ class BrowserTaskManager(
                 brain = brain,
                 drillExecutor = drillExecutor,
                 recipe = effectiveRecipe,
-                maxSteps = 50,
+                maxSteps = BrowserConstants.DEFAULT_MAX_STEPS,
+                browserName = resolved.name,
+                collector = taskObj.collector,
                 onStep = { step, thought, results ->
                     taskObj.lastStep = step
                     taskObj.lastThought = thought
@@ -186,38 +232,55 @@ class BrowserTaskManager(
                         taskObj.lastTitle = runCatching { control.getTitle() }.getOrNull().orEmpty()
                     }
                     emit(
-                        taskId,
-                        EventType.BROWSER_TASK_STEP,
+                        taskId = taskId,
+                        type = EventType.BROWSER_TASK_STEP,
                         status = TaskStatus.RUNNING,
+                        parentSessionId = taskObj.parentSessionId,
                         step = step,
                         thought = thought,
-                        results = results
+                        memory = taskObj.memory,
+                        results = results,
+                        collectedCount = taskObj.collector.size(),
+                        isTestTask = isTestTask
                     )
-                }
+                },
+                onMemoryUpdate = { text -> taskObj.memory = text }
             )
             try {
+                println("[BrowserTask] calling runner.run()...")
                 val opResult = runner.run(task)
+                println("[BrowserTask] runner.run() returned success=${opResult.success} msg=${opResult.message.take(200)}")
 
-                // 任务终态：由 BrowserBrain 生成结构化简报与报告
-                val reportResult = runCatching {
-                    brain.generateFinalReport(
-                        taskHistory = taskObj.steps.joinToString("\n"),
-                        goal = task,
-                        rawOperatorMessage = opResult.message,
-                        recipeRules = effectiveRecipe?.judgeRules.orEmpty()
-                    )
-                }.getOrNull()
-                taskObj.brainResult = reportResult
-
-                // 优先使用 Brain 产出的一句话简报给主管，主管查状态即得精简结论
-                val executiveSummary = if (reportResult != null && reportResult.success) {
-                    val summary = reportResult.data["summary"]
-                    val fileNotice = if (reportResult.filesWritten.isNotEmpty()) {
-                        " (报告已保存: ${reportResult.filesWritten.joinToString(", ")})"
-                    } else ""
-                    if (!summary.isNullOrBlank()) "$summary$fileNotice" else opResult.message
+                // 两种汇报情况：
+                // 1. 需要判定：先把信息给大脑，大脑反馈给它以后，再给主 agent；
+                // 2. 无需判定：操作员直接汇报给主 agent。
+                val needsJudgment = needsBrainJudgment(effectiveRecipe, taskObj)
+                val (executiveSummary, reportPath) = if (needsJudgment) {
+                    println("[BrowserTask] needsBrainJudgment=true: calling brain for evaluation...")
+                    val reportResult = runCatching {
+                        brain.generateFinalReport(
+                            taskHistory = taskObj.steps.joinToString("\n"),
+                            goal = task,
+                            rawOperatorMessage = opResult.message,
+                            recipeRules = effectiveRecipe?.judgeRules.orEmpty(),
+                            collectedItems = taskObj.collector.list()
+                        )
+                    }.getOrNull()
+                    println("[BrowserTask] brain.generateFinalReport() returned: ${reportResult?.success}")
+                    taskObj.brainResult = reportResult
+                    val summary = if (reportResult != null && reportResult.success) {
+                        val s = reportResult.data["summary"]
+                        val fileNotice = if (reportResult.filesWritten.isNotEmpty()) {
+                            " (报告已保存: ${reportResult.filesWritten.joinToString(", ")})"
+                        } else ""
+                        if (!s.isNullOrBlank()) "$s$fileNotice" else opResult.message
+                    } else {
+                        opResult.message
+                    }
+                    summary to reportResult?.filesWritten?.firstOrNull()
                 } else {
-                    opResult.message
+                    println("[BrowserTask] needsBrainJudgment=false: operator reports directly to main agent")
+                    opResult.message to null
                 }
 
                 val finalResult = opResult.copy(message = executiveSummary)
@@ -225,22 +288,51 @@ class BrowserTaskManager(
                 taskObj.status = if (opResult.success) TaskStatus.COMPLETED else TaskStatus.ERROR
                 taskObj.error = if (opResult.success) null else opResult.message
                 emit(
-                    taskId,
-                    if (opResult.success) EventType.BROWSER_TASK_COMPLETED else EventType.BROWSER_TASK_ERROR,
+                    taskId = taskId,
+                    type = if (opResult.success) EventType.BROWSER_TASK_COMPLETED else EventType.BROWSER_TASK_ERROR,
                     status = taskObj.status,
-                    message = executiveSummary
+                    parentSessionId = taskObj.parentSessionId,
+                    message = executiveSummary,
+                    role = SubagentRole.BROWSER_OPERATOR.name,
+                    reportPath = reportPath,
+                    collectedCount = taskObj.collector.size(),
+                    isTestTask = isTestTask
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 taskObj.status = TaskStatus.STOPPED
                 taskObj.error = "已停止"
-                emit(taskId, EventType.BROWSER_TASK_STOPPED, status = TaskStatus.STOPPED, message = "任务已停止")
+                emit(
+                    taskId = taskId,
+                    type = EventType.BROWSER_TASK_STOPPED,
+                    status = TaskStatus.STOPPED,
+                    parentSessionId = taskObj.parentSessionId,
+                    message = "任务已停止",
+                    role = SubagentRole.BROWSER_OPERATOR.name,
+                    isTestTask = isTestTask
+                )
                 throw e
             } catch (e: Throwable) {
                 taskObj.status = TaskStatus.ERROR
                 taskObj.error = e.message ?: e::class.simpleName.orEmpty()
-                emit(taskId, EventType.BROWSER_TASK_ERROR, status = TaskStatus.ERROR, message = taskObj.error)
+                emit(
+                    taskId = taskId,
+                    type = EventType.BROWSER_TASK_ERROR,
+                    status = TaskStatus.ERROR,
+                    parentSessionId = taskObj.parentSessionId,
+                    message = taskObj.error,
+                    role = SubagentRole.BROWSER_OPERATOR.name,
+                    isTestTask = isTestTask
+                )
             } finally {
-                // ST2：Brain 不再持有 client（llmCaller 自管），无 close
+                // 任务结束关闭浏览器，除非是自动化测试任务
+                if (!isTestTask) {
+                    try {
+                        control.close()
+                    } catch (_: Throwable) {
+                        DebugLog.error("BrowserTask", "control.close failed in finally")
+                    }
+                }
+                taskObj.control = null
             }
         }
         taskObj.job = job
@@ -258,7 +350,8 @@ class BrowserTaskManager(
                 taskId = taskId,
                 status = t.status.name,
                 browser = t.browserName,
-                message = if (t.status == TaskStatus.COMPLETED) t.result?.message else t.error
+                message = if (t.status == TaskStatus.COMPLETED) t.result?.message else t.error,
+                collectedCount = t.collector.size()
             )
         )
     }
@@ -358,7 +451,8 @@ class BrowserTaskManager(
             lastThought = t.lastThought,
             steps = t.steps.toList(),
             createdAt = t.createdAt,
-            brainResult = t.brainResult
+            brainResult = t.brainResult,
+            collectedItems = t.collector.list()
         )
     }
 
@@ -376,7 +470,8 @@ class BrowserTaskManager(
         lastThought = lastThought,
         steps = steps.toList(),
         createdAt = createdAt,
-        brainResult = brainResult
+        brainResult = brainResult,
+        collectedItems = collector.list()
     )
 
     // ── 内部 ──
@@ -398,34 +493,50 @@ class BrowserTaskManager(
         )
     }
 
-    private suspend fun createBrowserControl(registered: RegisteredBrowser, taskId: String): BrowserControl =
-        registered.factory(taskId)
+    private suspend fun createBrowserControl(
+        registered: RegisteredBrowser,
+        taskId: String,
+        sessionId: String
+    ): BrowserControl =
+        registered.factory(taskId, sessionId)
+
 
     private fun emit(
         taskId: String,
         type: EventType,
         status: TaskStatus,
+        parentSessionId: String,
         browser: String? = null,
+        role: String = SubagentRole.BROWSER_OPERATOR.name,
         step: Int? = null,
         thought: String? = null,
+        memory: String? = null,
         results: List<ActionResult>? = null,
-        message: String? = null
+        message: String? = null,
+        reportPath: String? = null,
+        collectedCount: Int? = null,
+        isTestTask: Boolean = false
     ) {
         runCatching {
             eventBus.tryEmit(MederiEvent(
                 type = type,
-                sessionId = "",  // 浏览器任务不属于某个 session 的对话；UI 用 taskId 过滤
+                sessionId = parentSessionId,
                 payload = buildMap {
                     put("taskId", taskId)
                     put("status", status.name)
+                    put("role", role)
+                    put("isTestTask", isTestTask.toString())
                     browser?.let { put("browser", it) }
+                    reportPath?.let { put("reportPath", it) }
                     step?.let { put("step", it.toString()) }
                     thought?.let { put("thought", it) }
+                    memory?.let { put("memory", it) }
                     results?.let {
                         put("results", it.joinToString(";") { "${it.action}:${it.success}" })
                         put("resultsJson", Json.encodeToString(ListSerializer(ActionResult.serializer()), it))
                     }
                     message?.let { put("message", it) }
+                    collectedCount?.let { put("collectedCount", it.toString()) }
                 },
                 timestamp = Instant.now().toString()
             ))
@@ -439,7 +550,8 @@ data class TaskStatusResult(
     val taskId: String,
     val status: String,
     val browser: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val collectedCount: Int = 0
 )
 
 /** 任务详情（用户 API）。 */
@@ -455,5 +567,6 @@ data class BrowserTaskDetails(
     val steps: List<String>,
     val createdAt: String,
     /** Brain 终态分析结果（任务完成时由 BrowserBrain.generateFinalReport 产出，未完成/失败为 null）。 */
-    val brainResult: BrainResult? = null
+    val brainResult: BrainResult? = null,
+    val collectedItems: List<BrowserCollectedItem> = emptyList()
 )

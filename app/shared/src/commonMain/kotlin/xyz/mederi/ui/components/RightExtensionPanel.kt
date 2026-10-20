@@ -59,8 +59,10 @@ fun RightExtensionPanel(
     LaunchedEffect(currentPanel) {
         if (currentPanel != null) {
             panelToDisplay = currentPanel
-            // 切换到阅读面板时，若当前宽度较小，默认展开至 2/3 窗口宽度以提供最佳阅读体验
-            if (currentPanel == RightDockPanel.ARTIFACTS && readerWidthDp < defaultReaderWidthDp) {
+            // 开启浏览器或阅读面板时，默认宽度占全屏 2/3（受 maxPanelWidth 保护）
+            if (currentPanel == RightDockPanel.BROWSER) {
+                readerWidthDp = defaultReaderWidthDp
+            } else if (currentPanel == RightDockPanel.ARTIFACTS && readerWidthDp < defaultReaderWidthDp) {
                 readerWidthDp = defaultReaderWidthDp
             }
         }

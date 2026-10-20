@@ -383,10 +383,10 @@ class BrowserArchitectureFlowTest {
         }
     }
 
-    // ── 2. vision fallback：supportsImages=true → decide 收到截图 ──
+    // ── 2. 纯 axtree 感知：即使 supportsImages=true，decide 也不传递截图（纯 axtree 策略） ──
 
     @Test
-    fun `vision gate passes screenshot when model supports images`() = runBlocking {
+    fun `vision gate withholds screenshot under pure axtree perception even when model supports images`() = runBlocking {
         val workDir = Files.createTempDirectory("arch-vision-on").toFile()
         val eventBus = MutableSharedFlow<MederiEvent>(extraBufferCapacity = 128)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -408,8 +408,7 @@ class BrowserArchitectureFlowTest {
 
             val decideImages = llm.decideImages()
             assertEquals(1, decideImages.size, "Operator 应经历 1 步 decide")
-            val image = assertNotNull(decideImages[0], "supportsImages=true 时 decide 应收到截图")
-            assertContentEquals(FakeBrowserControl.FIXED_SCREENSHOT, image, "截图字节应原样传递")
+            assertNull(decideImages[0], "纯 axtree 感知策略下不发送截图")
         } finally {
             BrowserRegistry.unregister("fake-arch")
             scope.cancel()

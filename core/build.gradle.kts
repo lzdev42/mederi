@@ -15,7 +15,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(libs.koog.agents)
+            api(libs.koog.agents)
             implementation(libs.koog.skills)
             implementation(libs.koog.mcp)
             implementation(libs.koog.google.client)

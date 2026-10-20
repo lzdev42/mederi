@@ -5,7 +5,11 @@ import androidx.compose.ui.platform.ClipEntry
 
 internal actual fun platformClipboardGetImage(): ClipboardImage? = null
 
+internal actual suspend fun platformClipboardGetImageAsync(): ClipboardImage? = null
+
 internal actual fun platformClipboardGetText(): String? = null
+
+internal actual suspend fun platformClipboardGetTextAsync(): String? = null
 
 @OptIn(ExperimentalComposeUiApi::class)
 internal actual fun plainTextClipEntry(text: String): ClipEntry? =

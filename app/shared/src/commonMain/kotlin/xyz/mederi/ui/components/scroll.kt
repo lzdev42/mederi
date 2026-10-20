@@ -8,19 +8,9 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
 
 /**
- * 判定 ReasoningBlock 是否应启用内部限高与垂直滚动容器：
- * - 只有外层要求限高 (enforceMaxHeight=true) 且未切换为无界全部展开 (!isUnbounded) 时才启用滚动与限高。
- * - 当 isUnbounded=true（用户点击底部展开按钮）或 enforceMaxHeight=false 时，必须禁用 verticalScroll，
- *   避免在 LazyColumn (垂直无界 Constraints.Infinity) 内挂载 verticalScroll 触发 Compose 崩溃。
- */
-fun shouldEnableReasoningScroll(enforceMaxHeight: Boolean, isUnbounded: Boolean): Boolean {
-    return enforceMaxHeight && !isUnbounded
-}
-
-/**
  * 判定底部「展开/收起」高度切换按钮是否渲染（ReasoningBlock / WorkTraceCard 共用）：
  * - [enforceMaxHeight] = false（WorkTraceCard 内的推理子项）→ 永不渲染：没有属于自己的高度开关。
- * - [isUnbounded] = true（已点开全部摊开）→ 必渲染：否则没有收回的入口。
+ * - [isUnbounded] = true（已点开抬大限高上限）→ 必渲染：否则没有收回的入口。
  * - 限高态：仅当内容实际超出视口（[hasOverflow]，即滚动状态 maxValue > 0）才渲染——
  *   内容本来就装得下时不显示一个"点了没反应"的按钮。
  */

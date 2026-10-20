@@ -1,6 +1,10 @@
 package xyz.mederi.browser
 
+import ai.koog.agents.core.tools.SimpleTool
+import ai.koog.agents.core.tools.ToolBase
+import ai.koog.serialization.typeToken
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.mederi.browser.drill.DrillExecutor
@@ -71,11 +75,7 @@ class BrowserOperatorActionTest {
                 {"type": "execute_drill", "script": {"task_name": "t", "steps": [{"action": "navigate", "url": "https://x"}]}},
                 {"type": "wait_for", "selector": ".loaded"},
                 {"type": "tabs", "tabAction": "NEW"},
-                {"type": "tabs", "tabAction": "SELECT", "tabId": "tab-2"},
-                {"type": "screenshot"},
-                {"type": "navigate_back"},
-                {"type": "close"},
-                {"type": "sleep", "sleepMs": 500}
+                {"type": "tabs", "tabAction": "SELECT", "tabId": "tab-2"}
             ],
             "is_done": false
         }
@@ -83,7 +83,7 @@ class BrowserOperatorActionTest {
 
         val actions = BrowserDecisionParser.toActions(BrowserDecisionParser.parse(json))
 
-        assertEquals(8, actions.size)
+        assertEquals(4, actions.size)
 
         val drill = assertIs<BrowserAction.ExecuteDrill>(actions[0])
         val drillObj = assertIs<JsonObject>(drill.script)
@@ -97,13 +97,6 @@ class BrowserOperatorActionTest {
         val tabsSelect = assertIs<BrowserAction.Tabs>(actions[3])
         assertEquals("SELECT", tabsSelect.action)
         assertEquals("tab-2", tabsSelect.tabId)
-
-        assertIs<BrowserAction.Screenshot>(actions[4])
-        assertIs<BrowserAction.NavigateBack>(actions[5])
-        assertIs<BrowserAction.Close>(actions[6])
-
-        val sleep = assertIs<BrowserAction.Sleep>(actions[7])
-        assertEquals(500L, sleep.ms)
     }
 
     @Test
@@ -169,7 +162,6 @@ class BrowserOperatorActionTest {
             "DrillExecutor 应执行 item 级 navigate, log=${control.log}"
         )
         assertTrue(control.log.contains("start"))
-        assertTrue(control.log.contains("close"))
     }
 
     // ── 3. judge 委托 BrowserBrain ──
@@ -207,36 +199,135 @@ class BrowserOperatorActionTest {
         assertTrue(judgeResult.detail.contains("ok"), "detail 应含 reason: ${judgeResult.detail}")
     }
 
-    // ── 4. vision 门控 ──
+    // ── 4. 纯 axtree 感知策略（暂时不用截图） ──
 
     @Test
-    fun `vision gate passes screenshot only when model supports images`() = runBlocking {
-        // supportsImages = true：llmCaller 收到非 null 截图
-        val visionControl = FakeBrowserControl()
-        val visionCaller = FakeLLMCaller(supportsImages = true)
+    fun `axtree policy passes null image to llmCaller`() = runBlocking {
+        // 当前统一走 axtree 感知，不调用截图，llmCaller 接收到的 image 恒为 null
+        val control = FakeBrowserControl()
+        val caller = FakeLLMCaller(supportsImages = true)
             .addDecision("""{"actions":[{"type":"done"}],"is_done":true}""")
-        val visionOp = BrowserOperator(
-            control = visionControl,
+        val op = BrowserOperator(
+            control = control,
             aiModel = visionModel,
-            llmCaller = visionCaller
+            llmCaller = caller
         )
-        val visionResult = visionOp.run("vision task")
-        assertTrue(visionResult.success, "vision 任务应成功: ${visionResult.message}")
-        val visionImage = visionCaller.calls[0].image
-        assertNotNull(visionImage, "supportsImages=true 时应收到截图")
-        assertContentEquals(FakeBrowserControl.FIXED_SCREENSHOT, visionImage, "截图字节应原样传递")
+        val result = op.run("axtree task")
+        assertTrue(result.success, "任务应成功: ${result.message}")
+        assertNull(caller.calls[0].image, "当前纯 axtree 策略下不得传截图")
+    }
 
-        // supportsImages = false：llmCaller 记录为 null
-        val textControl = FakeBrowserControl()
-        val textCaller = FakeLLMCaller(supportsImages = false)
-            .addDecision("""{"actions":[{"type":"done"}],"is_done":true}""")
-        val textOp = BrowserOperator(
-            control = textControl,
-            aiModel = textOnlyModel,
-            llmCaller = textCaller
-        )
-        val textResult = textOp.run("text task")
-        assertTrue(textResult.success, "text 任务应成功: ${textResult.message}")
-        assertNull(textCaller.calls[0].image, "supportsImages=false 时不得收到截图")
+    // ── 5. 原生 Koog tool-calling 与 BrowserPilot 风格自管理记忆 ──
+
+    @Serializable
+    private data class MockNavigateArgs(val url: String = "")
+
+    private class MockNavigateTool(private val control: FakeBrowserControl) : SimpleTool<MockNavigateArgs>(
+        argsType = typeToken<MockNavigateArgs>(),
+        name = BrowserConstants.ToolNames.NAVIGATE,
+        description = "Mock navigate tool"
+    ) {
+        override suspend fun execute(args: MockNavigateArgs): String {
+            control.navigate(args.url)
+            return "navigate=ok: ${args.url}"
+        }
+    }
+
+    private class NativeToolLLMCaller(
+        private val responses: List<BrowserLLMResponse>
+    ) : BrowserLLMCaller {
+        var callIndex = 0
+        override suspend fun call(systemPrompt: String, userPrompt: String, image: ByteArray?): String = ""
+
+        override suspend fun callWithTools(
+            systemPrompt: String,
+            userPrompt: String,
+            tools: List<ToolBase<*, *>>,
+            image: ByteArray?
+        ): BrowserLLMResponse {
+            val idx = callIndex++
+            return responses.getOrElse(idx) {
+                BrowserLLMResponse(
+                    toolCalls = listOf(
+                        BrowserToolCall(id = "end", name = BrowserConstants.ToolNames.DONE, argsJson = """{"message":"fallback done"}""")
+                    )
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `native tool calling executes external and internal tools and updates memory`() = runBlocking {
+        val browserName = "test-custom-browser"
+        val control = FakeBrowserControl()
+
+        // 模拟 UI 层注册该浏览器的物理操作工具
+        BrowserOperatorToolRegistry.register(browserName) { ctrl ->
+            listOf(MockNavigateTool(ctrl as FakeBrowserControl))
+        }
+
+        try {
+            val memoryUpdates = mutableListOf<String>()
+            val stepResults = mutableListOf<List<ActionResult>>()
+
+            val caller = NativeToolLLMCaller(
+                listOf(
+                    BrowserLLMResponse(
+                        text = "Opening page and updating memory",
+                        reasoning = "I need to open example.com first",
+                        toolCalls = listOf(
+                            BrowserToolCall(
+                                id = "tc1",
+                                name = BrowserConstants.ToolNames.UPDATE_MEMORY,
+                                argsJson = """{"memory":"current page: example.com"}"""
+                            ),
+                            BrowserToolCall(
+                                id = "tc2",
+                                name = BrowserConstants.ToolNames.NAVIGATE,
+                                argsJson = """{"url":"https://example.com"}"""
+                            )
+                        )
+                    ),
+                    BrowserLLMResponse(
+                        text = "Task is completed",
+                        toolCalls = listOf(
+                            BrowserToolCall(
+                                id = "tc3",
+                                name = BrowserConstants.ToolNames.DONE,
+                                argsJson = """{"message":"found target item"}"""
+                            )
+                        )
+                    )
+                )
+            )
+
+            val operator = BrowserOperator(
+                control = control,
+                aiModel = visionModel,
+                llmCaller = caller,
+                browserName = browserName,
+                onStep = { _, thought, results ->
+                    println("[TestLog] onStep: thought='$thought' results=${results.map { it.action }}")
+                    stepResults += results
+                },
+                onMemoryUpdate = { mem ->
+                    println("[TestLog] onMemoryUpdate: '$mem'")
+                    memoryUpdates += mem
+                }
+            )
+
+            val result = operator.run("search target")
+
+            assertTrue(result.success, "任务应成功: ${result.message}")
+            assertEquals(2, caller.callIndex, "两步各应调用一次 LLM")
+            assertEquals("current page: example.com", operator.getMemory(), "Operator memory 应自管理更新")
+            assertTrue(memoryUpdates.contains("current page: example.com"), "onMemoryUpdate 回调应被触发")
+            assertTrue(control.log.any { it == "navigate https://example.com" }, "MockNavigateTool 应真正调用 FakeBrowserControl")
+            assertEquals(2, stepResults.size, "应产出 2 步的结果")
+            assertEquals("navigate", stepResults[0].last().action)
+            assertTrue(stepResults[0].last().success)
+        } finally {
+            BrowserOperatorToolRegistry.unregister(browserName)
+        }
     }
 }

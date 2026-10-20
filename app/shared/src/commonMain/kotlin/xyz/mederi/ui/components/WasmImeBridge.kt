@@ -34,6 +34,8 @@ expect fun WasmImeBridge(
     onSend: (() -> Unit)?,          // Enter 发送回调；null = 不发送 (canSend=false 或 slashMenuOpen)
     rectPx: Rect?,
     density: Float,
+    onPasteImage: ((bytes: ByteArray, mimeType: String) -> Unit)? = null,
+    onPasteLargeText: ((String) -> Unit)? = null,
 )
 
 /** Compose [Color] → CSS `#rrggbb`（不含 alpha，假定不透明色用于光标/文字）。 */

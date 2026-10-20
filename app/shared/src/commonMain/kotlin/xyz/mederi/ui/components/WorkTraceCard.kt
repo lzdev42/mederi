@@ -24,7 +24,6 @@ import mederi.app.shared.generated.resources.worktrace_has_failure
 import mederi.app.shared.generated.resources.worktrace_steps_count
 import mederi.app.shared.generated.resources.worktrace_summary_title
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.ui.DebugLog
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ProcessRow
@@ -32,7 +31,7 @@ import xyz.mederi.ui.components.atoms.ProcessRow
 /**
  * 工作过程（WorkTraceCard）展开内容的步骤视口**最大**高度：子步骤在视口内独立上下滚动，
  * 内容超出该上限才出现滚动条；短内容按实际高度收缩（不再撑出固定 320.dp 空盒）。
- * 视口溢出时，容器底部出现「展开/收起」按钮，点击可切换为无限高度（展示全量步骤），再点缩回限高。
+ * 视口溢出时，容器底部出现「展开/收起」按钮，点击可切换为无限高真实高度（由外层 LazyColumn 滚动看全量步骤），再点缩回限高。
  */
 private val WorkTraceMaxContentHeight = 320.dp
 
@@ -58,7 +57,7 @@ fun WorkTraceCard(
     val autoExpanded = false
     val isExpanded = userChoice ?: autoExpanded
 
-    // 内容是否无限高：默认限高 + 栏内滚动，点块底部按钮切换为全部摊开，再点缩回限高
+    // 点块底部按钮切换为抬大限高上限（600dp）的展开态，再点缩回默认限高
     var isUnbounded by remember(workTrace.key) { mutableStateOf(false) }
 
     // 汇总标题文案：栏目名 + 步骤数 + 耗时 + 失败提示（拼接逻辑一字不改）
@@ -102,25 +101,14 @@ fun WorkTraceCard(
         labelColor = if (workTrace.hasFailedTool) colors.accentDanger else colors.textSecondary,
     ) {
         // 展开后的完整工作轨迹子项（导轨线由 ProcessRow 统一绘制）。
-        // 容器高度自适应内容（不设固定高），上限 320.dp 由可滚动的步骤视口自己承担
-        // （与 ToolCallsBlock 输出块同一套写法：.heightIn(max) + .verticalScroll，无 weight）：
+        // 容器高度自适应内容（不设固定高），上限 320.dp 由可滚动的步骤视口自己承担：
         // 步骤少时按实际高度收缩，避免推理/工具步骤把整个聊天顶得过长；
-        // 内容溢出时底部出现「展开/收起」按钮（不随内容滚动），点击切换为无限高度全部摊开，再点缩回。
+        // 内容溢出时底部出现「展开/收起」按钮（不随内容滚动），点击切换为无限高真实高度，再点缩回。
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(
-                    if (!isUnbounded) {
-                        Modifier.containScroll()
-                    } else {
-                        Modifier
-                    }
-                ),
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             // 步骤列表视口：高度自适应内容，上限 WorkTraceMaxContentHeight 由本节点自己承担
-            // （不能用 weight(1f)：Column 中带 weight 的子项会被分配满整个最大约束，
-            //   父级换成 heightIn(max) 也会被撑成固定高——这正是之前 320.dp 空盒的成因）
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -141,7 +129,7 @@ fun WorkTraceCard(
                 }
             }
 
-            // 底部切换按钮：仅步骤溢出视口时出现（点开摊开后恒显示），不随步骤内容滚动
+            // 底部切换按钮：仅步骤溢出视口时出现（展开态下恒显示），不随步骤内容滚动
             // （原型 height-toggle 样式：顶部 1dp divider 分割 + 居中 chevron 12dp + 11sp Medium textMuted 文案）
             if (showHeightToggle) {
                 Row(
@@ -156,7 +144,6 @@ fun WorkTraceCard(
                         }
                         .clickable {
                             isUnbounded = !isUnbounded
-                            DebugLog.debug("UI", "WorkTraceCard isUnbounded toggled to: $isUnbounded")
                         }
                         .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,

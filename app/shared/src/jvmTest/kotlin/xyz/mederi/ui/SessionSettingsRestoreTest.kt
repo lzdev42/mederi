@@ -260,4 +260,46 @@ class SessionSettingsRestoreTest {
             testScope.cancel()
         }
     }
+
+    /** 【Test G 复现/验证】Turn 结束收到带有陈旧 Conversation 的快照时，输入框的模型绝不被重置倒灌。 */
+    @Test
+    fun turnCompletedSnapshotDoesNotOverwriteUserSelectedModel() = runBlocking {
+        val testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val ctx = newCtx(testScope)
+            val conv = ctx.mockAiCore.createConversation("proj_1", null).getOrThrow()
+            // 假设最初后端会话绑定的是 gpt-5
+            val gpt5 = ctx.appState.availableModels.value.first { it.id == "gpt-5" }
+            val sonnet = claudeSonnet(ctx)
+            ctx.mockAiCore.updateConversationSettings(
+                conv.id,
+                UpdateConversationSettingsInput(model = gpt5)
+            )
+
+            // 1. 进入会话
+            ctx.appState.selectConversation(conv.id)
+            awaitAttached(ctx, conv.id)
+            println("[TEST LOG] Step 1 attached, selectedModel=${ctx.appState.selectedModel.value?.id}")
+
+            // 2. 用户在 UI 手动切换成 sonnet 并保存
+            ctx.viewModel.selectModel(sonnet)
+            println("[TEST LOG] Step 2 user selected sonnet: selectedModel=${ctx.appState.selectedModel.value?.id}")
+            assertEquals("claude-sonnet-4", ctx.appState.selectedModel.value?.id)
+
+            // 3. 模拟后台推送了一个陈旧快照（例如长连接里的 snapshot 依然包含旧的 gpt-5）
+            val staleSnapshot = ctx.mockAiCore.getSnapshot(conv.id).getOrThrow().copy(
+                conversation = conv.copy(modelId = "gpt-5")
+            )
+            println("[TEST LOG] Step 3 injecting stale snapshot with modelId=${staleSnapshot.conversation.modelId}")
+            ctx.mockAiCore.injectSnapshot(conv.id, staleSnapshot)
+            delay(200)
+
+            // 打印当前界面的模型
+            println("[TEST LOG] Step 4 after stale snapshot, selectedModel=${ctx.appState.selectedModel.value?.id}")
+            // 验证：当前界面的模型绝不能被陈旧快照倒灌！
+            assertEquals("claude-sonnet-4", ctx.appState.selectedModel.value?.id, "陈旧快照绝不得倒灌覆盖输入框选定的模型！")
+        } finally {
+            testScope.cancel()
+        }
+    }
 }

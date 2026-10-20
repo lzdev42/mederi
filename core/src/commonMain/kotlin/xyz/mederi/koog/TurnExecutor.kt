@@ -206,6 +206,11 @@ class TurnExecutor(
                         EventType.BACKGROUND_TASK_ERROR -> {
                             handleBackgroundTaskTerminalEvent(event)
                         }
+                        EventType.BROWSER_TASK_COMPLETED,
+                        EventType.BROWSER_TASK_ERROR,
+                        EventType.BROWSER_TASK_STOPPED -> {
+                            handleBrowserTaskTerminalEvent(event)
+                        }
                         // BACKGROUND_TASK_STOPPED 不唤醒 AI：用户手动停止任务后
                         // 通常想自己说话，无需 AI 被推过来。停止信息经
                         // EnvironmentInfoProvider 注入下轮 Runtime Environment 段，
@@ -1836,6 +1841,50 @@ class TurnExecutor(
 
         scope.launch {
             dispatchPendingEventMessages(parentSessionId)
+        }
+    }
+
+    private fun handleBrowserTaskTerminalEvent(event: MederiEvent) {
+        val parentSessionId = event.sessionId
+        if (parentSessionId.isBlank()) return
+
+        val msgText = formatBrowserTaskEventMessage(event)
+        DebugLog.event("TurnExec", "handleBrowserTaskTerminalEvent: session=$parentSessionId, taskId=${event.payload["taskId"]}, type=${event.type}")
+
+        val list = pendingEventMessages.computeIfAbsent(parentSessionId) {
+            java.util.Collections.synchronizedList(mutableListOf())
+        }
+        list.add(msgText)
+
+        scope.launch {
+            dispatchPendingEventMessages(parentSessionId)
+        }
+    }
+
+    private fun formatBrowserTaskEventMessage(event: MederiEvent): String {
+        val eventTypeStr = when (event.type) {
+            EventType.BROWSER_TASK_COMPLETED -> "browser_task_completed"
+            EventType.BROWSER_TASK_ERROR -> "browser_task_error"
+            EventType.BROWSER_TASK_STOPPED -> "browser_task_stopped"
+            else -> "browser_task_event"
+        }
+        val taskId = event.payload["taskId"] ?: "unknown"
+        val status = event.payload["status"] ?: "UNKNOWN"
+        val role = event.payload["role"] ?: SubagentRole.BROWSER_OPERATOR.name
+        val reportPath = event.payload["reportPath"]
+        val summary = event.payload["message"] ?: event.payload["summary"].orEmpty()
+
+        return buildString {
+            appendLine("""<event_message type="$eventTypeStr" agentId="$taskId" status="$status">""")
+            appendLine("Role: $role")
+            if (!reportPath.isNullOrBlank()) {
+                appendLine("ReportPath: $reportPath")
+            }
+            if (summary.isNotBlank()) {
+                appendLine("Summary:")
+                appendLine(summary)
+            }
+            append("</event_message>")
         }
     }
 

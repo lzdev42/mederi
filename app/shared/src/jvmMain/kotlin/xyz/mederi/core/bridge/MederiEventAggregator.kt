@@ -134,6 +134,12 @@ object MederiEventAggregator {
                     "planId=${event.payload["planId"]}, summary='${event.payload["summary"]}', planPath='${event.payload["planPath"]}', planContentLen=${planContent.length}"
                 )
             }
+            if (event.type == CoreEventType.MESSAGE_COMPLETED || event.type == CoreEventType.MESSAGE_ERROR) {
+                runCatching { sessions.get(conversationId) }.getOrNull()?.let { latestSession ->
+                    val latestConv = MederiModelMapper.toConversation(latestSession, latestSession.aiModel?.id?.let(modelToProvider))
+                    snapshot = snapshot.copy(conversation = latestConv.copy(status = snapshot.conversation.status))
+                }
+            }
 
             val emissions = ConversationStateReducer.applyWithRefresh(snapshot, event) { refreshPage() }
             emissions.forEach {
