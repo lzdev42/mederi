@@ -110,6 +110,14 @@ class BrowserSettingsApiImpl(
         requireInstaller().listInstalledVersions()
     }
 
+    override suspend fun getDefaultBrowser(): String? = mederiCall {
+        manager.getDefaultBrowser()
+    }
+
+    override suspend fun setDefaultBrowser(name: String?): Unit = mederiCall {
+        manager.setDefaultBrowser(name)
+    }
+
     private fun requireHome(): BrowserHome =
         BrowserHome.of(manager.current().browserHome)
             ?: throw MederiStateException("browserHome 未配置")

@@ -57,6 +57,18 @@ interface BrowserControl {
     /** 在元素上滚动（refid 定位）。 */
     suspend fun scroll(elementRef: String, deltaX: Int, deltaY: Int): OperationResult
 
+    /**
+     * 页面级滚动（无 refid）：滚动整个文档/视口。
+     * 与 [scroll] 互斥：不带 refid 时用此方法，避免空串进入 refid 查找。
+     * 默认用 window.scrollBy；真实后端（JCEF/Camoufox）覆盖为视口中心真实滚轮事件。
+     */
+    suspend fun scrollPage(deltaX: Int, deltaY: Int): OperationResult =
+        runCatching { evaluateJavascript("window.scrollBy($deltaX,$deltaY)") }
+            .fold(
+                onSuccess = { OperationResult.Acknowledged },
+                onFailure = { OperationResult.Failure("scroll_page", it.message ?: "scrollBy failed") }
+            )
+
     /** 按键。 */
     suspend fun press(key: KeyboardKey): OperationResult
 

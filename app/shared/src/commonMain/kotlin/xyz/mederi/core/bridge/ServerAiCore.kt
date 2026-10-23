@@ -66,11 +66,13 @@ import xyz.mederi.core.contract.dto.ReadyInfo
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ApiKeyOption
 import xyz.mederi.core.contract.models.BackgroundTaskInfo
+import xyz.mederi.core.contract.models.BrowserOption
 import xyz.mederi.core.contract.models.BrowserStatus
 import xyz.mederi.core.contract.models.CamoufoxSettings
 import xyz.mederi.core.contract.models.CamoufoxUpdate
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
+import xyz.mederi.core.contract.models.SetDefaultBrowserInput
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.SubagentReportDto
@@ -80,6 +82,7 @@ import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
+import xyz.mederi.core.contract.models.DefaultBrowserResponse
 import xyz.mederi.core.contract.models.FileDiff
 import xyz.mederi.core.contract.models.McpServerItem
 import xyz.mederi.core.contract.models.SkillItem
@@ -753,6 +756,18 @@ class ServerAiCore(
         httpGet("/v1/browser/versions")
     }
 
+    override suspend fun availableBrowsers(): Result<List<BrowserOption>> = runCatching {
+        httpGet("/v1/browser/list")
+    }
+
+    override suspend fun getDefaultBrowser(): Result<String?> = runCatching {
+        httpGet<DefaultBrowserResponse>("/v1/browser/default").name
+    }
+
+    override suspend fun setDefaultBrowser(input: SetDefaultBrowserInput): Result<Unit> = runCatching {
+        httpSend("/v1/browser/default", requestBody = input)
+    }
+
     // ------------------------------------------------------------------
     // AGENTS.md 生成（遥控 REST 桥）
     // ------------------------------------------------------------------
@@ -806,5 +821,9 @@ class ServerAiCore(
 
     override suspend fun stopBackgroundTask(taskId: String): Result<Unit> = runCatching {
         httpCall("/v1/background-tasks/${taskId.encodeURLParameter()}/stop")
+    }
+
+    override suspend fun stopBrowserTask(taskId: String): Result<Unit> = runCatching {
+        httpCall("/v1/browser-tasks/${taskId.encodeURLParameter()}/stop")
     }
 }

@@ -335,5 +335,49 @@ class FloatingOverlayTest {
         assertTrue(nextRunningShow, "新子任务启动时，浮条应能够再次自动显示")
         println("=== [DEBUG LOG 精简单一工作浮条生命周期验证通过] ===")
     }
+
+    @Test
+    fun testBrowserAutomationFloatingBarVisibilityAndState() {
+        // 初始状态：无步骤且未自动化
+        val idleState = xyz.mederi.ui.browser.BrowserAutomationUiState()
+        val shouldShowIdle = idleState.isAutomating || idleState.steps.isNotEmpty()
+        assertTrue(!shouldShowIdle, "初始空闲态不应展示浏览器浮动条")
+
+        // 自动化启动中：必须展示
+        val runningState = idleState.copy(
+            isAutomating = true,
+            startedAtMillis = 1000L,
+            steps = listOf(
+                xyz.mederi.ui.browser.BrowserFlowStep.Narration(id = "n1", text = "正在规划检索双阳区历史"),
+                xyz.mederi.ui.browser.BrowserFlowStep.Action(
+                    id = "a1",
+                    title = "正在打开网页",
+                    target = "https://zh.wikipedia.org",
+                    status = xyz.mederi.ui.browser.BrowserStepStatus.RUNNING
+                )
+            )
+        )
+        val shouldShowRunning = runningState.isAutomating || runningState.steps.isNotEmpty()
+        assertTrue(shouldShowRunning, "自动化运行中必须展示浮动通知条")
+        assertTrue(!runningState.canClose, "运行中不可无损关闭（必须停止任务）")
+
+        // 步骤完成态：保留步骤供查看
+        val completedState = runningState.copy(
+            isAutomating = false,
+            completedAtMillis = 2000L,
+            steps = listOf(
+                xyz.mederi.ui.browser.BrowserFlowStep.Action(
+                    id = "a1",
+                    title = "正在打开网页",
+                    target = "https://zh.wikipedia.org",
+                    status = xyz.mederi.ui.browser.BrowserStepStatus.COMPLETED,
+                    durationMs = 1000L
+                )
+            )
+        )
+        val shouldShowCompleted = completedState.isAutomating || completedState.steps.isNotEmpty()
+        assertTrue(shouldShowCompleted, "自动化完成后仍保留步骤浮动提示")
+        assertTrue(completedState.canClose, "自动化完成后解除锁定")
+    }
 }
 

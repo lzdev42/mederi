@@ -23,9 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,7 +54,6 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.ui.WorkspaceViewModel
-import xyz.mederi.ui.components.SubAgentDetailDialog
 import xyz.mederi.ui.components.atoms.MederiRoleTag
 import xyz.mederi.ui.components.atoms.WorkingAnimationStyle
 import xyz.mederi.ui.components.atoms.workingAnimation
@@ -68,7 +65,7 @@ import xyz.mederi.ui.components.atoms.workingAnimation
  * 否则只显示子代理总数计数（textSecondary 12sp）。
  *
  * 展开态：每个任务渲染一张内嵌卡片（角色标签 + mono 模型名 + 状态图标 + 单行预览 +
- * 运行中红色停止按钮 / 其余灰色 chevron），点击行打开复用的 [SubAgentDetailDialog]；
+ * 运行中红色停止按钮 / 其余灰色 chevron），点击行打开右侧子代理对话面板；
  * 有运行中的子代理时整块列表区套 BorderBeam 流光边框（浅层余光提示，参照 SubAgentManagementCard）。
  * 列表倒序展示（最新启动在前）。
  */
@@ -82,8 +79,6 @@ fun OverviewSubAgentRow(
     val colors = LocalMederiColors.current
     val subagents = viewModel.subagents
     val runningCount = subagents.count { it.status.equals("RUNNING", ignoreCase = true) }
-
-    var selectedSubagent by remember { mutableStateOf<SubagentState?>(null) }
 
     OverviewAccordionRow(
         icon = FeatherIcons.Users,
@@ -162,7 +157,7 @@ fun OverviewSubAgentRow(
                     SubAgentOverviewCard(
                         subagent = subagent,
                         colors = colors,
-                        onClick = { selectedSubagent = subagent },
+                        onClick = { viewModel.openSubagentPanel(subagent) },
                         onStop = { viewModel.stopSubagent(subagent.agentId) },
                     )
                 }
@@ -170,15 +165,6 @@ fun OverviewSubAgentRow(
         }
     }
 
-    // 详情大弹窗（复用公共组件，不重写）
-    selectedSubagent?.let { sub ->
-        SubAgentDetailDialog(
-            subagent = sub,
-            viewModel = viewModel,
-            colors = colors,
-            onDismiss = { selectedSubagent = null },
-        )
-    }
 }
 
 /**

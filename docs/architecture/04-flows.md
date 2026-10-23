@@ -184,7 +184,8 @@ flowchart TD
     SW -- "QUESTION_*/PLAN_APPROVAL_*" --> PE["写/清 pendingQuestion / pendingPlanApproval"]
     SW -- "TODO_UPDATED" --> TD["解码 payload.todos 整体替换(失败丢弃事件)"]
     SW -- "SUBAGENT_*" --> SA["增量维护 state.subagents (生命周期/动态/流式输出/耗时统计)"]
-    SW -- "BROWSER_TASK_*" --> BA["维护 state.browserAutomation (STARTED 自动设置 activeDockPanel=BROWSER)"]
+    SW -- "BROWSER_TASK_*" --> BA["维护 state.browserAutomation (STARTED 记录 taskId 并设置 activeDockPanel=BROWSER; 终态一律关闭面板(isPanelOpen=false、activeDockPanel=null)并清空 taskId; STEP/终态复位 liveReasoning/liveText)"]
+     SW -- "BROWSER_TASK_REASONING_DELTA" --> BRD["聚合 liveReasoning/liveText (kind=reasoning|text; 2026-10 decide 流式)"]
     SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max|serverMsg|retryAt'(serverMsg=供应商真实报错; retryAt=delayMs+当前时间)<br/>UI StatusBar 重试态第二行渲染"]
     SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage<br/>+ refreshPage 即时回查 listMessagesPage(新 turn 用户消息立即可见)"]
     SW -- "STATUS(steering_queued 引导)" --> SIG["忽略: payload 形状与 RETRYING 约定 key 不符(代码现状)<br/>steering 提示仅入队侧日志, 不渲染 StatusBar"]
@@ -517,6 +518,7 @@ flowchart TD
 > Koog AIAgent tool-calling 循环（`agent.run` 驱动 call_llm→execute_tools→send_tool_results），
 > nodePerceive 当步注入 a11y 快照（axtree）、用完即丢，记忆走 update_memory 工具。
 > 细节经 BROWSER_TASK_* 事件给 UI，用户自己看。
+> 滚动工具有两种模式——空 refid 走页面级 `scrollPage`、非空走元素级 `scroll`。
 > 主代理入口为 `browser` 工具（action=RUN/STATUS/STOP/INFO，委托原 run_browser_task 等四个工具类）。
 
 ```mermaid
@@ -569,18 +571,18 @@ sequenceDiagram
     else 无需大脑判定 (直接汇报)
         Note over BTM,BO: 操作员直接采用任务执行 message 准备汇报 (含 collectedItems)
     end
-    BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, role="BROWSER_OPERATOR", summary, reportPath, isTestTask)
-    EB-->>WV: 终态事件 (非测试任务关闭 Dock 面板; 测试任务保留展开)
+    BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, role="BROWSER_OPERATOR", summary, reportPath)
+    EB-->>WV: 终态事件 (终态一律关闭 Dock 面板并清空 taskId)
     EB-->>MA: TurnExecutor 监听终态 → 组装 <event_message> 自动唤醒主 turn 汇报！
-    opt 非自动化测试任务 (!isTestTask)
-        BTM->>BC: control.close() 关闭底层 Tab
-    end
+    Note over BTM,BC: 终态一律 withContext(NonCancellable) control.close()（JCEF 销毁会话 Tab / Camoufox 杀进程）
+    BTM->>BC: control.close() 关闭底层 Tab
 ```
 
 > **汇报机制与主代理自动唤醒（2026-10）**：任务结束时复用子 Agent 汇报通道：
 > - **两路汇报**：无需判定内容时，操作员（`BrowserOperator`）直接向主 Agent 汇报；需判定内容时（通过 `needsBrainJudgment` 留口识别，如带 judgeRules 配方），操作员先把提取信息交给大脑（`BrowserBrain`）判定，大脑将判定/简报反馈给操作员后，由操作员统一向主 Agent 汇报。
 > - **自动唤醒**：任务终态发 `BROWSER_TASK_COMPLETED/ERROR/STOPPED`（携带 `role=BROWSER_OPERATOR`），`TurnExecutor` 订阅并组装 `<event_message type="browser_task_completed">` 放入待发队列，自动唤醒主 Agent 开启新 turn 向用户汇报，无需主代理主动轮询。
-> - **生命周期与现场保留**：非测试任务结束后自动关闭对应底层 Tab 并折叠 UI Dock 面板；自动化测试任务（`isTestTask=true` 或命令含测试/断言等关键词）保留底层 Tab 与 UI 面板现场供用户检查。
+> - **用户停止链路（真停）**：UI 浮条「停止」→ `WorkspaceViewModel.stopBrowserAutomation()` 读 `browserAutomationState.taskId` → `AiCore.stopBrowserTask(taskId)` → `MederiAiCore` → `SessionApi.stopBrowserTask` → `BrowserTaskManager.stopTask`：同步置 STOPPED + 发 `BROWSER_TASK_STOPPED` + `cancel(job)`，协程 `finally` 在 `NonCancellable` 上下文 `control.close()` 真正关闭浏览器。UI 不再 `abort()` 主 turn（浏览器任务与主 turn 无生命周期绑定）。
+> - **生命周期（终态一律关闭）**：任务终态（完成/失败/停止）一律 `control.close()` 真正关闭浏览器（JCEF 销毁会话 Tab / Camoufox 杀进程）并折叠 UI Dock 面板；已删除基于 isTest 关键词保留现场的旧逻辑。
 > 浏览器选择（2026-09）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认
 > （defaultName 优先 → 内置 JCEF 优先 → 第一个注册的）。2026-10 起 JCEF（JcefBrowserControl）
 > 重新注册为主力引擎（MederiAiCore 在 kBrowser 非空时条件注册），Camoufox（BiDiBrowserControl）

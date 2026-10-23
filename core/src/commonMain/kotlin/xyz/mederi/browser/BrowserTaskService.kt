@@ -23,15 +23,14 @@ interface BrowserTaskService {
         parentSessionId: String,
         browser: String? = null,
         apiKeyId: String? = null,
-        recipe: BrowserRecipe? = null,
-        isTest: Boolean = false
+        recipe: BrowserRecipe? = null
     ): String
 
     /** 查询任务状态，返回 JSON（RUNNING/COMPLETED/ERROR/STOPPED/NOT_FOUND + 简短消息 + browser）。 */
     fun taskStatus(taskId: String): String
 
-    /** 停止任务，返回 JSON。 */
-    fun stopTask(taskId: String): String
+    /** 停止任务并返回停止后的状态名（STOPPED；任务已终态时返回其真实状态 COMPLETED/ERROR/STOPPED）；taskId 不存在返回 null。停止会真正关闭该任务的浏览器。 */
+    fun stopTask(taskId: String): String?
 
     /** 已注册浏览器名列表（工具描述动态生成用）。 */
     fun availableBrowsers(): List<String>

@@ -104,3 +104,15 @@ data class CamoufoxUpdate(
     val supported: Boolean = true,
     val reason: String = ""
 )
+
+/** 已注册浏览器选项（开关/列表用）。label 来自 BrowserKind.label（协议层描述）。 */
+@Serializable
+data class BrowserOption(val name: String, val label: String)
+
+/** 设置默认浏览器请求（name=null=清除，回退默认策略）。 */
+@Serializable
+data class SetDefaultBrowserInput(val name: String? = null)
+
+/** 默认浏览器响应（REST 边界包装：裸 String? 无法 JSON 往返，用 DTO 承载 name；对齐 SkillsRootResponse 模式）。 */
+@Serializable
+data class DefaultBrowserResponse(val name: String? = null)

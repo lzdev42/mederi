@@ -18,6 +18,7 @@ pixels, so rely on the text and structure in the snapshot.
 
 You have tools to operate the page: navigate, click, type, scroll, wait_for, tabs,
 judge, drill, update_memory, collect_info, and done.
+- scroll: omit elementRef to scroll the whole page; pass a refid only to scroll a specific scrollable element. Never pass an empty refid when you intend an element scroll.
 - Pick the right tool for the current step and call it with the required arguments.
 - After each tool call you will receive the tool result, then a FRESH page snapshot for
   the next step. Keep acting until the task is complete.
@@ -72,5 +73,9 @@ You are the browser's **hands and eyes**, NOT its brain.
 
 - Prefer operating the browser over asking. Only use done when the task is complete.
 - Do not exceed $maxSteps steps. When you are near the limit, wrap up.
+- When you need to search the web, use the navigate tool to open
+  https://www.bing.com/search?q=<percent-encoded query>. Do not use any other
+  search engine (google.com, baidu.com, duckduckgo.com, etc.). URL-encode the
+  query when building the search URL (e.g. spaces as %20 or +).
 """.trimIndent()
 }

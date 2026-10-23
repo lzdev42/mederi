@@ -157,6 +157,8 @@ interface AiCore {
     suspend fun listBackgroundTasks(sessionId: String): Result<List<BackgroundTaskInfo>> =
         Result.success(emptyList())
     suspend fun stopBackgroundTask(taskId: String): Result<Unit> = Result.success(Unit)
+    /** 停止指定的浏览器任务并关闭其浏览器；taskId 不存在时返回失败。 */
+    suspend fun stopBrowserTask(taskId: String): Result<Unit> = Result.success(Unit)
 
     // ==========================================
     // 浏览器设置契约（UI 薄触发，浏览器管理在 core）
@@ -167,6 +169,9 @@ interface AiCore {
     suspend fun checkCamoufoxUpdate(): Result<CamoufoxUpdate> = Result.success(CamoufoxUpdate())
     suspend fun installCamoufox(versionTag: String?): Result<Unit> = Result.failure(IllegalStateException("browser settings 未启用"))
     suspend fun listInstalledCamoufoxVersions(): Result<List<String>> = Result.success(emptyList())
+    suspend fun availableBrowsers(): Result<List<BrowserOption>> = Result.success(emptyList())
+    suspend fun getDefaultBrowser(): Result<String?> = Result.success(null)
+    suspend fun setDefaultBrowser(input: SetDefaultBrowserInput): Result<Unit> = Result.success(Unit)
 
     // ==========================================
     // AGENTS.md 生成契约（API 形态，暂无命令/UI 入口）

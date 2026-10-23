@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -57,9 +58,16 @@ fun BrowserSettingsPanel() {
     val scope = rememberCoroutineScope()
     val scroll = rememberScrollState()
 
+    // 挂载时刷新浏览器偏好与状态
+    LaunchedEffect(Unit) {
+        store.refreshAll()
+    }
+
     val settings by store.settings.collectAsState()
     val status by store.status.collectAsState()
     val installedVersions by store.installedVersions.collectAsState()
+    val availableBrowsers by store.availableBrowsers.collectAsState()
+    val defaultBrowser by store.defaultBrowser.collectAsState()
     val isOperating by store.isOperating.collectAsState()
     val errorMessage by store.errorMessage.collectAsState()
 
@@ -89,9 +97,71 @@ fun BrowserSettingsPanel() {
     var proxyPasswordText by remember { mutableStateOf(settings.proxy?.password.orEmpty()) }
     var advancedConfigText by remember { mutableStateOf(settings.advancedConfig.toJsonText()) }
     var showHomeDialog by remember { mutableStateOf(false) }
+    var showCamoufoxConfigWhenBuiltin by remember { mutableStateOf(false) }
 
-    // 外部设置变化（刷新/保存成功）时重置草稿与各文本状态
+    // 高级 JSON 合法性：空 = 合法（不注入）；非空必须能解析为 JSON 对象
+    val advancedConfigValid = remember(advancedConfigText) {
+        advancedConfigText.isBlank() || runCatching {
+            Json.parseToJsonElement(advancedConfigText) is JsonObject
+        }.getOrDefault(false)
+    }
+
+    // 解析当前草稿为 CamoufoxSettings（用于防抖保存及比对）
+    val currentParsedSettings = remember(
+        draft,
+        humanizeMaxSecondsText,
+        extraArgsText,
+        geolocationLatText,
+        geolocationLonText,
+        screenWidthText,
+        screenHeightText,
+        screenAvailWidthText,
+        screenAvailHeightText,
+        windowOuterWidthText,
+        windowOuterHeightText,
+        windowInnerWidthText,
+        windowInnerHeightText,
+        hardwareConcurrencyText,
+        maxTouchPointsText,
+        fontsText,
+        proxyType,
+        proxyHostText,
+        proxyPortText,
+        proxyBypassText,
+        proxyUsernameText,
+        proxyPasswordText,
+        advancedConfigText
+    ) {
+        buildSettings(
+            draft = draft,
+            humanizeMaxSecondsText = humanizeMaxSecondsText,
+            extraArgsText = extraArgsText,
+            geolocationLatText = geolocationLatText,
+            geolocationLonText = geolocationLonText,
+            screenWidthText = screenWidthText,
+            screenHeightText = screenHeightText,
+            screenAvailWidthText = screenAvailWidthText,
+            screenAvailHeightText = screenAvailHeightText,
+            windowOuterWidthText = windowOuterWidthText,
+            windowOuterHeightText = windowOuterHeightText,
+            windowInnerWidthText = windowInnerWidthText,
+            windowInnerHeightText = windowInnerHeightText,
+            hardwareConcurrencyText = hardwareConcurrencyText,
+            maxTouchPointsText = maxTouchPointsText,
+            fontsText = fontsText,
+            proxyType = proxyType,
+            proxyHostText = proxyHostText,
+            proxyPortText = proxyPortText,
+            proxyBypassText = proxyBypassText,
+            proxyUsernameText = proxyUsernameText,
+            proxyPasswordText = proxyPasswordText,
+            advancedConfigText = advancedConfigText
+        )
+    }
+
+    // 外部设置变化（刷新/首次加载）时重置草稿；若变更由本地已保存的值同步过来则不冲掉用户正在输入的文本
     LaunchedEffect(settings) {
+        if (settings == currentParsedSettings) return@LaunchedEffect
         draft = settings
         humanizeMaxSecondsText = settings.humanizeMaxSeconds?.toString().orEmpty()
         extraArgsText = settings.extraArgs.joinToString(" ")
@@ -117,16 +187,16 @@ fun BrowserSettingsPanel() {
         advancedConfigText = settings.advancedConfig.toJsonText()
     }
 
-    // 高级 JSON 合法性：空 = 合法（不注入）；非空必须能解析为 JSON 对象
-    val advancedConfigValid = remember(advancedConfigText) {
-        advancedConfigText.isBlank() || runCatching {
-            Json.parseToJsonElement(advancedConfigText) is JsonObject
-        }.getOrDefault(false)
+    // 修改即保存：防抖 500ms 自动保存合法配置
+    LaunchedEffect(currentParsedSettings, advancedConfigValid) {
+        if (!advancedConfigValid) return@LaunchedEffect
+        if (currentParsedSettings == settings) return@LaunchedEffect
+        delay(500)
+        store.save(currentParsedSettings)
     }
 
-    // 路径必填：browserHome 与 binaryPath 至少配置一个（与 core BrowserSettingsManager 保存校验同规则，UI 提前拦截）
-    val pathConfigured =
-        !draft.browserHome.isNullOrBlank() || !draft.binaryPath.isNullOrBlank()
+    val isCamoufox = defaultBrowser == "camoufox"
+    val showCamoufoxSection = isCamoufox || showCamoufoxConfigWhenBuiltin
 
     Column(
         modifier = Modifier
@@ -134,7 +204,84 @@ fun BrowserSettingsPanel() {
             .verticalScroll(scroll),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        // ── 分区 1：路径与安装 ──
+        // ── 分区 0：默认浏览器 ──
+        SettingsSection(
+            title = stringResource(Res.string.browser_section_default),
+            colors = colors
+        ) {
+            SettingsCard(colors = colors) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsRow(
+                        title = stringResource(Res.string.browser_section_default),
+                        subtitle = stringResource(Res.string.browser_default_hint),
+                        colors = colors
+                    ) {
+                        SegmentedPillToggle(
+                            selectedIndex = if (isCamoufox) 1 else 0,
+                            options = listOf(
+                                stringResource(Res.string.browser_choice_builtin),
+                                stringResource(Res.string.browser_choice_camoufox)
+                            ),
+                            onSelect = { index ->
+                                val target = if (index == 1) "camoufox" else "jcef"
+                                scope.launch { store.setDefaultBrowser(target) }
+                            },
+                            colors = colors
+                        )
+                    }
+
+                    if (!isCamoufox) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(MederiRadius.Control))
+                                .background(colors.accentPrimary.copy(alpha = 0.08f))
+                                .border(
+                                    1.dp,
+                                    colors.accentPrimary.copy(alpha = 0.2f),
+                                    RoundedCornerShape(MederiRadius.Control)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = FeatherIcons.Info,
+                                    contentDescription = null,
+                                    tint = colors.accentPrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = stringResource(Res.string.browser_builtin_active_notice),
+                                    color = colors.textPrimary,
+                                    fontSize = 11.5.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            MederiGhostButton(
+                                text = stringResource(
+                                    if (showCamoufoxConfigWhenBuiltin) Res.string.browser_hide_camoufox_settings
+                                    else Res.string.browser_show_camoufox_settings
+                                ),
+                                onClick = { showCamoufoxConfigWhenBuiltin = !showCamoufoxConfigWhenBuiltin },
+                                icon = if (showCamoufoxConfigWhenBuiltin) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showCamoufoxSection) {
+            // ── 分区 1：路径与安装 ──
         SettingsSection(
             title = stringResource(Res.string.browser_section_path),
             colors = colors
@@ -654,62 +801,14 @@ fun BrowserSettingsPanel() {
             }
         }
 
+        }
+
         // ── 错误消息 ──
         errorMessage?.let { msg ->
             Text(
                 text = stringResource(msg.key, *msg.args.toTypedArray()),
                 color = colors.accentDanger,
                 fontSize = 12.sp
-            )
-        }
-
-        // ── 路径必填错误（browserHome 与 binaryPath 均未配置时显示并禁用保存） ──
-        if (!pathConfigured) {
-            Text(
-                text = stringResource(Res.string.browser_path_required),
-                color = colors.accentDanger,
-                fontSize = 12.sp
-            )
-        }
-
-        // ── 底部保存 ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            MederiPrimaryDecisionButton(
-                text = stringResource(Res.string.browser_save),
-                onClick = {
-                    if (!pathConfigured) return@MederiPrimaryDecisionButton  // 路径未配置：见下方错误提示
-                    val parsed = buildSettings(
-                        draft = draft,
-                        humanizeMaxSecondsText = humanizeMaxSecondsText,
-                        extraArgsText = extraArgsText,
-                        geolocationLatText = geolocationLatText,
-                        geolocationLonText = geolocationLonText,
-                        screenWidthText = screenWidthText,
-                        screenHeightText = screenHeightText,
-                        screenAvailWidthText = screenAvailWidthText,
-                        screenAvailHeightText = screenAvailHeightText,
-                        windowOuterWidthText = windowOuterWidthText,
-                        windowOuterHeightText = windowOuterHeightText,
-                        windowInnerWidthText = windowInnerWidthText,
-                        windowInnerHeightText = windowInnerHeightText,
-                        hardwareConcurrencyText = hardwareConcurrencyText,
-                        maxTouchPointsText = maxTouchPointsText,
-                        fontsText = fontsText,
-                        proxyType = proxyType,
-                        proxyHostText = proxyHostText,
-                        proxyPortText = proxyPortText,
-                        proxyBypassText = proxyBypassText,
-                        proxyUsernameText = proxyUsernameText,
-                        proxyPasswordText = proxyPasswordText,
-                        advancedConfigText = advancedConfigText
-                    )
-                    scope.launch { store.save(parsed) }
-                },
-                enabled = !isOperating && advancedConfigValid && pathConfigured,
-                icon = FeatherIcons.Check
             )
         }
     }

@@ -28,6 +28,8 @@ data class ConversationState(
     val subagents: List<SubagentState> = emptyList(),
     /** 当前会话右侧 Dock 展开面板状态（DIFF / ARTIFACTS / TERMINAL / BROWSER，null 表示折叠收起）。 */
     val activeDockPanel: RightDockPanel? = null,
+    /** 当前会话右侧子代理对话面板打开的 agentId（null 表示收起）。会话级隔离，对齐 activeDockPanel。 */
+    val activeSubagentPanelAgentId: String? = null,
     /** 当前会话关联的浏览器自动化流程状态（BROWSER_TASK_* 事件驱动）。 */
     val browserAutomation: BrowserAutomationUiState? = null,
     val childConversations: List<Conversation> = emptyList(),

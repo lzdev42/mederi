@@ -31,8 +31,8 @@ import xyz.mederi.ui.WorkspaceViewModel
 /**
  * 内置浏览器面板。
  *
- * 桌面端：JcefBrowserHost 注入到 [WorkspaceViewModel.uiBrowserHost]（tab 栏 + 导航栏 + KBPage 视图 + 右侧自动化操作流程视图）；
- * 遥控端 / wasm / JCEF 未就绪时 host 为 null，左侧显示"当前端不支持网页面板"兜底提示，右侧按需展示自动化操作流程视图。
+ * 桌面端：JcefBrowserHost 注入到 [WorkspaceViewModel.uiBrowserHost]（tab 栏 + 导航栏 + KBPage 视图）；
+ * 遥控端 / wasm / JCEF 未就绪时 host 为 null，显示"当前端不支持网页面板"兜底提示。
  */
 @Composable
 internal fun BrowserPanelContent(
@@ -41,7 +41,6 @@ internal fun BrowserPanelContent(
     modifier: Modifier = Modifier
 ) {
     val host = viewModel.uiBrowserHost
-    val automationState = viewModel.browserAutomationState
 
     if (host != null) {
         val currentSessionId = viewModel.conversationId.orEmpty()
@@ -49,74 +48,43 @@ internal fun BrowserPanelContent(
             host.BrowserContent(
                 sessionId = currentSessionId,
                 colors = colors,
-                automationState = automationState,
-                onToggleAutomationPanel = viewModel::toggleBrowserAutomationPanel,
-                onCloseAutomationPanel = viewModel::closeBrowserAutomationPanel,
-                onResizeAutomationPanel = viewModel::resizeBrowserAutomationPanel,
-                onPreviewScreenshot = viewModel::openBrowserScreenshotPreview,
             )
         }
     } else {
-        // 遥控端 / wasm / JCEF 未就绪：左侧兜底提示，右侧在自动化流程可见时并排展示流程视图
-        Row(
+        // 遥控端 / wasm / JCEF 未就绪：兜底提示
+        Box(
             modifier = modifier
                 .fillMaxSize()
                 .background(colors.surfaceWorkspace),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .background(colors.surfaceWorkspace),
-                contentAlignment = Alignment.Center,
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(24.dp),
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(24.dp),
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.Globe,
-                        contentDescription = stringResource(Res.string.rightdock_browser),
-                        tint = colors.textMuted,
-                        modifier = Modifier.size(36.dp),
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = stringResource(Res.string.dock_browser_unsupported),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textSecondary,
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(Res.string.dock_browser_desktop_only),
-                        fontSize = 11.sp,
-                        color = colors.textMuted,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            }
-
-            if (automationState.isVisible) {
-                BrowserAutomationFlowPanel(
-                    state = automationState,
-                    colors = colors,
-                    onClose = viewModel::closeBrowserAutomationPanel,
-                    onResize = viewModel::resizeBrowserAutomationPanel,
-                    onPreviewScreenshot = { shot -> viewModel.openBrowserScreenshotPreview(shot) },
+                Icon(
+                    imageVector = FeatherIcons.Globe,
+                    contentDescription = stringResource(Res.string.rightdock_browser),
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(36.dp),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(Res.string.dock_browser_unsupported),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.textSecondary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(Res.string.dock_browser_desktop_only),
+                    fontSize = 11.sp,
+                    color = colors.textMuted,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
-    }
-
-    // 点击流程内截图放大预览弹窗（Lightbox）
-    automationState.previewScreenshot?.let { screenshot ->
-        BrowserScreenshotLightbox(
-            screenshot = screenshot,
-            colors = colors,
-            onDismiss = viewModel::closeBrowserScreenshotPreview,
-        )
     }
 }
 

@@ -22,18 +22,13 @@ interface UiBrowserHost {
     val isAvailable: Boolean
 
     /**
-     * 渲染指定会话的浏览器内容（tab 栏 + 导航栏 + 当前会话激活 tab 的 KBPage 视图 + 右侧自动化操作流程视图）。
+     * 渲染指定会话的浏览器内容（tab 栏 + 导航栏 + 当前会话激活 tab 的 KBPage 视图）。
      * 仅可用端被调用。
      */
     @Composable
     fun BrowserContent(
         sessionId: String,
         colors: MederiColors,
-        automationState: BrowserAutomationUiState = BrowserAutomationUiState(),
-        onToggleAutomationPanel: () -> Unit = {},
-        onCloseAutomationPanel: () -> Unit = {},
-        onResizeAutomationPanel: (Float) -> Unit = {},
-        onPreviewScreenshot: (BrowserFlowStep.Screenshot?) -> Unit = {},
     )
 
     /**

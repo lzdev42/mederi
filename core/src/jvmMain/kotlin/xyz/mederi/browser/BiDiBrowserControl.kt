@@ -1,6 +1,7 @@
 package xyz.mederi.browser
 
 import xyz.mederi.browser.bidi.BiDiBrowser
+import xyz.mederi.browser.bidi.BiDiBrowserLocator
 import xyz.mederi.browser.bidi.BiDiPage
 import xyz.mederi.browser.bidi.CamoufoxConfig
 import xyz.mederi.browser.bidi.KeyboardKey
@@ -84,6 +85,15 @@ class BiDiBrowserControl(
     override suspend fun scroll(elementRef: String, deltaX: Int, deltaY: Int): OperationResult =
         requirePage().scroll(elementRef, deltaX, deltaY)
 
+    override suspend fun scrollPage(deltaX: Int, deltaY: Int): OperationResult {
+        val p = requirePage()
+        // 视口中心（文档坐标）：取当前滚动偏移 + 视口一半，保证页面已滚动后仍落在视口内
+        val scroll = p.getScroll()
+        val vw = p.evaluateJavascript("String(window.innerWidth)").trim().toDoubleOrNull() ?: 1280.0
+        val vh = p.evaluateJavascript("String(window.innerHeight)").trim().toDoubleOrNull() ?: 720.0
+        return p.scrollByCoordinates((scroll.x + vw / 2).toInt(), (scroll.y + vh / 2).toInt(), deltaX, deltaY)
+    }
+
     override suspend fun press(key: KeyboardKey): OperationResult {
         return try {
             requirePage().press(key)
@@ -111,6 +121,68 @@ class BiDiBrowserControl(
             null
         }
     }
+
+    override suspend fun evaluateJavascript(js: String): String =
+        requirePage().evaluateJavascript(js)
+
+    override suspend fun scrollByCoordinates(
+        originX: Int,
+        originY: Int,
+        deltaX: Int,
+        deltaY: Int
+    ): OperationResult =
+        requirePage().scrollByCoordinates(originX, originY, deltaX, deltaY)
+
+    override suspend fun uploadFile(elementRef: String, filePaths: List<String>): OperationResult {
+        requirePage().uploadFile(elementRef, filePaths)
+        return OperationResult.Success("upload_file", detail = filePaths.joinToString(","))
+    }
+
+    override suspend fun locator(selector: String): BrowserLocator =
+        BiDiBrowserLocator(requirePage().locator(selector), selector)
+
+    override suspend fun openTab(): OperationResult {
+        val b = requireBrowser()
+        val newP = b.newPage(null)
+        page = newP
+        return OperationResult.Success("open_tab", detail = newP.contextId)
+    }
+
+    override suspend fun closeTab(tabId: String): OperationResult {
+        val b = requireBrowser()
+        val target = b.pages.find { it.contextId == tabId }
+            ?: return OperationResult.Failure("close_tab", "tab not found: $tabId")
+        b.closePage(target.contextId)
+        if (page == target) page = b.pages.firstOrNull()
+        return OperationResult.Success("close_tab", detail = tabId)
+    }
+
+    override suspend fun listTabs(): List<String> =
+        requireBrowser().pages.map { it.contextId }
+
+    override suspend fun selectTab(tabId: String): OperationResult {
+        val b = requireBrowser()
+        val target = b.pages.find { it.contextId == tabId }
+            ?: return OperationResult.Failure("select_tab", "tab not found: $tabId")
+        page = target
+        return OperationResult.Success("select_tab", detail = tabId)
+    }
+
+    override suspend fun waitFor(selector: String, timeoutMs: Long): OperationResult {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                if (requirePage().locator(selector).count() > 0) {
+                    return OperationResult.Success("wait_for", detail = selector)
+                }
+            } catch (_: Exception) {}
+            kotlinx.coroutines.delay(500)
+        }
+        return OperationResult.Failure("wait_for", "timeout waiting for: $selector")
+    }
+
+    private fun requireBrowser(): BiDiBrowser =
+        browser ?: error("Browser not started")
 
     private fun requirePage(): BiDiPage {
         return page ?: error("Browser not started — call start() first.")

@@ -19,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.TextStyle
 import kotlinx.coroutines.CoroutineStart
@@ -77,6 +76,7 @@ import xyz.mederi.ui.components.SystemInfoBar
 import xyz.mederi.ui.components.ReasoningBlock
 import xyz.mederi.ui.components.ToolCallsBlock
 import xyz.mederi.ui.components.SubagentCallsBlock
+import xyz.mederi.ui.components.SubagentConversationPanel
 import xyz.mederi.ui.components.QuestionCard
 import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
@@ -427,6 +427,35 @@ fun Workspace(
                         onSelectPanel = { panel -> viewModel.toggleDockPanel(panel) },
                         hasRunningSubagents = viewModel.hasRunningSubagents
                     )
+
+                    // 子代理对话面板（与 Dock 互斥；expandHorizontally 从右边缘展开）
+                    AnimatedVisibility(
+                        visible = viewModel.activeSubagentPanel != null,
+                        enter = fadeIn() +
+                            expandHorizontally(
+                                animationSpec = spring(
+                                    stiffness = Spring.StiffnessMediumLow,
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                ),
+                                expandFrom = Alignment.End,
+                            ),
+                        exit = fadeOut() +
+                            shrinkHorizontally(
+                                animationSpec = spring(
+                                    stiffness = Spring.StiffnessMediumLow,
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                ),
+                                shrinkTowards = Alignment.End,
+                            ),
+                    ) {
+                        SubagentConversationPanel(
+                            viewModel = viewModel,
+                            onDismiss = { viewModel.closeSubagentPanel() },
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width((screenWidth.value * (2f / 3f)).coerceAtLeast(340f).dp)
+                        )
+                    }
                 }
             }
 
@@ -460,6 +489,34 @@ fun Workspace(
                         rawMessagesViewModel = rawMessagesViewModel,
                         terminalViewModel = terminalViewModel,
                         isCompact = true,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(minOf(360.dp, screenWidth * 0.85f))
+                    )
+                }
+
+                // 子代理面板移动端抽屉（与 Dock 抽屉互斥）
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = viewModel.activeSubagentPanel != null,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(colors.surfaceOverlay)
+                            .clickable { viewModel.closeSubagentPanel() }
+                    )
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = viewModel.activeSubagentPanel != null,
+                    enter = slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { it } + fadeIn(),
+                    exit = slideOutHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { it } + fadeOut(),
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                ) {
+                    SubagentConversationPanel(
+                        viewModel = viewModel,
+                        onDismiss = { viewModel.closeSubagentPanel() },
                         modifier = Modifier
                             .fillMaxHeight()
                             .width(minOf(360.dp, screenWidth * 0.85f))
@@ -511,7 +568,6 @@ private fun MessageList(
     isCompact: Boolean = false,
     contentMaxWidth: Dp = ChatLayout.contentMaxWidth,
 ) {
-    val colors = LocalMederiColors.current
     val lazyListState = rememberLazyListState()
     val appMarkdownTheme = rememberMederiMarkdownTheme()
 
@@ -628,378 +684,18 @@ private fun MessageList(
         }
     }
 
-    CompositionLocalProvider(LocalSessionKey provides viewModel.conversationId) {
-        LazyColumn(
-            state = lazyListState,
-            modifier = modifier,
-        contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 12.dp) else PaddingValues(start = 24.dp, top = 20.dp, end = 24.dp, bottom = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(ChatLayout.itemSpacing),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // 1. 展平后的消息 items（每个文本块/思考面板独立；轮次起点与上一 item 拉开间距）
-        itemsIndexed(chatItems, key = { _, item -> item.key }) { index, item ->
-            // 以 item.key 锚定每个 item 的上一帧高度，防 LazyColumn 复用串位
-            var prevHeight by remember(item.key) { mutableIntStateOf(-1) }
-            Box(
-                modifier = Modifier
-                    .widthIn(max = contentMaxWidth)
-                    .fillMaxWidth()
-                    .padding(top = if (index > 0 && item.isTurnStart) ChatLayout.turnSpacing else 0.dp)
-                    .onSizeChanged { newSize ->
-                        // 同帧高度补偿：item 长高时同步下滚，保持底部按钮视觉位置不变
-                        val old = prevHeight
-                        prevHeight = newSize.height
-                        if (old >= 0 && newSize.height > old && stickToBottom && !lazyListState.isScrollInProgress) {
-                            lazyListState.dispatchRawDelta((newSize.height - old).toFloat())
-                        }
-                    }
-            ) {
-                when (item) {
-                    is ChatListItem.EventMessageCard -> {
-                        EventMessageCard(
-                            item = item,
-                            onOpenReport = { title, content ->
-                                viewModel.openDocument(
-                                    DocumentTarget.Content(
-                                        id = "report_${item.agentId}",
-                                        title = title,
-                                        content = content
-                                    )
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
-                        )
-                    }
-
-                    is ChatListItem.PlanApproval -> {
-                        PlanApprovalCard(
-                            request = item.request,
-                            onApprove = { viewModel.approvePlan(item.request.id) },
-                            onOpenInExtension = {
-                                val content = item.request.planContent
-                                    ?: "# ${item.request.title}\n\n${item.request.summary}"
-                                viewModel.openDocument(
-                                    DocumentTarget.Content(
-                                        id = "plan_${item.request.id}",
-                                        title = item.request.title,
-                                        content = content
-                                    )
-                                )
-                            },
-                            modifier = Modifier
-                                .widthIn(max = ChatLayout.actionCardMaxWidth)
-                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
-                        )
-                    }
-
-                    is ChatListItem.QuestionCard -> {
-                        QuestionCard(
-                            question = item.request,
-                            currentIndex = viewModel.questionPage,
-                            selectedAnswers = viewModel.questionAnswers[viewModel.questionPage] ?: emptyList(),
-                            onAnswer = { ans -> viewModel.answerQuestion(viewModel.questionPage, ans) },
-                            onNextPage = viewModel::nextQuestionPage,
-                            onPrevPage = viewModel::prevQuestionPage,
-                            onSubmit = viewModel::submitQuestion,
-                            onCancel = { viewModel.rejectQuestion(item.request.id) },
-                            modifier = Modifier
-                                .widthIn(max = ChatLayout.actionCardMaxWidth)
-                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
-                        )
-                    }
-
-                    is ChatListItem.DocumentCard -> {
-                        DocumentArtifactCard(
-                            title = item.title,
-                            lineCount = item.lineCount,
-                            charCount = item.charCount,
-                            createdAt = item.createdAt,
-                            isStreaming = item.isStreaming,
-                            isCompleted = item.isCompleted,
-                            onOpenInExtension = {
-                                viewModel.openDocument(
-                                    DocumentTarget.Content(
-                                        id = item.artifactId,
-                                        title = item.title,
-                                        content = item.content,
-                                        lineCount = item.lineCount,
-                                        charCount = item.charCount,
-                                        isStreaming = item.isStreaming,
-                                    )
-                                )
-                            },
-                            modifier = Modifier
-                                .widthIn(max = ChatLayout.actionCardMaxWidth)
-                                .padding(bottom = 4.dp)
-                        )
-                    }
-
-                    is ChatListItem.WorkTraceBlock -> {
-                        WorkTraceCard(
-                            workTrace = item,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = ChatLayout.thoughtBottomSpacing),
-                            renderStepItem = { stepItem ->
-                                when (stepItem) {
-                                    is ChatListItem.Reasoning -> {
-                                        ReasoningBlock(
-                                            text = stepItem.text,
-                                            isStreaming = stepItem.isStreaming,
-                                            durationMs = stepItem.durationMs,
-                                            isReasoningActive = stepItem.isReasoningActive,
-                                            // WorkTraceCard 已整体限高 + 滚动 + 展开按钮，子项不再重复限制
-                                            enforceMaxHeight = false,
-                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
-                                        )
-                                    }
-                                    is ChatListItem.ToolCalls -> {
-                                        ToolCallsBlock(
-                                            toolCalls = stepItem.toolCalls,
-                                            isStreaming = stepItem.isStreaming,
-                                            isRunning = stepItem.isRunning,
-                                            hasFailedTool = stepItem.hasFailedTool,
-                                            toolSummary = stepItem.toolSummary,
-                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
-                                        )
-                                    }
-                                    is ChatListItem.SubagentCalls -> {
-                                        SubagentCallsBlock(
-                                            subagents = stepItem.subagents,
-                                            isStreaming = stepItem.isStreaming,
-                                            isRunning = stepItem.isRunning,
-                                            hasFailed = stepItem.hasFailed,
-                                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
-                                        )
-                                    }
-                                    is ChatListItem.TextMessage -> {
-                                        if (stepItem.text.isNotBlank()) {
-                                            Text(
-                                                text = stepItem.text.trim(),
-                                                color = colors.textMuted,
-                                                fontSize = 12.sp,
-                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                        if (stepItem.images.isNotEmpty()) {
-                                            AssistantImagesView(
-                                                images = stepItem.images,
-                                                viewModel = viewModel,
-                                                colors = colors,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                    }
-                                    // WorkTrace 的 items 由 computeChatItems 构造时只可能是
-                                    // Reasoning/ToolCalls/SubagentCalls/TextMessage 四类，
-                                    // 以下分支为不可达的穷尽性占位。
-                                    is ChatListItem.DocumentCard -> {}
-                                    is ChatListItem.EventMessageCard -> {}
-                                    is ChatListItem.Footer -> {}
-                                    is ChatListItem.PlanApproval -> {}
-                                    is ChatListItem.QuestionCard -> {}
-                                    is ChatListItem.TurnDiffCard -> {}
-                                    is ChatListItem.WorkTraceBlock -> {}
-                                }
-                            }
-                        )
-                    }
-
-                    is ChatListItem.Reasoning -> {
-                        ReasoningBlock(
-                            text = item.text,
-                            isStreaming = item.isStreaming,
-                            durationMs = item.durationMs,
-                            isReasoningActive = item.isReasoningActive,
-                            // 用 item.key 作为展开状态锚点，避免 LazyColumn 复用导致展开状态串位
-                            contentKey = item.key,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
-                        )
-                    }
-
-                    is ChatListItem.ToolCalls -> {
-                        ToolCallsBlock(
-                            toolCalls = item.toolCalls,
-                            isStreaming = item.isStreaming,
-                            isRunning = item.isRunning,
-                            hasFailedTool = item.hasFailedTool,
-                            toolSummary = item.toolSummary,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = ChatLayout.thoughtBottomSpacing)
-                        )
-                    }
-
-                    is ChatListItem.SubagentCalls -> {
-                        // 子任务派发与运行态已提升至输入框顶部顶层浮层 (WorkspaceFloatingOverlay)，不在聊天流平铺
-                    }
-
-                    is ChatListItem.TurnDiffCard -> {
-                        TurnDiffSummaryCard(
-                            summary = item.summary,
-                            onReviewClick = {
-                                viewModel.openDiff(item.messageId, null)
-                            },
-                            // 文件行点击 = 打开文件本身（走 viewModel.openDocument 统一路由：内部能看的直接开，
-                            // 其余弹「用 XXX 打开 / 打开所在目录」）；审阅按钮才看 diff
-                            onFileClick = { filePath ->
-                                viewModel.openDocument(DocumentTarget.Path(filePath))
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 4.dp)
-                        )
-                    }
-
-                    is ChatListItem.Footer -> {
-                        AssistantMessageFooter(
-                            footer = item.footer,
-                            lastMessageText = item.lastMessageText,
-                            fullTurnText = item.fullTurnText,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 2.dp, bottom = 4.dp)
-                        )
-                    }
-
-                    is ChatListItem.TextMessage -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = if (item.isUser) Arrangement.End else Arrangement.Start
-                        ) {
-                            if (item.isUser) {
-                                // 用户消息：提升饱和度气泡，右对齐
-                                SelectionContainer {
-                                    val parsed = remember(item.text) { PromptComposer.parse(item.text) }
-                                    Column(
-                                        modifier = Modifier
-                                            .widthIn(max = if (isCompact) ChatLayout.userBubbleCompactMaxWidth else ChatLayout.userBubbleMaxWidth)
-                                            .clip(RoundedCornerShape(12.dp, 12.dp, 2.dp, 12.dp))
-                                            .background(colors.userBubbleBackground)
-                                            .border(1.dp, colors.userBubbleBorder, RoundedCornerShape(12.dp, 12.dp, 2.dp, 12.dp))
-                                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        if (item.images.isNotEmpty()) {
-                                            item.images.forEachIndexed { imgIdx, imgUrl ->
-                                                val imageTitle = stringResource(Res.string.input_image_n, imgIdx + 1)
-                                                InkImage(
-                                                    model = imgUrl,
-                                                    contentDescription = stringResource(Res.string.input_image_attachment),
-                                                    modifier = Modifier
-                                                        .widthIn(max = 260.dp)
-                                                        .heightIn(max = 180.dp)
-                                                        .clip(RoundedCornerShape(8.dp))
-                                                        .clickable {
-                                                            viewModel.openDocument(DocumentTarget.Image(imageTitle, imgUrl))
-                                                        }
-                                                )
-                                            }
-                                        }
-                                        if (parsed.instruction.isNotBlank()) {
-                                            Text(
-                                                text = parsed.instruction,
-                                                color = colors.textPrimary,
-                                                fontSize = 13.5.sp,
-                                                lineHeight = 21.6.sp
-                                            )
-                                        }
-                                        if (parsed.pastedTexts.isNotEmpty()) {
-                                            parsed.pastedTexts.forEach { pasted ->
-                                                val pastedTitle = stringResource(Res.string.input_pasted_text_n, pasted.index)
-                                                UserPastedTextCard(
-                                                    attachment = pasted,
-                                                    onOpenInExtension = {
-                                                        viewModel.openDocument(
-                                                            DocumentTarget.Content(
-                                                                id = "pasted_${pasted.index}",
-                                                                title = pastedTitle,
-                                                                content = pasted.text,
-                                                                lineCount = pasted.lineCount,
-                                                                charCount = pasted.charCount
-                                                            )
-                                                        )
-                                                    }
-                                                )
-                                            }
-                                        }
-                                        DisableSelection {
-                                            val copyToClipboard = xyz.mederi.util.rememberClipboardCopy()
-                                            UserMessageFooter(
-                                                createdAt = item.createdAt,
-                                                onRollback = {
-                                                    viewModel.rollbackMessage(
-                                                        conversationId = item.conversationId,
-                                                        messageId = item.messageId,
-                                                        messageText = item.text
-                                                    )
-                                                },
-                                                onCopy = {
-                                                    val textToCopy = if (parsed.pastedTexts.isNotEmpty()) item.text else parsed.instruction.ifBlank { item.text }
-                                                    copyToClipboard(textToCopy)
-                                                },
-                                                modifier = Modifier.align(Alignment.End)
-                                            )
-                                        }
-                                    }
-                                }
-                            } else {
-                                // 助手消息：渲染交付正文
-                                val assistantContent: @Composable (Modifier) -> Unit = { contentModifier ->
-                                    Column(modifier = contentModifier) {
-                                        if (item.text.isNotBlank()) {
-                                            MarkdownView(
-                                                content = item.text,
-                                                sessionKey = item.conversationId,
-                                                modifier = Modifier.fillMaxWidth(),
-                                                isStreaming = item.isStreaming,
-                                                selectionMenuActions = selectionMenuActions,
-                                                enableScrollOverride = false,
-                                                markdownTheme = appMarkdownTheme,
-                                                // 链接点击分流下沉到 VM：LinkTargetClassifier 纯函数分档（本地路径 vs 外部链接），
-                                                // View 只发意图（viewModel.openLink）
-                                                onLinkClick = { url -> viewModel.openLink(url) },
-                                            )
-                                        }
-                                        if (item.images.isNotEmpty()) {
-                                            AssistantImagesView(
-                                                images = item.images,
-                                                viewModel = viewModel,
-                                                colors = colors,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                        // 轮次底部 footer：模型名 · 审批/自主 · 推理档 · 时长 · 完成时间
-                                        item.assistantFooter?.let { footer ->
-                                            AssistantMessageFooter(
-                                                footer = footer,
-                                                lastMessageText = item.text,
-                                                fullTurnText = item.text,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                    }
-                                }
-
-                                assistantContent(Modifier.fillMaxWidth())
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. 动态选择题卡片已内联进 chatItems（ChatListItem.QuestionCard，挂在 ask_user 工具行位置）；
-        //    此处保留 pendingQuestion 仅作为滚底信号源（见上方 LaunchedEffect 的触发键）
-
-        // 底部安全留白（与输入框保持呼吸间距）
-        item {
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-    }
-}
+    // 渲染：复用可组合的 ChatListContent（主对话消息列表；LazyColumn + item 分发主体在 ui/chat/ChatListContent.kt）
+    ChatListContent(
+        viewModel = viewModel,
+        chatItems = chatItems,
+        lazyListState = lazyListState,
+        selectionMenuActions = selectionMenuActions,
+        appMarkdownTheme = appMarkdownTheme,
+        modifier = modifier,
+        contentMaxWidth = contentMaxWidth,
+        isCompact = isCompact,
+        showUserMessageActions = true,
+    )
 }
 
 /**
@@ -1018,7 +714,7 @@ private suspend fun LazyListState.snapToBottom() {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AssistantImagesView(
+internal fun AssistantImagesView(
     images: List<String>,
     viewModel: WorkspaceViewModel,
     colors: xyz.mederi.theme.MederiColors,

@@ -1,5 +1,6 @@
 package xyz.mederi.browser
 
+import ai.koog.agents.core.tools.ToolBase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,22 +59,47 @@ class BrowserArchitectureFlowTest {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    // ── 全链路决策脚本（FakeLLMCaller 按队列返回给 Operator decide） ──
-    private val JUDGE_DECISION = """
-        {"thought":"需要判定内容","memory":"先判定","actions":[{"type":"judge","content":"页面原始文本","instruction":"检查X是否存在"}],"is_done":false}
-    """.trimIndent()
+    // ── 全链路决策脚本（FakeLLMCaller 按队列返回给 Operator decide 的 toolCalls） ──
+    private val JUDGE_DECISION = BrowserLLMResponse(
+        reasoning = "需要判定内容",
+        toolCalls = listOf(
+            BrowserToolCall(
+                id = "judge-1",
+                name = BrowserConstants.ToolNames.JUDGE,
+                argsJson = """{"content":"页面原始文本","instruction":"检查X是否存在"}"""
+            )
+        )
+    )
 
-    private val DRILL_DECISION = """
-        {"thought":"执行确定性脚本","memory":"跑drill","actions":[{"type":"execute_drill","script":{"task_name":"skill1-drill","loop_count":1,"steps":[{"step_name":"extract","action":"extract_list","selector_value":".item","record_fields":{"title":".title"}}],"item_steps":[{"step_name":"go","action":"navigate","url":"https://drill-target.example"}]}}],"is_done":false}
-    """.trimIndent()
+    private val DRILL_DECISION = BrowserLLMResponse(
+        toolCalls = listOf(
+            BrowserToolCall(
+                id = "drill-1",
+                name = BrowserConstants.ToolNames.DRILL,
+                argsJson = """{"script":{"task_name":"skill1-drill","loop_count":1,"steps":[{"step_name":"extract","action":"extract_list","selector_value":".item","record_fields":{"title":".title"}}],"item_steps":[{"step_name":"go","action":"navigate","url":"https://drill-target.example"}]}}"""
+            )
+        )
+    )
 
-    private val DONE_DECISION = """
-        {"thought":"完成","memory":"完成","actions":[{"type":"done","message":"找到了X"}],"is_done":true}
-    """.trimIndent()
+    private val DONE_DECISION = BrowserLLMResponse(
+        toolCalls = listOf(
+            BrowserToolCall(
+                id = "done-1",
+                name = BrowserConstants.ToolNames.DONE,
+                argsJson = """{"message":"找到了X"}"""
+            )
+        )
+    )
 
-    private val DONE_ONLY_DECISION = """
-        {"actions":[{"type":"done","message":"ok"}],"is_done":true}
-    """.trimIndent()
+    private val DONE_ONLY_DECISION = BrowserLLMResponse(
+        toolCalls = listOf(
+            BrowserToolCall(
+                id = "done-2",
+                name = BrowserConstants.ToolNames.DONE,
+                argsJson = """{"message":"ok"}"""
+            )
+        )
+    )
 
     private val visionModel = AIModel(
         id = "m-vision",
@@ -92,7 +118,7 @@ class BrowserArchitectureFlowTest {
 
     private class FakeLLMCaller(
         private val supportsImages: Boolean,
-        decisions: List<String> = emptyList()
+        decisions: List<BrowserLLMResponse> = emptyList()
     ) : BrowserLLMCaller {
         data class Call(val systemPrompt: String, val userPrompt: String, val image: ByteArray?)
 
@@ -108,8 +134,6 @@ class BrowserArchitectureFlowTest {
             val effectiveImage = if (supportsImages) image else null
             calls += Call(systemPrompt, userPrompt, effectiveImage)
             return when {
-                DECIDE_MARKER in systemPrompt ->
-                    queue.removeFirstOrNull() ?: """{"actions":[],"is_done":true}"""
                 REPORT_MARKER in systemPrompt ->
                     """{"summary":"任务完成简报","goal_achieved":true,"details":"已完成目标"}"""
                 else ->
@@ -118,9 +142,30 @@ class BrowserArchitectureFlowTest {
             }
         }
 
+        override suspend fun callWithTools(
+            systemPrompt: String,
+            userPrompt: String,
+            tools: List<ToolBase<*, *>>,
+            image: ByteArray?
+        ): BrowserLLMResponse {
+            // Operator decide 走原生 tool-calling：镜像 BrowserLLMHelper 的 vision 门控
+            val effectiveImage = if (supportsImages) image else null
+            calls += Call(systemPrompt, userPrompt, effectiveImage)
+            return if (DECIDE_MARKER in systemPrompt) {
+                queue.removeFirstOrNull() ?: DEFAULT_DECIDE_RESPONSE
+            } else {
+                BrowserLLMResponse(toolCalls = emptyList())
+            }
+        }
+
         companion object {
             const val DECIDE_MARKER = "browser automation agent"
             const val REPORT_MARKER = "summarizing"
+            val DEFAULT_DECIDE_RESPONSE = BrowserLLMResponse(
+                toolCalls = listOf(
+                    BrowserToolCall(id = "fallback", name = BrowserConstants.ToolNames.DONE, argsJson = """{"message":"fallback"}""")
+                )
+            )
         }
     }
 

@@ -16,6 +16,7 @@ class BrowserSettingsManager(
 ) {
     companion object {
         const val KEY = "browser.camoufox.settings"
+        const val KEY_DEFAULT = "browser.default"
     }
 
     private val json = Json {
@@ -64,18 +65,28 @@ class BrowserSettingsManager(
     fun current(): CamoufoxSettings = cached
 
     /**
+     * 读取默认浏览器名（key = [KEY_DEFAULT]）：store 无值或空串都视为未设，返回 null。
+     * 不做 cached（AI run_task 经 BrowserRegistry.defaultName 直接读，不经这里）。
+     */
+    suspend fun getDefaultBrowser(): String? {
+        val raw = settingsStore.get(KEY_DEFAULT)
+        return raw?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * 保存默认浏览器名（key = [KEY_DEFAULT]；null/空白 = 清除，回退默认策略）。
+     */
+    suspend fun setDefaultBrowser(name: String?) {
+        if (name.isNullOrBlank()) settingsStore.set(KEY_DEFAULT, "") else settingsStore.set(KEY_DEFAULT, name)
+    }
+
+    /**
      * 基础校验：
-     * 1. **路径必填**：browserHome 与 binaryPath 均 null/blank 时拒绝保存——路径不设默认
-     *    （浏览器二进制体积大，不自动下载到默认路径），必须手动配置至少其一。
-     * 2. proxy 非 none 且 host 非空时，port 必须在 1..65535。
+     * proxy 非 none 且 host 非空时，port 必须在 1..65535。
      * advancedConfig 不做内容校验（Camoufox 自身校验）。
+     * 路径（browserHome/binaryPath）允许为空（未配置状态），运行时实例创建时再由 factory 检查。
      */
     private fun validate(s: CamoufoxSettings) {
-        if (s.browserHome.isNullOrBlank() && s.binaryPath.isNullOrBlank()) {
-            throw MederiValidationException(
-                "Camoufox 浏览器路径未配置：browserHome 与 binaryPath 必须至少设置一个"
-            )
-        }
         val proxy = s.proxy
         if (proxy != null && proxy.type != "none" && proxy.host.isNotBlank()) {
             if (proxy.port !in 1..65535) {

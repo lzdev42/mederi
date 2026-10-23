@@ -1,4 +1,4 @@
-package xyz.mederi.browser.tools
+package xyz.mederi.browser
 
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -8,11 +8,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
 /**
- * 验证 JCEF 浏览器物理操作工具的所有 Args 类的序列化能力：
+ * 验证浏览器物理操作工具的所有 Args 类的序列化能力：
  * 确保已正确应用 kotlinSerialization 编译器插件，避免运行时报
  * "Serializer for class 'XxxArgs' is not found" 异常。
  */
-class JcefBrowserToolsSerializationTest {
+class BrowserOperatorToolsSerializationTest {
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -63,4 +63,3 @@ class JcefBrowserToolsSerializationTest {
     }
 
 }
-

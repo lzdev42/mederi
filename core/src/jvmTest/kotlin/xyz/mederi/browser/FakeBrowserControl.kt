@@ -26,7 +26,9 @@ class FakeBrowserControl(
     var currentUrl: String = "https://example.com",
     var title: String = "Example Page",
     elements: Map<String, FakeElement> = emptyMap(),
-    jsResults: Map<String, String> = emptyMap()
+    jsResults: Map<String, String> = emptyMap(),
+    /** close() 的挂起时长（毫秒）。>0 时 close 内部有真实挂起点，用于验证 NonCancellable 关闭路径。 */
+    var closeDelayMs: Long = 0
 ) : BrowserControl {
 
     /** selector → 元素状态。 */
@@ -69,6 +71,10 @@ class FakeBrowserControl(
 
     override suspend fun close() {
         log += "close"
+        if (closeDelayMs > 0) {
+            kotlinx.coroutines.delay(closeDelayMs)
+            log += "close-finished"
+        }
     }
 
     override suspend fun getCurrentUrl(): String = currentUrl
@@ -98,6 +104,12 @@ class FakeBrowserControl(
 
     override suspend fun scroll(elementRef: String, deltaX: Int, deltaY: Int): OperationResult =
         OperationResult.Success("scroll", detail = "$deltaX,$deltaY")
+
+    // 页面级滚动：记录到 log，供测试断言空 refid 必须走 scrollPage 而非元素级 scroll
+    override suspend fun scrollPage(deltaX: Int, deltaY: Int): OperationResult {
+        log += "scrollPage $deltaX,$deltaY"
+        return OperationResult.Success("scroll_page", detail = "$deltaX,$deltaY")
+    }
 
     override suspend fun press(key: KeyboardKey): OperationResult =
         OperationResult.Success("press", detail = key.name)

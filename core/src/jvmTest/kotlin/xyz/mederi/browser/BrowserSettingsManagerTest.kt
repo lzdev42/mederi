@@ -131,24 +131,16 @@ class BrowserSettingsManagerTest {
     }
 
     @Test
-    fun `save rejects when both browserHome and binaryPath empty`() = runBlocking {
+    fun `save allows empty browser paths for preference draft`() = runBlocking {
         val manager = BrowserSettingsManager(InMemorySettingsStore())
 
-        // 全空（DEFAULT 路径均为 null）
-        try {
-            manager.save(CamoufoxSettings())
-            fail("expected MederiValidationException for missing browser path")
-        } catch (e: MederiException) {
-            assertTrue(e is MederiValidationException)
-        }
-
-        // blank 字符串同样拒绝（isNullOrBlank 判定）
-        try {
-            manager.save(CamoufoxSettings(browserHome = "   ", binaryPath = " "))
-            fail("expected MederiValidationException for blank browser path")
-        } catch (e: MederiException) {
-            assertTrue(e is MederiValidationException)
-        }
+        // 全空（DEFAULT 路径均为 null）允许保存偏好草稿
+        val saved = manager.save(CamoufoxSettings(headless = false))
+        val readBack = manager.get()
+        assertEquals(saved, readBack)
+        assertNull(readBack.browserHome)
+        assertNull(readBack.binaryPath)
+        assertEquals(false, readBack.headless)
     }
 
     @Test

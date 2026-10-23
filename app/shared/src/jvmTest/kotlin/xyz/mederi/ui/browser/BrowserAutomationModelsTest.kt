@@ -10,13 +10,18 @@ import kotlin.test.assertTrue
 class BrowserAutomationModelsTest {
 
     @Test
-    fun `when isAutomating is true, panel is forced visible and cannot be closed`() {
+    fun `when isAutomating is true, side panel follows isPanelOpen and cannot be closed`() {
         val state = BrowserAutomationUiState(
             isAutomating = true,
             isPanelOpen = false,
         )
-        assertTrue(state.isVisible, "Panel must be visible while isAutomating is true")
+        // 自动化主流程已迁移至主会话浮动条，浏览器右侧默认不强制撑开分栏以保留全宽视口
+        assertFalse(state.isVisible)
         assertFalse(state.canClose, "Panel must not be closable while isAutomating is true")
+
+        val stateWithPanelOpen = state.copy(isPanelOpen = true)
+        assertTrue(stateWithPanelOpen.isVisible)
+        assertFalse(stateWithPanelOpen.canClose)
     }
 
     @Test
@@ -81,5 +86,12 @@ class BrowserAutomationModelsTest {
 
         val dismissed = state.copy(previewScreenshot = null)
         assertNull(dismissed.previewScreenshot)
+    }
+
+    @Test
+    fun `default state has empty live streaming fields`() {
+        val state = BrowserAutomationUiState()
+        assertEquals("", state.liveReasoning)
+        assertEquals("", state.liveText)
     }
 }

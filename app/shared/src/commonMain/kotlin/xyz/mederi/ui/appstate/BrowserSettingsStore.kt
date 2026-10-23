@@ -13,9 +13,11 @@ import mederi.app.shared.generated.resources.browser_refresh_failed
 import mederi.app.shared.generated.resources.browser_save_failed
 import mederi.app.shared.generated.resources.err_generic
 import xyz.mederi.core.contract.AiCore
+import xyz.mederi.core.contract.models.BrowserOption
 import xyz.mederi.core.contract.models.BrowserStatus
 import xyz.mederi.core.contract.models.CamoufoxSettings
 import xyz.mederi.core.contract.models.CamoufoxUpdate
+import xyz.mederi.core.contract.models.SetDefaultBrowserInput
 import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.ui.DebugLog
 import xyz.mederi.ui.UiMessage
@@ -38,6 +40,12 @@ class BrowserSettingsStore(
 
     private val _installedVersions = MutableStateFlow<List<String>>(emptyList())
     val installedVersions: StateFlow<List<String>> = _installedVersions.asStateFlow()
+
+    private val _availableBrowsers = MutableStateFlow<List<BrowserOption>>(emptyList())
+    val availableBrowsers: StateFlow<List<BrowserOption>> = _availableBrowsers.asStateFlow()
+
+    private val _defaultBrowser = MutableStateFlow<String?>(null)
+    val defaultBrowser: StateFlow<String?> = _defaultBrowser.asStateFlow()
 
     private val _isOperating = MutableStateFlow(false)
     val isOperating: StateFlow<Boolean> = _isOperating.asStateFlow()
@@ -86,6 +94,26 @@ class BrowserSettingsStore(
                     _errorMessage.value = err?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                         ?: UiMessage(Res.string.browser_refresh_failed)
                 }
+
+                val browsersRes = aiCore.availableBrowsers()
+                if (browsersRes.isSuccess) {
+                    _availableBrowsers.value = browsersRes.getOrDefault(emptyList())
+                } else {
+                    val err = browsersRes.exceptionOrNull()
+                    DebugLog.error("BrowserSettingsStore", "Refresh available browsers failed: ${err?.message}", err)
+                    _errorMessage.value = err?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.browser_refresh_failed)
+                }
+
+                val defaultRes = aiCore.getDefaultBrowser()
+                if (defaultRes.isSuccess) {
+                    _defaultBrowser.value = defaultRes.getOrNull()
+                } else {
+                    val err = defaultRes.exceptionOrNull()
+                    DebugLog.error("BrowserSettingsStore", "Refresh default browser failed: ${err?.message}", err)
+                    _errorMessage.value = err?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.browser_refresh_failed)
+                }
             } finally {
                 // 无需 isRefreshing 状态（与 SandboxSettingsPanel 同层级面板，操作态走 isOperating）
             }
@@ -102,6 +130,25 @@ class BrowserSettingsStore(
             } else {
                 val err = res.exceptionOrNull()
                 DebugLog.error("BrowserSettingsStore", "Save settings failed: ${err?.message}", err)
+                _errorMessage.value = err?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                    ?: UiMessage(Res.string.browser_save_failed)
+            }
+            res.map { }
+        } catch (e: Exception) {
+            _errorMessage.value = UiMessage(Res.string.err_generic, listOf(e.message.orEmpty()))
+            Result.failure(e)
+        }
+    }
+
+    /** 设置默认浏览器（成功后乐观更新 flow，不阻塞 UI）。 */
+    suspend fun setDefaultBrowser(name: String): Result<Unit> {
+        return try {
+            val res = aiCore.setDefaultBrowser(SetDefaultBrowserInput(name))
+            if (res.isSuccess) {
+                _defaultBrowser.value = name
+            } else {
+                val err = res.exceptionOrNull()
+                DebugLog.error("BrowserSettingsStore", "Set default browser failed: ${err?.message}", err)
                 _errorMessage.value = err?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                     ?: UiMessage(Res.string.browser_save_failed)
             }

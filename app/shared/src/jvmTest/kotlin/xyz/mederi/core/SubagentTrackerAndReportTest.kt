@@ -3,7 +3,9 @@ package xyz.mederi.core
 import xyz.mederi.core.contract.SubagentTracker
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
+import xyz.mederi.core.contract.models.SubagentBlock
 import xyz.mederi.core.contract.models.SubagentState
+import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.ui.SubagentReportMarkdown
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -101,6 +103,85 @@ class SubagentTrackerAndReportTest {
 
         val s = states.getValue("sub_nm")
         assertNull(s.outputText)
+    }
+
+    @Test
+    fun `tracker accumulates reasoning tool and text blocks from progress events`() {
+        var states: Map<String, SubagentState> = emptyMap()
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_STARTED, "sub_blk",
+            "role" to "EXECUTOR", "task" to "do work"
+        ))
+        // 推理 delta
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_blk",
+            "activity" to "THINKING", "delta" to "reasoning "
+        ))
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_blk",
+            "activity" to "THINKING", "delta" to "more"
+        ))
+        // 工具调用
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_blk",
+            "activity" to "TOOL_CALL", "tool" to "read_file"
+        ))
+        // 正文
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_blk",
+            "activity" to "OUTPUT", "delta" to "Hello", "isMessage" to "true"
+        ))
+
+        val blocks = states.getValue("sub_blk").blocks
+        assertEquals(3, blocks.size)
+        assertTrue(blocks[0] is SubagentBlock.Reasoning)
+        assertEquals("reasoning more", (blocks[0] as SubagentBlock.Reasoning).text)
+        assertTrue(blocks[1] is SubagentBlock.ToolCall)
+        assertEquals("read_file", (blocks[1] as SubagentBlock.ToolCall).name)
+        assertTrue((blocks[1] as SubagentBlock.ToolCall).state is ToolCallState.Running)
+        assertTrue(blocks[2] is SubagentBlock.Text)
+        assertEquals("Hello", (blocks[2] as SubagentBlock.Text).text)
+    }
+
+    @Test
+    fun `tracker converges running toolcall to completed on terminal event`() {
+        var states: Map<String, SubagentState> = emptyMap()
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_STARTED, "sub_term",
+            "role" to "EXECUTOR", "task" to "x"
+        ))
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_term",
+            "activity" to "TOOL_CALL", "tool" to "bash"
+        ))
+        // 终态前：ToolCall 块为 Running
+        assertTrue((states.getValue("sub_term").blocks.last() as SubagentBlock.ToolCall).state is ToolCallState.Running)
+        // 终态：收敛为 Completed
+        states = SubagentTracker.apply(states, event(CoreEventType.SUBAGENT_COMPLETED, "sub_term"))
+        val tc = states.getValue("sub_term").blocks.last() as SubagentBlock.ToolCall
+        assertTrue(tc.state is ToolCallState.Completed)
+    }
+
+    @Test
+    fun `tracker outputText stays in sync with text blocks`() {
+        var states: Map<String, SubagentState> = emptyMap()
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_STARTED, "sub_sync",
+            "role" to "EXECUTOR", "task" to "x"
+        ))
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_sync",
+            "activity" to "OUTPUT", "delta" to "A", "isMessage" to "true"
+        ))
+        states = SubagentTracker.apply(states, event(
+            CoreEventType.SUBAGENT_PROGRESS, "sub_sync",
+            "activity" to "OUTPUT", "delta" to "B", "isMessage" to "true"
+        ))
+        val s = states.getValue("sub_sync")
+        assertEquals("AB", s.outputText)
+        assertEquals(1, s.blocks.size)
+        assertTrue(s.blocks[0] is SubagentBlock.Text)
+        assertEquals("AB", (s.blocks[0] as SubagentBlock.Text).text)
     }
 
     @Test

@@ -38,6 +38,8 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
+import xyz.mederi.core.contract.models.DefaultBrowserResponse
+import xyz.mederi.core.contract.models.SetDefaultBrowserInput
 import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
@@ -592,6 +594,16 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     get("/v1/browser/versions") {
         call.respondResult(aiCore.listInstalledCamoufoxVersions())
     }
+    get("/v1/browser/list") {
+        call.respondResult(aiCore.availableBrowsers())
+    }
+    get("/v1/browser/default") {
+        call.respondResult(aiCore.getDefaultBrowser().map { DefaultBrowserResponse(it) })
+    }
+    post("/v1/browser/default") {
+        val input = call.receive<SetDefaultBrowserInput>()
+        call.respondResult(aiCore.setDefaultBrowser(input))
+    }
 
     // ------------------------------------------------------------------
     // 子代理模型配置
@@ -641,6 +653,11 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     post("/v1/background-tasks/{taskId}/stop") {
         val taskId = call.parameters["taskId"] ?: return@post call.respond(HttpStatusCode.BadRequest)
         call.respondResult(aiCore.stopBackgroundTask(taskId))
+    }
+
+    post("/v1/browser-tasks/{taskId}/stop") {
+        val taskId = call.parameters["taskId"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.stopBrowserTask(taskId))
     }
 }
 

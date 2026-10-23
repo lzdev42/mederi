@@ -164,7 +164,7 @@ fun UserPastedTextCard(
 @Composable
 fun UserMessageFooter(
     createdAt: Long,
-    onRollback: () -> Unit,
+    onRollback: (() -> Unit)?,
     onCopy: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -203,11 +203,14 @@ fun UserMessageFooter(
         }
 
         // 2. 退回并重新编辑按钮（回退一步 = 撤回本条及后续记录，内容粘贴回输入框，可切换模型/模式后再发）
-        MederiMinimalIconButton(
-            icon = FeatherIcons.CornerUpLeft,
-            onClick = onRollback,
-            contentDescription = stringResource(Res.string.action_rollback),
-        )
+        //    onRollback 为 null 时不渲染（子代理合成消息不可回滚）
+        if (onRollback != null) {
+            MederiMinimalIconButton(
+                icon = FeatherIcons.CornerUpLeft,
+                onClick = onRollback,
+                contentDescription = stringResource(Res.string.action_rollback),
+            )
+        }
 
         // 3. 复制按钮（copied 态以 Check 图标切换表达，颜色收敛为 Minimal 的 textSecondary 系）
         MederiMinimalIconButton(

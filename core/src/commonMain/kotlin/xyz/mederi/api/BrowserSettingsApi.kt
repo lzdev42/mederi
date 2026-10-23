@@ -29,6 +29,12 @@ interface BrowserSettingsApi {
 
     /** 列出已安装的 Camoufox 版本（{browserHome}/camoufox/ 下子目录名）。 */
     suspend fun listInstalledVersions(): List<String>
+
+    /** 读取默认浏览器名（未设置返回 null）。 */
+    suspend fun getDefaultBrowser(): String?
+
+    /** 设置默认浏览器名（null = 清除，回退默认策略）。 */
+    suspend fun setDefaultBrowser(name: String?): Unit
 }
 
 /**

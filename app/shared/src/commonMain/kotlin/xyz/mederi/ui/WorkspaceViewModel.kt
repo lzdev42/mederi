@@ -154,15 +154,16 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 启动浏览器自动化流程（弹出流程视图并锁定为不可关闭，同时展开右侧网页面板）。
+     * 启动浏览器自动化流程（展开右侧网页面板）。
      * 供业务侧在浏览器自动化任务开始时调用。
      */
     fun startBrowserAutomation(taskSummary: String? = null, clearPrevious: Boolean = true) {
+        isBrowserAutomationFloatingExpanded = false
         val now = xyz.mederi.currentTimeMillis()
         updateBrowserAutomation { state ->
             state.copy(
                 isAutomating = true,
-                isPanelOpen = true,
+                isPanelOpen = false,
                 startedAtMillis = now,
                 completedAtMillis = null,
                 taskSummary = taskSummary ?: if (clearPrevious) null else state.taskSummary,
@@ -238,38 +239,6 @@ class WorkspaceViewModel(
         updateBrowserAutomation { state }
     }
 
-    /** 切换浏览器自动化流程面板显隐（自动化进行中不可关闭，直接忽略关闭请求）。 */
-    fun toggleBrowserAutomationPanel() {
-        updateBrowserAutomation { state ->
-            if (state.isAutomating) {
-                state.copy(isPanelOpen = true)
-            } else {
-                state.copy(isPanelOpen = !state.isPanelOpen)
-            }
-        }
-    }
-
-    /** 显式展开浏览器自动化流程面板。 */
-    fun openBrowserAutomationPanel() {
-        updateBrowserAutomation { it.copy(isPanelOpen = true) }
-    }
-
-    /** 关闭浏览器自动化流程面板（自动化进行中不可关闭）。 */
-    fun closeBrowserAutomationPanel() {
-        updateBrowserAutomation { state ->
-            if (!state.canClose) state else state.copy(isPanelOpen = false)
-        }
-    }
-
-    /** 拖拽调整浏览器自动化流程面板宽度（自动钳制在合法区间）。 */
-    fun resizeBrowserAutomationPanel(widthDp: Float) {
-        updateBrowserAutomation { state ->
-            state.copy(
-                panelWidthDp = BrowserAutomationUiState.clampWidthDp(widthDp),
-            )
-        }
-    }
-
     /** 点击流程内截图缩略图，打开高清大图预览弹窗（Lightbox）。 */
     fun openBrowserScreenshotPreview(screenshot: BrowserFlowStep.Screenshot?) {
         updateBrowserAutomation { it.copy(previewScreenshot = screenshot) }
@@ -278,6 +247,50 @@ class WorkspaceViewModel(
     /** 关闭截图高清大图预览弹窗。 */
     fun closeBrowserScreenshotPreview() {
         updateBrowserAutomation { it.copy(previewScreenshot = null) }
+    }
+
+    /** 浏览器自动化主对话浮动详情卡片是否展开 */
+    var isBrowserAutomationFloatingExpanded: Boolean by mutableStateOf(false)
+        private set
+
+    /** 展开/折叠主对话浏览器自动化详情卡片 */
+    fun toggleBrowserAutomationFloating() {
+        isBrowserAutomationFloatingExpanded = !isBrowserAutomationFloatingExpanded
+    }
+
+    /** 收起主对话浏览器自动化详情卡片（不影响自动化任务继续执行） */
+    fun closeBrowserAutomationFloating() {
+        isBrowserAutomationFloatingExpanded = false
+    }
+
+    /** 展开主对话浏览器自动化详情卡片 */
+    fun openBrowserAutomationFloating() {
+        isBrowserAutomationFloatingExpanded = true
+    }
+
+    /**
+     * 中止当前浏览器自动化任务：经契约真正停止 core 的浏览器任务（关闭其浏览器）。
+     * 不再中止主对话 turn——浏览器任务与主 turn 无生命周期绑定，误伤主 turn 是旧实现的副作用。
+     */
+    fun stopBrowserAutomation() {
+        viewModelScope.launch {
+            val taskId = browserAutomationState.taskId
+            try {
+                if (taskId.isNullOrBlank()) {
+                    // 状态里没有 taskId：如实记录，不伪装成功
+                    DebugLog.error("WorkspaceVM", "stopBrowserAutomation: no active browser taskId in state")
+                } else {
+                    appState.aiCore.stopBrowserTask(taskId).onFailure { e ->
+                        DebugLog.error("WorkspaceVM", "stopBrowserTask($taskId) failed: ${e.message}", e)
+                    }
+                }
+            } catch (e: Throwable) {
+                DebugLog.error("WorkspaceVM", "stopBrowserAutomation failed: ${e.message}", e)
+            } finally {
+                finishBrowserAutomation()
+                closeBrowserAutomationFloating()
+            }
+        }
     }
 
     /** 项目列表与选中项目（窄访问器，供文件树等派生 UI 使用；与 TerminalViewModel 同款转发） */
@@ -501,15 +514,56 @@ class WorkspaceViewModel(
             panel
         }
         updateActiveDockPanel(target)
+        closeSubagentPanel()
     }
 
     fun openDockPanel(panel: RightDockPanel) {
         if (panel == RightDockPanel.DIFF) openDiff()
         updateActiveDockPanel(panel)
+        closeSubagentPanel()
     }
 
     fun closeDockPanel() {
         updateActiveDockPanel(null)
+    }
+
+    /** 未绑定会话时的子代理对话面板激活状态兜底 */
+    private var unattachedSubagentPanelAgentId by mutableStateOf<String?>(null)
+
+    /** 右侧子代理对话面板当前打开的子代理（按 agentId 从 subagents 解析；null 表示收起）。 */
+    val activeSubagentPanel: xyz.mederi.core.contract.models.SubagentState?
+        get() = if (conversationId != null) {
+            conversationState?.activeSubagentPanelAgentId?.let { subagent(it) }
+        } else {
+            unattachedSubagentPanelAgentId?.let { subagent(it) }
+        }
+
+    /** 子代理对话视图的 ChatListItem（派生：activeSubagentPanel 变化时重算）。 */
+    val subagentChatItems: List<ChatListItem> by derivedStateOf {
+        activeSubagentPanel?.let { SubagentChatItems.build(it) } ?: emptyList()
+    }
+
+    private fun updateActiveSubagentPanel(agentId: String?) {
+        val convId = conversationId
+        val current = conversationState
+        if (convId != null && current != null) {
+            val updated = current.copy(activeSubagentPanelAgentId = agentId)
+            conversationState = updated
+            sessionCache.conversationStates[convId] = updated
+        } else {
+            unattachedSubagentPanelAgentId = agentId
+        }
+    }
+
+    /** 打开子代理对话面板（与 Dock 面板互斥：先关 Dock）。 */
+    fun openSubagentPanel(sub: xyz.mederi.core.contract.models.SubagentState) {
+        closeDockPanel()
+        updateActiveSubagentPanel(sub.agentId)
+    }
+
+    /** 关闭子代理对话面板。 */
+    fun closeSubagentPanel() {
+        updateActiveSubagentPanel(null)
     }
 
     /**
@@ -987,17 +1041,13 @@ class WorkspaceViewModel(
      */
     val errorId: String? get() = errorState.id
 
+    /** 断流标记（自愈已下沉到 TurnExecutor；此属性仅供手动"继续"按钮兜底读取） */
+
     /**
      * 当前错误是否为断流（流式连接提前中断）。为 true 时 ErrorBoard 显示"继续"按钮，
      * 点击经 [continueAfterInterruption] 重发 Continue 续写半截回复。
      */
     val isStreamInterrupted: Boolean get() = errorState.isStreamInterrupted
-
-    /** 是否正在自动补发 Continue（避免 send 时重置 autoContinueCount） */
-    private var isAutoContinuing = false
-
-    /** 自动补发 Continue 的调度任务句柄（防并发） */
-    private var autoContinueJob: Job? = null
 
     /** 排队消息序号自增器（确保同一毫秒内多条消息的 ID 唯一） */
     private var queuedMsgSeq = 0L
@@ -1721,28 +1771,10 @@ class WorkspaceViewModel(
         }
         val prevSnap = sessionCache.conversationStates[id]
         val wasWorking = prevSnap?.conversation?.status == ConversationStatus.Working
-        // 保留会话专属的写侧输入设置（model / agent / apiKey / thinkingLevel / draftText），绝不被 Core 推送的快照冲刷
-        val effectiveConv = if (prevSnap != null) {
-            snap.conversation.copy(
-                modelId = prevSnap.conversation.modelId ?: snap.conversation.modelId,
-                modelProvider = prevSnap.conversation.modelProvider ?: snap.conversation.modelProvider,
-                agent = prevSnap.conversation.agent ?: snap.conversation.agent,
-                apiKeyId = prevSnap.conversation.apiKeyId ?: snap.conversation.apiKeyId,
-                thinkingLevel = prevSnap.conversation.thinkingLevel ?: snap.conversation.thinkingLevel,
-                draftText = prevSnap.conversation.draftText ?: snap.conversation.draftText,
-            )
-        } else {
-            snap.conversation
-        }
-        // 保留会话专属的本地 UI 状态（activeDockPanel 与 browserAutomation）与子代理，防被来自 Core 的空值冲刷
-        val effectiveSnap = snap.copy(
-            conversation = effectiveConv,
-            activeDockPanel = snap.activeDockPanel ?: prevSnap?.activeDockPanel,
-            browserAutomation = snap.browserAutomation ?: prevSnap?.browserAutomation,
-            subagents = if (snap.subagents.isEmpty() && !prevSnap?.subagents.isNullOrEmpty()) {
-                prevSnap.subagents
-            } else snap.subagents
-        )
+        // 合并会话专属的本地 UI 状态（写侧输入设置 / activeDockPanel / browserAutomation / 子代理），
+        // 防被来自 Core 的空值冲刷；activeDockPanel 新规则（browserAutomation 非空时信任快照值）见 mergeLocalUiState。
+        val effectiveSnap = mergeLocalUiState(snap, prevSnap)
+        val effectiveConv = effectiveSnap.conversation
         sessionCache.conversationStates[id] = effectiveSnap
         if (conversationId == id) {
             conversationState = effectiveSnap
@@ -1762,7 +1794,6 @@ class WorkspaceViewModel(
             if (snap.conversation.status == ConversationStatus.Idle || snap.conversation.status == ConversationStatus.Error) {
                 isCompacting = false
             }
-            checkAndTriggerAutoContinue(id, snap)
         }
         // 仅在真实离开 Working 状态（turn 结束）时清除 StatusBar 计时锚点；
         // 状态机保留在 sessionCache.conversationStates 池中，保证切走切回零闪烁并保持子代理与 Dock 展开状态
@@ -1776,50 +1807,6 @@ class WorkspaceViewModel(
                 if (!queue.isNullOrEmpty()) {
                     val nextMsg = queue.removeAt(0)
                     sendQueuedMessage(nextMsg)
-                }
-            }
-        }
-    }
-
-    /**
-     * 流式闲置超时/中途断流后，若模型已吐出部分内容，UI 层自动替用户补发一句 "Continue"（且严格只发一次）。
-     * 若未吐出内容，Core 层已在内部静默重试，此处不处理。
-     */
-    private fun checkAndTriggerAutoContinue(id: String, snap: ConversationState) {
-        if (!snap.errorIsStreamInterrupted) return
-        if (snap.conversation.status == ConversationStatus.Working) return
-        if (isCompacting) return
-
-        val count = sessionCache.autoContinueCountByConv.getOrElse(id) { 0 }
-        val lastAssistant = snap.messages.lastOrNull { it.role == ChatRole.Assistant }
-        val hasEmittedTokens = lastAssistant != null && lastAssistant.blocks.any { block ->
-            when (block) {
-                is ChatBlock.Text -> block.text.isNotBlank()
-                is ChatBlock.Reasoning -> block.text.isNotBlank()
-                is ChatBlock.ToolCall -> true
-                else -> false
-            }
-        }
-
-        DebugLog.info(
-            "UI-AutoContinue",
-            "evaluating auto-continue: conv=$id, interrupted=${snap.errorIsStreamInterrupted}, " +
-                "status=${snap.conversation.status}, autoContinueCount=$count, hasEmittedTokens=$hasEmittedTokens"
-        )
-
-        if (count < 1 && hasEmittedTokens) {
-            sessionCache.autoContinueCountByConv[id] = count + 1
-            DebugLog.info("UI-AutoContinue", "scheduling auto-continue for conversation $id (attempt ${count + 1}/1)")
-            autoContinueJob?.cancel()
-            autoContinueJob = viewModelScope.launch {
-                delay(300L.milliseconds)
-                if (conversationId == id && snapshot?.conversation?.status != ConversationStatus.Working) {
-                    isAutoContinuing = true
-                    try {
-                        continueAfterInterruption()
-                    } finally {
-                        isAutoContinuing = false
-                    }
                 }
             }
         }
@@ -1933,9 +1920,6 @@ class WorkspaceViewModel(
             return
         }
         val convId = conversationId
-        if (!isAutoContinuing && convId != null) {
-            sessionCache.autoContinueCountByConv[convId] = 0
-        }
         // 未选中会话：若已选中项目，则发送时自动创建新会话；两者都无才报错
         val projectId = if (convId == null) appState.selectedProjectId.value else null
         if (convId == null && projectId == null) {
@@ -2022,7 +2006,6 @@ class WorkspaceViewModel(
         DebugLog.data("UI", "model.contextWindow", "${model.contextWindow}, maxTokens=${model.maxTokens}")
         DebugLog.data("UI", "agent", "${agent?.id} (${agent?.name}), reasoningLevel=${agent?.reasoningLevel}")
         DebugLog.data("UI", "thinkingLevel (sent)", computeEffectiveThinkingLevel())
-        val isAuto = isAutoContinuing
         viewModelScope.launch {
             // 未选中会话时：基于已选项目自动创建新会话，再发送
             val targetConvId = if (convId != null) {
@@ -2053,10 +2036,6 @@ class WorkspaceViewModel(
                 appState.selectProject(pid)
                 appState.selectConversation(conv.id)
                 conv.id
-            }
-
-            if (!isAuto) {
-                sessionCache.autoContinueCountByConv[targetConvId] = 0
             }
 
             val pendingPlan = snapshot?.pendingPlanApproval
@@ -2253,7 +2232,6 @@ class WorkspaceViewModel(
             apiKeyId = queuedMsg.apiKeyId
         )
 
-        sessionCache.autoContinueCountByConv[convId] = 0
         sessionCache.turnStartByConv[convId] = now
 
         viewModelScope.launch {
@@ -2557,9 +2535,49 @@ private class SessionUiCache {
     /** 各会话的后台观察 Job（conversationId → Job） */
     val observeJobs = mutableMapOf<String, Job>()
 
-    /** 断流自动补发 Continue 计数：conversationId → 已补发次数（防死循环，单次中断最多自动补发 1 次） */
-    val autoContinueCountByConv = mutableMapOf<String, Int>()
-
     /** 各会话的排队待发消息（按会话归档，FIFO 队列） */
     val queuedMessagesByConv = mutableStateMapOf<String, SnapshotStateList<QueuedMessage>>()
+}
+
+/**
+ * 合并快照与会话缓存中的本地 UI 状态（[WorkspaceViewModel.applySnapshot] 使用）。
+ *
+ * 规则：
+ * - 写侧输入设置（modelId / modelProvider / agent / apiKeyId / thinkingLevel / draftText）以 prevSnap 优先，
+ *   绝不被 Core 推送的快照冲刷；
+ * - **activeDockPanel**：当快照携带 [ConversationState.browserAutomation]（aggregator 归约快照，
+ *   显式管理浏览器/dock 状态）时信任其 activeDockPanel——null 也算（BROWSER_TASK_COMPLETED 显式关 dock）；
+ *   仅当快照无 browserAutomation（store 初始快照无浏览器上下文）时才回退 prevSnap；
+ * - browserAutomation 与 subagents 保持原语义：快照非空/非空列表优先，否则回退 prevSnap。
+ */
+internal fun mergeLocalUiState(snap: ConversationState, prevSnap: ConversationState?): ConversationState {
+    val effectiveConv = if (prevSnap != null) {
+        snap.conversation.copy(
+            modelId = prevSnap.conversation.modelId ?: snap.conversation.modelId,
+            modelProvider = prevSnap.conversation.modelProvider ?: snap.conversation.modelProvider,
+            agent = prevSnap.conversation.agent ?: snap.conversation.agent,
+            apiKeyId = prevSnap.conversation.apiKeyId ?: snap.conversation.apiKeyId,
+            thinkingLevel = prevSnap.conversation.thinkingLevel ?: snap.conversation.thinkingLevel,
+            draftText = prevSnap.conversation.draftText ?: snap.conversation.draftText,
+        )
+    } else {
+        snap.conversation
+    }
+    // 关键修复：当快照携带 browserAutomation（aggregator 归约快照，显式管理浏览器/dock 状态）
+    // 时信任其 activeDockPanel（null 也算 = COMPLETED 显式关 dock）；仅当快照无 browserAutomation
+    // （store 初始快照无浏览器上下文）时才回退 prevSnap。
+    val dockPanel = if (snap.browserAutomation != null) snap.activeDockPanel
+                    else snap.activeDockPanel ?: prevSnap?.activeDockPanel
+    return snap.copy(
+        conversation = effectiveConv,
+        activeDockPanel = dockPanel,
+        browserAutomation = snap.browserAutomation ?: prevSnap?.browserAutomation,
+        subagents = if (snap.subagents.isEmpty() && !prevSnap?.subagents.isNullOrEmpty()) {
+            prevSnap.subagents
+        } else snap.subagents,
+        // activeSubagentPanelAgentId 是 UI-only 字段（Core 不认识，快照里恒为 null），
+        // 必须从 prevSnap 兜住，否则每次 Core 发新快照（MESSAGE_DELTA/TOOL_CALLED 等）
+        // 都会把子代理面板冲成 null → 面板自动关闭。
+        activeSubagentPanelAgentId = snap.activeSubagentPanelAgentId ?: prevSnap?.activeSubagentPanelAgentId,
+    )
 }

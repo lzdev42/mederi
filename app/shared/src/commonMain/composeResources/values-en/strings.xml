@@ -216,6 +216,14 @@
     <string name="browser_section_fingerprint">Fingerprint overrides</string>
     <string name="browser_section_proxy">Proxy</string>
     <string name="browser_section_advanced">Advanced</string>
+    <string name="browser_section_default">Default Browser</string>
+    <string name="browser_default_hint">Which browser to use when AI doesn't specify one; defaults to built-in browser when unset</string>
+    <string name="browser_choice_builtin">Built-in Browser (JCEF)</string>
+    <string name="browser_choice_camoufox">Stealth Browser (Camoufox)</string>
+    <string name="browser_builtin_active_notice">Using built-in browser for web automation; pages render inside the main window. Settings below apply only to Camoufox.</string>
+    <string name="browser_camoufox_settings_title">Camoufox Engine Configuration</string>
+    <string name="browser_show_camoufox_settings">Show Camoufox configuration</string>
+    <string name="browser_hide_camoufox_settings">Hide Camoufox configuration</string>
     <string name="browser_save">Save settings</string>
     <string name="browser_path_required">Browser path required: set browserHome or binary path</string>
     <string name="browser_check_update">Check for updates</string>
@@ -799,11 +807,7 @@
     <string name="subagent_live_waiting">Waiting for subagent output…</string>
     <string name="subagent_live_empty">(No live output recorded)</string>
     <string name="browser_not_available">Not available on this end</string>
-    <!-- Browser automation flow panel (BrowserAutomationPanel.kt) -->
-    <string name="browser_flow_button">Flow</string>
-    <string name="browser_flow_title_running">Automating</string>
-    <string name="browser_flow_title_completed">Automation Done</string>
-    <string name="browser_flow_title_idle">Automation Flow</string>
+    <!-- Browser automation flow family -->
     <string name="browser_flow_running_locked">Running</string>
     <string name="browser_flow_close">Close flow panel</string>
     <string name="browser_flow_step_in_progress">Running...</string>
@@ -815,5 +819,13 @@
     <string name="browser_flow_footer_steps">%1$d steps</string>
     <string name="browser_flow_footer_steps_with_shots">%1$d steps (%2$d screenshots)</string>
     <string name="browser_flow_lightbox_close">Close preview</string>
+    <!-- Browser automation floating bar and popover -->
+    <string name="browser_automation_floating_title">Browser Automation</string>
+    <string name="browser_automation_reasoning_title">Reasoning &amp; Thoughts</string>
+    <string name="browser_automation_steps_title">Execution Steps</string>
+    <string name="browser_automation_stop_task">Stop Task</string>
+    <string name="browser_automation_collapse">Collapse</string>
+    <string name="browser_automation_expand">Details</string>
+    <string name="browser_automation_current_url">Current Page</string>
 </resources>
 

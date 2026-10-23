@@ -252,6 +252,9 @@ class SessionManagerImpl(
     override fun stopBackgroundTask(taskId: String): String? =
         turnExecutor.stopBackgroundTask(taskId)
 
+    override fun stopBrowserTask(taskId: String): String? =
+        turnExecutor.stopBrowserTask(taskId)
+
     override suspend fun getMessage(id: String, messageId: String): Message {
         return historyStore.load(id).firstOrNull { it.id == messageId }
             ?: throw NoSuchElementException("Message not found: $messageId")

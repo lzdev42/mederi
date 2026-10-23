@@ -102,6 +102,19 @@ class JcefBrowserControl(
     override suspend fun scroll(elementRef: String, deltaX: Int, deltaY: Int): OperationResult =
         requirePage().scroll(elementRef, deltaX, deltaY).toCore()
 
+    override suspend fun scrollPage(deltaX: Int, deltaY: Int): OperationResult {
+        val p = requirePage()
+        // 视口中心（文档坐标）：内层滚动容器（常见 SPA）也能命中，
+        // 比硬编码 640/360 在页面已滚动后落到视口外更可靠
+        val center = p.evaluateJavascript(
+            "(function(){return [window.scrollX+window.innerWidth/2, window.scrollY+window.innerHeight/2].join(',')})()"
+        ).trim()
+        val parts = center.split(',')
+        val x = parts.getOrNull(0)?.trim()?.toDoubleOrNull()?.toInt() ?: 640
+        val y = parts.getOrNull(1)?.trim()?.toDoubleOrNull()?.toInt() ?: 360
+        return p.scrollByCoordinates(x, y, deltaX, deltaY).toCore()
+    }
+
     override suspend fun press(key: KeyboardKey): OperationResult {
         return try {
             requirePage().press(key.toKBrowser())

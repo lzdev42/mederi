@@ -27,6 +27,7 @@ import xyz.mederi.api.CreateSessionRequest
 import xyz.mederi.api.RenameSessionRequest
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.api.UpdateCamoufoxSettingsInput as CoreUpdateCamoufoxSettingsInput
+import xyz.mederi.browser.BrowserRegistry
 import xyz.mederi.browser.resolveProfileDir
 import xyz.mederi.browser.toCamoufoxConfig
 import xyz.mederi.browser.toFirefoxPrefs
@@ -42,6 +43,7 @@ import xyz.mederi.core.contract.dto.CreateProjectInput
 import xyz.mederi.core.contract.dto.ProviderUpdateInput
 import xyz.mederi.core.contract.models.ApiKeyOption
 import xyz.mederi.core.contract.models.BackgroundTaskInfo
+import xyz.mederi.core.contract.models.BrowserOption
 import xyz.mederi.core.contract.models.BrowserStatus
 import xyz.mederi.core.contract.models.CamoufoxSettings
 import xyz.mederi.core.contract.models.CamoufoxUpdate
@@ -60,6 +62,7 @@ import xyz.mederi.core.contract.models.ProviderConfig
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.TokenUsage
+import xyz.mederi.core.contract.models.SetDefaultBrowserInput
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.SubagentReportDto
@@ -253,6 +256,9 @@ class MederiAiCore(
                 }
             )
             browserSettingsManager.get()  // 预热缓存（挂起）
+            // 默认浏览器偏好：读持久化值设给 BrowserRegistry（null 保持现有 JCEF 优先策略）
+            runCatching { browserSettingsManager.getDefaultBrowser() }.getOrNull()
+                ?.takeIf { it.isNotBlank() }?.let { BrowserRegistry.defaultName = it }
             xyz.mederi.browser.BrowserRegistry.register(
                 name = "camoufox",
                 kind = xyz.mederi.browser.BrowserKind.CAMOUFOX,
@@ -1521,6 +1527,28 @@ class MederiAiCore(
         browserSettingsApi.listInstalledVersions()
     }
 
+    override suspend fun availableBrowsers(): Result<List<BrowserOption>> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        BrowserRegistry.list().map { BrowserOption(it.name, it.kind.label) }
+    }
+
+    override suspend fun getDefaultBrowser(): Result<String?> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.getDefaultBrowser()
+    }
+
+    override suspend fun setDefaultBrowser(input: SetDefaultBrowserInput): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        browserSettingsApi.setDefaultBrowser(input.name)
+        BrowserRegistry.defaultName = input.name?.takeIf { it.isNotBlank() }
+    }
+
     // ==========================================
     // AGENTS.md 生成（进程内直调 core；读取/注入在 TurnExecutor 代码级完成）
     // ==========================================
@@ -1645,5 +1673,14 @@ class MederiAiCore(
             _isReady.first { it }
         }
         mederi.sessions.stopBackgroundTask(taskId) ?: Unit
+    }
+
+    override suspend fun stopBrowserTask(taskId: String): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        // null = 任务不存在，如实抛错而非伪装成功（调用方/UI 会看到真实失败）
+        mederi.sessions.stopBrowserTask(taskId)
+            ?: throw NoSuchElementException("Browser task not found: $taskId")
     }
 }

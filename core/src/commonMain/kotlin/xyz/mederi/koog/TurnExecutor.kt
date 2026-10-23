@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.mederi.api.AgentConfig
@@ -190,6 +192,14 @@ class TurnExecutor(
     private val compactingSessions = ConcurrentHashMap.newKeySet<String>()
 
     fun isCompacting(sessionId: String): Boolean = compactingSessions.contains(sessionId)
+
+    /** runTurn catch 块对 PREMATURE_CLOSE 的重抛信号——携带已收集的 errorPayload，供 auto-continue 循环决策。 */
+    private class PrematureCloseSignal(val errorPayload: Map<String, String>, cause: Throwable) : RuntimeException(cause)
+
+    companion object {
+        /** 断流自动续写最大重试次数（主代理与子代理共享此唯一真理源）。 */
+        private const val AUTO_CONTINUE_MAX_RETRIES = 1
+    }
 
     init {
         // 监听系统事件总线：当子代理（或未来其他异步任务）产生终态事件时，组装 <event_message> 唤醒父 turn
@@ -564,23 +574,49 @@ class TurnExecutor(
         planApprovalRequesters[sessionId] = planApprovalRequester
 
         val job = scope.launch {
-            runTurn(
-                sessionId = sessionId,
-                inputText = inputText,
-                userMessage = userMessage,
-                commandSandbox = commandSandbox,
-                provider = provider,
-                model = model,
-                systemPrompt = systemPrompt,
-                reasoningLevel = effectiveReasoningLevel,
-                agentMode = agentMode,
-                directories = projectDirs,
-                planStore = planStore,
-                notebook = notebook,
-                planApprovalRequester = planApprovalRequester,
-                subagentRole = subagentRole,
-                apiKeyId = activeApiKeyId
-            )
+            var autoContinueAttempt = 0
+            while (true) {
+                try {
+                    runTurn(
+                        sessionId = sessionId,
+                        inputText = inputText,
+                        userMessage = userMessage,
+                        commandSandbox = commandSandbox,
+                        provider = provider,
+                        model = model,
+                        systemPrompt = systemPrompt,
+                        reasoningLevel = effectiveReasoningLevel,
+                        agentMode = agentMode,
+                        directories = projectDirs,
+                        planStore = planStore,
+                        notebook = notebook,
+                        planApprovalRequester = planApprovalRequester,
+                        subagentRole = subagentRole,
+                        apiKeyId = activeApiKeyId
+                    )
+                    break // 正常完成（成功或非 PREMATURE_CLOSE 错误已由 runTurn catch 处理）
+                } catch (e: PrematureCloseSignal) {
+                    // 断流自愈决策
+                    if (autoContinueAttempt < AUTO_CONTINUE_MAX_RETRIES && hasEmittedTokens(sessionId)) {
+                        autoContinueAttempt++
+                        DebugLog.info("TurnExec", "auto-continue: attempt $autoContinueAttempt/$AUTO_CONTINUE_MAX_RETRIES for session $sessionId (premature close + emitted tokens)")
+                        // 追加 "Continue" user 消息到 historyStore——agent 通过 ChatMemory 自然读到
+                        val continueMsg = buildUserMessage(sessionId, listOf(MessagePart.Text("Continue")))
+                        historyStore.append(sessionId, continueMsg)
+                        sessionStore.update(sessionId, SessionStatus.RUNNING)
+                        continue // 重跑 runTurn（重建 agent + agent.run，从 history 继续）
+                    } else {
+                        // 重试耗尽或未吐 token：emit MESSAGE_ERROR(PREMATURE_CLOSE)，UI 手动"继续"兜底
+                        DebugLog.info("TurnExec", "auto-continue exhausted for session $sessionId: attempt=$autoContinueAttempt, hasTokens=${hasEmittedTokens(sessionId)}")
+                        sessionStore.update(sessionId, SessionStatus.IDLE)
+                        emit(sessionId, EventType.MESSAGE_ERROR, payload = e.errorPayload)
+                        break
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e // 协程规范：取消必须重抛
+                }
+                // 其它 Throwable 不会到这里——runTurn 的 catch 已全部处理（非 PREMATURE_CLOSE 的在 runTurn 内 emit + 正常返回）
+            }
         }
         activeJobs[sessionId] = job
     }
@@ -627,6 +663,16 @@ class TurnExecutor(
         )
     }
 
+    /** 断流前是否已输出内容（最后一条 assistant 消息有非空 Text part）。 */
+    private suspend fun hasEmittedTokens(sessionId: String): Boolean {
+        return historyStore.load(sessionId)
+            .lastOrNull { it.role == MessageRole.ASSISTANT }
+            ?.parts
+            ?.filterIsInstance<MessagePart.Text>()
+            ?.any { it.text.isNotBlank() }
+            ?: false
+    }
+
     /**
      * 中止指定 Session 的当前 turn。
      */
@@ -648,19 +694,6 @@ class TurnExecutor(
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         pendingEventMessages.remove(sessionId)
-        scope.launch {
-            runCatching {
-                sessionStore.update(sessionId, SessionStatus.IDLE)
-                // 用户中止 = 取消事件，走 ErrorCollector 统一记录（分类 CANCELLED / 严重级 WARNING）
-                val record = ErrorCollector.collect(
-                    kotlinx.coroutines.CancellationException("用户中止了对话"),
-                    ErrorContext(phase = "abort", sessionId = sessionId)
-                )
-                emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
-            }.onFailure {
-                DebugLog.error("TurnExec", "Failed to update session status after abort: ${it.message}", it)
-            }
-        }
     }
 
     /**
@@ -736,6 +769,9 @@ class TurnExecutor(
 
     fun stopBackgroundTask(taskId: String): String? =
         backgroundTaskManager.stop(taskId)
+
+    /** 停止浏览器任务（UI/契约入口）；返回停止后状态名，taskId 不存在返回 null。 */
+    fun stopBrowserTask(taskId: String): String? = browserTaskManager?.stopTask(taskId)
 
     suspend fun resolvePlanApproval(
         sessionId: String,
@@ -1312,12 +1348,16 @@ class TurnExecutor(
 
         } catch (e: kotlinx.coroutines.CancellationException) {
             DebugLog.event("TurnExec", "runTurn cancelled: ${e.message}")
-            frameChannel.close(e)
-            streamConsumer.join()
-            sessionStore.update(sessionId, SessionStatus.IDLE)
-            // 这里不再补发 MESSAGE_ERROR：所有主动取消都经由 abort()（已发"用户中止了对话"）
-            // 或 abortAndJoin()（回滚场景，紧随的 rollback 事件接管 UI）。若在此补发，
-            // 滞后到达的 ERROR 事件会污染回滚后新建 turn 的 UI 状态（错误横幅误亮）
+            withContext(NonCancellable) {
+                frameChannel.close(e)
+                streamConsumer.join()
+                sessionStore.update(sessionId, SessionStatus.IDLE)
+                val record = ErrorCollector.collect(
+                    kotlinx.coroutines.CancellationException("用户中止了对话"),
+                    ErrorContext(phase = "abort", sessionId = sessionId)
+                )
+                emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
+            }
             throw e
         } catch (e: Throwable) {
             DebugLog.event("TurnExec", "runTurn error: ${e::class.simpleName}: ${e.message}")
@@ -1334,6 +1374,11 @@ class TurnExecutor(
             val record = ErrorCollector.collect(e, errorContext)
             val errorPayload = record.toPayload().toMutableMap().apply {
                 streamWarning.get()?.let { put("warning", it) }
+            }
+            // 断流自愈：PREMATURE_CLOSE 不在此 emit MESSAGE_ERROR，重抛给 auto-continue 循环决策
+            // （已有半截 token 则追加 "Continue" 续写；清理已在重抛前完成——frameChannel.close + streamConsumer.join）
+            if (record.failureMode == ErrorCollector.FailureMode.PREMATURE_CLOSE) {
+                throw PrematureCloseSignal(errorPayload, e)
             }
             if (RetryableLLMClient.isTransientError(e) || record.severity == ErrorSeverity.RECOVERABLE) {
                 // 限流/网关过载/网络中断 = 环境态：重试已耗尽或流中途中断，属于可恢复状态，session 保持 IDLE

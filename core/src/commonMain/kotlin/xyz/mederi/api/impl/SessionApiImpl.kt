@@ -149,6 +149,10 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.stopBackgroundTask(taskId)
     }
 
+    override suspend fun stopBrowserTask(taskId: String): String? = mederiCall {
+        sessionManager.stopBrowserTask(taskId)
+    }
+
     override suspend fun getFileDiffs(sessionId: String, messageId: String?): List<FileDiff> = mederiCall {
         sessionManager.getFileDiffs(sessionId, messageId)
     }

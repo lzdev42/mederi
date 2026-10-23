@@ -21,22 +21,22 @@ import xyz.mederi.tools.ToolName
 @Serializable
 data class RunBrowserTaskArgs(
     @LLMDescription(
-        "Task instruction for the browser sub-agent (natural language, outcome-oriented): which site " +
-            "to visit and what result to produce. Low-level navigation/click/input is decided by the sub-agent."
+        "Task instruction for the browser sub-agent (natural language, outcome-oriented): the goal and the " +
+            "result to produce. The sub-agent AUTONOMOUSLY plans HOW to achieve it — search method, which " +
+            "search engine, navigation path, clicks, inputs are all its own decision. Do NOT prescribe how: " +
+            "never specify a search engine (e.g. baidu/google/bing), concrete navigation sequences, or " +
+            "low-level operation steps — hand down the goal only."
     )
     val task: String = "",
     @LLMDescription(
         "Browser to use (optional):\n" +
-            "- Empty = default browser.\n" +
-            "- Value from the registered browsers (jcef / camoufox etc.).\n" +
-            "- jcef: built-in visible browser, user can watch.\n" +
-            "- camoufox: headless anti-detection, for third-party automation/scraping."
+            "- LEAVE EMPTY by default: uses the user's preferred default browser configured in settings.\n" +
+            "- ONLY specify a browser name if the user explicitly requested a specific browser engine in their prompt (e.g. 'use camoufox' or 'use jcef').\n" +
+            "- Do NOT automatically pick camoufox just because the target site is third-party."
     )
     val browser: String = "",
     @LLMDescription("Optional recipe name or rules configuration to mount onto the task for guiding execution and judgment.")
-    val recipe: String = "",
-    @LLMDescription("Whether this is an automated testing task. If true, the browser UI and tabs remain open after completion for user inspection. Defaults to false.")
-    val isTest: Boolean = false
+    val recipe: String = ""
 )
 
 @Serializable
@@ -61,7 +61,23 @@ class RunBrowserTaskTool(
 ) {
     override suspend fun execute(args: RunBrowserTaskArgs): String {
         if (args.task.isBlank()) return "Error: task must not be empty."
-        val browser = args.browser.ifBlank { service.defaultBrowser() }
+        val defaultBrowser = service.defaultBrowser()
+        val available = service.availableBrowsers()
+        val browser = when {
+            args.browser.isNotBlank() && available.contains(args.browser) -> args.browser
+            args.browser.isNotBlank() && !available.contains(args.browser) -> {
+                xyz.mederi.debug.DebugLog.info(
+                    "RunBrowserTaskTool",
+                    "Requested browser '${args.browser}' is not registered (available: $available); falling back to default '$defaultBrowser'"
+                )
+                defaultBrowser
+            }
+            else -> defaultBrowser
+        }
+        xyz.mederi.debug.DebugLog.info(
+            "RunBrowserTaskTool",
+            "execute: requested='${args.browser}', resolved='$browser', default='$defaultBrowser', available=$available"
+        )
 
         val recipeObj = if (args.recipe.isNotBlank()) {
             runCatching {
@@ -78,8 +94,7 @@ class RunBrowserTaskTool(
             parentSessionId = sessionId,
             browser = browser,
             apiKeyId = apiKeyId,
-            recipe = recipeObj,
-            isTest = args.isTest
+            recipe = recipeObj
         )
         return Json.encodeToString(
             RunBrowserTaskResult.serializer(),
@@ -102,9 +117,12 @@ class RunBrowserTaskTool(
                 "its instruction. Returns immediately with a taskId — the sub-agent runs in the background and " +
                 "does not block your turn. Query it with browser_task_status(taskId) or stop it with " +
                 "stop_browser_task(taskId). Task details are viewable in the browser panel. " +
-                "Registered browser values: jcef (built-in, visible, user can watch); camoufox (headless, " +
-                "anti-detection, for automation/scraping on third-party sites). " +
-                browserHint
+                browserHint + ". IMPORTANT: Always leave 'browser' empty to use the user's default browser " +
+                "preference, unless the user explicitly requested a specific browser engine by name in their prompt. " +
+                "Do not pick camoufox arbitrarily. " +
+                "IMPORTANT: Give ONLY the goal and desired outcome in 'task'. Do NOT prescribe how — " +
+                "no search engine, no navigation/click sequence, no low-level steps; the sub-agent autonomously " +
+                "plans and executes the entire task itself."
         }
     }
 }
@@ -149,7 +167,8 @@ class StopBrowserTaskTool(
 ) {
     override suspend fun execute(args: StopBrowserTaskArgs): String {
         if (args.taskId.isBlank()) return "Error: taskId must not be empty."
-        return service.stopTask(args.taskId)
+        val status = service.stopTask(args.taskId) ?: "NOT_FOUND"
+        return Json.encodeToString(TaskStatusResult(taskId = args.taskId, status = status))
     }
 }
 
@@ -209,7 +228,7 @@ data class BrowserArgs(
     @LLMDescription("RUN: task instruction for the browser sub-agent (natural language, " +
         "outcome-oriented: which site, what result).")
     val task: String = "",
-    @LLMDescription("RUN: browser to use, from the registered browsers. Empty = default browser.")
+    @LLMDescription("RUN: browser to use. LEAVE EMPTY by default to use the user's preferred default browser configured in settings. ONLY specify a browser name if the user explicitly requested a specific browser engine in their prompt (e.g. 'use camoufox' or 'use jcef').")
     val browser: String = "",
     @LLMDescription("RUN: optional recipe name or rules configuration to mount onto the browser task.")
     val recipe: String = "",
@@ -269,8 +288,8 @@ class BrowserTool(
                 "action=STOP(taskId): cancel a task and close its browser (cannot resume). " +
                 "action=INFO: read the runtime browser state (per browser: inUse, open tabs, current URLs, " +
                 "started by this session or not). Task details are viewable in the browser panel. " +
-                "Browser kinds: jcef = built-in, visible (user can watch); camoufox = headless, " +
-                "anti-detection (third-party automation/scraping). " + browserHint
+                browserHint + ". IMPORTANT: Always leave 'browser' empty to respect user's default browser setting, " +
+                "unless the user explicitly requested a specific engine by name in their message."
         }
     }
 }

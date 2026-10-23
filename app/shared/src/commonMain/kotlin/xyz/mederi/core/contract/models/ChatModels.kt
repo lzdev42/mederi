@@ -223,6 +223,13 @@ enum class CoreEventType {
     BROWSER_TASK_STOPPED,
 
     /**
+     * 浏览器任务 LLM 流式增量事件（与 core EventType.BROWSER_TASK_REASONING_DELTA 同名对齐，
+     * EnumMirrorContractTest 锁死两侧枚举名集合相等，必须两侧同时加）。
+     * payload: taskId / step? / kind("reasoning"|"text") / content(增量文本)。
+     */
+    BROWSER_TASK_REASONING_DELTA,
+
+    /**
      * 子代理生命周期事件（与 core EventType 同名对齐）。sessionId = 父会话 ID。
      * payload：STARTED = agentId/role/modelId/modelName/reasoningLevel/task/briefing?；
      * COMPLETED/ERROR/STOPPED = agentId。UI 子代理面板消费。

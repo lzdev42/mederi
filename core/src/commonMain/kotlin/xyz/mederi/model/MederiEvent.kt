@@ -51,6 +51,13 @@ enum class EventType {
     BROWSER_TASK_STOPPED,
 
     /**
+     * 浏览器任务 LLM 流式增量事件（decide 阶段 reasoning/text 逐 token 推送）。
+     * payload: taskId, step?, kind("reasoning"|"text"), content(增量文本)。
+     * UI 浮动条据此流式渲染顶部推理框；新步（BROWSER_TASK_STEP）/终态时复位。
+     */
+    BROWSER_TASK_REASONING_DELTA,
+
+    /**
      * 子代理生命周期事件（异步，spawn_agent / spawn_researcher 派发）。
      * 与 BROWSER_TASK_* 同模式：UI 子代理面板消费，父代理只经 agent_status 查状态。
      * sessionId = 父会话 ID；payload 约定（key 统一 camelCase）：

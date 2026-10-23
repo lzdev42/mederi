@@ -2,7 +2,9 @@ package xyz.mederi.core.contract
 
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
+import xyz.mederi.core.contract.models.SubagentBlock
 import xyz.mederi.core.contract.models.SubagentState
+import xyz.mederi.core.contract.models.ToolCallState
 
 /**
  * 把 SUBAGENT_* 事件应用到子代理缓存表上的纯逻辑（跨平台，与 [SnapshotReducer] 同风格）。
@@ -40,6 +42,38 @@ object SubagentTracker {
                 val delta = event.payload["delta"].orEmpty()
                 val isMessage = event.payload["isMessage"] == "true"
                 states.updated(agentId) { current ->
+                    // 结构化块累积：把 SUBAGENT_PROGRESS 里被丢弃的 reasoning/tool/text 结构补回来
+                    var newBlocks = current.blocks
+                    // 1) THINKING delta 非空 → Reasoning 块
+                    if (activity == xyz.mederi.core.contract.models.SubagentActivity.THINKING && delta.isNotBlank()) {
+                        val last = newBlocks.lastOrNull()
+                        newBlocks = if (last is SubagentBlock.Reasoning)
+                            newBlocks.dropLast(1) + last.copy(text = last.text + delta)
+                        else newBlocks + SubagentBlock.Reasoning(delta)
+                    }
+                    // 2) TOOL_CALL 且 tool 非空 → ToolCall 块
+                    else if (activity == xyz.mederi.core.contract.models.SubagentActivity.TOOL_CALL && !tool.isNullOrBlank()) {
+                        val last = newBlocks.lastOrNull()
+                        when {
+                            // 上一块是同名工具仍在 Running → 不重复追加（同一工具调用的重复进度）
+                            last is SubagentBlock.ToolCall && last.name == tool && last.state is ToolCallState.Running -> {}
+                            // 上一块是不同工具仍在 Running → 收敛为 Completed，再追加新 Running
+                            last is SubagentBlock.ToolCall && last.state is ToolCallState.Running -> {
+                                newBlocks = newBlocks.dropLast(1) +
+                                    last.copy(state = ToolCallState.Completed(input = emptyMap(), output = "")) +
+                                    SubagentBlock.ToolCall(tool, ToolCallState.Running(input = emptyMap()))
+                            }
+                            else -> newBlocks = newBlocks + SubagentBlock.ToolCall(tool, ToolCallState.Running(input = emptyMap()))
+                        }
+                    }
+                    // 3) OUTPUT isMessage delta 非空 → Text 块
+                    else if (activity == xyz.mederi.core.contract.models.SubagentActivity.OUTPUT && isMessage && delta.isNotBlank()) {
+                        val last = newBlocks.lastOrNull()
+                        newBlocks = if (last is SubagentBlock.Text)
+                            newBlocks.dropLast(1) + last.copy(text = last.text + delta)
+                        else newBlocks + SubagentBlock.Text(delta)
+                    }
+
                     val newOutput = if (isMessage && delta.isNotBlank()) {
                         current.outputText.orEmpty() + delta
                     } else current.outputText
@@ -53,21 +87,28 @@ object SubagentTracker {
                             tool != null -> tool
                             else -> current.currentTool
                         },
-                        outputText = newOutput
+                        outputText = newOutput,
+                        blocks = newBlocks
                     )
                 }
             }
             CoreEventType.SUBAGENT_COMPLETED -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
-                states.updated(agentId) { it.copy(status = "COMPLETED", currentActivity = null, completedAt = completedAt) }
+                states.updated(agentId) {
+                    it.copy(status = "COMPLETED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted())
+                }
             }
             CoreEventType.SUBAGENT_ERROR -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
-                states.updated(agentId) { it.copy(status = "ERROR", currentActivity = null, completedAt = completedAt) }
+                states.updated(agentId) {
+                    it.copy(status = "ERROR", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted())
+                }
             }
             CoreEventType.SUBAGENT_STOPPED -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
-                states.updated(agentId) { it.copy(status = "STOPPED", currentActivity = null, completedAt = completedAt) }
+                states.updated(agentId) {
+                    it.copy(status = "STOPPED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted())
+                }
             }
             CoreEventType.SUBAGENT_DISCARDED ->
                 states - agentId
@@ -83,4 +124,12 @@ object SubagentTracker {
         val current = this[agentId] ?: return this
         return this + (agentId to transform(current))
     }
+}
+
+/** 把最后一个 Running 态 ToolCall 块收敛为 Completed（终态时该工具已结束）。 */
+private fun List<SubagentBlock>.mapLastToolCallCompleted(): List<SubagentBlock> {
+    val idx = indexOfLast { it is SubagentBlock.ToolCall && it.state is ToolCallState.Running }
+    if (idx < 0) return this
+    val tc = this[idx] as SubagentBlock.ToolCall
+    return subList(0, idx) + tc.copy(state = ToolCallState.Completed(input = emptyMap(), output = "")) + subList(idx + 1, size)
 }

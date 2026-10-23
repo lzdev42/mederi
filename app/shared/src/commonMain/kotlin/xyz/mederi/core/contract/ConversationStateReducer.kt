@@ -359,7 +359,10 @@ object ConversationStateReducer {
                 startedAtMillis = currentTimeMillis(),
                 completedAtMillis = null,
                 taskSummary = event.payload["thought"] ?: event.payload["message"],
-                steps = emptyList()
+                taskId = event.payload["taskId"],
+                steps = emptyList(),
+                liveReasoning = "",
+                liveText = ""
             )
             snapshot.copy(
                 browserAutomation = updated,
@@ -370,15 +373,30 @@ object ConversationStateReducer {
         CoreEventType.BROWSER_TASK_STEP -> {
             val current = snapshot.browserAutomation ?: BrowserAutomationUiState(isAutomating = true, isPanelOpen = true)
             val updatedSteps = parseBrowserStep(event, current.steps)
-            snapshot.copy(browserAutomation = current.copy(steps = updatedSteps))
+            snapshot.copy(browserAutomation = current.copy(steps = updatedSteps, liveReasoning = "", liveText = ""))
+        }
+
+        // 浏览器任务 LLM 流式增量（decide 阶段 reasoning/text 逐 token 推送）：瞬态流式事件，
+        // 累加进 browserAutomation 的 liveReasoning/liveText（不入 steps 时间线），
+        // UI 浮动条推理框从这两个字段流式渲染；新步（BROWSER_TASK_STEP）与终态复位为空
+        CoreEventType.BROWSER_TASK_REASONING_DELTA -> {
+            val current = snapshot.browserAutomation ?: BrowserAutomationUiState()
+            val kind = event.payload["kind"]
+            val content = event.payload["content"].orEmpty()
+            val updated = when (kind) {
+                "reasoning" -> current.copy(liveReasoning = current.liveReasoning + content)
+                "text" -> current.copy(liveText = current.liveText + content)
+                else -> current
+            }
+            snapshot.copy(browserAutomation = updated)
         }
 
         CoreEventType.BROWSER_TASK_COMPLETED,
         CoreEventType.BROWSER_TASK_ERROR,
         CoreEventType.BROWSER_TASK_STOPPED -> {
-            val isTestTask = event.payload["isTestTask"]?.toBooleanStrictOrNull() ?: false
+            // 终态一律收起浏览器 Dock 并清空 taskId（避免停止按钮用旧 taskId），不再区分测试任务
             val current = snapshot.browserAutomation
-            val updatedDockPanel = if (!isTestTask && snapshot.activeDockPanel == RightDockPanel.BROWSER) {
+            val updatedDockPanel = if (snapshot.activeDockPanel == RightDockPanel.BROWSER) {
                 null
             } else {
                 snapshot.activeDockPanel
@@ -398,9 +416,12 @@ object ConversationStateReducer {
                 snapshot.copy(
                     browserAutomation = current.copy(
                         isAutomating = false,
-                        isPanelOpen = if (!isTestTask) false else current.isPanelOpen,
+                        isPanelOpen = false,
                         completedAtMillis = currentTimeMillis(),
-                        steps = updatedSteps
+                        taskId = null,
+                        steps = updatedSteps,
+                        liveReasoning = "",
+                        liveText = ""
                     ),
                     activeDockPanel = updatedDockPanel
                 )

@@ -20,7 +20,6 @@ class BrowserToolTest {
         var lastRunTask: String? = null
         var lastBrowser: String? = null
         var lastRecipe: BrowserRecipe? = null
-        var lastIsTest: Boolean = false
         var statusQueried: String? = null
         var stopped: String? = null
         var statusSessionId: String? = null
@@ -28,12 +27,11 @@ class BrowserToolTest {
         override fun runTask(
             task: String, aiModel: AIModel, reasoningLevel: ReasoningLevel,
             projectId: String, parentSessionId: String, browser: String?, apiKeyId: String?,
-            recipe: BrowserRecipe?, isTest: Boolean
+            recipe: BrowserRecipe?
         ): String {
             lastRunTask = task
             lastBrowser = browser
             lastRecipe = recipe
-            lastIsTest = isTest
             return "task_1"
         }
 
@@ -42,9 +40,9 @@ class BrowserToolTest {
             return """{"taskId":"$taskId","status":"COMPLETED"}"""
         }
 
-        override fun stopTask(taskId: String): String {
+        override fun stopTask(taskId: String): String? {
             stopped = taskId
-            return """{"taskId":"$taskId","status":"STOPPED"}"""
+            return "STOPPED"
         }
 
         override fun availableBrowsers(): List<String> = listOf("jcef", "camoufox")
@@ -86,6 +84,30 @@ class BrowserToolTest {
         val result = newTool(FakeService()).execute(BrowserArgs(action = BrowserTaskAction.RUN))
 
         assertTrue(result.startsWith("Error: task must not be empty"), "空 task 校验错误应透传: $result")
+    }
+
+    @Test
+    fun `run with empty browser resolves to defaultBrowser`() = runBlocking {
+        val svc = FakeService()
+        val result = newTool(svc).execute(
+            BrowserArgs(action = BrowserTaskAction.RUN, task = "search docs", browser = "")
+        )
+
+        assertEquals("search docs", svc.lastRunTask)
+        assertEquals("jcef", svc.lastBrowser)
+        assertTrue(result.contains("\"browser\":\"jcef\""), "空 browser 应回退到 defaultBrowser: $result")
+    }
+
+    @Test
+    fun `run with unregistered browser falls back to defaultBrowser`() = runBlocking {
+        val svc = FakeService()
+        val result = newTool(svc).execute(
+            BrowserArgs(action = BrowserTaskAction.RUN, task = "scrape data", browser = "unknown_engine")
+        )
+
+        assertEquals("scrape data", svc.lastRunTask)
+        assertEquals("jcef", svc.lastBrowser)
+        assertTrue(result.contains("\"browser\":\"jcef\""), "未注册 engine 应回退到 defaultBrowser: $result")
     }
 
     @Test

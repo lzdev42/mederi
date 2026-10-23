@@ -20,10 +20,9 @@ import xyz.mederi.domain.model.AIModel
  * 核心定位：系统的"手和眼"，严格执行页面物理操作与感知。
  * - 遵循 4-phase 循环（perceive → decide → execute → postprocess）。
  * - 简化记忆机制：滑动 StepHistory + AI 自管理 memory（无长上下文堆积，防止快照爆炸）。
- * - 判定外包：遇到复杂判定、准则校验或需要动脑的场景，通过 [JudgeTool] / [BrowserAction.Judge] 交由 [BrowserBrain] 判定。
- * - 确定性脚本：通过 [ExecuteDrillTool] / [BrowserAction.ExecuteDrill] 把脚本交给 [DrillExecutor] 批量执行。
- * - 页面物理工具由 UI 注册到 [BrowserOperatorToolRegistry]，Core 零耦合消费。
- * - 原生 Koog tool-calling 优先；保留 [BrowserDecisionParser] 文本 JSON 解析以向下兼容与支持测试 Fake。
+ * - 判定外包：遇到复杂判定、准则校验或需要动脑的场景，通过 [JudgeTool] 交由 [BrowserBrain] 判定。
+ * - 确定性脚本：通过 [ExecuteDrillTool] 把脚本交给 [DrillExecutor] 批量执行。
+ * - 页面物理操作经通用工具集 [buildBrowserOperatorTools] 装配，原生 Koog tool-calling 为唯一执行路径。
  */
 class BrowserOperator(
     private val control: BrowserControl,
@@ -33,9 +32,9 @@ class BrowserOperator(
     private val drillExecutor: DrillExecutor? = null,
     private val recipe: BrowserRecipe? = null,
     private val maxSteps: Int = BrowserConstants.DEFAULT_MAX_STEPS,
-    private val browserName: String = BrowserConstants.DEFAULT_BROWSER_JCEF,
     val collector: BrowserCollector = BrowserCollector(),
     private val onStep: (suspend (step: Int, thought: String, results: List<ActionResult>) -> Unit)? = null,
+    private val onStream: (suspend (step: Int, kind: String, delta: String) -> Unit)? = null,
     private val onMemoryUpdate: ((String) -> Unit)? = null
 ) {
 
@@ -88,8 +87,8 @@ class BrowserOperator(
                 internalTools.add(ExecuteDrillTool(drillExecutor = drillExecutor, brain = brain, recipe = recipe))
             }
 
-            // 从 UI 注册中心拉取当前浏览器的物理操作工具
-            val externalTools = BrowserOperatorToolRegistry.getTools(browserName, control)
+            // 装配通用浏览器物理操作工具集（基于 BrowserControl 抽象，后端自动适配）
+            val externalTools = buildBrowserOperatorTools(control)
             val allTools: List<ToolBase<*, *>> = externalTools + internalTools
 
             repeat(maxSteps) { step ->
@@ -107,12 +106,21 @@ class BrowserOperator(
                 // ── Phase 2: DECIDE ──
                 val userPrompt = buildUserPrompt(task, snapshot)
                 val response = try {
-                    llmCaller.callWithTools(
+                    // 流式：reasoning/text 增量实时推给 onStream，Completed 帧承载最终结构化回复
+                    var streamed: BrowserLLMResponse? = null
+                    llmCaller.callWithToolsStreaming(
                         systemPrompt = BrowserPrompt.build(maxSteps),
                         userPrompt = userPrompt,
                         tools = allTools,
                         image = null
-                    )
+                    ).collect { ev ->
+                        when (ev) {
+                            is BrowserLLMStreamEvent.ReasoningDelta -> onStream?.invoke(step + 1, "reasoning", ev.text)
+                            is BrowserLLMStreamEvent.TextDelta -> onStream?.invoke(step + 1, "text", ev.text)
+                            is BrowserLLMStreamEvent.Completed -> streamed = ev.response
+                        }
+                    }
+                    streamed ?: BrowserLLMResponse(text = "Failed to resolve LLM client")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -129,7 +137,7 @@ class BrowserOperator(
                 val thought = response.reasoning ?: response.text.substringBefore("\n{").trim()
 
                 if (response.toolCalls.isNotEmpty()) {
-                    // 原生 Koog tool call 路径
+                    // 原生 Koog tool call 路径（唯一执行路径）
                     for (toolCall in response.toolCalls) {
                         val tool = allTools.firstOrNull { it.name == toolCall.name }
                         if (tool != null) {
@@ -144,27 +152,9 @@ class BrowserOperator(
                         }
                     }
                 } else if (response.text.isNotBlank()) {
-                    // 文本 JSON 决策回退路径（兼容测试与无 tool-calling 模型）
-                    val decision = runCatching { BrowserDecisionParser.parse(response.text) }.getOrNull()
-                    if (decision != null) {
-                        if (decision.memory.isNotBlank()) {
-                            memory = decision.memory
-                            onMemoryUpdate?.invoke(memory)
-                        }
-                        if (decision.isDone) {
-                            isDone = true
-                        }
-                        val actionResults = executeActions(decision)
-                        results.addAll(actionResults)
-                        if (isDone && doneMessage == null) {
-                            val doneAct = actionResults.lastOrNull { it.action == "done" }
-                            doneMessage = doneAct?.detail ?: decision.thought.ifBlank { "任务完成" }
-                        }
-                    } else {
-                        results.add(ActionResult("response", true, response.text.take(200)))
-                    }
+                    results.add(ActionResult("none", false, "no tool calls in response"))
                 } else {
-                    results.add(ActionResult("none", false, "没有可执行的动作"))
+                    results.add(ActionResult("none", false, "no response"))
                 }
 
                 lastResults = results
@@ -219,75 +209,6 @@ class BrowserOperator(
         } catch (e: Exception) {
             DebugLog.error("BrowserOperator", "Tool '${tool.name}' execution failed: ${e.message}")
             ActionResult(action = tool.name, success = false, detail = e.message ?: e::class.simpleName ?: "unknown error")
-        }
-    }
-
-    /** 执行 LLM 决策里的所有 action，返回每个 action 的结果（兼容回退）。 */
-    private suspend fun executeActions(decision: BrowserDecision): List<ActionResult> {
-        val actions = BrowserDecisionParser.toActions(decision)
-        if (actions.isEmpty()) {
-            return listOf(ActionResult("none", false, "没有可执行的动作"))
-        }
-        return actions.map { action ->
-            val result = when (action) {
-                is BrowserAction.Navigate -> exec("navigate") { control.navigate(action.url) }
-                is BrowserAction.Click -> exec("click") { control.click(action.elementRef) }
-                is BrowserAction.Type -> exec("type") { control.type(action.elementRef, action.text) }
-                is BrowserAction.Scroll -> exec("scroll") { control.scroll(action.elementRef, action.deltaX, action.deltaY) }
-                is BrowserAction.Done -> ActionResult("done", true, action.message)
-                is BrowserAction.Judge -> {
-                    if (brain == null) {
-                        ActionResult("judge", false, "BrowserBrain 未配置，无法进行判定")
-                    } else {
-                        val brainRes = brain.judge(
-                            content = action.content,
-                            instruction = action.instruction,
-                            recipeRules = recipe?.judgeRules.orEmpty()
-                        )
-                        ActionResult("judge", brainRes.success, brainRes.toCompactString())
-                    }
-                }
-                is BrowserAction.ExecuteDrill -> {
-                    if (drillExecutor == null) {
-                        ActionResult("drill", false, "DrillExecutor 未配置")
-                    } else {
-                        val onJudgeContent: (suspend (String, String) -> BrainResult)? = brain?.let { b ->
-                            { c: String, i: String -> b.judge(c, i, recipe?.judgeRules.orEmpty()) }
-                        }
-                        val r = drillExecutor.executeScript(action.script, onJudgeContent)
-                        ActionResult("drill", r.success, r.drill_results.joinToString(";") { it.toString() }.take(200))
-                    }
-                }
-                is BrowserAction.WaitFor -> exec("wait_for") { control.waitFor(action.selector) }
-                is BrowserAction.Tabs -> exec("tabs") {
-                    when (action.action.uppercase()) {
-                        "NEW" -> control.openTab()
-                        "CLOSE" -> control.closeTab(action.tabId)
-                        "LIST" -> {
-                            control.listTabs()
-                            xyz.mederi.browser.bidi.OperationResult.Success("tabs", detail = "listed")
-                        }
-                        "SELECT" -> control.selectTab(action.tabId)
-                        else -> xyz.mederi.browser.bidi.OperationResult.Failure("tabs", "unknown tabAction: ${action.action}")
-                    }
-                }
-            }
-            DebugLog.info("BrowserOperator", "  action ${result.action} success=${result.success} ${result.detail.take(120)}")
-            result
-        }
-    }
-
-    private suspend fun exec(
-        label: String,
-        block: suspend () -> xyz.mederi.browser.bidi.OperationResult
-    ): ActionResult {
-        return try {
-            val r = block()
-            ActionResult(label, r.success, if (r is xyz.mederi.browser.bidi.OperationResult.Failure) r.reason else r.toString())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            ActionResult(label, false, e.message ?: e::class.simpleName.orEmpty())
         }
     }
 

@@ -1,4 +1,4 @@
-package xyz.mederi.browser.tools
+package xyz.mederi.browser
 
 import ai.koog.agents.core.tools.SimpleTool
 import ai.koog.agents.core.tools.ToolBase
@@ -11,10 +11,8 @@ import xyz.mederi.browser.BrowserControl
 import xyz.mederi.browser.bidi.OperationResult
 
 /**
- * 桌面 UI 宿主层（JCEF）提供的浏览器页面物理操作工具集。
- *
- * 由 desktopApp 拥有并注册进 [xyz.mederi.browser.BrowserOperatorToolRegistry]，
- * 仅供浏览器操作员使用，Core 层对此零耦合。
+ * 通用浏览器操作工具集（基于 BrowserControl 抽象，jcef/camoufox 后端自动适配），
+ * 由 BrowserOperator 直接装配。
  */
 
 private fun OperationResult.toText(action: String): String = when (this) {
@@ -38,7 +36,7 @@ data class NavigateArgs(
     val url: String = ""
 )
 
-class JcefNavigateTool(private val control: BrowserControl) : SimpleTool<NavigateArgs>(
+class NavigateTool(private val control: BrowserControl) : SimpleTool<NavigateArgs>(
     argsType = typeToken<NavigateArgs>(),
     name = BrowserConstants.ToolNames.NAVIGATE,
     description = "Navigate the browser to a URL."
@@ -52,7 +50,7 @@ data class ClickArgs(
     val elementRef: String = ""
 )
 
-class JcefClickTool(private val control: BrowserControl) : SimpleTool<ClickArgs>(
+class ClickTool(private val control: BrowserControl) : SimpleTool<ClickArgs>(
     argsType = typeToken<ClickArgs>(),
     name = BrowserConstants.ToolNames.CLICK,
     description = "Click an element identified by its refid from the a11y snapshot."
@@ -68,7 +66,7 @@ data class TypeArgs(
     val text: String = ""
 )
 
-class JcefTypeTool(private val control: BrowserControl) : SimpleTool<TypeArgs>(
+class TypeTool(private val control: BrowserControl) : SimpleTool<TypeArgs>(
     argsType = typeToken<TypeArgs>(),
     name = BrowserConstants.ToolNames.TYPE,
     description = "Type text into an element identified by its refid."
@@ -78,7 +76,7 @@ class JcefTypeTool(private val control: BrowserControl) : SimpleTool<TypeArgs>(
 
 @Serializable
 data class ScrollArgs(
-    @LLMDescription("Element refid")
+    @LLMDescription("Optional element refid. Leave EMPTY to scroll the whole page/viewport; provide a refid only to scroll a specific scrollable element.")
     val elementRef: String = "",
     @LLMDescription("Horizontal scroll delta")
     val deltaX: Int = 0,
@@ -86,13 +84,17 @@ data class ScrollArgs(
     val deltaY: Int = 0
 )
 
-class JcefScrollTool(private val control: BrowserControl) : SimpleTool<ScrollArgs>(
+class ScrollTool(private val control: BrowserControl) : SimpleTool<ScrollArgs>(
     argsType = typeToken<ScrollArgs>(),
     name = BrowserConstants.ToolNames.SCROLL,
-    description = "Scroll an element by the given horizontal and vertical deltas."
+    description = "Scroll the page (leave elementRef empty) or a specific element (provide its refid) by the given horizontal/vertical deltas."
 ) {
     override suspend fun execute(args: ScrollArgs): String =
-        safeCall(name) { control.scroll(args.elementRef, args.deltaX, args.deltaY) }
+        safeCall(name) {
+            // 空 refid 走页面级 scrollPage，非空走元素级 scroll——空串永不再进入 refid 查找
+            if (args.elementRef.isBlank()) control.scrollPage(args.deltaX, args.deltaY)
+            else control.scroll(args.elementRef, args.deltaX, args.deltaY)
+        }
 }
 
 @Serializable
@@ -101,7 +103,7 @@ data class WaitForArgs(
     val selector: String = ""
 )
 
-class JcefWaitForTool(private val control: BrowserControl) : SimpleTool<WaitForArgs>(
+class WaitForTool(private val control: BrowserControl) : SimpleTool<WaitForArgs>(
     argsType = typeToken<WaitForArgs>(),
     name = BrowserConstants.ToolNames.WAIT_FOR,
     description = "Wait until the element matching the CSS selector appears or becomes visible."
@@ -117,7 +119,7 @@ data class TabsArgs(
     val tabId: String = ""
 )
 
-class JcefTabsTool(private val control: BrowserControl) : SimpleTool<TabsArgs>(
+class TabsTool(private val control: BrowserControl) : SimpleTool<TabsArgs>(
     argsType = typeToken<TabsArgs>(),
     name = BrowserConstants.ToolNames.TABS,
     description = "Manage browser tabs: NEW opens a tab, CLOSE closes the given tab id, LIST lists all tab ids, SELECT switches to the given tab id."
@@ -137,14 +139,13 @@ class JcefTabsTool(private val control: BrowserControl) : SimpleTool<TabsArgs>(
 }
 
 /**
- * 装配由 UI 层提供的全部 JCEF 浏览器物理操作工具。
+ * 装配浏览器物理操作工具集。
  */
-fun buildJcefBrowserTools(control: BrowserControl): List<ToolBase<*, *>> = listOf(
-    JcefNavigateTool(control),
-    JcefClickTool(control),
-    JcefTypeTool(control),
-    JcefScrollTool(control),
-    JcefWaitForTool(control),
-    JcefTabsTool(control)
+fun buildBrowserOperatorTools(control: BrowserControl): List<ToolBase<*, *>> = listOf(
+    NavigateTool(control),
+    ClickTool(control),
+    TypeTool(control),
+    ScrollTool(control),
+    WaitForTool(control),
+    TabsTool(control)
 )
-

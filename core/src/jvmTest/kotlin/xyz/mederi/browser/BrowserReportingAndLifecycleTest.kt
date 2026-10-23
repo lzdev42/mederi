@@ -15,7 +15,6 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.tools.subagent.FakeProviderManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -43,7 +42,14 @@ class BrowserReportingAndLifecycleTest {
             image: ByteArray?
         ): BrowserLLMResponse {
             return BrowserLLMResponse(
-                text = """{"thought":"任务完成","actions":[{"type":"done","message":"$operatorDoneMessage"}],"is_done":true}"""
+                text = "任务完成",
+                toolCalls = listOf(
+                    BrowserToolCall(
+                        id = "done-1",
+                        name = BrowserConstants.ToolNames.DONE,
+                        argsJson = """{"message":"$operatorDoneMessage"}"""
+                    )
+                )
             )
         }
     }
@@ -77,15 +83,13 @@ class BrowserReportingAndLifecycleTest {
             projectId = "p1",
             parentSessionId = "sess_1",
             browser = "fake-direct",
-            recipe = null,
-            isTest = false
+            recipe = null
         )
 
         val event = completedEventDeferred.await()
         assertEquals(taskId, event.payload["taskId"])
         assertEquals("COMPLETED", event.payload["status"])
         assertEquals(SubagentRole.BROWSER_OPERATOR.name, event.payload["role"])
-        assertEquals("false", event.payload["isTestTask"])
         // 无需判定：直接采用操作员的 message
         assertEquals("搜索完成，找到了3条记录", event.payload["message"])
         assertNull(event.payload["reportPath"])
@@ -131,8 +135,7 @@ class BrowserReportingAndLifecycleTest {
             projectId = "p1",
             parentSessionId = "sess_1",
             browser = "fake-judge",
-            recipe = recipeWithRules,
-            isTest = false
+            recipe = recipeWithRules
         )
 
         val event = completedEventDeferred.await()
@@ -142,38 +145,28 @@ class BrowserReportingAndLifecycleTest {
     }
 
     @Test
-    fun testAutomatedTestTaskDoesNotCloseBrowser() = runBlocking {
+    fun testTaskTextContainingTestKeywordStillClosesBrowser() = runBlocking {
         val fakeControl = FakeBrowserControl()
-        BrowserRegistry.register("fake-test", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
-
+        BrowserRegistry.register("fake-keyword", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 10)
-
-        val fakeCaller = TestLLMCaller(operatorDoneMessage = "断言通过")
-
         val manager = BrowserTaskManager(
             providerManager = FakeProviderManager(emptyMap()),
             scope = this,
             eventBus = eventBus,
-            llmCallerProvider = { _, _, _ -> fakeCaller }
+            llmCallerProvider = { _, _, _ -> TestLLMCaller(operatorDoneMessage = "测试完成") }
         )
-
-        val completedEventDeferred = asyncEvent(eventBus, EventType.BROWSER_TASK_COMPLETED)
-
+        val completed = asyncEvent(eventBus, EventType.BROWSER_TASK_COMPLETED)
         manager.runTask(
             task = "对登录页进行自动化测试",
             aiModel = fakeModel,
             reasoningLevel = ReasoningLevel.NONE,
             projectId = "p1",
             parentSessionId = "sess_1",
-            browser = "fake-test",
-            recipe = null,
-            isTest = true
+            browser = "fake-keyword",
+            recipe = null
         )
-
-        val event = completedEventDeferred.await()
-        assertEquals("true", event.payload["isTestTask"])
-        // 自动化测试任务不应调用 control.close()，保留浏览器现场
-        assertFalse(fakeControl.log.contains("close"), "自动化测试任务结束不应关闭浏览器")
+        completed.await()
+        assertTrue(fakeControl.log.contains("close"), "任务文本含『测试』也必须关闭浏览器（isTest 概念已删除）")
     }
 
     @Test

@@ -147,12 +147,21 @@ data class BrowserAutomationUiState(
     val startedAtMillis: Long? = null,
     val completedAtMillis: Long? = null,
     val taskSummary: String? = null,
+    /** 当前自动化任务的真实 taskId（来自 BROWSER_TASK_STARTED payload；停止按钮据此真停）。 */
+    val taskId: String? = null,
     val steps: List<BrowserFlowStep> = emptyList(),
+
+    /**
+     * 瞬态流式字（decide 阶段逐 token 累积）：新步/终态时由 reducer 复位为空；
+     * 不入 [steps] 时间线，仅用于浮动条推理框流式渲染。
+     */
+    val liveReasoning: String = "",
+    val liveText: String = "",
     val previewScreenshot: BrowserFlowStep.Screenshot? = null,
 ) {
-    /** 流程视图是否应当渲染：自动化进行中强制显示；非自动化时由 [isPanelOpen] 控制。 */
+    /** 流程视图是否应当在浏览器面板侧渲染：由 [isPanelOpen] 控制（自动化主流程已迁移至主对话浮动条，浏览器侧默认保留 100% 全宽视口）。 */
     val isVisible: Boolean
-        get() = isAutomating || isPanelOpen
+        get() = isPanelOpen
 
     /** 当前是否允许关闭流程视图：自动化操作进行中不可关闭。 */
     val canClose: Boolean

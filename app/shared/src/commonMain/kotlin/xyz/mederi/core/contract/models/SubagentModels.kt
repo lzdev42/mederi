@@ -36,8 +36,28 @@ data class SubagentState(
     /** 完整正文输出（流式累积，只含 isMessage=true 的正文 delta，不截断；详情弹窗 MarkdownView 渲染用）。 */
     val outputText: String? = null,
     /** 终态时间戳（ISO 8601），用于计算最终工作总耗时。 */
-    val completedAt: String? = null
+    val completedAt: String? = null,
+    /** 结构化工作块（推理/工具/正文），由 SUBAGENT_PROGRESS 累积；供子代理对话视图合成 ChatMessage。 */
+    val blocks: List<SubagentBlock> = emptyList()
 )
+
+/**
+ * 子代理工作过程的结构化块（SUBAGENT_PROGRESS 事件累积），供 [xyz.mederi.ui.SubagentChatItems]
+ * 合成 ChatMessage 喂给 computeChatItems，渲染出与主对话一致的推理折叠/工具卡片/正文流。
+ *
+ * @Serializable 跨平台可传输（server → wasmJs 遥控端经快照同步）。
+ */
+@Serializable
+sealed class SubagentBlock {
+    @Serializable
+    data class Reasoning(val text: String) : SubagentBlock()
+
+    @Serializable
+    data class ToolCall(val name: String, val state: ToolCallState) : SubagentBlock()
+
+    @Serializable
+    data class Text(val text: String) : SubagentBlock()
+}
 
 /**
  * wait_agent / agent_status 工具输出 JSON 的契约镜像（core SubagentManager.StatusResult）。

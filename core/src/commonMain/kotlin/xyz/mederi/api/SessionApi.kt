@@ -91,6 +91,9 @@ interface SessionApi {
     /** 停止指定的后台任务；taskId 不存在时返回 null。 */
     suspend fun stopBackgroundTask(taskId: String): String?
 
+    /** 停止指定的浏览器任务并关闭其浏览器；taskId 不存在时返回 null。 */
+    suspend fun stopBrowserTask(taskId: String): String?
+
     suspend fun getFileDiffs(sessionId: String, messageId: String? = null): List<FileDiff>
 
     fun events(sessionId: String): Flow<MederiEvent>

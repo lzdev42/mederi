@@ -2,8 +2,10 @@ package xyz.mederi.browser
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -63,7 +65,6 @@ class BrowserTaskManager(
         val parentSessionId: String,
         val apiKeyId: String? = null,
         val recipe: BrowserRecipe? = null,
-        val isTest: Boolean = false,
         @Volatile var browserName: String,
         @Volatile var job: Job,
         @Volatile var status: TaskStatus,
@@ -82,17 +83,6 @@ class BrowserTaskManager(
     )
 
     private val tasks = ConcurrentHashMap<String, BrowserTask>()
-
-    private fun isAutomatedTestTask(task: String, recipe: BrowserRecipe?, explicitIsTest: Boolean): Boolean {
-        if (explicitIsTest) return true
-        val lowerRecipe = recipe?.name?.lowercase().orEmpty()
-        val lowerTask = task.lowercase()
-        return lowerRecipe.contains("test") ||
-            lowerTask.contains("测试") ||
-            lowerTask.contains("test") ||
-            lowerTask.contains("e2e") ||
-            lowerTask.contains("assert")
-    }
 
     /**
      * 判定当前任务是否需要大脑介入进行内容/规则判定。
@@ -117,8 +107,7 @@ class BrowserTaskManager(
         parentSessionId: String,
         browser: String?,
         apiKeyId: String?,
-        recipe: BrowserRecipe?,
-        isTest: Boolean
+        recipe: BrowserRecipe?
     ): String {
         val resolved = BrowserRegistry.resolve(browser)
             ?: return Json.encodeToString(
@@ -129,7 +118,6 @@ class BrowserTaskManager(
                 )
             )
         val taskId = "bt_${UUID.randomUUID().toString().take(8)}"
-        val isTestTask = isAutomatedTestTask(task, recipe, isTest)
         val taskObj = BrowserTask(
             taskId = taskId,
             task = task,
@@ -139,7 +127,6 @@ class BrowserTaskManager(
             parentSessionId = parentSessionId,
             apiKeyId = apiKeyId,
             recipe = recipe,
-            isTest = isTestTask,
             browserName = resolved.name,
             job = Job(),
             status = TaskStatus.STARTED,
@@ -153,12 +140,11 @@ class BrowserTaskManager(
             status = TaskStatus.STARTED,
             parentSessionId = taskObj.parentSessionId,
             browser = resolved.name,
-            message = "任务已派发",
-            isTestTask = isTestTask
+            message = "任务已派发"
         )
 
         val job = scope.launch {
-            val control = createBrowserControl(resolved, taskId, taskObj.parentSessionId)
+            val control = resolved.factory(taskId, taskObj.parentSessionId)
             taskObj.control = control
             taskObj.status = TaskStatus.RUNNING
             emit(
@@ -167,8 +153,7 @@ class BrowserTaskManager(
                 status = TaskStatus.RUNNING,
                 parentSessionId = taskObj.parentSessionId,
                 browser = resolved.name,
-                message = "启动浏览器",
-                isTestTask = isTestTask
+                message = "启动浏览器"
             )
 
             // ST3 完整接线：recipe 解析（RecipeStore）+ LLM caller 注入（llmCallerProvider 优先，
@@ -220,7 +205,6 @@ class BrowserTaskManager(
                 drillExecutor = drillExecutor,
                 recipe = effectiveRecipe,
                 maxSteps = BrowserConstants.DEFAULT_MAX_STEPS,
-                browserName = resolved.name,
                 collector = taskObj.collector,
                 onStep = { step, thought, results ->
                     taskObj.lastStep = step
@@ -240,23 +224,31 @@ class BrowserTaskManager(
                         thought = thought,
                         memory = taskObj.memory,
                         results = results,
-                        collectedCount = taskObj.collector.size(),
-                        isTestTask = isTestTask
+                        collectedCount = taskObj.collector.size()
+                    )
+                },
+                onStream = { step, kind, delta ->
+                    // decide 阶段 reasoning/text 增量：只 emit，不更新 lastStep/lastThought（那是 STEP 的事）
+                    emit(
+                        taskId = taskId,
+                        type = EventType.BROWSER_TASK_REASONING_DELTA,
+                        status = TaskStatus.RUNNING,
+                        parentSessionId = taskObj.parentSessionId,
+                        step = step,
+                        kind = kind,
+                        content = delta
                     )
                 },
                 onMemoryUpdate = { text -> taskObj.memory = text }
             )
             try {
-                println("[BrowserTask] calling runner.run()...")
                 val opResult = runner.run(task)
-                println("[BrowserTask] runner.run() returned success=${opResult.success} msg=${opResult.message.take(200)}")
 
                 // 两种汇报情况：
                 // 1. 需要判定：先把信息给大脑，大脑反馈给它以后，再给主 agent；
                 // 2. 无需判定：操作员直接汇报给主 agent。
                 val needsJudgment = needsBrainJudgment(effectiveRecipe, taskObj)
                 val (executiveSummary, reportPath) = if (needsJudgment) {
-                    println("[BrowserTask] needsBrainJudgment=true: calling brain for evaluation...")
                     val reportResult = runCatching {
                         brain.generateFinalReport(
                             taskHistory = taskObj.steps.joinToString("\n"),
@@ -266,7 +258,6 @@ class BrowserTaskManager(
                             collectedItems = taskObj.collector.list()
                         )
                     }.getOrNull()
-                    println("[BrowserTask] brain.generateFinalReport() returned: ${reportResult?.success}")
                     taskObj.brainResult = reportResult
                     val summary = if (reportResult != null && reportResult.success) {
                         val s = reportResult.data["summary"]
@@ -279,7 +270,6 @@ class BrowserTaskManager(
                     }
                     summary to reportResult?.filesWritten?.firstOrNull()
                 } else {
-                    println("[BrowserTask] needsBrainJudgment=false: operator reports directly to main agent")
                     opResult.message to null
                 }
 
@@ -295,21 +285,22 @@ class BrowserTaskManager(
                     message = executiveSummary,
                     role = SubagentRole.BROWSER_OPERATOR.name,
                     reportPath = reportPath,
-                    collectedCount = taskObj.collector.size(),
-                    isTestTask = isTestTask
+                    collectedCount = taskObj.collector.size()
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
-                taskObj.status = TaskStatus.STOPPED
-                taskObj.error = "已停止"
-                emit(
-                    taskId = taskId,
-                    type = EventType.BROWSER_TASK_STOPPED,
-                    status = TaskStatus.STOPPED,
-                    parentSessionId = taskObj.parentSessionId,
-                    message = "任务已停止",
-                    role = SubagentRole.BROWSER_OPERATOR.name,
-                    isTestTask = isTestTask
-                )
+                // 幂等：stopTask 已先置状态并 emit 过 STOPPED，这里不再重复改写/重复通知；直接重抛
+                if (taskObj.status != TaskStatus.STOPPED) {
+                    taskObj.status = TaskStatus.STOPPED
+                    taskObj.error = "已停止"
+                    emit(
+                        taskId = taskId,
+                        type = EventType.BROWSER_TASK_STOPPED,
+                        status = TaskStatus.STOPPED,
+                        parentSessionId = taskObj.parentSessionId,
+                        message = "任务已停止",
+                        role = SubagentRole.BROWSER_OPERATOR.name
+                    )
+                }
                 throw e
             } catch (e: Throwable) {
                 taskObj.status = TaskStatus.ERROR
@@ -320,19 +311,21 @@ class BrowserTaskManager(
                     status = TaskStatus.ERROR,
                     parentSessionId = taskObj.parentSessionId,
                     message = taskObj.error,
-                    role = SubagentRole.BROWSER_OPERATOR.name,
-                    isTestTask = isTestTask
+                    role = SubagentRole.BROWSER_OPERATOR.name
                 )
             } finally {
-                // 任务结束关闭浏览器，除非是自动化测试任务
-                if (!isTestTask) {
-                    try {
-                        control.close()
-                    } catch (_: Throwable) {
-                        DebugLog.error("BrowserTask", "control.close failed in finally")
+                val ctl = taskObj.control
+                taskObj.control = null
+                if (ctl != null) {
+                    // 取消路径下普通挂起调用会立即抛 CancellationException，必须用 NonCancellable 保证真正关闭
+                    withContext(NonCancellable) {
+                        try {
+                            ctl.close()
+                        } catch (_: Throwable) {
+                            DebugLog.error("BrowserTask", "control.close failed in finally")
+                        }
                     }
                 }
-                taskObj.control = null
             }
         }
         taskObj.job = job
@@ -357,15 +350,28 @@ class BrowserTaskManager(
     }
 
     /**
-     * 停止任务（主代理用），返回当前状态。
+     * 停止任务并返回停止后的状态名（STOPPED；任务已终态时返回其真实状态 COMPLETED/ERROR/STOPPED）；
+     * taskId 不存在返回 null。停止会真正关闭该任务的浏览器。
      */
-    override fun stopTask(taskId: String): String {
-        val t = tasks[taskId]
-            ?: return Json.encodeToString(TaskStatusResult(taskId = taskId, status = "NOT_FOUND"))
-        t.job.cancel()
-        return Json.encodeToString(
-            TaskStatusResult(taskId = taskId, status = TaskStatus.STOPPED.name, browser = t.browserName)
+    override fun stopTask(taskId: String): String? {
+        val t = tasks[taskId] ?: return null
+        // 终态任务如实返回真实状态，不再伪装成 STOPPED
+        if (t.status == TaskStatus.COMPLETED || t.status == TaskStatus.ERROR || t.status == TaskStatus.STOPPED) {
+            return t.status.name
+        }
+        // 先标记 + 通知（UI 立即响应），再取消协程；浏览器由协程 finally 在 NonCancellable 上下文真正关闭
+        t.status = TaskStatus.STOPPED
+        t.error = "已停止"
+        emit(
+            taskId = taskId,
+            type = EventType.BROWSER_TASK_STOPPED,
+            status = TaskStatus.STOPPED,
+            parentSessionId = t.parentSessionId,
+            message = "任务已停止",
+            role = SubagentRole.BROWSER_OPERATOR.name
         )
+        t.job.cancel()
+        return TaskStatus.STOPPED.name
     }
 
     override fun availableBrowsers(): List<String> = BrowserRegistry.availableNames()
@@ -493,14 +499,6 @@ class BrowserTaskManager(
         )
     }
 
-    private suspend fun createBrowserControl(
-        registered: RegisteredBrowser,
-        taskId: String,
-        sessionId: String
-    ): BrowserControl =
-        registered.factory(taskId, sessionId)
-
-
     private fun emit(
         taskId: String,
         type: EventType,
@@ -515,7 +513,8 @@ class BrowserTaskManager(
         message: String? = null,
         reportPath: String? = null,
         collectedCount: Int? = null,
-        isTestTask: Boolean = false
+        kind: String? = null,
+        content: String? = null
     ) {
         runCatching {
             eventBus.tryEmit(MederiEvent(
@@ -525,7 +524,6 @@ class BrowserTaskManager(
                     put("taskId", taskId)
                     put("status", status.name)
                     put("role", role)
-                    put("isTestTask", isTestTask.toString())
                     browser?.let { put("browser", it) }
                     reportPath?.let { put("reportPath", it) }
                     step?.let { put("step", it.toString()) }
@@ -537,6 +535,8 @@ class BrowserTaskManager(
                     }
                     message?.let { put("message", it) }
                     collectedCount?.let { put("collectedCount", it.toString()) }
+                    kind?.let { put("kind", it) }
+                    content?.let { put("content", it) }
                 },
                 timestamp = Instant.now().toString()
             ))
