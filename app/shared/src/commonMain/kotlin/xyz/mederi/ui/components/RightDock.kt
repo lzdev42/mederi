@@ -35,6 +35,7 @@ import kotlinx.coroutines.delay
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.rightdock_artifacts
 import mederi.app.shared.generated.resources.rightdock_browser
+import mederi.app.shared.generated.resources.rightdock_browser_automation
 import mederi.app.shared.generated.resources.rightdock_diff
 import mederi.app.shared.generated.resources.rightdock_terminal
 import org.jetbrains.compose.resources.stringResource
@@ -63,7 +64,7 @@ fun RightDock(
         DockItemData(RightDockPanel.DIFF, FeatherIcons.GitCommit),
         DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.FileText),
         DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal),
-        DockItemData(RightDockPanel.BROWSER, FeatherIcons.Globe)
+        DockItemData(RightDockPanel.BROWSER_AUTOMATION, FeatherIcons.Globe)
     )
 
     Column(
@@ -82,6 +83,7 @@ fun RightDock(
                 RightDockPanel.DIFF -> stringResource(Res.string.rightdock_diff)
                 RightDockPanel.ARTIFACTS -> stringResource(Res.string.rightdock_artifacts)
                 RightDockPanel.TERMINAL -> stringResource(Res.string.rightdock_terminal)
+                RightDockPanel.BROWSER_AUTOMATION -> stringResource(Res.string.rightdock_browser_automation)
                 RightDockPanel.BROWSER -> stringResource(Res.string.rightdock_browser)
             }
             // 概览已迁出 Dock（浮动窗常驻），Dock 不再显示脉冲角标

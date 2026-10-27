@@ -52,27 +52,19 @@ fun WorkspaceFloatingOverlay(
     val showCompactionNotice = viewModel.compactionCompletedNotice
     val showFileOpenError = viewModel.fileOpenErrorNotice
     val browserAutomationState = viewModel.browserAutomationState
-    val showBrowserAutomation = browserAutomationState.isAutomating || browserAutomationState.steps.isNotEmpty()
     val colors = LocalMederiColors.current
 
     // 压缩进行中：用 isCompacting 覆盖派生状态，状态栏显示"压缩中"而非 Prepare 等通用态
     val status = if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus
     val showStatusBar = status.shouldDisplayInStatusBar
 
-    if (!showStatusBar && !showSubagentBanner && !showCompactionNotice && !showFileOpenError && !showBrowserAutomation) return
+    if (!showStatusBar && !showSubagentBanner && !showCompactionNotice && !showFileOpenError) return
 
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // 0. 浏览器自动化操作浮动通知栏（折叠胶囊态 + 向上弹出的详情卡片）
-        if (showBrowserAutomation) {
-            BrowserAutomationFloatingBar(
-                viewModel = viewModel,
-            )
-        }
-
         // 1. 子智能体工作态单一浮条（固定文案，支持查看概览与手动关闭，结束自动消失）
         AnimatedVisibility(
             visible = showSubagentBanner,

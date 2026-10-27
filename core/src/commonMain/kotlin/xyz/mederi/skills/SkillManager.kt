@@ -36,4 +36,13 @@ interface SkillManager {
 
     /** 卸载 skill：删除其在根目录下的整个目录。不存在抛 [xyz.mederi.api.exception.MederiNotFoundException]。 */
     suspend fun uninstall(name: String)
+
+    /**
+     * 读取指定 skill 的 SKILL.md 全文（供 TurnExecutor 注入系统提示词）。
+     *
+     * @param skill name（= 父目录名）。
+     * @return SKILL.md 全文。
+     * @throws xyz.mederi.api.exception.MederiNotFoundException skill 不存在。
+     */
+    suspend fun loadFullText(name: String): String
 }

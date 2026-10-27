@@ -33,10 +33,6 @@ import mederi.app.shared.generated.resources.input_remove_text
 import mederi.app.shared.generated.resources.input_select_model
 import mederi.app.shared.generated.resources.input_text_meta
 import mederi.app.shared.generated.resources.input_text_n
-import mederi.app.shared.generated.resources.queue_banner_title
-import mederi.app.shared.generated.resources.queue_send_now
-import mederi.app.shared.generated.resources.queue_remove
-import mederi.app.shared.generated.resources.queue_steer_tooltip
 import mederi.app.shared.generated.resources.reasoning_level_high
 import mederi.app.shared.generated.resources.remote_clipboard_image_unavailable
 import mederi.app.shared.generated.resources.remote_clipboard_text_unavailable
@@ -73,10 +69,8 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronUp
-import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Cpu
 import compose.icons.feathericons.File
 import compose.icons.feathericons.Folder
@@ -96,7 +90,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
-import xyz.mederi.core.contract.models.QueuedMessage
 import xyz.mederi.core.contract.models.SkillItem
 import xyz.mederi.ui.components.command.SlashCommandItem
 import xyz.mederi.ui.components.command.SlashCommandMenu
@@ -271,8 +264,7 @@ fun ChatInputCard(
     val isOverBudget = totalInputChars > maxSafeChars
 
     val isWaitingPlanApproval = viewModel.pendingPlanApproval != null
-    // 压缩进行中：输入框禁用、发送按钮禁用（isStreaming 排除 isCompacting，
-    // 使按钮显示发送图标而非停止图标——压缩中不应允许 abort）
+    // 压缩不阻止提交新输入；Core 负责等待安全边界，期间不提供停止压缩按钮。
     val isCompacting = viewModel.isCompacting
     val isStreaming = viewModel.isWorking && !isWaitingPlanApproval && !isCompacting && viewModel.pendingQuestion == null
     val errorMessage = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }
@@ -282,7 +274,7 @@ fun ChatInputCard(
     val imageStrippedNotice = viewModel.imageStrippedNotice
     val remoteCapabilityNotice = viewModel.remoteCapabilityNotice
     val hasContent = textValue.text.trim().isNotEmpty() || pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()
-    val canSend = hasContent && !isStreaming && !isOverBudget && !isCompacting
+    val canSend = hasContent && !isOverBudget
 
     // 未挂会话且未选项目：发送必被拦，提前把要求摆到明面上（醒目引导条 + 高亮项目选择器）
     val needProjectGuide = viewModel.conversationId == null && selectedProjectId == null
@@ -305,24 +297,13 @@ fun ChatInputCard(
         lastStreaming.value = isStreaming
     }
 
-    // 发送 / 停止 / 排队 动作（Enter 键与发送按钮共用）
+    // 发送统一交给 Core：工作中也是输入，空输入时才提供显式停止操作。
     val submit: () -> Unit = {
-        if (isStreaming) {
-            if (hasContent) {
-                val rawMsg = textValue.text.trim()
-                val msg = rawMsg.replace("\\/", "/")
-                DebugLog.data("UI", "ChatInputCard enqueue msg", "'$msg', pasted=${pendingPastedTexts.size}, images=${pendingImages.size}")
-                viewModel.enqueueCurrentInput(msg)
-            } else {
-                viewModel.abort()
-            }
-        } else if (canSend) {
-            val rawMsg = textValue.text.trim()
-            // 解转义 \/ -> /，支持用户通过 \/skill 明确输入字面量字符串而不触发冲突
-            val msg = rawMsg.replace("\\/", "/")
-            DebugLog.data("UI", "ChatInputCard submit msg", "'$msg', pasted=${pendingPastedTexts.size}, images=${pendingImages.size}")
-            viewModel.clearInputDraft()
+        if (canSend) {
+            val msg = textValue.text.trim().replace("\\/", "/")
             viewModel.send(msg)
+        } else if (isStreaming && !hasContent) {
+            viewModel.abort()
         }
     }
 
@@ -420,15 +401,7 @@ fun ChatInputCard(
         )
 
         // 对话框顶部排队信息展示：点击展开查看排队详情，可点击立即发送（引导模式）
-        val queuedMessages = viewModel.currentQueuedMessages
-        if (queuedMessages.isNotEmpty()) {
-            QueuedMessagesBanner(
-                queuedMessages = queuedMessages,
-                onSteer = viewModel::steerQueuedMessage,
-                onRemove = viewModel::removeQueuedMessage,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+
 
         // 输入卡片（聚焦 ring：常驻 1dp 透明外环预留避免聚焦抖动；聚焦时外环 accentFocus + 卡片自身 border 同步切换）
         Box(
@@ -567,7 +540,7 @@ fun ChatInputCard(
                 TextField(
                     value = textValue,
                     onValueChange = onSlashCommandTextChange,
-                    enabled = !isCompacting,
+                    enabled = true,
                     visualTransformation = remember(colors) {
                         SlashCommandTransformation(
                             highlightColor = colors.accentPrimary,
@@ -714,7 +687,7 @@ fun ChatInputCard(
                 }
                 WasmImeBridge(
                     textValue = textValue,
-                    enabled = !isCompacting && !anyOverlayActive,
+                    enabled = !anyOverlayActive,
                     onValueChange = onSlashCommandTextChange,
                     cursorColorHex = mederiColorToCssHex(colors.accentPrimary),
                     textColorHex = mederiColorToCssHex(colors.textPrimary),
@@ -863,180 +836,5 @@ private fun SlashMenuPopupContent(
             onSelect = onSelect,
             modifier = Modifier.fillMaxWidth()
         )
-    }
-}
-
-/**
- * 对话框上方排队消息横条：
- * 支持展开查看排队详情，提供"立即发送"（触发引导模式注入执行）和"移出队列"按钮。
- */
-@Composable
-internal fun QueuedMessagesBanner(
-    queuedMessages: List<QueuedMessage>,
-    onSteer: (QueuedMessage) -> Unit,
-    onRemove: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(true) }
-    val colors = LocalMederiColors.current
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Banner 头部：排队条数与展开/收起切换
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { expanded = !expanded },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                imageVector = FeatherIcons.Clock,
-                contentDescription = null,
-                tint = colors.accentPrimary,
-                modifier = Modifier.size(14.dp)
-            )
-            Text(
-                text = stringResource(Res.string.queue_banner_title, queuedMessages.size),
-                color = colors.textPrimary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(
-                imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                contentDescription = null,
-                tint = colors.textSecondary,
-                modifier = Modifier.size(14.dp)
-            )
-        }
-
-        // 展开列表
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut()
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                queuedMessages.forEachIndexed { index, item ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(colors.surfaceCardBorder.copy(alpha = 0.2f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "${index + 1}.",
-                            color = colors.textSecondary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            if (item.text.isNotBlank()) {
-                                Text(
-                                    text = item.text,
-                                    color = colors.textPrimary,
-                                    fontSize = 12.sp,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            if (item.images.isNotEmpty() || item.pastedTexts.isNotEmpty()) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (item.images.isNotEmpty()) {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = FeatherIcons.Image,
-                                                contentDescription = null,
-                                                tint = colors.textSecondary,
-                                                modifier = Modifier.size(10.dp)
-                                            )
-                                            Text(
-                                                text = "${item.images.size}",
-                                                color = colors.textSecondary,
-                                                fontSize = 10.sp
-                                            )
-                                        }
-                                    }
-                                    if (item.pastedTexts.isNotEmpty()) {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = FeatherIcons.Paperclip,
-                                                contentDescription = null,
-                                                tint = colors.textSecondary,
-                                                modifier = Modifier.size(10.dp)
-                                            )
-                                            Text(
-                                                text = "${item.pastedTexts.size}",
-                                                color = colors.textSecondary,
-                                                fontSize = 10.sp
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 立即发送（引导模式按钮）
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(colors.accentPrimary.copy(alpha = 0.16f))
-                                .border(1.dp, colors.accentPrimary.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-                                .clickable { onSteer(item) }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.ArrowUp,
-                                contentDescription = stringResource(Res.string.queue_steer_tooltip),
-                                tint = colors.accentPrimary,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Text(
-                                text = stringResource(Res.string.queue_send_now),
-                                color = colors.accentPrimary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-
-                        // 移出队列按钮
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = stringResource(Res.string.queue_remove),
-                            tint = colors.textSecondary,
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .clickable { onRemove(item.id) }
-                        )
-                    }
-                }
-            }
-        }
     }
 }

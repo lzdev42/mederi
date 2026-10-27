@@ -42,7 +42,7 @@ class SpawnToolDynamicModelTest {
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
             apiKeyId: String?, planId: String?, executorSubtaskIndex: Int?,
             planStore: xyz.mederi.plan.PlanStore?,
-            agentId: String?, onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)?
+            agentId: String?, onProgress: (suspend (xyz.mederi.domain.model.MederiEvent) -> Unit)?
         ): String {
             lastModel = aiModel
             lastReasoning = reasoningLevel

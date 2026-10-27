@@ -126,10 +126,6 @@
     <string name="input_placeholder">Type a message...</string>
     <string name="input_send">Send</string>
     <string name="input_stop">Stop generating</string>
-    <string name="queue_banner_title">%1$d message(s) queued</string>
-    <string name="queue_send_now">Send Now</string>
-    <string name="queue_remove">Remove</string>
-    <string name="queue_steer_tooltip">Inject immediately as guidance into the ongoing task</string>
     <string name="input_select_model">Select model</string>
     <string name="input_selected">Selected</string>
     <string name="input_default_key">Default key</string>
@@ -511,6 +507,7 @@
     <string name="sysinfo_memory_rss">Memory (RSS)</string>
     <string name="rightdock_artifacts">Viewer</string>
     <string name="rightdock_browser">Web</string>
+    <string name="rightdock_browser_automation">Browser Automation</string>
     <string name="rightdock_diff">Files</string>
     <string name="rightdock_overview">Overview</string>
     <string name="rightdock_plan">Plan</string>
@@ -546,6 +543,8 @@
     <string name="subagentui_status_running">Running</string>
     <string name="subagentui_status_stopped">Stopped</string>
     <string name="subagentui_stop_task">Stop subagent</string>
+    <string name="subagentui_stop_task_confirm_title">Stop subagent?</string>
+    <string name="subagentui_stop_task_confirm_message">Stop this subagent? In-progress work will be interrupted and cannot be resumed.</string>
     <string name="subagentui_tracker_title">Subagent tracker (%1$d)</string>
     <string name="termview_remote_title">Remote terminal</string>
     <string name="termview_remote_unavailable">Coming with the remote WS channel (/v1/terminal/ws)</string>
@@ -827,5 +826,11 @@
     <string name="browser_automation_collapse">Collapse</string>
     <string name="browser_automation_expand">Details</string>
     <string name="browser_automation_current_url">Current Page</string>
+    <string name="tool_detail_pending">Waiting to execute; no output yet</string>
+    <string name="tool_detail_running">Running; no output yet</string>
+    <string name="tool_detail_empty_output">Execution completed with no output</string>
+    <string name="tool_detail_empty_error">Execution failed; no error details provided</string>
+    <string name="worktrace_waiting_response">Waiting for model response…</string>
+    <string name="worktrace_waiting_subagents">Waiting for %1$d subtask results…</string>
 </resources>
 

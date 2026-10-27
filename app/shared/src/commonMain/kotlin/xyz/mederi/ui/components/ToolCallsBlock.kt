@@ -28,6 +28,10 @@ import kotlinx.serialization.json.contentOrNull
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.tool_detail_report
+import mederi.app.shared.generated.resources.tool_detail_pending
+import mederi.app.shared.generated.resources.tool_detail_running
+import mederi.app.shared.generated.resources.tool_detail_empty_output
+import mederi.app.shared.generated.resources.tool_detail_empty_error
 import mederi.app.shared.generated.resources.tool_action_ask_answered
 import mederi.app.shared.generated.resources.tool_action_ask_answered_many
 import mederi.app.shared.generated.resources.tool_action_ask_unanswered
@@ -90,7 +94,6 @@ import mederi.app.shared.generated.resources.subagent_strip_running_many
 import mederi.app.shared.generated.resources.subagent_strip_running_one
 import mederi.app.shared.generated.resources.subagent_strip_view_overview
 import org.jetbrains.compose.resources.stringResource
-import xyz.emuci.inkcompose.MarkdownView
 import xyz.mederi.ui.DebugLog
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.core.contract.models.ToolCallUi
@@ -99,13 +102,13 @@ import xyz.mederi.ui.chat.ToolActionGroup
 import xyz.mederi.ui.chat.ToolActionKind
 import xyz.mederi.ui.chat.groupToolCallsByAction
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.ExpandableRow
+import xyz.mederi.ui.components.atoms.MederiMarkdown
 import xyz.mederi.ui.components.atoms.ProcessRow
 import xyz.mederi.ui.components.atoms.StatusStrip
 
 /**
- * 工具调用时间线 (ToolCallsBlock)：按动作类别连续聚合为极简动作行。
+ * 工具调用时间线 (ToolCallsBlock)：按时序逐条展示极简动作行。
  *
  * - 单条：`>_ Ran command <command>` / `Read file <file>`
  * - 多条：`>_ Ran 2 commands` / `Read 2 files`
@@ -119,6 +122,7 @@ fun ToolCallsBlock(
     hasFailedTool: Boolean = false,
     toolSummary: String = "",
     modifier: Modifier = Modifier,
+    onLinkClick: ((String) -> Unit)? = null,
 ) {
     if (toolCalls.isEmpty()) return
 
@@ -134,6 +138,7 @@ fun ToolCallsBlock(
                     group = group,
                     isStreaming = isStreaming,
                     isRunning = isRunning,
+                    onLinkClick = onLinkClick,
                 )
             }
         }
@@ -150,16 +155,15 @@ fun ToolActionGroupRow(
     isStreaming: Boolean,
     isRunning: Boolean,
     modifier: Modifier = Modifier,
+    onLinkClick: ((String) -> Unit)? = null,
 ) {
     val colors = LocalMederiColors.current
-    val isFailed = group.calls.any { it.isFailed }
-    val isGroupRunning = (isRunning || isStreaming) && group.calls.any { it.state is ToolCallState.Running }
-    val isSubagentPreparing = group.kind == ToolActionKind.SUBAGENT && isGroupRunning
-    val canExpand = !isSubagentPreparing
+    val isFailed = group.calls.any { it.isFailed || it.state is ToolCallState.Failed }
+    val isGroupRunning = (isRunning || isStreaming) && group.calls.any { it.state is ToolCallState.Running || it.state is ToolCallState.Pending }
 
-    // 所有工具动作行严格默认不展开（即使执行失败也保持折叠，需要点击才展开）；用户点击后以用户状态为准；准备中子任务不可展开
+    // 工具状态本身也是有效详情；运行中子代理同样可以查看输入与等待结果状态。
     var userChoice by remember(group.calls.map { it.id }) { mutableStateOf(false) }
-    val isExpanded = userChoice && canExpand
+    val isExpanded = userChoice
 
     val count = group.calls.size
     val firstCall = group.calls.first()
@@ -201,26 +205,7 @@ fun ToolActionGroupRow(
     // 标题文本（全部走资源化，三类：执行中 / 单条 / 多条；带目标时用 _target/_running_target 格式化）
     val titleText = run {
         val base = when {
-            isGroupRunning -> when (group.kind) {
-                ToolActionKind.COMMAND -> singleTarget?.let { stringResource(Res.string.tool_action_run_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_run_running)
-                ToolActionKind.READ -> singleTarget?.let { stringResource(Res.string.tool_action_read_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_read_running)
-                ToolActionKind.EDIT -> singleTarget?.let { stringResource(Res.string.tool_action_edit_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_edit_running)
-                ToolActionKind.SEARCH -> singleTarget?.let { stringResource(Res.string.tool_action_search_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_search_running)
-                ToolActionKind.LIST -> singleTarget?.let { stringResource(Res.string.tool_action_list_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_list_running)
-                ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_running)
-                ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_running_target, singleTarget ?: firstCall.name)
-                ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_running)
-                ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_running)
-                ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_verify_running)
-                else -> singleTarget?.let { stringResource(Res.string.tool_action_other_running_target, it) }
-                    ?: stringResource(Res.string.tool_action_other_running)
-            }
+            isGroupRunning -> toolRunningLabel(group)
             count == 1 -> when (group.kind) {
                 ToolActionKind.COMMAND -> singleTarget?.let { stringResource(Res.string.tool_action_run_target, it) }
                     ?: stringResource(Res.string.tool_action_run_one)
@@ -267,7 +252,7 @@ fun ToolActionGroupRow(
         if (isFailed) "$base ${stringResource(Res.string.tool_action_failed_suffix)}" else base
     }
 
-    // 折叠微条（无卡片背景与硬边框，整行可点击 + hover surfaceHover，准备中子任务不可展开也不 hover）。
+    // 折叠微条：无卡片背景与硬边框，整行可点击查看详情与执行状态。
     // 外观壳（行高 / 圆角 / hover / 箭头 / 展开区导轨线）统一由 atoms/ProcessRow 提供，
     // 这里只负责「图标（分类 / 失败 / 运行中指示器）+ 文案 + 状态色 + 展开明细」。
     ProcessRow(
@@ -281,8 +266,6 @@ fun ToolActionGroupRow(
         iconTint = iconTint,
         label = titleText,
         labelColor = if (isFailed) colors.accentDanger else defaultMutedColor,
-        // 准备中的子代理动作行（canExpand=false）：仍显示该行，但不可点、无 hover、无箭头
-        clickable = canExpand,
         // 运行中的动作组以旋转指示器取代静态分类图标（运行中指示信息不丢）
         leading = if (isGroupRunning) {
             {
@@ -296,19 +279,19 @@ fun ToolActionGroupRow(
             null
         },
     ) {
-        // 展开后的具体执行明细（不可展开时 ProcessRow 不进入展开态，明细不会被组合）
+        // 展开后的具体执行明细：无输出时也明确呈现真实执行状态。
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             group.calls.forEach { call ->
-                val isCallFailed = call.isFailed
+                val isCallFailed = call.isFailed || call.state is ToolCallState.Failed
                 val completedState = call.state as? ToolCallState.Completed
                 val isReportTool = call.name in SubagentReportMarkdown.REPORT_TOOL_NAMES
                 // 组合期 JSON 解码（SubagentToolResult 解析）用 remember 缓存，避免重组时重复解析
                 val reportMarkdown = remember(call.id, completedState) {
                     if (isReportTool && completedState != null) {
-                        SubagentReportMarkdown.fromToolResult(call.name, completedState.output)
+                        SubagentReportMarkdown.fromToolResult(call.name, completedState.output)?.takeIf { it.isNotBlank() }
                     } else null
                 }
                 val output = when (val s = call.state) {
@@ -323,6 +306,7 @@ fun ToolActionGroupRow(
                         callId = call.id,
                         reportMarkdown = reportMarkdown,
                         colors = colors,
+                        onLinkClick = onLinkClick,
                     )
                 } else if (group.kind == ToolActionKind.ASK) {
                     // 问询明细展开：展示问题问了什么、用户回答了什么
@@ -332,60 +316,69 @@ fun ToolActionGroupRow(
                         isFailed = isCallFailed,
                         colors = colors,
                     )
-                } else if (group.kind == ToolActionKind.COMMAND) {
-                    // 命令行展开：命令行展示 + 输出点击展开（默认不展开）
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        if (!call.target.isNullOrBlank()) {
-                            Text(
-                                text = "$ ${call.target}",
-                                color = colors.textPrimary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                                lineHeight = 17.sp,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
-                            )
-                        }
-                        if (!output.isNullOrBlank()) {
-                            ToolCallOutputBlock(
-                                callId = call.id,
-                                output = output,
-                                isFailed = isCallFailed,
-                                colors = colors,
-                                maxHeight = 280.dp,
-                            )
-                        }
-                    }
                 } else {
-                    // 通用工具调用（读取/编辑/检索等）：目标显示 + 输出点击展开（默认不展开）
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        // 仅多条聚合时在明细项中展示各自目标；单条调用时标题已展示目标，避免垂直重复
-                        if (count > 1 && !call.target.isNullOrBlank()) {
-                            Text(
-                                text = call.target,
-                                color = colors.textSecondary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
-                            )
-                        }
-                        if (!output.isNullOrBlank()) {
-                            ToolCallOutputBlock(
-                                callId = call.id,
-                                output = output,
-                                isFailed = isCallFailed,
-                                colors = colors,
-                                maxHeight = 240.dp,
-                            )
-                        }
-                    }
+                    ToolCallExecutionDetails(call = call, isFailed = isCallFailed, colors = colors)
                 }
             }
+        }
+    }
+}
+
+/**
+ * 工具输入与结果。没有输出是明确的执行状态，不渲染空白展开区，也不伪造结果。
+ * 参数逐项按原始数据展示，不拼成 JSON；缺少 target 时仍可查看已有输入。
+ */
+@Composable
+private fun ToolCallExecutionDetails(
+    call: ToolCallUi,
+    isFailed: Boolean,
+    colors: xyz.mederi.theme.MederiColors,
+) {
+    val input = when (val state = call.state) {
+        is ToolCallState.Pending -> state.input
+        is ToolCallState.Running -> state.input
+        is ToolCallState.Completed -> state.input
+        is ToolCallState.Failed -> state.input
+    }
+    val output = when (val state = call.state) {
+        is ToolCallState.Completed -> state.output
+        is ToolCallState.Failed -> state.error
+        else -> null
+    }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // target 若已在原始参数中出现则不重复；命令也使用原始参数展示。
+        call.target?.takeIf { it.isNotBlank() && it !in input.values }?.let { target ->
+            SelectionContainer {
+                Text(target, color = colors.textSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+        }
+        input.forEach { (name, value) ->
+            SelectionContainer {
+                Column(Modifier.fillMaxWidth()) {
+                    Text(name, color = colors.textMuted, fontSize = 11.sp)
+                    Text(value, color = colors.textPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+            }
+        }
+        if (!output.isNullOrBlank()) {
+            ToolCallOutputBlock(
+                callId = call.id,
+                output = output,
+                isFailed = isFailed,
+                colors = colors,
+            )
+        } else {
+            val status = when (call.state) {
+                is ToolCallState.Pending -> Res.string.tool_detail_pending
+                is ToolCallState.Running -> Res.string.tool_detail_running
+                is ToolCallState.Completed -> Res.string.tool_detail_empty_output
+                is ToolCallState.Failed -> Res.string.tool_detail_empty_error
+            }
+            Text(
+                text = stringResource(status),
+                color = if (isFailed) colors.accentDanger else colors.textMuted,
+                fontSize = 12.sp,
+            )
         }
     }
 }
@@ -439,6 +432,7 @@ private fun ToolCallReportBlock(
     callId: String,
     reportMarkdown: String,
     colors: xyz.mederi.theme.MederiColors,
+    onLinkClick: ((String) -> Unit)? = null,
 ) {
     var isReportExpanded by remember(callId) { mutableStateOf(false) }
 
@@ -469,11 +463,11 @@ private fun ToolCallReportBlock(
                 .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
-            MarkdownView(
+            MederiMarkdown(
                 content = reportMarkdown,
                 modifier = Modifier.fillMaxWidth(),
                 enableScrollOverride = false,
-                markdownTheme = rememberMederiMarkdownTheme()
+                onLinkClick = onLinkClick,
             )
         }
     }
@@ -805,3 +799,30 @@ fun SubagentCallsBlock(
     )
 }
 
+
+/** 工具行与工作过程活动摘要共用同一运行中文案。 */
+@Composable
+internal fun toolRunningLabel(group: ToolActionGroup): String {
+    val firstCall = group.calls.first()
+    val singleTarget = firstCall.target?.trim()?.takeIf { it.isNotBlank() }
+    return when (group.kind) {
+        ToolActionKind.COMMAND -> singleTarget?.let { stringResource(Res.string.tool_action_run_running_target, it) }
+            ?: stringResource(Res.string.tool_action_run_running)
+        ToolActionKind.READ -> singleTarget?.let { stringResource(Res.string.tool_action_read_running_target, it) }
+            ?: stringResource(Res.string.tool_action_read_running)
+        ToolActionKind.EDIT -> singleTarget?.let { stringResource(Res.string.tool_action_edit_running_target, it) }
+            ?: stringResource(Res.string.tool_action_edit_running)
+        ToolActionKind.SEARCH -> singleTarget?.let { stringResource(Res.string.tool_action_search_running_target, it) }
+            ?: stringResource(Res.string.tool_action_search_running)
+        ToolActionKind.LIST -> singleTarget?.let { stringResource(Res.string.tool_action_list_running_target, it) }
+            ?: stringResource(Res.string.tool_action_list_running)
+        ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_running)
+        ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_running_target, singleTarget ?: firstCall.name)
+        ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_running)
+        ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_running)
+        ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_running_target, it) }
+            ?: stringResource(Res.string.tool_action_verify_running)
+        else -> singleTarget?.let { stringResource(Res.string.tool_action_other_running_target, it) }
+            ?: stringResource(Res.string.tool_action_other_running)
+    }
+}

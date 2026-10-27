@@ -50,7 +50,7 @@ class AgentCapabilitiesTest {
             SkillInfo(name = "csv-analysis", description = "Parse CSV files", location = "/skills/csv-analysis/SKILL.md"),
             SkillInfo(name = "latex-format", description = "Format LaTeX", location = "/skills/latex-format/SKILL.md")
         )
-        val result = SystemPrompts.withSkills(base, skills)
+        val result = SystemPrompts.withSkillsAndActive(base, skills, emptyList())
         assertTrue(result.startsWith("BASE PROMPT"))
         assertTrue(result.contains("# Available Skills"))
         assertTrue(result.contains("**csv-analysis**: Parse CSV files (SKILL.md at `/skills/csv-analysis/SKILL.md`)"))
@@ -60,6 +60,6 @@ class AgentCapabilitiesTest {
     @Test
     fun withSkills_returnsBaseUnchangedWhenEmpty() {
         val base = "BASE PROMPT"
-        assertEquals(base, SystemPrompts.withSkills(base, emptyList()))
+        assertEquals(base, SystemPrompts.withSkillsAndActive(base, emptyList(), emptyList()))
     }
 }

@@ -45,20 +45,22 @@ class SubagentChatItemsTest {
         assertTrue(firstText.text.contains("implement feature"))
         assertTrue(firstText.text.contains("watch tests"))
 
-        // assistant 部分：运行中 → isActiveAssistant → 平铺（不折叠 WorkTraceBlock）
-        // 应含 Reasoning、ToolCalls、TextMessage(assistant) 各一
-        assertTrue(items.any { it is ChatListItem.Reasoning }, "should contain reasoning block")
-        assertTrue(items.any { it is ChatListItem.ToolCalls }, "should contain tool calls block")
-        val assistantTexts = items.filterIsInstance<ChatListItem.TextMessage>().filter { !it.isUser }
-        assertTrue(assistantTexts.any { it.text.contains("done result") }, "should contain assistant text")
+        // 子代理也复用同一规则：运行中全部过程收进折叠块。
+        val trace = items.filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+        assertTrue(trace.isRunning)
+        assertTrue(trace.items.any { it is ChatListItem.Reasoning }, "should contain reasoning block")
+        assertTrue(trace.items.any { it is ChatListItem.ToolCalls }, "should contain tool calls block")
+        assertTrue(trace.items.filterIsInstance<ChatListItem.TextMessage>().any { it.text.contains("done result") })
+        assertTrue(items.filterIsInstance<ChatListItem.TextMessage>().none { !it.isUser })
     }
 
     @Test
     fun `build sets isStreaming true when running and false when completed`() {
         val running = subagent(status = "RUNNING", blocks = listOf(SubagentBlock.Text("hi")))
         val runningItems = SubagentChatItems.build(running)
-        // 运行中：assistant text 应 isStreaming=true（isActiveAssistant 平铺）
-        val runningText = runningItems.filterIsInstance<ChatListItem.TextMessage>().first { !it.isUser }
+        // 运行中的流式文本仍保留在过程详情内。
+        val runningText = runningItems.filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+            .items.filterIsInstance<ChatListItem.TextMessage>().first { !it.isUser }
         assertTrue(runningText.isStreaming, "running subagent text should be streaming")
 
         val completed = subagent(status = "COMPLETED", blocks = listOf(SubagentBlock.Text("hi")))

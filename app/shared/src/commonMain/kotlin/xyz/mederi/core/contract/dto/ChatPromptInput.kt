@@ -16,6 +16,8 @@ data class ChatPromptInput(
      * null = 用该供应商默认 key。唯一真理源 = 每次发送携带的 apiKeyId。
      */
     val apiKeyId: String? = null,
+    /** 客户端生成的稳定消息 ID，Core 接收、持久化和 UI 对账使用同一个值。 */
+    val messageId: String? = null,
 )
 
 @Serializable

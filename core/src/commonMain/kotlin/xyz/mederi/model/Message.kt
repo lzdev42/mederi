@@ -134,7 +134,16 @@ data class Message(
     val projectId: String? = null,
     val durationMs: Long? = null,
     /** 本轮 Turn 产生的文件变更摘要（仅本轮最后一条 Assistant 消息持有） */
-    val turnDiffSummary: xyz.mederi.tools.diff.TurnDiffSummary? = null
+    val turnDiffSummary: xyz.mederi.tools.diff.TurnDiffSummary? = null,
+    /** Core 工作轮次；同一轮内多次模型响应共享此 ID。 */
+    val turnId: String? = null,
+    /** null 仅表示旧历史尚无分类；新响应默认过程，正常完成才确认为最终交付。 */
+    val isFinalAnswer: Boolean? = null,
+    /** 输入已可靠接收，但尚未注入正在执行的模型上下文。 */
+    val pendingSteering: Boolean = false,
+    /** 同一工作周期的权威墙钟端点（epoch ms），与单次 LLM durationMs 区分。 */
+    val workStartedAt: Long? = null,
+    val workCompletedAt: Long? = null
 )
 
 /**

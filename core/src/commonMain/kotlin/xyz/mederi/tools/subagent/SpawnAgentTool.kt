@@ -25,9 +25,9 @@ import java.time.Instant
  */
 @Serializable
 data class SpawnAgentArgs(
-    @LLMDescription("Task description for the sub-agent; clear, specific, independently executable. Implementation steps only — the executor compiles to verify, do not instruct it to run tests.")
+    @LLMDescription("Task description for the sub-agent. With planId: brief identifier only (e.g. 'Execute subtask N: <name>') — the stored spec is the implementation source, do NOT put implementation instructions here. Without planId: clear, specific, independently executable task description.")
     val task: String = "",
-    @LLMDescription("Extra context from the parent: key constraints and relevant file paths.")
+    @LLMDescription("Extra context from the parent: key constraints and relevant file paths. With planId: not used (spec is the sole implementation source). Without planId: supplementary context for the task.")
     val briefing: String = "",
     @LLMDescription("Optional. Approved plan ID — with subtaskIndex, the sub-agent executes the exact spec stored by generate_spec. Omit for ad-hoc execution (no plan needed).")
     val planId: String = "",
@@ -191,15 +191,12 @@ class SpawnAgentTool(
         val agentId = try {
             subagentManager.spawn(
                 task = args.task,
-                // briefing 注入执行所需的最低意图（executor 自己读盘获取详情）：
-                // 1. 父 agent 调研结论（plan.researchNotes）——主 agent 备忘字段，不再注入 executor
-                //    briefing。executor 需要调研结论时 read_file .mederi/plans/{planId}/research.md
-                // 2. brief（用户批准的意图）——子任务在全局中的定位
-                // spec 是主执行清单（作为 plan 参数单独传，不拼进 briefing）
-                briefing = listOfNotNull(
-                    args.briefing.takeIf { it.isNotBlank() },
-                    st.planDetail.takeIf { it.isNotBlank() }?.let { "Brief: $it" }
-                ).takeIf { it.isNotEmpty() }?.joinToString("\n\n"),
+                // Plan 路径：spec 是唯一实现指令来源（作为 plan 参数单独传）。
+                // briefing = null：planDetail（用户批准的意图）不进执行器输入——
+                // planDetail 可能含处理逻辑，与后续修订的 spec 产生两套要求；
+                // 主代理负责确保 spec 符合批准意图，执行器不需要参与判断两份文本的关系。
+                // 调研结论（researchNotes）也不注入——executor 需要时 read_file research.md。
+                briefing = null,
                 plan = st.spec,
                 role = SubagentRole.EXECUTOR,
                 directories = directories,

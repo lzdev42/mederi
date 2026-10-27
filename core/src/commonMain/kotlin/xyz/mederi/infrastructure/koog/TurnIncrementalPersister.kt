@@ -32,15 +32,44 @@ import java.time.Instant
  * （role+parts，不含时间戳）reconcile，对齐已有历史后只追加新消息——
  * 本类提前落库的消息会被识别为已存在，不会重复。
  *
- * 失败语义：持久化失败只打日志，不抛异常——持久化是兜底机制，不能反过来弄死业务流。
+ * 失败语义：持久化失败记录并抛出，由运行时统一报错；未落库不得确认交付。
  */
 class TurnIncrementalPersister(
     private val sessionId: String,
     private val historyStore: HistoryStore,
     private val diagnostics: MessageDiagnostics = MessageDiagnostics(),
-    private val eventBus: kotlinx.coroutines.flow.MutableSharedFlow<MederiEvent>? = null
+    private val eventBus: kotlinx.coroutines.flow.MutableSharedFlow<MederiEvent>? = null,
+    val turnId: String? = null,
+    val includeImages: Boolean = true,
+    val workStartedAt: Long? = null,
+    private val responseBoundary: ((String, Boolean) -> Unit)? = null,
+    private val consumeInput: (suspend (SteeringItem) -> Unit)? = null
 ) {
     val lastAssistantMessageId = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
+    val currentResponseId = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
+    fun beginResponse(): String {
+        val id = "msg_${java.util.UUID.randomUUID()}"
+        currentResponseId.set(id)
+        responseBoundary?.invoke(id, true)
+        return id
+    }
+
+    fun completeResponse(id: String) { responseBoundary?.invoke(id, false) }
+
+    suspend fun consumeSteering(item: SteeringItem) { consumeInput?.invoke(item) }
+
+    /**
+     * 输入接收可早于本次响应落库，但在模型因果顺序上，尚未消费的输入位于
+     * 当前响应/工具结果之后。原子插入，避免历史重开后变成“模型已答过插话”。
+     */
+    private suspend fun persistBeforePending(message: xyz.mederi.domain.model.Message) {
+        historyStore.updateHistory(sessionId) { history ->
+            val index = history.indexOfFirst { it.pendingSteering }.let { if (it < 0) history.size else it }
+            history.take(index) + message + history.drop(index)
+        }
+    }
 
     /**
      * assistant 消息到达即落库（含 token 用量/finishReason 诊断 + 模型/模式/推理档/耗时）。
@@ -53,17 +82,19 @@ class TurnIncrementalPersister(
     suspend fun persistAssistant(response: KoogMessage.Assistant, durationMs: Long? = null) {
         runCatching {
             val base = KoogMessageMapper.fromKoogMessage(sessionId, response).withDiagnostics(diagnostics)
+                .copy(turnId = turnId, isFinalAnswer = false, workStartedAt = workStartedAt)
             val msg = if (durationMs != null) {
                 base.copy(durationMs = base.durationMs ?: durationMs.coerceAtLeast(0L))
             } else {
                 base.withAssistantDuration(response, Instant.now())
             }
-            historyStore.append(sessionId, msg)
+            persistBeforePending(msg)
             lastAssistantMessageId.set(msg.id)
             DebugLog.event("Persist", "assistant appended: id=${msg.id}, parts=${msg.parts.size}, " +
                 "modelName=${msg.modelName}, reasoningLevel=${msg.reasoningLevel}, durationMs=${msg.durationMs}")
         }.onFailure { e ->
             DebugLog.error("Persist", "assistant persist failed: ${e.message}", e)
+            throw e
         }
     }
 
@@ -77,10 +108,11 @@ class TurnIncrementalPersister(
             )
             val msg = KoogMessageMapper.fromKoogUserMessage(sessionId, koogUser)
                 .withDiagnostics(diagnostics)
-            historyStore.append(sessionId, msg)
+            persistBeforePending(msg)
             DebugLog.event("Persist", "tool results appended: ${parts.size} parts")
         }.onFailure { e ->
             DebugLog.error("Persist", "tool results persist failed: ${e.message}", e)
+            throw e
         }
     }
 

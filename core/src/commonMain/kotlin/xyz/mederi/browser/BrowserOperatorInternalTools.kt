@@ -166,22 +166,23 @@ data class DrillArgs(
 class ExecuteDrillTool(
     private val drillExecutor: DrillExecutor?,
     private val brain: BrowserBrain?,
-    private val recipe: BrowserRecipe?
+    private val recipe: BrowserRecipe?,
+    private val mountedScript: String? = null
 ) : SimpleTool<DrillArgs>(
     argsType = typeToken<DrillArgs>(),
     name = BrowserConstants.ToolNames.DRILL,
-    description = "Execute a deterministic browser automation drill script (DrillScript JSON string or task name)."
+    description = buildDescription(mountedScript)
 ) {
     override suspend fun execute(args: DrillArgs): String {
         val executor = drillExecutor ?: return "drill=FAIL: DrillExecutor not configured"
         val onJudgeContent: (suspend (String, String) -> BrainResult)? = brain?.let { b ->
             { c: String, i: String -> b.judge(c, i, recipe?.judgeRules.orEmpty()) }
         }
-        val scriptElement = if (args.script.isBlank()) {
-            return "drill=FAIL: empty script"
-        } else {
-            runCatching { Json.parseToJsonElement(args.script) }.getOrElse { JsonPrimitive(args.script) }
-        }
+        val rawScript = args.script.takeIf { it.isNotBlank() }
+            ?: mountedScript?.takeIf { it.isNotBlank() }
+            ?: return "drill=FAIL: no drill script provided and none mounted"
+        val scriptElement = runCatching { Json.parseToJsonElement(rawScript) }
+            .getOrElse { JsonPrimitive(rawScript) }
         return try {
             val r = executor.executeScript(scriptElement, onJudgeContent)
             "drill=${if (r.success) "ok" else "FAIL"}: ${r.drill_results.joinToString(";") { it.toString() }.take(200)}"
@@ -189,6 +190,19 @@ class ExecuteDrillTool(
             throw e
         } catch (e: Exception) {
             "drill=FAIL: ${e.message}"
+        }
+    }
+
+    companion object {
+        /**
+         * 动态生成工具描述：存在挂载脚本时，提示 LLM 可用空 script 参数执行挂载脚本。
+         */
+        fun buildDescription(mountedScript: String?): String = buildString {
+            append("Execute a deterministic browser automation drill script (DrillScript JSON string). ")
+            if (!mountedScript.isNullOrBlank()) {
+                append("A drill script is MOUNTED for the current task: call this tool with an EMPTY 'script' argument to run the mounted script. ")
+            }
+            append("Pass a JSON drill script in 'script' to override the mounted script.")
         }
     }
 }

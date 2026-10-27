@@ -2,6 +2,7 @@ package xyz.mederi.browser.drill
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -9,12 +10,17 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.mederi.browser.BrainResult
 import xyz.mederi.browser.BrowserControl
 import xyz.mederi.browser.BrowserLocator
+import xyz.mederi.browser.LocatorKind
 import xyz.mederi.browser.bidi.KeyboardKey
 import xyz.mederi.browser.bidi.OperationResult
 import xyz.mederi.browser.drill.models.*
 import xyz.mederi.debug.DebugLog
 import java.io.File
 import kotlin.time.Duration.Companion.milliseconds
+
+/** extract_chat_history 的单条消息（JS 端 JSON.stringify 的结果，字段对齐 BrowserPilot）。 */
+@Serializable
+private data class ChatMessage(val sender: String, val text: String)
 
 /**
  * 确定性自动化脚本（Drill）执行器。
@@ -317,7 +323,7 @@ class DrillExecutor(
                     "abort_item" -> handleAbortItem(resolvedStep, itemContext)
                     "branch" -> handleBranch(resolvedStep, itemContext, onJudgeContent, imageAssets)
                     "type_slowly" -> handleTypeSlowly(resolvedStep, itemContext)
-                    "upload_file" -> handleUploadFile(resolvedStep, itemContext)
+                    "upload_file" -> handleUploadFile(resolvedStep, itemContext, imageAssets)
                     "write_file" -> handleWriteFile(resolvedStep, itemContext)
                     "append_file" -> handleAppendFile(resolvedStep, itemContext)
                     else -> {
@@ -520,13 +526,66 @@ $assetLines"""
     }
 
     /**
-     * 提取聊天记录（stub）。
+     * 提取聊天记录。
      *
-     * BrowserPilot 原版用单次 JS 从页面抓取消息并格式化；mederi 骨架阶段暂不实现，
-     * 记 log 后跳过——罕见动作，脚本不应依赖它（依赖时 itemContext 中没有对应 key）。
+     * 对齐 BrowserPilot 的单次 JS 实现：querySelectorAll + className 判定 me/them +
+     * filter_contains 过滤（命中关键词的消息剔除）。结果按 store_as 存入 itemContext。
      */
     private suspend fun handleExtractChatHistory(step: DrillStep, itemContext: MutableMap<String, String>) {
-        DebugLog.info("drill", "extract_chat_history 未实现（stub），已跳过: ${step.step_name}")
+        val selector = step.selector_value ?: throw IllegalArgumentException("extract_chat_history 需要 selector_value")
+        val options = step.selector_options ?: emptyMap()
+        val myClass = options["my_class"] ?: "item-myself"
+        val friendClass = options["friend_class"] ?: "item-friend"
+        val filterContains = options["filter_contains"]
+            ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+
+        // 对齐 BrowserPilot：选择器手工转义拼单引号字符串；myClass/friendClass 按 BP 原样裸插值
+        val escapedSelector = selector.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"").replace("\n", "\\n")
+        val js = """
+            (function() {
+                var items = document.querySelectorAll('$escapedSelector');
+                var myClass = '$myClass';
+                var friendClass = '$friendClass';
+                var results = [];
+                for (var i = 0; i < items.length; i++) {
+                    var item = items[i];
+                    var cls = item.className || '';
+                    var sender = 'other';
+                    if (cls.indexOf(myClass) !== -1) sender = 'me';
+                    else if (cls.indexOf(friendClass) !== -1) sender = 'them';
+                    var text = item.textContent.trim();
+                    if (text) { results.push({sender: sender, text: text}); }
+                }
+                return JSON.stringify(results);
+            })()
+        """.trimIndent()
+
+        val resultJson = control.evaluateJavascript(js)
+        val messages = try {
+            jsonHelper.decodeFromString<List<ChatMessage>>(resultJson)
+        } catch (e: Exception) {
+            DebugLog.info("drill", "extract_chat_history: JS 返回解析失败: ${e.message}, 原始: ${resultJson.take(200)}")
+            emptyList()
+        }
+        val filtered = if (filterContains.isEmpty()) messages
+            else messages.filter { msg -> filterContains.none { kw -> msg.text.contains(kw) } }
+        val chatLog = buildString {
+            for (msg in filtered) {
+                val label = when (msg.sender) {
+                    "me" -> "[我方]"
+                    "them" -> "[对方]"
+                    else -> "[系统/其他]"
+                }
+                append("$label: ${msg.text}\n")
+            }
+        }.trim()
+        val storeKey = step.store_as ?: "chat_history"
+        if (chatLog.isBlank()) {
+            throw Exception("extract_chat_history: 未提取到任何对话内容，可能对话未加载或选择器错误")
+        }
+        itemContext[storeKey] = chatLog
+        val filteredCount = messages.size - filtered.size
+        DebugLog.info("drill", "extract_chat_history: 存入 '$storeKey'，条数=${filtered.size}，过滤=${filteredCount}，字数=${chatLog.length}")
     }
 
     /**
@@ -640,20 +699,48 @@ $assetLines"""
         val selector = step.selector_value ?: throw IllegalArgumentException("type_slowly 需要 selector_value")
         val template = step.action_value ?: ""
         val text = resolveTemplate(template, itemContext)
-        // mederi BrowserLocator 无 type；用 fill 近似（语义相当：在输入框中设置文本）
-        control.locator(selector).fill(text)
+        // 元素级逐字符输入（对齐 BrowserPilot 的 itemPage.locator(selector).type(text)）
+        control.locator(selector).type(text)
         DebugLog.info("drill", "type_slowly: 输入完成")
     }
 
     /**
-     * 上传文件（stub）。
+     * 上传文件。
      *
-     * BrowserPilot 原版依赖 page.snapshot() 的 AxTree rawTree 定位 input[type=file] 的
-     * refid 再走 CDP DOM.setFileInputFiles。mederi 的 PageSnapshot.rawTree 是 Any?（后端
-     * 数据结构未在此层暴露），骨架阶段不接具体结构，记 log 后跳过。
+     * action_value 为模板（可引用 itemContext 变量），逗号拆分多个文件路径；
+     * 名称命中 image_assets 时映射为对应 asset.path。走
+     * [BrowserControl.uploadFileBySelector]（CSS 选择器定位，支持隐藏 input）。
      */
-    private suspend fun handleUploadFile(step: DrillStep, itemContext: Map<String, String>) {
-        DebugLog.info("drill", "upload_file 未实现（stub），已跳过: ${step.step_name}")
+    private suspend fun handleUploadFile(
+        step: DrillStep,
+        itemContext: MutableMap<String, String>,
+        imageAssets: Map<String, ImageAsset>? = null
+    ) {
+        val selector = step.selector_value ?: throw IllegalArgumentException("upload_file 需要 selector_value")
+        val rawValue = step.action_value?.let { resolveTemplate(it, itemContext) } ?: return
+        if (rawValue.isBlank()) {
+            DebugLog.info("drill", "upload_file: action_value 为空，跳过上传")
+            return
+        }
+        val filePaths = rawValue.split(",").map { it.trim() }.filter { it.isNotEmpty() }.map { nameOrPath ->
+            val asset = imageAssets?.get(nameOrPath)
+            if (asset != null) {
+                DebugLog.info("drill", "upload_file: '$nameOrPath' 解析为 asset: ${asset.path}")
+                asset.path
+            } else {
+                nameOrPath
+            }
+        }
+        if (filePaths.isEmpty()) {
+            DebugLog.info("drill", "upload_file: 解析后文件路径为空，跳过上传")
+            return
+        }
+        val result = control.uploadFileBySelector(selector, filePaths)
+        if (!result.success) {
+            val reason = (result as? OperationResult.Failure)?.reason ?: result.toString()
+            throw Exception("upload_file 失败: $reason")
+        }
+        DebugLog.info("drill", "upload_file 成功: 上传了 ${filePaths.size} 个文件 -> $selector")
     }
 
     private fun handleWriteFile(step: DrillStep, itemContext: Map<String, String>) {
@@ -812,29 +899,35 @@ $assetLines"""
     // ── locator 解析 / 动作执行 / 结果捕获 ──
 
     private suspend fun resolveDrillLocator(step: DrillStep): BrowserLocator {
-        val playwrightApi = step.playwright_api ?: "locator"
-
-        // mederi BrowserControl 只有 locator(selector)，getBy* 全部退化为 locator
-        var locator = when (playwrightApi) {
-            "locator" -> control.locator(step.selector_value!!)
+        val api = step.playwright_api ?: "locator"
+        val kind = when (api) {
+            "locator" -> LocatorKind.CSS
+            "getByRole" -> LocatorKind.ROLE
+            "getByText" -> LocatorKind.TEXT
+            "getByLabel" -> LocatorKind.LABEL
+            "getByPlaceholder" -> LocatorKind.PLACEHOLDER
+            "getByAltText" -> LocatorKind.ALT_TEXT
+            "getByTitle" -> LocatorKind.TITLE
+            "getByTestId" -> LocatorKind.TEST_ID
             else -> {
-                val fallbackSelector = step.selector_value ?: step.selector_type ?: ""
-                DebugLog.info("drill", "playwright_api $playwrightApi 退化为 locator (selector='$fallbackSelector')")
-                control.locator(fallbackSelector)
+                DebugLog.info("drill", "未知 playwright_api '$api'，回退 CSS locator")
+                LocatorKind.CSS
             }
         }
-
-        val hasText = step.filter_has_text
-        if (hasText != null) {
-            locator = locator.filter(hasText)
+        val options = step.selector_options.orEmpty()
+        // 对齐 BrowserPilot：getByRole 的 role 取 selector_type（BP 用 selector_type!!，缺则抛）；
+        // 其余已知 getBy*/locator 用 selector_value（BP 用 selector_value!!，缺则抛）；
+        // 未知 playwright_api 的 else 分支 BP 用 selector_value ?: ""（不抛）。
+        val value = when (api) {
+            "getByRole" -> step.selector_type ?: throw IllegalArgumentException("getByRole 需要 selector_type")
+            "locator", "getByText", "getByLabel", "getByPlaceholder", "getByAltText", "getByTitle", "getByTestId" ->
+                step.selector_value ?: throw IllegalArgumentException("$api 需要 selector_value")
+            else -> step.selector_value ?: ""
         }
-        if (step.first == true) {
-            locator = locator.first()
-        }
-        if (step.last == true) {
-            locator = locator.last()
-        }
-
+        var locator = control.locator(kind, value, options["name"], options["exact"]?.toBoolean() ?: false)
+        step.filter_has_text?.let { locator = locator.filter(it) }
+        if (step.first == true) locator = locator.first()
+        if (step.last == true) locator = locator.last()
         return locator
     }
 
@@ -854,18 +947,16 @@ $assetLines"""
                     locator!!.hover()
                 }
                 "press" -> {
-                    val keyStr = step.action_value ?: "Enter"
-                    val key = mapKey(keyStr)
-                    // mederi BrowserLocator 无 press，press 走 control
-                    control.press(key)
+                    val key = mapKey(step.action_value ?: "Enter")
+                    locator!!.press(key)
                 }
                 "check" -> {
-                    // mederi 无 check，简化为 click
-                    locator!!.click()
+                    // BP 语义：check/uncheck 同语义（底层为点击切换）
+                    locator!!.check()
                 }
                 "uncheck" -> {
-                    // mederi 无 check，简化为 click
-                    locator!!.click()
+                    // BP 语义：check/uncheck 同语义（底层为点击切换）
+                    locator!!.check()
                 }
                 "scroll" -> {
                     val value = step.action_value ?: "down"
@@ -875,8 +966,17 @@ $assetLines"""
                         else -> value.toIntOrNull() ?: 400
                     }
 
-                    // mederi BrowserLocator 无 scroll，统一走 control.scrollByCoordinates
-                    control.scrollByCoordinates(500, 500, 0, deltaY)
+                    // selector_value 为 body/html 时走页面级滚动；否则以元素中心为原点滚动（对齐 BP，失败仅 warn 不抛）
+                    val scrollTarget = step.selector_value?.lowercase()
+                    if (scrollTarget == "body" || scrollTarget == "html") {
+                        control.scrollByCoordinates(500, 500, 0, deltaY)
+                    } else {
+                        try {
+                            locator!!.scroll(0, deltaY)
+                        } catch (e: Exception) {
+                            DebugLog.info("drill", "scroll 动作执行失败: ${e.message}")
+                        }
+                    }
                 }
                 "none" -> {
                 }

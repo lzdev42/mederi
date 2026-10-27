@@ -1,5 +1,11 @@
 package xyz.mederi.browser
 
+/**
+ * DEAD CODE (2026-10): JCEF 自动化后端退役，改用 camoufox。
+ * 本文件暂定不用，是死代码但禁止清理，以后根据情况决定是否启用。
+ *
+ * （原用途：内嵌 tab UI 组件）
+ */
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable

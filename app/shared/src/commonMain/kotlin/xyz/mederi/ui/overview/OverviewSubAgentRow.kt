@@ -267,9 +267,9 @@ private fun SubAgentOverviewCard(
 }
 
 /**
- * 子代理状态图标（20dp 指示器，参照 SubAgentComponents.RunningStatusIndicator 的视觉语义）。
+ * 子代理状态图标（20dp 指示器）。
  *
- * RUNNING → 旋转 Loader（自绘等效 spinner；RunningStatusIndicator 是 private 函数不可复用）；
+ * RUNNING → 旋转 Loader（自绘等效 spinner）；
  * COMPLETED → Check / accentSuccess；ERROR → AlertTriangle / accentDanger；else → Minus / textMuted。
  */
 @Composable

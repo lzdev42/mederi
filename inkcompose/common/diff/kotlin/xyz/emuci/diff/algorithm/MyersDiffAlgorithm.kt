@@ -35,7 +35,9 @@ object MyersDiffAlgorithm {
                 oldPath = filePath,
                 newPath = filePath,
                 language = UnifiedDiffParser.detectLanguage(filePath),
-                hunks = emptyList()
+                hunks = emptyList(),
+                oldSourceLines = oldLines,
+                newSourceLines = newLines,
             )
         }
 
@@ -46,7 +48,9 @@ object MyersDiffAlgorithm {
             oldPath = filePath,
             newPath = filePath,
             language = UnifiedDiffParser.detectLanguage(filePath),
-            hunks = hunks
+            hunks = hunks,
+            oldSourceLines = oldLines,
+            newSourceLines = newLines,
         )
     }
 

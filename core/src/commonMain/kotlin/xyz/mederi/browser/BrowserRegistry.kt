@@ -79,12 +79,11 @@ object BrowserRegistry {
         name?.let { browsers[it] } ?: default()
 
     /**
-     * 默认浏览器：defaultName 指定的；否则优先内置 JCEF（用户可观察、最常用），
-     * 与注册顺序无关；再没有（如 headless server 只有 camoufox）才用第一个注册的；没有返回 null。
+     * 默认浏览器：defaultName 指定的；否则第一个注册的（camoufox，JCEF 自动化后端已退役）。
+     * JCEF 渲染后端（KBrowser）仍保留供 inkcompose Mermaid/PDF/HTML，不注册为自动化后端。
      */
     fun default(): RegisteredBrowser? =
         defaultName?.let { browsers[it] }
-            ?: browsers.values.firstOrNull { it.kind == BrowserKind.JCEF }
             ?: browsers.values.firstOrNull()
 
     fun list(): List<RegisteredBrowser> = browsers.values.toList()

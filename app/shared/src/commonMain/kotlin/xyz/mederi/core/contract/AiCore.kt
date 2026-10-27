@@ -58,7 +58,9 @@ interface AiCore {
     suspend fun deleteProviderApiKey(providerId: String, keyId: String): Result<Unit>
     suspend fun setDefaultProviderApiKey(providerId: String, keyId: String): Result<Unit>
 
+    /** 统一输入入口：Core 决定开始工作、运行中插话或解除交互挂起。 */
     suspend fun sendMessage(conversationId: String, input: ChatPromptInput): Result<Unit>
+    /** 兼容旧客户端；语义与 sendMessage 完全相同。 */
     suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit>
     suspend fun abort(conversationId: String): Result<Unit>
     suspend fun rollbackToMessage(conversationId: String, messageId: String): Result<Unit>
@@ -139,6 +141,13 @@ interface AiCore {
     suspend fun setSkillsRoot(path: String): Result<Unit> = Result.success(Unit)
     suspend fun installSkill(url: String): Result<SkillItem> = Result.failure(IllegalStateException("skills 未启用"))
     suspend fun uninstallSkill(name: String): Result<Unit> = Result.success(Unit)
+
+    // ==========================================
+    // 会话级 Skill 激活契约（UI 薄触发，全文挂载由 TurnExecutor 注入系统提示词）
+    // ==========================================
+    suspend fun listActiveSkills(conversationId: String): Result<List<SkillItem>> = Result.success(emptyList())
+    suspend fun activateSkill(conversationId: String, skillName: String): Result<SkillItem> = Result.failure(IllegalStateException("skills 未启用"))
+    suspend fun deactivateSkill(conversationId: String, skillName: String): Result<Unit> = Result.success(Unit)
 
     // ==========================================
     // 子代理模型配置契约

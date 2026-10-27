@@ -6,12 +6,14 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -170,8 +172,8 @@ class WorkspaceViewModel(
                 steps = if (clearPrevious) emptyList() else state.steps,
             )
         }
-        if (activeDockPanel != RightDockPanel.BROWSER) {
-            openDockPanel(RightDockPanel.BROWSER)
+        if (activeDockPanel != RightDockPanel.BROWSER_AUTOMATION) {
+            openDockPanel(RightDockPanel.BROWSER_AUTOMATION)
         }
     }
 
@@ -1050,7 +1052,6 @@ class WorkspaceViewModel(
     val isStreamInterrupted: Boolean get() = errorState.isStreamInterrupted
 
     /** 排队消息序号自增器（确保同一毫秒内多条消息的 ID 唯一） */
-    private var queuedMsgSeq = 0L
 
     /**
      * 是否正在展示详细错误报告弹窗。
@@ -1074,7 +1075,6 @@ class WorkspaceViewModel(
     val optimisticUserMessage: ChatMessage? get() = conversationId?.let { sessionCache.pendingUserMessages[it]?.lastOrNull() }
 
     /** 当前会话的排队消息列表（排队模式 / 引导模式） */
-    val currentQueuedMessages: List<QueuedMessage> get() = conversationId?.let { sessionCache.queuedMessagesByConv[it] } ?: emptyList()
 
     /**
      * 输入框草稿（会话级业务状态，唯一真理源在此）。
@@ -1087,6 +1087,37 @@ class WorkspaceViewModel(
 
     /** 未绑定会话（conversationId == null）时的草稿文本，切走再切回新会话时恢复 */
     private var unattachedDraft: String = ""
+
+    // 这里只合并创建会话的在途传输，不缓存/调度业务消息；消息仍立即交给 Core。
+    private data class ConversationCreation(
+        val projectId: String,
+        val contextVersion: Long,
+        val result: Deferred<Result<Conversation>>,
+    )
+    private var conversationCreation: ConversationCreation? = null
+    private var inputContextVersion = 0L
+    private var inputProjectId: String? = appState.selectedProjectId.value
+    private var creationDraftTarget: String? = null
+    private data class UnacceptedInput(
+        val text: String,
+        val pasted: List<PastedTextAttachment>,
+        val images: List<ImageAttachment>,
+    )
+    // 传输失败时保留原上下文的可编辑草稿；切回时恢复，不污染当前会话。
+    private val unacceptedInputs = mutableMapOf<String, MutableList<UnacceptedInput>>()
+
+    private fun restoreUnacceptedInputs(key: String) {
+        val failed = unacceptedInputs.remove(key) ?: return
+        val merged = (failed.map { it.text } + inputDraft.text).filter { it.isNotBlank() }.joinToString("\n\n")
+        failed.flatMap { it.pasted }.forEach { item ->
+            if (pendingPastedTexts.none { it.id == item.id }) pendingPastedTexts.add(item.copy(index = pendingPastedTexts.size + 1))
+        }
+        failed.flatMap { it.images }.forEach { item ->
+            if (pendingImages.none { it.id == item.id }) pendingImages.add(item)
+        }
+        // 正文恢复作为完成信号，观察到正文时附件也已恢复。
+        updateInputDraft(TextFieldValue(merged, TextRange(merged.length)))
+    }
 
     /** 草稿输入防抖 Job：连续打字 300ms 无新输入后自动保存到当前会话 */
     private var draftDebounceJob: kotlinx.coroutines.Job? = null
@@ -1289,23 +1320,8 @@ class WorkspaceViewModel(
         val base = snapshot?.messages ?: emptyList()
         val opts = conversationId?.let { sessionCache.pendingUserMessages[it] }?.toList() ?: emptyList()
         if (opts.isEmpty()) return base
-        val result = base.toMutableList()
-        for (opt in opts) {
-            val isSteering = opt.id.startsWith("optimistic_steer_")
-            if (isSteering) {
-                // 插话（Steering）：用户在运行中插入的消息，排列在当前已有内容之后（即正在流式的上一轮回复之后）
-                result.add(opt)
-            } else {
-                // 常规用户消息：若已有正在流式的回复（由本条消息触发），应显示在流式回复之前
-                val streamingIndex = result.indexOfFirst { it.isStreaming }
-                if (streamingIndex >= 0) {
-                    result.add(streamingIndex, opt)
-                } else {
-                    result.add(opt)
-                }
-            }
-        }
-        return result
+        // 本地只补充尚未被 Core 确认的输入，接纳与执行时序由 Core 快照决定。
+        return base + opts.filter { pending -> base.none { it.id == pending.id } }
     }
     val pendingQuestion: QuestionRequest? get() = snapshot?.pendingQuestion
     val tokenUsage: TokenUsage get() = snapshot?.tokenUsage ?: TokenUsage()
@@ -1608,6 +1624,15 @@ class WorkspaceViewModel(
                 if (id != conversationId) attach(id)
             }
         }
+        viewModelScope.launch {
+            appState.selectedProjectId.collect { id ->
+                if (id != inputProjectId) {
+                    inputProjectId = id
+                    if (conversationId == null) inputContextVersion++
+                }
+                if (conversationId == null) restoreUnacceptedInputs("new:$id")
+            }
+        }
 
         // 手动压缩预检旁路：core 判定"没有可压缩内容"时只发 STATUS 事件（scope=compaction），
         // 不翻会话状态机 → 没有 SESSION_UPDATED，onSnapshot 那条清锚点路径不会触发。
@@ -1652,6 +1677,10 @@ class WorkspaceViewModel(
 
     fun attach(id: String?) {
         DebugLog.event("UI", "attach: id=$id")
+        if (conversationId != id) {
+            inputContextVersion++
+            if (creationDraftTarget != id) creationDraftTarget = null
+        }
         draftDebounceJob?.cancel()
         resetQuestionState()
         isSubagentBannerDismissed = false
@@ -1666,6 +1695,7 @@ class WorkspaceViewModel(
             // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted）
             errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
             inputDraft = TextFieldValue(unattachedDraft)
+            restoreUnacceptedInputs("new:${appState.selectedProjectId.value}")
             return
         }
         conversationId = id
@@ -1742,32 +1772,11 @@ class WorkspaceViewModel(
                 "background session failed: id=$id, current=$conversationId, error='${snap.errorMessage}', errorId=${snap.errorId}"
             )
         }
-        // 乐观消息与快照对账：真实消息已落库（turn 结束/出错兜底时 core 写入）→ 移除乐观消息
-        val pendingList = sessionCache.pendingUserMessages[id]
-        if (!pendingList.isNullOrEmpty()) {
-            val toRemove = mutableListOf<ChatMessage>()
-            for (pendingOpt in pendingList) {
-                val optText = pendingOpt.blocks
-                    .filterIsInstance<ChatBlock.Text>()
-                    .joinToString("") { it.text }
-                val hasReal = snap.messages.any { msg ->
-                    if (msg.role == ChatRole.User) {
-                        val realText = msg.blocks.filterIsInstance<ChatBlock.Text>()
-                            .joinToString("") { it.text }
-                        realText == optText || (optText.isNotBlank() && realText.trim() == optText.trim())
-                    } else false
-                }
-                if (hasReal) {
-                    toRemove.add(pendingOpt)
-                    DebugLog.info("UI", "optimistic user message matched real message in snapshot, clearing optimistic message (id=${pendingOpt.id}, text='$optText')")
-                }
-            }
-            if (toRemove.isNotEmpty()) {
-                pendingList.removeAll(toRemove)
-                if (pendingList.isEmpty()) {
-                    sessionCache.pendingUserMessages.remove(id)
-                }
-            }
+        // Core 接收即按稳定 ID 落库；相同正文、图片和重复输入不能互相确认。
+        val acceptedIds = snap.messages.mapTo(mutableSetOf()) { it.id }
+        sessionCache.pendingUserMessages[id]?.let { pending ->
+            pending.removeAll { it.id in acceptedIds }
+            if (pending.isEmpty()) sessionCache.pendingUserMessages.remove(id)
         }
         val prevSnap = sessionCache.conversationStates[id]
         val wasWorking = prevSnap?.conversation?.status == ConversationStatus.Working
@@ -1801,14 +1810,7 @@ class WorkspaceViewModel(
             DebugLog.debug("UI-Timer", "turn ended for $id (wasWorking=$wasWorking, newStatus=${snap.conversation.status}), removing timer")
             sessionCache.turnStartByConv.remove(id)
 
-            // 排队模式：当前 turn 结束恢复 Idle 时自动出队消费
-            if (snap.conversation.status == ConversationStatus.Idle) {
-                val queue = sessionCache.queuedMessagesByConv[id]
-                if (!queue.isNullOrEmpty()) {
-                    val nextMsg = queue.removeAt(0)
-                    sendQueuedMessage(nextMsg)
-                }
-            }
+
         }
     }
 
@@ -1828,7 +1830,13 @@ class WorkspaceViewModel(
         isHydratingSettings = true
         try {
             // 恢复草稿文本（即使无模型也要恢复）
-            inputDraft = TextFieldValue(conv.draftText ?: "")
+            if (creationDraftTarget == conv.id) {
+                // 创建请求挂起期间用户可能继续输入，首次水合不得用创建前的空草稿覆盖。
+                creationDraftTarget = null
+            } else {
+                inputDraft = TextFieldValue(conv.draftText ?: "")
+            }
+            restoreUnacceptedInputs(conv.id)
             if (conv.modelId == null) return
             val all = appState.availableModels.value
             val model = all.find { it.id == conv.modelId && it.provider == conv.modelProvider }
@@ -1899,6 +1907,7 @@ class WorkspaceViewModel(
         return true // 剔除放行：不拒绝发送；core 按模型能力在 AI 视图剔除图片，历史仍保留图片块
     }
 
+    @OptIn(kotlin.uuid.ExperimentalUuidApi::class)
     fun send(text: String) {
         if (pendingQuestion != null) {
             resetQuestionState()
@@ -1943,12 +1952,23 @@ class WorkspaceViewModel(
         errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
 
         // 组装最终提示词：用户主指令在前，粘贴大文本在后；Core 的 TurnExecutor 会追加 metaNote 保证 metaNote 恒在最底部
-        val finalPrompt = PromptComposer.compose(trimmed, pendingPastedTexts)
+        val pastedAttachments = pendingPastedTexts.toList()
+        val finalPrompt = PromptComposer.compose(trimmed, pastedAttachments)
         val imageAttachments = pendingImages.toList()
+        // 选择项目的 StateFlow 观察可能尚未运行，发送时先同步当前项目，
+        // 避免把延迟到达的首次观察误当成“创建期间用户切走”。
+        if (convId == null && inputProjectId != projectId) {
+            inputProjectId = projectId
+            inputContextVersion++
+        }
+        val originalContextVersion = inputContextVersion
+        val originalSettings = buildComposeStateInput().copy(draftText = "")
+        val originalInput = UnacceptedInput(trimmed, pastedAttachments, imageAttachments)
 
         // 乐观更新：立刻在 UI 显示用户消息（按会话归档，切会话不丢）
         val now = xyz.mederi.currentTimeMillis()
-        val pendingKey = convId ?: "pending_$now"
+        val messageId = "msg_${kotlin.uuid.Uuid.random()}"
+        val pendingKey = convId ?: "pending_$messageId"
         val optBlocks = mutableListOf<ChatBlock>()
         imageAttachments.forEachIndexed { i, img ->
             optBlocks.add(
@@ -1964,7 +1984,7 @@ class WorkspaceViewModel(
             optBlocks.add(ChatBlock.Text(id = "optimistic_text_$now", text = finalPrompt))
         }
         val optMsg = ChatMessage(
-            id = "optimistic_$now",
+            id = messageId,
             conversationId = pendingKey,
             role = ChatRole.User,
             blocks = optBlocks,
@@ -1976,13 +1996,14 @@ class WorkspaceViewModel(
             isStreaming = false,
             error = null
         )
-        sessionCache.clearPendingUserMessages(pendingKey)
         sessionCache.addPendingUserMessage(pendingKey, optMsg)
+        clearInputDraft()
         clearPendingAttachments()
         DebugLog.info("UI", "set optimistic user message: key=$pendingKey, id=${optMsg.id}, text='$finalPrompt', images=${imageAttachments.size}")
 
         val agent = appState.availableAgents.value.find { it.id == appState.selectedAgentId.value }
         val input = ChatPromptInput(
+            messageId = messageId,
             text = finalPrompt,
             model = model,
             agent = agent,
@@ -2006,47 +2027,58 @@ class WorkspaceViewModel(
         DebugLog.data("UI", "model.contextWindow", "${model.contextWindow}, maxTokens=${model.maxTokens}")
         DebugLog.data("UI", "agent", "${agent?.id} (${agent?.name}), reasoningLevel=${agent?.reasoningLevel}")
         DebugLog.data("UI", "thinkingLevel (sent)", computeEffectiveThinkingLevel())
+        val creation = if (convId == null) {
+            val pid = projectId ?: return
+            conversationCreation?.takeIf { it.projectId == pid && it.contextVersion == originalContextVersion }
+                ?: ConversationCreation(pid, originalContextVersion, viewModelScope.async(start = CoroutineStart.LAZY) {
+                    val created = appState.aiCore.createConversation(pid, agent)
+                    if (created.isSuccess) {
+                        val conv = created.getOrThrow()
+                        val configured = appState.aiCore.updateConversationSettings(conv.id, originalSettings)
+                        if (configured.isFailure) return@async Result.failure(configured.exceptionOrNull()!!)
+                    }
+                    created
+                }).also { conversationCreation = it }
+        } else null
+        fun recoverInput(targetId: String?) {
+            val key = targetId ?: "new:$projectId"
+            unacceptedInputs.getOrPut(key) { mutableListOf() }.add(originalInput)
+            val stillOriginal = conversationId == convId && inputContextVersion == originalContextVersion &&
+                (convId != null || appState.selectedProjectId.value == projectId)
+            if (conversationId == targetId && targetId != null || stillOriginal) restoreUnacceptedInputs(key)
+        }
         viewModelScope.launch {
-            // 未选中会话时：基于已选项目自动创建新会话，再发送
+            // 连续首发共用同一个创建请求；每条输入仍以自己的消息 ID 独立发送。
             val targetConvId = if (convId != null) {
                 convId
             } else {
-                val pid = projectId ?: return@launch
-                val created = appState.aiCore.createConversation(pid, agent)
+                val created = creation!!.result.await()
                 if (created.isFailure) {
+                    if (conversationCreation === creation) conversationCreation = null
                     val ex = created.exceptionOrNull()
                     DebugLog.error("UI", "auto create conversation failed: ${ex?.message}", ex)
                     errorState = errorState.copy(
                         message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                             ?: UiMessage(Res.string.err_create_conversation_failed)
                     )
-                    sessionCache.clearPendingUserMessages(pendingKey)
+                    sessionCache.removePendingUserMessage(pendingKey, messageId)
+                    recoverInput(null)
                     return@launch
                 }
                 val conv = created.getOrThrow()
-                // 乐观消息归属从 pending_xxx re-key 到真实会话 id
-                val pendingOpts = sessionCache.pendingUserMessages.remove(pendingKey)?.toList()
-                if (!pendingOpts.isNullOrEmpty()) {
-                    pendingOpts.forEach { sessionCache.addPendingUserMessage(conv.id, it.copy(conversationId = conv.id)) }
+                sessionCache.removePendingUserMessage(pendingKey, messageId)
+                sessionCache.addPendingUserMessage(conv.id, optMsg.copy(conversationId = conv.id))
+                if (conversationId == null && inputContextVersion == originalContextVersion &&
+                    appState.selectedProjectId.value == projectId
+                ) {
+                    creationDraftTarget = conv.id
+                    appState.selectConversation(conv.id)
                 }
-                // 新建会话第一步：立即将当前界面选好的全量配置（模型、Key、推理档位、草稿等）写入该新会话
-                val initialInput = buildComposeStateInput()
-                appState.aiCore.updateConversationSettings(conv.id, initialInput)
-                unattachedDraft = ""
-                appState.selectProject(pid)
-                appState.selectConversation(conv.id)
                 conv.id
             }
 
-            val pendingPlan = snapshot?.pendingPlanApproval
-            // 计划待批准时用户直接回复 ≠ 拒绝（三条硬规则之一）：不再预置 resolvePlanApproval(false)，
-            // 交给 TurnExecutor 的 pending 分支补写中性 ToolResult + 中止旧 turn，计划保持 PENDING_APPROVAL。
-            if (pendingPlan != null) {
-                DebugLog.info("UI", "user replied while plan approval pending: plan stays PENDING_APPROVAL (continue discussion), planId=${pendingPlan.id}")
-            }
-
             // StatusBar 计时锚点：从"发送请求时刻"起算（切会话回来不重置）
-            sessionCache.turnStartByConv[targetConvId] = xyz.mederi.currentTimeMillis()
+            sessionCache.turnStartByConv.getOrPut(targetConvId) { xyz.mederi.currentTimeMillis() }
 
             val r = appState.aiCore.sendMessage(targetConvId, input)
             DebugLog.event("UI", "sendMessage result: isSuccess=${r.isSuccess}")
@@ -2057,195 +2089,11 @@ class WorkspaceViewModel(
                     message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
                         ?: UiMessage(Res.string.err_send_failed)
                 )
-                sessionCache.clearPendingUserMessages(targetConvId)
-                sessionCache.turnStartByConv.remove(targetConvId)
-            }
-        }
-    }
-
-    /**
-     * 排队模式：将当前输入框内容压入当前会话的排队队列。
-     */
-    fun enqueueCurrentInput(trimmedText: String) {
-        val convId = conversationId ?: return
-        val pasted = pendingPastedTexts.toList()
-        val images = pendingImages.toList()
-        if (trimmedText.isEmpty() && pasted.isEmpty() && images.isEmpty()) return
-
-        val now = xyz.mederi.currentTimeMillis()
-        val seq = ++queuedMsgSeq
-        val queuedMsg = QueuedMessage(
-            id = "queue_${now}_$seq",
-            conversationId = convId,
-            text = trimmedText,
-            pastedTexts = pasted,
-            images = images,
-            model = appState.selectedModel.value,
-            thinkingLevel = computeEffectiveThinkingLevel(),
-            agent = appState.availableAgents.value.find { it.id == appState.selectedAgentId.value },
-            apiKeyId = appState.selectedModel.value?.let { appState.getApiKeyId(it.provider) },
-            createdAt = now
-        )
-
-        val queue = sessionCache.queuedMessagesByConv.getOrPut(convId) { mutableStateListOf() }
-        queue.add(queuedMsg)
-        DebugLog.event("UI", "enqueued message for conv=$convId, id=${queuedMsg.id}, queueSize=${queue.size}")
-
-        // 清空输入草稿与附件
-        clearInputDraft()
-        clearPendingAttachments()
-    }
-
-    /**
-     * 移出排队消息。
-     */
-    fun removeQueuedMessage(id: String) {
-        val convId = conversationId ?: return
-        val queue = sessionCache.queuedMessagesByConv[convId] ?: return
-        queue.removeAll { it.id == id }
-        DebugLog.event("UI", "removed queued message $id for conv=$convId, remaining=${queue.size}")
-    }
-
-    /**
-     * 立即发送排队消息（引导模式 / Steering）：
-     * 从队列中取出，并在运行时将消息注入当前进行中的 Turn。
-     */
-    fun steerQueuedMessage(queuedMsg: QueuedMessage) {
-        val convId = queuedMsg.conversationId
-        val queue = sessionCache.queuedMessagesByConv[convId]
-        queue?.removeAll { it.id == queuedMsg.id }
-
-        val finalPrompt = PromptComposer.compose(queuedMsg.text, queuedMsg.pastedTexts)
-        val imageAttachments = queuedMsg.images
-        val now = xyz.mederi.currentTimeMillis()
-
-        val optBlocks = mutableListOf<ChatBlock>()
-        imageAttachments.forEachIndexed { i, img ->
-            optBlocks.add(
-                ChatBlock.File(
-                    id = "optimistic_img_${now}_$i",
-                    name = img.name,
-                    url = img.base64DataUrl,
-                    mimeType = img.mimeType
-                )
-            )
-        }
-        if (finalPrompt.isNotEmpty()) {
-            optBlocks.add(ChatBlock.Text(id = "optimistic_text_$now", text = finalPrompt))
-        }
-
-        val optMsg = ChatMessage(
-            id = "optimistic_steer_$now",
-            conversationId = convId,
-            role = ChatRole.User,
-            blocks = optBlocks,
-            createdAt = now,
-            completedAt = now,
-            parentMessageId = null,
-            model = null,
-            agent = null,
-            isStreaming = false,
-            error = null
-        )
-        sessionCache.addPendingUserMessage(convId, optMsg)
-        DebugLog.info("UI", "set optimistic steering user message: convId=$convId, id=${optMsg.id}, text='$finalPrompt', images=${imageAttachments.size}")
-
-        val input = ChatPromptInput(
-            text = finalPrompt,
-            model = queuedMsg.model,
-            agent = queuedMsg.agent,
-            thinkingLevel = queuedMsg.thinkingLevel,
-            attachments = queuedMsg.images.map {
-                FileAttachment(name = it.name, mimeType = it.mimeType, bytes = it.bytes)
-            },
-            apiKeyId = queuedMsg.apiKeyId
-        )
-
-        DebugLog.section("UI", "WorkspaceViewModel.steerQueuedMessage")
-        DebugLog.data("UI", "conversationId", convId)
-        DebugLog.data("UI", "text", finalPrompt)
-
-        viewModelScope.launch {
-            val r = appState.aiCore.steerMessage(convId, input)
-            DebugLog.event("UI", "steerMessage result: isSuccess=${r.isSuccess}")
-            if (r.isFailure) {
-                val ex = r.exceptionOrNull()
-                DebugLog.error("UI", "steerMessage failed: ${ex?.message}", ex)
-                sessionCache.removePendingUserMessage(convId, optMsg.id)
-                errorState = errorState.copy(
-                    message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
-                        ?: UiMessage(Res.string.err_send_failed)
-                )
-            }
-        }
-    }
-
-    /**
-     * 自动发送排队消息（排队模式正常出队）。
-     */
-    fun sendQueuedMessage(queuedMsg: QueuedMessage) {
-        val convId = queuedMsg.conversationId
-        val finalPrompt = PromptComposer.compose(queuedMsg.text, queuedMsg.pastedTexts)
-        val imageAttachments = queuedMsg.images
-
-        val now = xyz.mederi.currentTimeMillis()
-        val optBlocks = mutableListOf<ChatBlock>()
-        imageAttachments.forEachIndexed { i, img ->
-            optBlocks.add(
-                ChatBlock.File(
-                    id = "optimistic_img_${now}_$i",
-                    name = img.name,
-                    url = img.base64DataUrl,
-                    mimeType = img.mimeType
-                )
-            )
-        }
-        if (finalPrompt.isNotEmpty()) {
-            optBlocks.add(ChatBlock.Text(id = "optimistic_text_$now", text = finalPrompt))
-        }
-        val optMsg = ChatMessage(
-            id = "optimistic_$now",
-            conversationId = convId,
-            role = ChatRole.User,
-            blocks = optBlocks,
-            createdAt = now,
-            completedAt = now,
-            parentMessageId = null,
-            model = null,
-            agent = null,
-            isStreaming = false,
-            error = null
-        )
-        sessionCache.addPendingUserMessage(convId, optMsg)
-        DebugLog.info("UI", "sendQueuedMessage: convId=$convId, text='$finalPrompt', images=${imageAttachments.size}")
-
-        val model = queuedMsg.model ?: appState.selectedModel.value
-        val agent = queuedMsg.agent ?: appState.availableAgents.value.find { it.id == appState.selectedAgentId.value }
-        val input = ChatPromptInput(
-            text = finalPrompt,
-            model = model,
-            agent = agent,
-            thinkingLevel = queuedMsg.thinkingLevel ?: computeEffectiveThinkingLevel(),
-            attachments = imageAttachments.map {
-                FileAttachment(name = it.name, mimeType = it.mimeType, bytes = it.bytes)
-            },
-            apiKeyId = queuedMsg.apiKeyId
-        )
-
-        sessionCache.turnStartByConv[convId] = now
-
-        viewModelScope.launch {
-            val r = appState.aiCore.sendMessage(convId, input)
-            DebugLog.event("UI", "sendQueuedMessage result: isSuccess=${r.isSuccess}")
-            if (r.isFailure) {
-                val ex = r.exceptionOrNull()
-                DebugLog.error("UI", "sendQueuedMessage failed: ${ex?.message}", ex)
-                errorState = errorState.copy(
-                    message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
-                        ?: UiMessage(Res.string.err_send_failed)
-                )
-                sessionCache.removePendingUserMessage(convId, optMsg.id)
-                sessionCache.turnStartByConv.remove(convId)
+                sessionCache.removePendingUserMessage(targetConvId, messageId)
+                recoverInput(targetConvId)
+                if (sessionCache.pendingUserMessages[targetConvId].isNullOrEmpty() && !isWorking) {
+                    sessionCache.turnStartByConv.remove(targetConvId)
+                }
             }
         }
     }
@@ -2490,10 +2338,9 @@ class WorkspaceViewModel(
  * 会话级缓存族（内部收敛 holder：VM 顶层 4 个散落 map 归入单一实例，字段不对外暴露）。
  *
  * 各成员的语义与原 VM 顶层散落声明完全一致（本次改动只改内部存储结构，不改行为）：
- * - [pendingUserMessages]：乐观用户消息（按会话归档）。core 在 turn 结束时才把用户消息落库
- *   （ChatMemory store / 失败兜底），turn 进行中快照里没有它——乐观消息是唯一的显示来源。
- *   因此切换会话**不能清除**：切走再切回，消息仍在；等 observe 到的快照里出现匹配的真实
- *   消息后才移除。key = conversationId（新会话创建成功后从 pending_xxx re-key 到真实 id）。
+ * - [pendingUserMessages]：等待 Core 接纳确认的本地输入，按稳定消息 ID 对账。
+ *   切会话保留；Core 接收即落库，快照包含相同 ID 后移除。
+ *   key = conversationId（新会话创建成功后从 pending_xxx re-key 到真实 id）。
  * - [turnStartByConv]：StatusBar 计时锚点：每次发送（send）记录"请求发出时刻"（epoch ms），
  *   按会话归档。计时 = now - turnStartAt（每秒重算），切换会话回来不重置；
  *   turn 结束（快照 status 离开 Working）时清除。
@@ -2519,10 +2366,6 @@ private class SessionUiCache {
         }
     }
 
-    fun clearPendingUserMessages(convId: String) {
-        pendingUserMessages.remove(convId)
-    }
-
     /** StatusBar 计时锚点：conversationId → 发送请求时刻（epoch ms） */
     val turnStartByConv = mutableMapOf<String, Long>()
 
@@ -2535,8 +2378,7 @@ private class SessionUiCache {
     /** 各会话的后台观察 Job（conversationId → Job） */
     val observeJobs = mutableMapOf<String, Job>()
 
-    /** 各会话的排队待发消息（按会话归档，FIFO 队列） */
-    val queuedMessagesByConv = mutableStateMapOf<String, SnapshotStateList<QueuedMessage>>()
+
 }
 
 /**
@@ -2548,7 +2390,7 @@ private class SessionUiCache {
  * - **activeDockPanel**：当快照携带 [ConversationState.browserAutomation]（aggregator 归约快照，
  *   显式管理浏览器/dock 状态）时信任其 activeDockPanel——null 也算（BROWSER_TASK_COMPLETED 显式关 dock）；
  *   仅当快照无 browserAutomation（store 初始快照无浏览器上下文）时才回退 prevSnap；
- * - browserAutomation 与 subagents 保持原语义：快照非空/非空列表优先，否则回退 prevSnap。
+ * - browserAutomation 非空优先；subagents的成员以快照为准，同ID按进度序号和终态时间单调合并。
  */
 internal fun mergeLocalUiState(snap: ConversationState, prevSnap: ConversationState?): ConversationState {
     val effectiveConv = if (prevSnap != null) {
@@ -2572,9 +2414,8 @@ internal fun mergeLocalUiState(snap: ConversationState, prevSnap: ConversationSt
         conversation = effectiveConv,
         activeDockPanel = dockPanel,
         browserAutomation = snap.browserAutomation ?: prevSnap?.browserAutomation,
-        subagents = if (snap.subagents.isEmpty() && !prevSnap?.subagents.isNullOrEmpty()) {
-            prevSnap.subagents
-        } else snap.subagents,
+        subagents = xyz.mederi.core.contract.SubagentTracker.reconcileSnapshots(
+            snap.subagents, prevSnap?.subagents.orEmpty()),
         // activeSubagentPanelAgentId 是 UI-only 字段（Core 不认识，快照里恒为 null），
         // 必须从 prevSnap 兜住，否则每次 Core 发新快照（MESSAGE_DELTA/TOOL_CALLED 等）
         // 都会把子代理面板冲成 null → 面板自动关闭。

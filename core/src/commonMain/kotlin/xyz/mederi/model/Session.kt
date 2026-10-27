@@ -29,6 +29,9 @@ enum class SessionStatus {
  * @param env 会话环境变量。
  * @param todos 无 Plan 任务的轻量 todo 列表（update_todo 工具维护，sessions.todos 列持久化）。
  * 有活跃 Plan 时此字段被 Plan 子任务投影取代（见 docs/todo-system-plan.md 真理源表）。
+ * @param activeSkills 会话级已激活 skill 的 name 列表（load_skill/unload_skill 工具或 SessionApi 维护，
+ *   sessions.active_skills 列持久化，唯一真理源）。激活的 skill 全文由 TurnExecutor 每轮注入系统提示词，
+ *   不进对话历史。
  * @param draftText 用户已输入但未发送的草稿文本，可为 null（无草稿）。
  * @param createdAt ISO 8601 时间戳。
  * @param updatedAt ISO 8601 时间戳。
@@ -45,6 +48,7 @@ data class Session(
     val apiKeyId: String? = null,
     val env: Map<String, String> = emptyMap(),
     val todos: List<TodoItem> = emptyList(),
+    val activeSkills: List<String> = emptyList(),
     val draftText: String? = null,
     val createdAt: String,
     val updatedAt: String

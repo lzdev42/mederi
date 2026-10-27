@@ -28,6 +28,7 @@ class SubagentLifecycleEventTest {
 
     private class FakeRunner : SubagentRunner {
         var mode = Mode.COMPLETE
+        var events: List<MederiEvent> = emptyList()
         enum class Mode { COMPLETE, HANG, THROW }
         override suspend fun run(
             task: String, briefing: String?, plan: String?, role: SubagentRole,
@@ -35,9 +36,12 @@ class SubagentLifecycleEventTest {
             reasoningLevel: ReasoningLevel, projectId: String, parentSessionId: String,
             apiKeyId: String?, planId: String?, executorSubtaskIndex: Int?,
             planStore: xyz.mederi.plan.PlanStore?,
-            agentId: String?, onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)?
+            agentId: String?, onProgress: (suspend (xyz.mederi.domain.model.MederiEvent) -> Unit)?
         ): String = when (mode) {
-            Mode.COMPLETE -> "done: $task"
+            Mode.COMPLETE -> {
+                events.forEach { onProgress?.invoke(it) }
+                "done: $task"
+            }
             Mode.HANG -> { kotlinx.coroutines.delay(Long.MAX_VALUE); "" }
             Mode.THROW -> throw IllegalStateException("boom")
         }
@@ -203,4 +207,26 @@ class SubagentLifecycleEventTest {
             scope.cancel()
         }
     }
+    @Test
+    fun `progress envelope preserves exact child events and snapshot sequence`() = runBlocking {
+        val runner = FakeRunner()
+        val childEvent = MederiEvent(EventType.TOOL_RESULT, "sub-wire", "response", mapOf(
+            "toolCallId" to "directory-1", "tool" to "list_directory", "output" to "complete listing", "isError" to "false",
+            "turnId" to "work", "workStartedAt" to "1234"), "2026-10-27T08:00:00Z")
+        runner.events = listOf(childEvent)
+        val bus = MutableSharedFlow<MederiEvent>(replay = 64)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val manager = newManager(runner, bus, scope)
+            val id = spawn(manager)
+            withTimeout(5_000) { bus.first { it.type == EventType.SUBAGENT_COMPLETED } }
+            val frame = bus.replayCache.single { it.type == EventType.SUBAGENT_PROGRESS }
+            assertEquals("1", frame.payload["sequence"])
+            assertEquals(childEvent, kotlinx.serialization.json.Json.decodeFromString<MederiEvent>(frame.payload.getValue("eventJson")))
+            val snapshot = manager.listForSession("sess_parent").single { it.agentId == id }
+            assertEquals(listOf(childEvent), synchronized(snapshot.progressEvents) { snapshot.progressEvents.toList() })
+            assertTrue(snapshot.completedAt != null)
+        } finally { scope.cancel() }
+    }
+
 }

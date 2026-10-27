@@ -15,6 +15,7 @@ import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.Session
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.session.SessionManager
+import xyz.mederi.skills.domain.SkillInfo
 
 /**
  * SessionApi 实现。
@@ -151,6 +152,16 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
 
     override suspend fun stopBrowserTask(taskId: String): String? = mederiCall {
         sessionManager.stopBrowserTask(taskId)
+    }
+
+    override suspend fun listActiveSkills(sessionId: String): List<SkillInfo> =
+        mederiCall { sessionManager.listActiveSkills(sessionId) }
+
+    override suspend fun activateSkill(sessionId: String, skillName: String): SkillInfo =
+        mederiCall { sessionManager.activateSkill(sessionId, skillName) }
+
+    override suspend fun deactivateSkill(sessionId: String, skillName: String) {
+        mederiCall { sessionManager.deactivateSkill(sessionId, skillName) }
     }
 
     override suspend fun getFileDiffs(sessionId: String, messageId: String?): List<FileDiff> = mederiCall {

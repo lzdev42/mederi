@@ -1,6 +1,6 @@
 package xyz.mederi.ui
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.ChatRole
@@ -38,30 +38,29 @@ object SubagentChatItems {
             parentMessageId = null,
             model = null,
             agent = null,
+            workStartedAt = createdAt.takeIf { it > 0 },
+            workCompletedAt = subagent.completedAt?.let { runCatching { Instant.parse(it).toEpochMilliseconds() }.getOrNull() },
         )
 
-        // 2) Assistant 消息：子代理工作流 blocks → ChatBlock
-        val assistantBlocks = subagent.blocks.mapIndexed { idx, block -> block.toChatBlock(idx) }
-        val assistantMsg = ChatMessage(
-            id = "sub_assistant_${subagent.agentId}",
-            conversationId = subagent.agentId,
-            role = ChatRole.Assistant,
-            blocks = assistantBlocks,
-            createdAt = createdAt,
-            completedAt = if (!isRunning) createdAt else null,
-            parentMessageId = null,
-            model = subagent.modelId.ifBlank { null },
-            agent = null,
-            isStreaming = isRunning,
-            modelName = subagent.modelName.ifBlank { null },
-            thinkingLevel = subagent.reasoningLevel,
-        )
-
-        return computeChatItems(
-            msgs = listOf(userMsg, assistantMsg),
-            isWorking = isRunning,
-            snapshot = null,
-        )
+        // 标准事件路径：保留每次响应边界与Core的final标记，不把整段工作伪装成一次响应。
+        val assistantMessages = if (subagent.messages.isNotEmpty()) subagent.messages.map { message ->
+            message.copy(model = message.model ?: subagent.modelId.ifBlank { null },
+                modelName = message.modelName ?: subagent.modelName.ifBlank { null },
+                thinkingLevel = message.thinkingLevel ?: subagent.reasoningLevel)
+        } else {
+            // 旧快照只有扁平blocks时保留可阅读性；新转发路径不再生成这种有损结构。
+            val completedAt = subagent.completedAt?.let { value ->
+                runCatching { Instant.parse(value).toEpochMilliseconds() }.getOrNull()
+            }
+            listOf(ChatMessage(
+                id = "sub_assistant_${subagent.agentId}", conversationId = subagent.agentId,
+                role = ChatRole.Assistant, blocks = subagent.blocks.mapIndexed { idx, block -> block.toChatBlock(idx) },
+                createdAt = createdAt, completedAt = completedAt, parentMessageId = null,
+                model = subagent.modelId.ifBlank { null }, agent = null, isStreaming = isRunning,
+                modelName = subagent.modelName.ifBlank { null }, thinkingLevel = subagent.reasoningLevel,
+                workStartedAt = createdAt.takeIf { it > 0 }, workCompletedAt = completedAt))
+        }
+        return computeChatItems(listOf(userMsg) + assistantMessages, isWorking = isRunning, snapshot = null)
     }
 
     /** SubagentBlock → ChatBlock 映射（id 用索引保证唯一）。 */

@@ -599,10 +599,11 @@ class SharedLogicDesktopTest {
 
             val items = viewModel.computeChatItems(listOf(assistantMsgWithImage, pureImageAssistantMsg))
             println("DEBUG_TEST: items count = ${items.size}")
-            // 两条 assistant 消息构成同一轮次：正文(带图) + 纯图 + 轮次底部 Footer
-            assertEquals(3, items.size, "应生成两条 TextMessage 列表项 + 一条沉底 Footer")
+            // 旧历史缺交付标记时，仅最后完整响应是交付；前一条文字和图片保留在过程详情。
+            assertEquals(3, items.size, "应生成过程折叠块 + 最后完整响应 + Footer")
 
-            val firstItem = items[0] as xyz.mederi.ui.ChatListItem.TextMessage
+            val firstItem = (items[0] as xyz.mederi.ui.ChatListItem.WorkTraceBlock)
+                .items.single() as xyz.mederi.ui.ChatListItem.TextMessage
             assertEquals("这是为您生成的图片：", firstItem.text)
             assertEquals(listOf("https://example.com/gen.png"), firstItem.images)
             assertEquals(false, firstItem.isUser)
@@ -1326,7 +1327,8 @@ class SharedLogicDesktopTest {
             snapshot = buildSnapshot(null)
         )
         assertTrue(itemsB.none { it is ChatListItem.QuestionCard }, "回答后不应再出现 QuestionCard")
-        val askToolLine = itemsB.filterIsInstance<ChatListItem.ToolCalls>()
+        val askToolLine = itemsB.filterIsInstance<ChatListItem.WorkTraceBlock>()
+            .flatMap { it.items }.filterIsInstance<ChatListItem.ToolCalls>()
             .firstOrNull { item -> item.toolCalls.any { it.name == "ask_user" } }
         assertNotNull(askToolLine, "回答后 ask 工具的 ToolCalls 行必须回归")
     }
@@ -1413,7 +1415,7 @@ class SharedLogicDesktopTest {
             assertTrue(currentItems[1] is ChatListItem.WorkTraceBlock)
             val workTrace = currentItems[1] as ChatListItem.WorkTraceBlock
             assertEquals(2, workTrace.totalToolsCount)
-            assertEquals(2000L, workTrace.totalDurationMs)
+            assertNull(workTrace.startedAt, "历史只有LLM请求耗时，不能伪造工作起点")
             assertEquals(4, workTrace.items.size)
 
             // 检查 WorkTrace 内部的 4 个工作步骤（Reasoning, ToolCalls, Reasoning, SubagentCalls）
@@ -1650,8 +1652,9 @@ class SharedLogicDesktopTest {
 
             val items = viewModel.computeChatItems(listOf(userMsg, asstMsg))
 
-            val reasoningItems = items.filterIsInstance<ChatListItem.Reasoning>()
-            assertEquals(1, reasoningItems.size, "流式无工具轮次只应有一个 Reasoning，不能占位与真实推理重复")
+            val reasoningItems = items.filterIsInstance<ChatListItem.WorkTraceBlock>()
+                .single().items.filterIsInstance<ChatListItem.Reasoning>()
+            assertEquals(1, reasoningItems.size, "流式无工具轮次的过程详情只应有一个 Reasoning，不能占位与真实推理重复")
             assertEquals("用户想让我分析当前未提交代码的质量问题", reasoningItems.first().text)
             assertTrue(reasoningItems.first().text.isNotBlank(), "不允许存在空文本占位 Reasoning")
         } finally {
@@ -1806,10 +1809,12 @@ class SharedLogicDesktopTest {
                 isStreaming = true
             )
             val activeItems = viewModel.computeChatItems(listOf(cmdMsg))
-            val activeReasoning = activeItems.filterIsInstance<ChatListItem.Reasoning>().firstOrNull()
-            assertNotNull(activeReasoning, "流式运行中推理应直接出现在对话时间线中")
-            val activeToolCall = activeItems.filterIsInstance<ChatListItem.ToolCalls>().firstOrNull()
-            assertNotNull(activeToolCall, "流式运行中工具调用应直接出现在对话时间线中")
+            val activeTrace = activeItems.filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+            assertTrue(activeTrace.isRunning)
+            val activeReasoning = activeTrace.items.filterIsInstance<ChatListItem.Reasoning>().firstOrNull()
+            assertNotNull(activeReasoning, "流式运行中推理应出现在过程折叠详情中")
+            val activeToolCall = activeTrace.items.filterIsInstance<ChatListItem.ToolCalls>().firstOrNull()
+            assertNotNull(activeToolCall, "流式运行中工具调用应出现在过程折叠详情中")
             assertTrue(activeToolCall.isRunning, "流式执行命令中 isRunning 必须为 true")
 
             // 场景 2: 轮次结束后（isStreaming = false） -> 步骤聚合折叠入 WorkTraceBlock
@@ -2434,20 +2439,22 @@ class SharedLogicDesktopTest {
                 isStreaming = true
             )
 
-            // 1. 流式状态测试：必须严格就地保持交错时序，绝不沉底汇聚
+            // 1. 流式过程全部收进一个折叠块，内部保持交错时序。
             val activeItems = viewModel.computeChatItems(listOf(interleavedMsg))
-            val activeItemTypes = activeItems.map { it::class.simpleName }
+            val activeSteps = activeItems.filterIsInstance<ChatListItem.WorkTraceBlock>().single().items
+            assertTrue(activeItems.none { it is ChatListItem.TextMessage && !it.isUser })
+            val activeItemTypes = activeSteps.map { it::class.simpleName }
             println("TEST_DEBUG_activeItemTypes: $activeItemTypes")
 
             // 预期顺序：Reasoning -> ToolCalls -> Reasoning -> ToolCalls -> Reasoning -> ToolCalls -> TextMessage
             assertEquals(
                 listOf("Reasoning", "ToolCalls", "Reasoning", "ToolCalls", "Reasoning", "ToolCalls", "TextMessage"),
                 activeItemTypes,
-                "流式活跃状态下，工具调用必须按发生时序就地交错排列，绝不沉底汇聚"
+                "工作折叠详情内，工具调用必须按发生时序交错排列"
             )
 
             // 验证每一个 ToolCalls item 内部只有 1 个 toolCall（绝不跨调用聚合为 '运行 2 条命令'）
-            val activeToolCallsItems = activeItems.filterIsInstance<ChatListItem.ToolCalls>()
+            val activeToolCallsItems = activeSteps.filterIsInstance<ChatListItem.ToolCalls>()
             assertEquals(3, activeToolCallsItems.size)
             activeToolCallsItems.forEach {
                 assertEquals(1, it.toolCalls.size, "每个工具调用必须作为独立项展示，禁止跨条目汇总")
@@ -2774,109 +2781,47 @@ class SharedLogicDesktopTest {
     }
 
     @Test
-    fun testQueuedMessagesEnqueueRemoveAndSteer() = kotlinx.coroutines.runBlocking {
+    fun workingInputUsesSingleSendEntryAndStableIds() = kotlinx.coroutines.runBlocking {
         val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         try {
-            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
-            mockAiCore.initialize()
-            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
-            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
-            appState.hydrate()
-            val viewModel = WorkspaceViewModel(appState)
-
-            // 选择会话
-            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
-            appState.selectConversation(conv.id)
-            kotlinx.coroutines.withTimeout(5_000) {
-                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
-            }
-
-            // 初始队列为空
-            assertTrue(viewModel.currentQueuedMessages.isEmpty(), "初始排队应为空")
-
-            // 入队 2 条消息
-            viewModel.enqueueCurrentInput("Message 1")
-            viewModel.enqueueCurrentInput("Message 2")
-
-            val queued = viewModel.currentQueuedMessages
-            assertEquals(2, queued.size, "排队队列应有 2 条消息")
-            assertEquals("Message 1", queued[0].text)
-            assertEquals("Message 2", queued[1].text)
-
-            // 移出第一条
-            viewModel.removeQueuedMessage(queued[0].id)
-            val remaining = viewModel.currentQueuedMessages
-            assertEquals(1, remaining.size, "移出后应剩 1 条")
-            assertEquals("Message 2", remaining[0].text)
-
-            // 立即发送（引导模式）
-            viewModel.steerQueuedMessage(remaining[0])
-            assertTrue(viewModel.currentQueuedMessages.isEmpty(), "引导发送后队列应清空")
-
-            // 等待异步写入完成并校验 MockAiCore 成功收到了引导消息
-            kotlinx.coroutines.withTimeout(5_000) {
-                while (true) {
-                    val convSnapshot = mockAiCore.getSnapshot(conv.id).getOrThrow()
-                    val hasGuidance = convSnapshot.messages.any { msg ->
-                        msg.blocks.any { (it as? ChatBlock.Text)?.text?.contains("[Guidance]: Message 2") == true }
-                    }
-                    if (hasGuidance) break
-                    kotlinx.coroutines.delay(50)
+            val backend = xyz.mederi.core.mock.MockAiCore()
+            backend.initialize()
+            val received = java.util.concurrent.CopyOnWriteArrayList<xyz.mederi.core.contract.dto.ChatPromptInput>()
+            val api = object : xyz.mederi.core.contract.AiCore by backend {
+                override suspend fun sendMessage(conversationId: String, input: xyz.mederi.core.contract.dto.ChatPromptInput): Result<Unit> {
+                    received.add(input)
+                    return Result.success(Unit)
                 }
+                override suspend fun steerMessage(conversationId: String, input: xyz.mederi.core.contract.dto.ChatPromptInput): Result<Unit> =
+                    error("UI must use sendMessage for all input")
             }
-        } finally {
-            testScope.cancel()
-        }
-    }
-
-    @Test
-    fun testAutoDrainQueuedMessagesWhenTurnCompletes() = kotlinx.coroutines.runBlocking {
-        val testScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
-        try {
-            val mockAiCore = xyz.mederi.core.mock.MockAiCore()
-            mockAiCore.initialize()
-            val prefs = xyz.mederi.core.contract.preferences.InMemoryPreferencesStore()
-            val appState = xyz.mederi.ui.appstate.AppState(aiCore = mockAiCore, preferences = prefs, scope = testScope)
+            val appState = xyz.mederi.ui.appstate.AppState(api, xyz.mederi.core.contract.preferences.InMemoryPreferencesStore(), testScope)
             appState.hydrate()
             appState.selectModel(appState.availableModels.value.first())
-            val viewModel = WorkspaceViewModel(appState)
-
-            val conv = mockAiCore.createConversation("proj_1", null).getOrThrow()
+            val conv = backend.createConversation("proj_1", null).getOrThrow()
+            val vm = WorkspaceViewModel(appState)
             appState.selectConversation(conv.id)
             kotlinx.coroutines.withTimeout(5_000) {
-                while (viewModel.conversationId != conv.id) kotlinx.coroutines.delay(50)
+                while (vm.conversationId != conv.id || !vm.isAttached) kotlinx.coroutines.delay(10)
             }
-
-            // 入队排队消息
-            viewModel.enqueueCurrentInput("Next queued task")
-            assertEquals(1, viewModel.currentQueuedMessages.size)
-
-            val applySnapshotMethod = viewModel::class.java.getDeclaredMethod(
-                "applySnapshot",
-                String::class.java,
-                xyz.mederi.core.contract.dto.ConversationSnapshot::class.java
-            ).apply { isAccessible = true }
-
-            // 模拟之前状态为 Working
-            val workingSnap = xyz.mederi.core.contract.dto.ConversationSnapshot(
-                conversation = conv.copy(status = ConversationStatus.Working),
-                messages = emptyList(),
-                tokenUsage = xyz.mederi.core.contract.models.TokenUsage(0, 0, 0),
-                cost = xyz.mederi.core.contract.models.CostSummary(0.0)
-            )
-            applySnapshotMethod.invoke(viewModel, conv.id, workingSnap)
-
-            // 模拟转变为 Idle 状态（回合执行结束）
-            val idleSnap = workingSnap.copy(
-                conversation = conv.copy(status = ConversationStatus.Idle)
-            )
-            applySnapshotMethod.invoke(viewModel, conv.id, idleSnap)
-
-            // 等待出队发送协程完成（delay 100ms）
-            kotlinx.coroutines.delay(200L)
-
-            // 队列应被自动消费出队
-            assertTrue(viewModel.currentQueuedMessages.isEmpty(), "Turn 结束恢复 Idle 时应自动出队发送")
+            val apply = vm::class.java.getDeclaredMethod("applySnapshot", String::class.java,
+                xyz.mederi.core.contract.dto.ConversationSnapshot::class.java).apply { isAccessible = true }
+            val working = backend.getSnapshot(conv.id).getOrThrow().copy(
+                conversation = conv.copy(status = ConversationStatus.Working))
+            apply.invoke(vm, conv.id, working)
+            vm.send("same text")
+            vm.send("same text")
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (received.size < 2) kotlinx.coroutines.delay(10)
+            }
+            val ids = received.map { it.messageId }
+            assertTrue(ids.all { !it.isNullOrBlank() })
+            assertEquals(2, ids.distinct().size, "重复正文仍有各自的消息 ID")
+            val pending = vm.messages.filter { it.id in ids }
+            assertEquals(2, pending.size, "运行中连续输入均立即提交，不在UI排队")
+            val accepted = pending.first()
+            apply.invoke(vm, conv.id, working.copy(messages = listOf(accepted)))
+            assertEquals(2, vm.messages.count { it.id in ids }, "只确认相同ID，不误移除相同正文的另一条")
         } finally {
             testScope.cancel()
         }
@@ -3382,20 +3327,17 @@ class SharedLogicDesktopTest {
                 snapshot = snap
             )
 
-            val t1Index = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("下面是计划") }
+            val trace = items.filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+            val t1Index = trace.items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("下面是计划") }
+            val t2Index = trace.items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("批准了") }
+            val specToolIndex = trace.items.indexOfFirst { it is ChatListItem.ToolCalls && it.toolCalls.any { tc -> tc.name == "generate_spec" } }
             val planCardIndex = items.indexOfFirst { it is ChatListItem.PlanApproval && it.request.id == "plan_test_order" }
-            val t2Index = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("批准了") }
-            val specToolIndex = items.indexOfFirst { it is ChatListItem.ToolCalls && it.toolCalls.any { tc -> tc.name == "generate_spec" } }
 
-            assertTrue(t1Index >= 0, "应找到阶段 1 的文本条目")
-            assertTrue(planCardIndex >= 0, "应找到计划审批卡片")
-            assertTrue(t2Index >= 0, "应找到阶段 2 的文本条目")
-            assertTrue(specToolIndex >= 0, "应找到阶段 2 的 generate_spec 工具条目")
-
-            // 核心断言：时序必须绝对向前，不得发生新消息在旧计划上方的颠倒
-            assertTrue(t1Index < planCardIndex, "阶段 1 文本应当在计划审批卡片上方 (t1=$t1Index, plan=$planCardIndex)")
-            assertTrue(planCardIndex < t2Index, "计划审批卡片应当在阶段 2 文本上方 (plan=$planCardIndex, t2=$t2Index)")
-            assertTrue(t2Index < specToolIndex, "阶段 2 文本应当在 generate_spec 工具上方 (t2=$t2Index, specTool=$specToolIndex)")
+            assertTrue(t1Index >= 0 && t2Index > t1Index && specToolIndex > t2Index,
+                "工作详情内必须按阶段1说明、阶段2说明、generate_spec保持真实时序")
+            assertTrue(planCardIndex > items.indexOf(trace), "计划审批卡独立显示在过程栏外")
+            assertTrue(items.filterIsInstance<ChatListItem.TextMessage>().none { !it.isUser },
+                "工作期间的阶段说明不能成为顶层交付正文")
         } finally {
             testScope.cancel()
         }
@@ -3524,8 +3466,12 @@ Summary: 子任务 0 执行完毕
             isStreaming = false,
         )
 
+        val finalResponse = asstTurn2.copy(
+            id = "a_final", blocks = listOf(asstTurn2.blocks.last()), isFinalAnswer = true,
+        )
+        val processResponse = asstTurn2.copy(blocks = asstTurn2.blocks.dropLast(1), isFinalAnswer = false)
         val items = xyz.mederi.ui.computeChatItems(
-            msgs = listOf(userMsg, asstTurn1, eventMsg, asstTurn2),
+            msgs = listOf(userMsg, asstTurn1, eventMsg, processResponse, finalResponse),
             isWorking = false,
             snapshot = null,
         )

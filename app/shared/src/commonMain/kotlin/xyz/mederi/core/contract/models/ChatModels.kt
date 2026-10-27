@@ -62,6 +62,15 @@ data class ChatMessage(
     val durationMs: Long? = null,
     /** 本轮 Turn 产生的文件变更摘要（assistant 消息底部展示） */
     val turnDiffSummary: TurnDiffSummaryUi? = null,
+    /** Core 分配的工作轮次 ID；同一工作中的插话和模型响应共享此 ID。 */
+    val turnId: String? = null,
+    /** Core 确认的最终交付；null 仅用于兼容没有交付标记的旧历史。 */
+    val isFinalAnswer: Boolean? = null,
+    /** 已持久化但尚未注入模型的用户输入。 */
+    val pendingSteering: Boolean = false,
+    /** Core 工作墙钟端点；运行时只有起点，真正结束后固定终点。 */
+    val workStartedAt: Long? = null,
+    val workCompletedAt: Long? = null,
 )
 
 /**
@@ -251,7 +260,20 @@ enum class CoreEventType {
     BACKGROUND_TASK_STARTED,
     BACKGROUND_TASK_COMPLETED,
     BACKGROUND_TASK_ERROR,
-    BACKGROUND_TASK_STOPPED
+    BACKGROUND_TASK_STOPPED,
+
+    /**
+     * 会话 skill 激活（与 core EventType.SKILL_ACTIVATED 同名对齐，EnumMirrorContractTest
+     * 锁死两侧枚举名集合相等，必须两侧同时加）。payload: skillName / activeSkills（最新列表的 JSON）。
+     * UI 据此刷新会话激活 skill 列表。
+     */
+    SKILL_ACTIVATED,
+
+    /**
+     * 会话 skill 卸载（与 core EventType.SKILL_DEACTIVATED 同名对齐）。
+     * payload: skillName / activeSkills（最新列表的 JSON）。
+     */
+    SKILL_DEACTIVATED
 }
 
 /**
@@ -296,20 +318,3 @@ data class ImageAttachment(
 
     override fun hashCode(): Int = 31 * id.hashCode() + bytes.contentHashCode()
 }
-
-/**
- * 排队待发消息项（排队模式 / 引导模式共用）。
- */
-@Serializable
-data class QueuedMessage(
-    val id: String,
-    val conversationId: String,
-    val text: String,
-    val pastedTexts: List<PastedTextAttachment> = emptyList(),
-    val images: List<ImageAttachment> = emptyList(),
-    val model: ModelOption? = null,
-    val thinkingLevel: String? = null,
-    val agent: AgentOption? = null,
-    val apiKeyId: String? = null,
-    val createdAt: Long = 0L
-)

@@ -63,6 +63,32 @@ class SqliteHistoryStore(
         }
     }
 
+    override suspend fun updateMessage(sessionId: String, messageId: String, transform: (Message) -> Message): Unit = withContext(Dispatchers.IO) {
+        queries.transaction {
+            val row = queries.loadBySession(sessionId).executeAsList().firstOrNull { it.message_id == messageId }
+                ?: error("Message not found: $messageId")
+            val updated = transform(json.decodeFromString<Message>(row.payload))
+            queries.updateMessagePayload(json.encodeToString(updated), updated.status.name, sessionId, messageId)
+        }
+    }
+
+    override suspend fun updateHistory(sessionId: String, transform: (List<Message>) -> List<Message>): Unit = withContext(Dispatchers.IO) {
+        queries.transaction {
+            val before = queries.loadBySession(sessionId).executeAsList().map { json.decodeFromString<Message>(it.payload) }
+            val after = transform(before)
+            if (after != before) replaceInTransaction(sessionId, after)
+        }
+    }
+
+    private fun replaceInTransaction(sessionId: String, messages: List<Message>) {
+        queries.deleteAllBySession(sessionId)
+        messages.forEachIndexed { index, message ->
+            queries.appendMessage(sessionId, index.toLong(), message.id, message.role.name,
+                extractContent(message), json.encodeToString(message), message.createdAt,
+                message.modelId, message.durationMs, message.finishReason, message.status.name)
+        }
+    }
+
     override suspend fun replace(sessionId: String, messages: List<Message>): Unit = withContext(Dispatchers.IO) {
         queries.transaction {
             queries.deleteAllBySession(sessionId)

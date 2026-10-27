@@ -88,8 +88,7 @@ private val CompatText: TextStyle = TextStyle(fontSize = 9.sp, fontWeight = Font
  * Tab 计数徽标（02-components §3.6 `tab-badge`）。
  *
  * 标准：1/5dp、radius Pill、`bg-input` + border、10sp `text-muted`。
- * 现状出处：RawMessagesCard / TodoListCard 的 CardHeader count（10sp textMuted）、
- * SubAgentComponents 头部计数（10sp textSecondary/accentPrimary）。
+ * 现状出处：RawMessagesCard / TodoListCard 的 CardHeader count（10sp textMuted）。
  * 按标准取 surfaceInput 底 + surfaceCardBorder 描边 + 10sp 常规 textMuted。
  */
 @Composable
@@ -119,9 +118,9 @@ fun MederiTabBadge(
  *
  * 标准：1/6dp、radius Pill、accent 软底 + border iris-6、`accent-text` 10sp/500 + 6dp pulse dot
  * （accent + glow ring，1.5s scale 1↔1.3 / opacity 1↔0.6）。
- * 现状出处：SubAgentComponents「$runningCount 运行中」（RoundedCornerShape(10.dp) +
- * accentPrimary.copy(alpha=0.12f) + [RadarPulseDot] + 10sp Medium accentPrimary），
- * 现状无描边；按标准补 accent 级 border（accentPrimary.copy(alpha=0.35f)）。
+ * 标准参照：RoundedCornerShape(10.dp) + accentPrimary.copy(alpha=0.12f) 底 +
+ * [RadarPulseDot] + 10sp Medium accentPrimary，现状无描边；
+ * 按标准补 accent 级 border（accentPrimary.copy(alpha=0.35f)）。
  */
 @Composable
 fun MederiRunningPulseBadge(
@@ -205,8 +204,8 @@ private fun RunningPulseDot(
  * 子代理/角色标签（02-components §3.6 `subagent-role-tag`）。
  *
  * 标准：1/5dp、radius Badge、gray-4 底、`text-primary` 10sp/500。
- * 现状出处：SubAgentComponents「协同角色」行（11sp textPrimary Medium，未成徽标），
- * 此处按标准落徽标：surfaceHover 底 + 10sp Medium textPrimary。
+ * 标准参照：11sp textPrimary Medium 角色标签，此处按标准落徽标：
+ * surfaceHover 底 + 10sp Medium textPrimary。
  */
 @Composable
 fun MederiRoleTag(

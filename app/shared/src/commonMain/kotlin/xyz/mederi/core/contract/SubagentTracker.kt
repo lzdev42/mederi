@@ -5,6 +5,15 @@ import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.SubagentBlock
 import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.core.contract.models.ToolCallState
+import xyz.mederi.core.contract.models.ChatBlock
+import xyz.mederi.core.contract.models.ChatRole
+import xyz.mederi.core.contract.models.Conversation
+import xyz.mederi.core.contract.models.ConversationStatus
+import xyz.mederi.core.contract.models.TokenUsage
+import xyz.mederi.core.contract.models.CostSummary
+import xyz.mederi.core.contract.dto.ConversationState
+import kotlinx.serialization.json.Json
+import kotlin.time.Instant
 
 /**
  * 把 SUBAGENT_* 事件应用到子代理缓存表上的纯逻辑（跨平台，与 [SnapshotReducer] 同风格）。
@@ -23,6 +32,7 @@ object SubagentTracker {
         val agentId = event.payload["agentId"] ?: return states
         return when (event.type) {
             CoreEventType.SUBAGENT_STARTED -> {
+                val existing = states[agentId]
                 states + (agentId to SubagentState(
                     agentId = agentId,
                     parentSessionId = event.sessionId,
@@ -32,11 +42,28 @@ object SubagentTracker {
                     reasoningLevel = event.payload["reasoningLevel"],
                     task = event.payload["task"] ?: "",
                     briefing = event.payload["briefing"],
-                    status = "RUNNING",
-                    startedAt = event.timestamp
+                    status = existing?.status ?: "RUNNING",
+                    startedAt = existing?.startedAt ?: event.payload["startedAt"] ?: event.timestamp,
+                    currentActivity = existing?.currentActivity,
+                    currentTool = existing?.currentTool,
+                    outputText = existing?.outputText,
+                    completedAt = existing?.completedAt,
+                    blocks = existing?.blocks ?: emptyList(),
+                    messages = existing?.messages ?: emptyList(),
+                    progressSequence = existing?.progressSequence ?: 0L
                 ))
             }
             CoreEventType.SUBAGENT_PROGRESS -> {
+                val childEventJson = event.payload["eventJson"]
+                if (childEventJson != null) {
+                    val childEvent = runCatching { wireJson.decodeFromString<CoreEvent>(childEventJson) }.getOrNull()
+                        ?: return states // malformed structured frame cannot be reinterpreted as prose
+                    val sequence = event.payload["sequence"]?.toLongOrNull()
+                    return states.updated(agentId) { current ->
+                        if (sequence != null && sequence <= current.progressSequence) current
+                        else applyChildEvent(current, childEvent).copy(progressSequence = sequence ?: current.progressSequence)
+                    }
+                }
                 val activity = event.payload["activity"]
                 val tool = event.payload["tool"]
                 val delta = event.payload["delta"].orEmpty()
@@ -95,25 +122,114 @@ object SubagentTracker {
             CoreEventType.SUBAGENT_COMPLETED -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
                 states.updated(agentId) {
-                    it.copy(status = "COMPLETED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted())
+                    it.copy(status = "COMPLETED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
+                        message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: parseEpoch(completedAt))
+                    })
                 }
             }
             CoreEventType.SUBAGENT_ERROR -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
                 states.updated(agentId) {
-                    it.copy(status = "ERROR", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted())
+                    it.copy(status = "ERROR", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
+                        message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: parseEpoch(completedAt))
+                    })
                 }
             }
             CoreEventType.SUBAGENT_STOPPED -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
                 states.updated(agentId) {
-                    it.copy(status = "STOPPED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted())
+                    it.copy(status = "STOPPED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
+                        message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: parseEpoch(completedAt))
+                    })
                 }
             }
             CoreEventType.SUBAGENT_DISCARDED ->
                 states - agentId
             else -> states
         }
+    }
+
+    private fun parseEpoch(value: String): Long? = runCatching { Instant.parse(value).toEpochMilliseconds() }.getOrNull()
+
+    private val wireJson = Json { ignoreUnknownKeys = true }
+
+    /** 初次水合/重连与实时事件使用同一个投影，不能把已收的消息降级成扁平正文。 */
+    fun replay(subagent: SubagentState, events: List<CoreEvent>): SubagentState =
+        settleTerminal(events.fold(subagent.copy(messages = emptyList())) { current, event -> applyChildEvent(current, event) }
+            .copy(progressSequence = events.size.toLong()))
+
+    /**
+     * snapshot是权威成员表（空列表也有效，不能复活已DISCARDED成员）。同ID的内容序列与
+     * 生命周期分别单调合并：旧水合不能覆盖新流式，旧RUNNING不能覆盖已知终态。
+     */
+    fun reconcileSnapshots(snapshot: List<SubagentState>, previous: List<SubagentState>): List<SubagentState> {
+        val previousById = previous.associateBy { it.agentId }
+        return snapshot.map { incoming ->
+            val old = previousById[incoming.agentId] ?: return@map settleTerminal(incoming)
+            val content = when {
+                old.progressSequence > incoming.progressSequence -> old
+                old.progressSequence == incoming.progressSequence && incoming.messages.isEmpty() && old.messages.isNotEmpty() -> old
+                else -> incoming
+            }
+            val lifecycle = when {
+                isTerminal(old.status) && !isTerminal(incoming.status) -> old
+                isTerminal(incoming.status) && !isTerminal(old.status) -> incoming
+                isTerminal(old.status) && isTerminal(incoming.status) -> {
+                    val oldEnd = old.completedAt?.let(::parseEpoch)
+                    val newEnd = incoming.completedAt?.let(::parseEpoch)
+                    if (oldEnd != null && (newEnd == null || oldEnd > newEnd)) old else incoming
+                }
+                else -> incoming
+            }
+            settleTerminal(incoming.copy(
+                messages = content.messages,
+                blocks = content.blocks,
+                progressSequence = content.progressSequence,
+                currentActivity = content.currentActivity,
+                currentTool = content.currentTool,
+                outputText = content.outputText,
+                status = lifecycle.status,
+                completedAt = lifecycle.completedAt,
+            ))
+        }
+    }
+
+    private fun isTerminal(status: String): Boolean = status in setOf("COMPLETED", "ERROR", "STOPPED")
+
+    private fun settleTerminal(state: SubagentState): SubagentState {
+        if (!isTerminal(state.status)) return state
+        val endedAt = state.completedAt?.let(::parseEpoch)
+        return state.copy(currentActivity = null, currentTool = null, messages = state.messages.map { message ->
+            message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: endedAt)
+        })
+    }
+
+    private fun applyChildEvent(current: SubagentState, event: CoreEvent): SubagentState {
+        if (event.sessionId != current.agentId) return current
+        val startedAt = runCatching { Instant.parse(current.startedAt).toEpochMilliseconds() }.getOrNull() ?: 0L
+        val state = ConversationState(
+            conversation = Conversation(id = current.agentId, projectId = null, title = current.task,
+                status = if (current.status == "RUNNING") ConversationStatus.Working else ConversationStatus.Idle,
+                createdAt = startedAt, updatedAt = startedAt),
+            messages = current.messages, tokenUsage = TokenUsage(), cost = CostSummary())
+        val next = ConversationStateReducer.apply(state, event)
+        val activity = when (event.type) {
+            CoreEventType.TOOL_CALLED -> "TOOL_CALL"
+            CoreEventType.TOOL_RESULT -> "THINKING"
+            CoreEventType.MESSAGE_COMPLETED, CoreEventType.MESSAGE_ERROR -> null
+            CoreEventType.MESSAGE_DELTA -> when (event.payload["type"]) {
+                "text" -> "OUTPUT"
+                "tool_call" -> "TOOL_CALL"
+                "reasoning", "response_started" -> "THINKING"
+                else -> current.currentActivity
+            }
+            else -> current.currentActivity
+        }
+        val tool = if (activity == "TOOL_CALL") event.payload["tool"] ?: event.payload["name"] ?: current.currentTool else null
+        val body = next.messages.filter { it.role == ChatRole.Assistant }.flatMap { it.blocks }
+            .filterIsInstance<ChatBlock.Text>().joinToString("") { it.text }
+        return current.copy(messages = next.messages, currentActivity = activity, currentTool = tool,
+            outputText = body.takeIf { it.isNotEmpty() } ?: current.outputText)
     }
 
     /** 终态事件先于 STARTED 到达（理论上不该发生）时安全跳过。 */

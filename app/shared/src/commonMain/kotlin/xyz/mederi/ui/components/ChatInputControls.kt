@@ -120,7 +120,7 @@ internal fun AutoApproveSwitch(
     }
 }
 
-/** 发送 / 停止按钮。支持排队模式与中止模式。样式收敛为 MederiSendRoundButton（反色 send，KDoc 已注明）。 */
+/** 发送 / 停止按钮。输入存在时统一发送，工作中无输入时可中止。样式收敛为 MederiSendRoundButton（反色 send，KDoc 已注明）。 */
 @Composable
 internal fun SendButton(
     size: Dp = 28.dp,
@@ -130,7 +130,7 @@ internal fun SendButton(
     onSubmit: () -> Unit
 ) {
     val showSendIcon = !isStreaming || hasContent
-    val isEnabled = if (isStreaming) true else canSend
+    val isEnabled = canSend || (isStreaming && !hasContent)
     MederiSendRoundButton(
         icon = if (showSendIcon) FeatherIcons.ArrowUp else FeatherIcons.Square,
         onClick = onSubmit,

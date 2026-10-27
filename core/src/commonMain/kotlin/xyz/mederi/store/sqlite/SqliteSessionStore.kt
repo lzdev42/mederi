@@ -48,6 +48,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 apiKeyId = row.api_key_id,
                 env = parseEnv(row.env),
                 todos = parseTodos(row.todos),
+                activeSkills = parseActiveSkills(row.active_skills),
                 draftText = row.draft_text,
                 createdAt = row.created_at,
                 updatedAt = row.updated_at
@@ -68,6 +69,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 apiKeyId = row.api_key_id,
                 env = parseEnv(row.env),
                 todos = parseTodos(row.todos),
+                activeSkills = parseActiveSkills(row.active_skills),
                 draftText = row.draft_text,
                 createdAt = row.created_at,
                 updatedAt = row.updated_at
@@ -87,6 +89,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             api_key_id = session.apiKeyId,
             env = serializeEnv(session.env),
             todos = session.todos.encodeTodos(),
+            active_skills = session.activeSkills.encodeActiveSkills(),
             draft_text = session.draftText,
             created_at = session.createdAt,
             updated_at = session.updatedAt
@@ -144,6 +147,10 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         queries.updateSessionTodos(todos.encodeTodos(), id)
     }
 
+    override suspend fun updateActiveSkills(id: String, activeSkills: List<String>): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionActiveSkills(activeSkills.encodeActiveSkills(), id)
+    }
+
     override suspend fun delete(id: String): Unit = withContext(Dispatchers.IO) {
         queries.deleteSession(id)
     }
@@ -158,6 +165,12 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
 
     private fun parseTodos(jsonStr: String): List<TodoItem> =
         decodeTodos(jsonStr).orEmpty()
+
+    private fun parseActiveSkills(jsonStr: String): List<String> =
+        runCatching { json.decodeFromString<List<String>>(jsonStr) }.getOrDefault(emptyList())
+
+    private fun List<String>.encodeActiveSkills(): String =
+        json.encodeToString(this)
 
     private fun serializeAIModel(aiModel: AIModel): String =
         json.encodeToString(AIModel.serializer(), aiModel)

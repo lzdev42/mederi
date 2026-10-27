@@ -41,6 +41,12 @@ enum class ToolName(val value: String) {
     @SerialName("update_todo")
     UPDATE_TODO("update_todo"),
 
+    @SerialName("load_skill")
+    LOAD_SKILL("load_skill"),
+
+    @SerialName("unload_skill")
+    UNLOAD_SKILL("unload_skill"),
+
     @SerialName("ask_user")
     ASK_USER("ask_user"),
 

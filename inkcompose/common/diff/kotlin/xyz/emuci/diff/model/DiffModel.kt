@@ -9,6 +9,8 @@ data class DiffFile(
     val newPath: String? = null,
     val language: String? = null,
     val hunks: List<DiffHunk> = emptyList(),
+    val oldSourceLines: List<String> = emptyList(),
+    val newSourceLines: List<String> = emptyList(),
     val stats: DiffStats = DiffStats.calculate(hunks),
 ) {
     val displayPath: String

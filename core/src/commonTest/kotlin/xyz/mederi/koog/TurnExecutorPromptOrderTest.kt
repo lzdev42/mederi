@@ -19,7 +19,7 @@ class TurnExecutorPromptOrderTest {
     fun planSection_comesAfterProjectInstructions() {
         // 与 TurnExecutor 装配顺序一一对应：
         val base = SystemPrompts.build(AgentMode.APPROVAL)
-        val withSkills = SystemPrompts.withSkills(base, emptyList())
+        val withSkills = SystemPrompts.withSkillsAndActive(base, emptyList(), emptyList())
         val agentsFiles = listOf(
             AgentsFileLoader.AgentsFile(
                 path = "AGENTS.md",
@@ -42,7 +42,7 @@ class TurnExecutorPromptOrderTest {
     @Test
     fun todoSection_comesAfterProjectInstructions() {
         val base = SystemPrompts.build(AgentMode.APPROVAL)
-        val withSkills = SystemPrompts.withSkills(base, emptyList())
+        val withSkills = SystemPrompts.withSkillsAndActive(base, emptyList(), emptyList())
         val agentsFiles = listOf(
             AgentsFileLoader.AgentsFile(
                 path = "AGENTS.md",

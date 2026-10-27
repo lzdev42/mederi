@@ -332,9 +332,11 @@ class ServerAiCore(
                 }
                 val newStatus = when (event.type) {
                     CoreEventType.SESSION_UPDATED -> {
-                        // 新 turn 开始：主 turn 活跃；若仍有子代理在跑，维持 Working
-                        mainTurnActive[event.sessionId] = true
-                        ConversationStatus.Working
+                        // 接收插话不是新 turn，不能把 WaitingUser 或子代理生命周期误翻为 Working。
+                        if (event.payload["inputAccepted"] == "true") null else {
+                            mainTurnActive[event.sessionId] = true
+                            ConversationStatus.Working
+                        }
                     }
                     CoreEventType.MESSAGE_COMPLETED -> {
                         // 主 turn 结束：子代理集合非空时保持 Working（子代理仍在跑），否则回 Idle
@@ -593,9 +595,8 @@ class ServerAiCore(
         httpCall("/v1/sessions/$conversationId/messages", requestBody = input)
     }
 
-    override suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit> = runCatching {
-        httpCall("/v1/sessions/$conversationId/steer", requestBody = input)
-    }
+    override suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit> =
+        sendMessage(conversationId, input)
 
     override suspend fun abort(conversationId: String): Result<Unit> = runCatching {
         httpCall("/v1/sessions/$conversationId/abort")
@@ -726,6 +727,16 @@ class ServerAiCore(
 
     override suspend fun uninstallSkill(name: String): Result<Unit> = runCatching {
         httpCall("/v1/skills/${name.encodeURLParameter()}", method = HttpMethod.Delete)
+    }
+
+    override suspend fun listActiveSkills(conversationId: String): Result<List<SkillItem>> = runCatching {
+        httpGet<List<SkillItem>>("/v1/sessions/$conversationId/skills")
+    }
+    override suspend fun activateSkill(conversationId: String, skillName: String): Result<SkillItem> = runCatching {
+        httpSend<SkillItem>("/v1/sessions/$conversationId/skills/${skillName.encodeURLParameter()}", method = HttpMethod.Post)
+    }
+    override suspend fun deactivateSkill(conversationId: String, skillName: String): Result<Unit> = runCatching {
+        httpCall("/v1/sessions/$conversationId/skills/${skillName.encodeURLParameter()}", method = HttpMethod.Delete)
     }
 
     // ------------------------------------------------------------------

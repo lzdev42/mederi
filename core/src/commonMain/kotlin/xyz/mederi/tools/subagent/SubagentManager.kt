@@ -76,7 +76,10 @@ class SubagentManager(
         val executorSubtaskIndex: Int? = null,
         val planStore: PlanStore? = null,
         @Volatile var stopReason: String? = null,
-        @Volatile var isDiscarded: Boolean = false
+        @Volatile var isDiscarded: Boolean = false,
+        @Volatile var completedAt: String? = null,
+        /** 正常化的子会话事件快照，用于重连水合；与实时转发使用同一序列。 */
+        val progressEvents: MutableList<MederiEvent> = java.util.Collections.synchronizedList(mutableListOf())
     )
 
     @Serializable
@@ -199,7 +202,8 @@ class SubagentManager(
                 "modelId" to aiModel.id,
                 "modelName" to aiModel.name,
                 "reasoningLevel" to reasoningLevel.name,
-                "task" to task
+                "task" to task,
+                "startedAt" to bg.startedAt
             ) + (briefing?.takeIf { it.isNotBlank() }?.let { mapOf("briefing" to it) } ?: emptyMap()))
             try {
                 val result = subagentRunner.run(
@@ -217,19 +221,17 @@ class SubagentManager(
                     executorSubtaskIndex = executorSubtaskIndex,
                     planStore = planStore,
                     agentId = agentId,
-                    onProgress = { activity, delta, toolName, isMessage ->
-                        emitEvent(
-                            parentSessionId,
-                            EventType.SUBAGENT_PROGRESS,
-                            buildMap {
-                                put("agentId", agentId)
-                                put("role", role.name)
-                                put("activity", activity)
-                                if (toolName != null) put("tool", toolName)
-                                if (delta.isNotBlank()) put("delta", delta)
-                                if (isMessage) put("isMessage", "true")
-                            }
-                        )
+                    onProgress = { event ->
+                        val sequence = synchronized(bg.progressEvents) {
+                            bg.progressEvents.add(event)
+                            bg.progressEvents.size.toLong()
+                        }
+                        emitEvent(parentSessionId, EventType.SUBAGENT_PROGRESS, mapOf(
+                            "agentId" to agentId,
+                            "role" to role.name,
+                            "sequence" to sequence.toString(),
+                            "eventJson" to Json.encodeToString(event)
+                        ))
                     }
                 )
                 bg.result = result
@@ -274,6 +276,7 @@ class SubagentManager(
                     val reportPath = bg.result?.let { extractReportPath(it) }
                     bg.reportPath = reportPath
                     val completedAt = java.time.Instant.now().toString()
+                    bg.completedAt = completedAt
 
                     val payload = buildMap {
                         put("agentId", agentId)

@@ -394,7 +394,7 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     post("/v1/sessions/{id}/steer") {
         val input = call.receive<ChatPromptInput>()
-        call.respondResult(aiCore.steerMessage(call.parameters["id"]!!, input))
+        call.respondResult(aiCore.sendMessage(call.parameters["id"]!!, input))
     }
     post("/v1/sessions/{id}/abort") {
         call.respondResult(aiCore.abort(call.parameters["id"]!!))
@@ -568,6 +568,19 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     }
     delete("/v1/skills/{name}") {
         call.respondResult(aiCore.uninstallSkill(call.parameters["name"]!!))
+    }
+
+    // ------------------------------------------------------------------
+    // 会话级 Skill 激活
+    // ------------------------------------------------------------------
+    get("/v1/sessions/{id}/skills") {
+        call.respondResult(aiCore.listActiveSkills(call.parameters["id"]!!))
+    }
+    post("/v1/sessions/{id}/skills/{name}") {
+        call.respondResult(aiCore.activateSkill(call.parameters["id"]!!, call.parameters["name"]!!))
+    }
+    delete("/v1/sessions/{id}/skills/{name}") {
+        call.respondResult(aiCore.deactivateSkill(call.parameters["id"]!!, call.parameters["name"]!!))
     }
 
     // ------------------------------------------------------------------

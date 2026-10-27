@@ -12,18 +12,24 @@ class InMemoryHistoryStore : HistoryStore {
     private val messages = mutableMapOf<String, MutableList<Message>>()
 
     override suspend fun load(sessionId: String): List<Message> =
-        messages[sessionId]?.toList() ?: emptyList()
+        synchronized(messages) { messages[sessionId]?.toList() ?: emptyList() }
 
     override suspend fun append(sessionId: String, message: Message) {
-        messages.getOrPut(sessionId) { mutableListOf() }.add(message)
+        synchronized(messages) { messages.getOrPut(sessionId) { mutableListOf() }.add(message) }
+    }
+
+    override suspend fun updateHistory(sessionId: String, transform: (List<Message>) -> List<Message>) {
+        synchronized(messages) {
+            messages[sessionId] = transform(messages[sessionId]?.toList().orEmpty()).toMutableList()
+        }
     }
 
     override suspend fun replace(sessionId: String, messages: List<Message>) {
-        this.messages[sessionId] = messages.toMutableList()
+        synchronized(this.messages) { this.messages[sessionId] = messages.toMutableList() }
     }
 
     override suspend fun delete(sessionId: String) {
-        messages.remove(sessionId)
+        synchronized(messages) { messages.remove(sessionId) }
     }
 
     override suspend fun rollbackTo(sessionId: String, seq: Long) {

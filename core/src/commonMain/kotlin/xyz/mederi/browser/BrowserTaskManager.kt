@@ -43,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap
  * @param recipeStore 配方存储；非 null 且任务 recipe 非 inline（无 drillScript）时，按 recipe.name 解析 skill 增强配方。
  * @param llmCallerProvider LLM caller 工厂注入（测试/自定义 LLM 路径）；null = 走 [BrowserLLMHelper] 真路径。
  * @param subagentConfigManager 子代理模型配置（操作者/大脑独立模型解析）；null = 全部继承父会话模型。
+ * @param runtimeProvider 每任务运行目录解析（browserHome 懒解析：reports → DrillExecutor/Brain，skills → RecipeStore）；null = 用构造参数 workingDir/recipeStore。
  */
 class BrowserTaskManager(
     private val providerManager: ProviderManager,
@@ -51,7 +52,12 @@ class BrowserTaskManager(
     private val workingDir: File? = null,
     private val recipeStore: RecipeStore? = null,
     private val llmCallerProvider: ((aiModel: AIModel, reasoningLevel: ReasoningLevel, apiKeyId: String?) -> BrowserLLMCaller)? = null,
-    private val subagentConfigManager: SubagentConfigManager? = null
+    private val subagentConfigManager: SubagentConfigManager? = null,
+    /**
+     * 每任务运行目录解析（browserHome 懒解析，每次 runTask 调用；用户改 browserHome 后下一任务即生效）；
+     * null = 用构造参数 workingDir/recipeStore。
+     */
+    private val runtimeProvider: (suspend () -> BrowserRuntimeDirs?)? = null
 ) : BrowserTaskService {
 
     enum class TaskStatus { STARTED, RUNNING, COMPLETED, ERROR, STOPPED }
@@ -156,10 +162,14 @@ class BrowserTaskManager(
                 message = "启动浏览器"
             )
 
-            // ST3 完整接线：recipe 解析（RecipeStore）+ LLM caller 注入（llmCallerProvider 优先，
-            // 否则 BrowserLLMHelper 真路径）+ workingDir/drillExecutor 真传（Brain 报告落盘、
-            // Drill 文件路径相对解析），修复 ST2 的 null。
-            val effectiveRecipe = resolveRecipe(recipe)
+            // ST3 完整接线：每任务懒解析 browserHome 运行目录（reports → DrillExecutor/Brain 落盘、
+            // skills → RecipeStore 配方加载），recipe 解析（RecipeStore）+ LLM caller 注入
+            // （llmCallerProvider 优先，否则 BrowserLLMHelper 真路径）+ workingDir/drillExecutor 真传，
+            // 修复 ST2 的 null。runtimeProvider 失败时安全回退构造参数（不阻塞任务）。
+            val runtime = runtimeProvider?.let { provider -> runCatching { provider() }.getOrNull() }
+            val effectiveWorkingDir = runtime?.workingDir ?: workingDir
+            val effectiveRecipeStore = runtime?.skillsDir?.let { RecipeStore(it) } ?: recipeStore
+            val effectiveRecipe = resolveRecipeFrom(recipe, effectiveRecipeStore)
 
             // 浏览器子代理独立模型解析（2026-09-23）：操作者（BROWSER_OPERATOR）与大脑（BROWSER_BRAIN）
             // 在设置页各自可配模型/推理档；配置了独立模型则覆盖，否则继承父会话模型。
@@ -190,11 +200,11 @@ class BrowserTaskManager(
                     apiKeyId = apiKeyId
                 )
 
-            val drillExecutor = DrillExecutor(control = control, workingDir = workingDir)
+            val drillExecutor = DrillExecutor(control = control, workingDir = effectiveWorkingDir)
 
             val brain = BrowserBrain(
                 llmCaller = brainLlmCaller,
-                workingDir = workingDir
+                workingDir = effectiveWorkingDir
             )
 
             val runner = BrowserOperator(
@@ -482,23 +492,6 @@ class BrowserTaskManager(
 
     // ── 内部 ──
 
-    /**
-     * ST3：配方解析——非 inline recipe（未带 drillScript）且配了 [recipeStore] 时，
-     * 按 recipe.name 从 skills 目录加载 skill 增强配方（operator 规则/判定规则/drill 脚本）。
-     * 加载失败（文件不存在/解析异常）安全回退原 recipe（不兜底不伪造，直接按原名挂载）。
-     */
-    private fun resolveRecipe(recipe: BrowserRecipe?): BrowserRecipe? {
-        if (recipe == null || recipeStore == null || recipe.drillScript != null) return recipe
-        val loaded = recipeStore.load(recipe.name) ?: return recipe
-        return BrowserRecipe(
-            name = loaded.id,
-            description = loaded.description,
-            operatorContent = loaded.operatorContent,
-            judgeRules = loaded.judgeRules,
-            drillScript = loaded.drillScriptJson
-        )
-    }
-
     private fun emit(
         taskId: String,
         type: EventType,
@@ -570,3 +563,32 @@ data class BrowserTaskDetails(
     val brainResult: BrainResult? = null,
     val collectedItems: List<BrowserCollectedItem> = emptyList()
 )
+
+/** 浏览器任务运行目录（每任务懒解析，用户改 browserHome 后下一任务即生效）。 */
+data class BrowserRuntimeDirs(val workingDir: File?, val skillsDir: File?)
+
+/**
+ * 从 browserHome 路径解析任务运行目录：reports 给 DrillExecutor/BrowserBrain（报告与文件写入），
+ * skills 给 RecipeStore（skill 配方加载）。未配置（null/空白）返回 null（不伪造路径）。
+ */
+fun browserRuntimeDirs(browserHomePath: String?): BrowserRuntimeDirs? {
+    val home = xyz.mederi.browser.install.BrowserHome.of(browserHomePath) ?: return null
+    return BrowserRuntimeDirs(workingDir = home.reportsDir, skillsDir = home.skillsDir)
+}
+
+/**
+ * ST3：配方解析——非 inline recipe（未带 drillScript）且配了 store 时，
+ * 按 recipe.name 从 skills 目录加载 skill 增强配方（operator 规则/判定规则/drill 脚本）。
+ * 加载失败（文件不存在/解析异常）安全回退原 recipe（不兜底不伪造，直接按原名挂载）。
+ */
+internal fun resolveRecipeFrom(recipe: BrowserRecipe?, store: RecipeStore?): BrowserRecipe? {
+    if (recipe == null || store == null || recipe.drillScript != null) return recipe
+    val loaded = store.load(recipe.name) ?: return recipe
+    return BrowserRecipe(
+        name = loaded.id,
+        description = loaded.description,
+        operatorContent = loaded.operatorContent,
+        judgeRules = loaded.judgeRules,
+        drillScript = loaded.drillScriptJson
+    )
+}

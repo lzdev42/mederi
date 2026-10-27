@@ -147,6 +147,13 @@ class TurnExecutor(
     private val onTurnDiff: ((xyz.mederi.tools.diff.TurnDiff) -> Unit)? = null,
     private val subagentConfigManager: SubagentConfigManager? = null,
     private val compactionThresholdPercent: () -> Int = { 70 },
+    /**
+     * 浏览器任务运行目录解析（browserHome 懒解析，每次浏览器任务调用；null = BrowserTaskManager
+     * 用默认 workingDir/recipeStore）。由 Mederi 装配注入，用户改 browserHome 后下一任务即生效。
+     */
+    private val browserRuntimeProvider: (suspend () -> xyz.mederi.browser.BrowserRuntimeDirs?)? = null,
+    /** LLM 传输实现可注入；运行时调度与测试共用同一真实 Koog 工具循环。 */
+    private val llmClientFactory: (xyz.mederi.provider.domain.model.Provider, String) -> ai.koog.prompt.executor.clients.LLMClient = KoogClientFactory::create,
 ) {
 
     /**
@@ -184,8 +191,23 @@ class TurnExecutor(
     /** 事件消息等待队列（按 parentSessionId 分组）：子代理终态时暂存，父 turn 空闲时冲刷唤醒新 turn。 */
     private val pendingEventMessages = ConcurrentHashMap<String, MutableList<String>>()
     private val eventMessageLock = Mutex()
+    // 子任务状态先变终态、事件稍后才到达；确认事件已入队前不可提前交付。
+    private val observedSubagentTerminals = ConcurrentHashMap.newKeySet<String>()
+    private val suppressedSubagentTerminals = ConcurrentHashMap.newKeySet<String>()
+
+    private fun hasPendingSubagentWork(sessionId: String): Boolean =
+        subagentManager.listForSession(sessionId).any { agent ->
+            !agent.isDiscarded && agent.agentId !in suppressedSubagentTerminals &&
+                (agent.status == SubagentManager.SubagentStatus.RUNNING || agent.agentId !in observedSubagentTerminals)
+        } || !pendingEventMessages[sessionId].isNullOrEmpty()
+
 
     /** 引导消息等待队列（按 sessionId 分组）：用户在 turn 运行时插话，工具边界时注入 prompt。 */
+    private val inputLocks = ConcurrentHashMap<String, Mutex>()
+    private val activeTurnIds = ConcurrentHashMap<String, String>()
+    private data class WorkClock(val turnId: String, val startedAt: Long, val completedAt: Long? = null)
+    private val workClocks = ConcurrentHashMap<String, WorkClock>()
+
     private val pendingSteerings = ConcurrentHashMap<String, java.util.concurrent.ConcurrentLinkedQueue<SteeringItem>>()
 
     /** 当前正在进行上下文压缩的会话集合（排他互斥，防止压缩被新轮次/事件抢占打断）。 */
@@ -207,6 +229,13 @@ class TurnExecutor(
             scope.launch {
                 eventBus.collect { event ->
                     when (event.type) {
+                        EventType.QUESTION_REQUESTED,
+                        EventType.PLAN_APPROVAL_REQUESTED -> {
+                            // 输入可能早于挂起到达，不能等用户再发一次才解除等待。
+                            pendingSteerings[event.sessionId]?.peek()?.let { pending ->
+                                scope.launch { sendMessage(event.sessionId, pending.request) }
+                            }
+                        }
                         EventType.SUBAGENT_COMPLETED,
                         EventType.SUBAGENT_ERROR,
                         EventType.SUBAGENT_STOPPED -> {
@@ -235,15 +264,15 @@ class TurnExecutor(
     // 浏览器任务管理：持有 BrowserRegistry（UI 注册 JCEF、core 注册 Camoufox，启动装配时填充）。
     // 主代理获得 run_browser_task / browser_task_status / stop_browser_task 三个工具；
     // 注册表为空时 runTask 返回明确错误引导用户配置。
-    // TODO(ST3+)：真实 browserHome 接线（workingDir=reportsDir / recipeStore=skillsDir / llmCallerProvider）
-    //   属 app 层装配职责——在 MederiAiCore 装配处从 BrowserSettingsManager/settings 解析 reportsDir/skillsDir 后传参。
-    //   当前保持默认 null（= ST2 行为：BrowserLLMHelper 真路径、无 recipe/drill 面板装配），不在此强接。
+    // ST3 已接线：browserRuntimeProvider 由 Mederi 装配注入（browserHome 懒解析 → reports/skills），
+    // BrowserTaskManager.runTask 逐任务解析 workingDir/recipeStore 供 DrillExecutor/Brain/RecipeStore。
     private val browserTaskManager: xyz.mederi.browser.BrowserTaskService? =
         xyz.mederi.browser.BrowserTaskManager(
             providerManager = providerManager,
             scope = scope,
             eventBus = eventBus,
-            subagentConfigManager = subagentConfigManager
+            subagentConfigManager = subagentConfigManager,
+            runtimeProvider = browserRuntimeProvider
         )
 
     private val activeJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
@@ -288,88 +317,86 @@ class TurnExecutor(
      * AI 的回复文本/推理通过 [MESSAGE_DELTA] 事件流式输出，
      * 完成后通过 [MESSAGE_COMPLETED] 事件告知。调用方可通过 HistoryStore / listMessages 读取完整历史。
      */
+    private class InteractionChanged : RuntimeException()
+
+    /** 唯一输入入口：接收与调度由 Core 决定，客户端无需判断是否正在运行。 */
     suspend fun sendMessage(sessionId: String, request: SendMessageRequest, subagentRole: SubagentRole? = null) {
-        return try {
-            sendMessageInternal(sessionId, request, subagentRole)
-        } catch (e: Throwable) {
-            runCatching {
-                sessionStore.update(sessionId, SessionStatus.ERROR)
+        val stable = request.copy(messageId = request.messageId ?: "msg_${UUID.randomUUID()}")
+        var continuingClock: WorkClock? = null
+        while (true) {
+            // 已消费的同 ID 重试不应解除正在等待的其他问题或审批。
+            if (historyStore.load(sessionId).any { it.id == stable.messageId && !it.pendingSteering }) return
+            val waitingQuestion = questionRequesters[sessionId]?.hasPending() == true
+            val waitingPlan = planApprovalRequesters[sessionId]?.hasPending() == true
+            if (waitingQuestion || waitingPlan) {
+                continuingClock = continuingClock ?: workClocks[sessionId]?.takeIf { it.completedAt == null }
+                if (waitingPlan) injectNeutralPlanToolResult(sessionId)
+                if (waitingQuestion) injectAskUserDeclinedToolResult(sessionId)
+                abortAndJoin(sessionId)
             }
-            val record = ErrorCollector.collect(e, ErrorContext(
-                phase = "send_message",
-                sessionId = sessionId
-            ))
-            emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
-            throw e
+            try {
+                inputLocks.computeIfAbsent(sessionId) { Mutex() }.withLock {
+                    val existing = historyStore.load(sessionId).firstOrNull { it.id == stable.messageId }
+                    if (existing != null && !existing.pendingSteering) return@withLock
+                    val session = sessionStore.get(sessionId)
+                        ?: throw NoSuchElementException("Session not found: $sessionId")
+                    val waiting = questionRequesters[sessionId]?.hasPending() == true ||
+                        planApprovalRequesters[sessionId]?.hasPending() == true
+                    if (waiting) throw InteractionChanged()
+                    val running = activeJobs[sessionId]?.isActive == true || session.status == SessionStatus.RUNNING
+                    if (running || compactingSessions.contains(sessionId)) {
+                        if (existing != null) return@withLock
+                        val message = buildUserMessage(sessionId, stable.parts).copy(
+                            id = stable.messageId, pendingSteering = true, turnId = activeTurnIds[sessionId],
+                            workStartedAt = workClocks[sessionId]?.startedAt
+                        )
+                        historyStore.append(sessionId, message)
+                        pendingSteerings.computeIfAbsent(sessionId) { java.util.concurrent.ConcurrentLinkedQueue() }
+                            .offer(SteeringItem(sessionId,
+                                stable.parts.filterIsInstance<MessagePart.Text>().joinToString("\n") { it.text },
+                                stable, System.currentTimeMillis(), stable.messageId, message.parts))
+                        emit(sessionId, EventType.SESSION_UPDATED, payload = mapOf("inputAccepted" to "true"))
+                        return@withLock
+                    }
+                    // 新输入中性解除挂起属于原工作，不能把墙钟起点重置成“再次发请求”。
+                    continuingClock?.takeIf { activeTurnIds[sessionId] == null }?.let { clock ->
+                        activeTurnIds[sessionId] = clock.turnId
+                        workClocks[sessionId] = clock
+                        historyStore.updateHistory(sessionId) { messages ->
+                            messages.map { if (it.turnId == clock.turnId) it.copy(workCompletedAt = null) else it }
+                        }
+                    }
+                    // 重启/异常后仍保留已接收的输入，下次工作一并读取。
+                    historyStore.load(sessionId).filter { it.pendingSteering }.forEach { pending ->
+                        historyStore.updateMessage(sessionId, pending.id!!) { it.copy(pendingSteering = false) }
+                    }
+                    pendingSteerings.remove(sessionId)
+                    try {
+                        sendMessageInternal(sessionId, stable, subagentRole)
+                    } catch (e: Throwable) {
+                        if (e is InteractionChanged || e is kotlinx.coroutines.CancellationException) throw e
+                        val record = ErrorCollector.collect(e, ErrorContext(phase = "send_message", sessionId = sessionId))
+                        emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
+                        throw e
+                    }
+                }
+                return
+            } catch (_: InteractionChanged) {
+                // 挂起在检查与加锁之间发生：释放接收锁后解除，禁止持锁 join。
+            }
         }
     }
 
-    /**
-     * 引导模式（Steering）：用户在 turn 运行时插话。
-     * 若会话正在运行，将消息存入 [pendingSteerings] 队列，在下一个工具边界（nodeSendToolResult）注入；
-     * 若会话未处于 RUNNING，安全降级走普通的 [sendMessage]。
-     */
-    suspend fun steerMessage(sessionId: String, request: SendMessageRequest) {
-        val session = sessionStore.get(sessionId)
-            ?: throw NoSuchElementException("Session not found: $sessionId")
+    /** 兼容旧客户端；没有第二种发送/排队模式。 */
+    suspend fun steerMessage(sessionId: String, request: SendMessageRequest) = sendMessage(sessionId, request)
 
-        DebugLog.section("TurnExec", "TurnExecutor.steerMessage")
-        DebugLog.data("TurnExec", "sessionId", sessionId)
-        DebugLog.data("TurnExec", "session.status", session.status)
+    fun pollSteering(sessionId: String): SteeringItem? = pendingSteerings[sessionId]?.poll()
 
-        // 正在压缩中：引导消息直接入队 pendingSteerings，等压缩完成后的工具边界消费，不触发 sendMessage 竞争
-        if (compactingSessions.contains(sessionId)) {
-            val text = request.parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.Text>()
-                .joinToString("\n") { it.text }
-            val item = SteeringItem(
-                sessionId = sessionId,
-                text = text,
-                request = request,
-                timestamp = System.currentTimeMillis()
-            )
-            val queue = pendingSteerings.computeIfAbsent(sessionId) { java.util.concurrent.ConcurrentLinkedQueue() }
-            queue.offer(item)
-            DebugLog.event("TurnExec", "steering item enqueued while compacting for session $sessionId: text='$text', queueSize=${queue.size}")
-            emit(sessionId, EventType.STATUS, payload = mapOf(
-                "status" to "steering_queued",
-                "message" to text
-            ))
-            return
+    private suspend fun consumeSteering(sessionId: String, item: SteeringItem) {
+        item.messageId?.let { id ->
+            historyStore.updateMessage(sessionId, id) { it.copy(pendingSteering = false) }
         }
-
-        // 若会话当前非 RUNNING 且无活跃 job，直接回退走正常 sendMessage
-        if (session.status != SessionStatus.RUNNING && activeJobs[sessionId]?.isActive != true) {
-            DebugLog.info("TurnExec", "Session $sessionId is not running a turn; falling back to sendMessage")
-            sendMessage(sessionId, request)
-            return
-        }
-
-        val text = request.parts.filterIsInstance<xyz.mederi.domain.model.MessagePart.Text>()
-            .joinToString("\n") { it.text }
-        val item = SteeringItem(
-            sessionId = sessionId,
-            text = text,
-            request = request,
-            timestamp = System.currentTimeMillis()
-        )
-        val queue = pendingSteerings.computeIfAbsent(sessionId) { java.util.concurrent.ConcurrentLinkedQueue() }
-        queue.offer(item)
-        DebugLog.event("TurnExec", "steering item enqueued for session $sessionId: text='$text', queueSize=${queue.size}")
-
-        // 触发环境状态通知：UI 收到 steering_queued
-        emit(sessionId, EventType.STATUS, payload = mapOf(
-            "status" to "steering_queued",
-            "message" to text
-        ))
-    }
-
-    fun pollSteering(sessionId: String): SteeringItem? {
-        val queue = pendingSteerings[sessionId] ?: return null
-        val item = queue.poll()
-        if (queue.isEmpty()) {
-            pendingSteerings.remove(sessionId)
-        }
-        return item
+        emit(sessionId, EventType.SESSION_UPDATED, payload = mapOf("inputAccepted" to "true"))
     }
 
     private suspend fun sendMessageInternal(sessionId: String, request: SendMessageRequest, subagentRole: SubagentRole? = null) {
@@ -389,28 +416,11 @@ class TurnExecutor(
             )
         }
 
-        val hasPendingQuestion = questionRequesters[sessionId]?.hasPending() == true
-        val hasPendingPlanApproval = planApprovalRequesters[sessionId]?.hasPending() == true
-        if (hasPendingQuestion || hasPendingPlanApproval) {
-            DebugLog.info("TurnExec", "User sent message while question/plan approval pending for session $sessionId; aborting previous turn cleanly")
-            // 计划待批准时用户直接继续对话 ≠ 拒绝（三条硬规则之一）：先给挂起的 write_plan
-            // 工具调用补写一条中性 ToolResult 落库（非批准/非拒绝/非作废），再中止旧 turn。
-            // 这样下一轮 AI 视图无悬空 tool call，且明确知道计划仍 PENDING_APPROVAL——绝不会
-            // 被误解成"拒绝"而反问用户为什么。abort 会取消 plan 工具协程（其返回不落盘），
-            // 这里的主动落库是中性结果的唯一权威写入，确定性由它保证。
-            if (hasPendingPlanApproval) injectNeutralPlanToolResult(sessionId)
-            if (hasPendingQuestion) injectAskUserDeclinedToolResult(sessionId)
-            abortAndJoin(sessionId)
-        } else {
-            if (session.status == SessionStatus.RUNNING) {
-                throw IllegalStateException(
-                    "Session $sessionId is already running a turn. Wait for it to complete or abort it first."
-                )
-            }
-            if (activeJobs[sessionId]?.isActive == true) {
-                throw IllegalStateException("Session $sessionId has an active turn in progress.")
-            }
+        if (questionRequesters[sessionId]?.hasPending() == true || planApprovalRequesters[sessionId]?.hasPending() == true) {
+            throw InteractionChanged()
         }
+        check(activeJobs[sessionId]?.isActive != true) { "Session $sessionId has an active turn in progress." }
+        check(session.status != SessionStatus.RUNNING) { "Session $sessionId is already running a turn." }
 
         val agentMode = request.agentConfig.agentMode
         // 唯一真理源 = 本次发送携带的 apiKeyId（null = 用该供应商默认 key）；本 turn 全链路继承
@@ -489,7 +499,14 @@ class TurnExecutor(
                 DebugLog.error("TurnExec", "加载 skills 列表失败（不阻塞 turn）: ${e.message}", e)
                 null
             }
-            SystemPrompts.withSkills(basePrompt, skillList.orEmpty())
+            // 读会话已激活 skill 全文，注入系统提示词（不进对话历史，不参与压缩）
+            val activeFullTexts = session.activeSkills.mapNotNull { name ->
+                runCatching { skills?.loadFullText(name) }
+                    .onFailure { e -> DebugLog.error("TurnExec", "加载 skill 全文失败: name=$name, ${e.message}", e) }
+                    .getOrNull()
+                    ?.let { name to it }
+            }
+            SystemPrompts.withSkillsAndActive(basePrompt, skillList.orEmpty(), activeFullTexts)
         } else basePrompt
         // AGENTS.md 指令链注入（代码级自动读取）：git 根 → 项目目录浅→深。
         // 每轮重建（文件可能被用户/模型改过）；读取失败不阻塞 turn。
@@ -564,8 +581,19 @@ class TurnExecutor(
         // 不会重复追加。append 同步执行且先于 SESSION_UPDATED 事件，
         // 发送时机的监听者（如自动改名）回查快照必然能看到本条消息。
         // 环境元数据（OS/Shell/沙箱等）已移至系统提示词，不在此落库。
-        val userMessage = buildUserMessage(sessionId, request.parts)
-        historyStore.append(sessionId, userMessage)
+        val turnId = activeTurnIds.computeIfAbsent(sessionId) { "turn_${UUID.randomUUID()}" }
+        val workClock = workClocks.compute(sessionId) { _, existing ->
+            if (existing?.turnId == turnId) existing else WorkClock(turnId, System.currentTimeMillis())
+        }!!
+        val existingInput = historyStore.load(sessionId).firstOrNull { it.id == request.messageId }
+        val userMessage = existingInput ?: buildUserMessage(sessionId, request.parts).copy(
+            id = request.messageId, turnId = turnId, workStartedAt = workClock.startedAt)
+        if (existingInput == null) historyStore.append(sessionId, userMessage)
+        else if (existingInput.workStartedAt == null || existingInput.turnId != turnId) {
+            historyStore.updateMessage(sessionId, existingInput.id!!) {
+                it.copy(turnId = turnId, workStartedAt = workClock.startedAt, workCompletedAt = null)
+            }
+        }
 
         sessionStore.update(sessionId, SessionStatus.RUNNING)
         emit(sessionId, EventType.SESSION_UPDATED)
@@ -573,11 +601,13 @@ class TurnExecutor(
         val planApprovalRequester = xyz.mederi.plan.PlanApprovalRequester(sessionId, eventBus)
         planApprovalRequesters[sessionId] = planApprovalRequester
 
-        val job = scope.launch {
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             var autoContinueAttempt = 0
+            var finalized = false
+            try {
             while (true) {
                 try {
-                    runTurn(
+                    val outcome = runTurn(
                         sessionId = sessionId,
                         inputText = inputText,
                         userMessage = userMessage,
@@ -594,7 +624,33 @@ class TurnExecutor(
                         subagentRole = subagentRole,
                         apiKeyId = activeApiKeyId
                     )
-                    break // 正常完成（成功或非 PREMATURE_CLOSE 错误已由 runTurn catch 处理）
+                    if (outcome == null) break
+                    val shouldContinue = inputLocks.getValue(sessionId).withLock {
+                        val pending = historyStore.load(sessionId).filter { it.pendingSteering }
+                        if (pending.isNotEmpty()) {
+                            pending.forEach { input ->
+                                historyStore.updateMessage(sessionId, input.id!!) { it.copy(pendingSteering = false) }
+                            }
+                            pendingSteerings.remove(sessionId)
+                            true
+                        } else {
+                            // 正常结束的一轮可正式交付阶段回复；子代理仍在后台工作时，
+                            // 只保留工作时钟与工作 ID，不隐藏本轮已完成的整条回复。
+                            val finalId = outcome.candidateMessageId
+                            if (finalId != null) {
+                                historyStore.updateMessage(sessionId, finalId) { it.copy(isFinalAnswer = true) }
+                            }
+                            sessionStore.update(sessionId, SessionStatus.IDLE)
+                            val payload = outcome.payload.toMutableMap()
+                            finalId?.let { payload["finalMessageId"] = it }
+                            emit(sessionId, EventType.MESSAGE_COMPLETED, payload = payload)
+                            activeJobs.remove(sessionId)
+                            if (!hasPendingSubagentWork(sessionId)) activeTurnIds.remove(sessionId)
+                            finalized = true
+                            false
+                        }
+                    }
+                    if (!shouldContinue) break
                 } catch (e: PrematureCloseSignal) {
                     // 断流自愈决策
                     if (autoContinueAttempt < AUTO_CONTINUE_MAX_RETRIES && hasEmittedTokens(sessionId)) {
@@ -614,11 +670,34 @@ class TurnExecutor(
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e // 协程规范：取消必须重抛
+                } catch (e: Throwable) {
+                    // 收尾持久化同样可能失败，不能只留后台日志、让 UI 卡在工作中。
+                    sessionStore.update(sessionId, SessionStatus.ERROR)
+                    val record = ErrorCollector.collect(e, ErrorContext(phase = "turn_completion", sessionId = sessionId))
+                    emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
+                    break
                 }
-                // 其它 Throwable 不会到这里——runTurn 的 catch 已全部处理（非 PREMATURE_CLOSE 的在 runTurn 内 emit + 正常返回）
+                // 错误由 runTurn 发出；只有正常结果才进入最终交付提交。
+            }
+            } finally {
+                val wasCancelled = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]?.isCancelled == true
+                var resumeInput: SendMessageRequest? = null
+                if (!finalized) withContext(NonCancellable) {
+                    inputLocks.getValue(sessionId).withLock {
+                        activeJobs.remove(sessionId)
+                        activeTurnIds.remove(sessionId)
+                        // 错误收尾窗口中成功接收的新输入仍须处理；用户显式停止则保留但不自动续跑。
+                        if (!wasCancelled) resumeInput = pendingSteerings[sessionId]?.peek()?.request
+                    }
+                }
+                scope.launch {
+                    resumeInput?.let { sendMessage(sessionId, it) }
+                    dispatchPendingEventMessages(sessionId)
+                }
             }
         }
         activeJobs[sessionId] = job
+        job.start()
     }
 
     /**
@@ -679,10 +758,15 @@ class TurnExecutor(
     fun abort(sessionId: String) {
         // peek 而非 remove：entry 由 runTurn 的 finally 自清理。若在这里移除，
         // 紧随其后的 abortAndJoin（rollback 流程）将找不到 dying job 而无法 join。
-        // 无活跃 turn 时整体 no-op：滞后的 abort 请求不能误杀新建的 turn。
-        val job = activeJobs[sessionId] ?: return
-        if (!job.isActive) return
-        job.cancel()
+        val job = activeJobs[sessionId]
+        val hasMainTurn = job?.isActive == true
+        val hasChildren = subagentManager.runningCountForSession(sessionId) > 0 ||
+            backgroundTaskManager.runningCountForSession(sessionId) > 0
+        if (!hasMainTurn && !hasChildren) return
+        val stoppedTurnId = activeTurnIds[sessionId]
+        suppressedSubagentTerminals.addAll(subagentManager.listForSession(sessionId).map { it.agentId })
+        activeTurnIds.remove(sessionId)
+        job?.cancel()
         // 级联收割本会话的后台子代理：它们挂在全局 scope 上，不随父 turn job 取消而亡，
         // 不收割就成了继续写文件的孤儿（换模型"继续"后与重 spawn 的新代理并发写同一批文件）
         val stoppedSubagents = subagentManager.stopAllForSession(sessionId)
@@ -694,6 +778,13 @@ class TurnExecutor(
         questionRequesters[sessionId]?.cancelAll()
         planApprovalRequesters[sessionId]?.cancelAll()
         pendingEventMessages.remove(sessionId)
+        if (!hasMainTurn) scope.launch {
+            sessionStore.update(sessionId, SessionStatus.IDLE)
+            val record = ErrorCollector.collect(kotlinx.coroutines.CancellationException("用户中止了工作"),
+                ErrorContext(phase = "abort", sessionId = sessionId))
+            emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload() +
+                (stoppedTurnId?.let { mapOf("turnId" to it) } ?: emptyMap()))
+        }
     }
 
     /**
@@ -705,6 +796,8 @@ class TurnExecutor(
      * 造成整个会话重复。join 确保历史截断发生时不可能再有旧 turn 的写入。
      */
     suspend fun abortAndJoin(sessionId: String) {
+        suppressedSubagentTerminals.addAll(subagentManager.listForSession(sessionId).map { it.agentId })
+        activeTurnIds.remove(sessionId)
         activeJobs[sessionId]?.cancelAndJoin()
         // 与 abort 同语义：回滚 = 撤销到目标消息，其后发生的一切都不该继续——
         // 后台子代理一并收割（幂等，abort 路径已收过的这里是 0）
@@ -731,6 +824,8 @@ class TurnExecutor(
      * @param keptAgentIds 回滚点之前已经创立的子代理 ID 集合
      */
     suspend fun rollbackAndJoin(sessionId: String, keptAgentIds: Set<String>) {
+        suppressedSubagentTerminals.addAll(subagentManager.listForSession(sessionId).map { it.agentId })
+        activeTurnIds.remove(sessionId)
         activeJobs[sessionId]?.cancelAndJoin()
         // 丢弃在回滚目标消息时尚未创立的子 Agent（不发射 SUBAGENT_STOPPED，不进 pendingEventMessages）
         val discarded = subagentManager.rollbackSubagents(sessionId, keptAgentIds)
@@ -954,6 +1049,7 @@ class TurnExecutor(
         sessionStore.update(sessionId, SessionStatus.RUNNING)
         emit(sessionId, EventType.SESSION_UPDATED)
 
+        var compressionFailure: Throwable? = null
         try {
             compressOnce(
                 session = session,
@@ -971,13 +1067,17 @@ class TurnExecutor(
             // 压缩失败是 transient：emit 前更新 sessionStore，保证 emit() 内读到权威终态 IDLE
             sessionStore.update(sessionId, SessionStatus.IDLE)
             emit(sessionId, EventType.MESSAGE_ERROR, payload = record.toPayload())
-            throw e
+            compressionFailure = e
         } finally {
             sessionStore.update(sessionId, SessionStatus.IDLE)
         }
 
         // 通知 UI 刷新消息列表
-        emit(sessionId, EventType.MESSAGE_COMPLETED, null)
+        if (compressionFailure == null) emit(sessionId, EventType.MESSAGE_COMPLETED, null)
+        pendingSteerings[sessionId]?.peek()?.let { pending ->
+            scope.launch { sendMessage(sessionId, pending.request) }
+        }
+        compressionFailure?.let { throw it }
     }
 
     /**
@@ -1010,17 +1110,17 @@ class TurnExecutor(
                             java.util.concurrent.atomic.AtomicInteger()
                         }
                         retryWrapped(
-                            KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)]),
+                            llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)]),
                             session.id,
                             retryDelegateProvider = {
-                                KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)])
+                                llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)])
                             }
                         )
                     } else {
-                        retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
+                        retryWrapped(llmClientFactory(provider, apiKey), session.id)
                     }
                 } else {
-                    retryWrapped(KoogClientFactory.create(provider, apiKey), session.id)
+                    retryWrapped(llmClientFactory(provider, apiKey), session.id)
                 }
             val executor = PromptExecutorBuilder()
                 .addClient(client)
@@ -1075,6 +1175,10 @@ class TurnExecutor(
         }
     }
 
+    private data class TurnOutcome(val payload: Map<String, String>, val candidateMessageId: String?)
+    private data class ResponseStreamItem(val messageId: String, val frame: StreamFrame? = null, val started: Boolean? = null,
+        val eventType: EventType? = null, val payload: Map<String, String> = emptyMap())
+
     private suspend fun runTurn(
         sessionId: String,
         inputText: String,
@@ -1091,9 +1195,10 @@ class TurnExecutor(
         planApprovalRequester: xyz.mederi.plan.PlanApprovalRequester,
         subagentRole: SubagentRole? = null,
         apiKeyId: String? = null
-    ) {
+    ): TurnOutcome? {
         val newContextWindowFlag = AtomicBoolean(false)
-        val frameChannel = Channel<StreamFrame>(Channel.UNLIMITED)
+        val turnId = activeTurnIds[sessionId] ?: "turn_${UUID.randomUUID()}"
+        val frameChannel = Channel<ResponseStreamItem>(Channel.UNLIMITED)
         // 流式传输异常（静默断流/消费异常）：流消费者写入，turn 收尾时随 MESSAGE_COMPLETED
         // 的 payload 传给 UI。内容不回滚（半截文本已生成/落库），只提示不完整。
         // streamWarning = 人类提示文本；streamWarningRecord = 结构化警告记录（ErrorCollector，走统一错误出口）
@@ -1128,6 +1233,7 @@ class TurnExecutor(
             providerName = provider.name,
             modelId = model.id,
             modelName = model.name,
+            turnId = turnId,
             diagnosticsProvider = diagnosticsProvider
         )
 
@@ -1137,7 +1243,9 @@ class TurnExecutor(
             modelName = model.name,
             reasoningLevel = reasoningLevel.name,
             agentMode = agentMode.name,
-            projectId = session.projectId
+            projectId = session.projectId,
+            turnId = turnId,
+            workStartedAt = workClocks[sessionId]?.startedAt
         )
         val toolTimings = TurnToolTimings()
         // 发送链路与实际一致：图片按当前模型能力剔除（与压缩/预检估算一致）
@@ -1175,17 +1283,17 @@ class TurnExecutor(
                             java.util.concurrent.atomic.AtomicInteger()
                         }
                         retryWrapped(
-                            KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)]),
+                            llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)]),
                             sessionId,
                             retryDelegateProvider = {
-                                KoogClientFactory.create(provider, keys[counter.getAndIncrement().mod(keys.size)])
+                                llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)])
                             }
                         )
                     } else {
-                        retryWrapped(KoogClientFactory.create(provider, apiKey), sessionId)
+                        retryWrapped(llmClientFactory(provider, apiKey), sessionId)
                     }
                 } else {
-                    retryWrapped(KoogClientFactory.create(provider, apiKey), sessionId)
+                    retryWrapped(llmClientFactory(provider, apiKey), sessionId)
                 }
 
             DebugLog.section("TurnExec", "TurnExecutor.runTurn")
@@ -1240,10 +1348,17 @@ class TurnExecutor(
                 onFileTouched = onFileTouched,
                 apiKeyId = apiKeyId,
                 subagentConfigManager = subagentConfigManager,
+                skills = skills,
                 backgroundTaskManager = backgroundTaskManager
             )
 
-            val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics, eventBus)
+            val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics, eventBus,
+                turnId = turnId,
+                includeImages = model.supportsImages,
+                workStartedAt = workClocks[sessionId]?.startedAt,
+                responseBoundary = { id, started -> frameChannel.trySend(ResponseStreamItem(id, started = started)) },
+                consumeInput = { item -> consumeSteering(sessionId, item) }
+            )
 
             val agent = buildTurnAgent(
                 sessionId = sessionId,
@@ -1309,23 +1424,16 @@ class TurnExecutor(
 
             if (turnDiffSummary != null && lastMsgId != null) {
                 runCatching {
-                    val history = historyStore.load(sessionId)
-                    val updated = history.map { msg ->
-                        if (msg.id == lastMsgId) msg.copy(turnDiffSummary = turnDiffSummary) else msg
-                    }
-                    historyStore.replace(sessionId, updated)
+                    historyStore.updateMessage(sessionId, lastMsgId) { it.copy(turnDiffSummary = turnDiffSummary) }
                     DebugLog.event("TurnExec", "updated last assistant message with turnDiffSummary: ${turnDiffSummary.files.size} files")
                 }.onFailure { e ->
                     DebugLog.error("TurnExec", "failed to update last assistant message with turnDiffSummary: ${e.message}", e)
                 }
             }
 
-            sessionStore.update(sessionId, SessionStatus.IDLE)
-            DebugLog.event("TurnExec", "runTurn success, session status = IDLE (streamWarning=${streamWarning.get() != null}, record=${streamWarningRecord.get()?.id})")
-
             val warning = streamWarning.get()
             val warningRecord = streamWarningRecord.get()
-            val payload = mutableMapOf<String, String>()
+            val payload = mutableMapOf("turnId" to turnId)
             if (warningRecord != null) {
                 val record = warningRecord as xyz.mederi.debug.ErrorRecord
                 payload.putAll(record.toPayload())
@@ -1340,11 +1448,21 @@ class TurnExecutor(
                 }
             }
 
-            emit(
-                sessionId,
-                EventType.MESSAGE_COMPLETED,
-                payload = payload
-            )
+            val lastResponse = lastMsgId?.let { id -> historyStore.load(sessionId).firstOrNull { it.id == id } }
+            val candidate = lastResponse?.takeIf { streamWarning.get() == null && it.isCompleteDeliverable() }?.id
+            if (candidate == null && streamWarning.get() == null &&
+                lastResponse?.parts?.none { it is MessagePart.ToolCall } == true
+            ) {
+                // 长度截断/空响应等既不交付，也必须给用户一个可见原因。
+                val reason = lastResponse.finishReason ?: "missing finish reason"
+                val record = ErrorCollector.collect(
+                    IllegalStateException("模型未生成完整回复（finishReason=$reason），请补充指令或继续。"),
+                    ErrorContext(phase = "response_completion", sessionId = sessionId,
+                        providerId = provider.id, providerName = provider.name, modelId = model.id, modelName = model.name)
+                )
+                payload.putAll(record.toPayload())
+            }
+            return TurnOutcome(payload, candidate)
 
         } catch (e: kotlinx.coroutines.CancellationException) {
             DebugLog.event("TurnExec", "runTurn cancelled: ${e.message}")
@@ -1390,7 +1508,6 @@ class TurnExecutor(
                 emit(sessionId, EventType.MESSAGE_ERROR, payload = errorPayload)
             }
         } finally {
-            activeJobs.remove(sessionId)
             questionRequesters.remove(sessionId)?.cancelAll()
             planApprovalRequesters.remove(sessionId)?.cancelAll()
             // 注销会话级 diff 注册（子代理改动合并入口），防止泄漏与跨 turn 误归并
@@ -1402,18 +1519,9 @@ class TurnExecutor(
                     DebugLog.error("TurnExec", "关闭 MCP 连接失败: ${e.message}", e)
                 }
             }
-            // 冲刷子代理事件消息
-            scope.launch {
-                if (pendingEventMessages.containsKey(sessionId)) {
-                    dispatchPendingEventMessages(sessionId)
-                }
-            }
-            // 若 turn 因异常/中止退出，清理未消费的插话残留
-            val leftoverSteers = pendingSteerings.remove(sessionId)
-            if (!leftoverSteers.isNullOrEmpty()) {
-                DebugLog.info("TurnExec", "Cleared ${leftoverSteers.size} unconsumed steering items on turn exit for session $sessionId")
-            }
+
         }
+        return null
     }
 
 
@@ -1426,26 +1534,38 @@ class TurnExecutor(
      */
     private fun launchStreamConsumer(
         sessionId: String,
-        frameChannel: Channel<StreamFrame>,
+        frameChannel: Channel<ResponseStreamItem>,
         streamWarning: AtomicReference<String?>,
         streamWarningRecord: AtomicReference<xyz.mederi.debug.ErrorRecord?>,
         providerId: String,
         providerName: String,
         modelId: String,
         modelName: String,
+        turnId: String,
         diagnosticsProvider: () -> StreamCloseDiagnostics? = { null }
     ) = scope.launch {
         val timing = StreamTimingLog("SSE-Timing", "delta frames")
         val traceSession = StreamTrace.beginSession(sessionId)
         var exitNote = "drained"
         try {
-            for (frame in frameChannel) {
+            for (item in frameChannel) {
+                if (item.eventType != null) {
+                    emit(sessionId, item.eventType, messageId = item.messageId,
+                        payload = item.payload + ("turnId" to turnId))
+                    continue
+                }
+                if (item.started != null) {
+                    emit(sessionId, EventType.MESSAGE_DELTA, messageId = item.messageId,
+                        payload = mapOf("type" to if (item.started) "response_started" else "response_completed", "turnId" to turnId))
+                    continue
+                }
+                val frame = item.frame ?: continue
                 when (frame) {
                     is StreamFrame.TextDelta -> {
                         timing.sample(frame.text.length)
                         frame.text.takeIf { it.isNotEmpty() }?.let {
                             StreamTrace.delta(traceSession, "text", it.length)
-                            emitDelta(sessionId, "text", it)
+                            emitDelta(sessionId, "text", it, item.messageId, turnId)
                         }
                     }
                     is StreamFrame.ReasoningDelta -> {
@@ -1456,7 +1576,7 @@ class TurnExecutor(
                             ?: frame.summary?.takeIf { it.isNotEmpty() }
                         reasoning?.let {
                             StreamTrace.delta(traceSession, "reasoning", it.length)
-                            emitDelta(sessionId, "reasoning", it)
+                            emitDelta(sessionId, "reasoning", it, item.messageId, turnId)
                         }
                     }
                     is StreamFrame.ToolCallDelta -> {
@@ -1465,7 +1585,7 @@ class TurnExecutor(
                         if (frame.name.isNullOrBlank()) continue
                         timing.sample(frame.content?.length ?: 0)
                         DebugLog.debug("Frame", "ToolCallDelta: name=${frame.name}, contentLen=${frame.content?.length ?: 0}")
-                        emitToolDelta(sessionId, name = frame.name!!, args = frame.content ?: "", complete = false)
+                        emitToolDelta(sessionId, name = frame.name!!, args = frame.content ?: "", complete = false, messageId = item.messageId, turnId = turnId)
                     }
                     is StreamFrame.ToolCallComplete -> {
                         // 碎片续片（id/name 空）是 Koog builder 挤兑 pending 槽的副产品，
@@ -1477,7 +1597,7 @@ class TurnExecutor(
                             "ToolCallComplete: name=${frame.name}, argsLen=${frame.content?.length ?: 0}, " +
                                 "argsPreview=${frame.content?.take(120)}"
                         )
-                        emitToolDelta(sessionId, name = frame.name!!, args = frame.content, complete = true)
+                        emitToolDelta(sessionId, name = frame.name!!, args = frame.content, complete = true, messageId = item.messageId, turnId = turnId)
                     }
                     is StreamFrame.End -> {
                         // End 也是轮次边界（tool loop 每轮一个 End）。finishReason 为空/空白的 End
@@ -1618,7 +1738,7 @@ class TurnExecutor(
         toolRegistry: ToolRegistry,
         historyProvider: TrackingHistoryProvider,
         toolTimings: TurnToolTimings,
-        frameChannel: Channel<StreamFrame>,
+        frameChannel: Channel<ResponseStreamItem>,
         streamWarning: AtomicReference<String?>,
         incrementalPersister: TurnIncrementalPersister,
         clientRef: AtomicReference<ai.koog.prompt.executor.clients.LLMClient?> = AtomicReference(null),
@@ -1720,7 +1840,9 @@ class TurnExecutor(
             .install(EventHandler.Feature) { config ->
                 config.onLLMStreamingFrameReceived { eventContext ->
                     // 逐帧只转发给 frameChannel，不逐帧打日志（速率/时间戳由 StreamTimingLog 汇总）
-                    frameChannel.trySend(eventContext.streamFrame)
+                    incrementalPersister.currentResponseId.get()?.let { id ->
+                        frameChannel.trySend(ResponseStreamItem(id, frame = eventContext.streamFrame))
+                    }
                     // End 帧是流式请求的自然完成点：携带 metaInfo（含 inputTokensCount 等）时发射用量事件
                     val frame = eventContext.streamFrame
                     if (frame is StreamFrame.End) {
@@ -1754,22 +1876,23 @@ class TurnExecutor(
                 config.onToolCallStarting { eventContext ->
                     toolTimings.onStarting(eventContext.toolCallId)
                     DebugLog.event("EventHandler", "onToolCallStarting: tool=${eventContext.toolName}, toolCallId=${eventContext.toolCallId}")
-                    scope.launch {
-                        emit(sessionId, EventType.TOOL_CALLED, payload = mapOf(
+                    val responseId = incrementalPersister.currentResponseId.get()
+                    if (responseId != null) frameChannel.trySend(ResponseStreamItem(responseId,
+                        eventType = EventType.TOOL_CALLED, payload = mapOf(
                             "tool" to eventContext.toolName,
                             "toolCallId" to (eventContext.toolCallId ?: ""),
                             // 必须走标准 JSON 序列化：Koog JSONObject.toString() 是手拼的
                             // （字符串值原样包引号、不转义内部引号/反斜杠），命令里带 " 或 \ 会产出
                             // 非法 JSON，导致 UI 端 ToolArgParser 解析失败、工具目标显示丢失。
                             "args" to Json.Default.encodeToString(eventContext.toolArgs.toKotlinxJsonElement())
-                        ))
-                    }
+                        )))
                 }
                 config.onToolCallCompleted { eventContext ->
                     toolTimings.onCompleted(eventContext.toolCallId)
                     DebugLog.event("EventHandler", "onToolCallCompleted: tool=${eventContext.toolName}, toolCallId=${eventContext.toolCallId}")
-                    scope.launch {
-                        emit(sessionId, EventType.TOOL_RESULT, payload = mapOf(
+                    val responseId = incrementalPersister.currentResponseId.get()
+                    if (responseId != null) frameChannel.trySend(ResponseStreamItem(responseId,
+                        eventType = EventType.TOOL_RESULT, payload = mapOf(
                             "tool" to eventContext.toolName,
                             "toolCallId" to (eventContext.toolCallId ?: ""),
                             // 必须走 formatToolResultOutput（与上方 args 的修复同源）：Koog
@@ -1778,8 +1901,7 @@ class TurnExecutor(
                             // 解析失败后回退把整串塞进 Q1（已回答显示错乱）。
                             "output" to formatToolResultOutput(eventContext.toolResult),
                             "isError" to "false"
-                        ))
-                    }
+                        )))
                 }
                 config.onToolCallFailed { eventContext ->
                     toolTimings.onFailed(eventContext.toolCallId, eventContext.message)
@@ -1791,32 +1913,36 @@ class TurnExecutor(
                             toolName = eventContext.toolName
                         )
                     )
-                    scope.launch {
-                        emit(sessionId, EventType.TOOL_RESULT, payload = mapOf(
+                    val responseId = incrementalPersister.currentResponseId.get()
+                    if (responseId != null) frameChannel.trySend(ResponseStreamItem(responseId,
+                        eventType = EventType.TOOL_RESULT, payload = mapOf(
                             "tool" to eventContext.toolName,
                             "toolCallId" to (eventContext.toolCallId ?: ""),
                             "output" to eventContext.message,
                             "isError" to "true"
-                        ))
-                    }
+                        )))
                 }
             }
             .build()
     }
 
-    private suspend fun emitDelta(sessionId: String, type: String, content: String) {        emit(
-            sessionId = sessionId,
-            type = EventType.MESSAGE_DELTA,
-            payload = mapOf("type" to type, "content" to content)
-        )
-    }
-
-    private suspend fun emitToolDelta(sessionId: String, name: String, args: String, complete: Boolean) {
+    private suspend fun emitDelta(sessionId: String, type: String, content: String, messageId: String, turnId: String) {
         emit(
             sessionId = sessionId,
             type = EventType.MESSAGE_DELTA,
+            messageId = messageId,
+            payload = mapOf("type" to type, "content" to content, "turnId" to turnId)
+        )
+    }
+
+    private suspend fun emitToolDelta(sessionId: String, name: String, args: String, complete: Boolean, messageId: String, turnId: String) {
+        emit(
+            sessionId = sessionId,
+            type = EventType.MESSAGE_DELTA,
+            messageId = messageId,
             payload = mapOf(
                 "type" to "tool_call",
+                "turnId" to turnId,
                 "name" to name,
                 "content" to args,
                 "state" to if (complete) "completed" else "running"
@@ -1831,13 +1957,41 @@ class TurnExecutor(
         payload: Map<String, String> = emptyMap()
     ) {
         try {
+            val clock = workClocks[sessionId]?.takeIf {
+                val requestedTurn = payload["turnId"]
+                if (requestedTurn != null) requestedTurn == it.turnId
+                else activeTurnIds[sessionId] == it.turnId || activeJobs.containsKey(sessionId)
+            }
+            val endsWork = clock != null && (type == EventType.MESSAGE_ERROR ||
+                type == EventType.MESSAGE_COMPLETED && !hasPendingSubagentWork(sessionId))
+            val effectiveClock = if (endsWork) {
+                workClocks.computeIfPresent(sessionId) { _, current ->
+                    if (current.turnId == clock!!.turnId && current.completedAt == null)
+                        current.copy(completedAt = System.currentTimeMillis()) else current
+                }
+            } else clock
+            val clockPayload = if (effectiveClock != null) {
+                if (endsWork) historyStore.updateHistory(sessionId) { messages ->
+                    messages.map { message ->
+                        if (message.turnId == effectiveClock.turnId) message.copy(
+                            workStartedAt = effectiveClock.startedAt, workCompletedAt = effectiveClock.completedAt
+                        ) else message
+                    }
+                }
+                buildMap {
+                    put("turnId", effectiveClock.turnId)
+                    put("workStartedAt", effectiveClock.startedAt.toString())
+                    effectiveClock.completedAt?.let { put("workCompletedAt", it.toString()) }
+                }
+            } else emptyMap()
+            val timedPayload = payload + clockPayload
             // MESSAGE_ERROR：读 sessionStore 权威终态注入 payload，消费端（MederiAiCore / ServerAiCore /
             // SnapshotReducer）统一读 payload["finalStatus"] 映射，不再各自读 sessionStore 或硬编码。
             val enrichedPayload = if (type == EventType.MESSAGE_ERROR) {
                 val ss = try { sessionStore.get(sessionId)?.status } catch (_: Exception) { null }
-                if (ss != null) payload + ("finalStatus" to ss.name) else payload
+                if (ss != null) timedPayload + ("finalStatus" to ss.name) else timedPayload
             } else {
-                payload
+                timedPayload
             }
             DebugLog.debug("EventBus", "emit: type=$type, sessionId=$sessionId, messageId=$messageId, payload keys=${enrichedPayload.keys}")
             eventBus.emit(
@@ -1858,6 +2012,8 @@ class TurnExecutor(
         val parentSessionId = event.sessionId
         if (parentSessionId.isBlank()) return
 
+        val agentId = event.payload["agentId"]
+        if (agentId in suppressedSubagentTerminals) return
         val msgText = formatSubagentEventMessage(event)
         DebugLog.event("TurnExec", "handleSubagentTerminalEvent: session=$parentSessionId, agentId=${event.payload["agentId"]}, type=${event.type}")
 
@@ -1865,6 +2021,7 @@ class TurnExecutor(
             java.util.Collections.synchronizedList(mutableListOf())
         }
         list.add(msgText)
+        agentId?.let(observedSubagentTerminals::add)
 
         // 异步尝试调度：dispatchPendingEventMessages 内部持锁检查会话是否空闲
         scope.launch {
@@ -2060,7 +2217,7 @@ class TurnExecutor(
 
             try {
                 DebugLog.event("TurnExec", "dispatchPendingEventMessages: dispatching ${messagesToDispatch.size} event message(s) to session $sessionId")
-                sendMessageInternal(sessionId, request)
+                sendMessage(sessionId, request)
             } catch (e: IllegalStateException) {
                 DebugLog.info("TurnExec", "dispatchPendingEventMessages busy ($sessionId), requeueing: ${e.message}")
                 synchronized(list) {
@@ -2090,3 +2247,9 @@ internal fun extractUsagePayload(meta: ai.koog.prompt.message.ResponseMetaInfo):
         (meta.metadata?.get("cachedTokens") as? JsonPrimitive)?.content?.let { put("cachedTokens", it) }
     }
 }
+
+/** 完整交付以统一完成语义判断；截断/过滤/未知结束不能作为最终答案。 */
+internal fun Message.isCompleteDeliverable(): Boolean =
+    finishReason?.lowercase() in setOf("stop", "completed", "end_turn") &&
+        parts.any { it is MessagePart.Text && it.text.isNotBlank() } &&
+        parts.none { it is MessagePart.ToolCall }

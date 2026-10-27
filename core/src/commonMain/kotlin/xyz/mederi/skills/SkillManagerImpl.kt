@@ -6,12 +6,15 @@ import ai.koog.skills.model.Skill
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.api.exception.MederiValidationException
 import xyz.mederi.skills.domain.SkillInfo
 import xyz.mederi.store.SettingsStore
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
 
 /**
@@ -30,6 +33,9 @@ class SkillManagerImpl(
     private val defaultSkillsRoot: String,
     private val downloader: suspend (String) -> ByteArray = SkillManagerImpl::downloadFromUrl,
 ) : SkillManager {
+
+    /** name → (SKILL.md 全文, 文件 mtime)；mtime 变化即失效重读。 */
+    private val fullTextCache = ConcurrentHashMap<String, Pair<String, Long>>()
 
     private companion object {
         const val ROOT_KEY = "skills.root"
@@ -123,6 +129,19 @@ class SkillManagerImpl(
             throw MederiNotFoundException("skill '$trimmed' 不存在")
         }
         dir.deleteRecursively()
+    }
+
+    override suspend fun loadFullText(name: String): String = withContext(Dispatchers.IO) {
+        val info = list().find { it.name == name }
+            ?: throw MederiNotFoundException("Skill not found: $name")
+        val file = File(info.location)
+        val mtime = file.lastModified()
+        fullTextCache[name]?.let { (cached, cachedMtime) ->
+            if (cachedMtime == mtime) return@withContext cached
+        }
+        val text = file.readText()
+        fullTextCache[name] = text to mtime
+        text
     }
 
     // ==================== 内部 ====================

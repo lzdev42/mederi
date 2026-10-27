@@ -60,7 +60,7 @@ fun RightExtensionPanel(
         if (currentPanel != null) {
             panelToDisplay = currentPanel
             // 开启浏览器或阅读面板时，默认宽度占全屏 2/3（受 maxPanelWidth 保护）
-            if (currentPanel == RightDockPanel.BROWSER) {
+            if (currentPanel == RightDockPanel.BROWSER_AUTOMATION) {
                 readerWidthDp = defaultReaderWidthDp
             } else if (currentPanel == RightDockPanel.ARTIFACTS && readerWidthDp < defaultReaderWidthDp) {
                 readerWidthDp = defaultReaderWidthDp
@@ -138,6 +138,7 @@ private fun RightExtensionPanelContent(
         RightDockPanel.DIFF -> FeatherIcons.Folder
         RightDockPanel.ARTIFACTS -> FeatherIcons.FileText
         RightDockPanel.TERMINAL -> FeatherIcons.Terminal
+        RightDockPanel.BROWSER_AUTOMATION -> FeatherIcons.Globe
         RightDockPanel.BROWSER -> FeatherIcons.Globe
     }
 
@@ -213,6 +214,10 @@ private fun RightExtensionPanelContent(
                     RightDockPanel.TERMINAL -> TerminalPanelContent(
                         viewModel = viewModel,
                         terminalVm = terminalViewModel,
+                        colors = colors
+                    )
+                    RightDockPanel.BROWSER_AUTOMATION -> BrowserAutomationDockPanel(
+                        viewModel = viewModel,
                         colors = colors
                     )
                     RightDockPanel.BROWSER -> BrowserPanelContent(

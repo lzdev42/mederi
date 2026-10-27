@@ -39,7 +39,7 @@ private val ReasoningMaxContentHeight = 200.dp
  *
  * 顶层独立显示（enforceMaxHeight=true）时：展开内容高度自适应（wrap content），
  * 未点展开按钮时最高高度上限为 [ReasoningMaxContentHeight]，内容溢出时在视口内滚动 + 流式即时吸底；
- * 底部「展开/收起」按钮在溢出或摊开时出现，点击可切换为抬大限高上限（500dp）的展开态，在视口内滚动看完整内容。
+ * 底部「展开/收起」按钮在溢出或摊开时出现，点击可解除限高，由外层消息视口展示完整内容。
  * 位于 WorkTraceCard 内（enforceMaxHeight=false）时保持无限高——卡整体已限高滚动，子项不再重复限制。
  */
 @Composable
@@ -111,6 +111,7 @@ fun ReasoningBlock(
         icon = BrainIcon,
         iconTint = if (isReasoningActive) activePulseColor else colors.textMuted,
         label = label,
+        clickable = text.isNotBlank(),
         labelColor = if (isReasoningActive) activePulseColor else colors.textSecondary,
     ) {
         Column(

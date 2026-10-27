@@ -1,5 +1,11 @@
 package xyz.mederi.browser
 
+/**
+ * DEAD CODE (2026-10): JCEF 自动化后端退役，改用 camoufox。
+ * 本文件暂定不用，是死代码但禁止清理，以后根据情况决定是否启用。
+ *
+ * （原用途：KBWebView zoom + 文件对话框）
+ */
 import xyz.kbrowser.webview.KBFileDialogCallback
 import xyz.kbrowser.webview.KBFileDialogMode
 import xyz.kbrowser.webview.KBFileDialogRequest

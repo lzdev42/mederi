@@ -1,5 +1,11 @@
 package xyz.mederi.ui.components
 
+/**
+ * DEAD CODE (2026-10): JCEF 自动化后端退役，改用 camoufox。
+ * 本文件暂定不用，是死代码但禁止清理，以后根据情况决定是否启用。
+ *
+ * （原用途：内嵌 tab 面板 UI）
+ */
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -96,5 +102,6 @@ internal fun rightDockPanelTitle(panel: RightDockPanel): String = stringResource
         RightDockPanel.ARTIFACTS -> Res.string.rightdock_artifacts
         RightDockPanel.TERMINAL -> Res.string.rightdock_terminal
         RightDockPanel.BROWSER -> Res.string.rightdock_browser
+        RightDockPanel.BROWSER_AUTOMATION -> Res.string.rightdock_browser_automation
     }
 )

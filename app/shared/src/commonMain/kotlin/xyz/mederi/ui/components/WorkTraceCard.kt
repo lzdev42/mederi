@@ -1,5 +1,7 @@
 package xyz.mederi.ui.components
 
+import kotlinx.coroutines.delay
+import kotlin.time.TimeSource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -23,8 +25,17 @@ import mederi.app.shared.generated.resources.worktrace_expand
 import mederi.app.shared.generated.resources.worktrace_has_failure
 import mederi.app.shared.generated.resources.worktrace_steps_count
 import mederi.app.shared.generated.resources.worktrace_summary_title
+import mederi.app.shared.generated.resources.status_working
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.ChatListItem
+import xyz.mederi.ui.WorkTraceActivity
+import xyz.mederi.ui.workTraceElapsedMs
+import xyz.mederi.ui.chat.ToolActionGroup
+import xyz.mederi.ui.chat.classifyToolAction
+import mederi.app.shared.generated.resources.status_thinking
+import mederi.app.shared.generated.resources.status_generating
+import mederi.app.shared.generated.resources.worktrace_waiting_response
+import mederi.app.shared.generated.resources.worktrace_waiting_subagents
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ProcessRow
 
@@ -50,36 +61,48 @@ fun WorkTraceCard(
     modifier: Modifier = Modifier,
     renderStepItem: @Composable (ChatListItem) -> Unit,
 ) {
-    if (workTrace.items.isEmpty()) return
+    if (workTrace.items.isEmpty() && !workTrace.isRunning) return
 
     val colors = LocalMederiColors.current
     var userChoice by remember(workTrace.key) { mutableStateOf<Boolean?>(null) }
-    val autoExpanded = false
-    val isExpanded = userChoice ?: autoExpanded
+    val isExpanded = userChoice ?: false
 
     // 点块底部按钮切换为抬大限高上限（600dp）的展开态，再点缩回默认限高
     var isUnbounded by remember(workTrace.key) { mutableStateOf(false) }
 
-    // 汇总标题文案：栏目名 + 步骤数 + 耗时 + 失败提示（拼接逻辑一字不改）
-    val durationStr = if (workTrace.totalDurationMs > 0) {
-        val sec = workTrace.totalDurationMs / 1000
-        if (sec >= 60) "${sec / 60}m ${sec % 60}s" else "${sec}s"
-    } else ""
-
-    val titleText = run {
-        val title = stringResource(Res.string.worktrace_summary_title)
-        val details = mutableListOf<String>()
-        if (workTrace.totalToolsCount > 0) {
-            details.add(stringResource(Res.string.worktrace_steps_count, workTrace.totalToolsCount))
+    // 起终点来自Core；运行中使用单调时钟递增，结束后只读持久化终点。
+    var now by remember(workTrace.key) { mutableLongStateOf(xyz.mederi.currentTimeMillis()) }
+    LaunchedEffect(workTrace.key, workTrace.isRunning, workTrace.startedAt, workTrace.completedAt) {
+        val origin = xyz.mederi.currentTimeMillis()
+        val ticking = TimeSource.Monotonic.markNow()
+        now = origin
+        if (workTrace.isRunning && workTrace.startedAt != null && workTrace.completedAt == null) {
+            while (true) {
+                delay(1_000)
+                now = origin + ticking.elapsedNow().inWholeMilliseconds
+            }
         }
-        if (durationStr.isNotBlank()) {
-            details.add(stringResource(Res.string.worktrace_duration, durationStr))
-        }
-        if (workTrace.hasFailedTool) {
-            details.add(stringResource(Res.string.worktrace_has_failure))
-        }
-        if (details.isNotEmpty()) "$title (${details.joinToString(" · ")})" else title
     }
+    val elapsedMs = workTraceElapsedMs(workTrace.startedAt, workTrace.completedAt, workTrace.isRunning, now)
+    val durationStr = elapsedMs?.let { elapsed ->
+        val sec = elapsed / 1_000
+        if (sec >= 60) "${sec / 60}m ${sec % 60}s" else "${sec}s"
+    }
+    val titleText = buildList {
+        add(stringResource(if (workTrace.isRunning) Res.string.status_working else Res.string.worktrace_summary_title))
+        if (!workTrace.isRunning && workTrace.totalToolsCount > 0) {
+            add(stringResource(Res.string.worktrace_steps_count, workTrace.totalToolsCount))
+        }
+        durationStr?.let { add(stringResource(Res.string.worktrace_duration, it)) }
+        if (workTrace.hasFailedTool) add(stringResource(Res.string.worktrace_has_failure))
+    }.joinToString(" · ")
+    val activitySummary = if (workTrace.isRunning) when (val activity = workTrace.activity) {
+        is WorkTraceActivity.Tool -> toolRunningLabel(ToolActionGroup(classifyToolAction(activity.call.name), listOf(activity.call)))
+        WorkTraceActivity.Thinking -> stringResource(Res.string.status_thinking)
+        WorkTraceActivity.Generating -> stringResource(Res.string.status_generating)
+        is WorkTraceActivity.WaitingSubagents -> stringResource(Res.string.worktrace_waiting_subagents, activity.count)
+        else -> stringResource(Res.string.worktrace_waiting_response)
+    } else null
 
     // 步骤视口滚动状态提到 content 之外：底部按钮的显隐需要读 maxValue（内容是否溢出视口），
     // 必须在组合期求值，不能是展开区内部的局部变量
@@ -93,12 +116,18 @@ fun WorkTraceCard(
     // 汇总折叠栏：整行可点，hover 才浮出 surfaceHover 底色（无常态底色、无描边）。
     ProcessRow(
         expanded = isExpanded,
+        clickable = workTrace.items.isNotEmpty(),
         onExpandedChange = { userChoice = !isExpanded },
         modifier = modifier.fillMaxWidth(),
         icon = if (workTrace.hasFailedTool) FeatherIcons.AlertCircle else FeatherIcons.Activity,
         iconTint = if (workTrace.hasFailedTool) colors.accentDanger else colors.accentPrimary,
         label = titleText,
         labelColor = if (workTrace.hasFailedTool) colors.accentDanger else colors.textSecondary,
+        summary = activitySummary,
+        leading = if (workTrace.isRunning) {
+            { CircularProgressIndicator(color = colors.accentPrimary, strokeWidth = 1.4.dp,
+                modifier = Modifier.size(14.dp)) }
+        } else null,
     ) {
         // 展开后的完整工作轨迹子项（导轨线由 ProcessRow 统一绘制）。
         // 容器高度自适应内容（不设固定高），上限 320.dp 由可滚动的步骤视口自己承担：

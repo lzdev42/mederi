@@ -1,12 +1,18 @@
 package xyz.mederi.tools.subagent
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlin.coroutines.coroutineContext
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.SendMessageRequest
@@ -61,7 +67,7 @@ class SubagentRunnerImpl(
         executorSubtaskIndex: Int?,
         planStore: PlanStore?,
         agentId: String?,
-        onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)?
+        onProgress: (suspend (MederiEvent) -> Unit)?
     ): String {
         val sessionId = agentId ?: "sub_${UUID.randomUUID().toString().take(8)}"
         val now = Instant.now().toString()
@@ -86,6 +92,7 @@ class SubagentRunnerImpl(
         )
         sessionStore.insert(session)
 
+        val executionJob = SupervisorJob(coroutineContext[Job])
         val turnExecutor = TurnExecutor(
             sessionStore = sessionStore,
             historyStore = historyStore,
@@ -97,7 +104,7 @@ class SubagentRunnerImpl(
             skills = skills,
             // 继承调用方协程上下文：外部取消（SubagentManager.stop）能级联取消内部 turn，
             // 避免"外层 job 取消但内层 Koog turn 继续跑"的资源泄漏。
-            scope = CoroutineScope(coroutineContext + SupervisorJob()),
+            scope = CoroutineScope(coroutineContext + executionJob),
             // 文件写入追踪：写工具成功后回调入队，turn 结束时 flush（见 flushTouchedFiles）
             onFileTouched = { path -> touchedFiles.add(path) },
             // 子 turn 的 TurnDiff 回传：合并进父会话当前活跃 turn 的 diff tracker——
@@ -110,29 +117,7 @@ class SubagentRunnerImpl(
         )
 
         val inputText = when (role) {
-            SubagentRole.EXECUTOR -> buildString {
-                append("You are a subagent executor: execute the task directly with your tools. ")
-                append("Do not create plans or spawn agents.\n\n")
-                if (!plan.isNullOrBlank()) {
-                    append("Work through the spec checklist TOP-DOWN, item by item, in order. ")
-                    append("Do not skip items and do not improvise additions. If an item proves impossible ")
-                    append("as written, stop rather than improvise, and say so explicitly in your final answer ")
-                    append("under a line 'SPEC_FEEDBACK: <what in the spec contradicts reality>'.\n\n")
-                } else {
-                    append("Execute the task to completion. Only read files directly needed for the changes. ")
-                    append("If something proves impossible, stop and report it in your final answer.\n\n")
-                }
-                append("Verify compilation only (e.g. ./gradlew :module:compileKotlin). Do NOT run tests.\n\n")
-                append(task)
-                if (!briefing.isNullOrBlank()) {
-                    append("\n\nAdditional info:\n")
-                    append(briefing)
-                }
-                if (!plan.isNullOrBlank()) {
-                    append("\n\nSpec checklist to execute (top-down):\n")
-                    append(plan)
-                }
-            }
+            SubagentRole.EXECUTOR -> buildExecutorInput(task, briefing, plan)
             SubagentRole.RESEARCHER -> buildString {
                 append("You are a research subagent: investigate the task below using read-only tools. ")
                 append("Read files, list directories, cross-reference, and report findings. ")
@@ -148,34 +133,28 @@ class SubagentRunnerImpl(
                 throw IllegalStateException("BROWSER_* roles are configuration-only: browser tasks run via BrowserTaskManager, not SubagentRunner")
         }
 
-        // 窗口聚合：高频 MESSAGE_DELTA → 低频 SUBAGENT_PROGRESS（≥throttle 才 emit 一帧），
-        // tool_call 帧只带工具名、参数分片不进 delta（聚合器规则，见 SubagentProgressBatch）。
+        // 一个消费者拥有聚合器与终态确认；终态必须在所有先前事件转发后才可返回。
+        val terminal = CompletableDeferred<MederiEvent>()
         val progressBatch = SubagentProgressBatch()
-        val progressJob = CoroutineScope(coroutineContext + SupervisorJob()).launch {
-            eventBus.filter { it.sessionId == sessionId }.collect { ev ->
-                when (ev.type) {
-                    EventType.MESSAGE_DELTA -> {
-                        val deltaType = ev.payload["type"] ?: "text"
-                        val content = ev.payload["content"].orEmpty()
-                        val activity = when (deltaType) {
-                            "reasoning" -> SubagentActivity.THINKING
-                            "tool_call" -> SubagentActivity.TOOL_CALL
-                            else -> SubagentActivity.OUTPUT
-                        }
-                        // 正文/推理帧都进输出视窗；工具参数分片（type=tool_call）不累积
-                        progressBatch.add(
-                            activity, content, ev.payload["name"],
-                            isMessage = deltaType == "text",
-                            accumulateDelta = deltaType != "tool_call"
-                        )
+        val forwardedTypes = setOf(EventType.SESSION_UPDATED, EventType.MESSAGE_DELTA,
+            EventType.TOOL_CALLED, EventType.TOOL_RESULT, EventType.MESSAGE_COMPLETED,
+            EventType.MESSAGE_ERROR, EventType.STATUS)
+        val progressJob = CoroutineScope(coroutineContext).launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                eventBus.filter { it.sessionId == sessionId }.takeWhile { event ->
+                    if (event.type in forwardedTypes) {
+                        for (frame in progressBatch.add(event)) onProgress?.invoke(frame)
                     }
-                    EventType.TOOL_CALLED -> {
-                        progressBatch.add(SubagentActivity.TOOL_CALL, "", ev.payload["tool"], false)
-                    }
-                    else -> {}
-                }
-                progressBatch.flushIfDue()?.let { frame ->
-                    onProgress?.invoke(frame.activity, frame.delta, frame.toolName, frame.isMessage)
+                    val isTerminal = event.type == EventType.MESSAGE_COMPLETED || event.type == EventType.MESSAGE_ERROR
+                    if (isTerminal) terminal.complete(event)
+                    !isTerminal
+                }.collect { }
+            } catch (e: Throwable) {
+                terminal.completeExceptionally(e)
+                throw e
+            } finally {
+                withContext(NonCancellable) {
+                    progressBatch.flushNow()?.let { onProgress?.invoke(it) }
                 }
             }
         }
@@ -198,14 +177,10 @@ class SubagentRunnerImpl(
             )
 
             // 阻塞等待子 Agent turn 结束
-            val terminalEvent = eventBus
-                .filter { it.sessionId == sessionId }
-                .first {
-                    it.type == EventType.MESSAGE_COMPLETED || it.type == EventType.MESSAGE_ERROR
-                }
+            val terminalEvent = terminal.await()
 
-            if (terminalEvent.type == EventType.MESSAGE_ERROR) {
-                val error = terminalEvent.payload["error"] ?: "Subagent encountered an error."
+            if (terminalEvent.type == EventType.MESSAGE_ERROR || terminalEvent.payload["finalMessageId"].isNullOrBlank()) {
+                val error = terminalEvent.payload["error"] ?: "Subagent finished without a complete final response."
                 return "[subagent error] $error"
             }
 
@@ -224,11 +199,11 @@ class SubagentRunnerImpl(
         } catch (e: Throwable) {
             "[subagent error] ${e.message ?: e.javaClass.simpleName}"
         } finally {
-            // 尾部冲刷：把窗口内残留的文本增量在取消前补发一次（不丢最后一段流式输出）
-            progressBatch.flushNow()?.let { frame ->
-                onProgress?.invoke(frame.activity, frame.delta, frame.toolName, frame.isMessage)
+            // 聚合器仅由订阅协程操作，避免finally与collect并发冲刷造成乱序/重复。
+            withContext(NonCancellable) {
+                progressJob.cancelAndJoin()
+                executionJob.cancelAndJoin()
             }
-            progressJob.cancel()
             // 无论成功/失败/取消，都把已写入的文件清单 flush 回 PlanStore——agent 丢失后父代理可据此恢复/查越界。
             if (planId != null && executorSubtaskIndex != null && planStore != null && touchedFiles.isNotEmpty()) {
                 val files = touchedFiles.toList()
@@ -286,6 +261,35 @@ class SubagentRunnerImpl(
                 }
             }
             SubagentRole.BROWSER_OPERATOR, SubagentRole.BROWSER_BRAIN -> fullText
+        }
+    }
+
+    companion object {
+        /**
+         * 组装执行器输入文本（纯函数，供实际派工与测试共用）。
+         *
+         * - Plan 路径（spec 非空）：spec 是唯一实现指令来源。task 和 briefing 都不进输入——
+         *   task 仅为标识（日志/UI），briefing（planDetail）可能含处理逻辑，与 spec 产生两套要求。
+         *   执行器只看到 spec 清单，不需要参与判断其他文本与 spec 的关系。
+         * - Ad-hoc 路径（spec 为空）：task + briefing 是执行器的完整指令。
+         *
+         * 纪律指令（SPEC_FEEDBACK 类别、不猜边界、编译命令由 spec 指定等）全部在执行器系统提示词
+         * [xyz.mederi.prompt.SystemPrompts.forSubagent] 中，此函数不重复——避免两处漂移。
+         */
+        internal fun buildExecutorInput(task: String, briefing: String?, plan: String?): String {
+            return if (!plan.isNullOrBlank()) {
+                // Plan 路径：spec 唯一真理源，task/briefing 都不进输入
+                "Spec checklist to execute (top-down):\n$plan"
+            } else {
+                // Ad-hoc 路径：task + briefing 是完整指令
+                buildString {
+                    append(task)
+                    if (!briefing.isNullOrBlank()) {
+                        append("\n\nAdditional info:\n")
+                        append(briefing)
+                    }
+                }
+            }
         }
     }
 }

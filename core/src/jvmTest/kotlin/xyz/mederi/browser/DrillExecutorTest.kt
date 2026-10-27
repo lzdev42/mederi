@@ -147,7 +147,7 @@ class DrillExecutorTest {
         assertTrue(result.success, "success 应为 true, error=${result.error_message}")
         assertEquals(1, result.drill_results.size)
         assertTrue(
-            control.log.any { it == "locator.click .loaded" },
+            control.log.any { it == "locator.click CSS:.loaded:inexact" },
             "应执行匹配分支的 click 动作, log=${control.log}"
         )
     }

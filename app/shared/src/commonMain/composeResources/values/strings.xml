@@ -135,10 +135,6 @@
     <string name="input_placeholder">输入消息...</string>
     <string name="input_send">发送</string>
     <string name="input_stop">停止生成</string>
-    <string name="queue_banner_title">%1$d 条消息排队中</string>
-    <string name="queue_send_now">立即发送</string>
-    <string name="queue_remove">移出队列</string>
-    <string name="queue_steer_tooltip">立即作为引导信息注入当前任务</string>
     <string name="input_select_model">选择模型</string>
     <string name="input_selected">已选择</string>
     <string name="input_default_key">默认 Key</string>
@@ -520,6 +516,7 @@
     <string name="sysinfo_memory_rss">内存(RSS)</string>
     <string name="rightdock_artifacts">文件查看器</string>
     <string name="rightdock_browser">网页</string>
+    <string name="rightdock_browser_automation">浏览器自动化</string>
     <string name="rightdock_diff">文件</string>
     <string name="rightdock_overview">概览</string>
     <string name="rightdock_plan">计划</string>
@@ -555,6 +552,8 @@
     <string name="subagentui_status_running">运行中</string>
     <string name="subagentui_status_stopped">已终止</string>
     <string name="subagentui_stop_task">关闭子任务</string>
+    <string name="subagentui_stop_task_confirm_title">终止子任务？</string>
+    <string name="subagentui_stop_task_confirm_message">确定终止该子任务？进行中的工作将被打断且无法恢复。</string>
     <string name="subagentui_tracker_title">子 AGENT 任务追踪器 (%1$d)</string>
     <string name="termview_remote_title">远程终端</string>
     <string name="termview_remote_unavailable">将随遥控 WS 通道（/v1/terminal/ws）一同提供</string>
@@ -836,4 +835,10 @@
     <string name="browser_automation_collapse">收起</string>
     <string name="browser_automation_expand">详情</string>
     <string name="browser_automation_current_url">当前页面</string>
+    <string name="tool_detail_pending">等待执行，尚无输出</string>
+    <string name="tool_detail_running">执行中，尚无输出</string>
+    <string name="tool_detail_empty_output">执行完成，无输出</string>
+    <string name="tool_detail_empty_error">执行失败，未提供错误详情</string>
+    <string name="worktrace_waiting_response">等待模型响应…</string>
+    <string name="worktrace_waiting_subagents">等待 %1$d 个子任务结果…</string>
 </resources>

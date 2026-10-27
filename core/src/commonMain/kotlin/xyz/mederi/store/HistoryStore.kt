@@ -39,6 +39,17 @@ interface HistoryStore {
      */
     suspend fun append(sessionId: String, message: Message)
 
+    /** 更新一条消息，保留序号及其他消息；实现应与 append 原子隔离。 */
+    suspend fun updateMessage(sessionId: String, messageId: String, transform: (Message) -> Message) {
+        updateHistory(sessionId) { history ->
+            require(history.any { it.id == messageId }) { "Message not found: $messageId" }
+            history.map { if (it.id == messageId) transform(it) else it }
+        }
+    }
+
+    /** 与 append/updateMessage 原子隔离的读改写；用于压缩/ChatMemory 回写保留并发接收的输入。 */
+    suspend fun updateHistory(sessionId: String, transform: (List<Message>) -> List<Message>)
+
     /**
      * 全量替换指定 session 的对话历史。
      *

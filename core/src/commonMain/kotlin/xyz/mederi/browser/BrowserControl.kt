@@ -28,6 +28,9 @@ data class PageSnapshot(
     val rawTree: Any?
 )
 
+/** 语义定位方式（对齐 Playwright locator 家族；Drill 的 playwright_api 映射到此）。 */
+enum class LocatorKind { CSS, XPATH, TEXT, ROLE, LABEL, PLACEHOLDER, ALT_TEXT, TITLE, TEST_ID }
+
 interface BrowserControl {
 
     /** 启动浏览器（连接内核），幂等。 */
@@ -85,6 +88,19 @@ interface BrowserControl {
     suspend fun locator(selector: String): BrowserLocator =
         throw UnsupportedOperationException("selector locator not supported by this backend")
 
+    /**
+     * 按语义方式定位元素。
+     * - ROLE：value = role，name = 可访问名（可空）
+     * - TEXT：value = 可见文本，exact 控制精确/包含
+     * - CSS/XPATH 之外的 kind 一律按语义查询，不要退化成 CSS。
+     */
+    suspend fun locator(
+        kind: LocatorKind,
+        value: String,
+        name: String? = null,
+        exact: Boolean = true
+    ): BrowserLocator = throw UnsupportedOperationException("semantic locator not supported by this backend")
+
     /** 在当前页面执行 JS，返回结果字符串。 */
     suspend fun evaluateJavascript(js: String): String =
         throw UnsupportedOperationException("evaluateJavascript not supported")
@@ -108,6 +124,10 @@ interface BrowserControl {
     /** 上传文件到指定元素（elementRef 定位）。 */
     suspend fun uploadFile(elementRef: String, filePaths: List<String>): OperationResult =
         throw UnsupportedOperationException("uploadFile not supported")
+
+    /** 按 CSS 选择器上传文件到 input[type=file]（支持 display:none 的隐藏 input）。 */
+    suspend fun uploadFileBySelector(selector: String, filePaths: List<String>): OperationResult =
+        throw UnsupportedOperationException("uploadFileBySelector not supported by this backend")
 
     /** 按页面坐标增量滚动。 */
     suspend fun scrollByCoordinates(originX: Int, originY: Int, deltaX: Int, deltaY: Int): OperationResult =
@@ -158,4 +178,16 @@ interface BrowserLocator {
 
     /** 过滤出文本包含 hasText 的匹配元素。 */
     suspend fun filter(hasText: String): BrowserLocator
+
+    /** 聚焦元素后按下按键（元素级）。 */
+    suspend fun press(key: KeyboardKey): OperationResult
+
+    /** 勾选元素（checkbox/radio；uncheck 同语义，底层为点击切换）。 */
+    suspend fun check(): OperationResult
+
+    /** 以元素中心为原点滚动。 */
+    suspend fun scroll(deltaX: Int, deltaY: Int): OperationResult
+
+    /** 在元素上逐字符输入（先清空原值）。 */
+    suspend fun type(text: String): OperationResult
 }

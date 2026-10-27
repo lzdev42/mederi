@@ -33,9 +33,6 @@ import xyz.emuci.diff.syntax.DiffSyntaxHighlighter
 import xyz.emuci.syntax.ast.TokenType
 import xyz.emuci.syntax.theme.CodeTheme
 
-private val GUTTER_ACTION_BLUE = Color(0xFF007ACC)
-private val GUTTER_TEXT_MUTED = Color(0xFF6B7280)
-
 /**
  * 差异单行视图组件。
  * 严格按照高清晰度规范：双列等宽右对齐行号、软折行行号顶部对齐且不重复、整行增删半透明底色。
@@ -74,7 +71,7 @@ fun DiffLineRow(
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
             lineHeight = 20.sp,
-            color = GUTTER_TEXT_MUTED,
+            color = theme.diffGutterTextColor,
             textAlign = TextAlign.End,
         )
     }
@@ -117,7 +114,7 @@ fun DiffLineRow(
                     modifier = Modifier
                         .size(15.dp)
                         .clip(CircleShape)
-                        .background(GUTTER_ACTION_BLUE)
+                        .background(theme.diffGutterActionColor)
                         .clickable { onGutterActionClick(actionLineNo.first, actionLineNo.second) },
                     contentAlignment = Alignment.Center,
                 ) {

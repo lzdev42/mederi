@@ -241,13 +241,13 @@ class MederiAiCore(
                 compactionThresholdPercent = { _compactionThresholdPercent.value }
             }
             // KBrowser 初始化（JCEF 可用且运行环境支持时非 null；headless 无 Xvfb 时为 null）
-            // core 拥有 KBrowser 单例，注入给 inkcompose（渲染）和 UI（可见浏览器），也用于 JcefBrowserControl 自动化
+            // core 拥有 KBrowser 单例，注入给 inkcompose（渲染）和 UI（可见浏览器）；JCEF 自动化后端已退役，仅渲染用
             _kBrowser = xyz.mederi.browser.KBrowserRuntime.ensureInitialized()
-            // 浏览器自动化：注册 Camoufox（headless 可选能力；未安装/未配置时选择它会得到引导错误）。
-            // 内置 JCEF 在此注册（KBrowser 初始化成功时，见上方 _kBrowser 判空）——注册表默认策略
-            // 优先内置可见浏览器（JCEF），headless server 无 JCEF 时默认才落到 Camoufox。
-            // AI 通过 run_browser_task(browser=...) 选择：测自己网页→jcef，第三方自动化→camoufox。
-            browserSettingsManager = xyz.mederi.browser.BrowserSettingsManager(mederi.settingsStore)
+            // 浏览器自动化：仅注册 Camoufox（headless 可选能力；未安装/未配置时选择它会得到引导错误）。
+            // JCEF 自动化后端已退役（改用 camoufox）：KBrowser 仅保留渲染用途（inkcompose Mermaid/PDF/HTML），
+            // 不再注册为自动化后端；AI 通过 run_browser_task(browser=...) 选择，默认即 camoufox。
+            // 复用 Mederi 持有的单一实例（避免双缓存：BrowserSettingsApi 与浏览器任务运行目录解析共享同一缓存）
+            browserSettingsManager = mederi.browserSettingsManager
             browserSettingsApi = xyz.mederi.api.impl.BrowserSettingsApiImpl(
                 browserSettingsManager,
                 installerProvider = {
@@ -256,7 +256,7 @@ class MederiAiCore(
                 }
             )
             browserSettingsManager.get()  // 预热缓存（挂起）
-            // 默认浏览器偏好：读持久化值设给 BrowserRegistry（null 保持现有 JCEF 优先策略）
+            // 默认浏览器偏好：读持久化值设给 BrowserRegistry（null 保持默认策略：第一个注册的，即 camoufox）
             runCatching { browserSettingsManager.getDefaultBrowser() }.getOrNull()
                 ?.takeIf { it.isNotBlank() }?.let { BrowserRegistry.defaultName = it }
             xyz.mederi.browser.BrowserRegistry.register(
@@ -283,15 +283,6 @@ class MederiAiCore(
                     )
                 }
             )
-            // JCEF 浏览器自动化：KBrowser 可用时注册为主力引擎（BrowserRegistry.default() 策略优先 JCEF）
-            // Camoufox 保持注册为 backup；AI 可通过 browser=camoufox 显式选择
-            if (_kBrowser != null) {
-                xyz.mederi.browser.BrowserRegistry.register(
-                    name = "jcef",
-                    kind = xyz.mederi.browser.BrowserKind.JCEF,
-                    factory = { _ -> xyz.mederi.browser.JcefBrowserControl() }
-                )
-            }
             cleanupLegacyBuiltinProviders()
             cleanupStaleRunningSessions()
             syncBuiltinProviders()
@@ -376,9 +367,11 @@ class MederiAiCore(
                 }
                 val newStatus = when (event.type) {
                     xyz.mederi.domain.model.EventType.SESSION_UPDATED -> {
-                        // 新 turn 开始：主 turn 活跃；若仍有子代理在跑，维持 Working
-                        mainTurnActive[event.sessionId] = true
-                        ConversationStatus.Working
+                        // 接收插话不是新 turn，不能把 WaitingUser 或子代理生命周期误翻为 Working。
+                        if (event.payload["inputAccepted"] == "true") null else {
+                            mainTurnActive[event.sessionId] = true
+                            ConversationStatus.Working
+                        }
                     }
                     xyz.mederi.domain.model.EventType.MESSAGE_COMPLETED -> {
                         // 主 turn 结束：子代理集合非空时保持 Working（子代理仍在跑），否则回 Idle
@@ -814,10 +807,9 @@ class MederiAiCore(
             // 重启/翻历史恢复：当前活跃计划（审批模式待批准 / 自动模式已自动审批），UI 自由决定卡片渲染位置
             pendingPlanApproval = initialPlanApproval(conversationId),
             planApprovals = initialPlanApprovals(conversationId),
-            // 重启/翻历史恢复：当前会话在跑/已结束的子代理（静态元数据补齐；
-            // currentActivity/currentTool/outputText 等实时进度字段留 null，由 SUBAGENT_* 事件流更新）
+            // 切换/重连重放与实时相同的标准子事件，不能只水合元数据而丢失推理/工具结果。
             subagents = mederi.sessions.listSubagentsForSession(conversationId).map { bg ->
-                xyz.mederi.core.contract.models.SubagentState(
+                val metadata = xyz.mederi.core.contract.models.SubagentState(
                     agentId = bg.agentId,
                     parentSessionId = bg.parentSessionId,
                     role = bg.role.name,
@@ -827,8 +819,11 @@ class MederiAiCore(
                     task = bg.task,
                     briefing = bg.briefing,
                     status = bg.status.name,
-                    startedAt = bg.startedAt
+                    startedAt = bg.startedAt,
+                    completedAt = bg.completedAt,
                 )
+                val events = synchronized(bg.progressEvents) { bg.progressEvents.toList() }
+                xyz.mederi.core.contract.SubagentTracker.replay(metadata, events.map(MederiModelMapper::toCoreEvent))
             },
             pendingQuestion = hydratedQuestion,
             requestCount = backfill.requestCount,
@@ -1013,7 +1008,8 @@ class MederiAiCore(
         val request = SendMessageRequest(
             agentConfig = agentConfig,
             parts = parts,
-            apiKeyId = input.apiKeyId
+            apiKeyId = input.apiKeyId,
+            messageId = input.messageId
         )
         // 记录该供应商最近一次选定的 key（供自动命名等非 turn 操作跟随；仅内存，不落库）
         if (input.apiKeyId != null) {
@@ -1024,19 +1020,9 @@ class MederiAiCore(
         mederi.sessions.sendMessage(conversationId, request)
     }
 
-    override suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit> = runCatching {
-        DebugLog.section("AiCore", "MederiAiCore.steerMessage")
-        DebugLog.data("AiCore", "conversationId", conversationId)
-        val model = input.model?.let { findCoreModel(it.id) }
-        val agentConfig = MederiInputMapper.toAgentConfig(input.agent, model, input.thinkingLevel)
-        val parts = MederiInputMapper.toMessageParts(input)
-        val request = SendMessageRequest(
-            agentConfig = agentConfig,
-            parts = parts,
-            apiKeyId = input.apiKeyId
-        )
-        mederi.sessions.steerMessage(conversationId, request)
-    }
+    // 旧调用方兼容入口：发送/插话的状态决策全部由 Core 执行。
+    override suspend fun steerMessage(conversationId: String, input: ChatPromptInput): Result<Unit> =
+        sendMessage(conversationId, input)
 
     override suspend fun abort(conversationId: String): Result<Unit> = runCatching {
         mederi.sessions.abort(conversationId)
@@ -1479,6 +1465,45 @@ class MederiAiCore(
             _isReady.first { it }
         }
         mederi.skills.uninstall(name)
+    }
+
+    override suspend fun listActiveSkills(conversationId: String): Result<List<SkillItem>> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.sessions.listActiveSkills(conversationId).map {
+            SkillItem(
+                name = it.name,
+                description = it.description,
+                location = it.location,
+                license = it.license,
+                compatibility = it.compatibility,
+                allowedTools = it.allowedTools,
+            )
+        }
+    }
+
+    override suspend fun activateSkill(conversationId: String, skillName: String): Result<SkillItem> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.sessions.activateSkill(conversationId, skillName).let {
+            SkillItem(
+                name = it.name,
+                description = it.description,
+                location = it.location,
+                license = it.license,
+                compatibility = it.compatibility,
+                allowedTools = it.allowedTools,
+            )
+        }
+    }
+
+    override suspend fun deactivateSkill(conversationId: String, skillName: String): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        mederi.sessions.deactivateSkill(conversationId, skillName)
     }
 
     // ==========================================

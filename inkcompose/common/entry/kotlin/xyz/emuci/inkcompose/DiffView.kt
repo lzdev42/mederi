@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import xyz.emuci.diff.algorithm.MyersDiffAlgorithm
 import xyz.emuci.diff.model.DiffDisplayItem
 import xyz.emuci.diff.model.DiffFile
+import xyz.emuci.diff.model.DiffLine
 import xyz.emuci.diff.parser.UnifiedDiffParser
 import xyz.emuci.diff.ui.DiffFileHeader
 import xyz.emuci.diff.ui.DiffHunkExpander
@@ -58,6 +59,7 @@ fun DiffView(
                 diffFile = diff,
                 isExpanded = isExpanded,
                 onToggleExpand = { isExpanded = !isExpanded },
+                theme = effectiveTheme,
             )
         }
 
@@ -112,7 +114,7 @@ fun DiffView(
 
                                 // 折叠胶囊与展开控制器
                                 if (item.remainingCount > 0) {
-                                    DiffHunkExpander(collapsed = item)
+                                    DiffHunkExpander(collapsed = item, theme = effectiveTheme)
                                 }
 
                                 // 向下展开的行
@@ -257,18 +259,34 @@ internal fun buildDisplayItems(diffFile: DiffFile): List<DiffDisplayItem> {
     val hunks = diffFile.hunks
     if (hunks.isEmpty()) return emptyList()
 
+    val oldSrc = diffFile.oldSourceLines
+    val newSrc = diffFile.newSourceLines
+    val hasSource = oldSrc.isNotEmpty() || newSrc.isNotEmpty()
+
     for (i in hunks.indices) {
         val hunk = hunks[i]
         // 检查首个 Hunk 前或 Hunk 之间的折叠区
         if (i == 0) {
-            val gapOld = hunk.oldStart - 1
-            if (gapOld > 0) {
+            val gapSize = hunk.oldStart - 1
+            if (gapSize > 0) {
+                val gapOldStartLine = 1
+                val gapNewStartLine = 1
+                val hidden: List<DiffLine.Unchanged> = if (hasSource && gapSize > 0) {
+                    (0 until gapSize).mapNotNull { k ->
+                        val oldNo = gapOldStartLine + k
+                        val newNo = gapNewStartLine + k
+                        val content = oldSrc.getOrNull(oldNo - 1) ?: newSrc.getOrNull(newNo - 1) ?: return@mapNotNull null
+                        DiffLine.Unchanged(oldLineNo = oldNo, newLineNo = newNo, content = content)
+                    }
+                } else emptyList()
+                val totalCount = if (hasSource) hidden.size else gapSize
                 items.add(
                     DiffDisplayItem.Collapsed(
                         id = "gap-0",
-                        oldStart = 1,
-                        newStart = 1,
-                        totalCount = gapOld,
+                        oldStart = gapOldStartLine,
+                        newStart = gapNewStartLine,
+                        totalCount = totalCount,
+                        hiddenLines = hidden,
                     )
                 )
             }
@@ -276,14 +294,26 @@ internal fun buildDisplayItems(diffFile: DiffFile): List<DiffDisplayItem> {
             val prevHunk = hunks[i - 1]
             val prevOldEnd = prevHunk.oldStart + prevHunk.oldCount
             val prevNewEnd = prevHunk.newStart + prevHunk.newCount
-            val gapOld = hunk.oldStart - prevOldEnd
-            if (gapOld > 0) {
+            val gapSize = hunk.oldStart - prevOldEnd
+            if (gapSize > 0) {
+                val gapOldStartLine = prevOldEnd
+                val gapNewStartLine = prevNewEnd
+                val hidden: List<DiffLine.Unchanged> = if (hasSource && gapSize > 0) {
+                    (0 until gapSize).mapNotNull { k ->
+                        val oldNo = gapOldStartLine + k
+                        val newNo = gapNewStartLine + k
+                        val content = oldSrc.getOrNull(oldNo - 1) ?: newSrc.getOrNull(newNo - 1) ?: return@mapNotNull null
+                        DiffLine.Unchanged(oldLineNo = oldNo, newLineNo = newNo, content = content)
+                    }
+                } else emptyList()
+                val totalCount = if (hasSource) hidden.size else gapSize
                 items.add(
                     DiffDisplayItem.Collapsed(
                         id = "gap-$i",
-                        oldStart = prevOldEnd,
-                        newStart = prevNewEnd,
-                        totalCount = gapOld,
+                        oldStart = gapOldStartLine,
+                        newStart = gapNewStartLine,
+                        totalCount = totalCount,
+                        hiddenLines = hidden,
                     )
                 )
             }

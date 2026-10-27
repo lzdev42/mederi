@@ -20,12 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.emuci.diff.model.DiffFile
-
-private val HEADER_BG = Color(0xFF18181B)
-private val TEXT_PRIMARY = Color(0xFFF3F4F6)
-private val TEXT_MUTED = Color(0xFF9CA3AF)
-private val GREEN_ADD = Color(0xFF4ADE80)
-private val RED_DEL = Color(0xFFF87171)
+import xyz.emuci.syntax.theme.CodeTheme
 
 /**
  * 差异文件卡片顶部 Header 栏。
@@ -36,13 +31,14 @@ fun DiffFileHeader(
     isExpanded: Boolean,
     onToggleExpand: () -> Unit,
     modifier: Modifier = Modifier,
+    theme: CodeTheme,
 ) {
     val dirPath = diffFile.displayPath.substringBeforeLast('/', "").ifEmpty { null }
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(HEADER_BG)
+            .background(theme.diffHeaderBackground)
             .clickable(onClick = onToggleExpand)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -55,7 +51,7 @@ fun DiffFileHeader(
             // 折叠箭头
             BasicText(
                 text = if (isExpanded) "▼" else "▶",
-                style = TextStyle(color = TEXT_MUTED, fontSize = 10.sp),
+                style = TextStyle(color = theme.diffHeaderMutedTextColor, fontSize = 10.sp),
                 modifier = Modifier.padding(end = 8.dp)
             )
 
@@ -63,7 +59,7 @@ fun DiffFileHeader(
             BasicText(
                 text = diffFile.fileName,
                 style = TextStyle(
-                    color = TEXT_PRIMARY,
+                    color = theme.diffHeaderTextColor,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp,
@@ -76,7 +72,7 @@ fun DiffFileHeader(
                 BasicText(
                     text = dirPath,
                     style = TextStyle(
-                        color = TEXT_MUTED,
+                        color = theme.diffHeaderMutedTextColor,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                     )
@@ -93,7 +89,7 @@ fun DiffFileHeader(
                 BasicText(
                     text = "+${diffFile.stats.additions}",
                     style = TextStyle(
-                        color = GREEN_ADD,
+                        color = theme.diffAddedTextColor,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -104,7 +100,7 @@ fun DiffFileHeader(
                 BasicText(
                     text = "-${diffFile.stats.deletions}",
                     style = TextStyle(
-                        color = RED_DEL,
+                        color = theme.diffRemovedTextColor,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,

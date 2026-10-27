@@ -80,6 +80,12 @@ class InMemorySessionStore : SessionStore {
         } ?: return
     }
 
+    override suspend fun updateActiveSkills(id: String, activeSkills: List<String>) {
+        sessions[id] = sessions[id]?.let { s ->
+            s.copy(activeSkills = activeSkills)
+        } ?: return
+    }
+
     override suspend fun delete(id: String) {
         sessions.remove(id)
     }

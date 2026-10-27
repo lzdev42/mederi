@@ -39,7 +39,7 @@ import xyz.mederi.ui.browser.BrowserStepStatus
  * - wasmJs（浏览器）：ServerAiCore 提供 HTTP/SSE 数据源
  *
  * 聚合规则：
- * - [CoreEventType.MESSAGE_DELTA] 追加到当前 streaming Assistant 占位消息
+ * - [CoreEventType.MESSAGE_DELTA] 按响应消息 ID 聚合；response_started/completed 保留请求边界
  * - [CoreEventType.MESSAGE_COMPLETED] 标记占位消息完成，再回查落库数据对齐
  * - [CoreEventType.MESSAGE_ERROR] 设置 errorMessage 并回查落库数据
  * - [CoreEventType.TOOL_CALLED] / [CoreEventType.TOOL_RESULT] 维护 ToolCall block 状态机
@@ -85,7 +85,7 @@ object ConversationStateReducer {
             val page = runCatching { refreshPage() }.getOrNull()
             listOf(page?.let { p ->
                 updated.copy(
-                    messages = p.messages,
+                    messages = if (event.payload["inputAccepted"] == "true") mergeLiveMessages(p.messages, snapshot.messages) else p.messages,
                     tokenUsage = p.tokenUsage,
                     contextUsedTokens = p.contextUsedTokens,
                     requestCount = p.requestCount,
@@ -118,7 +118,10 @@ object ConversationStateReducer {
     fun apply(snapshot: ConversationState, event: CoreEvent): ConversationState = when (event.type) {
         CoreEventType.SESSION_CREATED -> snapshot
 
-        CoreEventType.SESSION_UPDATED -> snapshot.copy(
+        CoreEventType.SESSION_UPDATED -> if (event.payload["inputAccepted"] == "true") {
+            // 输入已被 Core 接收：仅刷新历史，不结束当前响应，也不清除等待用户的交互。
+            snapshot
+        } else snapshot.copy(
             conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
             // 新 turn 开始 = 上一轮的错误已过时（如"用户中止了对话"来自被回滚杀掉的旧 turn），
             // 不清除会让错误横幅挂在重发的新 turn 上；同时清空上一轮未决的提问与审批，
@@ -135,7 +138,7 @@ object ConversationStateReducer {
             statusHint = null
         )
 
-        CoreEventType.MESSAGE_DELTA -> snapshot.withDelta(event.payload).copy(statusHint = null, errorIsStreamInterrupted = false)
+        CoreEventType.MESSAGE_DELTA -> snapshot.withDelta(event).copy(statusHint = null, errorIsStreamInterrupted = false)
 
         CoreEventType.MESSAGE_COMPLETED -> {
             val now = currentTimeMillis()
@@ -147,15 +150,29 @@ object ConversationStateReducer {
                 }.getOrNull()
             }
             val diffMessageId = event.payload["diffMessageId"]
+            val finalMessageId = event.payload["finalMessageId"]?.takeIf { it.isNotBlank() }
+            val turnId = event.payload["turnId"]
 
             val completed = snapshot.copy(
                 conversation = snapshot.conversation.copy(status = ConversationStatus.Idle),
                 messages = snapshot.messages.map { msg ->
                     val isTarget = if (diffMessageId != null) msg.id == diffMessageId else msg.isStreaming
                     val updatedDiff = if (isTarget && diffSummary != null) diffSummary else msg.turnDiffSummary
-                    if (msg.isStreaming) msg.copy(isStreaming = false, completedAt = now, turnDiffSummary = updatedDiff)
-                    else if (isTarget && diffSummary != null) msg.copy(turnDiffSummary = updatedDiff)
-                    else msg
+                    val belongsToTurn = turnId != null && msg.turnId == turnId
+                    val finalAnswer = when {
+                        msg.role != ChatRole.Assistant -> msg.isFinalAnswer
+                        streamInterrupted && msg.isStreaming -> false
+                        msg.id == finalMessageId -> true
+                        else -> msg.isFinalAnswer
+                    }
+                    msg.copy(
+                        isStreaming = false,
+                        completedAt = if (msg.isStreaming) now else msg.completedAt,
+                        turnDiffSummary = updatedDiff,
+                        isFinalAnswer = finalAnswer,
+                        workStartedAt = if (belongsToTurn) event.payload["workStartedAt"]?.toLongOrNull() ?: msg.workStartedAt else msg.workStartedAt,
+                        workCompletedAt = if (belongsToTurn) event.payload["workCompletedAt"]?.toLongOrNull() ?: msg.workCompletedAt else msg.workCompletedAt,
+                    )
                 },
                 errorMessage = event.payload["error"] ?: snapshot.errorMessage,
                 errorId = event.payload["errorId"] ?: snapshot.errorId,
@@ -177,7 +194,10 @@ object ConversationStateReducer {
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = status),
                 messages = snapshot.messages.map { msg ->
-                    if (msg.isStreaming) msg.copy(isStreaming = false) else msg
+                    val belongsToWork = event.payload["turnId"] != null && msg.turnId == event.payload["turnId"]
+                    msg.copy(isStreaming = false,
+                        workStartedAt = if (belongsToWork) event.payload["workStartedAt"]?.toLongOrNull() ?: msg.workStartedAt else msg.workStartedAt,
+                        workCompletedAt = if (belongsToWork) event.payload["workCompletedAt"]?.toLongOrNull() ?: msg.workCompletedAt else msg.workCompletedAt)
                 },
                 errorMessage = event.payload["error"],
                 errorId = event.payload["errorId"],
@@ -209,14 +229,16 @@ object ConversationStateReducer {
         CoreEventType.TOOL_CALLED -> snapshot.withToolCalled(
             toolCallId = event.payload["toolCallId"] ?: "",
             name = event.payload["tool"] ?: "tool",
-            args = event.payload["args"] ?: ""
+            args = event.payload["args"] ?: "",
+            event = event,
         ).copy(statusHint = null)
 
         CoreEventType.TOOL_RESULT -> snapshot.withToolResult(
             toolCallId = event.payload["toolCallId"] ?: "",
             name = event.payload["tool"] ?: "tool",
             output = event.payload["output"] ?: "",
-            isError = event.payload["isError"] == "true"
+            isError = event.payload["isError"] == "true",
+            event = event,
         )
 
         // 单次 LLM HTTP 请求完成：实时累加 requestCount、更新 lastRequestUsage（不走 refreshPage）
@@ -447,6 +469,11 @@ object ConversationStateReducer {
         CoreEventType.BACKGROUND_TASK_COMPLETED,
         CoreEventType.BACKGROUND_TASK_ERROR,
         CoreEventType.BACKGROUND_TASK_STOPPED -> snapshot
+
+        // 会话 skill 激活/卸载：事件只是投影通知 UI 刷新激活列表（UI 按需读 session.activeSkills），
+        // 快照不直接处理。
+        CoreEventType.SKILL_ACTIVATED,
+        CoreEventType.SKILL_DEACTIVATED -> snapshot
     }
 
     // ------------------------------------------------------------------
@@ -573,15 +600,17 @@ object ConversationStateReducer {
     // 私有：消息/block 状态机
     // ------------------------------------------------------------------
 
-    private fun ConversationState.withDelta(payload: Map<String, String>): ConversationState {
+    private fun ConversationState.withDelta(event: CoreEvent): ConversationState {
+        val payload = event.payload
         val type = payload["type"] ?: "text"
         val content = payload["content"] ?: ""
         val currentMessages = this.messages.toMutableList()
 
-        val placeholder = ensureStreamingPlaceholder(currentMessages)
+        val placeholder = ensureStreamingPlaceholder(currentMessages, event)
         val updatedBlocks = placeholder.blocks.toMutableList()
 
         when (type) {
+            "response_started", "response_completed" -> Unit
             "text" -> {
                 val lastBlock = updatedBlocks.lastOrNull()
                 if (lastBlock is ChatBlock.Text) {
@@ -661,7 +690,13 @@ object ConversationStateReducer {
             }
         }
 
-        currentMessages.add(placeholder.copy(blocks = updatedBlocks))
+        currentMessages.putMessage(placeholder.copy(
+            blocks = updatedBlocks,
+            isStreaming = type != "response_completed",
+            completedAt = if (type == "response_completed") currentTimeMillis() else null,
+            workStartedAt = event.payload["workStartedAt"]?.toLongOrNull() ?: placeholder.workStartedAt,
+            workCompletedAt = event.payload["workCompletedAt"]?.toLongOrNull() ?: placeholder.workCompletedAt,
+        ))
 
         val targetStatus = if (this.conversation.status == ConversationStatus.WaitingUser) {
             ConversationStatus.WaitingUser
@@ -674,15 +709,45 @@ object ConversationStateReducer {
         )
     }
 
+    /** 回查已落库历史时保留尚未落库的响应，不让接收插话的刷新冲掉正在流式的内容。 */
+    private fun mergeLiveMessages(persisted: List<ChatMessage>, live: List<ChatMessage>): List<ChatMessage> {
+        val merged = persisted.toMutableList()
+        for ((index, msg) in live.withIndex()) {
+            val isUnconfirmedResponse = msg.role == ChatRole.Assistant && msg.turnId != null && msg.isFinalAnswer == false
+            if ((!msg.isStreaming && !isUnconfirmedResponse) || merged.any { it.id == msg.id }) continue
+            val previousId = live.take(index).lastOrNull { previous -> merged.any { it.id == previous.id } }?.id
+            val previousIndex = merged.indexOfLast { it.id == previousId }
+            merged.add(if (previousIndex >= 0) previousIndex + 1 else merged.size, msg)
+        }
+        return merged
+    }
+
+    private fun MutableList<ChatMessage>.putMessage(message: ChatMessage) {
+        val index = indexOfFirst { it.id == message.id }
+        if (index >= 0) this[index] = message else add(message)
+    }
+
     @OptIn(ExperimentalUuidApi::class)
-    private fun ConversationState.ensureStreamingPlaceholder(currentMessages: MutableList<ChatMessage>): ChatMessage {
-        val last = currentMessages.lastOrNull()
-        if (last != null && last.role == ChatRole.Assistant && (last.isStreaming || this.conversation.status == ConversationStatus.WaitingUser)) {
-            currentMessages.removeLast()
-            return last
+    private fun ConversationState.ensureStreamingPlaceholder(
+        currentMessages: MutableList<ChatMessage>,
+        event: CoreEvent,
+    ): ChatMessage {
+        val responseId = event.messageId?.takeIf { it.isNotBlank() }
+        if (responseId != null) {
+            currentMessages.firstOrNull { it.id == responseId && it.role == ChatRole.Assistant }?.let { return it }
+            // 响应边界来自 Core；新请求不能继续写入上一个请求的占位消息。
+            currentMessages.indices.forEach { index ->
+                val message = currentMessages[index]
+                if (message.isStreaming) currentMessages[index] = message.copy(isStreaming = false)
+            }
+        } else {
+            // 兼容旧事件协议，只有无响应 ID 的事件才使用原来的尾部占位逻辑。
+            val last = currentMessages.lastOrNull()
+            if (last != null && last.role == ChatRole.Assistant &&
+                (last.isStreaming || this.conversation.status == ConversationStatus.WaitingUser)) return last
         }
         return ChatMessage(
-            id = "streaming_${Uuid.random()}",
+            id = responseId ?: "streaming_${Uuid.random()}",
             conversationId = this.conversation.id,
             role = ChatRole.Assistant,
             blocks = emptyList(),
@@ -692,18 +757,23 @@ object ConversationStateReducer {
             model = this.conversation.modelId,
             agent = this.conversation.agent,
             isStreaming = true,
-            error = null
+            error = null,
+            turnId = event.payload["turnId"],
+            isFinalAnswer = if (responseId != null) false else null,
+            workStartedAt = event.payload["workStartedAt"]?.toLongOrNull(),
+            workCompletedAt = event.payload["workCompletedAt"]?.toLongOrNull(),
         )
     }
 
     private fun ConversationState.withToolCalled(
         toolCallId: String,
         name: String,
-        args: String
+        args: String,
+        event: CoreEvent,
     ): ConversationState {
         val input = parseToolArgs(args)
         val currentMessages = this.messages.toMutableList()
-        val placeholder = ensureStreamingPlaceholder(currentMessages)
+        val placeholder = ensureStreamingPlaceholder(currentMessages, event)
         val updatedBlocks = placeholder.blocks.toMutableList()
 
         val existing = (if (toolCallId.isNotBlank()) {
@@ -731,7 +801,7 @@ object ConversationStateReducer {
             )
         }
 
-        currentMessages.add(placeholder.copy(blocks = updatedBlocks))
+        currentMessages.putMessage(placeholder.copy(blocks = updatedBlocks))
         val targetStatus = if (this.conversation.status == ConversationStatus.WaitingUser) {
             ConversationStatus.WaitingUser
         } else {
@@ -747,14 +817,15 @@ object ConversationStateReducer {
         toolCallId: String,
         name: String,
         output: String,
-        isError: Boolean
+        isError: Boolean,
+        event: CoreEvent,
     ): ConversationState {
         val currentMessages = this.messages.toMutableList()
 
         var found = false
         for (i in currentMessages.indices.reversed()) {
             val msg = currentMessages[i]
-            if (msg.role != ChatRole.Assistant) continue
+            if (msg.role != ChatRole.Assistant || (event.messageId != null && msg.id != event.messageId)) continue
             val blocks = msg.blocks.toMutableList()
             val target = (if (toolCallId.isNotBlank()) {
                 blocks.filterIsInstance<ChatBlock.ToolCall>()
@@ -783,7 +854,7 @@ object ConversationStateReducer {
         }
 
         if (!found) {
-            val placeholder = ensureStreamingPlaceholder(currentMessages)
+            val placeholder = ensureStreamingPlaceholder(currentMessages, event)
             val updatedBlocks = placeholder.blocks.toMutableList()
             val target = (if (toolCallId.isNotBlank()) {
                 updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
@@ -806,7 +877,7 @@ object ConversationStateReducer {
                 }
                 updatedBlocks[updatedBlocks.lastIndexOf(target)] = target.copy(state = state)
             }
-            currentMessages.add(placeholder.copy(blocks = updatedBlocks))
+            currentMessages.putMessage(placeholder.copy(blocks = updatedBlocks))
         }
 
         val targetStatus = if (this.conversation.status == ConversationStatus.WaitingUser) {

@@ -48,8 +48,13 @@ sealed interface ChatListItem {
         override val key: String,
         val items: List<ChatListItem>,
         val totalToolsCount: Int,
-        val totalDurationMs: Long,
         val hasFailedTool: Boolean,
+        val isRunning: Boolean = false,
+        val turnId: String? = null,
+        /** Core记录的整项工作墙钟时间，包含工具执行与子任务等待。 */
+        val startedAt: Long? = null,
+        val completedAt: Long? = null,
+        val activity: WorkTraceActivity? = null,
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
 

@@ -61,6 +61,10 @@ fun computeChatItems(
     }
 
     val lastAssistantTurn = turns.lastOrNull { it.first == ChatRole.Assistant }?.second
+    val lastResponseByWork = msgs.filter { it.role == ChatRole.Assistant && it.turnId != null }
+        .associate { it.turnId to it.id }
+    // 执行工作ID可跨插话延续，但显示段必须以真实用户消息为边界，禁止向上合并。
+    val hasRunningSubagents = snapshot?.subagents?.any { it.status == "RUNNING" } == true
     for ((turnIndex, turnPair) in turns.withIndex()) {
         val (role, turnMessages) = turnPair
         val isUser = role == ChatRole.User
@@ -131,14 +135,10 @@ fun computeChatItems(
 
         // Assistant 轮次
         val isStreaming = turnMessages.any { it.isStreaming }
-        // 活跃判定：正在流式，或会话在工作且本 turn 是最后一个 assistant turn 且其最后一条
-        // 消息仍是会话最新消息（尾巴检查）。缺尾巴检查时，新用户消息已发出、新 turn 的
-        // assistant 尚未开始流式的窗口期内，lastAssistantTurn 仍指向旧完成 turn，会把它
-        // 误判为活跃 → 已折叠的 WorkTraceBlock 平铺展开（历史 bug）。
         val isLastMsgTail = turnMessages.lastOrNull()?.id == msgs.lastOrNull()?.id
-        val isActiveAssistant = isStreaming || (isWorking && turnMessages == lastAssistantTurn && isLastMsgTail)
+        val isActiveAssistant = isStreaming ||
+            ((isWorking || hasRunningSubagents) && turnMessages == lastAssistantTurn && isLastMsgTail)
 
-        val hasAnyToolCallInTurn = turnMessages.any { m -> m.blocks.any { it is ChatBlock.ToolCall } }
         var turnHasFirstItem = false
 
         // 预解析计划审批卡片匹配
@@ -166,10 +166,12 @@ fun computeChatItems(
 
         // 按真实自然时序收集本轮的消息块
         val rawChronologicalItems = mutableListOf<ChatListItem>()
+        val itemMessageIds = mutableMapOf<String, String>()
         var planApprovalEmitted = false
         var questionCardEmitted = false
 
         for ((msgIndex, msg) in turnMessages.withIndex()) {
+            val firstItemIndex = rawChronologicalItems.size
             val messageImages = msg.blocks.filterIsInstance<ChatBlock.File>()
                 .filter { isImageBlock(it) }
                 .map { it.url }
@@ -179,18 +181,16 @@ fun computeChatItems(
                 when (block) {
                     is ChatBlock.Reasoning -> {
                         if (block.text.isNotBlank()) {
-                            val durationMs = if (msg.completedAt != null && msg.completedAt > msg.createdAt) {
-                                msg.completedAt - msg.createdAt
-                            } else (msg.durationMs ?: 0L)
-                            val isReasoningActive = isStreaming && (
-                                msg.blocks.drop(blockIndex + 1).none { it is ChatBlock.Text && it.text.isNotBlank() } &&
-                                    turnMessages.drop(msgIndex + 1).none { m -> m.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() } }
-                            )
+                            // 没有推理阶段自己的起终点；完整LLM响应耗时不能冒充推理耗时。
+                            val durationMs = 0L
+                            val isReasoningActive = msg.isStreaming && blockIndex == msg.blocks.indexOfLast {
+                                it is ChatBlock.Reasoning || it is ChatBlock.Text || it is ChatBlock.ToolCall
+                            }
 
                             val item = ChatListItem.Reasoning(
                                 key = "${msg.id}_${block.id}",
                                 text = block.text,
-                                isStreaming = isStreaming,
+                                isStreaming = msg.isStreaming,
                                 isTurnStart = false,
                                 durationMs = durationMs,
                                 isReasoningActive = isReasoningActive,
@@ -201,7 +201,7 @@ fun computeChatItems(
 
                     is ChatBlock.Text -> {
                         if (block.text.isNotBlank()) {
-                            val parseResult = ArtifactParser.parse(block.text, isStreaming = isStreaming)
+                            val parseResult = ArtifactParser.parse(block.text, isStreaming = msg.isStreaming)
                             val artifact = parseResult.artifact
                             if (artifact != null) {
                                 if (parseResult.preamble.isNotBlank()) {
@@ -232,7 +232,7 @@ fun computeChatItems(
                                         lineCount = artifact.lineCount,
                                         charCount = artifact.charCount,
                                         isCompleted = artifact.isCompleted,
-                                        isStreaming = isStreaming && !artifact.isCompleted,
+                                        isStreaming = msg.isStreaming && !artifact.isCompleted,
                                         createdAt = msg.createdAt,
                                         isTurnStart = false,
                                     )
@@ -242,7 +242,7 @@ fun computeChatItems(
                                     val postItem = ChatListItem.TextMessage(
                                         key = "${msg.id}_${block.id}_post",
                                         isUser = false,
-                                        isStreaming = isStreaming,
+                                        isStreaming = msg.isStreaming,
                                         isActiveAssistant = isActiveAssistant,
                                         text = parseResult.postscript,
                                         partId = "${block.id}_post",
@@ -259,7 +259,7 @@ fun computeChatItems(
                                 val textItem = ChatListItem.TextMessage(
                                     key = "${msg.id}_${block.id}",
                                     isUser = false,
-                                    isStreaming = isStreaming,
+                                    isStreaming = msg.isStreaming,
                                     isActiveAssistant = isActiveAssistant,
                                     text = block.text,
                                     partId = block.id,
@@ -284,7 +284,7 @@ fun computeChatItems(
                                 ChatListItem.SubagentCalls(
                                     key = "${msg.id}_${block.id}",
                                     subagents = listOf(toolUi),
-                                    isStreaming = isStreaming,
+                                    isStreaming = msg.isStreaming,
                                     isTurnStart = false,
                                     isRunning = isStreaming && toolUi.state is ToolCallState.Running,
                                     hasFailed = toolUi.isFailed,
@@ -313,7 +313,7 @@ fun computeChatItems(
                                 ChatListItem.ToolCalls(
                                     key = "${msg.id}_${block.id}",
                                     toolCalls = listOf(toolUi),
-                                    isStreaming = isStreaming,
+                                    isStreaming = msg.isStreaming,
                                     isTurnStart = false,
                                     toolSummary = buildToolSummary(listOf(toolUi)),
                                     hasFailedTool = toolUi.isFailed,
@@ -342,7 +342,7 @@ fun computeChatItems(
                 val imgItem = ChatListItem.TextMessage(
                     key = "${msg.id}_img",
                     isUser = false,
-                    isStreaming = isStreaming,
+                    isStreaming = msg.isStreaming,
                     isActiveAssistant = isActiveAssistant,
                     text = "",
                     partId = "img",
@@ -354,142 +354,77 @@ fun computeChatItems(
                 )
                 rawChronologicalItems.add(imgItem)
             }
+            for (item in rawChronologicalItems.drop(firstItemIndex)) itemMessageIds[item.key] = msg.id
         }
 
-        // 过程步骤与工作轨迹生命周期：
-        // - Turn 执行中（isActiveAssistant = true）：所有步骤直接按自然时序平铺在聊天流中，实时展示各步骤行与命令输出；
-        // - Turn 完成后（isActiveAssistant = false）：轮次内所有非 Message 过程（思考、工具调用、子代理）折叠进顶部的 WorkTraceBlock，外部留 Message 交付项。
-        if (isActiveAssistant) {
-            if (rawChronologicalItems.isEmpty() && !turnHasFirstItem) {
-                val firstMsg = turnMessages.firstOrNull()
-                result.add(
-                    ChatListItem.Reasoning(
-                        key = "${firstMsg?.id ?: "active"}_reasoning",
-                        text = "",
-                        isStreaming = true,
-                        isTurnStart = true,
-                        durationMs = 0L,
-                        isReasoningActive = true,
-                    )
-                )
-                turnHasFirstItem = true
-            } else {
-                rawChronologicalItems.forEachIndexed { idx, item ->
-                    val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) item.withTurnStart(true) else item
-                    result.add(itemWithTurnStart)
-                    turnHasFirstItem = true
+        // 新消息只认 Core 的交付标记；旧历史缺标记时，兼容保留最后一条完整响应。
+        // 不再根据“最后一个文本块”或是否含工具调用推测答案，artifact 前后文也属于同一响应。
+        val hasDeliveryMetadata = turnMessages.any { it.isFinalAnswer != null || it.turnId != null }
+        val legacyFinalId = if (!hasDeliveryMetadata && !isActiveAssistant &&
+            !hasLaterTurnInSameCycle(turns, turnIndex)
+        ) turnMessages.lastOrNull { msg ->
+            msg.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() || it is ChatBlock.File }
+        }?.id else null
+        val finalMessages = turnMessages.filter { it.isFinalAnswer == true || it.id == legacyFinalId }
+        val finalMessageIds = finalMessages.map { it.id }.toSet()
+        val workItems = mutableListOf<ChatListItem>()
+        val deliverableItems = mutableListOf<ChatListItem>()
+        for (item in rawChronologicalItems) {
+            when (item) {
+                is ChatListItem.PlanApproval, is ChatListItem.QuestionCard,
+                is ChatListItem.SubagentCalls -> deliverableItems.add(item)
+                is ChatListItem.TextMessage, is ChatListItem.DocumentCard -> {
+                    if (itemMessageIds[item.key] in finalMessageIds) deliverableItems.add(item)
+                    else workItems.add(item)
                 }
+                else -> workItems.add(item)
             }
-
-            // 兜底：若 matchedPlan 存在且未在遍历 create_plan 时挂载，追加到尾部
-            if (matchedPlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }) {
-                result.add(
-                    ChatListItem.PlanApproval(
-                        key = "plan_${matchedPlan.id}",
-                        request = matchedPlan,
-                        isTurnStart = !turnHasFirstItem
-                    )
-                )
-                turnHasFirstItem = true
-            }
-        } else {
-            // Turn 已完成：判定本轮是否为用户指令周期内的中间轮次（紧随其后的是同一用户周期内的 <event_message> 唤醒消息）
-            val isIntermediateTurnInCycle = hasLaterTurnInSameCycle(turns, turnIndex)
-
-            var hasDeliverablesInTurn = !hasAnyToolCallInTurn
-            if (!hasAnyToolCallInTurn) {
-                // 无工具调用：全时序输出（无论是否中间轮次——纯文本/推理回复不应折叠）
-                rawChronologicalItems.forEachIndexed { idx, item ->
-                    val itemWithTurnStart = if (!turnHasFirstItem && idx == 0) item.withTurnStart(true) else item
-                    result.add(itemWithTurnStart)
-                    turnHasFirstItem = true
-                }
-            } else {
-                // 有工具调用：思考、工具调用、子代理及非最终过渡文本全部按时序折叠进 WorkTraceBlock，外部仅保留最终交付项
-                val workItems = mutableListOf<ChatListItem>()
-                val deliverableItems = mutableListOf<ChatListItem>()
-                var planApprovalItem: ChatListItem.PlanApproval? = null
-
-                val lastToolIdx = rawChronologicalItems.indexOfLast {
-                    it is ChatListItem.ToolCalls || it is ChatListItem.SubagentCalls
-                }
-                val lastTextIdx = rawChronologicalItems.indexOfLast { it is ChatListItem.TextMessage }
-
-                for ((idx, item) in rawChronologicalItems.withIndex()) {
-                    when (item) {
-                        is ChatListItem.Reasoning,
-                        is ChatListItem.ToolCalls,
-                        is ChatListItem.SubagentCalls -> workItems.add(item)
-
-                        is ChatListItem.PlanApproval -> planApprovalItem = item
-
-                        is ChatListItem.TextMessage -> {
-                            val isFinalDeliverableText =
-                                !isIntermediateTurnInCycle &&
-                                idx > lastToolIdx &&
-                                (idx == lastTextIdx || rawChronologicalItems.getOrNull(idx + 1) is ChatListItem.DocumentCard)
-                            if (isFinalDeliverableText) {
-                                deliverableItems.add(item)
-                            } else {
-                                workItems.add(item)
-                            }
+        }
+        if (workItems.isNotEmpty() || isActiveAssistant) {
+            result.add(
+                ChatListItem.WorkTraceBlock(
+                    key = "${turnMessages.firstOrNull()?.id ?: "active"}_worktrace",
+                    items = workItems,
+                    totalToolsCount = workItems.sumOf { item ->
+                        when (item) {
+                            is ChatListItem.ToolCalls -> item.toolCalls.size
+                            is ChatListItem.SubagentCalls -> item.subagents.size
+                            else -> 0
                         }
+                    },
+                    hasFailedTool = workItems.any { item ->
+                        item is ChatListItem.ToolCalls && item.hasFailedTool ||
+                            item is ChatListItem.SubagentCalls && item.hasFailed
+                    },
+                    isRunning = isActiveAssistant,
+                    turnId = turnMessages.firstOrNull()?.turnId,
+                    // 同一工作可跨用户插话有多段显示，累计计时只放在最后一段，旧段不再跳动。
+                    startedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] })
+                        turnMessages.mapNotNull { it.workStartedAt }.minOrNull() else null,
+                    completedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] })
+                        turnMessages.mapNotNull { it.workCompletedAt }.maxOrNull() else null,
+                    activity = if (isActiveAssistant) deriveWorkTraceActivity(workItems,
+                        snapshot?.subagents?.count { it.status == "RUNNING" } ?: 0) else null,
+                    isTurnStart = true,
+                )
+            )
+            turnHasFirstItem = true
+        }
+        // 待用户操作的卡片必须留在折叠块外，不能因等待而藏起入口。
+        if (matchedPlan != null && deliverableItems.none { it is ChatListItem.PlanApproval } &&
+            result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }
+        ) deliverableItems.add(ChatListItem.PlanApproval(key = "plan_${matchedPlan.id}", request = matchedPlan))
+        deliverableItems.forEach { item ->
+            if (item is ChatListItem.QuestionCard && result.any { it is ChatListItem.QuestionCard }) return@forEach
+            if (item is ChatListItem.PlanApproval && result.any { it is ChatListItem.PlanApproval && it.request.id == item.request.id }) return@forEach
+            result.add(item.withTurnStart(!turnHasFirstItem))
+            turnHasFirstItem = true
+        }
 
-                        else -> deliverableItems.add(item)
-                    }
-                }
-
-                if (workItems.isNotEmpty()) {
-                    var totalToolsCount = 0
-                    var hasFailed = false
-                    for (it in workItems) {
-                        when (it) {
-                            is ChatListItem.ToolCalls -> {
-                                totalToolsCount += it.toolCalls.size
-                                if (it.hasFailedTool) hasFailed = true
-                            }
-                            is ChatListItem.SubagentCalls -> {
-                                totalToolsCount += it.subagents.size
-                                if (it.hasFailed) hasFailed = true
-                            }
-                            else -> {}
-                        }
-                    }
-                    val totalDurationMs = turnMessages.mapNotNull { it.durationMs }.sum()
-                    result.add(
-                        ChatListItem.WorkTraceBlock(
-                            key = "${turnMessages.firstOrNull()?.id ?: ""}_worktrace",
-                            items = workItems,
-                            totalToolsCount = totalToolsCount,
-                            totalDurationMs = totalDurationMs,
-                            hasFailedTool = hasFailed,
-                            isTurnStart = !turnHasFirstItem,
-                        )
-                    )
-                    turnHasFirstItem = true
-                }
-
-                // 计划卡片展示在工作过程之后
-                val effectivePlan = planApprovalItem ?: matchedPlan?.let {
-                    ChatListItem.PlanApproval(key = "plan_${it.id}", request = it, isTurnStart = !turnHasFirstItem)
-                }
-                if (effectivePlan != null && result.none { it is ChatListItem.PlanApproval && it.request.id == effectivePlan.request.id }) {
-                    result.add(effectivePlan.withTurnStart(!turnHasFirstItem))
-                    turnHasFirstItem = true
-                }
-
-                // 交付内容（最终答复正文）
-                deliverableItems.forEach { item ->
-                    if (item is ChatListItem.QuestionCard && result.any { it is ChatListItem.QuestionCard }) return@forEach
-                    result.add(item.withTurnStart(!turnHasFirstItem))
-                    turnHasFirstItem = true
-                }
-                hasDeliverablesInTurn = deliverableItems.isNotEmpty() || effectivePlan != null
-            }
-
+        if (!isActiveAssistant) {
             // 单轮文件变更汇总卡片
             val turnDiffSummary = turnMessages.mapNotNull { it.turnDiffSummary }.lastOrNull()
-            val lastMsg = turnMessages.lastOrNull { it.role == ChatRole.Assistant }
+            val lastMsg = finalMessages.lastOrNull()
             if (turnDiffSummary != null && turnDiffSummary.files.isNotEmpty() && !isStreaming) {
                 result.add(
                     ChatListItem.TurnDiffCard(
@@ -502,16 +437,12 @@ fun computeChatItems(
                 turnHasFirstItem = true
             }
 
-            // 轮次底部的诊断与状态栏：仅当轮次有面对用户的交付项（正文/卡片）或无工具轮次时输出。
-            // 若整轮全部为工具过程被折叠且无交付项（如中途被 Steering 插话打断），则不输出孤立的 Footer，避免时间倒流与空复制按钮。
-            val hasDeliverableItems = hasDeliverablesInTurn || (turnDiffSummary != null && turnDiffSummary.files.isNotEmpty())
-            if (lastMsg != null && !isStreaming && hasDeliverableItems) {
-                val lastMessageText = turnMessages
-                    .flatMap { it.blocks }
+            // 诊断与默认复制内容都绑定完整交付消息，不能只复制最后一句或混入过程说明。
+            if (lastMsg != null && !isStreaming) {
+                val lastMessageText = finalMessages.flatMap { it.blocks }
                     .filterIsInstance<ChatBlock.Text>()
-                    .lastOrNull { it.text.isNotBlank() }
-                    ?.text
-                    .orEmpty()
+                    .filter { it.text.isNotBlank() }
+                    .joinToString("\n\n") { it.text }
 
                 val fullTurnText = buildString {
                     for (msg in turnMessages) {
@@ -552,6 +483,11 @@ fun computeChatItems(
         }
     }
 
+    snapshot?.pendingQuestion?.let { question ->
+        if (result.none { it is ChatListItem.QuestionCard && it.request.id == question.id }) {
+            result.add(ChatListItem.QuestionCard(key = "question_${question.id}", request = question, isTurnStart = true))
+        }
+    }
     val pending = snapshot?.pendingPlanApproval?.takeIf { it.status == "PENDING" || it.status == "PENDING_APPROVAL" }
     if (pending != null && result.none { it is ChatListItem.PlanApproval && it.request.id == pending.id }) {
         result.add(

@@ -1,5 +1,11 @@
 package xyz.mederi.browser
 
+/**
+ * DEAD CODE (2026-10): JCEF 自动化后端退役，改用 camoufox。
+ * 本文件暂定不用，是死代码但禁止清理，以后根据情况决定是否启用。
+ *
+ * （原用途：可见 tab + 接管）
+ */
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.kbrowser.webview.ElementNotFoundException
@@ -137,6 +143,11 @@ internal class JcefSessionBrowserControl(
         return OperationResult.Success("upload_file", detail = filePaths.joinToString(","))
     }
 
+    override suspend fun uploadFileBySelector(selector: String, filePaths: List<String>): OperationResult {
+        requirePage().uploadFileBySelector(selector, filePaths)
+        return OperationResult.Success("upload_file", detail = filePaths.joinToString(","))
+    }
+
     override suspend fun scrollByCoordinates(
         originX: Int,
         originY: Int,
@@ -156,6 +167,28 @@ internal class JcefSessionBrowserControl(
 
     override suspend fun locator(selector: String): BrowserLocator =
         JcefSessionBrowserLocator(requirePage().locator(selector), selector)
+
+    override suspend fun locator(
+        kind: LocatorKind,
+        value: String,
+        name: String?,
+        exact: Boolean
+    ): BrowserLocator {
+        val p = requirePage()
+        val (delegate, label) = when (kind) {
+            LocatorKind.CSS -> p.locator(value) to "css=$value"
+            LocatorKind.XPATH -> p.locator("xpath=$value") to "xpath=$value"
+            LocatorKind.TEXT -> p.getByText(value, exact) to "text=$value"
+            LocatorKind.ROLE ->
+                p.getByRole(value, name) to (if (name != null) "role=$value[name=$name]" else "role=$value")
+            LocatorKind.LABEL -> p.getByLabel(value) to "label=$value"
+            LocatorKind.PLACEHOLDER -> p.getByPlaceholder(value) to "placeholder=$value"
+            LocatorKind.ALT_TEXT -> p.getByAltText(value) to "alt=$value"
+            LocatorKind.TITLE -> p.getByTitle(value) to "title=$value"
+            LocatorKind.TEST_ID -> p.getByTestId(value) to "test-id=$value"
+        }
+        return JcefSessionBrowserLocator(delegate, label)
+    }
 
     private suspend fun requirePage(): KBPage {
         val existing = session.selectedTab?.page
@@ -198,6 +231,18 @@ private class JcefSessionBrowserLocator(
 
     override suspend fun filter(hasText: String): BrowserLocator =
         JcefSessionBrowserLocator(delegate.filter { it.text.contains(hasText) }, selector)
+
+    override suspend fun press(key: KeyboardKey): OperationResult =
+        withNotFound("locator.press") { delegate.press(key.toKBrowser()); OperationResult.Acknowledged }
+
+    override suspend fun check(): OperationResult =
+        withNotFound("locator.check") { delegate.check(); OperationResult.Acknowledged }
+
+    override suspend fun scroll(deltaX: Int, deltaY: Int): OperationResult =
+        withNotFound("locator.scroll") { delegate.scroll(deltaX, deltaY).toCore() }
+
+    override suspend fun type(text: String): OperationResult =
+        withNotFound("locator.type") { delegate.type(text).toCore() }
 
     private suspend fun withNotFound(action: String, block: suspend () -> OperationResult): OperationResult =
         try {

@@ -18,6 +18,7 @@ import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.PlanApprovalRequester
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import xyz.mederi.skills.SkillManager
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
 import xyz.mederi.tools.diff.TurnDiffTracker
@@ -42,6 +43,8 @@ object ToolFactory {
     // get_context_remaining / new_context 未开放给 AI（AgentTools 实现保留），恢复时取消注释
     val AGENT_TOOL_NAMES: List<ToolName> = listOf(
         ToolName.UPDATE_TODO,
+        ToolName.LOAD_SKILL,
+        ToolName.UNLOAD_SKILL,
         // ToolName.GET_CONTEXT_REMAINING,
         // ToolName.NEW_CONTEXT,
         ToolName.ASK_USER
@@ -94,11 +97,12 @@ object ToolFactory {
         subagentConfigManager: SubagentConfigManager? = null,
         /** 自定义工具（CustomToolRegistry.buildAll() 收集）：旁路合并，不参与 toolNames 裁剪。 */
         customTools: List<ToolBase<*, *>> = emptyList(),
+        skills: SkillManager? = null,
         backgroundTaskManager: xyz.mederi.tools.background.BackgroundTaskManager? = null,
     ): ToolRegistry {
         val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched)
         val shellTools = ShellTools(directories, commandSandbox, backgroundTaskManager, sessionId)
-        val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester)
+        val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester, skills)
 
         // 主代理：全量工具（Triage Flow——是否建计划由 AI 判断，无代码门禁）。子代理按角色裁剪：
         // - EXECUTOR：执行计划内子任务——全量写/执行工具，但无 plan/spawn/verify/ask_user。
@@ -153,7 +157,9 @@ object ToolFactory {
 
         val agentToolMap = if (canTodo) {
             mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                ToolName.UPDATE_TODO to { agentTools.UpdateTodoTool() }
+                ToolName.UPDATE_TODO to { agentTools.UpdateTodoTool() },
+                ToolName.LOAD_SKILL to { agentTools.LoadSkillTool() },
+                ToolName.UNLOAD_SKILL to { agentTools.UnloadSkillTool() }
             )
         } else {
             // 未开放给 AI：AgentTools 实现保留，恢复时取消注释

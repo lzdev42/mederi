@@ -1,5 +1,6 @@
 package xyz.mederi.ui.components.atoms
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -62,9 +63,10 @@ import xyz.mederi.theme.LocalMederiColors
  * @param label 单行主文案（超长省略号截断）
  * @param labelColor 主文案着色，默认次要文字色
  * @param clickable 是否响应交互。false 时整行不可点、无 hover 底色、且不渲染尾部箭头
- *   （用于「该行暂不可展开」的场合，如准备中的子代理动作行）
+ *   （用于「该行暂不可展开」的场合，如正文尚未到达的推理状态行）
  * @param leading 前置区自定义内容（可选）。非 null 时取代默认 [icon] 渲染，用于表达
  *   「运行中」等非静态图标状态（如旋转进度条）
+ * @param summary 可选当前活动单行摘要，占剩余宽度并将箭头置于最右侧
  * @param content 展开内容（左侧自带导轨线容器）
  */
 @Composable
@@ -78,6 +80,7 @@ fun ProcessRow(
     labelColor: Color = LocalMederiColors.current.textSecondary,
     clickable: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
+    summary: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalMederiColors.current
@@ -132,8 +135,15 @@ fun ProcessRow(
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
+                modifier = if (summary == null) Modifier.weight(1f, fill = false) else Modifier
             )
+            if (summary != null) {
+                Crossfade(targetState = summary, animationSpec = tween(150),
+                    modifier = Modifier.weight(1f), label = "processActivity") { activity ->
+                    Text(text = activity, color = colors.textMuted, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
 
             if (clickable) {
                 // 箭头紧跟文字：spacedBy 已给 6dp，再补 2.dp 模拟「两个空格」的视觉间隔

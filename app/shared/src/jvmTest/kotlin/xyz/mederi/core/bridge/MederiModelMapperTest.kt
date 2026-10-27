@@ -63,6 +63,24 @@ class MederiModelMapperTest {
         assertNull(backfill.lastRequestUsage, "全无 usage → lastRequestUsage 为 null（不用 0 伪装）")
     }
 
+    @Test
+    fun toChatMessage_preservesCoreDeliveryAndPendingInputIdentity() {
+        val message = msg(MessageRole.ASSISTANT).copy(
+            id = "response_1", turnId = "turn_1", isFinalAnswer = true, workStartedAt = 1000L, workCompletedAt = 9000L,
+        )
+        val chat = MederiModelMapper.toChatMessage(message)
+        assertEquals("response_1", chat.id)
+        assertEquals("turn_1", chat.turnId)
+        assertEquals(1000L, chat.workStartedAt)
+        assertEquals(9000L, chat.workCompletedAt)
+        assertEquals(true, chat.isFinalAnswer)
+        val pending = MederiModelMapper.toChatMessage(msg(MessageRole.USER).copy(
+            id = "user_1", turnId = "turn_1", pendingSteering = true,
+        ))
+        assertEquals("user_1", pending.id)
+        assertEquals(true, pending.pendingSteering)
+    }
+
     // ── UI_HIDDEN_MARKER 剥离的角色作用域（回归：ASSISTANT 字面提及标记不得被截断）──
 
     @Test

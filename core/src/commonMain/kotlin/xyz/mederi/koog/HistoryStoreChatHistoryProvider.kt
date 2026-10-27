@@ -24,7 +24,9 @@ data class MessageDiagnostics(
     val modelName: String? = null,
     val reasoningLevel: String? = null,
     val agentMode: String? = null,
-    val projectId: String? = null
+    val projectId: String? = null,
+    val turnId: String? = null,
+    val workStartedAt: Long? = null
 )
 
 /**
@@ -65,7 +67,10 @@ internal fun xyz.mederi.domain.model.Message.withDiagnostics(d: MessageDiagnosti
         modelName = modelName ?: d.modelName,
         reasoningLevel = reasoningLevel ?: d.reasoningLevel,
         agentMode = agentMode ?: d.agentMode,
-        projectId = projectId ?: d.projectId
+        projectId = projectId ?: d.projectId,
+        turnId = turnId ?: d.turnId,
+        workStartedAt = workStartedAt ?: d.workStartedAt,
+        isFinalAnswer = isFinalAnswer ?: if (role == MessageRole.ASSISTANT && d.turnId != null) false else null
     )
 
 /**
@@ -148,106 +153,102 @@ class HistoryStoreChatHistoryProvider(
         }
         if (incoming.isEmpty()) return
 
-        val existing = historyStore.load(conversationId)
+        historyStore.updateHistory(conversationId) { stored ->
+            val pending = stored.filter { it.pendingSteering }
+            val existing = stored.filterNot { it.pendingSteering }
 
-        // ── 已有 id 过滤（AI 视图回显不覆盖已落库消息）：
-        //    库是含全量字段（图片等）的真理源。includeImages=false 时 load 返回的
-        //    无图 AI 视图在 store 回写时若参与 reconcile，指纹与库中带图版不同，
-        //    常规对齐会失败 → 走整表 replace，把带图历史替换成无图版本。
-        //    这里先按 id 剔除已在库中的回显消息，只对真正的新消息做回写——
-        //    已落库消息永远以库中版本为准，无图 AI 视图不得覆盖历史。
-        val existingIds = existing.mapTo(java.util.HashSet<String?>()) { it.id }
-        val incomingIds = incoming.mapTo(java.util.HashSet<String?>()) { it.id }
-        val freshIncoming = incoming.filter { it.id !in existingIds }
-        if (freshIncoming.isEmpty()) return
+            // ── 已有 id 过滤（AI 视图回显不覆盖已落库消息）：
+            //    库是含全量字段（图片等）的真理源。includeImages=false 时 load 返回的
+            //    无图 AI 视图在 store 回写时若参与 reconcile，指纹与库中带图版不同，
+            //    常规对齐会失败 → 走整表 replace，把带图历史替换成无图版本。
+            //    这里先按 id 剔除已在库中的回显消息，只对真正的新消息做回写——
+            //    已落库消息永远以库中版本为准，无图 AI 视图不得覆盖历史。
+            val existingIds = existing.mapTo(java.util.HashSet<String?>()) { it.id }
+            val incomingIds = incoming.mapTo(java.util.HashSet<String?>()) { it.id }
+            val freshIncoming = incoming.filter { it.id !in existingIds }
+            if (freshIncoming.isEmpty()) return@updateHistory stored
 
-        val freshIncomingSigs = freshIncoming.map { signature(it) }
-        val existingSigs = existing.map { signature(it) }
+            val freshIncomingSigs = freshIncoming.map { signature(it) }
+            val existingSigs = existing.map { signature(it) }
 
-        // ── 压缩回写：首条是 TLDR 且它不在已有历史里（本次新生成的总结）
-        val first = freshIncoming.first()
-        val firstText = first.parts.filterIsInstance<MessagePart.Text>().firstOrNull()?.text.orEmpty()
-        val tldrLike = first.role == MessageRole.ASSISTANT && firstText.startsWith(TLDR_PREFIX)
+            // ── 压缩回写：首条是 TLDR 且它不在已有历史里（本次新生成的总结）
+            val first = freshIncoming.first()
+            val firstText = first.parts.filterIsInstance<MessagePart.Text>().firstOrNull()?.text.orEmpty()
+            val tldrLike = first.role == MessageRole.ASSISTANT && firstText.startsWith(TLDR_PREFIX)
 
-        if (tldrLike) {
-            // 对齐用 id 过滤前的完整 incoming（recent 携带库中同 id，见下方注释）
-            val incomingSigs = incoming.map { signature(it) }
-            val alreadyMarked = existing.any {
-                it.role == MessageRole.SUMMARY &&
-                    it.parts.filterIsInstance<MessagePart.Text>().firstOrNull()?.text == firstText
-            }
-            if (!alreadyMarked) {
-                // 本次新生成的压缩：与库尾的指纹对齐必须用 id 过滤前的 incoming。
-                // Koog ChatMemory 在 strategy 完成时把压缩后的历史（[TLDR, recent...]）
-                // 整体交给 store，recent 携带与库中一致的 id——若用 freshIncoming
-                // （id 去重后只剩 TLDR）做对齐，k 恒为 0，SUMMARY 会插到历史末尾、
-                // 保留的 recent 退出 AI 视图窗口（压缩后模型看不到保留的最近原文）。
-                // 现在只把 TLDR 之后的头部与库尾做最长指纹匹配，k = recent 条数，
-                // SUMMARY 插在 recent 起点（压缩点）；recent 取库中版，
-                // 新消息仅追加未落库（id 不在库、内容不在 recent 段）的部分。
-                var k = minOf(incoming.size - 1, existing.size)
-                while (k > 0) {
-                    val head = incomingSigs.subList(1, 1 + k)
-                    val tail = existingSigs.takeLast(k)
-                    if (head == tail) break
-                    k--
+            if (tldrLike) {
+                // 对齐用 id 过滤前的完整 incoming（recent 携带库中同 id，见下方注释）
+                val incomingSigs = incoming.map { signature(it) }
+                val alreadyMarked = existing.any {
+                    it.role == MessageRole.SUMMARY &&
+                        it.parts.filterIsInstance<MessagePart.Text>().firstOrNull()?.text == firstText
                 }
-                val markerAt = existing.size - k
-                val marker = summaryMarker(conversationId, firstText)
-                val recentSigs = existing.drop(markerAt).mapTo(java.util.HashSet()) { signature(it) }
-                val fresh = incoming.drop(1 + k).filter {
-                    it.id !in existingIds && signature(it) !in recentSigs
+                if (!alreadyMarked) {
+                    // 本次新生成的压缩：与库尾的指纹对齐必须用 id 过滤前的 incoming。
+                    // Koog ChatMemory 在 strategy 完成时把压缩后的历史（[TLDR, recent...]）
+                    // 整体交给 store，recent 携带与库中一致的 id——若用 freshIncoming
+                    // （id 去重后只剩 TLDR）做对齐，k 恒为 0，SUMMARY 会插到历史末尾、
+                    // 保留的 recent 退出 AI 视图窗口（压缩后模型看不到保留的最近原文）。
+                    // 现在只把 TLDR 之后的头部与库尾做最长指纹匹配，k = recent 条数，
+                    // SUMMARY 插在 recent 起点（压缩点）；recent 取库中版，
+                    // 新消息仅追加未落库（id 不在库、内容不在 recent 段）的部分。
+                    var k = minOf(incoming.size - 1, existing.size)
+                    while (k > 0) {
+                        val head = incomingSigs.subList(1, 1 + k)
+                        val tail = existingSigs.takeLast(k)
+                        if (head == tail) break
+                        k--
+                    }
+                    val markerAt = existing.size - k
+                    val marker = summaryMarker(conversationId, firstText)
+                    val recentSigs = existing.drop(markerAt).mapTo(java.util.HashSet()) { signature(it) }
+                    val fresh = incoming.drop(1 + k).filter {
+                        it.id !in existingIds && signature(it) !in recentSigs
+                    }
+                    val merged = existing.take(markerAt) + marker +
+                        existing.drop(markerAt) + fresh
+                    return@updateHistory merged + pending
                 }
-                val merged = existing.take(markerAt) + marker +
-                    existing.drop(markerAt) + fresh
-                historyStore.replace(conversationId, merged)
-                return
+                // TLDR 已在早前的 store 调用中落库（同一 run 压缩后的后续回写）：
+                // 跳过 TLDR 头，对齐已有历史尾部，只追加新消息
+                val rest = freshIncomingSigs.drop(1)
+                var k = minOf(rest.size, existingSigs.size)
+                while (k > 0 && rest.take(k) != existingSigs.takeLast(k)) k--
+                return@updateHistory existing + freshIncoming.drop(1 + k) + pending
             }
-            // TLDR 已在早前的 store 调用中落库（同一 run 压缩后的后续回写）：
-            // 跳过 TLDR 头，对齐已有历史尾部，只追加新消息
-            val rest = freshIncomingSigs.drop(1)
-            var k = minOf(rest.size, existingSigs.size)
-            while (k > 0 && rest.take(k) != existingSigs.takeLast(k)) k--
-            for (msg in freshIncoming.drop(1 + k)) {
-                historyStore.append(conversationId, msg)
-            }
-            return
-        }
 
-        // ── 常规回写：freshIncoming 应与已有历史的一段对齐（无标记时从头对齐，
-        //    有标记时 freshIncoming 首条就是被映射回来的 SUMMARY），对齐后只追加新消息。
-        val alignStart = if (existingSigs.isNotEmpty() && freshIncomingSigs.first() == existingSigs.first()) {
-            0
-        } else {
-            existingSigs.lastIndexOf(freshIncomingSigs.first())
-        }
-        if (alignStart >= 0) {
-            var i = 0
-            var j = alignStart
-            while (i < freshIncoming.size && j < existing.size) {
-                if (freshIncomingSigs[i] == existingSigs[j]) {
-                    i++
-                    j++
-                } else if (existing[j].id in incomingIds) {
-                    // existing[j] 在 incoming 中存在但被 id 过滤移出了 freshIncoming（如 steering 消息）
-                    // 跳过它继续对齐
-                    j++
-                } else {
-                    break
+            // ── 常规回写：freshIncoming 应与已有历史的一段对齐（无标记时从头对齐，
+            //    有标记时 freshIncoming 首条就是被映射回来的 SUMMARY），对齐后只追加新消息。
+            val alignStart = if (existingSigs.isNotEmpty() && freshIncomingSigs.first() == existingSigs.first()) {
+                0
+            } else {
+                existingSigs.lastIndexOf(freshIncomingSigs.first())
+            }
+            if (alignStart >= 0) {
+                var i = 0
+                var j = alignStart
+                while (i < freshIncoming.size && j < existing.size) {
+                    if (freshIncomingSigs[i] == existingSigs[j]) {
+                        i++
+                        j++
+                    } else if (existing[j].id in incomingIds) {
+                        // existing[j] 在 incoming 中存在但被 id 过滤移出了 freshIncoming（如 steering 消息）
+                        // 跳过它继续对齐
+                        j++
+                    } else {
+                        break
+                    }
                 }
+                // i 之后的是本轮新增消息（j 已到已有历史末尾或内容不再匹配）
+                return@updateHistory existing + freshIncoming.drop(i) + pending
             }
-            // i 之后的是本轮新增消息（j 已到已有历史末尾或内容不再匹配）
-            for (msg in freshIncoming.drop(i)) {
-                historyStore.append(conversationId, msg)
-            }
-            return
-        }
 
-        // ── 对齐失败（异常状态，如运行期间历史被外部清空/内容不匹配）：
-        //    退回整体替换，但必须 existing + freshIncoming——只用 freshIncoming 会删掉
-        //    库中全部旧消息；existing 已在库、freshIncoming 保证不在库（id 已去重），
-        //    拼接无重复，且库中带图版本原样保留。
-        historyStore.replace(conversationId, existing + freshIncoming)
+            // ── 对齐失败（异常状态，如运行期间历史被外部清空/内容不匹配）：
+            //    退回整体替换，但必须 existing + freshIncoming——只用 freshIncoming 会删掉
+            //    库中全部旧消息；existing 已在库、freshIncoming 保证不在库（id 已去重），
+            //    拼接无重复，且库中带图版本原样保留。
+            existing + freshIncoming + pending
+        }
     }
 
     /**
@@ -289,7 +290,7 @@ class HistoryStoreChatHistoryProvider(
          * 所有需要「发送给 AI 的内容」的地方（ChatMemory load、token 估算等）都应使用本函数。
          */
         suspend fun aiViewWindow(historyStore: HistoryStore, sessionId: String): List<Message> {
-            val all = historyStore.load(sessionId)
+            val all = historyStore.load(sessionId).filterNot { it.pendingSteering }
             val markerIndex = all.indexOfLast { it.role == MessageRole.SUMMARY }
             return if (markerIndex >= 0) all.drop(markerIndex) else all
         }

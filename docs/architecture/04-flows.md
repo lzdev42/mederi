@@ -33,7 +33,7 @@ sequenceDiagram
     alt 用户在 turn 运行中插话 (引导模式 Steering, 见 2.1)
         UI->>AC: steerMessage(conversationId, input)
         AC->>TE: steerMessage
-        TE->>TE: RUNNING → pendingSteerings 入队 + STATUS(steering_queued)<br/>非 RUNNING → 降级 sendMessage
+        TE->>TE: sendMessage统一接纳，稳定ID落库<br/>运行中pending输入 / 空闲启动工作
     end
 
     rect rgb(235, 244, 255)
@@ -74,6 +74,36 @@ sequenceDiagram
     UI->>UI: SnapshotReducer.applyWithRefresh + refreshPage 回查落库对齐
 ```
 
+### 消息视口：推理展开与底部跟随（2026-10）
+
+```mermaid
+flowchart TD
+    ITEMS["chatItems 时间正序"] --> PROJECTION["ChatScrollLayout 反向布局投影<br/>固定 index 0 底部留白"]
+    PROJECTION --> FOLLOW{"当前位于底部？"}
+    FOLLOW -- 是 --> MEASURE["本次测量从底边向上布局<br/>推理增长/展开不先下沉再滚回"]
+    FOLLOW -- 否 --> HISTORY["按稳定消息 key 保留阅读锚点<br/>新内容不强制拉回"]
+    MEASURE --> NEXT["后续正文/工具接续<br/>原推理块自然向上移"]
+    SEND["用户发送消息"] --> REQUEST["requestScrollToItem 0<br/>下次测量回到底部"]
+    REQUEST --> PROJECTION
+```
+
+`Workspace.MessageList` 与 `SubagentConversationPanel` 共用底部锚定视口；前者按 conversationId、后者按 agentId 隔离列表状态。不再以布局变化后的异步滚底修正推理展开高度；短内容保持顶部对齐，输入区仍在消息视口外正常占位。
+
+### 过程详情的可展开状态（2026-10）
+
+```mermaid
+flowchart LR
+    R["推理状态行"] --> T{"正文非空？"}
+    T -- 否 --> STATUS["仅状态，无箭头/点击"]
+    T -- 是 --> DISCLOSE["可展开推理正文"]
+    TOOL["工具详情展开"] --> INPUT["展示已有输入参数"]
+    INPUT --> OUTPUT{"结果/错误非空？"}
+    OUTPUT -- 是 --> BODY["展示真实输出或错误"]
+    OUTPUT -- 否 --> EMPTY["按 Pending/Running/Completed/Failed<br/>展示明确状态，无空白详情"]
+```
+
+运行中子代理也允许查看输入与执行状态；报告正文为空时走通用详情，不再生成空 REPORT 折叠。ASK 保持原结构化问答展示。
+
 ### 1.1 输入框设置真理源翻转（2026-10：全局偏好 → 会话）
 
 **语义**：输入框全部设置（模型 / Agent / API Key / 推理档位 / 草稿文本）的真理源已从"全局偏好"翻转为**会话**：
@@ -97,9 +127,9 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     S["sendMessage(sessionId, request, subagentRole?)"] --> V{"会话状态 == IDLE?"}
-    S2["steerMessage(sessionId, request) 引导模式"] --> RQ{"会话 RUNNING<br/>且 activeJobs 活跃?"}
+    S2["sendMessage统一入口 / steer兼容别名"] --> RQ{"会话 RUNNING<br/>且 activeJobs 活跃?"}
     RQ -- "否" --> S
-    RQ -- "是" --> STQ["pendingSteerings 入队 (STATUS steering_queued)<br/>pre-LLM(工具边界) 或文本输出后 nodeCheckSteering 出队注入<br/>有插话转回 nodeCallLLM 继续流式生成；无插话走向 nodeFinish 结束"]
+    RQ -- "是" --> STQ["Core统一接纳并持久化pending输入<br/>安全边界消费完整parts后继续；收尾原子检查"]
     STQ --> RUN
     V -- "否" --> E1["上抛异常(上游包装 MederiException)"]
     V -- "是" --> PREP["组装上下文: Project/PlanStore/Notebook<br/>activePlanContent(计划+spec指针+活跃spec)<br/>activeTodoContent(仅无活跃Plan)"]
@@ -123,45 +153,36 @@ flowchart TD
 
 **事件流消费侧**：`eventBus` → 三路消费：① `MederiAiCore.events()`（进程内）/ `GET /v1/events`（SSE 遥控端）→ 客户端 `SnapshotReducer` 聚合快照；② `launchStreamConsumer` 把 StreamFrame 转 MESSAGE_DELTA；③ UI 层特性（SessionTitleService 等）订阅。
 
-### 2.1 引导/排队模式（Steering）
+### 2.1 统一用户输入与安全边界消费（2026-10）
 
-用户在 turn RUNNING 时插话的两条 UI 路径（共用 `QueuedMessage` 模型，输入框上方队列横幅展示 `currentQueuedMessages`）：
-
-- **排队模式**：`WorkspaceViewModel.enqueueCurrentInput` 把当前输入框文本/粘贴/图片压入会话队列 `queuedMessagesByConv`（`removeQueuedMessage` 可移除）；turn 结束恢复 Idle 时**自动出队** `sendQueuedMessage`（即普通 sendMessage，携带入队时的模型/推理档/agent/apiKeyId）。
-- **引导模式**：`steerQueuedMessage` 取出排队项，构造乐观消息存入 `pendingUserMessages`（UI 即时展示用户气泡），并经 `AiCore.steerMessage`（契约 → `MederiAiCore` 直调 / `POST /v1/sessions/{id}/steer` 遥控路由）**立即注入**运行中的 turn。工具边界注入的 `<user_intervention>` 系统标签在 UI 映射层（`MederiModelMapper`）与回退反解层（`InputRestorer` / `PromptComposer`）统一做标签剥离与清洗，保证 UI 界面与回退重新编辑时均呈现为纯净用户正文。
-
-Core 侧链路（`TurnExecutor`）：
-
-| 链路环节 | 行为 |
-|---|---|
-| `steerMessage` | 会话 RUNNING 且 activeJobs 活跃 → `SteeringItem` 入 `pendingSteerings` 队列 + 发 `STATUS(status=steering_queued)`（SnapshotReducer 忽略该事件，见 §3）；非 RUNNING → 安全降级 `sendMessage` |
-| pre-LLM 注入(工具边界) | `graphStrategy`（`mederiSingleRunStrategy*`）的 `nodeSendToolResult` 调 `pollSteering` 出队，有项则生成确定性 ID 并把插话包成 `<user_intervention>` 追加进本轮工具结果消息，LLM 下一步即可见并据此调整；增量落库时显式携带 `steer.timestamp` 真实时刻，保持时间戳单调因果序 |
-| post-LLM 注入(文本输出后 nodeCheckSteering) | 文本消息产生时，边转向 `nodeCheckSteering` 节点：调 `pollSteering` 出队，有插话则包装注入 Prompt + `persistSteeringUserMessage`（携带真实 `timestamp`，发射 `SESSION_UPDATED` 即刻落库对齐），转回 `nodeCallLLM` 继续流式生成；无插话则走向 `nodeFinish` 正常结束 turn |
-| UI 轮次与 Footer 衔接 | 轮次因中途插话截断且全为工具调用（无最终交付文本）时，`ChatItemsBuilder` 仅输出 `WorkTraceBlock`，省略孤立沉底 `Footer`，避免错误完成时间倒流与空复制按钮；插话与后续新回答自然紧密衔接 |
-| turn 收尾清理 | turn 结束若因异常/abort 退出，安全清理残留 `pendingSteerings` 并记日志，不再异步降级起新 turn，杜绝并发竞态与状态锁冲突 |
+UI 与 API 只提交 `sendMessage`，不选择排队/立即发送。`steerMessage` 和旧 `/steer` 路由保留为同一入口的兼容别名。
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant VM as WorkspaceViewModel
-    participant AC as AiCore
-    participant TE as TurnExecutor
-    participant K as Koog Agent (运行中的 turn)
-
-    Note over VM,K: 当前 turn RUNNING，用户输入插话
-    VM->>VM: enqueueCurrentInput 压入会话队列(队列横幅可见)
-    alt 引导模式(立即注入运行中 turn)
-        VM->>VM: 乐观消息入 pendingUserMessages (追加在流式消息之后)
-        VM->>AC: steerMessage(convId, input)
-        AC->>TE: steerMessage
-        TE->>TE: RUNNING → pendingSteerings 入队<br/>+ STATUS(steering_queued)
-        K->>K: pre-LLM(工具边界) 或文本输出后 nodeCheckSteering 出队<br/>→ 注入 <user_intervention>, 落库并触发 SESSION_UPDATED<br/>→ 转回 nodeCallLLM 继续流式生成回复
-        Note over VM: 快照对账: 真实消息落库后移除乐观消息<br/>UI/回退层剥离 <user_intervention> 标签
-    else 排队模式(turn 先结束)
-        Note over TE: turn 结束 Idle
-        VM->>VM: Idle → 自动出队 sendQueuedMessage(普通 sendMessage)
-    end
+flowchart TD
+    U[用户发送文本和附件] --> VM[生成稳定 messageId / 乐观显示]
+    VM --> AC[AiCore.sendMessage]
+    AC --> C[Core 会话级串行接纳]
+    C --> D[按稳定ID持久化 / 重试去重]
+    D --> STATE{当前执行状态}
+    STATE -->|空闲| START[启动工作]
+    STATE -->|执行或压缩中| PENDING[完整输入待消费 / pendingSteering]
+    STATE -->|等待提问或审批| RESUME[中性结束挂起 / 处理新输入]
+    PENDING --> SAFE[工具边界或文本输出后安全点注入]
+    SAFE --> NEXT[继续模型调用]
+    NEXT --> CHECK{还有输入或待完成子代理?}
+    CHECK -->|输入| SAFE
+    CHECK -->|子代理| WAIT[保留过程 / 等终态唤醒]
+    CHECK -->|无且正常完成| FINAL[持久化最终消息标记 / finalMessageId]
+    START --> NEXT
+    RESUME --> NEXT
+    FINAL --> UI[UI显示完整最终正文 / 过程仍折叠]
 ```
+
+每次模型响应使用稳定消息 ID，`MESSAGE_DELTA` 的 `response_started/response_completed` 与内容增量经同一有序流传输，并携带 `turnId`。实时占位与落库消息保持同一 ID；不再把整个工具循环拼进一个占位消息。
+
+插话在接收时即落库，消费前从 AI 视图排除；当前响应和工具结果原子插入未消费输入之前，保留历史的因果顺序。注入时使用完整 parts（含图片），消费后更新标记。若输入先到、提问/审批后挂起，Core 在挂起事件上自动处理已有输入，不让其悬空。接收确认 `SESSION_UPDATED{inputAccepted=true}` 回查不会清除挂起或未落库响应。UI 仅按 ID 移除对应乐观消息。
+
+工作期间所有正文和过程进入折叠块，最终交付由 Core 正常收尾确认。取消、异常和截断不确认最终交付；收尾未消费输入不能静默清掉。历史重开使用持久化标记，不依赖 UI 猜测。
 
 ## 3. 事件 → UI 状态机聚合流程
 
@@ -188,7 +209,7 @@ flowchart TD
      SW -- "BROWSER_TASK_REASONING_DELTA" --> BRD["聚合 liveReasoning/liveText (kind=reasoning|text; 2026-10 decide 流式)"]
     SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max|serverMsg|retryAt'(serverMsg=供应商真实报错; retryAt=delayMs+当前时间)<br/>UI StatusBar 重试态第二行渲染"]
     SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage<br/>+ refreshPage 即时回查 listMessagesPage(新 turn 用户消息立即可见)"]
-    SW -- "STATUS(steering_queued 引导)" --> SIG["忽略: payload 形状与 RETRYING 约定 key 不符(代码现状)<br/>steering 提示仅入队侧日志, 不渲染 StatusBar"]
+    SW -- "SESSION_UPDATED(inputAccepted=true)" --> SIG["输入接收/消费确认回查<br/>保留挂起交互与未落库实时响应"]
     D & C2 & ER & TO & PE & TD & SA & BA & ST & SU --> UI["WorkspaceViewModel.conversationState<br/>→ chatItems(derivedStateOf 展平渲染)"]
 ```
 
@@ -213,7 +234,7 @@ flowchart TD
     AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变<br/>不转录文件摘录:executor 自己 read_file 原文件"]
     GEN --> SPAWN["subagent(action=SPAWN, planId?, subtaskIndex?)<br/>planId 非空 → 硬校验 subtaskIndex/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>planId 为空 → ad-hoc 路径: task+briefing 直接派 executor(跳过 spec/IN_PROGRESS)<br/>PLAN_PROGRESS('subtask-started'+subtasks 全量 JSON 列表)<br/>briefing 简化注入: 只 task + planDetail(意图)<br/>(researchNotes/appendix 不再注入,executor 自己 read_file research.md/原文件)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
     SPAWN --> ENDTURN["END TURN（父代理 turn 结束,不阻塞）"]
-    ENDTURN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户<br/>完成时报告落盘 {planId}/reports/NN-executor.md, 父上下文只收尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>SPEC_FEEDBACK 回报 spec 与现实的矛盾"]
+    ENDTURN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>buildExecutorInput 组装: plan 路径只传 spec+planDetail(task/args.briefing 不进输入)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户,不猜<br/>完成时报告落盘 {planId}/reports/NN-executor.md, 父上下文只收尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>5 类 SPEC_FEEDBACK: missing/ambiguous/vs-reality/unsatisfiable/compile-blocked"]
     SUB --> WAKE["子代理终态 → SUBAGENT_COMPLETED/ERROR/STOPPED 事件(eventBus, NonCancellable emit)<br/>→ handleSubagentTerminalEvent 组 &lt;event_message&gt; → pendingEventMessages 入队<br/>→ 父 turn 空闲 dispatchPendingEventMessages 批量合并唤醒<br/>(同会话多个完成合并成一条内部消息,一次 turn)<br/>2026-10: 冲刷前查 runningCountForSession——仍有 RUNNING 子代理则延后,<br/>等全部终态事件聚合后再一次性唤醒(不做中间态多次唤醒)"]
     WAKE --> VER["verify_subtask(planId, subtaskIndex, status, evidence)<br/>自动执行 Subtask.verification 命令(30s)"]
     VER --> CHK{"verify 结果"}
@@ -467,7 +488,7 @@ sequenceDiagram
     M-->>M: 主代理 END TURN, 期间继续对话/派发其他任务
     Note over SM,ITE: 后台执行(与父 turn 并行)
     SR->>SR: 内存建临时 Session(sub_xxxxxxxx, AUTONOMOUS)
-    SR->>ITE: sendMessage(inputText=spec清单自顶向下+SPEC_FEEDBACK约定, subagentRole=EXECUTOR)
+    SR->>ITE: sendMessage(inputText=buildExecutorInput组装, subagentRole=EXECUTOR)<br/>plan路径: 只spec+planDetail(task/args.briefing不进输入)<br/>ad-hoc路径: task+briefing<br/>SPEC_FEEDBACK 5类: missing/ambiguous/vs-reality/unsatisfiable/compile-blocked
     Note over ITE: RESEARCHER 则 inputText=只读调研任务<br/>工具裁剪=read_file+list_directory
     Note over ITE: 继承策略=中心化 AgentCapabilities 表<br/>MCP: 主/执行/研究都继承(每子代理 turn 独立现连现断)<br/>Skills: 主/执行注入提示词, 研究不注入
     loop 子 turn 内
@@ -489,7 +510,7 @@ sequenceDiagram
     Note over ITE: 子代理一次任务即死, 无会话残留
 ```
 
-**briefing 简化 + 报告落盘（方案A 2026-09-24）**：SpawnAgentTool 拼装 briefing 时只注入 ①`task`（来自调用方参数）②`planDetail`（子任务意图/brief，恒不变）——不再注入 `researchNotes` 全文、不再注入 `appendix` 摘录（appendix 字段已删）。executor 是干脏活的便宜模型，需要调研结论时自己 `read_file .mederi/plans/{planId}/research.md`，需要原文件认知时直接 `read_file` 该路径。executor 完成时报告落盘到 `{planId}/reports/NN-executor.md`，父上下文只收尾部 1500 字符 + 路径（尾部捕获 SPEC_FEEDBACK）；researcher 报告**始终落盘**——有活跃 plan 时写 `{planId}/research.md`，无活跃 plan 时经 `PlanStore.writeStandaloneResearchReport` 写 `.mederi/research/{timestamp}.md`，两种情况父上下文都只收头部 800 字符 + 路径（全量报告不再有回灌通道；详情一律 read_file 取盘）。EXECUTOR 无 planId/planStore 或写盘失败时才回退全文回灌。子代理 TurnExecutor 透传 `onTurnDiff` 回调，结束时把文件改动经 `ParentDiffRegistry` 合并进父 turn 的 diffTracker（见 §4 diff 合并说明）。
+**briefing 隔离 + 报告落盘（2026-10 更新）**：SpawnAgentTool plan 路径 `briefing = null`——不传调用方 `args.briefing`，也不传 `planDetail`（planDetail 可能含处理逻辑，与 spec 产生两套要求）；spec 是唯一实现指令来源。ad-hoc 路径仍传 `task`+`briefing`。`SubagentRunnerImpl.buildExecutorInput` 纯函数组装执行器输入：plan 路径 = 只 spec（task/briefing 都不进输入）；ad-hoc 路径 = task + briefing。纪律指令（5 类 SPEC_FEEDBACK、不猜边界、编译命令由 spec 指定）全部在执行器系统提示词 `forSubagentExecutor()` 中，`buildExecutorInput` 不重复——避免两处漂移。不再注入 `researchNotes` 全文、不再注入 `appendix` 摘录（appendix 字段已删）。executor 需要调研结论时自己 `read_file .mederi/plans/{planId}/research.md`，需要原文件认知时直接 `read_file` 该路径。executor 完成时报告落盘到 `{planId}/reports/NN-executor.md`，父上下文只收尾部 1500 字符 + 路径（尾部捕获 SPEC_FEEDBACK）；researcher 报告**始终落盘**——有活跃 plan 时写 `{planId}/research.md`，无活跃 plan 时经 `PlanStore.writeStandaloneResearchReport` 写 `.mederi/research/{timestamp}.md`，两种情况父上下文都只收头部 800 字符 + 路径（全量报告不再有回灌通道；详情一律 read_file 取盘）。EXECUTOR 无 planId/planStore 或写盘失败时才回退全文回灌。子代理 TurnExecutor 透传 `onTurnDiff` 回调，结束时把文件改动经 `ParentDiffRegistry` 合并进父 turn 的 diffTracker（见 §4 diff 合并说明）。
 
 **per-role 模型解析（2026-09）**：`SpawnAgentTool` / `SpawnResearcherTool` 派发时经 `SubagentConfigManager.resolve(role=EXECUTOR/RESEARCHER, fallbackModel=会话模型, fallbackReasoning=会话推理档)` 覆盖父会话模型——配置了独立模型/推理档则覆盖，否则继承。**apiKeyId 同策略（2026-10）**：派发时读 `SubagentConfigManager.get(role)?.apiKeyId`，非 null 则 `effectiveApiKeyId = config.apiKeyId` 覆盖父会话 apiKeyId（null=继承父），轮询哨兵 `API_KEY_ROTATION_ID`（`"__rotate__"`）原样透传；`SubagentManager.spawn(apiKeyId=effectiveApiKeyId)` → 子代理 TurnExecutor（构造传 `rotationSessionId = parentSessionId`，与父共享轮询计数器）在 resolve 后检测哨兵建 `RotatingLLMClient`（见 §1 runTurn 与 01-core §9.1）。
 
@@ -591,10 +612,11 @@ sequenceDiagram
 > 浏览器面板在所有端均可展开（遥控端/wasm 同样适用）。
 
 > 执行模型（2026-10 重构）：BrowserOperator 遵循 4-phase 循环（perceive → decide → execute → postprocess）。
-> 感知层统一走 **纯 axtree 快照**（`SnapshotMode.CLEAN` YAML，暂时不传截图），单步重建 prompt，杜绝上下文累积与 a11y 快照爆炸；采用 Koog 原生 tool-calling，由 UI 宿主
-> （app:desktopApp）经 `BrowserOperatorToolRegistry` 注册页面物理工具（navigate/click/type/scroll/wait_for/tabs），Core 注册内部工具
-> （done/update_memory/collect_info/judge/execute_drill），删除无用工具（sleep/back/noop/close/screenshot）；支持 `BrowserDecisionParser` 文本 JSON 决策回退；
+> 感知层统一走 **纯 axtree 快照**（`SnapshotMode.CLEAN` YAML，暂时不传截图），单步重建 prompt，杜绝上下文累积与 a11y 快照爆炸；采用 Koog 原生 tool-calling（原生 tool-calling 为唯一路径），页面物理工具
+> 由通用工具集 `buildBrowserOperatorTools(control)` 装配（基于 BrowserControl 抽象，jcef/camoufox 后端自动适配），Core 注册内部工具
+> （done/update_memory/collect_info/judge/execute_drill），删除无用工具（sleep/back/noop/close/screenshot）；
 > 配备 `BrowserCollector` 临时存储器，支持在多网站查找时调用 `collect_info` 暂存 Markdown 内容（含图片链接），解耦上下文避免 Token 膨胀，并在终态由 Brain / 操作员统一汇总；
+> `execute_drill` 支持 recipe 挂载脚本（空参执行），drill 定位器支持语义 getBy* 与元素级 press/check/scroll/type；
 > 开启浏览器面板时，默认宽度占全屏 2/3（受 maxPanelWidth 保护）；
 > 记忆自管理（滑动 stepHistory + update_memory 工具同步至 taskObj.memory），每步发射带真实
 > thought、memory 与 action 结果的 BROWSER_TASK_STEP 事件。
@@ -755,7 +777,7 @@ flowchart LR
 
 **契约层会话状态（ConversationStatus，SnapshotReducer）**：4 值 `Idle / Working / Error / WaitingUser`——`QUESTION_REQUESTED`/`PLAN_APPROVAL_REQUESTED` → **WaitingUser**（同时把流式占位消息 isStreaming 置 false，交互挂起），对应 `QUESTION_RESOLVED`/`PLAN_APPROVAL_RESOLVED` → Working；双侧（进程内与 SSE 遥控端）经 `startSessionStatusSync` 同步驱动侧边栏状态点。**子代理延长 Working（jvm 桥 + SSE 遥控端，2026-10）**：`SUBAGENT_STARTED` → Working（agentId 记入 `runningSubagentIds`，MederiAiCore 用 core `EventType`、ServerAiCore 用契约 `CoreEventType`，逻辑一致）；子代理终态（COMPLETED/ERROR/STOPPED/DISCARDED）移出集合，集合清空且主 turn 不活跃（`mainTurnActive=false`，MESSAGE_COMPLETED/ERROR 置 false、SESSION_UPDATED 置 true）才回 Idle；**MESSAGE_COMPLETED 时子代理集合非空 → 保持 Working**（主 turn 结束但子代理仍在后台跑，侧边栏不误闪 Idle）。
 
-**排队/引导（Steering，见 §2.1）**：`RUNNING` 中 `steerMessage` → `pendingSteerings` 入队（发 `STATUS(steering_queued)`）→ pre-LLM（工具边界 `nodeSendToolResult`）或 post-LLM（文本输出后 `nodeCheckSteering` 节点）`pollSteering` 注入；有插话转回 `nodeCallLLM` 继续流式生成回复，落库触发 `SESSION_UPDATED` 实时对账；无插话走向 `nodeFinish`；turn 异常/abort 退出时清理残留；UI 侧 turn 结束回 Idle 时排队队列自动出队。
+**统一输入（见 §2.1）**：所有发送走 Core 单入口；执行期间输入先落库为 pending，在工具边界/文本输出后的安全点消费。收尾串行检查 pending，存在则继续；只有确认结束才提交最终消息。UI 无待发队列。
 
 **Message 状态机**：`PROCESSING(streaming 占位) → COMPLETED / ERROR`；快照里 isStreaming 对应 PROCESSING。
 

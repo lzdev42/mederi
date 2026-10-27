@@ -8,7 +8,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,7 +64,6 @@ import mederi.app.shared.generated.resources.ws_open_menu
 import mederi.app.shared.generated.resources.ws_open_sidebar
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.theme.rememberMederiMarkdownTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import xyz.emuci.inkcompose.LocalSessionKey
 import xyz.emuci.inkcompose.MarkdownView
@@ -107,7 +105,6 @@ import mederi.app.shared.generated.resources.file_open_open
 
 import compose.icons.feathericons.Menu
 import androidx.compose.ui.text.style.TextOverflow
-import kotlinx.coroutines.flow.first
 
 @Composable
 fun Workspace(
@@ -568,15 +565,8 @@ private fun MessageList(
     isCompact: Boolean = false,
     contentMaxWidth: Dp = ChatLayout.contentMaxWidth,
 ) {
-    val lazyListState = rememberLazyListState()
-    val appMarkdownTheme = rememberMederiMarkdownTheme()
-
-    var stickToBottom by remember(viewModel.conversationId) { mutableStateOf(true) }
-
-    // 首次自动滚底完成前禁用位置跟踪。否则列表初始布局在顶部，
-    // 跟踪 effect 立刻把 stickToBottom 打成 false，与"打开会话自动滚底"互相打架
-    // （内容变化 effect 因 key 变化被重启后早退，永远卡在顶部）。
-    var bottomTrackingEnabled by remember(viewModel.conversationId) { mutableStateOf(false) }
+    // 切会话使用独立列表状态；reverseLayout 的 index 0 即内容底部。
+    val lazyListState = key(viewModel.conversationId) { rememberLazyListState() }
 
     // 展平后的聊天列表 item 由 WorkspaceViewModel 计算
     val chatItems = viewModel.chatItems
@@ -612,76 +602,11 @@ private fun MessageList(
         )
     }
 
-    // 位置跟踪：只在"滚动锚点变化"（用户滚动/程序吸附落地）时更新贴底意图。
-    // 关键区分：内容增长（流式输出）不改变 firstVisible，不会误判为用户离开底部；
-    // 而在"比视口高的最后一个 item"内部上拉时 firstVisible 会变——index 阈值判定在这里会失灵，
-    // 必须用 !canScrollForward（内容真正的底）作为贴底判据。
-    // 滚动进行中（拖拽/惯性/程序滚动）不定意图，落定后的那一帧再算。
-    var lastScrollAnchor by remember(viewModel.conversationId) { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(lazyListState) {
-        snapshotFlow { lazyListState.layoutInfo }
-            .collect { _ ->
-                if (!bottomTrackingEnabled) return@collect
-                if (lazyListState.isScrollInProgress) return@collect
-                val anchor = lazyListState.firstVisibleItemIndex to lazyListState.firstVisibleItemScrollOffset
-                if (anchor != lastScrollAnchor) {
-                    lastScrollAnchor = anchor
-                    stickToBottom = !lazyListState.canScrollForward
-                }
-            }
-    }
-
-    // 跟随滚动（stick-to-bottom / tail -f 式）：贴底期间内容增长（流式文字增高、
-    // 新消息 / StatusBar / 动态卡片出现）自动吸附到内容真正的底部。
-    // 观察 layoutInfo（每次布局都发射，避免 canForward 等派生值不变时 dedup 吞掉事件），
-    // 条件全部在 collect 内现读。防打架：
-    // 1) isScrollInProgress：用户拖拽/惯性中不拽回（程序滚动中间帧同样跳过，防自触发）
-    // 2) stickToBottom 现读：同一帧布局里位置跟踪先落旗（声明在前），用户已上拉则不拽
-    // 吸附成功后重申贴底意图，抵消"吸附落地瞬间内容又增长"的竞态误判。
-    LaunchedEffect(lazyListState) {
-        snapshotFlow { lazyListState.layoutInfo }
-            .collect {
-                if (bottomTrackingEnabled && stickToBottom &&
-                    !lazyListState.isScrollInProgress && lazyListState.canScrollForward
-                ) {
-                    lazyListState.snapToBottom()
-                    stickToBottom = true
-                }
-            }
-    }
-
-    // 发送消息（乐观用户消息出现）时强制滚底：即使用户正翻在历史区，发送动作也回到最新。
-    // 同样先等首次测量（新会话首条消息从欢迎页切入 MessageList 时是冷启动）
+    // 仅用户发送消息时主动回到底部。内容增高、展开和追加步骤由底部锚定布局处理，
+    // 不再监听 layoutInfo 后二次滚动，也不把布局导致的位置变化误判成用户上翻。
     val optimisticMessageId = viewModel.optimisticUserMessage?.id
-    LaunchedEffect(optimisticMessageId) {
-        if (optimisticMessageId != null) {
-            stickToBottom = true
-            snapshotFlow { lazyListState.layoutInfo.totalItemsCount }
-                .first { it > 0 }
-            lazyListState.snapToBottom()
-            bottomTrackingEnabled = true
-        }
-    }
-
-    // 内容变化（会话打开加载完成/新消息/思考面板/动态卡片出现）时自动滚到列表真正底部。
-    // 冷启动恢复会话时 chatItems 首帧就可能是全量，但 LazyColumn 尚未测量（totalItemsCount=0），
-    // 此时 scrollToItem 会被 clamp 到 index 0 卡在顶部——先等首次测量完成再跳。
-    val pendingQuestion = viewModel.pendingQuestion
-    val pendingPlanApproval = viewModel.pendingPlanApproval
-    LaunchedEffect(
-        chatItems.size, chatItems.lastOrNull()?.key,
-        pendingQuestion?.id, pendingPlanApproval?.id, stickToBottom
-    ) {
-        if (!stickToBottom) return@LaunchedEffect
-        val hasDynamicItems = pendingQuestion != null || pendingPlanApproval != null
-        if (chatItems.isNotEmpty() || hasDynamicItems) {
-            snapshotFlow { lazyListState.layoutInfo.totalItemsCount }
-                .first { it > 0 }
-            lazyListState.snapToBottom()
-            stickToBottom = true
-            // 首次滚底落地后再放开位置跟踪，之后的 stickToBottom 变化才代表用户的真实滚动意图
-            bottomTrackingEnabled = true
-        }
+    LaunchedEffect(viewModel.conversationId, optimisticMessageId) {
+        if (optimisticMessageId != null) lazyListState.requestScrollToItem(0)
     }
 
     // 渲染：复用可组合的 ChatListContent（主对话消息列表；LazyColumn + item 分发主体在 ui/chat/ChatListContent.kt）
@@ -690,26 +615,11 @@ private fun MessageList(
         chatItems = chatItems,
         lazyListState = lazyListState,
         selectionMenuActions = selectionMenuActions,
-        appMarkdownTheme = appMarkdownTheme,
         modifier = modifier,
         contentMaxWidth = contentMaxWidth,
         isCompact = isCompact,
         showUserMessageActions = true,
     )
-}
-
-/**
- * 吸附到内容真正的底部。
- *
- * scrollToItem(lastIndex) 只会把"最后一个 item 的顶部"对齐视口顶——当最后一个 item
- * 比视口高（流式中的长回复）时根本看不到最新内容。给 scrollOffset 一个超量值，
- * 测量时会 clamp 到内容底：无论最后一个 item 多高都精确落底，落定后 canScrollForward=false。
- */
-private suspend fun LazyListState.snapToBottom() {
-    val lastIndex = layoutInfo.totalItemsCount - 1
-    if (lastIndex >= 0) {
-        scrollToItem(lastIndex, 1_000_000)
-    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

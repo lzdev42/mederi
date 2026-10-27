@@ -5,7 +5,9 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
@@ -14,6 +16,7 @@ import xyz.mederi.domain.model.TodoItem
 import xyz.mederi.domain.model.TodoStatus
 import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.infrastructure.koog.aiViewContextUsedTokens
+import xyz.mederi.skills.SkillManager
 import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.SessionStore
 import java.time.Instant
@@ -34,6 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * @param modelContextWindow 模型上下文窗口大小（token 数），用于计算剩余量。
  * @param newContextWindowFlag 开新上下文窗口请求标志（execute 只置标志，TurnExecutor 在 agent.run 结束后消费）。
  * @param questionRequester 问题请求器（ask_user 工具需要）。
+ * @param skills Skill 管理器（load_skill/unload_skill 工具需要）；null 时 load_skill/unload_skill 工具不可用。
  */
 class AgentTools(
     private val sessionId: String,
@@ -42,7 +46,8 @@ class AgentTools(
     private val eventBus: MutableSharedFlow<MederiEvent>,
     private val modelContextWindow: Int?,
     private val newContextWindowFlag: AtomicBoolean,
-    private val questionRequester: xyz.mederi.question.QuestionRequester? = null
+    private val questionRequester: xyz.mederi.question.QuestionRequester? = null,
+    private val skills: SkillManager? = null
 ) {
 
     // ==================== update_todo ====================
@@ -110,6 +115,96 @@ class AgentTools(
                 val done = items.count { it.status == TodoStatus.COMPLETED }
                 "Todo list updated (${items.size} items, $done completed)."
             }
+        }
+    }
+
+    // ==================== load_skill / unload_skill ====================
+
+    @Serializable
+    data class SkillNameArgs(
+        @LLMDescription("Skill name (the directory name under skills root, = SkillInfo.name).")
+        val name: String
+    )
+
+    inner class LoadSkillTool : SimpleTool<SkillNameArgs>(
+        argsType = typeToken<SkillNameArgs>(),
+        name = ToolName.LOAD_SKILL.value,
+        description = "Activate an installed skill: its full SKILL.md workflow is mounted into your " +
+            "system prompt under '# Active Skill Workflows' on the next turn (NOT into your " +
+            "conversation history). Use this when the task matches a skill's trigger description. " +
+            "The skill stays active for the rest of the session until unload_skill. Idempotent " +
+            "(activating an already-active skill is a no-op)."
+    ) {
+        override suspend fun execute(args: SkillNameArgs): String {
+            if (sessionStore == null) {
+                return "Error: session persistence is not available in this context."
+            }
+            if (skills == null) {
+                return "Error: skill manager is not available in this context."
+            }
+            val name = args.name.trim()
+            // 校验 skill 存在
+            val allSkills = runCatching { skills.list() }.getOrElse {
+                return "Error: failed to list skills: ${it.message}"
+            }
+            val info = allSkills.find { it.name == name }
+                ?: return "Error: skill not found: '$name'. Available: ${allSkills.map { it.name }.sorted()}"
+            // 读当前激活列表
+            val session = sessionStore.get(sessionId)
+                ?: return "Error: session not found: $sessionId"
+            val current = session.activeSkills.toMutableList()
+            if (name in current) {
+                return "Skill '$name' is already active. Active skills: $current"
+            }
+            current.add(name)
+            sessionStore.updateActiveSkills(sessionId, current)
+            eventBus.emit(
+                MederiEvent(
+                    type = EventType.SKILL_ACTIVATED,
+                    sessionId = sessionId,
+                    payload = mapOf(
+                        "skillName" to name,
+                        "activeSkills" to kotlinx.serialization.json.Json.encodeToString(current)
+                    ),
+                    timestamp = java.time.Instant.now().toString()
+                )
+            )
+            return "Skill '${info.name}' activated. Its full workflow will be in your system prompt " +
+                "under '# Active Skill Workflows' on the next turn. Active skills: $current"
+        }
+    }
+
+    inner class UnloadSkillTool : SimpleTool<SkillNameArgs>(
+        argsType = typeToken<SkillNameArgs>(),
+        name = ToolName.UNLOAD_SKILL.value,
+        description = "Deactivate a previously activated skill: its workflow is removed from your " +
+            "system prompt on the next turn. Idempotent (unloading a non-active skill is a no-op)."
+    ) {
+        override suspend fun execute(args: SkillNameArgs): String {
+            if (sessionStore == null) {
+                return "Error: session persistence is not available in this context."
+            }
+            val name = args.name.trim()
+            val session = sessionStore.get(sessionId)
+                ?: return "Error: session not found: $sessionId"
+            val current = session.activeSkills.toMutableList()
+            if (name !in current) {
+                return "Skill '$name' is not active. Active skills: $current"
+            }
+            current.remove(name)
+            sessionStore.updateActiveSkills(sessionId, current)
+            eventBus.emit(
+                MederiEvent(
+                    type = EventType.SKILL_DEACTIVATED,
+                    sessionId = sessionId,
+                    payload = mapOf(
+                        "skillName" to name,
+                        "activeSkills" to kotlinx.serialization.json.Json.encodeToString(current)
+                    ),
+                    timestamp = java.time.Instant.now().toString()
+                )
+            )
+            return "Skill '$name' deactivated. Active skills: $current"
         }
     }
 

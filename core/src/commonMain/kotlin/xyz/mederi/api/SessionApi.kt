@@ -9,6 +9,7 @@ import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.Session
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import xyz.mederi.skills.domain.SkillInfo
 
 /**
  * Session API。
@@ -94,6 +95,21 @@ interface SessionApi {
     /** 停止指定的浏览器任务并关闭其浏览器；taskId 不存在时返回 null。 */
     suspend fun stopBrowserTask(taskId: String): String?
 
+    /** 列出会话已激活的 skill（摘要，不含全文——全文由 TurnExecutor 注入系统提示词）。 */
+    suspend fun listActiveSkills(sessionId: String): List<SkillInfo>
+
+    /**
+     * 激活 skill：写入 session.activeSkills，下一轮 turn 重建系统提示词时由 TurnExecutor 挂载全文。
+     * 不进对话历史。重复激活幂等（已激活不重复加入）。skill 不存在抛 MederiNotFoundException。
+     */
+    suspend fun activateSkill(sessionId: String, skillName: String): SkillInfo
+
+    /**
+     * 卸载 skill：从 session.activeSkills 移除，下一轮 turn 重建系统提示词时不再挂载。
+     * 未激活的 skill 卸载幂等（no-op）。
+     */
+    suspend fun deactivateSkill(sessionId: String, skillName: String)
+
     suspend fun getFileDiffs(sessionId: String, messageId: String? = null): List<FileDiff>
 
     fun events(sessionId: String): Flow<MederiEvent>
@@ -150,7 +166,9 @@ data class SendMessageRequest(
      * 本次消息选定的供应商 API Key 的 ID。null = 用该供应商默认 key。
      * 唯一真理源 = 每次发送携带的 apiKeyId，本 turn 内所有操作（主链路/压缩/子代理/浏览器）继承。
      */
-    val apiKeyId: String? = null
+    val apiKeyId: String? = null,
+    /** 客户端生成的稳定消息 ID；用于接收确认与重试去重。 */
+    val messageId: String? = null
 )
 
 /**

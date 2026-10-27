@@ -30,6 +30,7 @@ class BrowserRegistryTest {
         BrowserRegistry.register(name, kind, factory = { _ -> error("工厂不应在本测试中被调用") })
     }
 
+    // 注：default() 简化为 firstOrNull 后此测试仍通过（ConcurrentHashMap 迭代序≠注册序：T_CAMO 虽先注册，实际 firstOrNull 返回 T_JCEF，故断言 T_JCEF 成立）
     @Test
     fun `default prefers builtin jcef even when camoufox registered first`() {
         register(T_CAMO, BrowserKind.CAMOUFOX)

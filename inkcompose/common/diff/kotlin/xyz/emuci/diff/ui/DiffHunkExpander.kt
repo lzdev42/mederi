@@ -26,11 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.emuci.diff.model.DiffDisplayItem
-
-private val EXPANDER_BG = Color(0xFF1E1E1E)
-private val EXPANDER_BORDER = Color(0xFF374151)
-private val EXPANDER_TEXT = Color(0xFF9CA3AF)
-private val PILL_BG = Color(0xFF262626)
+import xyz.emuci.syntax.theme.CodeTheme
 
 /**
  * 折叠代码段落展开控制器组件。
@@ -42,8 +38,39 @@ private val PILL_BG = Color(0xFF262626)
 fun DiffHunkExpander(
     collapsed: DiffDisplayItem.Collapsed,
     modifier: Modifier = Modifier,
+    theme: CodeTheme,
 ) {
     if (collapsed.remainingCount <= 0) return
+
+    // patch 路径（无源行）：渲染不可交互静态标签
+    if (collapsed.hiddenLines.isEmpty()) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(theme.diffExpanderBackground)
+                    .border(1.dp, theme.diffExpanderBorderColor, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(
+                    text = "+${collapsed.remainingCount} lines hidden",
+                    style = TextStyle(
+                        color = theme.diffExpanderTextColor,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium,
+                    )
+                )
+            }
+        }
+        return
+    }
 
     Box(
         modifier = modifier
@@ -63,8 +90,8 @@ fun DiffHunkExpander(
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
-                    .background(PILL_BG)
-                    .border(1.dp, EXPANDER_BORDER, RoundedCornerShape(12.dp))
+                    .background(theme.diffExpanderBackground)
+                    .border(1.dp, theme.diffExpanderBorderColor, RoundedCornerShape(12.dp))
                     .clickable { collapsed.expandAll() }
                     .padding(horizontal = 14.dp, vertical = 5.dp),
                 contentAlignment = Alignment.Center,
@@ -72,7 +99,7 @@ fun DiffHunkExpander(
                 BasicText(
                     text = "+${collapsed.remainingCount} more lines",
                     style = TextStyle(
-                        color = EXPANDER_TEXT,
+                        color = theme.diffExpanderTextColor,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Medium,
@@ -91,8 +118,8 @@ fun DiffHunkExpander(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .background(PILL_BG)
-                        .border(1.dp, EXPANDER_BORDER, RoundedCornerShape(6.dp))
+                        .background(theme.diffExpanderBackground)
+                        .border(1.dp, theme.diffExpanderBorderColor, RoundedCornerShape(6.dp))
                         .clickable { collapsed.expandTop(10) }
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                     contentAlignment = Alignment.Center,
@@ -100,7 +127,7 @@ fun DiffHunkExpander(
                     BasicText(
                         text = "+10",
                         style = TextStyle(
-                            color = EXPANDER_TEXT,
+                            color = theme.diffExpanderTextColor,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
@@ -112,8 +139,8 @@ fun DiffHunkExpander(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .background(PILL_BG)
-                        .border(1.dp, EXPANDER_BORDER, RoundedCornerShape(6.dp))
+                        .background(theme.diffExpanderBackground)
+                        .border(1.dp, theme.diffExpanderBorderColor, RoundedCornerShape(6.dp))
                         .clickable { collapsed.expandBottom(10) }
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                     contentAlignment = Alignment.Center,
@@ -121,7 +148,7 @@ fun DiffHunkExpander(
                     BasicText(
                         text = "+10",
                         style = TextStyle(
-                            color = EXPANDER_TEXT,
+                            color = theme.diffExpanderTextColor,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,

@@ -1,8 +1,11 @@
 package xyz.mederi.domain.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * 事件类型。
  */
+@Serializable
 enum class EventType {
     SESSION_CREATED,
     SESSION_UPDATED,
@@ -95,7 +98,20 @@ enum class EventType {
     BACKGROUND_TASK_STARTED,
     BACKGROUND_TASK_COMPLETED,
     BACKGROUND_TASK_ERROR,
-    BACKGROUND_TASK_STOPPED
+    BACKGROUND_TASK_STOPPED,
+
+    /**
+     * 会话 skill 激活（load_skill 工具 / SessionApi 维护）。
+     * payload: skillName, activeSkills（最新列表的 JSON 数组字符串）。
+     * 真理源 = sessions.active_skills 列；事件只是投影通知 UI 刷新激活列表。
+     */
+    SKILL_ACTIVATED,
+
+    /**
+     * 会话 skill 卸载（unload_skill 工具 / SessionApi 维护）。
+     * payload: skillName, activeSkills（最新列表的 JSON 数组字符串）。
+     */
+    SKILL_DEACTIVATED
 }
 
 /**
@@ -109,6 +125,7 @@ enum class EventType {
  * @param payload 附加数据。
  * @param timestamp ISO 8601 时间戳。
  */
+@Serializable
 data class MederiEvent(
     val type: EventType,
     val sessionId: String,

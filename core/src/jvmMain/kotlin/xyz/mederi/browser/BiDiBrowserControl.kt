@@ -138,8 +138,35 @@ class BiDiBrowserControl(
         return OperationResult.Success("upload_file", detail = filePaths.joinToString(","))
     }
 
+    override suspend fun uploadFileBySelector(selector: String, filePaths: List<String>): OperationResult {
+        requirePage().uploadFileBySelector(selector, filePaths)
+        return OperationResult.Success("upload_file", detail = filePaths.joinToString(","))
+    }
+
     override suspend fun locator(selector: String): BrowserLocator =
         BiDiBrowserLocator(requirePage().locator(selector), selector)
+
+    override suspend fun locator(
+        kind: LocatorKind,
+        value: String,
+        name: String?,
+        exact: Boolean
+    ): BrowserLocator {
+        val p = requirePage()
+        val (delegate, label) = when (kind) {
+            LocatorKind.CSS -> p.locator(value) to "css=$value"
+            LocatorKind.XPATH -> p.locator("xpath=$value") to "xpath=$value"
+            LocatorKind.TEXT -> p.getByText(value, exact) to "text=$value"
+            LocatorKind.ROLE ->
+                p.getByRole(value, name) to (if (name != null) "role=$value[name=$name]" else "role=$value")
+            LocatorKind.LABEL -> p.getByLabel(value) to "label=$value"
+            LocatorKind.PLACEHOLDER -> p.getByPlaceholder(value) to "placeholder=$value"
+            LocatorKind.ALT_TEXT -> p.getByAltText(value) to "alt=$value"
+            LocatorKind.TITLE -> p.getByTitle(value) to "title=$value"
+            LocatorKind.TEST_ID -> p.getByTestId(value) to "test-id=$value"
+        }
+        return BiDiBrowserLocator(delegate, label)
+    }
 
     override suspend fun openTab(): OperationResult {
         val b = requireBrowser()

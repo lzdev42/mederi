@@ -87,6 +87,8 @@ class Mederi private constructor(
     private val paths: MederiPaths?,
     val historyStore: HistoryStore?,
     val settingsStore: SettingsStore,
+    /** 浏览器设置管理器（唯一真理源；Mederi 创建并持有，装配层复用同一实例，避免双缓存）。 */
+    val browserSettingsManager: xyz.mederi.browser.BrowserSettingsManager,
     private val apiKeyStore: ApiKeyStore?,
     private val sessionStore: SessionStore?,
     val providers: ProviderApi,
@@ -256,6 +258,13 @@ class Mederi private constructor(
                 settingsStore = settingsStore,
                 providerManager = providerManager
             )
+            // 浏览器设置管理器：唯一真理源（BrowserSettingsApi 与浏览器任务运行目录解析共用此实例，避免双缓存）
+            val browserSettingsManager = xyz.mederi.browser.BrowserSettingsManager(settingsStore)
+            // 浏览器任务运行目录解析：每任务懒解析 browserHome（reports → DrillExecutor/Brain，skills → RecipeStore），
+            // 用户改 browserHome 后下一任务即生效；经 SessionManagerImpl → TurnExecutor → BrowserTaskManager 透传。
+            val browserRuntimeProvider: suspend () -> xyz.mederi.browser.BrowserRuntimeDirs? = {
+                xyz.mederi.browser.browserRuntimeDirs(browserSettingsManager.get().browserHome)
+            }
             val sessionManager = SessionManagerImpl(
                 sessionStore = sessionStore,
                 historyStore = historyStore,
@@ -265,7 +274,8 @@ class Mederi private constructor(
                 mcpConnector = mcpConnector,
                 skills = skillManager,
                 subagentConfigManager = subagentConfigManager,
-                compactionThresholdPercent = config.compactionThresholdPercent  // 新增
+                compactionThresholdPercent = config.compactionThresholdPercent,  // 新增
+                browserRuntimeProvider = browserRuntimeProvider
             )
 
             // === API 层装配 ===
@@ -282,6 +292,7 @@ class Mederi private constructor(
                 paths = paths,
                 historyStore = historyStore,
                 settingsStore = settingsStore,
+                browserSettingsManager = browserSettingsManager,
                 apiKeyStore = apiKeyStore,
                 sessionStore = sessionStore,
                 providers = providerApi,
@@ -334,6 +345,7 @@ class Mederi private constructor(
             val migrations = linkedMapOf(
                 1 to listOf("ALTER TABLE sessions ADD COLUMN api_key_id TEXT"),
                 2 to listOf("ALTER TABLE sessions ADD COLUMN draft_text TEXT"),
+                3 to listOf("ALTER TABLE sessions ADD COLUMN active_skills TEXT NOT NULL DEFAULT '[]'"),
             )
 
             for (v in (currentVersion + 1)..DATA_DB_VERSION) {
@@ -350,7 +362,7 @@ class Mederi private constructor(
         }
 
         /** 当前 data.db schema 版本（每次改 .sq schema 递增 + 加迁移脚本）。 */
-        private const val DATA_DB_VERSION = 2
+        private const val DATA_DB_VERSION = 3
 
         /** 创建 SQLite driver（WAL + 外键约束），建表。 */
         private fun createDriver(dbPath: String): app.cash.sqldelight.db.SqlDriver {

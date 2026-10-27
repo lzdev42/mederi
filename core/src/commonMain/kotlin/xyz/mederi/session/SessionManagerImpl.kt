@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.channels.BufferOverflow
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.SendMessageRequest
+import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.FileDiff
@@ -23,6 +24,7 @@ import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.RawMessageRecord
 import xyz.mederi.store.SessionStore
 import xyz.mederi.skills.SkillManager
+import xyz.mederi.skills.domain.SkillInfo
 import xyz.mederi.tools.diff.countChanges
 import java.time.Instant
 import java.util.UUID
@@ -54,6 +56,10 @@ class SessionManagerImpl(
     private val skills: SkillManager? = null,
     private val subagentConfigManager: xyz.mederi.tools.subagent.SubagentConfigManager? = null,
     private val compactionThresholdPercent: () -> Int = { 70 },
+    /**
+     * 浏览器任务运行目录解析（browserHome 懒解析，透传给 [TurnExecutor] → BrowserTaskManager）。
+     */
+    private val browserRuntimeProvider: (suspend () -> xyz.mederi.browser.BrowserRuntimeDirs?)? = null,
 ) : SessionManager {
 
     private val turnExecutor = TurnExecutor(
@@ -66,7 +72,8 @@ class SessionManagerImpl(
         mcpConnector = mcpConnector,
         skills = skills,
         subagentConfigManager = subagentConfigManager,
-        compactionThresholdPercent = compactionThresholdPercent  // 新增
+        compactionThresholdPercent = compactionThresholdPercent,  // 新增
+        browserRuntimeProvider = browserRuntimeProvider
     )
 
     override suspend fun list(): List<Session> = sessionStore.list()
@@ -208,6 +215,55 @@ class SessionManagerImpl(
         DebugLog.event("SessionMgr", "updateComposeState: sessionId=$id, agentMode=$agentMode, aiModel=${aiModel?.id}, reasoningLevel=$reasoningLevel, apiKeyId=$apiKeyId, draftTextLen=${draftText.length}")
         require(id)
         sessionStore.updateComposeState(id, agentMode, aiModel, reasoningLevel, apiKeyId, draftText)
+    }
+
+    override suspend fun listActiveSkills(id: String): List<SkillInfo> {
+        val session = require(id)
+        val all = skills?.list().orEmpty()
+        val activeSet = session.activeSkills.toSet()
+        return all.filter { it.name in activeSet }
+    }
+
+    override suspend fun activateSkill(id: String, skillName: String): SkillInfo {
+        val session = require(id)
+        val all = skills?.list().orEmpty()
+        val info = all.find { it.name == skillName }
+            ?: throw MederiNotFoundException("Skill not found: $skillName")
+        val current = session.activeSkills.toMutableList()
+        if (skillName !in current) current.add(skillName)  // 幂等
+        sessionStore.updateActiveSkills(id, current)
+        eventBus.emit(
+            MederiEvent(
+                type = EventType.SKILL_ACTIVATED,
+                sessionId = id,
+                payload = mapOf(
+                    "skillName" to skillName,
+                    "activeSkills" to kotlinx.serialization.json.Json.encodeToString(current)
+                ),
+                timestamp = java.time.Instant.now().toString()
+            )
+        )
+        DebugLog.event("SessionMgr", "activateSkill: sessionId=$id, skill=$skillName, active=${current.size}")
+        return info
+    }
+
+    override suspend fun deactivateSkill(id: String, skillName: String) {
+        val session = require(id)
+        val current = session.activeSkills.toMutableList()
+        current.remove(skillName)  // 幂等：不在则 no-op
+        sessionStore.updateActiveSkills(id, current)
+        eventBus.emit(
+            MederiEvent(
+                type = EventType.SKILL_DEACTIVATED,
+                sessionId = id,
+                payload = mapOf(
+                    "skillName" to skillName,
+                    "activeSkills" to kotlinx.serialization.json.Json.encodeToString(current)
+                ),
+                timestamp = java.time.Instant.now().toString()
+            )
+        )
+        DebugLog.event("SessionMgr", "deactivateSkill: sessionId=$id, skill=$skillName, active=${current.size}")
     }
 
     override suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>) {

@@ -127,6 +127,24 @@ class FakeBrowserControl(
 
     override suspend fun locator(selector: String): BrowserLocator = FakeLocator(this, selector)
 
+    /**
+     * 语义定位：构造稳定可断言的显示键。
+     * - 基础键 = `"${kind.name}:$value"`
+     * - name != null 时追加 `":$name"`
+     * - exact == false 时追加 `":inexact"`
+     */
+    override suspend fun locator(
+        kind: LocatorKind,
+        value: String,
+        name: String?,
+        exact: Boolean
+    ): BrowserLocator {
+        var key = "${kind.name}:$value"
+        if (name != null) key += ":$name"
+        if (!exact) key += ":inexact"
+        return FakeLocator(this, key)
+    }
+
     override suspend fun evaluateJavascript(js: String): String {
         jsResults[js]?.let { return it }
         jsResults.entries.firstOrNull { js.contains(it.key) }?.let { return it.value }
@@ -158,6 +176,11 @@ class FakeBrowserControl(
     override suspend fun uploadFile(elementRef: String, filePaths: List<String>): OperationResult {
         log += "uploadFile $elementRef ${filePaths.joinToString(",")}"
         return OperationResult.Success("uploadFile", detail = filePaths.joinToString(","))
+    }
+
+    override suspend fun uploadFileBySelector(selector: String, filePaths: List<String>): OperationResult {
+        log += "uploadFileBySelector $selector ${filePaths.joinToString(",")}"
+        return OperationResult.Success("upload_file", detail = filePaths.joinToString(","))
     }
 
     override suspend fun scrollByCoordinates(originX: Int, originY: Int, deltaX: Int, deltaY: Int): OperationResult {
@@ -216,6 +239,26 @@ class FakeBrowserControl(
         override suspend fun last(): BrowserLocator = FakeLocator(owner, "$selector:last")
 
         override suspend fun filter(hasText: String): BrowserLocator = FakeLocator(owner, "$selector:hasText($hasText)")
+
+        override suspend fun press(key: KeyboardKey): OperationResult {
+            owner.log += "locator.press $selector=${key.name}"
+            return OperationResult.Success("press", detail = key.name)
+        }
+
+        override suspend fun check(): OperationResult {
+            owner.log += "locator.check $selector"
+            return OperationResult.Success("check", detail = selector)
+        }
+
+        override suspend fun scroll(deltaX: Int, deltaY: Int): OperationResult {
+            owner.log += "locator.scroll $selector=$deltaX,$deltaY"
+            return OperationResult.Success("scroll", detail = "$deltaX,$deltaY")
+        }
+
+        override suspend fun type(text: String): OperationResult {
+            owner.log += "locator.type $selector=$text"
+            return OperationResult.Success("type", detail = text)
+        }
     }
 
     companion object {

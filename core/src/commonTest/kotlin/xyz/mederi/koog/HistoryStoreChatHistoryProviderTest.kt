@@ -266,4 +266,27 @@ class HistoryStoreChatHistoryProviderTest {
         assertEquals(2, storedImages.size, "u1/u2 带图原版必须保留")
         assertTrue(stored.any { it.role == MessageRole.ASSISTANT }, "新 assistant 应落库")
     }
+    @Test
+    fun compressionPreservesPendingInputAndRecentWindow() = runBlocking {
+        val store = InMemoryHistoryStore()
+        store.append("s1", mederiMessage("old", MessageRole.USER, listOf(MederiMessagePart.Text("old"))))
+        val recent = mederiMessage("recent", MessageRole.ASSISTANT, listOf(MederiMessagePart.Text("recent")))
+            .copy(turnId = "work", isFinalAnswer = false)
+        store.append("s1", recent)
+        val pending = mederiMessage("pending", MessageRole.USER, listOf(MederiMessagePart.Text("new instruction")))
+            .copy(pendingSteering = true, turnId = "work")
+        store.append("s1", pending)
+        HistoryStoreChatHistoryProvider(store).store("s1", listOf(
+            KoogMessage.Assistant(parts = listOf(KoogMessagePart.Text("TLDR: summary")),
+                metaInfo = ResponseMetaInfo(KoogInstant.parse("2026-10-27T08:00:00Z")), id = "summary"),
+            KoogMessage.Assistant(parts = listOf(KoogMessagePart.Text("recent")),
+                metaInfo = ResponseMetaInfo(KoogInstant.parse("2026-10-27T08:01:00Z")), id = "recent")))
+        val history = store.load("s1")
+        assertEquals(pending, history.single { it.id == "pending" }, "压缩不得删除或提前消费已接收输入")
+        assertEquals(recent, history.single { it.id == "recent" }, "已有交付与工作字段不得被AI视图回写覆盖")
+        val window = HistoryStoreChatHistoryProvider.aiViewWindow(store, "s1")
+        assertEquals(listOf(MessageRole.SUMMARY, MessageRole.ASSISTANT), window.map { it.role })
+        assertEquals("recent", window.last().id, "SUMMARY必须在保留原文之前，pending不参与recent尾部对齐")
+    }
+
 }

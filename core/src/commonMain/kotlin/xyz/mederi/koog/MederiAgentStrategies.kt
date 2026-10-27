@@ -191,15 +191,32 @@ data class SteeringItem(
     val sessionId: String,
     val text: String,
     val request: xyz.mederi.api.SendMessageRequest,
-    val timestamp: Long
+    val timestamp: Long,
+    val messageId: String? = request.messageId,
+    val parts: List<xyz.mederi.domain.model.MessagePart> = request.parts
 )
+
+/** 插话保留完整附件，只有模型输入中的文本包上引导标签；存储仍保留用户原文。 */
+internal fun SteeringItem.toKoogSteering(includeImages: Boolean = true): Message.User =
+    KoogMessageMapper.toKoogMessage(
+        xyz.mederi.domain.model.Message(
+            id = messageId,
+            sessionId = sessionId,
+            role = xyz.mederi.domain.model.MessageRole.USER,
+            parts = parts.map { part ->
+                if (part is xyz.mederi.domain.model.MessagePart.Text)
+                    part.copy(text = xyz.mederi.prompt.SteeringPrompt.wrap(part.text)) else part
+            },
+            createdAt = java.time.Instant.ofEpochMilli(timestamp).toString()
+        ), includeImages = includeImages
+    ) as Message.User
 
 /**
  * Koog nodeLLMSendToolResults 的可持久化变体：tool results 落库后再请求下一轮 LLM。
  *
  * 背景：turn 中途崩溃（限流耗尽/断流）时 ChatMemory 的 strategy 级 store 不执行，
  * tool results（user 消息）会丢——下一轮模型看不到自己上一轮工具调用的结果。
- * 先落库再请求（persist 内部吞异常，不影响业务流）。
+ * 先落库再请求；持久化失败由运行时统一报错，不确认交付。
  * 同时在工具边界检查用户引导队列（Steering），若有中途纠偏指令，包装后在同一步注入 prompt。
  */
 private fun nodeLLMSendToolResultsPersistable(
@@ -217,18 +234,11 @@ private fun nodeLLMSendToolResultsPersistable(
             // 工具边界检查引导注入
             var steer = pollSteering?.invoke()
             while (steer != null) {
-                // 包装文本唯一生成点 = SteeringPrompt（剥离侧 PromptComposer 与其有跨模块契约测试）
-                val steerMeta = xyz.mederi.prompt.SteeringPrompt.wrap(steer.text)
-                val steerId = "msg_${java.util.UUID.randomUUID().toString().take(8)}"
-                val steerUserMsg = Message.User(
-                    content = steerMeta,
-                    id = steerId,
-                    metaInfo = RequestMetaInfo.create(KoogClock.System)
-                )
-                appendPrompt {
-                    message(steerUserMsg)
-                }
-                persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
+                val current = steer
+                val steerId = current.messageId ?: "msg_${java.util.UUID.randomUUID()}"
+                appendPrompt { message(current.toKoogSteering(persister?.includeImages ?: true)) }
+                if (current.messageId != null) persister?.consumeSteering(current)
+                else persister?.persistSteeringUserMessage(current.text, id = steerId, timestamp = current.timestamp)
                 steer = pollSteering?.invoke()
             }
             // 流式与 nodeCallLLM 对齐：requestLLM() 是非流式——工具轮之后的
@@ -237,11 +247,15 @@ private fun nodeLLMSendToolResultsPersistable(
             // 显式计时：Koog metaInfo.timestamp 是流结束时刻，推算 durationMs≈0，
             // 故围绕 requestLLMStreaming 前后测量真实流耗时（含推理+正文）。
             val startNs = System.nanoTime()
-            val response = requestLLMStreaming().toList().toAssistantMessageSafe()
+            val responseId = persister?.beginResponse()
+            val response = requestLLMStreaming().toList().toAssistantMessageSafe().let {
+                if (responseId != null) it.copy(id = responseId) else it
+            }
             val durationMs = (System.nanoTime() - startNs) / 1_000_000
             // requestLLMStreaming() 不自动追加响应到 prompt（与 requestLLM() 不同），手动补
             appendPrompt { message(response) }
             persister?.persistAssistant(response, durationMs)
+            responseId?.let { persister?.completeResponse(it) }
             response
         }
     }
@@ -256,7 +270,10 @@ fun mederiSingleRunStrategy(
                 if (message != MEDERI_INPUT_PERSISTED) appendPrompt { user(message) }
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
-                val response = requestLLMStreaming().toList().toAssistantMessageSafe()
+                val responseId = persister?.beginResponse()
+            val response = requestLLMStreaming().toList().toAssistantMessageSafe().let {
+                if (responseId != null) it.copy(id = responseId) else it
+            }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000
                 // requestLLMStreaming() 不会自动把响应追加到 prompt（与 requestLLM() 不同），
                 // 必须手动追加，否则 ChatMemory.store 时 assistant 消息会丢失。
@@ -264,6 +281,7 @@ fun mederiSingleRunStrategy(
                 // 增量持久化：LLM 响应到达即落库。turn 中途崩溃时本轮对话不丢
                 // （ChatMemory 的 strategy 级 store 只在 turn 正常结束时执行）
                 persister?.persistAssistant(response, durationMs)
+            responseId?.let { persister?.completeResponse(it) }
                 response
             }
         }
@@ -273,14 +291,12 @@ fun mederiSingleRunStrategy(
         val nodeCheckSteering by node<String, String>("check_steering") { lastText ->
             val steer = pollSteering?.invoke()
             if (steer != null) {
-                val steerMeta = xyz.mederi.prompt.SteeringPrompt.wrap(steer.text)
-                val steerId = "msg_${java.util.UUID.randomUUID().toString().take(8)}"
+                val steerId = steer.messageId ?: "msg_${java.util.UUID.randomUUID()}"
                 llm.writeSession {
-                    appendPrompt {
-                        message(Message.User(content = steerMeta, id = steerId, metaInfo = RequestMetaInfo.create(KoogClock.System)))
-                    }
+                    appendPrompt { message(steer.toKoogSteering(persister?.includeImages ?: true)) }
                 }
-                persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
+                if (steer.messageId != null) persister?.consumeSteering(steer)
+                else persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
                 MEDERI_INPUT_PERSISTED
             } else {
                 lastText
@@ -321,11 +337,15 @@ fun mederiSingleRunStrategyWithCompression(
                 if (message != MEDERI_INPUT_PERSISTED) appendPrompt { user(message) }
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
-                val response = requestLLMStreaming().toList().toAssistantMessageSafe()
+                val responseId = persister?.beginResponse()
+            val response = requestLLMStreaming().toList().toAssistantMessageSafe().let {
+                if (responseId != null) it.copy(id = responseId) else it
+            }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000
                 appendPrompt { message(response) }
                 // 增量持久化（同 mederiSingleRunStrategy）
                 persister?.persistAssistant(response, durationMs)
+            responseId?.let { persister?.completeResponse(it) }
                 response
             }
         }
@@ -341,14 +361,12 @@ fun mederiSingleRunStrategyWithCompression(
         val nodeCheckSteering by node<String, String>("check_steering") { lastText ->
             val steer = pollSteering?.invoke()
             if (steer != null) {
-                val steerMeta = xyz.mederi.prompt.SteeringPrompt.wrap(steer.text)
-                val steerId = "msg_${java.util.UUID.randomUUID().toString().take(8)}"
+                val steerId = steer.messageId ?: "msg_${java.util.UUID.randomUUID()}"
                 llm.writeSession {
-                    appendPrompt {
-                        message(Message.User(content = steerMeta, id = steerId, metaInfo = RequestMetaInfo.create(KoogClock.System)))
-                    }
+                    appendPrompt { message(steer.toKoogSteering(persister?.includeImages ?: true)) }
                 }
-                persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
+                if (steer.messageId != null) persister?.consumeSteering(steer)
+                else persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
                 MEDERI_INPUT_PERSISTED
             } else {
                 lastText

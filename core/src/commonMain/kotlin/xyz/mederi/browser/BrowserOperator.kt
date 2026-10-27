@@ -84,7 +84,14 @@ class BrowserOperator(
                 internalTools.add(JudgeTool(brain = brain, recipe = recipe, collector = collector))
             }
             if (drillExecutor != null) {
-                internalTools.add(ExecuteDrillTool(drillExecutor = drillExecutor, brain = brain, recipe = recipe))
+                internalTools.add(
+                    ExecuteDrillTool(
+                        drillExecutor = drillExecutor,
+                        brain = brain,
+                        recipe = recipe,
+                        mountedScript = recipe?.drillScript
+                    )
+                )
             }
 
             // 装配通用浏览器物理操作工具集（基于 BrowserControl 抽象，后端自动适配）

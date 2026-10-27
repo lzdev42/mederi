@@ -67,6 +67,12 @@ interface SessionStore {
     suspend fun updateTodos(id: String, todos: List<TodoItem>)
 
     /**
+     * 更新会话已激活 skill 列表（整体替换；会话级激活力真理源 = sessions.active_skills 列）。
+     * 激活的 skill 全文由 TurnExecutor 注入系统提示词，不进对话历史。
+     */
+    suspend fun updateActiveSkills(id: String, activeSkills: List<String>)
+
+    /**
      * 删除会话。
      */
     suspend fun delete(id: String)

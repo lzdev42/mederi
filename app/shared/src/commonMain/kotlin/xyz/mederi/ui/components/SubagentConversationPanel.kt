@@ -13,9 +13,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Square
 import compose.icons.feathericons.X
 import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.cancel
 import mederi.app.shared.generated.resources.subagentui_stop_task
+import mederi.app.shared.generated.resources.subagentui_stop_task_confirm_title
+import mederi.app.shared.generated.resources.subagentui_stop_task_confirm_message
 import mederi.app.shared.generated.resources.subagentui_status_running
 import mederi.app.shared.generated.resources.subagentui_status_completed
 import mederi.app.shared.generated.resources.subagentui_status_error
@@ -29,7 +33,7 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.ChatListContent
 import xyz.mederi.ui.ChatLayout
 import xyz.mederi.ui.WorkspaceViewModel
-import xyz.mederi.theme.rememberMederiMarkdownTheme
+import xyz.mederi.ui.components.atoms.ConfirmDialog
 import xyz.mederi.ui.components.atoms.MederiRoleTag
 import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
 
@@ -48,9 +52,25 @@ fun SubagentConversationPanel(
 ) {
     val colors = LocalMederiColors.current
     val subagent = viewModel.activeSubagentPanel ?: return
-    val appMarkdownTheme = rememberMederiMarkdownTheme()
-    val lazyListState = rememberLazyListState()
+    val lazyListState = key(subagent.agentId) { rememberLazyListState() }
     val isRunning = subagent.status.equals("RUNNING", ignoreCase = true)
+    // 终结子任务需二次确认，避免误点；与"关闭页面"的 X 视觉/语义分离。
+    var showStopConfirm by remember { mutableStateOf(false) }
+    if (showStopConfirm) {
+        ConfirmDialog(
+            title = stringResource(Res.string.subagentui_stop_task_confirm_title),
+            message = stringResource(Res.string.subagentui_stop_task_confirm_message),
+            confirmLabel = stringResource(Res.string.subagentui_stop_task),
+            cancelLabel = stringResource(Res.string.cancel),
+            danger = true,
+            confirmIcon = FeatherIcons.Square,
+            onConfirm = {
+                viewModel.stopSubagent(subagent.agentId)
+                showStopConfirm = false
+            },
+            onDismiss = { showStopConfirm = false },
+        )
+    }
 
     val statusLabel = when (subagent.status.uppercase()) {
         "RUNNING" -> stringResource(Res.string.subagentui_status_running)
@@ -66,13 +86,7 @@ fun SubagentConversationPanel(
         if (!subagent.reasoningLevel.isNullOrBlank()) append(" (${subagent.reasoningLevel})")
     }
 
-    // 运行中自动滚底（简单 snapToBottom：chatItems 变化时贴底）
-    LaunchedEffect(viewModel.subagentChatItems.size, viewModel.subagentChatItems.lastOrNull()?.key) {
-        if (isRunning) {
-            val last = viewModel.subagentChatItems.size - 1
-            if (last >= 0) lazyListState.scrollToItem(last, 1_000_000)
-        }
-    }
+    // 与主对话共用底部锚定布局；增量内容无需事后滚底，翻阅历史也不会被拉回。
 
     Column(
         modifier = modifier
@@ -113,8 +127,8 @@ fun SubagentConversationPanel(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (isRunning) {
                     MederiPanelHeaderIconButton(
-                        icon = FeatherIcons.X,
-                        onClick = { viewModel.stopSubagent(subagent.agentId) },
+                        icon = FeatherIcons.Square,
+                        onClick = { showStopConfirm = true },
                         contentDescription = stringResource(Res.string.subagentui_stop_task),
                         colors = colors,
                     )
@@ -136,7 +150,6 @@ fun SubagentConversationPanel(
                 chatItems = viewModel.subagentChatItems,
                 lazyListState = lazyListState,
                 selectionMenuActions = emptyList(),
-                appMarkdownTheme = appMarkdownTheme,
                 modifier = Modifier.fillMaxSize(),
                 contentMaxWidth = ChatLayout.contentMaxWidth,
                 showUserMessageActions = false,

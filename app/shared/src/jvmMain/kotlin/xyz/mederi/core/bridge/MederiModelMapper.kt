@@ -236,6 +236,11 @@ object MederiModelMapper {
             agentMode = message.agentMode,
             thinkingLevel = message.reasoningLevel,
             durationMs = message.durationMs,
+            turnId = message.turnId,
+            isFinalAnswer = message.isFinalAnswer,
+            pendingSteering = message.pendingSteering,
+            workStartedAt = message.workStartedAt,
+            workCompletedAt = message.workCompletedAt,
             turnDiffSummary = message.turnDiffSummary?.let { summary ->
                 xyz.mederi.core.contract.models.TurnDiffSummaryUi(
                     files = summary.files.map { f ->

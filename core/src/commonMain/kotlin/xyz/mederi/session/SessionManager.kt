@@ -7,6 +7,7 @@ import xyz.mederi.domain.model.FileDiff
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.Session
+import xyz.mederi.skills.domain.SkillInfo
 import xyz.mederi.store.RawMessageRecord
 
 /**
@@ -103,6 +104,10 @@ interface SessionManager {
 
     /** 停止指定的浏览器任务并关闭其浏览器；返回停止后状态名，taskId 不存在返回 null。 */
     fun stopBrowserTask(taskId: String): String?
+
+    suspend fun listActiveSkills(id: String): List<SkillInfo>
+    suspend fun activateSkill(id: String, skillName: String): SkillInfo
+    suspend fun deactivateSkill(id: String, skillName: String)
 
     suspend fun getFileDiffs(id: String, messageId: String? = null): List<FileDiff>
 

@@ -56,9 +56,9 @@ interface SubagentRunner {
          */
         agentId: String? = null,
         /**
-         * 子代理流式执行回调：activity 取值见 [SubagentActivity]（契约层有镜像），
-         * 工具活动只回传工具名、不回传参数分片（参数 JSON 碎片会污染 UI 输出视窗）。
+         * 原样转发子会话规范事件，保留响应ID、类型、完整工具参数/结果与最终交付标记。
+         * 仅同响应同类型的文本增量允许合并，边界与工具生命周期不丢弃。
          */
-        onProgress: (suspend (activity: String, delta: String, toolName: String?, isMessage: Boolean) -> Unit)? = null
+        onProgress: (suspend (xyz.mederi.domain.model.MederiEvent) -> Unit)? = null
     ): String
 }

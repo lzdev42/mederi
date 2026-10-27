@@ -138,7 +138,7 @@ Example (shape to follow; content from your real task):
      "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",  // command YOU run via verify_subtask after executor completes — NOT something the executor runs
      "verificationCwd": null,        // optional: verification working dir (relative to project root); null = project root
      "verificationTimeoutSeconds": 30, // optional: verification timeout seconds; verification must be a single ASCII command (prose rejected)
-     "dependsOn": [], "parallelizable": false,  // "appendix": "Optional. Subtask technical reasoning: current logic, code evidence, root cause, fix preview."
+     "dependsOn": [], "parallelizable": false,  // "appendix": "Optional. Subtask technical reasoning: current logic, evidence, root cause, fix preview."
      }],
      // "appendix": "Optional. Plan-level technical context shared across subtasks."
 }
@@ -221,8 +221,8 @@ understand exactly what will change. Unlike the concise overview, be substantive
   architecture, sequence). Omit for trivial changes.
 
 ## Subtask Appendix (free-text, optional)
-- For complex subtasks: current logic, code evidence, root cause, fix preview.
-- HIGH information density — no full source dumps, only key code lines + core contradiction.
+- For complex subtasks: current logic, evidence, root cause, fix preview.
+- HIGH information density — no full source dumps, only key lines + core contradiction.
 - Pseudo-code is preferred over real code for fix previews.
 - Omit for simple subtasks (new files, mechanical changes).
 """.trimIndent()
@@ -246,25 +246,98 @@ assuming success.
   unfinished work.
 - If in doubt, read the report file (ReportPath, e.g. `.mederi/plans/{planId}/reports/NN-executor.md`)
   or the touched files before continuing the plan.
+
+## SPEC_FEEDBACK Handling
+
+When the executor reports SPEC_FEEDBACK, read the actual code, then handle by category:
+
+- **(missing)**: The spec lacked information the executor needed. Read the relevant code, fill
+  the gap, amend the spec via generate_spec(reason=...), re-spawn.
+- **(ambiguous)**: Multiple implementations with different semantics existed and the spec did
+  not select one. Make the decision, amend the spec via generate_spec(reason=...), re-spawn.
+- **(vs-reality)**: The spec's description did not match the actual code. Read the real code,
+  correct the spec via generate_spec(reason=...), re-spawn.
+- **(unsatisfiable)**: Two spec requirements conflict and the conflict is NOT a misread of
+  the code (code mismatch goes to vs-reality above). Must use ask_user — never silently pick
+  a side or "fix" the spec.
+- **(compile-blocked)**: Fixing a compile error would require changing specified semantics or
+  expanding scope. Decide: amend the spec to widen scope if appropriate, or adjust the approach.
+  Then generate_spec(reason=...) and re-spawn.
+
+In all cases, the parent agent owns the decision — the executor does not guess.
 """.trimIndent()
 
     /**
-     * Spec 撰写引导：执行器零项目上下文，spec 是其唯一知识来源。
-     * 引导式（非硬约束）——AI 自行决定包含多少上下文。
+     * Spec 撰写规范：执行器零项目上下文、不猜，spec 是其唯一实现指令来源。
+     *
+     * 硬约束（2026-10）：替换原"You decide how much to embed"的引导式措辞——
+     * 主代理必须在派工前完成全部必要决策，执行器只落实代码和验证编译。
      */
     val SPEC_WRITING_GUIDE: String = """
 # Spec Writing Guide
 
 The executor subagent has NO project context — it does not see AGENTS.md, architecture docs,
-or any coding principles. The spec is its only source of project knowledge. When writing a
-spec, include any rules the executor needs to make correct edits without guessing: coding
-conventions, architectural constraints (e.g. "tests must not hit the production database",
-"all public APIs must have integration tests"), dependency choices, and style expectations
-relevant to this task. Embed key
-signatures or data structures the executor will work with. You decide how much to include —
-the goal is executor efficiency: the executor should follow the spec without re-investigating
-the codebase. A one-line fix needs almost none; a multi-file refactor needs more.
-Specs are implementation steps only. The executor ensures its code compiles — do NOT include
-test-running steps. You run tests via verify_subtask after the executor completes.
+or any project conventions. The spec is its ONLY source of implementation requirements. The
+executor does NOT guess: if a decision is not in the spec, it stops and reports SPEC_FEEDBACK.
+
+## Required Content (every spec)
+
+1. **Modification scope** — exact files, classes/functions, and location anchors (line numbers
+   or surrounding code). List reference files the executor should read to make the correct edit.
+2. **Modification steps** — per file, numbered in execution order: what to add, replace, or
+   delete. State types, signatures, and call-site wiring explicitly.
+3. **Compile command** — the exact command the executor runs to verify compilation
+   (e.g. `./gradlew :core:compileKotlinJvm`), including the working directory (if not project
+   root) and the platform/target variant for multi-platform projects. The executor does NOT
+   discover build commands or select targets.
+4. **Execution boundary** — what mechanical fixes the executor may apply without asking
+   (imports, local syntax) and what requires stopping (see SPEC_FEEDBACK categories in the
+   executor prompt).
+
+## Conditional Content (required when applicable; write "N/A" if not)
+
+5. **Behavior decisions** — branches, edge cases, error handling, state changes. Every
+   behavioral choice the executor would otherwise have to make MUST be stated. If a branch
+   has no special handling, say so explicitly.
+6. **Constraint translation** — project rules (from AGENTS.md, architecture docs, conventions)
+   translated into concrete modification actions the executor must follow.
+
+## Forbidden
+
+Do NOT leave necessary decisions as "handle reasonably", "follow existing patterns",
+"choose an appropriate approach", or equivalent vague language. If the executor would need
+to select between materially different implementations, the spec MUST state which one.
+
+Specs are implementation steps only — do NOT include test-running steps. You run tests via
+verify_subtask after the executor completes. The compile command above is for the executor's
+own validation, not a test.
+""".trimIndent()
+
+    /**
+     * 研究委派纪律（主代理侧）：派发 SPAWN_RESEARCHER 前给足上下文 + 消费研究报告时只采信证据。
+     *
+     * 通用规则——coding 与 work 场景同适用。判断基准一项是关键：无基准则研究员只能报裸事实，
+     * 无法做合规性核查。消费侧：研究报告里只有证据部分（出处+原文+理由链）可采信，
+     * 证据以外的判断/联想/建议一律"仅供参考"。
+     */
+    val RESEARCH_DELEGATION: String = """
+# Research Delegation
+
+When delegating research via subagent(SPAWN_RESEARCHER), you MUST give enough context that
+the subagent does not have to guess the task's intent:
+- Project background and positioning — what this project is, what it's for.
+- Research purpose — what decision or question this research feeds.
+- Specific question — the concrete thing to investigate.
+- Scope — what's in and out of bounds.
+- Judgment baseline — what architecture / style / convention / special constraints to check
+  against (e.g. "this project follows MVVM", "core is JVM-only"). Without a baseline, the
+  researcher cannot assess correctness — it can only report bare facts.
+- Necessary research method — files to read, URLs, search terms, when applicable.
+
+The researcher returns evidence-grounded findings; you independently review them and decide
+whether to adopt. Only the EVIDENCE portion of a researcher's report (source location +
+quoted material + reasoning chain) is trustworthy; anything beyond evidence (researcher's
+judgments, associations, suggestions) is "for reference only" and may be ignored when you
+make your decision.
 """.trimIndent()
 }

@@ -1,113 +1,83 @@
 package xyz.mederi.tools.subagent
 
+import xyz.mederi.domain.model.EventType
+import xyz.mederi.domain.model.MederiEvent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/**
- * SubagentProgressBatch 窗口聚合的时序与规则单测。
- *
- * 覆盖三类关键行为：
- * 1. 窗口内多帧合并为一次 emit（事件量随 token 线性增长的问题被窗口吸收）；
- * 2. tool_call 帧只记录工具名、参数 JSON 分片不进 delta（不污染 UI 输出视窗）；
- * 3. flushNow 尾部冲刷（窗口未满也补发，不丢最后一段流式输出）。
- */
 class SubagentProgressBatchTest {
+    private fun delta(kind: String, content: String, response: String = "r1", turn: String = "work") =
+        MederiEvent(EventType.MESSAGE_DELTA, "child", response,
+            mapOf("type" to kind, "content" to content, "turnId" to turn), "2026-10-27T08:00:00Z")
 
-    private class FakeClock(var now: Long = 0L) {
-        fun tick(ms: Long) { now += ms }
-        fun fn(): () -> Long = { now }
+    @Test
+    fun sameKindAndResponseCoalesceWithoutLosingWhitespace() {
+        var now = 0L
+        val batch = SubagentProgressBatch(nowMillis = { now })
+        assertEquals(emptyList(), batch.add(delta("reasoning", "plan_d87")))
+        assertEquals(emptyList(), batch.add(delta("reasoning", "a4db4. ")))
+        assertEquals(emptyList(), batch.add(delta("reasoning", "\n")))
+        now = 150
+        val frame = batch.flushIfDue()!!
+        assertEquals("plan_d87a4db4. \n", frame.payload["content"])
+        assertEquals("reasoning", frame.payload["type"])
+        assertNull(batch.flushNow())
     }
 
     @Test
-    fun burstWithinWindowCoalescesToSingleFrame() {
-        val clock = FakeClock()
-        val batch = SubagentProgressBatch(throttleMillis = 120, nowMillis = clock.fn())
-
-        batch.add(SubagentActivity.OUTPUT, "a", null, true)
-        clock.tick(10)
-        batch.add(SubagentActivity.OUTPUT, "b", null, true)
-        clock.tick(10)
-        batch.add(SubagentActivity.OUTPUT, "c", null, true)
-
-        // 窗口未到 → 无输出
-        clock.tick(50) // 距上次 flush 仍是 70ms
-        assertNull(batch.flushIfDue(), "窗口未满不应产出")
-
-        // 窗口到（80→200ms）
-        clock.tick(130)
-        val frame = batch.flushIfDue()
-        assertEquals(SubagentActivity.OUTPUT, frame?.activity)
-        assertEquals("abc", frame?.delta, "窗口内帧应合并为一段文本")
-        assertEquals(true, frame?.isMessage)
-        assertNull(batch.flushIfDue(), "flush 后无新内容不应重复产出")
+    fun typeAndToolBoundariesNeverRelabelOrDropBufferedText() {
+        val batch = SubagentProgressBatch(nowMillis = { 0L })
+        val out = mutableListOf<MederiEvent>()
+        out += batch.add(delta("reasoning", "plan_d87"))
+        out += batch.add(delta("reasoning", "a4db4."))
+        out += batch.add(delta("text", "The notebook's recent entries will"))
+        val call = MederiEvent(EventType.TOOL_CALLED, "child", "r1",
+            mapOf("tool" to "list_directory", "toolCallId" to "directory-1", "args" to "directory-arguments"), "now")
+        val result = MederiEvent(EventType.TOOL_RESULT, "child", "r1",
+            mapOf("tool" to "list_directory", "toolCallId" to "directory-1", "output" to "complete directory output", "isError" to "false"), "now")
+        out += batch.add(call)
+        out += batch.add(result)
+        out += batch.add(delta("reasoning", "next analysis"))
+        out += listOfNotNull(batch.flushNow())
+        assertEquals(listOf("reasoning", "text", null, null, "reasoning"), out.map { it.payload["type"] })
+        assertEquals("plan_d87a4db4.", out[0].payload["content"])
+        assertEquals("The notebook's recent entries will", out[1].payload["content"])
+        assertEquals(call, out[2])
+        assertEquals(result, out[3])
+        assertEquals("next analysis", out[4].payload["content"])
+        assertNull(batch.flushNow())
     }
 
     @Test
-    fun toolCallFramesKeepNameButDropArgFragments() {
-        val clock = FakeClock()
-        val batch = SubagentProgressBatch(throttleMillis = 120, nowMillis = clock.fn())
-
-        // 模拟工具参数流式分片（type=tool_call 的 content 是部分 JSON）
-        batch.add(SubagentActivity.TOOL_CALL, """{"path":"src/""", "read_file", false)
-        clock.tick(10)
-        batch.add(SubagentActivity.TOOL_CALL, """Main.kt"}""", "read_file", false)
-        clock.tick(10)
-        batch.add(SubagentActivity.TOOL_CALL, "", "read_file", false)
-
-        clock.tick(150) // 窗口已到
-        val frame = batch.flushIfDue()
-        assertEquals(SubagentActivity.TOOL_CALL, frame?.activity)
-        assertEquals("read_file", frame?.toolName)
-        assertEquals("", frame?.delta, "工具参数分片不得进入 delta")
-        assertEquals(false, frame?.isMessage)
+    fun responseBoundariesAndFinalMarkerAreForwardedInOrder() {
+        val batch = SubagentProgressBatch(nowMillis = { 0L })
+        val out = mutableListOf<MederiEvent>()
+        out += batch.add(delta("text", "first", "r1"))
+        val boundary = delta("response_completed", "", "r1")
+        out += batch.add(boundary)
+        out += batch.add(delta("text", "second", "r2"))
+        val complete = MederiEvent(EventType.MESSAGE_COMPLETED, "child", payload = mapOf("finalMessageId" to "r2", "turnId" to "work"), timestamp = "now")
+        out += batch.add(complete)
+        assertEquals(listOf("first", "", "second", null), out.map { it.payload["content"] })
+        assertEquals(boundary, out[1])
+        assertEquals(complete, out.last())
+        assertEquals(listOf("r1", "r1", "r2", null), out.map { it.messageId })
     }
 
     @Test
-    fun thinkingFramesBatchLikeText() {
-        val clock = FakeClock()
-        val batch = SubagentProgressBatch(throttleMillis = 120, nowMillis = clock.fn())
-
-        // 推理帧 isMessage=false（不进 lastMessage），但 accumulateDelta=true（进输出视窗）
-        batch.add(SubagentActivity.THINKING, "先分析", null, false, accumulateDelta = true)
-        clock.tick(10)
-        batch.add(SubagentActivity.THINKING, "再动手", null, false, accumulateDelta = true)
-        clock.tick(150)
-
-        val frame = batch.flushIfDue()
-        assertEquals(SubagentActivity.THINKING, frame?.activity)
-        assertEquals("先分析再动手", frame?.delta)
-        // 推理帧 isMessage=false：不参与 lastMessage 提取
-        assertEquals(false, frame?.isMessage)
+    fun distinctResponsesCannotShareOneTextBuffer() {
+        val batch = SubagentProgressBatch(nowMillis = { 0L })
+        assertEquals(emptyList(), batch.add(delta("text", "one", "r1")))
+        assertEquals("one", batch.add(delta("text", "two", "r2")).single().payload["content"])
+        assertEquals("two", batch.flushNow()!!.payload["content"])
     }
 
     @Test
-    fun flushNowEmitsTailEvenBeforeWindow() {
-        val clock = FakeClock()
-        val batch = SubagentProgressBatch(throttleMillis = 120, nowMillis = clock.fn())
-
-        batch.add(SubagentActivity.OUTPUT, "尾巴", null, true)
-        // 未做任何 flushIfDue、窗口也没到——flushNow 必须补发（会话终止兜底）
-        val frame = batch.flushNow()
-        assertEquals("尾巴", frame?.delta)
-        assertNull(batch.flushNow(), "flushNow 后不应重复产出")
-    }
-
-    @Test
-    fun activityAndToolResetAfterFlush() {
-        val clock = FakeClock()
-        val batch = SubagentProgressBatch(throttleMillis = 120, nowMillis = clock.fn())
-
-        batch.add(SubagentActivity.TOOL_CALL, "", "ls", false)
-        clock.tick(150)
-        assertEquals("ls", batch.flushIfDue()?.toolName)
-
-        // 下一窗口只有文本帧时，不应残留上一次工具名
-        batch.add(SubagentActivity.OUTPUT, "结果", null, true)
-        clock.tick(150)
-        val frame = batch.flushIfDue()
-        assertEquals(SubagentActivity.OUTPUT, frame?.activity)
-        assertNull(frame?.toolName, "flush 后工具名应复位")
-        assertEquals("结果", frame?.delta)
+    fun toolArgumentDeltasAreTypedEventsNotNarration() {
+        val batch = SubagentProgressBatch(nowMillis = { 0L })
+        val frame = delta("tool_call", "{", "r1").copy(payload = mapOf("type" to "tool_call", "name" to "read_file", "content" to "{", "turnId" to "work"))
+        assertEquals(listOf(frame), batch.add(frame))
+        assertNull(batch.flushNow())
     }
 }

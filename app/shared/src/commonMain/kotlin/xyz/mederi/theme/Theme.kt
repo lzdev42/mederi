@@ -323,11 +323,20 @@ fun rememberMederiMarkdownColors(): MarkdownColors {
 }
 
 /**
- * Mederi 统一 Markdown 主题适配：
- * 将业务色彩规范（[rememberMederiMarkdownColors]）与几何排版（[RenderStyle]）组装为 [MarkdownTheme]。
+ * Mederi 统一 Markdown 渲染配置工厂：内部组装两套独立维度，调用点不传颜色。
  *
- * @param style 排版风格（默认为面向对话的 [RenderStyle.Chat]，长文阅读可传入 [RenderStyle.Github]）
- * @param compact 紧凑变体，适用于思维链、追踪折叠卡片等空间受限区域。
+ * 维度一·软件主题配色（主题1，只改配色）：
+ *   经 [rememberMederiMarkdownColors] 从 [LocalMederiColors] 派生 [MarkdownColors]，
+ *   随用户切深/浅色软件主题自动同步——这是全局真理源，调用点绝不手传颜色参数。
+ *
+ * 维度二·inkcompose 渲染配置（[RenderStyle]，决定渲染几何效果，严格说不该叫"主题"）：
+ *   [RenderStyle.Chat] = 会话场景（小行距、紧凑垂直间距、平缓字号、关分割线）；
+ *   [RenderStyle.Github] = 长文阅读场景（大呼吸感、GFM 大字号阶梯、开 H1/H2 分割线）。
+ *   两者拼成 [MarkdownTheme] 喂给底层 MarkdownView。
+ *
+ * @param style 渲染版式，会话场景默认 [RenderStyle.Chat]，长文阅读器传 [RenderStyle.Github]
+ * @param compact 紧凑变体，覆盖 style 的字号/行距/间距，适用于思维链、追踪折叠卡片等空间受限区域
+ * DUAL-THEME: colors=LocalMederiColors geometry=RenderStyle
  */
 @Composable
 fun rememberMederiMarkdownTheme(

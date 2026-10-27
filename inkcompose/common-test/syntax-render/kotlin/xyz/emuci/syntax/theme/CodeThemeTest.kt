@@ -89,4 +89,16 @@ class CodeThemeTest {
         assertNotEquals(Color.Unspecified, theme.diffRemovedLineBackground)
         assertNotEquals(Color.Unspecified, theme.diffMetaLineBackground)
     }
+
+    @Test
+    fun should_useOpaqueDiffColors_when_themeUsedForDiff() {
+        // diff 行底色必须不透明（清晰可辨，非灰蒙蒙半透明）
+        val themes = listOf(OneDarkProTheme, GithubLightTheme, DraculaProTheme, SolarizedLightTheme)
+        for (theme in themes) {
+            assertEquals(1f, theme.diffAddedLineBackground.alpha,
+                "${theme::class.simpleName} added line background must be opaque")
+            assertEquals(1f, theme.diffRemovedLineBackground.alpha,
+                "${theme::class.simpleName} removed line background must be opaque")
+        }
+    }
 }

@@ -38,7 +38,11 @@ data class SubagentState(
     /** 终态时间戳（ISO 8601），用于计算最终工作总耗时。 */
     val completedAt: String? = null,
     /** 结构化工作块（推理/工具/正文），由 SUBAGENT_PROGRESS 累积；供子代理对话视图合成 ChatMessage。 */
-    val blocks: List<SubagentBlock> = emptyList()
+    val blocks: List<SubagentBlock> = emptyList(),
+    /** 与主对话相同的响应消息；原始事件由同一个 ConversationStateReducer 聚合。 */
+    val messages: List<ChatMessage> = emptyList(),
+    /** 已聚合的有序进度事件数，用于快照水合后丢弃SSE重放帧。 */
+    val progressSequence: Long = 0L
 )
 
 /**

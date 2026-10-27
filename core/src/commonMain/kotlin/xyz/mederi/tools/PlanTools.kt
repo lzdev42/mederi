@@ -293,12 +293,15 @@ class PlanTools(
         val subtaskIndex: Int,
         @LLMDescription(
             "The detailed implementation spec as an ORDERED CHECKLIST: numbered steps (1. 2. 3.), " +
-                "each step concrete and independently verifiable, in execution order. Include exact " +
-                "function names/signatures grounded in the real code (read the files first), data " +
-                "structures, edge cases, and error handling. The executor has NO project context — " +
-                "include any coding conventions, architectural constraints, and key signatures the " +
-                "executor needs (see Spec Writing Guide). You decide how much to embed. Specs are " +
-                "implementation only — do NOT include test-running steps."
+                "each step concrete and independently verifiable, in execution order. The executor " +
+                "has NO project context and does NOT guess — the spec is its sole source of " +
+                "implementation requirements. Follow the Spec Writing Guide: state modification " +
+                "scope (files, anchors), per-file steps (types, signatures, wiring), compile " +
+                "command, execution boundary, and all behavior decisions (branches, edge cases, " +
+                "error handling). Translate project rules into concrete actions. Do NOT leave " +
+                "decisions as 'handle reasonably' or 'follow existing patterns'. Specs are " +
+                "implementation only — do NOT include test-running steps; include the compile " +
+                "command for the executor's own validation."
         )
         val spec: String,
         @LLMDescription(
@@ -678,9 +681,9 @@ class PlanTools(
             "subtask — and re-call it (with reason=) to CORRECT the spec whenever verification shows " +
             "the spec itself is wrong. Corrections are append-only: the full old spec text is preserved " +
             "in the audit trail (specChanges). The spec is stored per (planId, subtaskIndex); " +
-            "subagent(SPAWN) will execute exactly this spec. The spec is implementation steps only " +
-            "— do NOT include test-running steps; the executor compiles to verify, you test via " +
-            "verify_subtask."
+            "subagent(SPAWN) will execute exactly this spec. The executor does NOT guess — the spec is " +
+            "its sole source of implementation requirements. Include the compile command for the " +
+            "executor's own validation. Do NOT include test-running steps; you test via verify_subtask."
     ) {
         override suspend fun execute(args: GenerateSpecArgs): String {
             val plan = planStore.load(args.planId)

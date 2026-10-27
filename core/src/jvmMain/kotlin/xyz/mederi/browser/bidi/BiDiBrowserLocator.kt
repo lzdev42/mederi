@@ -51,6 +51,18 @@ class BiDiBrowserLocator(
     override suspend fun filter(hasText: String): BrowserLocator =
         BiDiBrowserLocator(delegate.filter { it.text.contains(hasText) }, selector)
 
+    override suspend fun press(key: KeyboardKey): OperationResult =
+        withNotFound("locator.press") { delegate.press(key); OperationResult.Acknowledged }
+
+    override suspend fun check(): OperationResult =
+        withNotFound("locator.check") { delegate.check(); OperationResult.Acknowledged }
+
+    override suspend fun scroll(deltaX: Int, deltaY: Int): OperationResult =
+        withNotFound("locator.scroll") { delegate.scroll(deltaX, deltaY); OperationResult.Acknowledged }
+
+    override suspend fun type(text: String): OperationResult =
+        withNotFound("locator.type") { delegate.type(text); OperationResult.Acknowledged }
+
     private suspend fun withNotFound(action: String, block: suspend () -> OperationResult): OperationResult =
         try {
             block()

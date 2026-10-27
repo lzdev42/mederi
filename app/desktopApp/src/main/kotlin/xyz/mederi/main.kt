@@ -77,17 +77,6 @@ fun main() = application {
                             if (kb != null) {
                                 xyz.emuci.diagram.mermaid.SingleMermaidWorker.attachBrowser(kb)
                                 xyz.emuci.inkcompose.MarkdownExporter.setBrowser(kb)
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                    val host = xyz.mederi.browser.JcefBrowserHost(kb)
-                                    appState.uiBrowserHost = host
-                                    // 重新注册 JCEF 工厂：让浏览器工具的页面通过 UI 宿主创建（可见），
-                                    // 覆盖 MederiAiCore 注册的独立 viewport 工厂（headless/server 路径才用那个）。
-                                    xyz.mederi.browser.BrowserRegistry.register(
-                                        name = "jcef",
-                                        kind = xyz.mederi.browser.BrowserKind.JCEF,
-                                        factory = { taskId, sessionId -> host.createControl(taskId, sessionId) }
-                                    )
-                                }
                             }
                             // kb == null → JCEF 不支持（headless 无 Xvfb 等）：inkcompose 降级源码展示，无浏览器面板
                         }
