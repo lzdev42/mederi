@@ -162,7 +162,7 @@ object ConversationStateReducer {
                     val finalAnswer = when {
                         msg.role != ChatRole.Assistant -> msg.isFinalAnswer
                         streamInterrupted && msg.isStreaming -> false
-                        msg.id == finalMessageId -> true
+                        msg.id == finalMessageId -> !streamInterrupted
                         else -> msg.isFinalAnswer
                     }
                     msg.copy(
@@ -776,14 +776,17 @@ object ConversationStateReducer {
         val placeholder = ensureStreamingPlaceholder(currentMessages, event)
         val updatedBlocks = placeholder.blocks.toMutableList()
 
-        val existing = (if (toolCallId.isNotBlank()) {
-            updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
-                .firstOrNull { it.id == "tool_$toolCallId" }
-        } else null)
-            ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
-                .lastOrNull { it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
-            ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
-                .lastOrNull { it.state is ToolCallState.Running || it.state is ToolCallState.Pending }
+        val calls = updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
+        // 已知调用 ID 只能匹配自身或尚未绑定 ID 的流式占位；同名并行调用不得互相覆盖。
+        val existing = calls.firstOrNull { toolCallId.isNotBlank() && it.id == "tool_$toolCallId" }
+            ?: calls.lastOrNull {
+                (toolCallId.isBlank() || it.id.startsWith("${placeholder.id}_tool_")) &&
+                    it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending)
+            }
+            ?: calls.lastOrNull {
+                it.id.startsWith("${placeholder.id}_tool_") && it.name == "tool" &&
+                    (it.state is ToolCallState.Running || it.state is ToolCallState.Pending)
+            }
 
         val prevInput = (existing?.state as? ToolCallState.Running)?.input
         val effectiveInput = if (input.isEmpty() && !prevInput.isNullOrEmpty()) prevInput else input
@@ -832,7 +835,7 @@ object ConversationStateReducer {
                     .firstOrNull { it.id == "tool_$toolCallId" }
             } else null)
                 ?: blocks.filterIsInstance<ChatBlock.ToolCall>()
-                    .lastOrNull { it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
+                    .lastOrNull { toolCallId.isBlank() && it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
 
             if (target != null) {
                 val prevInput = when (val s = target.state) {
@@ -861,7 +864,7 @@ object ConversationStateReducer {
                     .firstOrNull { it.id == "tool_$toolCallId" }
             } else null)
                 ?: updatedBlocks.filterIsInstance<ChatBlock.ToolCall>()
-                    .lastOrNull { it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
+                    .lastOrNull { toolCallId.isBlank() && it.name == name && (it.state is ToolCallState.Running || it.state is ToolCallState.Pending) }
 
             if (target != null) {
                 val prevInput = when (val s = target.state) {

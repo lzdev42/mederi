@@ -119,7 +119,7 @@ classDiagram
   - `ToolCall(id?, tool, args)`；`ToolResult(id?, tool, output, isError=false, status?, durationMs?, error?)`
   - `Reasoning(content: List<String>, summary?, encrypted?, id?)`
   - `const val UI_HIDDEN_MARKER = "<<<NOT_FOR_UI>>>"`（消息文本中该标记后 UI 不渲染、AI 可见——系统环境注入块）
-- **`Message`**：新增 `turnId: String?=null`（工作归属）、`isFinalAnswer: Boolean?=null`（Core 确认最终交付，null 为旧历史）、`pendingSteering: Boolean=false`（接收即落库、尚未消费的用户输入）。见类图。诊断字段 totalTokens/inputTokens/outputTokens/cachedTokens/durationMs 等写入时抽取进 message_history 列。`turnDiffSummary: TurnDiffSummary?`（`…/tools/diff/TurnDiff.kt`：`files: List<FileDiffSummary>` + totalAdditions/totalDeletions）——一个 turn 的**最后一条 assistant 消息**携带本 turn 的文件变更摘要（runTurn 收尾经 historyStore.updateMessage 原子回写该消息，其余消息为 null；MESSAGE_COMPLETED payload 同步带出，见 §11）。
+- **`Message`**：新增 `turnId: String?=null`（工作归属）、`isFinalAnswer: Boolean?=null`（Core 确认本轮正式回复，null 为旧历史）、`pendingSteering: Boolean=false`（接收即落库、尚未消费的用户输入）、`workStartedAt: Long?=null` / `workCompletedAt: Long?=null`（工作墙钟起终点，epoch ms）。见类图。诊断字段 totalTokens/inputTokens/outputTokens/cachedTokens/durationMs 等写入时抽取进 message_history 列。`turnDiffSummary: TurnDiffSummary?`（`…/tools/diff/TurnDiff.kt`：`files: List<FileDiffSummary>` + totalAdditions/totalDeletions）——一个 turn 的**最后一条 assistant 消息**携带本 turn 的文件变更摘要（runTurn 收尾经 historyStore.updateMessage 原子回写该消息，其余消息为 null；MESSAGE_COMPLETED payload 同步带出，见 §11）。
 - **`Provider`（`…/provider/domain/model/Provider.kt`）**：`id, name, type: ProviderType, baseUrl, reasoningParameter: ReasoningParameter?, models: List<AIModel>, responseSanitization: Boolean=false, modelsDevKey: String?, @Transient apiKeys: List<ProviderApiKey>`（apiKeys 读时合并、写时剥离）；派生 `defaultApiKey`、`supportsReasoning`。
 - **`ProviderApiKey`**：`id, name, @Contextual maskedValue, isDefault`；companion `mask()`（前3+"..."+后4，≤7 返回 "***"）。
 - **`ReasoningParameter`**：`levels: Map<ReasoningLevel, String?>, parameterName: String="", customRequestBody: Map<String,String>`。核心思想：**不对供应商参数做语义解释**，每档对应用户编写的请求体 JSON 片段，发送时根级合并。方法 `resolve(level)` / `supportsLevel` / `availableLevels` / `validate()`；companion `forOpenAIChat()/forOpenAIResponses()/forGoogle()/forType(type)`。
@@ -915,7 +915,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 |---|---|
 | `SESSION_CREATED` / `SESSION_UPDATED` | 无 / 状态变化 |
 | `MESSAGE_DELTA` | `type`(text/reasoning/tool_call)、`content`；tool_call 另有 `name`、`state`(running/completed) |
-| `MESSAGE_COMPLETED` | 正常交付携 `finalMessageId`，取消/异常/截断/等待子代理不确认交付；本 turn 有 diffTracker 时携带 `turnDiffSummary`（TurnDiffSummary JSON = 本 turn 文件变更摘要，同时经 historyStore.replace 写进最后一条 assistant 消息的 Message.turnDiffSummary 字段）+ `diffMessageId`（摘要挂靠的 assistant 消息 id）；**断流时携带 ErrorRecord payload**（`error`=formatShortMessage、`errorId`、`fullDiagnostic`、`errorCategory`=NETWORK、`errorSeverity`=WARNING、`failureMode`=PREMATURE_CLOSE、`providerName`/`modelName`，另带 `warning` 人类提示文本）。两类来源——① End 帧无 finishReason（`collectWarning`，无异常）：`流式连接提前中断：服务器关闭连接但未发送结束标记（已接收 N 帧 / N 字符）`② 流消费异常（`collect`）：`流式中断：<ErrorRecord.formatShortMessage()>（已接收 N 帧 / N 字符）`。客户端 MESSAGE_COMPLETED 分支把 `error/errorId/fullDiagnostic` 写入快照 errorMessage/errorId/errorDiagnostic（severity=WARNING 不进 Error 状态，会话保持 Idle），`failureMode==PREMATURE_CLOSE` 时置 `errorIsStreamInterrupted=true` → ErrorBoard 显示"继续"按钮（重发 Continue 走正常 send 流程，历史里的半截回复让模型自然续写）→ ErrorBoard 展示 |
+| `MESSAGE_COMPLETED` | 正常交付携 `finalMessageId`，取消/异常/截断不确认交付；等待子代理可确认本轮阶段回复，但没有 workCompletedAt；本 turn 有 diffTracker 时携带 `turnDiffSummary`（TurnDiffSummary JSON = 本 turn 文件变更摘要，同时经 historyStore.replace 写进最后一条 assistant 消息的 Message.turnDiffSummary 字段）+ `diffMessageId`（摘要挂靠的 assistant 消息 id）；**断流时携带 ErrorRecord payload**（`error`=formatShortMessage、`errorId`、`fullDiagnostic`、`errorCategory`=NETWORK、`errorSeverity`=WARNING、`failureMode`=PREMATURE_CLOSE、`providerName`/`modelName`，另带 `warning` 人类提示文本）。两类来源——① End 帧无 finishReason（`collectWarning`，无异常）：`流式连接提前中断：服务器关闭连接但未发送结束标记（已接收 N 帧 / N 字符）`② 流消费异常（`collect`）：`流式中断：<ErrorRecord.formatShortMessage()>（已接收 N 帧 / N 字符）`。客户端 MESSAGE_COMPLETED 分支把 `error/errorId/fullDiagnostic` 写入快照 errorMessage/errorId/errorDiagnostic（severity=WARNING 不进 Error 状态，会话保持 Idle），`failureMode==PREMATURE_CLOSE` 时置 `errorIsStreamInterrupted=true` → ErrorBoard 显示"继续"按钮（重发 Continue 走正常 send 流程，历史里的半截回复让模型自然续写）→ ErrorBoard 展示 |
 | `MESSAGE_ERROR` | rich payload（由 `ErrorRecord.toPayload()` 生成）：`error`(简报。**有 `serverMessage` 时 = `[分类] 供应商真实报错(HTTP xxx)`**（如 `[RATE_LIMIT] Insufficient Balance (HTTP 429)`，从 errorBody JSON 提取）；否则 `[分类] 异常类型: 消息(HTTP xxx)`，向后兼容)、`errorId`、`errorCategory`、`errorSeverity`、`errorType`(完整类名)、`errorPhase`、`httpStatus`、`errorBody`、`serverMessage`(errorBody 解析出的真实报错)、`networkErrorType`、`providerName`、`modelName`、`toolName`、`recoverySuggestion`、`fullDiagnostic`(完整分层诊断报告)、`causeChain` |
 | `TOOL_CALLED` | `tool`、`toolCallId`、`args` |
 | `TOOL_RESULT` | `tool`、`toolCallId`、`output`、`isError` |
@@ -930,7 +930,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 | `BROWSER_TASK_STARTED/STEP/COMPLETED/ERROR/STOPPED` | 浏览器任务生命周期（异步，UI 浏览器任务面板消费）：`taskId`、`status`(STARTED/RUNNING/COMPLETED/ERROR/STOPPED)、`step?`、`thought?`、`results?`、`message?`。终态事件另带 `role=BROWSER_OPERATOR`、`reportPath?`。sessionId = 派发会话的 parentSessionId。**终态驱动自动唤醒**：`TurnExecutor` init 订阅 COMPLETED/ERROR/STOPPED → `handleBrowserTaskTerminalEvent` 组装 `<event_message type="browser_task_completed">` 放入 `pendingEventMessages`，在父会话空闲时启新 turn 汇报！UI 可据 taskId 经 `AiCore.stopBrowserTask(taskId)` 真停。 |
 | `BROWSER_TASK_REASONING_DELTA` | 浏览器 decide 阶段 LLM 流式增量（2026-10）：Operator DECIDE 改走 `BrowserLLMCaller.callWithToolsStreaming`（Koog `executeStreaming` Flow<StreamFrame>，120ms 窗口聚合），reasoning/text 逐 token 推送。payload：`taskId`、`step?`、`kind`("reasoning"\|"text")、`content`(增量文本)。UI 浮动条顶部推理框流式蹦字；`BROWSER_TASK_STEP`（新步）与三终态复位 `liveReasoning/liveText`。不复用 `MESSAGE_DELTA`（会污染主聊天流） |
 | `SUBAGENT_STARTED` | 子代理启动（SubagentManager 发，UI 子代理面板消费）：`agentId`、`role`(EXECUTOR/RESEARCHER)、`modelId`、`modelName`、`reasoningLevel`、`task`(主代理派发的命令)、`briefing?`。sessionId = 父会话 ID |
-| `SUBAGENT_PROGRESS` | 子代理流式动态（SubagentManager 转发，UI 详情流式消费；SubagentRunnerImpl 侧按 120ms 窗口聚合，正文/推理增量合并、工具参数分片不携带）：`agentId`、`role`、`activity`(THINKING/TOOL_CALL/OUTPUT，词表 = core `SubagentActivity`，契约层有镜像 + 契约测试锁死)、`tool?`(工具名，工具活动时)、`delta?`(窗口内累积文本，流式视窗用)、`isMessage?`(是否正文帧，驱动 lastMessage 提取)。驱动 UI 实时蹦字与最后一句话提取。sessionId = 父会话 ID |
+| `SUBAGENT_PROGRESS` | 标准事件信封：`agentId`、`role`、`eventJson`（@Serializable MederiEvent 原始事件）、`sequence`（每子代理从 1 递增）。SUBAGENT_PROGRESS.sessionId 为父会话；原始响应 ID、推理/正文类型、工具 ID/参数/结果、终态和工作时间保留于 eventJson。客户端以相同 reducer 聚合主/子代理，序号用于快照重放对账与去重。 |
 | `SUBAGENT_COMPLETED/ERROR/STOPPED` | 子代理终态：`agentId`、`role`、`status`、`reportPath?`（报告落盘路径）、`result?`（摘要/部分结果）、`planId?`、`subtaskIndex?`、`completedAt?`（终态时间戳，用于耗时统计）。STOPPED 覆盖 stop（用户主动关闭带 reason="被用户关闭"）与 abort 级联收割两条路径。汇报全文不进事件。**终态事件驱动父 turn 自动唤醒**：TurnExecutor init 订阅这三个终态事件 → `handleSubagentTerminalEvent` 组装 `<event_message>` 内部消息（含 Note 提示验证真实完成性）入 `pendingEventMessages` → 在父会话空闲时启新 turn 向 AI 汇报 |
 | `SUBAGENT_DISCARDED` | 子代理无感丢弃（回滚到某句对话时，丢弃该句时尚未创立的子代理）：`agentId`、`role?`。**坚决不进** `pendingEventMessages`、不通知 AI、不触发新 turn；仅通知前端 `SubagentTracker` 将其从状态缓存中移除（`states - agentId`） |
 
@@ -1040,9 +1040,18 @@ flowchart LR
 
 - `TurnExecutor` 构造新增 `llmClientFactory: (Provider, String) -> LLMClient = KoogClientFactory::create` 注入点；生产默认行为不变，回归测试以 Fake 流式客户端运行真实 Koog 图，覆盖工具循环/插话/最终交付而无需启动宿主或联网。
 
-- 最终交付检查排除空文本、工具调用和 length/content_filter/未知结束原因；不完整响应经 ErrorBoard 返回原因。正常收尾与新输入接纳使用同一会话锁，晚到输入继续运行而不先提交旧候选答案。
-- 子代理状态终结到终态事件入队之间也属于未完成工作：`hasPendingSubagentWork` 同时检查运行态、终态事件是否已被观察和待唤醒消息，避免终态事件到达前提前交付；等待与事件续跑保留同一 turnId。显式停止/回滚抑制旧子代理晚到终态再次唤醒。
+- 本轮正式回复检查排除空文本、工具调用和 length/content_filter/未知结束原因；不完整响应经 ErrorBoard 返回原因。正常收尾与新输入接纳使用同一会话锁，晚到输入继续运行而不先提交旧候选答案。
+- 子代理状态终结到终态事件入队之间也属于未完成工作：`hasPendingSubagentWork` 同时检查运行态、终态事件是否已被观察和待唤醒消息，避免终态事件到达前提前结束工作；等待与事件续跑保留同一 turnId。显式停止/回滚抑制旧子代理晚到终态再次唤醒。
 
 - `TurnIncrementalPersister.persistBeforePending(message)` 原子保存当前响应/工具结果到未消费输入之前：接收时间早于响应落库不代表模型已消费插话，历史重放必须保持模型因果顺序。接收即落库与因果顺序通过 pending 标记共同维护。
 - 提问/审批事件若发生时已有 pending 输入，Core 自动重新接纳该输入并中性解除挂起，避免等待用户再发一次；同 ID 已消费重试不会解除其他挂起。
 - 自定义 `HistoryStore` 实现需要提供 `updateHistory` 的原子语义；不存在 load→replace 的默认伪原子实现。
+
+
+### 工作时钟与子代理事件契约（2026-10-28）
+
+`Message` / `MessageDiagnostics` 新增可空 epoch ms `workStartedAt`、`workCompletedAt`；`TurnIncrementalPersister` 持久化起点，`TurnExecutor.WorkClock` / workClocks 为同一工作保留起点，中心事件出口透传锚点，真正完成/异常/取消时落库终点。工具执行、子代理等待及终态唤醒均计入；安全挂起后继续保留原工作，不伪造结束。无旧数据时不回填假时间。
+
+`finalMessageId/isFinalAnswer` 表示本次主 turn 完整正式回复，与整项工作的 `workCompletedAt` 分离。派发子代理后可交付简短阶段回复；pending 子代理/终态事件仍保留同一 work ID、无结束时间，唤醒后可产生后续完整回复。先前已确认的阶段回复不撤销。提示词要求阶段说明自足、明确等待事项，不冒称全任务完成。
+
+`SubagentRunner.run` 的 onProgress 改为 `suspend (MederiEvent) -> Unit`，`MederiEvent/EventType` 可序列化。SubagentProgressBatch 120ms 仅合并同类同响应文本；边界、工具参数/结果不可混型，单消费者保证终态前冲刷尾帧。`BackgroundAgent` 新增 `completedAt: String?`、`progressEvents: MutableList<MederiEvent>`；在同一同步区追加事件并生成信封序号，供 MederiAiCore 重放。不再通过“下一个工具开始”猜测上一个工具成功。

@@ -53,6 +53,21 @@ class ResponseBoundaryReducerTest {
     }
 
     @Test
+    fun laterReplyPreservesEarlierDeliveredStageReplyInSameWork() {
+        var snapshot = state()
+        for (id in listOf("dispatch", "result")) {
+            snapshot = ConversationStateReducer.apply(snapshot, delta(id, "response_started"))
+            snapshot = ConversationStateReducer.apply(snapshot, delta(id, "text", id))
+            snapshot = ConversationStateReducer.apply(snapshot, delta(id, "response_completed"))
+            snapshot = ConversationStateReducer.apply(snapshot, CoreEvent(
+                type = CoreEventType.MESSAGE_COMPLETED, sessionId = "s",
+                payload = mapOf("turnId" to "turn", "finalMessageId" to id),
+            ))
+        }
+        assertTrue(snapshot.messages.all { it.isFinalAnswer == true })
+    }
+
+    @Test
     fun acceptedInputRefreshPreservesUnpersistedResponseAndWaitingInteraction() = runTest {
         val user = ChatMessage(
             id = "u1", conversationId = "s", role = ChatRole.User,
@@ -102,6 +117,7 @@ class ResponseBoundaryReducerTest {
     @Test
     fun interruptedResponseCannotBecomeFinalEvenWithACandidateId() {
         var snapshot = ConversationStateReducer.apply(state(), delta("r1", "text", "半截"))
+        snapshot = ConversationStateReducer.apply(snapshot, delta("r1", "response_completed"))
         snapshot = ConversationStateReducer.apply(snapshot, CoreEvent(
             type = CoreEventType.MESSAGE_COMPLETED, sessionId = "s",
             payload = mapOf("turnId" to "turn", "finalMessageId" to "r1", "failureMode" to "PREMATURE_CLOSE"),

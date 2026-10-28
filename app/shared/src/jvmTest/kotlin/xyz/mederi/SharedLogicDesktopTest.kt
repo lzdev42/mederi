@@ -1220,7 +1220,7 @@ class SharedLogicDesktopTest {
 
             val reasoningSubItem = workTraceItem.items[0] as ChatListItem.Reasoning
             assertEquals("正在分析用户的意图...", reasoningSubItem.text)
-            assertEquals(1500L, reasoningSubItem.durationMs)
+            assertEquals(0L, reasoningSubItem.durationMs, "请求总耗时不能冒充推理阶段耗时")
 
             val toolCallsSubItem = workTraceItem.items[1] as ChatListItem.ToolCalls
             assertEquals(1, toolCallsSubItem.toolCalls.size)
@@ -1406,19 +1406,19 @@ class SharedLogicDesktopTest {
             val rawMessages = listOf(userMsg, asst1, toolResultUser1, asst2)
             val currentItems = viewModel.computeChatItems(rawMessages)
 
-            // 预期分为：1用户文本 + 1工作过程汇总栏 + 1助手正文 + 1Footer = 4项
-            assertEquals(4, currentItems.size, "多步轮次的所有非 Message 工作步骤应汇聚为一个 WorkTraceBlock 汇总栏")
+            // 用户文本 + 工作过程 + 独立派发条 + 助手正文 + Footer = 5项
+            assertEquals(5, currentItems.size, "过程折叠，派发条与交付正文独立展示")
 
             assertTrue(currentItems[0] is ChatListItem.TextMessage)
             assertEquals("请修复并验证", (currentItems[0] as ChatListItem.TextMessage).text)
 
             assertTrue(currentItems[1] is ChatListItem.WorkTraceBlock)
             val workTrace = currentItems[1] as ChatListItem.WorkTraceBlock
-            assertEquals(2, workTrace.totalToolsCount)
+            assertEquals(1, workTrace.totalToolsCount)
             assertNull(workTrace.startedAt, "历史只有LLM请求耗时，不能伪造工作起点")
-            assertEquals(4, workTrace.items.size)
+            assertEquals(3, workTrace.items.size)
 
-            // 检查 WorkTrace 内部的 4 个工作步骤（Reasoning, ToolCalls, Reasoning, SubagentCalls）
+            // 推理和普通工具在过程内，子代理派发条单独外显。
             assertTrue(workTrace.items[0] is ChatListItem.Reasoning)
             assertEquals("先阅读代码...", (workTrace.items[0] as ChatListItem.Reasoning).text)
 
@@ -1430,18 +1430,18 @@ class SharedLogicDesktopTest {
             assertTrue(workTrace.items[2] is ChatListItem.Reasoning)
             assertEquals("派发子代理执行...", (workTrace.items[2] as ChatListItem.Reasoning).text)
 
-            assertTrue(workTrace.items[3] is ChatListItem.SubagentCalls)
-            val subagents = (workTrace.items[3] as ChatListItem.SubagentCalls).subagents
+            assertTrue(currentItems[2] is ChatListItem.SubagentCalls)
+            val subagents = (currentItems[2] as ChatListItem.SubagentCalls).subagents
             assertEquals(1, subagents.size)
             assertEquals("subagent", subagents.first().name)
             assertEquals("子任务0", subagents.first().target)
 
             // 交付正文留在外部
-            assertTrue(currentItems[2] is ChatListItem.TextMessage)
-            assertEquals("修复完成，子代理汇报成功。", (currentItems[2] as ChatListItem.TextMessage).text)
+            assertTrue(currentItems[3] is ChatListItem.TextMessage)
+            assertEquals("修复完成，子代理汇报成功。", (currentItems[3] as ChatListItem.TextMessage).text)
 
             // 沉底 Footer
-            assertTrue(currentItems[3] is ChatListItem.Footer)
+            assertTrue(currentItems[4] is ChatListItem.Footer)
         } finally {
             testScope.cancel()
         }
@@ -3494,10 +3494,13 @@ Summary: 子任务 0 执行完毕
             "中间轮次的所有过渡消息（含子代理派发尾随语）均应按时序收起进 WorkTraceBlock"
         )
         assertEquals(
-            listOf("Reasoning", "TextMessage", "ToolCalls", "SubagentCalls", "TextMessage"),
+            listOf("Reasoning", "TextMessage", "ToolCalls", "TextMessage"),
             workTraces[0].items.map { it::class.simpleName },
             "第一轮 WorkTraceBlock 内部子项必须严格保持原始发生时序"
         )
+
+        assertEquals(1, items.filterIsInstance<ChatListItem.SubagentCalls>().size,
+            "派发状态条应独立外显，不能藏进工作过程")
 
         // 3. 第二轮（最终轮次）的 WorkTraceBlock 应按时序包含工具前过渡语（"验证："、"记录完成："），不含最终回复
         val wt2Texts = workTraces[1].items.filterIsInstance<ChatListItem.TextMessage>().map { it.text }

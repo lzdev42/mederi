@@ -399,9 +399,9 @@ fun computeChatItems(
                     isRunning = isActiveAssistant,
                     turnId = turnMessages.firstOrNull()?.turnId,
                     // 同一工作可跨用户插话有多段显示，累计计时只放在最后一段，旧段不再跳动。
-                    startedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] })
+                    startedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] || it.turnId == null && turnMessages == lastAssistantTurn })
                         turnMessages.mapNotNull { it.workStartedAt }.minOrNull() else null,
-                    completedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] })
+                    completedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] || it.turnId == null && turnMessages == lastAssistantTurn })
                         turnMessages.mapNotNull { it.workCompletedAt }.maxOrNull() else null,
                     activity = if (isActiveAssistant) deriveWorkTraceActivity(workItems,
                         snapshot?.subagents?.count { it.status == "RUNNING" } ?: 0) else null,

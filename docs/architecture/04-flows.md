@@ -171,7 +171,8 @@ flowchart TD
     SAFE --> NEXT[继续模型调用]
     NEXT --> CHECK{还有输入或待完成子代理?}
     CHECK -->|输入| SAFE
-    CHECK -->|子代理| WAIT[保留过程 / 等终态唤醒]
+    CHECK -->|子代理| STAGE[确认本轮完整阶段回复 / 保留工作时钟]
+    STAGE --> WAIT[等终态唤醒 / 同一工作继续]
     CHECK -->|无且正常完成| FINAL[持久化最终消息标记 / finalMessageId]
     START --> NEXT
     RESUME --> NEXT
@@ -182,7 +183,7 @@ flowchart TD
 
 插话在接收时即落库，消费前从 AI 视图排除；当前响应和工具结果原子插入未消费输入之前，保留历史的因果顺序。注入时使用完整 parts（含图片），消费后更新标记。若输入先到、提问/审批后挂起，Core 在挂起事件上自动处理已有输入，不让其悬空。接收确认 `SESSION_UPDATED{inputAccepted=true}` 回查不会清除挂起或未落库响应。UI 仅按 ID 移除对应乐观消息。
 
-工作期间所有正文和过程进入折叠块，最终交付由 Core 正常收尾确认。取消、异常和截断不确认最终交付；收尾未消费输入不能静默清掉。历史重开使用持久化标记，不依赖 UI 猜测。
+过程进入折叠块；Core 正常收尾确认本轮完整回复，含派发子代理后等待的阶段回复。阶段回复与派发状态条在折叠块外保留；只有整项工作结束才写 workCompletedAt。UI 以用户消息切分显示段，同一 turnId 不跨插话气泡合并后续推理。取消、异常和截断不确认最终交付；收尾未消费输入不能静默清掉。历史重开使用持久化标记，不依赖 UI 猜测。
 
 ## 3. 事件 → UI 状态机聚合流程
 
@@ -314,8 +315,8 @@ sequenceDiagram
     M->>M: END TURN（父代理结束 turn，期间可自由对话）
     SM->>SR: 后台协程 run(内存 store + 独立 TurnExecutor, 挂载 onProgress)
     loop 流式执行
-        SR->>SM: onProgress(activity, tool?, delta?, isMessage?)（120ms 窗口聚合）
-        SM->>EB: SUBAGENT_PROGRESS(agentId, activity, tool?, delta?, isMessage?)
+        SR->>SM: onProgress(MederiEvent)（120ms 仅同类同响应增量聚合，边界先冲刷）
+        SM->>EB: SUBAGENT_PROGRESS(agentId, role, eventJson, sequence)
         Note over EB: UI 实时蹦字视窗 + 最新一句话(现场死因)
     end
     alt 正常完成/出错/停止
@@ -493,9 +494,9 @@ sequenceDiagram
     Note over ITE: 继承策略=中心化 AgentCapabilities 表<br/>MCP: 主/执行/研究都继承(每子代理 turn 独立现连现断)<br/>Skills: 主/执行注入提示词, 研究不注入
     loop 子 turn 内
         ITE->>ITE: 正常 TurnExecutor 流程(事件走独立 eventBus)
-        ITE-->>SR: MESSAGE_DELTA / TOOL_CALLED
-        SR->>SM: onProgress(activity, tool?, delta?, isMessage?)（120ms 窗口聚合）
-        SM->>EB: SUBAGENT_PROGRESS(agentId, activity, tool?, delta?, isMessage?)
+        ITE-->>SR: MESSAGE_DELTA / TOOL_CALLED / TOOL_RESULT / MESSAGE_COMPLETED / MESSAGE_ERROR
+        SR->>SM: onProgress(MederiEvent)（120ms 仅同类同响应增量聚合，边界先冲刷）
+        SM->>EB: SUBAGENT_PROGRESS(agentId, role, eventJson, sequence)
         Note over EB: UI 详情弹窗消费: 实时蹦字流与最新输出/死因现场
     end
     SR->>SR: 等 MESSAGE_COMPLETED/MESSAGE_ERROR 终态事件
@@ -788,3 +789,24 @@ flowchart LR
 **ToolCallState（契约层）**：`Pending → Running → Completed / Failed`。
 
 **RemoteServerUiState**：`Idle → Starting → Running(port, portFallback?) / Failed`；**TunnelUiState**：`Idle → Starting → Running(url) / Failed(reason, notInstalled)`（`url` = `formatTunnelUrl(domain)` 用户填域名拼 `https://` 的结果；`notInstalled=true` = 本机未装 cloudflared，AppState.kt L72-73）。
+
+
+### 工作反馈投影（2026-10-28）
+
+```mermaid
+flowchart TD
+    CORE[Core 工作开始 / workStartedAt] --> RESP[稳定响应 ID / 标准推理正文工具事件]
+    RESP --> SEG[UI 按用户消息分段 / 不跨插话合并]
+    RESP --> CHILD[子代理原始事件 / eventJson + sequence]
+    CHILD --> REDUCE[与主代理共用 ConversationStateReducer]
+    REDUCE --> SEG
+    SEG --> TRACE[默认折叠 / spinner + 结构化活动摘要]
+    RESP --> STAGE[正常 turn 收尾 / finalMessageId]
+    STAGE --> VISIBLE[完整阶段回复外显 / 派发条与交互卡外显]
+    STAGE --> CHECK{还有子任务或待唤醒事件?}
+    CHECK -->|有| RESP
+    CHECK -->|无| END[workCompletedAt / 冻结墙钟]
+    END --> TRACE
+```
+
+SubagentManager 同步追加 progressEvents 并编号；快照重放后按序号去重，终态不被旧 RUNNING 快照覆盖，空快照成员集合有效。客户端不从普通文本猜消息类型，也不从下一工具事件推测上个工具已完成。

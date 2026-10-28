@@ -3,6 +3,7 @@ package xyz.mederi.ui.chat
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.ChatRole
+import xyz.mederi.core.contract.models.ToolCallUi
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.computeChatItems
