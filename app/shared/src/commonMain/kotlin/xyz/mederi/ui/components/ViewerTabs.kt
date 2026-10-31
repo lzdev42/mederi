@@ -1,8 +1,6 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -13,13 +11,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
-import xyz.mederi.util.rememberClipboardCopy
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.coroutines.launch
@@ -44,103 +40,51 @@ import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.emuci.inkcompose.RenderStyle
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.MederiRadius
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.rememberMederiMarkdownTheme
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.ui.ChatLayout
-import xyz.mederi.ui.components.atoms.MederiRunningPulseBadge
 import xyz.mederi.util.DocumentExporter
 import xyz.mederi.util.ExportStatus
+import xyz.mederi.util.rememberClipboardCopy
 
-/**
- * 扩展面板图片查看器内容
- */
+/** 图片和文本共享轻量工具栏；缩放与滚动仍由原图片查看器负责。 */
 @Composable
 internal fun ImageViewerTabContent(
     title: String,
     imageUrl: String,
-    colors: MederiColors
+    colors: MederiColors,
+    showTitle: Boolean = true,
 ) {
     var isOriginalScale by remember { mutableStateOf(false) }
-
     Column(modifier = Modifier.fillMaxSize()) {
-        // 工具条：标题、比例适应/原始大小切换
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(36.dp)
-                .background(colors.surfaceCard)
-                .border(1.dp, colors.surfaceCardBorder)
-                .padding(horizontal = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.weight(1f, fill = false)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Image,
-                    contentDescription = null,
-                    tint = colors.accentPrimary,
-                    modifier = Modifier.size(13.dp)
-                )
-                Text(
-                    text = title,
-                    color = colors.textPrimary,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(colors.surfaceWorkspace)
-                    .clickable { isOriginalScale = !isOriginalScale }
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
-            ) {
-                Text(
-                    text = if (isOriginalScale) stringResource(Res.string.dock_fit_window) else stringResource(Res.string.dock_original_ratio),
-                    color = colors.accentPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-
-        // 大图居中展示画板（暗色背景衬托细节）
+        ImageReaderToolbar(
+            title = title.takeIf { showTitle },
+            isOriginalScale = isOriginalScale,
+            onToggleScale = { isOriginalScale = !isOriginalScale },
+            colors = colors,
+        )
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.surfaceOverlay.copy(alpha = 0.9f))
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
+            modifier = Modifier.fillMaxSize().background(colors.surfaceWorkspace).padding(MederiSpacing.LG),
+            contentAlignment = Alignment.Center,
         ) {
             InkImage(
                 model = imageUrl,
                 contentDescription = title,
                 contentScale = if (isOriginalScale) ContentScale.None else ContentScale.Fit,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .then(
-                        if (isOriginalScale) {
-                            Modifier
-                                .verticalScroll(rememberScrollState())
-                                .horizontalScroll(rememberScrollState())
-                        } else {
-                            Modifier.fillMaxSize()
-                        }
-                    )
+                modifier = Modifier.clip(RoundedCornerShape(MederiRadius.Control))
+                    .then(if (isOriginalScale) {
+                        Modifier.verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState())
+                    } else Modifier.fillMaxSize()),
             )
         }
     }
 }
 
-/**
- * 扩展面板大文本阅读器内容 (使用 inkcompose.MarkdownView 进行富文本排版)
- */
+/** 阅读器正文保持完整，不为消除重复标题解析或修改Markdown。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun TextReaderTabContent(
     title: String,
@@ -148,7 +92,8 @@ internal fun TextReaderTabContent(
     lineCount: Int,
     charCount: Int,
     isStreaming: Boolean = false,
-    colors: MederiColors
+    colors: MederiColors,
+    showTitle: Boolean = true,
 ) {
     val copyToClipboard = rememberClipboardCopy()
     var copied by remember { mutableStateOf(false) }
@@ -163,7 +108,7 @@ internal fun TextReaderTabContent(
 
     LaunchedEffect(copied) {
         if (copied) {
-            kotlinx.coroutines.delay(2000)
+            kotlinx.coroutines.delay(WorkspaceStyle.CopyFeedbackMillis)
             copied = false
         }
     }
@@ -185,155 +130,84 @@ internal fun TextReaderTabContent(
     val pdfFilterLabel = stringResource(Res.string.pick_file_filter, "PDF", "pdf")
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 顶部信息条
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(36.dp)
-                .background(colors.surfaceCard)
-                .border(1.dp, colors.surfaceCardBorder)
-                .padding(horizontal = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        TextReaderToolbar(
+            title = title.takeIf { showTitle },
+            lineCount = lineCount,
+            charCount = charCount,
+            isStreaming = isStreaming,
+            copied = copied,
+            onCopy = { copyToClipboard(content); copied = true },
+            colors = colors,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.weight(1f, fill = false)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.File,
-                    contentDescription = null,
-                    tint = colors.accentSecondary,
-                    modifier = Modifier.size(13.dp)
-                )
-                Text(
-                    text = title,
-                    color = colors.textPrimary,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (charCount > 0 || lineCount > 0) {
-                    Text(
-                        text = stringResource(Res.string.attachment_meta, lineCount, charCount),
-                        color = colors.textMuted,
-                        fontSize = 11.sp
-                    )
-                }
-                if (isStreaming) {
-                    // 流式生成中微标：收敛为 MederiRunningPulseBadge（Pill 底 + accent 描边 + 脉冲点）
-                    MederiRunningPulseBadge(text = stringResource(Res.string.dock_generating))
-                }
-            }
+            // 导出 HTML 按钮（I/O 全链路在 util/DocumentExporter.kt，状态机收敛在 ExportActionButton）
+            ExportActionButton(
+                icon = FeatherIcons.Code,
+                idleLabel = stringResource(Res.string.dock_export_html),
+                exportingLabel = stringResource(Res.string.dock_exporting),
+                doneLabel = stringResource(Res.string.dock_exported),
+                enabled = !exportingNow,
+                colors = colors,
+                onExport = {
+                    exportingNow = true
+                    try {
+                        val result = DocumentExporter.exportDocumentToHtml(
+                            title = title,
+                            content = content,
+                            baseName = safeBaseName,
+                            saveDialogTitle = saveDialogTitle,
+                            filterLabel = htmlFilterLabel,
+                        )
+                        ExportOutcome(
+                            status = result.status,
+                            error = when (result.status) {
+                                ExportStatus.WRITE_FAILED -> htmlSaveFailedMsg
+                                ExportStatus.EXPORT_FAILED -> result.error ?: exportErrorMsg
+                                else -> null
+                            },
+                        )
+                    } finally {
+                        exportingNow = false
+                    }
+                },
+                onError = { exportError = it },
+            )
 
-            // 操作按钮区：复制全文、导出 HTML、导出 PDF
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                if (exportError != null) {
-                    Text(
-                        text = exportError ?: "",
-                        color = colors.accentDanger,
-                        fontSize = 10.5.sp,
-                        maxLines = 1
-                    )
-                }
-
-                // 复制全文按钮
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (copied) colors.accentSuccess.copy(alpha = 0.15f) else colors.surfaceWorkspace)
-                        .clickable {
-                            copyToClipboard(content)
-                            copied = true
-                        }
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
-                ) {
-                    Icon(
-                        imageVector = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
-                        contentDescription = null,
-                        tint = if (copied) colors.accentSuccess else colors.textMuted,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Text(
-                        text = if (copied) stringResource(Res.string.copy_done) else stringResource(Res.string.dock_copy_full),
-                        color = if (copied) colors.accentSuccess else colors.textPrimary,
-                        fontSize = 11.sp
-                    )
-                }
-
-                // 导出 HTML 按钮（I/O 全链路在 util/DocumentExporter.kt，状态机收敛在 ExportActionButton）
-                ExportActionButton(
-                    icon = FeatherIcons.Code,
-                    idleLabel = stringResource(Res.string.dock_export_html),
-                    exportingLabel = stringResource(Res.string.dock_exporting),
-                    doneLabel = stringResource(Res.string.dock_exported),
-                    enabled = !exportingNow,
-                    colors = colors,
-                    onExport = {
-                        exportingNow = true
-                        try {
-                            val result = DocumentExporter.exportDocumentToHtml(
-                                title = title,
-                                content = content,
-                                baseName = safeBaseName,
-                                saveDialogTitle = saveDialogTitle,
-                                filterLabel = htmlFilterLabel,
-                            )
-                            ExportOutcome(
-                                status = result.status,
-                                error = when (result.status) {
-                                    ExportStatus.WRITE_FAILED -> htmlSaveFailedMsg
-                                    ExportStatus.EXPORT_FAILED -> result.error ?: exportErrorMsg
-                                    else -> null
-                                },
-                            )
-                        } finally {
-                            exportingNow = false
-                        }
-                    },
-                    onError = { exportError = it },
-                )
-
-                // 导出 PDF 按钮（I/O 全链路在 util/DocumentExporter.kt，状态机收敛在 ExportActionButton）
-                ExportActionButton(
-                    icon = FeatherIcons.Download,
-                    idleLabel = stringResource(Res.string.dock_export_pdf),
-                    exportingLabel = stringResource(Res.string.dock_exporting),
-                    doneLabel = stringResource(Res.string.dock_exported),
-                    enabled = !exportingNow,
-                    colors = colors,
-                    onExport = {
-                        exportingNow = true
-                        try {
-                            val result = DocumentExporter.exportDocumentToPdf(
-                                title = title,
-                                content = content,
-                                baseName = safeBaseName,
-                                saveDialogTitle = saveDialogTitle,
-                                filterLabel = pdfFilterLabel,
-                            )
-                            ExportOutcome(
-                                status = result.status,
-                                error = when (result.status) {
-                                    ExportStatus.WRITE_FAILED -> pdfExportFailedMsg
-                                    ExportStatus.EXPORT_FAILED -> result.error ?: exportErrorMsg
-                                    else -> null
-                                },
-                            )
-                        } finally {
-                            exportingNow = false
-                        }
-                    },
-                    onError = { exportError = it },
-                )
-            }
+            // 导出 PDF 按钮（I/O 全链路在 util/DocumentExporter.kt，状态机收敛在 ExportActionButton）
+            ExportActionButton(
+                icon = FeatherIcons.Download,
+                idleLabel = stringResource(Res.string.dock_export_pdf),
+                exportingLabel = stringResource(Res.string.dock_exporting),
+                doneLabel = stringResource(Res.string.dock_exported),
+                enabled = !exportingNow,
+                colors = colors,
+                onExport = {
+                    exportingNow = true
+                    try {
+                        val result = DocumentExporter.exportDocumentToPdf(
+                            title = title,
+                            content = content,
+                            baseName = safeBaseName,
+                            saveDialogTitle = saveDialogTitle,
+                            filterLabel = pdfFilterLabel,
+                        )
+                        ExportOutcome(
+                            status = result.status,
+                            error = when (result.status) {
+                                ExportStatus.WRITE_FAILED -> pdfExportFailedMsg
+                                ExportStatus.EXPORT_FAILED -> result.error ?: exportErrorMsg
+                                else -> null
+                            },
+                        )
+                    } finally {
+                        exportingNow = false
+                    }
+                },
+                onError = { exportError = it },
+            )
+        }
+        exportError?.let { error ->
+            Text(error, style = WorkspaceStyle.Caption, color = colors.accentDanger,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = MederiSpacing.MD, vertical = MederiSpacing.XS))
         }
 
         // 正文阅读器区域：使用 inkcompose.MarkdownView 统一高质量渲染，支持流式渲染状态
@@ -341,7 +215,7 @@ internal fun TextReaderTabContent(
             modifier = Modifier
                 .fillMaxSize()
                 .background(colors.surfaceWorkspace)
-                .padding(14.dp),
+                .padding(MederiSpacing.LG),
             contentAlignment = Alignment.TopCenter
         ) {
             MarkdownView(
@@ -367,7 +241,7 @@ private enum class ExportRunState { Idle, Exporting, Done }
  * 导出结果：status + 失败文案。
  * 错误文案由 [ExportActionButton] 经 onError 上抛给父级 exportError（共享展示在按钮上方）。
  */
-private data class ExportOutcome(val status: ExportStatus, val error: String? = null)
+internal data class ExportOutcome(val status: ExportStatus, val error: String? = null)
 
 /**
  * 一次性导出按钮原子：内部持有 [ExportRunState] 状态机。
@@ -378,7 +252,7 @@ private data class ExportOutcome(val status: ExportStatus, val error: String? = 
  * - WRITE_FAILED / EXPORT_FAILED 时把错误文案经 [onError] 上抛给父级 exportError。
  */
 @Composable
-private fun ExportActionButton(
+internal fun ExportActionButton(
     icon: ImageVector,
     idleLabel: String,
     exportingLabel: String,
@@ -398,56 +272,139 @@ private fun ExportActionButton(
         }
     }
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(
-                when (runState) {
-                    ExportRunState.Done -> colors.accentSuccess.copy(alpha = 0.15f)
-                    ExportRunState.Exporting -> colors.accentPrimary.copy(alpha = 0.15f)
-                    ExportRunState.Idle -> colors.surfaceWorkspace
-                }
-            )
-            .clickable(enabled = enabled && runState != ExportRunState.Exporting) {
-                coroutineScope.launch {
-                    runState = ExportRunState.Exporting
-                    val r = onExport()
-                    runState = when (r.status) {
-                        ExportStatus.EXPORTED -> ExportRunState.Done
-                        ExportStatus.CANCELLED -> ExportRunState.Idle // 用户取消，无提示
-                        ExportStatus.WRITE_FAILED, ExportStatus.EXPORT_FAILED -> {
-                            r.error?.let(onError)
-                            ExportRunState.Idle
-                        }
+    ReaderActionButton(
+        icon = if (runState == ExportRunState.Done) FeatherIcons.Check else icon,
+        label = when (runState) {
+            ExportRunState.Exporting -> exportingLabel
+            ExportRunState.Done -> doneLabel
+            ExportRunState.Idle -> idleLabel
+        },
+        enabled = enabled && runState != ExportRunState.Exporting,
+        colors = colors,
+        tint = when (runState) {
+            ExportRunState.Done -> colors.accentSuccess
+            ExportRunState.Exporting -> colors.accentText
+            ExportRunState.Idle -> colors.textSecondary
+        },
+        onClick = {
+            coroutineScope.launch {
+                runState = ExportRunState.Exporting
+                val r = onExport()
+                runState = when (r.status) {
+                    ExportStatus.EXPORTED -> ExportRunState.Done
+                    ExportStatus.CANCELLED -> ExportRunState.Idle
+                    ExportStatus.WRITE_FAILED, ExportStatus.EXPORT_FAILED -> {
+                        r.error?.let(onError)
+                        ExportRunState.Idle
                     }
                 }
             }
-            .padding(horizontal = 7.dp, vertical = 3.dp)
+        },
+    )
+}
+
+/** 一个无框工具栏容纳身份/次级元数据/操作，窄面板自动换行，不复制tab上的标题。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ReaderToolbar(
+    title: String?,
+    icon: ImageVector,
+    colors: MederiColors,
+    metadata: @Composable FlowRowScope.() -> Unit = {},
+    actions: @Composable FlowRowScope.() -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = MederiSpacing.SM, vertical = MederiSpacing.XS),
+        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+        verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = if (runState == ExportRunState.Done) FeatherIcons.Check else icon,
-            contentDescription = null,
-            tint = when (runState) {
-                ExportRunState.Done -> colors.accentSuccess
-                ExportRunState.Exporting -> colors.accentPrimary
-                ExportRunState.Idle -> colors.textMuted
-            },
-            modifier = Modifier.size(12.dp)
+        if (title != null) {
+            Row(
+                modifier = Modifier.heightIn(min = WorkspaceStyle.ControlHeight).widthIn(max = 340.dp)
+                    .padding(horizontal = MederiSpacing.XS),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+            ) {
+                Icon(icon, null, tint = colors.textSecondary, modifier = Modifier.size(WorkspaceStyle.IconSize))
+                Text(title, style = WorkspaceStyle.Title, color = colors.textPrimary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        metadata()
+        actions()
+    }
+}
+
+/** 阅读器图标文字动作，共用工作台最小热区与hover/focus反馈，不承载导出状态。 */
+@Composable
+internal fun ReaderActionButton(
+    icon: ImageVector,
+    label: String,
+    colors: MederiColors,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    tint: Color = colors.textSecondary,
+) {
+    WorkspaceActionButton(text = label, onClick = onClick, enabled = enabled,
+        icon = icon, contentColor = tint, colors = colors)
+}
+
+
+/** 图片比例动作的纯表现入口，状态由图片查看器传入。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ImageReaderToolbar(
+    title: String?,
+    isOriginalScale: Boolean,
+    onToggleScale: () -> Unit,
+    colors: MederiColors,
+) {
+    ReaderToolbar(title = title, icon = FeatherIcons.Image, colors = colors) {
+        ReaderActionButton(
+            icon = if (isOriginalScale) FeatherIcons.Minimize2 else FeatherIcons.Maximize2,
+            label = stringResource(if (isOriginalScale) Res.string.dock_fit_window else Res.string.dock_original_ratio),
+            colors = colors,
+            onClick = onToggleScale,
         )
-        Text(
-            text = when (runState) {
-                ExportRunState.Exporting -> exportingLabel
-                ExportRunState.Done -> doneLabel
-                ExportRunState.Idle -> idleLabel
-            },
-            color = when (runState) {
-                ExportRunState.Done -> colors.accentSuccess
-                ExportRunState.Exporting -> colors.accentPrimary
-                ExportRunState.Idle -> colors.textPrimary
-            },
-            fontSize = 11.sp
+    }
+}
+
+/** 文本工具栏只渲染元数据与动作；复制和导出由原调用点编排。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun TextReaderToolbar(
+    title: String?,
+    lineCount: Int,
+    charCount: Int,
+    isStreaming: Boolean,
+    copied: Boolean,
+    onCopy: () -> Unit,
+    colors: MederiColors,
+    exportActions: @Composable FlowRowScope.() -> Unit = {},
+) {
+    ReaderToolbar(
+        title = title,
+        icon = FeatherIcons.FileText,
+        colors = colors,
+        metadata = {
+            if (charCount > 0 || lineCount > 0) {
+                Text(stringResource(Res.string.attachment_meta, lineCount, charCount),
+                    style = WorkspaceStyle.Caption, color = colors.textMuted)
+            }
+            if (isStreaming) {
+                Text(stringResource(Res.string.dock_generating),
+                    style = WorkspaceStyle.Caption, color = colors.accentText)
+            }
+        },
+    ) {
+        ReaderActionButton(
+            icon = if (copied) FeatherIcons.Check else FeatherIcons.Copy,
+            label = stringResource(if (copied) Res.string.copy_done else Res.string.dock_copy_full),
+            colors = colors,
+            tint = if (copied) colors.accentSuccess else colors.textSecondary,
+            onClick = onCopy,
         )
+        exportActions()
     }
 }

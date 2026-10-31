@@ -11,6 +11,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import xyz.emuci.markdown.renderer.internal.selection.LocalSelectionTextScope
+import xyz.emuci.markdown.renderer.internal.selection.SelectionTextScope
+import xyz.emuci.syntax.renderer.LocalCodeTextSelectionObserver
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -191,82 +195,93 @@ private fun PrefetchNextMarkdownBlock(
 
 @Composable
 private fun PaintBlock(block: xyz.emuci.markdown.renderer.internal.layout.model.InternalLayoutBlockModel) {
-    when (block) {
-        is LayoutRenderBlockModel -> PaintRenderBlock(block)
-        is LayoutListBlockModel -> RenderListLayoutBlockModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-            renderChildren = ::PaintLayoutBlockChildren,
-        )
+    val controller = LocalMarkdownSelectionController.current
+    val isCodeBlock = (block as? LayoutWidgetBlockModel)?.widget is CodeBlockWidgetModel ||
+        (block as? LayoutRenderBlockModel)?.block is CodeBlockModel
+    val observer = remember(controller, block.identity.stableId, isCodeBlock) {
+        if (isCodeBlock) controller?.textFragments?.observer(block.identity.stableId) else null
+    }
+    CompositionLocalProvider(
+        LocalSelectionTextScope provides SelectionTextScope(block.identity.stableId),
+        LocalCodeTextSelectionObserver provides observer,
+    ) {
+        when (block) {
+            is LayoutRenderBlockModel -> PaintRenderBlock(block)
+            is LayoutListBlockModel -> RenderListLayoutBlockModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+                renderChildren = ::PaintLayoutBlockChildren,
+            )
 
-        is LayoutColumnsBlockModel -> RenderColumnsLayoutGroupModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-            renderChildren = ::PaintLayoutBlockColumn,
-        )
+            is LayoutColumnsBlockModel -> RenderColumnsLayoutGroupModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+                renderChildren = ::PaintLayoutBlockColumn,
+            )
 
-        is LayoutTableBlockModel -> RenderTableLayoutBlockModel(
-            model = block,
-            modifier = Modifier
-                .fillMaxWidth()
-                .selectableBlock(block, LocalMarkdownSelectionController.current),
-        )
+            is LayoutTableBlockModel -> RenderTableLayoutBlockModel(
+                model = block,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectableBlock(block, LocalMarkdownSelectionController.current),
+            )
 
-        is LayoutDefinitionListBlockModel -> RenderDefinitionListLayoutBlockModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-            renderChildren = ::PaintLayoutBlockChildren,
-        )
+            is LayoutDefinitionListBlockModel -> RenderDefinitionListLayoutBlockModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+                renderChildren = ::PaintLayoutBlockChildren,
+            )
 
-        is LayoutFigureBlockModel -> RenderFigureLayoutBlockModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            is LayoutFigureBlockModel -> RenderFigureLayoutBlockModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-        is LayoutTocBlockModel -> RenderTocLayoutBlockModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            is LayoutTocBlockModel -> RenderTocLayoutBlockModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-        is LayoutBibliographyBlockModel -> RenderBibliographyLayoutBlockModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            is LayoutBibliographyBlockModel -> RenderBibliographyLayoutBlockModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-        is LayoutTabBlockModel -> RenderTabLayoutBlockModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-            renderChildren = ::PaintLayoutBlockColumn,
-        )
+            is LayoutTabBlockModel -> RenderTabLayoutBlockModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+                renderChildren = ::PaintLayoutBlockColumn,
+            )
 
-        is LayoutFootnoteBlockModel -> RenderFootnoteLayoutBlockModel(
-            model = block,
-            modifier = Modifier.fillMaxWidth(),
-            renderLeadChild = { child ->
-                if (child != null) {
-                    Box {
-                        PaintBlock(child)
+            is LayoutFootnoteBlockModel -> RenderFootnoteLayoutBlockModel(
+                model = block,
+                modifier = Modifier.fillMaxWidth(),
+                renderLeadChild = { child ->
+                    if (child != null) {
+                        Box {
+                            PaintBlock(child)
+                        }
                     }
-                }
-            },
-            renderTrailingChildren = { children ->
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(LocalMarkdownTheme.current.blockSpacing),
-                ) {
-                    PaintLayoutBlockChildren(children)
-                }
-            },
-        )
+                },
+                renderTrailingChildren = { children ->
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(LocalMarkdownTheme.current.blockSpacing),
+                    ) {
+                        PaintLayoutBlockChildren(children)
+                    }
+                },
+            )
 
-        is LayoutWidgetBlockModel -> PaintWidgetBlock(
-            block,
-            modifier = Modifier
-                .fillMaxWidth()
-                .selectableBlock(block, LocalMarkdownSelectionController.current),
-        )
+            is LayoutWidgetBlockModel -> PaintWidgetBlock(
+                block,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectableBlock(block, LocalMarkdownSelectionController.current),
+            )
 
-        is LayoutInlineBlockModel -> PaintInlineBlock(block)
+            is LayoutInlineBlockModel -> PaintInlineBlock(block)
+        }
     }
 }
 

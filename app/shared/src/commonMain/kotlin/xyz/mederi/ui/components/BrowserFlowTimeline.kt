@@ -1,10 +1,10 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -36,9 +35,9 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Activity
 import compose.icons.feathericons.ArrowDown
@@ -61,6 +60,8 @@ import mederi.app.shared.generated.resources.browser_flow_step_in_progress
 import mederi.app.shared.generated.resources.browser_flow_zoom_in_hint
 import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.InkImage
+import xyz.mederi.theme.WorkspaceStyle
+import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.browser.BrowserActionKind
 import xyz.mederi.ui.browser.BrowserFlowStep
@@ -136,113 +137,23 @@ internal fun BrowserFlowTimelineRow(
  * 左侧时间线节点圆标（16×16dp）。
  */
 @Composable
-private fun TimelineStepIndicator(
-    step: BrowserFlowStep,
-    colors: MederiColors,
-) {
-    when (step) {
-        is BrowserFlowStep.Narration -> {
-            Box(
-                modifier = Modifier
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(colors.accentBg)
-                    .border(1.dp, colors.accentBorder, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.MessageSquare,
-                    contentDescription = null,
-                    tint = colors.accentText,
-                    modifier = Modifier.size(9.dp),
-                )
-            }
-        }
-
-        is BrowserFlowStep.Action -> {
-            when (step.status) {
-                BrowserStepStatus.RUNNING -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 1.8.dp,
-                        color = colors.accentPrimary,
-                    )
-                }
-
-                BrowserStepStatus.COMPLETED -> {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(colors.successBg)
-                            .border(1.dp, colors.accentSuccess.copy(alpha = 0.45f), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Check,
-                            contentDescription = null,
-                            tint = colors.successText,
-                            modifier = Modifier.size(9.dp),
-                        )
-                    }
-                }
-
-                BrowserStepStatus.FAILED -> {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(colors.dangerBg)
-                            .border(1.dp, colors.statusError.copy(alpha = 0.45f), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.X,
-                            contentDescription = null,
-                            tint = colors.dangerText,
-                            modifier = Modifier.size(9.dp),
-                        )
-                    }
-                }
-            }
-        }
-
-        is BrowserFlowStep.Screenshot -> {
-            Box(
-                modifier = Modifier
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(colors.successBg)
-                    .border(1.dp, colors.accentSuccess.copy(alpha = 0.45f), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Camera,
-                    contentDescription = null,
-                    tint = colors.successText,
-                    modifier = Modifier.size(9.dp),
-                )
-            }
-        }
-
-        is BrowserFlowStep.Memory -> {
-            Box(
-                modifier = Modifier
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(colors.accentBg)
-                    .border(1.dp, colors.accentBorder, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Layers,
-                    contentDescription = null,
-                    tint = colors.accentText,
-                    modifier = Modifier.size(9.dp),
-                )
-            }
-        }
+private fun TimelineStepIndicator(step: BrowserFlowStep, colors: MederiColors) {
+    if (step is BrowserFlowStep.Action && step.status == BrowserStepStatus.RUNNING) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(WorkspaceStyle.IconSize), strokeWidth = 1.5.dp,
+            color = colors.accentPrimary,
+        )
+        return
     }
+    val (icon, tint) = when (step) {
+        is BrowserFlowStep.Narration -> FeatherIcons.MessageSquare to colors.textMuted
+        is BrowserFlowStep.Memory -> FeatherIcons.Layers to colors.textMuted
+        is BrowserFlowStep.Screenshot -> FeatherIcons.Camera to colors.textMuted
+        is BrowserFlowStep.Action -> if (step.status == BrowserStepStatus.FAILED) {
+            FeatherIcons.X to colors.accentDanger
+        } else FeatherIcons.Check to colors.accentSuccess
+    }
+    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(WorkspaceStyle.IconSize))
 }
 
 /**
@@ -253,7 +164,6 @@ private fun BrowserNarrationStepCard(
     step: BrowserFlowStep.Narration,
     colors: MederiColors,
 ) {
-    val shape = RoundedCornerShape(6.dp)
     val timeLabel = remember(step.timestampMillis) {
         if (step.timestampMillis > 0L) TimeFormatter.formatTimeWithSeconds(step.timestampMillis) else ""
     }
@@ -261,22 +171,21 @@ private fun BrowserNarrationStepCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, shape)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(horizontal = MederiSpacing.XS, vertical = MederiSpacing.XS),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
             text = step.text,
-            fontSize = 12.sp,
+            fontSize = WorkspaceStyle.Body.fontSize,
+            lineHeight = WorkspaceStyle.Body.lineHeight,
             color = colors.textPrimary,
         )
 
         if (timeLabel.isNotEmpty()) {
             Text(
                 text = timeLabel,
-                fontSize = 10.sp,
+                fontSize = WorkspaceStyle.Caption.fontSize,
+                lineHeight = WorkspaceStyle.Caption.lineHeight,
                 fontFamily = FontFamily.Monospace,
                 color = colors.textMuted,
             )
@@ -293,7 +202,6 @@ private fun BrowserMemoryStepCard(
     step: BrowserFlowStep.Memory,
     colors: MederiColors,
 ) {
-    val shape = RoundedCornerShape(6.dp)
     val timeLabel = remember(step.timestampMillis) {
         if (step.timestampMillis > 0L) TimeFormatter.formatTimeWithSeconds(step.timestampMillis) else ""
     }
@@ -301,18 +209,15 @@ private fun BrowserMemoryStepCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(colors.accentBg)
-            .border(1.dp, colors.accentBorder, shape)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(horizontal = MederiSpacing.XS, vertical = MederiSpacing.XS),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon(
             imageVector = FeatherIcons.Layers,
             contentDescription = null,
-            tint = colors.accentText,
-            modifier = Modifier.size(12.dp),
+            tint = colors.textSecondary,
+            modifier = Modifier.size(WorkspaceStyle.IconSize),
         )
         Column(
             modifier = Modifier.weight(1f),
@@ -320,13 +225,15 @@ private fun BrowserMemoryStepCard(
         ) {
             Text(
                 text = step.text,
-                fontSize = 12.sp,
-                color = colors.accentText,
+                fontSize = WorkspaceStyle.Body.fontSize,
+                lineHeight = WorkspaceStyle.Body.lineHeight,
+                color = colors.textSecondary,
             )
             if (timeLabel.isNotEmpty()) {
                 Text(
                     text = timeLabel,
-                    fontSize = 10.sp,
+                    fontSize = WorkspaceStyle.Caption.fontSize,
+                    lineHeight = WorkspaceStyle.Caption.lineHeight,
                     fontFamily = FontFamily.Monospace,
                     color = colors.textMuted,
                 )
@@ -343,20 +250,9 @@ private fun BrowserActionStepCard(
     step: BrowserFlowStep.Action,
     colors: MederiColors,
 ) {
-    val shape = RoundedCornerShape(6.dp)
     val isRunning = step.status == BrowserStepStatus.RUNNING
     val isFailed = step.status == BrowserStepStatus.FAILED
 
-    val bgColor = when {
-        isRunning -> colors.accentBg
-        isFailed -> colors.dangerBg
-        else -> colors.surfaceCard
-    }
-    val borderColor = when {
-        isRunning -> colors.accentBorder
-        isFailed -> colors.statusError.copy(alpha = 0.4f)
-        else -> colors.surfaceCardBorder
-    }
     val titleColor = when {
         isRunning -> colors.accentText
         isFailed -> colors.dangerText
@@ -372,10 +268,7 @@ private fun BrowserActionStepCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(bgColor)
-            .border(1.dp, borderColor, shape)
-            .padding(horizontal = 9.dp, vertical = 6.dp),
+            .padding(horizontal = MederiSpacing.XS, vertical = MederiSpacing.XS),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(
@@ -392,11 +285,12 @@ private fun BrowserActionStepCard(
                     imageVector = actionKindIcon(step.kind),
                     contentDescription = null,
                     tint = titleColor,
-                    modifier = Modifier.size(12.dp),
+                    modifier = Modifier.size(WorkspaceStyle.IconSize),
                 )
                 Text(
                     text = step.title,
-                    fontSize = 12.sp,
+                    fontSize = WorkspaceStyle.Body.fontSize,
+                    lineHeight = WorkspaceStyle.Body.lineHeight,
                     fontWeight = FontWeight.Medium,
                     color = titleColor,
                     maxLines = 1,
@@ -408,9 +302,10 @@ private fun BrowserActionStepCard(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = statusText,
-                    fontSize = 10.sp,
+                    fontSize = WorkspaceStyle.Caption.fontSize,
+                    lineHeight = WorkspaceStyle.Caption.lineHeight,
                     fontFamily = FontFamily.Monospace,
-                    color = if (isRunning) colors.accentText else colors.textMuted,
+                    color = when { isFailed -> colors.dangerText; isRunning -> colors.accentText; else -> colors.textMuted },
                 )
             }
         }
@@ -419,10 +314,9 @@ private fun BrowserActionStepCard(
         if (target != null) {
             Text(
                 text = target,
-                fontSize = 11.sp,
+                fontSize = WorkspaceStyle.Body.fontSize,
+                lineHeight = WorkspaceStyle.Body.lineHeight,
                 color = colors.textSecondary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -439,9 +333,9 @@ private fun BrowserScreenshotStepCard(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isFocused by interactionSource.collectIsFocusedAsState()
 
     val shape = RoundedCornerShape(6.dp)
-    val borderColor = if (isHovered) colors.accentPrimary else colors.surfaceCardBorder
     val displayTitle = step.title?.takeIf { it.isNotBlank() }
         ?: stringResource(Res.string.browser_flow_screenshot_default)
 
@@ -460,12 +354,12 @@ private fun BrowserScreenshotStepCard(
             .fillMaxWidth()
             .clip(shape)
             .background(colors.surfaceCard)
-            .border(1.dp, borderColor, shape)
             .hoverable(interactionSource)
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                role = Role.Button,
                 onClick = onClick,
             ),
     ) {
@@ -484,7 +378,7 @@ private fun BrowserScreenshotStepCard(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            if (isHovered) {
+            if (isHovered || isFocused) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -497,18 +391,18 @@ private fun BrowserScreenshotStepCard(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(colors.surfaceCard.copy(alpha = 0.9f))
-                            .border(1.dp, colors.borderStrong, RoundedCornerShape(4.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     ) {
                         Icon(
                             imageVector = FeatherIcons.ZoomIn,
                             contentDescription = null,
                             tint = colors.textPrimary,
-                            modifier = Modifier.size(12.dp),
+                            modifier = Modifier.size(WorkspaceStyle.IconSize),
                         )
                         Text(
                             text = stringResource(Res.string.browser_flow_zoom_in_hint),
-                            fontSize = 11.sp,
+                            fontSize = WorkspaceStyle.Body.fontSize,
+                            lineHeight = WorkspaceStyle.Body.lineHeight,
                             fontWeight = FontWeight.Medium,
                             color = colors.textPrimary,
                         )
@@ -516,13 +410,6 @@ private fun BrowserScreenshotStepCard(
                 }
             }
         }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(colors.divider),
-        )
 
         // 2. 底部截图说明条
         Row(
@@ -534,7 +421,8 @@ private fun BrowserScreenshotStepCard(
         ) {
             Text(
                 text = displayTitle,
-                fontSize = 11.sp,
+                fontSize = WorkspaceStyle.Body.fontSize,
+                lineHeight = WorkspaceStyle.Body.lineHeight,
                 color = colors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -545,7 +433,8 @@ private fun BrowserScreenshotStepCard(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = metaText,
-                    fontSize = 10.sp,
+                    fontSize = WorkspaceStyle.Caption.fontSize,
+                    lineHeight = WorkspaceStyle.Caption.lineHeight,
                     fontFamily = FontFamily.Monospace,
                     color = colors.textMuted,
                     maxLines = 1,

@@ -1,325 +1,166 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.*
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.ui.appstate.RemoteServerUiState
 import xyz.mederi.ui.appstate.TunnelUiState
-import xyz.mederi.ui.components.atoms.CopyButton
-import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
-import xyz.mederi.ui.components.atoms.MederiSurfaceButton
+import xyz.mederi.ui.components.ErrorBoard
+import xyz.mederi.ui.components.atoms.*
 
-/**
- * 远程遥控与 Cloudflare 隧道设置面板。
- */
+/** 宿主能力和运行事实来自AppState；关闭页面没有服务副作用。 */
 @Composable
 fun RemoteSettingsPanel(isCompact: Boolean = false) {
     val appState = LocalAppState.current
-    val colors = LocalMederiColors.current
-    val scroll = rememberScrollState()
-    val hooks = appState.remoteControl
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scroll),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        if (hooks != null) {
-            RemoteControlCard(appState, colors, isCompact)
-        } else {
-            SettingsCard(colors = colors) {
-                Text(
-                    text = stringResource(Res.string.settings_remote_unsupported_platform),
-                    color = colors.textMuted,
-                    fontSize = 12.sp
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RemoteControlCard(
-    appState: xyz.mederi.ui.appstate.AppState,
-    colors: MederiColors,
-    isCompact: Boolean
-) {
     val enabled by appState.remoteControlEnabled.collectAsState()
-    val savedPassword by appState.remoteControlPassword.collectAsState()
-    val serverState by appState.remoteServerState.collectAsState()
-    val tunnelState by appState.tunnelState.collectAsState()
-    val hooks = appState.remoteControl ?: return
-    val localAddr = hooks.localAddress
-
-    var password by remember { mutableStateOf(savedPassword ?: "") }
-    var showPassword by remember { mutableStateOf(false) }
-
-    SettingsCard(colors = colors) {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            // 开关行
-            SettingsRow(
-                title = stringResource(Res.string.settings_remote_title),
-                subtitle = when (serverState) {
-                    is RemoteServerUiState.Idle -> stringResource(Res.string.settings_remote_state_idle)
-                    is RemoteServerUiState.Starting -> stringResource(Res.string.settings_remote_state_starting)
-                    is RemoteServerUiState.Running -> stringResource(Res.string.settings_remote_state_running)
-                    is RemoteServerUiState.Failed -> stringResource(Res.string.settings_remote_state_failed)
-                },
-                icon = FeatherIcons.Sliders,
-                iconTint = colors.accentPrimary,
-                colors = colors
-            ) {
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = { on -> appState.setRemoteControl(on, password) }
-                )
-            }
-
-            // 状态展示
-            when (val ss = serverState) {
-                is RemoteServerUiState.Running -> {
-                    HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(colors.surfaceWorkspace)
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = stringResource(Res.string.settings_remote_lan_address_title),
-                                color = colors.textMuted,
-                                fontSize = 11.sp
-                            )
-                            val url = "http://${localAddr ?: "127.0.0.1"}:${ss.port}"
-                            Text(
-                                text = url,
-                                color = colors.accentSuccess,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                        CopyButton(
-                            text = "http://${localAddr ?: "127.0.0.1"}:${ss.port}",
-                            size = 28
-                        )
-                    }
-                }
-                is RemoteServerUiState.Failed -> {
-                    val reasonText = stringResource(ss.reason.key, *ss.reason.args.toTypedArray())
-                    Text(reasonText, color = colors.accentDanger, fontSize = 12.sp)
-                }
-                else -> {}
-            }
-
-            // 密码行：限制最大合理宽度（380dp），避免 780dp 超长拉伸
-            if (enabled && serverState !is RemoteServerUiState.Starting) {
-                HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
-                Column(
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = stringResource(Res.string.settings_remote_password_label),
-                        color = colors.textPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    SettingsInputField(
-                        value = password,
-                        onValueChange = { password = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = stringResource(Res.string.settings_remote_password_placeholder),
-                        singleLine = true,
-                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            Icon(
-                                imageVector = if (showPassword) FeatherIcons.EyeOff else FeatherIcons.Eye,
-                                contentDescription = null,
-                                tint = colors.textMuted,
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .clickable { showPassword = !showPassword }
-                            )
-                        },
-                        colors = colors
-                    )
-                    Text(
-                        text = stringResource(Res.string.settings_remote_password_note),
-                        color = colors.textMuted,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-
-            // Cloudflare 隧道区块
-            if (serverState is RemoteServerUiState.Running) {
-                HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = stringResource(Res.string.settings_tunnel_title),
-                        color = colors.textPrimary,
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    when (val ts = tunnelState) {
-                        is TunnelUiState.Idle -> {
-                            TunnelInputFields(appState, colors)
-                            Text(stringResource(Res.string.settings_tunnel_desc), color = colors.textMuted, fontSize = 11.5.sp)
-                            MederiPrimaryDecisionButton(
-                                text = stringResource(Res.string.settings_tunnel_start),
-                                onClick = { appState.startTunnel() }
-                            )
-                        }
-                        is TunnelUiState.Starting -> {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = colors.accentPrimary)
-                                Text(stringResource(Res.string.settings_tunnel_starting), color = colors.textSecondary, fontSize = 12.sp)
-                            }
-                        }
-                        is TunnelUiState.Running -> {
-                            val url = ts.url
-                            if (url != null) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(colors.surfaceWorkspace)
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text(
-                                            text = stringResource(Res.string.settings_tunnel_public_url_title),
-                                            color = colors.textMuted,
-                                            fontSize = 11.sp
-                                        )
-                                        Text(
-                                            text = url,
-                                            color = colors.accentPrimary,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            fontFamily = FontFamily.Monospace
-                                        )
-                                    }
-                                    CopyButton(text = url, size = 28)
-                                }
-                            }
-                            MederiSurfaceButton(
-                                text = stringResource(Res.string.settings_tunnel_stop),
-                                onClick = { appState.stopTunnel() }
-                            )
-                        }
-                        is TunnelUiState.Failed -> {
-                            val msg = if (ts.notInstalled) stringResource(Res.string.settings_tunnel_not_installed)
-                            else stringResource(Res.string.settings_tunnel_failed, stringResource(ts.reason.key, *ts.reason.args.toTypedArray()))
-                            Text(msg, color = colors.accentDanger, fontSize = 12.sp)
-                            // 失败时仍显示输入框，允许用户修改 token/domain 后重试
-                            TunnelInputFields(appState, colors)
-                            MederiPrimaryDecisionButton(
-                                text = stringResource(Res.string.settings_retry),
-                                onClick = { appState.startTunnel() }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Cloudflare 隧道的 token + 域名输入框（Idle 和 Failed 状态共用）。
- * Failed 时允许用户修改后重试，而不是只给一个重试按钮。
- */
-@Composable
-private fun TunnelInputFields(
-    appState: xyz.mederi.ui.appstate.AppState,
-    colors: MederiColors,
-) {
+    val password by appState.remoteControlPassword.collectAsState()
+    val server by appState.remoteServerState.collectAsState()
+    val tunnel by appState.tunnelState.collectAsState()
     val token by appState.tunnelToken.collectAsState()
     val domain by appState.tunnelDomain.collectAsState()
-    var showToken by remember { mutableStateOf(false) }
+    val copy = rememberCopyFeedback()
+    var copiedValue by remember { mutableStateOf<String?>(null) }
+    CopyFeedbackScope(copy) { copied ->
+        RemoteSettingsContent(RemoteSettingsUiState(appState.remoteControl != null, enabled, password,
+            server, tunnel, token, domain, appState.remoteControl?.localAddress),
+            RemoteSettingsActions(appState::setRemoteControl, appState::setTunnelToken, appState::setTunnelDomain,
+                appState::startTunnel, appState::stopTunnel, { appState.setRemoteControl(true, it) },
+                { copiedValue = it; copy.copy(it) }), copiedValue = if (copied) copiedValue else null)
+    }
+}
 
-    Column(
-        modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Text(
-            text = stringResource(Res.string.settings_tunnel_token_label),
-            color = colors.textPrimary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        SettingsInputField(
-            value = token,
-            onValueChange = { appState.setTunnelToken(it) },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = stringResource(Res.string.settings_tunnel_token_placeholder),
-            singleLine = true,
-            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                Icon(
-                    imageVector = if (showToken) FeatherIcons.EyeOff else FeatherIcons.Eye,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(16.dp).clickable { showToken = !showToken }
-                )
-            },
-            colors = colors
-        )
-        Text(
-            text = stringResource(Res.string.settings_tunnel_token_note),
-            color = colors.textMuted,
-            fontSize = 11.sp
-        )
+internal data class RemoteSettingsUiState(
+    val supported: Boolean,
+    val enabled: Boolean,
+    val savedPassword: String?,
+    val server: RemoteServerUiState,
+    val tunnel: TunnelUiState,
+    val token: String,
+    val domain: String,
+    val localAddress: String?,
+)
 
-        // 域名输入
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = stringResource(Res.string.settings_tunnel_domain_label),
-            color = colors.textPrimary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        SettingsInputField(
-            value = domain,
-            onValueChange = { appState.setTunnelDomain(it) },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = stringResource(Res.string.settings_tunnel_domain_placeholder),
-            singleLine = true,
-            colors = colors
-        )
+internal data class RemoteSettingsActions(
+    val toggle: (Boolean, String?) -> Unit,
+    val token: (String) -> Unit,
+    val domain: (String) -> Unit,
+    val startTunnel: () -> Unit,
+    val stopTunnel: () -> Unit,
+    val retryServer: (String) -> Unit,
+    val copy: (String) -> Unit,
+)
+
+@Composable
+internal fun RemoteSettingsContent(
+    state: RemoteSettingsUiState,
+    actions: RemoteSettingsActions,
+    modifier: Modifier = Modifier,
+    copiedValue: String? = null,
+) {
+    val colors = LocalMederiColors.current
+    var password by remember { mutableStateOf(state.savedPassword.orEmpty()) }
+    var passwordEdited by remember { mutableStateOf(false) }
+    // 初始偏好水合可以填入字段；之后的状态回流不覆盖用户正在编辑的密码草稿。
+    LaunchedEffect(state.savedPassword) {
+        if (!passwordEdited || password == state.savedPassword.orEmpty()) {
+            password = state.savedPassword.orEmpty(); passwordEdited = false
+        }
+    }
+    Column(modifier.fillMaxSize().padding(12.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        if (!state.supported) {
+            Text(stringResource(Res.string.settings_remote_unsupported_platform), style = WorkspaceStyle.Body, color = colors.textSecondary)
+        } else {
+            SettingsRow(stringResource(Res.string.settings_remote_title), when (state.server) {
+                RemoteServerUiState.Idle -> stringResource(Res.string.settings_remote_state_idle)
+                RemoteServerUiState.Starting -> stringResource(Res.string.settings_remote_state_starting)
+                is RemoteServerUiState.Running -> stringResource(Res.string.settings_remote_state_running)
+                is RemoteServerUiState.Failed -> stringResource(Res.string.settings_remote_state_failed)
+            }, icon = FeatherIcons.Sliders) {
+                MederiMiniSwitch(state.enabled, { actions.toggle(it, password) },
+                    contentDescription = stringResource(Res.string.settings_remote_title))
+            }
+            when (val server = state.server) {
+                RemoteServerUiState.Starting -> WorkspaceLoadingIndicator()
+                is RemoteServerUiState.Failed -> ErrorBoard(stringResource(server.reason.key, *server.reason.args.toTypedArray()),
+                    showContinue = true, onContinue = { actions.retryServer(password) }, continueLabel = stringResource(Res.string.settings_retry))
+                is RemoteServerUiState.Running -> {
+                    if (server.portFallback) Text(stringResource(Res.string.settings_remote_port_fallback, server.port),
+                        style = WorkspaceStyle.Caption, color = colors.textSecondary)
+                    if (!state.localAddress.isNullOrBlank()) {
+                        val url = "http://${state.localAddress}:${server.port}"
+                        SettingsCopyableValue(stringResource(Res.string.settings_remote_lan_address_title), url, actions.copy, copiedValue == url)
+                    } else Text(stringResource(Res.string.settings_remote_no_lan), style = WorkspaceStyle.Body, color = colors.textSecondary)
+                }
+                else -> Unit
+            }
+            if (state.enabled && state.server !is RemoteServerUiState.Starting) {
+                SettingsSecretField(stringResource(Res.string.settings_remote_password_label), password,
+                    { password = it; passwordEdited = true }, stringResource(Res.string.settings_remote_password_placeholder),
+                    stringResource(Res.string.settings_remote_password_note))
+            }
+            if (state.server is RemoteServerUiState.Running) {
+                SettingsSection(stringResource(Res.string.settings_tunnel_title), stringResource(Res.string.settings_tunnel_desc)) {
+                    when (val tunnel = state.tunnel) {
+                        TunnelUiState.Idle, is TunnelUiState.Failed -> {
+                            SettingsSecretField(stringResource(Res.string.settings_tunnel_token_label), state.token, actions.token,
+                                stringResource(Res.string.settings_tunnel_token_placeholder), stringResource(Res.string.settings_tunnel_token_note))
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(stringResource(Res.string.settings_tunnel_domain_label), style = WorkspaceStyle.Caption, color = colors.textSecondary)
+                                val domainLabel = stringResource(Res.string.settings_tunnel_domain_label)
+                                WorkspaceTextField(state.domain, actions.domain, Modifier.fillMaxWidth().semantics { contentDescription = domainLabel },
+                                    placeholder = stringResource(Res.string.settings_tunnel_domain_placeholder), monospace = true)
+                            }
+                            if (tunnel is TunnelUiState.Failed) {
+                                val message = if (tunnel.notInstalled) stringResource(Res.string.settings_tunnel_not_installed)
+                                else stringResource(Res.string.settings_tunnel_failed, stringResource(tunnel.reason.key, *tunnel.reason.args.toTypedArray()))
+                                ErrorBoard(message, showContinue = true, onContinue = actions.startTunnel,
+                                    continueLabel = stringResource(Res.string.settings_retry))
+                            } else WorkspaceActionButton(stringResource(Res.string.settings_tunnel_start), actions.startTunnel, primary = true)
+                        }
+                        TunnelUiState.Starting -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            WorkspaceLoadingIndicator()
+                            Text(stringResource(Res.string.settings_tunnel_starting), style = WorkspaceStyle.Body, color = colors.textSecondary)
+                        }
+                        is TunnelUiState.Running -> {
+                            Text(stringResource(Res.string.settings_tunnel_running), style = WorkspaceStyle.Body, color = colors.textPrimary)
+                            if (!tunnel.url.isNullOrBlank()) SettingsCopyableValue(stringResource(Res.string.settings_tunnel_public_url_title),
+                                tunnel.url, actions.copy, copiedValue == tunnel.url)
+                            else Text(stringResource(Res.string.settings_tunnel_url_unknown), style = WorkspaceStyle.Caption, color = colors.textSecondary)
+                            WorkspaceActionButton(stringResource(Res.string.settings_tunnel_stop), actions.stopTunnel, icon = FeatherIcons.Square)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 密码和Token复用同一字段，显隐仅是本地表现，不触发保存/重启。 */
+@Composable
+internal fun SettingsSecretField(label: String, value: String, onValueChange: (String) -> Unit, placeholder: String, hint: String) {
+    val colors = LocalMederiColors.current
+    var reveal by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = WorkspaceStyle.Caption, color = colors.textSecondary)
+        WorkspaceTextField(value, onValueChange, Modifier.fillMaxWidth().semantics { contentDescription = label }, placeholder = placeholder,
+            visualTransformation = if (reveal) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = { WorkspaceIconButton(if (reveal) FeatherIcons.EyeOff else FeatherIcons.Eye,
+                { reveal = !reveal }, stringResource(if (reveal) Res.string.settings_secret_hide else Res.string.settings_secret_show)) })
+        Text(hint, style = WorkspaceStyle.Caption, color = colors.textSecondary)
     }
 }

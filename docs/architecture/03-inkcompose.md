@@ -14,6 +14,7 @@
 | `MarkdownConfig` | `common/entry/kotlin/xyz/emuci/inkcompose/RenderStyleExport.kt` | Markdown 解析与渲染配置（方言、表情、标题编号、`enableHighlight` 高亮开关、流式合并阈值等） |
 | `LocalRenderStyle` / `LocalMarkdownColors` / `LocalMarkdownConfig` | 同目录 RenderStyleExport.kt | 排版风格、色彩皮肤与解析配置的 CompositionLocal 注入 |
 | `RenderType` | 同目录 RenderType.kt | `AUTO / TEXT / MARKDOWN / LATEX / MERMAID / VLR / CODE` |
+| `SelectionMenuAction` | 同目录 SelectionMenuAction.kt | sealed interface：`Copy` / `Paste` / `Custom(label, onClick: (String) -> Unit, leadingIcon: (@Composable () -> Unit)? = null, enabled: Boolean = true)`；完整有序菜单数组，不使用字符串判定动作 |
 | `MermaidCacheConfig` | 同目录（object + 顶层 expect 函数） | `setBaseDirectory(path)` / `getBaseDirectory()` / `clearSessionCache(sessionKey)` |
 | `LocalSessionKey` | 同目录 | `compositionLocalOf<String?>`，会话标识用于图表缓存前缀 |
 | `MarkdownExporter` | `common/entry/kotlin/xyz/emuci/inkcompose/MarkdownExporter.kt` | Markdown 文档导出器（object）：`setBrowser(browser: KBrowser?)` / `getBrowser()` + `toHtml`×2（同步，自包含 HTML 字符串）+ `suspend toPdf`×2（`Result<String>`，KBrowser 打印矢量 PDF）；配置 `HtmlExportOptions` / `PdfExportOptions`（含 `landscape`/`printBackground`/`browser: KBrowser?`） |
@@ -37,13 +38,30 @@ fun MarkdownView(
     diagramTheme: DiagramTheme = DiagramTheme.Default,
     onLinkClick: ((String) -> Unit)? = null,
     enableSelection: Boolean = true,
-    selectionMenuActions: List<SelectionMenuAction> = emptyList(),
+    selectionMenuActions: List<SelectionMenuAction> = listOf(SelectionMenuAction.Copy, SelectionMenuAction.Paste),
     enableScrollOverride: Boolean? = null,   // null=BoxWithConstraints 自动检测; LazyColumn 中传 false
     sessionKey: String? = null,              // 回退到 LocalSessionKey
+    onPasteRequested: (() -> Unit)? = null, // 宿主读取剪贴板并写入可编辑目标；null 时 Paste 禁用
 )
 ```
 
-分发：`AUTO`→`MARKDOWN`；MARKDOWN 内 `BoxWithConstraints.hasBoundedHeight` 自动选 StaticColumn/LazyColumn；`LATEX`→`Latex`，`MERMAID`→`DiagramBlockView`，`VLR`→`VTextView`，`CODE`→`CodeBlock`；外层 `CompositionLocalProvider(LocalSessionKey, LocalRenderStyle, LocalMarkdownColors, LocalMarkdownConfig)`。
+分发：`AUTO`→`MARKDOWN`；MARKDOWN 内 `BoxWithConstraints.hasBoundedHeight` 自动选 StaticColumn/LazyColumn；`LATEX`→`Latex`，`MERMAID`→`DiagramBlockView`，`VLR`→`VTextView`，`TEXT` / `CODE` 通过 `literalRenderDocument(content, type, language)` 直接构造字面量 AST（不做 Markdown 解析），再经 `Markdown(document)` 复用同一选区/菜单；代码节点关闭行号；外层 `CompositionLocalProvider(LocalSessionKey, LocalRenderStyle, LocalMarkdownColors, LocalMarkdownConfig)`。
+
+菜单调用方式（`label` 由宿主自己的 i18n 提供；`pasteIntoInput` 负责读取剪贴板并更新输入目标）：
+
+```kotlin
+MarkdownView(
+    content = content,
+    selectionMenuActions = listOf(
+        SelectionMenuAction.Copy,
+        SelectionMenuAction.Paste,
+        SelectionMenuAction.Custom(label = label, onClick = addToInput),
+    ),
+    onPasteRequested = pasteIntoInput,
+)
+```
+
+省略数组使用默认 Copy/Paste；传空数组隐藏菜单；数组是完整配置，不追加隐含动作。旧的 `xyz.emuci.markdown.renderer.SelectionMenuAction(label, ...)` 迁移为公共包 `xyz.emuci.inkcompose.SelectionMenuAction.Custom(label, ...)`，内置复制项直接使用 `Copy`。
 
 ## 2. MarkdownExporter（HTML / PDF 导出）
 
@@ -95,11 +113,19 @@ flowchart TD
 ### 3.3 渲染器要点（`common/markdown-renderer/kotlin/xyz/emuci/markdown/renderer/`）
 
 - **管线层次**：`Markdown.kt`（顶层 Composable：异步解析+文档缓存，Static/Lazy 双模式；`MarkdownStreaming.kt` 全局 `parsedDocumentCache` key=(markdown, MarkdownConfig) 防跨配置污染，`MarkdownConfig.enableHighlight: Boolean?=null` 透传 `MarkdownParser`（null=跟随 flavour））→ `internal/RendererFacadeState`（门面状态）→ `internal/MarkdownEngineHost`（三段管线宿主，持有 InlineLayoutRuntime + 全局共享块布局缓存）→ `MarkdownDocumentRenderer`（按 Document 隔离 + viewportWidth 有界 LRU 防 LazyColumn 高度 thrash）→ `internal/compose/`（`MarkdownComposePainter` 绘制接口 + `DefaultMarkdownComposePainter` + `ComposeRenderEnvironment` + `InlineLayoutContent`）。
-- **顶层包文件**（除 `Markdown.kt` 入口、`MarkdownConfig`/`MarkdownTheme`/`MarkdownColors`/`RenderStyle` 预设与上文各 internal 组件外）：`MarkdownImage.kt` / `MarkdownLayouts.kt` / `MarkdownNavigationController.kt` / `MarkdownRenderMode.kt` / `MarkdownStreaming.kt` / `RendererContext.kt` / `FootnoteNavigation.kt` / `SelectionMenuAction.kt`。
+- **顶层包文件**（除 `Markdown.kt` 入口、`MarkdownConfig`/`MarkdownTheme`/`MarkdownColors`/`RenderStyle` 预设与上文各 internal 组件外）：`MarkdownImage.kt` / `MarkdownLayouts.kt` / `MarkdownNavigationController.kt` / `MarkdownRenderMode.kt` / `MarkdownStreaming.kt` / `RendererContext.kt` / `FootnoteNavigation.kt`（`SelectionMenuAction` 已移至公共 `xyz.emuci.inkcompose` 包）。
 - **Render model 编译**（`internal/core/`）：`compile/RenderModelCompiler`（接口）→ `DefaultRenderModelCompiler`（唯一实现，AST→纯数据）；`RenderCompileEnvironment`；`compile/InlineCompiler`；`compile/RenderCompileCache`；`identity/RenderIdentity`（四元组 revision，FNV-1a 内容寻址）；`model/`（RenderDocumentModel/RenderBlockModel(sealed)/InlineModel(InlineAtom=TextAtom+WidgetAtom)/WidgetModel(sealed Inline+Block 两族)）。
 - **布局引擎**（`internal/layout/`）：`engine/MarkdownLayoutEngine`(接口)→`DefaultMarkdownLayoutEngine`(object)；`LayoutEnvironment`（viewportWidth/blockSpacing/theme/density/textMeasurer/latexMeasurer/epoch…）；`BlockMeasurementKernel`；`engine/MarkdownLayoutSource` / `engine/TableLayoutMetrics`；`inline/InlineFlowLayoutEngine.computeInlineFlowLayout` + 缓存三件（`InlineFlowLayoutCache`/`InlineRenderResultCache`/`InlineLayoutEpoch` 跨回收稳定环境身份）+ `InlineLayoutRuntime`（每 Host 运行时）+ `InlineFlowInput`/`InlineFlowModels`/`InlineLayoutBlockSupport`/`InlineLayoutMetrics`/`LayoutInlineRunGeometry`；`table/TableLayoutAlgorithm`；`list/ListLayoutMetrics`；输出 `model/LayoutBlockModel/LayoutDocumentModel/LayoutGeometry`；`widget/BlockWidgetLayoutProtocol`（图/表/竖排测量摆放协议）。
 - **Block renderer**（`block/`，分发器 `BlockRenderer`）：Paragraph/Heading/BlockQuote/List/Table/CodeBlock（info-string `{title/linenos/highlight}`）/MathBlock（嵌入 Latex）/DiagramBlock（→DiagramBlockView）/VerticalTextBlock（→VTextView）/Admonition（`> [!NOTE]`）/CustomContainer（`:::type`）/Directive（`{% tag %}` 外部插件，渲染桥 `internal/adapter/DirectiveScopeAdapters`）/Figure/FigureCaption/ColumnsLayout/TabBlock/Bibliography/PageBreak/ThematicBreak/Misc（HtmlBlock/FrontMatter/脚注）。
-- **Selection**（`internal/selection/`，自研跨块选区层）：MarkdownSelectionController（组合状态/手势/渲染/复制）、MarkdownSelectionState（range+活动手柄+`isMouseInput` 输入模式标志）、SelectionAnchor（块 stableId+块内字符偏移，reflow 不变）、SelectionModelIndex（块序列↔字符偏移全局索引）、SelectionGestures/Handles/Modifiers、SelectionCoordinateRegistry（window↔local 换算，支持 LazyColumn 虚拟化）、SelectionGeometry（RunHit 命中检测）、SelectionTextExtractor、`expect plainTextClipEntry`(SelectionClipboard)、`expect isSecondaryClick()`、PopupTextToolbar(自实现 TextToolbar，纯渲染协议：`MenuState` 只存锚点 rect、忽略 TextToolbar 回调)、PopupTextToolbarHost(Popup 黑白紧凑菜单：`PopupPositionProvider` 把 rect 经 `rootCoordinates.windowToLocal` 换算定位，行高 40dp、`leadingIcon`（前导图标，可空）)、SurrogateSupport（UTF-16 代理对防 emoji 切半）。**输入模式分流**（桌面级选取）：`SelectionGestures` 新增不消费事件的 pointerInput recorder（`awaitEachGesture{awaitFirstDown(requireUnconsumed=false)}` 按 `down.type` 写入 `state.isMouseInput`）；`detectDragGestures.onDrag` 按 `change.type` 分流——Mouse 跳过 `dispatchPreScroll` 直接框选（列表滚动交滚轮），Touch 保持 nestedScroll 先喂父级 LazyColumn；`finishSelectionGesture`/`selectWordAtRootLocal`/`showContextMenuAt` 仅触屏 bump `toolbarRequestKey` 且仅触屏设 `skipNextTapClear`（鼠标右键弹菜单后，下次左键点击直接清选区）。
+- **Selection**（`internal/selection/`，自研跨块选区层）：
+  - `MarkdownSelectionController` 聚合逻辑选区、可见块几何和剪贴板；`MarkdownSelectionState` 保存 range、activeHandle、输入模式与 window 坐标 `contextMenuAnchor` / `dragPointerInWindow`；`SelectionAnchor` 使用 stableId + UTF-16 字符偏移，reflow 不变。`SelectionModelIndex` 全文轻量索引让未布局块也可全选/复制，`SelectionCoordinateRegistry` 仅保留可见坐标，支持虚拟化；块命中同时考虑纵向与横向距离（dy*1000+dx），并排多列不会误吸附到首列。
+  - `SelectionTextFragmentRegistry`（同目录新文件）：`observer(block, baseOffset)` / `removeBlock` / `offsetAt` / `highlightBoxes` / `positionFor`。代码行、表格单元格、正文与行内代码注册真实 `TextLayoutResult` + `LayoutCoordinates`，分别用于字符命中、高亮、手柄。高亮合并同行相邻字符矩形。`SelectionTextScope` / `LocalSelectionTextScope` 传递所属块与单元格基偏移；syntax 域 `CodeTextSelectionObserver` / `LocalCodeTextSelectionObserver`（`common/syntax-render/.../renderer/CodeTextSelectionObserver.kt`）提供无 markdown 依赖的布局观察桥；行号与代码工具栏不纳入选区。
+  - `SelectionGestures`：鼠标从 down 固定锚点、直接拖选，双击选词、Shift-click 扩选；链接点击保持可用，链接起点跨过拖动阈值后抢占选区，双击/长按拖动按词边界双向扩选并保留起始词；普通触摸滑动交给滚动容器，长按才选词并拖动，词边界使用文本引擎 Unicode 分词。Ctrl/Cmd+C、Ctrl+Insert、Copy 键复制，Ctrl/Cmd+A 全选，Escape 清除。菜单关闭和复制保留选区；触屏选区手柄可继续调整，鼠标模式不创建触屏手柄 Popup，避免拦截端点处的下一次框选。
+  - `SelectionAutoScrollHost(controller, lazyListState, enableScroll, dispatcher)`（`SelectionAutoScroll.kt`）：指针固定在 window 坐标，按 `root.boundsInWindow()` 裁剪可见视口计算 48dp 边缘内的逐帧速度；内部 LazyColumn 先滚，未消费部分经 nested-scroll post-scroll 传给父列表，滚动后重新命中字符；鼠标/触摸/手柄松开即清除滚动指针。`selectionAutoScrollVelocity` 为纯几何函数。
+  - `SelectionToolbarHost(controller, onPasteRequested)` 保鲜宿主粘贴回调，向 `TextToolbar.showMenu` 提供复制、粘贴与全选能力（能力不等于显示项）。`PopupTextToolbar.MenuState` 完整保存 rect 与 copy/paste/cut/selectAll 回调。`PopupTextToolbarHost` 经 `resolveToolbarActions` 穷举公共 `SelectionMenuAction`，严格按数组顺序渲染；空数组不显示，默认数组仅 Copy/Paste，宿主未提供粘贴目标时 Paste 禁用，Custom 直接调用开发者回调。中英文默认文案在 `common/composeResources/values{,-en}/selection.xml`。
+  - 菜单使用 MaterialTheme 色彩、圆角/描边/阴影、hover/禁用反馈；鼠标 36dp 行高，触屏 48dp。`SelectionMenuPositionProvider(selectionBounds, mouse, spacing)` 使用 window 坐标，鼠标贴右键位置下方、触屏优先选区上方，支持 RTL、上下翻转与窗口夹界。桌面弹窗支持方向键、Home/End、Enter/Space/Escape、复制/粘贴快捷键。
+  - `expect plainTextClipEntry` 平台剪贴板编码；`expect PointerEvent.isSecondaryClick()` 在 JVM 用 PointerButton、Android/iOS/wasmJs 用通用按钮状态支持真实外接鼠标，JVM/wasmJs 的 macOS Control-click 同样打开上下文菜单；`SurrogateSupport` 防 emoji 代理对切半。
+
 - **缓存设施**：`internal/util/LruCache`（通用有界 LRU，主线程无锁）、`DimensionUtils`（`parseDimensionDp`/`parseFontSizeSp` 字符串尺寸解析）、`CacheMutex`（class + 顶层 expect 函数：JVM=监视器锁/Native=AtomicInt CAS 自旋锁/wasm=直接执行）、RenderCompileCache、InlineRenderResultCache、InlineFlowLayoutCache、sharedMarkdownBlockLayoutCache、viewportWidthCache。
 
 ## 4. LaTeX 域

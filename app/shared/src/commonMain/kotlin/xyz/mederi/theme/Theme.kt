@@ -233,6 +233,7 @@ private val themeColorMap = mapOf(
 @Composable
 fun AppTheme(
     themeMode: AppThemeMode = AppThemeMode.DARK,
+    reducedMotion: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val customColors = themeColorMap[themeMode] ?: DarkColors
@@ -280,6 +281,7 @@ fun AppTheme(
     val codeTheme = if (customColors.isDark) OneDarkProTheme else GithubLightTheme
 
     CompositionLocalProvider(
+        LocalWorkspaceMotion provides WorkspaceMotionPolicy(reducedMotion),
         LocalMederiColors provides customColors,
         LocalAppThemeMode provides themeMode,
         LocalCodeTheme provides codeTheme,

@@ -196,6 +196,12 @@ sealed interface ArtifactItem {
         val isStreaming: Boolean = false,
     ) : ArtifactItem
 
+    data class Report(
+        override val id: String,
+        override val title: String,
+        val request: ReportRequest,
+    ) : ArtifactItem
+
     data class Image(
         override val id: String,
         override val title: String,

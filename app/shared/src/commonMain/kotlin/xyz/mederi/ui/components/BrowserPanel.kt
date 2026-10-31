@@ -1,31 +1,14 @@
 package xyz.mederi.ui.components
 
 /**
- * DEAD CODE (2026-10): JCEF 自动化后端退役，改用 camoufox。
- * 本文件暂定不用，是死代码但禁止清理，以后根据情况决定是否启用。
- *
- * （原用途：内嵌 tab 面板 UI）
+ * 网页宿主能力面板，与浏览器自动化任务分开。
+ * BROWSER路由仍接线此组件；只有宿主注入时渲染原生网页，否则显示能力说明。
  */
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Globe
 import mederi.app.shared.generated.resources.*
@@ -33,6 +16,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.ui.RightDockPanel
 import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.components.atoms.WorkspacePanelEmptyState
 
 /**
  * 内置浏览器面板。
@@ -57,41 +41,19 @@ internal fun BrowserPanelContent(
             )
         }
     } else {
-        // 遥控端 / wasm / JCEF 未就绪：兜底提示
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(colors.surfaceWorkspace),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(24.dp),
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Globe,
-                    contentDescription = stringResource(Res.string.rightdock_browser),
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(36.dp),
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = stringResource(Res.string.dock_browser_unsupported),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colors.textSecondary,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = stringResource(Res.string.dock_browser_desktop_only),
-                    fontSize = 11.sp,
-                    color = colors.textMuted,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
+        BrowserUnsupportedPlaceholder(colors, modifier)
     }
+}
+
+/** 真实能力缺失提示；不假装在遥控端创建本地网页宿主。 */
+@Composable
+internal fun BrowserUnsupportedPlaceholder(colors: MederiColors, modifier: Modifier = Modifier) {
+    WorkspacePanelEmptyState(
+        icon = FeatherIcons.Globe,
+        title = stringResource(Res.string.dock_browser_unsupported),
+        hint = stringResource(Res.string.dock_browser_desktop_only),
+        modifier = modifier.background(colors.surfaceWorkspace), colors = colors,
+    )
 }
 
 /** 右侧面板标题唯一映射点（枚举不持有表现层文案，i18n 约定）。 */

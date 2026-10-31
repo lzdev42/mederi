@@ -149,6 +149,10 @@ class AppState(
     private val _language = MutableStateFlow(AppLanguage.SYSTEM)
     val language: StateFlow<AppLanguage> = _language.asStateFlow()
 
+    /** 动效是设备本地偏好，不随远端Core或会话同步。 */
+    private val _reducedMotion = MutableStateFlow(false)
+    val reducedMotion: StateFlow<Boolean> = _reducedMotion.asStateFlow()
+
     /** 左侧边栏是否常驻固定（false = 自动隐藏，鼠标悬浮/把手呼出；true = 常驻分栏） */
     private val _leftSidebarPinned = MutableStateFlow(false)
     val leftSidebarPinned: StateFlow<Boolean> = _leftSidebarPinned.asStateFlow()
@@ -295,6 +299,11 @@ class AppState(
     fun setLanguage(value: AppLanguage) {
         _language.value = value
         persist("app.language", value) { it.name }
+    }
+
+    fun setReducedMotion(value: Boolean) {
+        _reducedMotion.value = value
+        persist("ui.motion.reduced", value) { it.toString() }
     }
 
     /** 切换左侧边栏常驻固定状态（写状态 + 持久化） */
@@ -532,6 +541,7 @@ class AppState(
     // ───── D. 启动 hydration ─────
 
     suspend fun hydrate() {
+        _reducedMotion.value = preferences.getBoolean("ui.motion.reduced", false)
         _theme.value = AppThemeMode.fromString(preferences.getString("app.theme"))
         _language.value = AppLanguage.fromString(preferences.getString("app.language"))
         _leftSidebarPinned.value = preferences.getBoolean("ui.sidebar.pinned", false)

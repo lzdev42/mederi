@@ -1,255 +1,109 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.AlertCircle
-import compose.icons.feathericons.Plus
-import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Trash2
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.SandboxHooks
-import xyz.mederi.core.contract.SandboxStatusInfo
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.ui.appstate.LocalAppState
-import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
+import xyz.mederi.ui.components.ErrorBoard
+import xyz.mederi.ui.components.atoms.*
 
-/**
- * 执行沙盒安全状态与白名单设置面板。
- */
+/** Route仅绑定权威白名单流和状态查询VM。 */
 @Composable
 fun SandboxSettingsPanel() {
     val appState = LocalAppState.current
-    val colors = LocalMederiColors.current
-    val scroll = rememberScrollState()
     val hooks = appState.aiCore as? SandboxHooks
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scroll),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // 1. 沙盒状态卡
-        SandboxStatusCard(hooks, colors)
-
-        // 2. 全局白名单卡
-        if (hooks != null) {
-            SandboxWhitelistCard(appState, colors)
-        } else {
-            Text(
-                text = stringResource(Res.string.settings_sandbox_remote_hint),
-                color = colors.textMuted,
-                fontSize = 12.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun SandboxStatusCard(
-    hooks: SandboxHooks?,
-    colors: MederiColors
-) {
-    var status by remember(hooks) { mutableStateOf<SandboxStatusInfo?>(null) }
-    LaunchedEffect(hooks) { status = hooks?.sandboxStatus() }
-    val isQuerying = hooks != null && status == null
-    val isAvailable = status?.available == true
-
-    SettingsCard(colors = colors) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    SettingsIconBadge(
-                        icon = if (isAvailable) FeatherIcons.Shield else FeatherIcons.AlertCircle,
-                        tint = if (isAvailable) colors.accentSuccess else colors.accentWarning,
-                        size = 34.dp,
-                        iconSize = 17.dp
-                    )
-                    Text(
-                        text = when {
-                            isQuerying -> stringResource(Res.string.settings_sandbox_querying)
-                            status == null -> stringResource(Res.string.settings_sandbox_unknown)
-                            status?.available == true -> stringResource(Res.string.settings_sandbox_enabled, status?.backend.orEmpty())
-                            else -> stringResource(Res.string.settings_sandbox_unavailable)
-                        },
-                        color = colors.textPrimary,
-                        fontSize = 14.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                // 右侧 Shell 微型代码标签
-                val shellText = status?.shell
-                if (!shellText.isNullOrBlank()) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(colors.surfaceWorkspace)
-                            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "shell: $shellText",
-                            color = colors.textMuted,
-                            fontSize = 11.5.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
-
-            Text(
-                text = status?.detail ?: stringResource(Res.string.settings_sandbox_status_unavailable),
-                color = colors.textSecondary,
-                fontSize = 12.sp,
-                lineHeight = 16.sp
-            )
-            Text(
-                text = stringResource(Res.string.settings_sandbox_write_scope),
-                color = colors.textMuted,
-                fontSize = 11.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun SandboxWhitelistCard(
-    appState: xyz.mederi.ui.appstate.AppState,
-    colors: MederiColors
-) {
+    val vm: SandboxSettingsViewModel = viewModel { SandboxSettingsViewModel(hooks) }
+    LaunchedEffect(vm) { vm.reload() }
     val paths by appState.sandboxExtraPaths.collectAsState()
+    SandboxSettingsContent(vm.uiState, paths, vm::reload, { updated ->
+        if (hooks != null) appState.setSandboxExtraPaths(updated)
+    })
+}
+
+/** 纯视图：草稿是短命输入状态，路径列表与宿主状态始终来自调用方。 */
+@Composable
+internal fun SandboxSettingsContent(
+    state: SandboxSettingsUiState,
+    paths: List<String>,
+    onReload: () -> Unit,
+    onPathsChange: (List<String>) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
     var input by remember { mutableStateOf("") }
-
-    SettingsCard(colors = colors) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    text = stringResource(Res.string.settings_sandbox_whitelist_title),
-                    color = colors.textPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = stringResource(Res.string.settings_sandbox_whitelist_desc),
-                    color = colors.textMuted,
-                    fontSize = 11.5.sp
-                )
+    val candidate = input.trim()
+    val canAdd = state.supported && candidate.isNotEmpty() && candidate !in paths
+    val inputLabel = stringResource(Res.string.settings_sandbox_whitelist_placeholder)
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(MederiSpacing.XXL)) {
+        SettingsSection(title = when {
+            state.loading -> stringResource(Res.string.settings_sandbox_querying)
+            state.status == null -> stringResource(Res.string.settings_sandbox_unknown)
+            state.status.available -> stringResource(Res.string.settings_sandbox_enabled, state.status.backend)
+            else -> stringResource(Res.string.settings_sandbox_unavailable)
+        }) {
+            if (state.loading) WorkspaceLoadingIndicator(Modifier.size(WorkspaceStyle.IconSize))
+            state.error?.let { error ->
+                ErrorBoard(errorMessage = stringResource(error.key, *error.args.toTypedArray()),
+                    showContinue = state.supported, onContinue = onReload,
+                    continueLabel = stringResource(Res.string.settings_sandbox_retry))
             }
-
-            // 路径列表
-            if (paths.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceWorkspace)
-                        .padding(14.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = stringResource(Res.string.settings_sandbox_whitelist_empty),
-                        color = colors.textMuted,
-                        fontSize = 12.sp
-                    )
+            state.status?.let { status ->
+                if (status.shell.isNotBlank()) SelectionContainer {
+                    Text(stringResource(Res.string.settings_sandbox_shell, status.shell),
+                        color = colors.textSecondary, style = WorkspaceStyle.Caption.copy(fontFamily = FontFamily.Monospace))
                 }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceWorkspace)
-                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                ) {
-                    paths.forEachIndexed { index, path ->
-                        if (index > 0) {
-                            HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
+                if (status.detail.isNotBlank()) SelectionContainer {
+                    Text(status.detail, color = colors.textSecondary, style = WorkspaceStyle.Body)
+                }
+            }
+            if (!state.supported) Text(stringResource(Res.string.settings_sandbox_status_unavailable),
+                color = colors.textSecondary, style = WorkspaceStyle.Body)
+            Text(stringResource(Res.string.settings_sandbox_write_scope), color = colors.textMuted, style = WorkspaceStyle.Caption)
+        }
+        SettingsSection(title = stringResource(Res.string.settings_sandbox_whitelist_title),
+            description = if (state.supported) stringResource(Res.string.settings_sandbox_whitelist_desc) else null) {
+            if (!state.supported) Text(stringResource(Res.string.settings_sandbox_remote_hint),
+                color = colors.textSecondary, style = WorkspaceStyle.Body)
+            // 无宿主hooks时读不到远端白名单，不能把设备偏好冒充服务器配置。
+            if (state.supported) {
+                if (paths.isEmpty()) Text(stringResource(Res.string.settings_sandbox_whitelist_empty),
+                    color = colors.textMuted, style = WorkspaceStyle.Body)
+                paths.forEach { path ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM)) {
+                        SelectionContainer(Modifier.weight(1f).padding(vertical = MederiSpacing.Tight)) {
+                            Text(path, color = colors.textPrimary, style = WorkspaceStyle.Body.copy(fontFamily = FontFamily.Monospace))
                         }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = path,
-                                color = colors.textPrimary,
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(
-                                imageVector = FeatherIcons.Trash2,
-                                contentDescription = stringResource(Res.string.settings_remove),
-                                tint = colors.accentDanger.copy(alpha = 0.8f),
-                                modifier = Modifier
-                                    .size(15.dp)
-                                    .clickable { appState.setSandboxExtraPaths(paths - path) }
-                            )
-                        }
+                        WorkspaceIconButton(FeatherIcons.Trash2,
+                            onClick = { if (state.supported) onPathsChange(paths - path) },
+                            contentDescription = stringResource(Res.string.settings_remove), enabled = state.supported)
                     }
                 }
-            }
-
-            // 添加输入栏（高度完全对齐 38dp，消除大输入框和矮按钮的不协调）
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                SettingsInputField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = stringResource(Res.string.settings_sandbox_whitelist_placeholder),
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    modifier = Modifier.weight(1f),
-                    colors = colors
-                )
-                MederiPrimaryDecisionButton(
-                    text = stringResource(Res.string.settings_add),
-                    onClick = {
-                        val p = input.trim()
-                        if (p.isNotEmpty() && p !in paths) {
-                            appState.setSandboxExtraPaths(paths + p)
-                            input = ""
-                        }
-                    },
-                    enabled = input.trim().isNotEmpty(),
-                    icon = FeatherIcons.Plus
-                )
+                // 输入和动作纵向排列，窄屏/大字体下始终可达。
+                WorkspaceTextField(input, { input = it }, modifier = Modifier.fillMaxWidth()
+                    .semantics { contentDescription = inputLabel }, enabled = state.supported,
+                    placeholder = inputLabel, monospace = true)
+                WorkspaceActionButton(stringResource(Res.string.settings_add), onClick = {
+                    if (canAdd) { onPathsChange(paths + candidate); input = "" }
+                }, enabled = canAdd, primary = true)
             }
         }
     }

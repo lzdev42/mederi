@@ -17,14 +17,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,6 +44,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.InkImage
 import xyz.mederi.core.contract.models.ImageAttachment
 import xyz.mederi.core.contract.models.PastedTextAttachment
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiColors
 
 /**
@@ -99,18 +98,18 @@ internal fun ChatInputAttachments(
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(3.dp)
-                            .size(16.dp)
+                            .padding(2.dp)
+                            .size(WorkspaceStyle.IconTarget)
                             .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.65f))
+                            .background(colors.surfaceCard.copy(alpha = 0.94f))
                             .clickable { onRemoveImage(img.id) },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = FeatherIcons.X,
                             contentDescription = stringResource(Res.string.input_remove_image),
-                            tint = Color.White,
-                            modifier = Modifier.size(10.dp)
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(WorkspaceStyle.IconSize)
                         )
                     }
                 }
@@ -121,19 +120,18 @@ internal fun ChatInputAttachments(
                 Box(
                     modifier = Modifier
                         .height(56.dp)
-                        .widthIn(min = 120.dp, max = 180.dp)
+                        .widthIn(min = 150.dp, max = 220.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceInput)
-                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                        .clickable {
+                        .background(colors.surfaceHover)
+                        .inputControlSurface(onClick = {
                             onOpenPastedText(pastedTitle, item)
-                        }
+                        })
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(end = 14.dp),
+                            .padding(end = WorkspaceStyle.IconTarget),
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(
@@ -143,13 +141,13 @@ internal fun ChatInputAttachments(
                             Icon(
                                 imageVector = FeatherIcons.File,
                                 contentDescription = null,
-                                tint = colors.accentSecondary,
-                                modifier = Modifier.size(12.dp)
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(WorkspaceStyle.IconSize)
                             )
                             Text(
                                 text = stringResource(Res.string.input_text_n, item.index),
                                 color = colors.textPrimary,
-                                fontSize = 11.sp,
+                                fontSize = WorkspaceStyle.Caption.fontSize,
                                 fontWeight = FontWeight.Medium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -158,7 +156,7 @@ internal fun ChatInputAttachments(
                         Text(
                             text = stringResource(Res.string.input_text_meta, item.lineCount, item.charCount),
                             color = colors.textMuted,
-                            fontSize = 10.sp,
+                            fontSize = WorkspaceStyle.Caption.fontSize,
                             maxLines = 1
                         )
                     }
@@ -167,35 +165,30 @@ internal fun ChatInputAttachments(
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(3.dp)
-                            .size(16.dp)
+                            .padding(2.dp)
+                            .size(WorkspaceStyle.IconTarget)
                             .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.5f))
+                            .background(colors.surfaceCard.copy(alpha = 0.94f))
                             .clickable { onRemovePastedText(item.id) },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = FeatherIcons.X,
                             contentDescription = stringResource(Res.string.input_remove_text),
-                            tint = Color.White,
-                            modifier = Modifier.size(10.dp)
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(WorkspaceStyle.IconSize)
                         )
                     }
                 }
             }
         }
 
-        HorizontalDivider(
-            color = colors.divider.copy(alpha = 0.4f),
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
-
         // 图片门禁内联提示：挂了图片但当前模型不支持（如切换模型后），发送会被拦截
         if (pendingImages.isNotEmpty() && !modelSupportsImages) {
             Text(
                 text = stringResource(Res.string.input_image_unsupported),
                 color = colors.accentWarning,
-                fontSize = 11.sp,
+                fontSize = WorkspaceStyle.Caption.fontSize,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.padding(bottom = 6.dp)
             )

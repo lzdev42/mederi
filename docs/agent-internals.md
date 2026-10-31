@@ -10,8 +10,8 @@
 沙盒（路径/命令强制）兜底。不变量 = 文件工具只能写项目目录、bash 走 OS 级写沙箱（macOS Seatbelt / Linux bwrap 检测 / Windows 降级警告）、读全盘放行。全局白名单在设置页配置。
 
 **不变量（代码强制，全平台）**：
-- 文件工具（write_file/edit_file，含未注册的 apply_patch 实现）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
-- **同文件并发写硬拒绝（2026-09）**：write_file/edit_file 落盘前经进程级 `FileWriteRegistry`（`tools/FileWriteRegistry.kt`）try-lock——文件已被其他并发工具调用占用则直接返回 Error，写完（含异常）finally 释放；键 = canonical path，跨 turn/跨子代理/跨 session 生效。bash 与 MCP 工具是外部进程，不在注册表管辖内（提示词约束兜底）
+- 文件工具（write_file/edit_file/apply_patch）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
+- **同文件并发写硬拒绝（2026-09）**：write_file/edit_file/apply_patch 落盘前经进程级 `FileWriteRegistry`（`tools/FileWriteRegistry.kt`）try-lock——文件已被其他并发工具调用占用则直接返回 Error，写完（含异常）finally 释放；键 = canonical path，跨 turn/跨子代理/跨 session 生效。bash 与 MCP 工具是外部进程，不在注册表管辖内（提示词约束兜底）
 - bash：macOS Seatbelt（sandbox-exec）/ Linux bwrap（只检测不代装）/ Windows 降级警告；shell 探测链 bash→sh（Windows bash.exe→cmd）
 - **进程回收**：每条命令是独立进程组，bash 启动即登记 `ProcessRegistry`；`list_processes`/`stop_process` 宿主侧（沙箱外）按注册表整组回收——macOS 沙箱内信号不可用（profile 无 process-signal，实测 unbound），只能靠宿主侧。**只杀 mederi 自己启动的进程**，注册表查不到 pid 即拒绝，沙箱内命令无法写注册表
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行

@@ -9,8 +9,10 @@
 |---|---|
 | 排查 AI 运行时自身行为（沙盒实现/子代理事件/上下文挂载/审计备忘） | `docs/agent-internals.md` |
 | 改遥控功能（嵌入式 server/端口记忆/密码门/Cloudflare 隧道） | `docs/remote-control.md` |
+| 改 apply_patch（补丁语法、模型调用格式、路径/写锁/回滚、上游升级） | `docs/apply-patch.md` |
 | 改 provider/model 同步、模型元数据字段、ModelMerge、图片能力门禁 | `docs/model-metadata.md` |
 | 桌面端 UI 开发/UI 测试/写跨平台测试 | `docs/ui-dev-workflow.md` |
+| 对话工作台 UI 整体改造/续做（理念、MVVM 边界、一致性、实施顺序与验收） | `docs/design/conversation-workspace-redesign-plan.md`（主计划）+ `docs/design/conversation-workspace-ui-inventory.md`（部件清单） |
 | 查代码结构（类图/流程图/签名/端点/表结构） | `docs/architecture/`（见 §0） |
 
 ## 0. 架构速查文档（AI 必读入口）
@@ -158,7 +160,7 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 沙盒（路径/命令强制）兜底。不变量 = 文件工具只能写项目目录、bash 走 OS 级写沙箱（macOS Seatbelt / Linux bwrap 检测 / Windows 降级警告）、读全盘放行。全局白名单在设置页配置。
 
 **不变量（代码强制，全平台）**：
-- 文件工具（write_file/edit_file）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
+- 文件工具（write_file/edit_file/apply_patch）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
 - **同文件并发写硬拒绝**（`FileWriteRegistry` try-lock，跨 turn/跨子代理/跨 session 生效）
 - bash：macOS Seatbelt / Linux bwrap（只检测不代装）/ Windows 降级警告
 - 进程回收：`list_processes`/`stop_process` 宿主侧按 `ProcessRegistry` 整组回收；**只杀 mederi 自己启动的进程**
@@ -171,7 +173,7 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 
 - create_plan = WHAT（用户批准的对象，含每个子任务的 verification 契约：命令 + 预期结果 + 机器校验字面量）
 - 批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）
-- subagent(SPAWN, planId, subtaskIndex) 硬绑定执行存储的 spec
+ - subagent(SPAWN, planId, subtaskIndex) 执行存储的 spec——但 generate_spec 后**并非每子任务必 spawn**，按「执行路径选择」（§5.6）判据逐子任务选直接执行或 spawn
 - verify 两分支（根因轴，**先验实现、实现无误再验计划**）：
   - PASS → 下一个子任务
   - rootCause=IMPLEMENTATION（spec 清楚、执行没做到）→ converge_plan 追加补救 → 重执行
@@ -202,12 +204,16 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 用户请求 → 主代理判断：
 ├─【纯读】问答/讨论/分析 → 主代理直接读文件回答；
 │    读不够深（跨多文件/链路长/根因未知）→ subagent(SPAWN_RESEARCHER) → 完整报告 → 据此回答
-├─【小改动】已知根因/简单逻辑/几行代码 → 主代理直接 edit_file/write_file
-│    （不建 plan、不 spawn；apply_patch 已注销，不注册给 AI）
+├─【小改动】已知根因/简单逻辑/几行代码 → 主代理直接 apply_patch/edit_file/write_file
+│    （不建 plan、不 spawn；可用 apply_patch / edit_file / write_file）
 └─【复杂改动】多文件/逻辑变化/需用户决策 → Plan Loop：
      （理解不足先 subagent(SPAWN_RESEARCHER)）→ create_plan → 批准 → generate_spec
-     → subagent(SPAWN, planId, subtaskIndex) → END TURN（子代理后台跑，完成自动唤醒父 turn）
-     → 唤醒后 verify_subtask（机器无条件执行验证命令 + 字面量硬校验）
+     → 执行路径选择（见下「执行路径选择」）：
+        ├─【直接执行】主代理已读透目标代码 + 少量工具调用 + 无并行收益
+        │    → apply_patch/edit_file/write_file + bash → verify_subtask
+        └─【subagent(SPAWN)】需读大量未知文件 / 可与其他子任务并行 / 多轮工具往返需隔离上下文
+             → END TURN（子代理后台跑，完成自动唤醒父 turn）→ 唤醒后 verify_subtask
+      verify_subtask（机器无条件执行验证命令 + 字面量硬校验）：
        ├─ PASS → 下一个子任务
        ├─ rootCause=IMPLEMENTATION（spec 清楚、执行没做到）→ converge_plan 追加补救 → 重执行
        └─ rootCause=PLAN（实现照 spec 做到、计划本身错）→ append-only 修订
@@ -216,6 +222,21 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 ```
 
 小改动 vs 复杂改动的判断由 AI 自主做出；拿不准时**先调研再决定**。
+
+### 执行路径选择（硬性判据）
+
+generate_spec 之后、执行之前，主代理逐子任务判断走**直接执行**还是 **subagent(SPAWN)**。判据不是"是不是 plan 子任务"，而是"spawn 有没有净值收益"：
+
+- **直接执行**（apply_patch / edit_file / write_file + bash，然后 verify_subtask）——满足以下**全部**条件：
+  1. 主代理在调研 / 写 spec 阶段已读透目标代码，执行所需上下文已在主线
+  2. 执行动作是少量工具调用（预计几次写 + 一次编译 / 验证），不会把大段文件内容灌进主线上下文
+  3. 无并行收益可图（该子任务依赖前序，或后续子任务都串行）
+- **subagent(SPAWN)** ——满足以下**任一**条件：
+  1. 执行需要读大量主代理尚未读过的文件 / 探索未知代码区，直接执行会膨胀主线上下文
+  2. 与其他独立子任务可并行，spawn 能并行跑省墙钟时间
+  3. 执行涉及多轮工具往返，隔离在子代理里更省主线 context budget
+
+**核心原则**：spawn 的唯一正当理由是"隔离上下文膨胀"或"换并行"，不是"plan 子任务就该 spawn"。主代理已读透、已知道怎么改的子任务，直接改——让子代理重新发现主代理已知的东西是纯浪费（零上下文的子代理要重新读文件、重新理解，再加一轮异步往返延迟 + spec 转录损耗）。能并行 / 能隔离上下文膨胀的才 spawn。
 
 ### 拆小可验证（硬性要求）
 
@@ -226,6 +247,15 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 ### 破坏性决策先 ask_user，计划里禁止 User Review 段（硬性要求）
 
 计划文档里**不允许出现『需要你确认（User Review Required）』段**——需用户拍板的破坏性变更/重大取舍/高风险操作，一律在 write_plan 之前走 ask_user 解决；计划只反映已拍板定下来的结果。Open Questions（非阻塞默认）保留为计划内的低成本否决通道。
+
+### 减少用户负担：需要拍板时给选项，别抛开放问题（硬性要求）
+
+当确实需要用户拍板时（破坏性变更、重大取舍、方向分歧），**走 ask_user 并给出可选答案让用户选**，不要在正文里抛一个开放问题让用户自己组织回答——用户从选项里点选一个，心智负担远小于从零构思答案。
+
+判据：
+- **需要用户拍板** → 走 ask_user，提供 concrete options（A / B / C 各配一句理由），让用户点选；**不要**写成"要我把这条规则落进 AGENTS.md 吗？你确认方向后我来改"这种开放问句
+- **有合理默认值、无实质分歧** → 不必走 ask_user，直接取默认 + 走 openQuestions 标注（"选了 X 因为 Y，不同意可在聊天里否决"）
+- ask_user 的问题应是"在已给选项里选哪个"，不是"你觉得该怎么办"
 
 ### 并行执行
 

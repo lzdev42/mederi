@@ -1,6 +1,7 @@
 package xyz.emuci.markdown.renderer.internal.selection
 
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawWithContent
@@ -24,8 +25,9 @@ internal fun Modifier.selectableBlock(
     return this.composed {
         val stableId = block.identity.stableId
         val highlightColor = LocalMarkdownTheme.current.linkColor.copy(alpha = 0.3f)
-        DisposableEffect(block, controller) {
-            controller.registerVisibleBlock(block)
+        SideEffect { controller.registerVisibleBlock(block) }
+        // 流式更新/reflow 不等于离屏：不要销毁仍在组合中的文字片段及其真实布局。
+        DisposableEffect(stableId, controller) {
             onDispose {
                 controller.unregisterVisibleBlock(stableId)
                 controller.registry.unregister(stableId)

@@ -1,6 +1,8 @@
 package xyz.mederi.ui.host
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 
 /** 桌面 java.io 实现：跳过隐藏文件与 .git；目录优先、名称排序；懒列子项。 */
 class ProjectFileTreeProviderJvm(private val root: File) : ProjectFileTreeProvider {
@@ -21,6 +23,14 @@ class ProjectFileTreeProviderJvm(private val root: File) : ProjectFileTreeProvid
     override fun readText(path: String): String? = runCatching {
         resolveFile(path).takeIf { it.isFile }?.readText()
     }.getOrNull()
+
+    override fun readTextResult(path: String): Result<String?> = try {
+        Result.success(Files.readString(resolveFile(path).toPath()))
+    } catch (_: NoSuchFileException) {
+        Result.success(null)
+    } catch (failure: Exception) {
+        Result.failure(failure)
+    }
 
     override fun isDirectory(path: String): Boolean = runCatching {
         resolveFile(path).isDirectory

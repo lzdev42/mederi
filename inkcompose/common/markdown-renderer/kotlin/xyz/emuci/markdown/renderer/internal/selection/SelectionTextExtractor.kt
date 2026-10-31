@@ -5,7 +5,7 @@ package xyz.emuci.markdown.renderer.internal.selection
  * - 首块从 start.charInBlock 到块末；
  * - 末块从 0 到 end.charInBlock；
  * - 中间块全选；
- * - 块之间用 "\n" 连接（gap 块——表格/代码块等——因不在索引中而被自然跳过）。
+ * - 块之间用 "\n" 连接；代码保留源码换行，表格按 tab/newline 抽取。
  */
 internal fun extractSelectedText(index: SelectionModelIndex, range: SelectionRange): String {
     if (index.isEmpty) return ""

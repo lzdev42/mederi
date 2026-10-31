@@ -2,6 +2,8 @@
 
 package xyz.mederi.ui.components
 
+import xyz.mederi.theme.WorkspaceStyle
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -80,7 +82,7 @@ actual fun WasmImeBridge(
         style.background = "transparent"
         style.fontSize = "16px" // 防 iOS 自动缩放（<16px 会触发 focus zoom，破坏覆盖层定位）
         style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', sans-serif" // 尽量贴近 Canvas Roboto/NotoSans，减少光标横向错位
-        style.lineHeight = "20px" // 对齐 Canvas textStyle lineHeight（20.sp = 20 CSS px），避免光标/文字错位
+        style.lineHeight = "${WorkspaceStyle.MessageBody.lineHeight.value}px" // 与 Canvas 输入排版同源，保留16px字体避免iOS focus zoom
         style.border = "0"
         style.padding = "0"
         style.margin = "0"

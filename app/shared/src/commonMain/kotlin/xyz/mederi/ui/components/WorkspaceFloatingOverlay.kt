@@ -1,13 +1,16 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+
+import xyz.mederi.theme.WorkspaceStyle
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -15,13 +18,9 @@ import androidx.compose.ui.unit.dp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertTriangle
 import compose.icons.feathericons.Archive
-import compose.icons.feathericons.Play
-import compose.icons.feathericons.X
 import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.close
 import mederi.app.shared.generated.resources.compaction_completed_notice
 import mederi.app.shared.generated.resources.file_open_failed
-import mederi.app.shared.generated.resources.subagent_strip_working
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.TurnStatus
@@ -34,13 +33,9 @@ import xyz.mederi.ui.components.atoms.StatusStrip
  * 永远处于 Z 轴最顶层（z-index 顶层），悬浮挂载在对话框（ChatInputCard）正上方，
  * 不推挤消息列表周围布局。
  *
- * 承载三类非消息正文的运转与通知态：
- * 1. 子智能体工作态单一浮动条：当前有子智能体在工作时显示一行固定通知
- *    （概览已改为浮动窗常驻，不再提供"查看概览"跳转），支持用户手动点 [✕] 关闭，
- *    无子智能体工作时自动关闭。
- * 2. 压缩完成一次性提示条：压缩成功结束后短暂显示"已压缩会话"（复用 StatusStrip 样式）。
- * 3. 对话轮次状态栏 (StatusBar)：Option 3 Linear Tech Capsule 极简胶囊，
- *    实时指示当前 AI 运转态（排队/思考中/工具调用/生成中/重试中）。
+ * 保留主 AI 轮次状态、压缩完成与文件打开失败提示。
+ * 子 Agent 运行提醒由对话派发记录与概览负责，不在输入框上方重复显示。
+ * 截图预览独立于这些通知的可见性。
  */
 @Composable
 fun WorkspaceFloatingOverlay(
@@ -48,7 +43,6 @@ fun WorkspaceFloatingOverlay(
     modifier: Modifier = Modifier,
 ) {
     val turnStatus = viewModel.turnStatus
-    val showSubagentBanner = viewModel.showSubagentRunningBanner
     val showCompactionNotice = viewModel.compactionCompletedNotice
     val showFileOpenError = viewModel.fileOpenErrorNotice
     val browserAutomationState = viewModel.browserAutomationState
@@ -58,54 +52,19 @@ fun WorkspaceFloatingOverlay(
     val status = if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus
     val showStatusBar = status.shouldDisplayInStatusBar
 
-    if (!showStatusBar && !showSubagentBanner && !showCompactionNotice && !showFileOpenError) return
+    if (!showStatusBar && !showCompactionNotice && !showFileOpenError &&
+        browserAutomationState.previewScreenshot == null) return
 
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // 1. 子智能体工作态单一浮条（固定文案，支持查看概览与手动关闭，结束自动消失）
-        AnimatedVisibility(
-            visible = showSubagentBanner,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    StatusStrip(
-                        text = stringResource(Res.string.subagent_strip_working),
-                        icon = FeatherIcons.Play,
-                        iconTint = colors.accentSecondary,
-                        borderColor = colors.accentSecondary.copy(alpha = 0.35f),
-                        spinning = false,
-                        animated = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                Spacer(modifier = Modifier.width(4.dp))
-                IconButton(
-                    onClick = { viewModel.dismissSubagentRunningBanner() },
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(Res.string.close),
-                        tint = colors.textMuted,
-                        modifier = Modifier.size(13.dp)
-                    )
-                }
-            }
-        }
-
         // 2. 压缩完成一次性提示条（复用 StatusStrip 样式，3 秒自动消失）
         AnimatedVisibility(
             visible = showCompactionNotice,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
+            enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.disclosureSpec()) + expandVertically(LocalWorkspaceMotion.current.disclosureSpec()),
+            exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.disclosureSpec()) + shrinkVertically(LocalWorkspaceMotion.current.disclosureSpec()),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -114,10 +73,7 @@ fun WorkspaceFloatingOverlay(
                 StatusStrip(
                     text = stringResource(Res.string.compaction_completed_notice),
                     icon = FeatherIcons.Archive,
-                    iconTint = colors.accentSecondary,
-                    borderColor = colors.accentSecondary.copy(alpha = 0.35f),
-                    spinning = false,
-                    animated = false,
+                    iconTint = colors.accentPrimary,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -126,8 +82,8 @@ fun WorkspaceFloatingOverlay(
         // 2.5 文件打开失败一次性提示条（错误样式，5 秒自动消失）
         AnimatedVisibility(
             visible = showFileOpenError,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
+            enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.disclosureSpec()) + expandVertically(LocalWorkspaceMotion.current.disclosureSpec()),
+            exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.disclosureSpec()) + shrinkVertically(LocalWorkspaceMotion.current.disclosureSpec()),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -137,19 +93,16 @@ fun WorkspaceFloatingOverlay(
                     text = stringResource(Res.string.file_open_failed),
                     icon = FeatherIcons.AlertTriangle,
                     iconTint = colors.accentDanger,
-                    borderColor = colors.accentDanger.copy(alpha = 0.35f),
-                    spinning = false,
-                    animated = false,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
 
-        // 3. 对话轮次状态栏（Option 3 极简胶囊，靠左悬浮贴近输入框）
+        // 3. 主轮次轻量状态行；其显隐条件与计时来源保持不变。
         AnimatedVisibility(
             visible = showStatusBar,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
+            enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.disclosureSpec()) + expandVertically(LocalWorkspaceMotion.current.disclosureSpec()),
+            exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.disclosureSpec()) + shrinkVertically(LocalWorkspaceMotion.current.disclosureSpec()),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

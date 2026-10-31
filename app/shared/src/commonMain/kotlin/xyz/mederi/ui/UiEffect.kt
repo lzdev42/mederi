@@ -8,8 +8,8 @@ package xyz.mederi.ui
  * - **UiEffect = 一次性命令**（打开设置对话框、打开项目选择菜单等导航/打开类动作）。
  *   这类动作不是"持续展示的状态"，用布尔标志/递增计数器表达会在 VM 与 UI 之间
  *   泄漏一次性语义（谁置 true、谁置 false、何时重置都含糊）。迁移后由
- *   [WorkspaceViewModel.effects]（`Channel<UiEffect>`）派发，UI 层 collect 消费，
- *   一次性语义由 Channel 天然承载（发送即消费，不持久化）。
+ *   [WorkspaceViewModel.effects]（`Channel<UiEffect>`）派发，窗口Route唯一collect消费，叶子只读受控展开状态，
+ *   一次性语义由 Channel 承载（消费一次、不持久化；缓冲命令在Route订阅后处理）。
  * - **持续展示状态仍然保留在 VM state**（error 家族/ErrorBoard、imageStrippedNotice
  *   轻提示）：它们需要在 UI 上常驻展示直到被清除，不是"触发一次的导航命令"，不该走效果通道。
  *
@@ -19,7 +19,7 @@ sealed interface UiEffect {
     /** 打开设置对话框（一次性导航命令） */
     data object OpenSettings : UiEffect
 
-    /** 打开项目选择菜单（一次性命令，原 ChatInputCard projectMenuOpenRequest 计数器） */
+    /** 打开项目选择菜单（一次性命令，由窗口Route落为受控菜单状态，无递增计数器） */
     data object OpenProjectMenu : UiEffect
 
     /**

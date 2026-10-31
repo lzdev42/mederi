@@ -1,9 +1,10 @@
+// Portions adapted from openai/codex (Apache-2.0), commit 23934d31b15b1127c83535f84854e5009f7cd51d.
 package xyz.mederi.tools.patch
 
 /**
  * 补丁应用核心算法（对照 Codex `apply-patch/src/seek_sequence.rs` 与 `file_update.rs`）。
  *
- * 只实现 NormalizeToLf 模式：行按 `\n` 拆分，末尾换行哨兵剥离，输出统一 `\n` 行尾。
+ * 保留 LF / CRLF / CR 及混合行尾；上下文原样保留，新行采用源文件第一种行尾。
  */
 object PatchApplier {
 
@@ -16,15 +17,16 @@ object PatchApplier {
      * 3. 忽略首尾空白（trim）；
      * 4. Unicode 标点归一化（弯引号/各种连字符/特殊空格 → ASCII）后再 trim 比较。
      *
-     * [eof] 为 true 时优先从「文件末尾减 pattern 长度」处开始匹配（末尾追加语义），失败回退从 [start] 搜。
+     * [eof] 为 true 时只能命中文件末尾，且不得回退到 [start] 之前。
      *
      * 防御：空 pattern 返回 [start]（no-op）；pattern 比 lines 长返回 null。
      */
     fun seekSequence(lines: List<String>, pattern: List<String>, start: Int, eof: Boolean): Int? {
-        if (pattern.isEmpty()) return start
+        if (start < 0) return null
+        if (pattern.isEmpty()) return start.takeIf { it <= lines.size }
         if (pattern.size > lines.size) return null
 
-        val searchStart = if (eof) lines.size - pattern.size else start
+        val searchStart = if (eof) maxOf(start, lines.size - pattern.size) else start
         val lastStart = lines.size - pattern.size
         if (searchStart > lastStart) return null
 
@@ -117,13 +119,8 @@ object PatchApplier {
             }
 
             if (chunk.oldLines.isEmpty()) {
-                // 纯新增：插入点取文件末尾（若末位是空行哨兵则其前）
-                val insertionIdx = if (originalLines.isNotEmpty() && originalLines.last().isEmpty()) {
-                    originalLines.size - 1
-                } else {
-                    originalLines.size
-                }
-                replacements.add(Replacement(insertionIdx, 0, chunk.newLines))
+                // Source lines store terminators separately; an actual final blank line is data.
+                replacements.add(Replacement(originalLines.size, 0, chunk.newLines))
                 continue
             }
 
@@ -141,7 +138,23 @@ object PatchApplier {
             }
 
             if (found != null) {
-                replacements.add(Replacement(found, pattern.size, newSlice))
+                // Context was parsed explicitly, not inferred by comparing equal text.
+                // A fuzzy match must never rewrite those lines or their line endings.
+                var oldStart = 0
+                var newStart = 0
+                for ((oldContext, newContext) in chunk.contextLineIndices) {
+                    if (oldContext >= pattern.size || newContext >= newSlice.size) break
+                    if (oldStart != oldContext || newStart != newContext) {
+                        replacements.add(Replacement(found + oldStart, oldContext - oldStart,
+                            newSlice.subList(newStart, newContext)))
+                    }
+                    oldStart = oldContext + 1
+                    newStart = newContext + 1
+                }
+                if (oldStart != pattern.size || newStart != newSlice.size) {
+                    replacements.add(Replacement(found + oldStart, pattern.size - oldStart,
+                        newSlice.subList(newStart, newSlice.size)))
+                }
                 lineIndex = found + pattern.size
             } else {
                 throw PatchApplyException(
@@ -166,27 +179,58 @@ object PatchApplier {
         return lines
     }
 
-    /**
-     * 依据 chunks 推导文件的新内容（不落盘）。
-     *
-     * 行拆分按 `\n`，末尾空行（换行哨兵）先剥离使行数与 diff 一致，计算后补回末尾换行。
-     *
-     * @param path 仅用于错误消息展示。
-     * @throws PatchApplyException 定位失败。
-     */
+    /** Derive the complete updated UTF-8 text without filesystem effects. */
     fun deriveNewContents(originalContents: String, path: String, chunks: List<UpdateChunk>): String {
-        val originalLines = originalContents.split("\n").toMutableList()
-        if (originalLines.isNotEmpty() && originalLines.last().isEmpty()) {
-            originalLines.removeAt(originalLines.size - 1)
+        val source = SourceFile.parse(originalContents)
+        val replacements = computeReplacements(source.lines.map { it.text }, path, chunks)
+        return source.apply(replacements)
+    }
+
+    private data class SourceLine(val text: String, val ending: String?)
+
+    /** Retain terminators per source line; a trailing newline is not an extra logical line. */
+    private class SourceFile(val lines: List<SourceLine>, private val preferredEnding: String) {
+        fun apply(replacements: List<Replacement>): String = buildString {
+            var sourceIndex = 0
+            for (replacement in replacements) {
+                if (replacement.startIndex < sourceIndex ||
+                    replacement.startIndex > lines.size ||
+                    replacement.oldLength < 0 ||
+                    replacement.startIndex + replacement.oldLength > lines.size) {
+                    throw PatchApplyException("Overlapping or invalid update chunks")
+                }
+                for (index in sourceIndex until replacement.startIndex) {
+                    append(lines[index].text).append(lines[index].ending ?: preferredEnding)
+                }
+                for (text in replacement.newLines) append(text).append(preferredEnding)
+                sourceIndex = replacement.startIndex + replacement.oldLength
+            }
+            for (index in sourceIndex until lines.size) {
+                append(lines[index].text).append(lines[index].ending ?: preferredEnding)
+            }
         }
 
-        val replacements = computeReplacements(originalLines, path, chunks)
-        val newLines = applyReplacements(originalLines, replacements)
-
-        if (newLines.isEmpty() || newLines.last().isNotEmpty()) {
-            newLines.add("")
+        companion object {
+            fun parse(contents: String): SourceFile {
+                val lines = mutableListOf<SourceLine>()
+                var preferredEnding: String? = null
+                var lineStart = 0
+                var cursor = 0
+                while (cursor < contents.length) {
+                    val ending = when (contents[cursor]) {
+                        '\r' -> if (contents.getOrNull(cursor + 1) == '\n') "\r\n" else "\r"
+                        '\n' -> "\n"
+                        else -> { cursor++; continue }
+                    }
+                    if (preferredEnding == null) preferredEnding = ending
+                    lines.add(SourceLine(contents.substring(lineStart, cursor), ending))
+                    cursor += ending.length
+                    lineStart = cursor
+                }
+                if (lineStart < contents.length) lines.add(SourceLine(contents.substring(lineStart), null))
+                return SourceFile(lines, preferredEnding ?: "\n")
+            }
         }
-        return newLines.joinToString("\n")
     }
 }
 

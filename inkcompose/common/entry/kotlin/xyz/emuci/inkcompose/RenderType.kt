@@ -20,8 +20,8 @@ enum class RenderType {
     AUTO,
 
     /**
-     * 纯文本。不做任何解析,直接当 Text 渲染。
-     * 用于明确知道内容不含任何 markdown 语法、且需要最高性能的场景。
+     * 纯文本。不做 Markdown 解析，字面量 AST 保留所有标点和换行。
+     * 与 Markdown/Code 共用选区和菜单，避免入口之间操作不一致。
      */
     TEXT,
 

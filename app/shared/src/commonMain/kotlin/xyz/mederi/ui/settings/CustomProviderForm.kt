@@ -1,159 +1,90 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.provider_api_key_placeholder
-import mederi.app.shared.generated.resources.settings_panel_api_key_secret_label
-import mederi.app.shared.generated.resources.settings_panel_base_url_label
-import mederi.app.shared.generated.resources.settings_panel_base_url_placeholder_local
-import mederi.app.shared.generated.resources.settings_panel_cancel
-import mederi.app.shared.generated.resources.settings_panel_connecting
-import mederi.app.shared.generated.resources.settings_panel_create_custom_desc
-import mederi.app.shared.generated.resources.settings_panel_create_custom_title
-import mederi.app.shared.generated.resources.settings_panel_provider_name_label
-import mederi.app.shared.generated.resources.settings_panel_provider_name_placeholder
-import mederi.app.shared.generated.resources.settings_panel_reasoning_optional_hint
-import mederi.app.shared.generated.resources.settings_panel_reasoning_optional_title
-import mederi.app.shared.generated.resources.settings_panel_save_connect
+import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.theme.MederiColors
-import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 
-// ============================================================================
-// 3. 右侧工作台：新建自定义供应商表单
-// ============================================================================
-
+/** VM包装保留原保存入口和原始字段语义，不在表现层纠正/裁剪供应商参数。 */
 @Composable
 internal fun CreateCustomProviderForm(
     viewModel: ProviderSettingsViewModel,
     colors: MederiColors,
     isCompact: Boolean = false,
-    onCancel: () -> Unit = {}
+    onCancel: () -> Unit = {},
+) {
+    CustomProviderFormContent(
+        saving = viewModel.uiState.isSavingCredentials,
+        colors = colors,
+        onCancel = onCancel,
+        onSave = { name, protocol, baseUrl, key, levels ->
+            viewModel.saveProviderCredentials(providerId = null, name = name, protocolType = protocol,
+                baseUrl = baseUrl, apiKey = key, reasoningLevels = levels)
+        },
+    )
+}
+
+/** 本地仅持有尚未提交的表单输入；提交值保持原值，不另设供应商事实状态。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun CustomProviderFormContent(
+    saving: Boolean,
+    colors: MederiColors,
+    onCancel: () -> Unit,
+    onSave: (String, ProtocolType, String, String, Map<String, String?>) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var name by remember { mutableStateOf("") }
     var protocolType by remember { mutableStateOf(ProtocolType.DEFAULT) }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var reasoningLevels by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
-    val isSaving = viewModel.uiState.isSavingCredentials
-
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingLarge)
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(MederiSpacing.LG),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(Res.string.settings_panel_create_custom_title), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
-            Text(stringResource(Res.string.settings_panel_create_custom_desc), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
+        Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
+            Text(stringResource(Res.string.settings_panel_create_custom_title), style = WorkspaceStyle.Title, color = colors.textPrimary)
+            Text(stringResource(Res.string.settings_panel_create_custom_desc), style = WorkspaceStyle.Caption, color = colors.textMuted)
         }
-
-        HorizontalDivider(color = colors.divider)
-
+        LabeledTextField(stringResource(Res.string.settings_panel_provider_name_label), name, { name = it },
+            stringResource(Res.string.settings_panel_provider_name_placeholder), colors)
+        ProtocolSelectorBar(protocolType, { protocolType = it }, colors)
         LabeledTextField(
-            label = stringResource(Res.string.settings_panel_provider_name_label),
-            value = name,
-            onValueChange = { name = it },
-            placeholder = stringResource(Res.string.settings_panel_provider_name_placeholder),
-            colors = colors
-        )
-
-        ProtocolSelectorBar(
-            selected = protocolType,
-            onSelect = { protocolType = it },
-            colors = colors
-        )
-
-        LabeledTextField(
-            label = stringResource(Res.string.settings_panel_base_url_label),
-            value = baseUrl,
-            onValueChange = { baseUrl = it },
-            placeholder = if (protocolType == ProtocolType.GOOGLE) {
-                ProtocolType.GOOGLE.placeholderUrl
-            } else {
+            label = stringResource(Res.string.settings_panel_base_url_label), value = baseUrl, onValueChange = { baseUrl = it },
+            placeholder = if (protocolType == ProtocolType.GOOGLE) ProtocolType.GOOGLE.placeholderUrl else {
                 stringResource(Res.string.settings_panel_base_url_placeholder_local, ProtocolType.OPENAI_CHAT.placeholderUrl)
             },
-            colors = colors
+            colors = colors,
         )
-
-        LabeledTextField(
-            label = stringResource(Res.string.settings_panel_api_key_secret_label),
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            placeholder = stringResource(Res.string.provider_api_key_placeholder),
-            isPassword = true,
-            colors = colors
-        )
-
-        // 推理参数区块（v6：每级别一段请求体 JSON，根级合并；用户填什么发什么）
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(ProviderTokens.RadiusCard)
-                .background(colors.surfaceCard)
-                .border(1.dp, colors.divider, ProviderTokens.RadiusCard)
-                .padding(ProviderTokens.SpacingMedium),
-            verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
-        ) {
-            Text(stringResource(Res.string.settings_panel_reasoning_optional_title), color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
-            Text(
-                stringResource(Res.string.settings_panel_reasoning_optional_hint),
-                color = colors.textMuted, fontSize = ProviderTokens.FontLabel
-            )
-            ReasoningLevelsEditor(
-                levels = reasoningLevels,
-                onChange = { reasoningLevels = it },
-                colors = colors
-            )
+        LabeledTextField(stringResource(Res.string.settings_panel_api_key_secret_label), apiKey, { apiKey = it },
+            stringResource(Res.string.provider_api_key_placeholder), colors, isPassword = true)
+        Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.SM)) {
+            Text(stringResource(Res.string.settings_panel_reasoning_optional_title), style = WorkspaceStyle.Title, color = colors.textPrimary)
+            Text(stringResource(Res.string.settings_panel_reasoning_optional_hint), style = WorkspaceStyle.Caption, color = colors.textMuted)
+            ReasoningLevelsEditor(reasoningLevels, { reasoningLevels = it }, colors)
         }
-
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+            verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
         ) {
-            MederiGhostButton(
-                text = stringResource(Res.string.settings_panel_cancel),
-                onClick = {
-                    onCancel()
-                    val first = viewModel.uiState.providers.firstOrNull()?.id
-                    if (first != null) viewModel.selectProvider(first)
-                }
-            )
-
-            Spacer(modifier = Modifier.width(ProviderTokens.SpacingSmall))
-
-            PrimaryActionBtn(
-                text = if (isSaving) stringResource(Res.string.settings_panel_connecting) else stringResource(Res.string.settings_panel_save_connect),
-                colors = colors,
-                enabled = name.isNotBlank() && baseUrl.isNotBlank() && !isSaving,
-                onClick = {
-                    viewModel.saveProviderCredentials(
-                        providerId = null,
-                        name = name,
-                        protocolType = protocolType,
-                        baseUrl = baseUrl,
-                        apiKey = apiKey,
-                        reasoningLevels = reasoningLevels
-                    )
-                }
+            WorkspaceActionButton(stringResource(Res.string.settings_panel_cancel), onCancel,
+                enabled = !saving, colors = colors)
+            WorkspaceActionButton(
+                text = stringResource(if (saving) Res.string.settings_panel_connecting else Res.string.settings_panel_save_connect),
+                enabled = name.isNotBlank() && baseUrl.isNotBlank() && !saving,
+                primary = true, colors = colors,
+                onClick = { onSave(name, protocolType, baseUrl, apiKey, reasoningLevels) },
             )
         }
     }

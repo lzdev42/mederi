@@ -1,239 +1,125 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
-import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.settings_panel_back_cd
-import mederi.app.shared.generated.resources.settings_panel_back_list
-import mederi.app.shared.generated.resources.settings_panel_empty_select_hint
-import mederi.app.shared.generated.resources.settings_panel_providers_count
+import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.appstate.LocalAppState
-import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.theme.*
+import xyz.mederi.ui.components.ErrorBoard
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
+import xyz.mederi.ui.components.atoms.WorkspacePanelEmptyState
 
-/**
- * 供应商与模型管理面板（支持桌面端 Master-Detail 双栏 与 移动端单栏下钻自适应）。
- *
- * 遵循 Linear / Raycast / Vercel 风格规范：
- * 1. 克制、精密、信息密度高但不拥挤
- * 2. 严格的 8px 间距阶梯与三级字阶
- * 3. 统一标签（Badge）容器体系与灰阶中性色彩策略
- * 4. 物理拆分“数据展示区”与“操作区”
- * 5. 常驻固定的「刷新模型」与「+ 添加模型」入口，杜绝突兀冗余的 status bar
- */
+/** Route只装配VM和原详情/表单，目录与管理共用纯Content。 */
 @Composable
 fun ProviderSettingsPanel() {
     val appState = LocalAppState.current
-    // 经 ViewModelStore 管理：设置页关闭/切换 tab 不再丢失 VM 内状态，onCleared 协程清理可靠
-    val viewModel: ProviderSettingsViewModel = viewModel { ProviderSettingsViewModel(appState) }
+    val vm: ProviderSettingsViewModel = viewModel { ProviderSettingsViewModel(appState) }
     val colors = LocalMederiColors.current
-    val uiState = viewModel.uiState
-    var addingBuiltin by remember { mutableStateOf<String?>(null) }
+    val state = vm.uiState
+    ProviderSettingsContent(state, vm.builtinPresets,
+        vm::updateProviderQuery, vm::updatePresetQuery, vm::openProviderCatalog,
+        vm::returnToProviderManagement, vm::startCreateCustomProvider,
+        vm::selectProvider, vm::selectProviderPreset, vm::clearMessages,
+        detail = { provider, compact ->
+            ProviderDetailWorkspace(provider, vm, colors, compact, onDelete = vm::returnToProviderManagement)
+        }, custom = { compact ->
+            CreateCustomProviderForm(vm, colors, compact, onCancel = vm::openProviderCatalog)
+        }, preset = { name ->
+            ProviderPresetCredentials(name, state.isSavingCredentials, { vm.addBuiltinProvider(name, it) }, vm::openProviderCatalog)
+        })
+}
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val isCompact = maxWidth < 640.dp
-        var showMobileDetail by remember { mutableStateOf(false) }
-
-        if (isCompact) {
-            // ========================================================
-            // 移动端单栏下钻模式 (Mobile Drill-down Layout)
-            // ========================================================
-            if (!showMobileDetail) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(colors.surfaceWorkspace)
-                        .padding(ProviderTokens.SpacingMedium)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
-                ) {
-                    AddProviderSidebarButton(
-                        isSelected = false,
-                        colors = colors,
-                        onClick = {
-                            viewModel.startCreateCustomProvider()
-                            showMobileDetail = true
-                        }
-                    )
-
-                    Text(
-                        text = stringResource(Res.string.settings_panel_providers_count, uiState.providers.size),
-                        color = colors.textMuted,
-                        fontSize = ProviderTokens.FontLabel,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-
-                    uiState.providers.forEach { provider ->
-                        ProviderSidebarRow(
-                            provider = provider,
-                            isSelected = uiState.selectedProviderId == provider.id,
-                            colors = colors,
-                            onClick = {
-                                viewModel.selectProvider(provider.id)
-                                showMobileDetail = true
-                            }
-                        )
-                    }
-
-                    BuiltinPresetsSection(
-                        presets = viewModel.builtinPresets,
-                        existingProviderNames = uiState.providers.map { it.name }.toSet(),
-                        colors = colors,
-                        onAddPreset = { addingBuiltin = it }
-                    )
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(colors.surfaceWorkspace)
-                        .padding(ProviderTokens.SpacingMedium),
-                    verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showMobileDetail = false }
-                            .padding(vertical = ProviderTokens.SpacingXSmall),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
-                    ) {
-                        Icon(FeatherIcons.ArrowLeft, stringResource(Res.string.settings_panel_back_cd), tint = colors.textSecondary, modifier = Modifier.size(14.dp))
-                        Text(stringResource(Res.string.settings_panel_back_list), color = colors.textSecondary, fontSize = ProviderTokens.FontLabel)
-                    }
-
-                    HorizontalDivider(color = colors.divider)
-
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        if (uiState.isCreatingCustom) {
-                            CreateCustomProviderForm(
-                                viewModel = viewModel,
-                                colors = colors,
-                                isCompact = true,
-                                onCancel = { showMobileDetail = false }
-                            )
-                        } else if (uiState.selectedProvider != null) {
-                            ProviderDetailWorkspace(
-                                provider = uiState.selectedProvider!!,
-                                viewModel = viewModel,
-                                colors = colors,
-                                isCompact = true,
-                                onDelete = { showMobileDetail = false }
-                            )
-                        }
-                    }
-                }
+@Composable
+internal fun ProviderSettingsContent(
+    state: ProviderSettingsUiState, presets: List<String>,
+    onProviderQuery: (String) -> Unit, onPresetQuery: (String) -> Unit,
+    onOpenCatalog: () -> Unit, onManage: () -> Unit, onCustom: () -> Unit,
+    onSelectProvider: (String) -> Unit, onSelectPreset: (String) -> Unit, onDismissError: () -> Unit,
+    modifier: Modifier = Modifier,
+    detail: @Composable (ProviderItemUiState, Boolean) -> Unit,
+    custom: @Composable (Boolean) -> Unit,
+    preset: @Composable (String) -> Unit,
+) {
+    val colors = LocalMederiColors.current
+    val configuredList = rememberLazyListState()
+    val catalogList = rememberLazyListState()
+    // 改查询时从首个匹配开始；步骤返回未改变查询，因此不会把目录阅读位置重置。
+    LaunchedEffect(state.presetQuery) { catalogList.scrollToItem(0) }
+    LaunchedEffect(state.providerQuery, state.providerIdsFilter) { configuredList.scrollToItem(0) }
+    val enabled = !state.isSavingCredentials
+    BoxWithConstraints(modifier.fillMaxSize().padding(12.dp)) {
+        val compact = maxWidth < 720.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            state.errorMessage?.let { error ->
+                ErrorBoard(stringResource(error.key, *error.args.toTypedArray()), onDismiss = onDismissError,
+                    modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()))
             }
-        } else {
-            // ========================================================
-            // 桌面端 Master-Detail 双栏模式 (Desktop Layout: 左导航栏 | 右工作台)
-            // ========================================================
-            Row(modifier = Modifier.fillMaxSize()) {
-                // 1. 左侧：供应商导航栏（+ 添加供应商 + 已配置供应商 + 推荐预设）
-                Column(
-                    modifier = Modifier
-                        .width(216.dp)
-                        .fillMaxHeight()
-                        .background(colors.surfaceSidebar)
-                        .padding(ProviderTokens.SpacingSmall),
-                    verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
-                ) {
-                    AddProviderSidebarButton(
-                        isSelected = uiState.isCreatingCustom,
-                        colors = colors,
-                        onClick = { viewModel.startCreateCustomProvider() }
-                    )
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.settings_panel_providers_count, uiState.providers.size),
-                                color = colors.textMuted,
-                                fontSize = ProviderTokens.FontLabel,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                            )
-
-                            uiState.providers.forEach { provider ->
-                                val isSelected = !uiState.isCreatingCustom && uiState.selectedProviderId == provider.id
-                                ProviderSidebarRow(
-                                    provider = provider,
-                                    isSelected = isSelected,
-                                    colors = colors,
-                                    onClick = { viewModel.selectProvider(provider.id) }
-                                )
-                            }
-                        }
-
-                        BuiltinPresetsSection(
-                            presets = viewModel.builtinPresets,
-                            existingProviderNames = uiState.providers.map { it.name }.toSet(),
-                            colors = colors,
-                            onAddPreset = { addingBuiltin = it }
-                        )
-                    }
+            when (val page = state.page) {
+                ProviderPage.Catalog -> ProviderCatalogContent(providerPresetItems(presets, state.providers, state.presetQuery),
+                    state.presetQuery, onPresetQuery, onSelectPreset, onCustom, onManage,
+                    catalogList, Modifier.weight(1f), enabled)
+                is ProviderPage.Preset -> Box(Modifier.weight(1f)) { preset(page.name) }
+                ProviderPage.Custom -> Column(Modifier.weight(1f)) {
+                    WorkspaceActionButton(stringResource(Res.string.provider_preset_back), onOpenCatalog, enabled = enabled, icon = FeatherIcons.ArrowLeft)
+                    Box(Modifier.weight(1f)) { custom(compact) }
                 }
-
-                // 竖向细分割线
-                Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(colors.divider))
-
-                // 2. 右侧：工作台 (Detail Workspace)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .background(colors.surfaceWorkspace)
-                        .padding(ProviderTokens.SpacingMedium)
-                ) {
-                    when {
-                        uiState.isCreatingCustom -> {
-                            CreateCustomProviderForm(
-                                viewModel = viewModel,
-                                colors = colors,
-                                isCompact = false
-                            )
+                ProviderPage.Manage, ProviderPage.Detail -> {
+                    if (compact && page == ProviderPage.Detail) {
+                        WorkspaceActionButton(stringResource(Res.string.settings_panel_back_list), onManage, enabled = enabled, icon = FeatherIcons.ArrowLeft)
+                        Box(Modifier.weight(1f)) {
+                            state.selectedProvider?.let { detail(it, true) }
+                                ?: WorkspacePanelEmptyState(FeatherIcons.Cpu, stringResource(Res.string.settings_panel_empty_select_hint))
                         }
-
-                        uiState.selectedProvider != null -> {
-                            ProviderDetailWorkspace(
-                                provider = uiState.selectedProvider!!,
-                                viewModel = viewModel,
-                                colors = colors,
-                                isCompact = false
-                            )
+                    } else {
+                        if (state.providers.isEmpty()) {
+                            ProviderManagementHeader(0, onOpenCatalog, enabled)
+                            WorkspacePanelEmptyState(FeatherIcons.Cpu,
+                                stringResource(Res.string.provider_manage_empty), stringResource(Res.string.provider_manage_empty_hint),
+                                Modifier.weight(1f))
                         }
-
-                        else -> {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text(stringResource(Res.string.settings_panel_empty_select_hint), color = colors.textMuted, fontSize = ProviderTokens.FontValue)
+                        else Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                            Column(if (compact) Modifier.fillMaxSize() else Modifier.width(224.dp).fillMaxHeight(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ProviderManagementHeader(state.providers.size, onOpenCatalog, enabled)
+                                ProviderSearchField(state.providerQuery, stringResource(Res.string.provider_manage_search), onProviderQuery, enabled)
+                                if (state.providerIdsFilter != null) {
+                                    Text(stringResource(Res.string.provider_filtered_configs), style = WorkspaceStyle.Caption, color = colors.textSecondary)
+                                    WorkspaceActionButton(stringResource(Res.string.provider_show_all), { onProviderQuery("") })
+                                }
+                                if (state.filteredProviders.isEmpty()) WorkspacePanelEmptyState(FeatherIcons.Search,
+                                    stringResource(Res.string.provider_search_empty), modifier = Modifier.weight(1f), action = {
+                                        WorkspaceActionButton(stringResource(Res.string.provider_search_clear), { onProviderQuery("") })
+                                    })
+                                else LazyColumn(Modifier.weight(1f), state = configuredList,
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    items(state.filteredProviders, key = { it.id }) { provider ->
+                                        ProviderChoiceRow(provider.name,
+                                            provider.baseUrl.ifBlank { stringResource(if (provider.isConnected) Res.string.provider_configured else Res.string.provider_without_key) },
+                                            null, state.selectedProviderId == provider.id, { onSelectProvider(provider.id) },
+                                            enabled = enabled, baseUrl = provider.baseUrl)
+                                    }
+                                }
+                            }
+                            if (!compact) Box(Modifier.weight(1f).fillMaxHeight()) {
+                                state.selectedProvider?.let { detail(it, false) }
+                                    ?: WorkspacePanelEmptyState(FeatherIcons.Cpu, stringResource(Res.string.settings_panel_empty_select_hint))
                             }
                         }
                     }
@@ -241,16 +127,34 @@ fun ProviderSettingsPanel() {
             }
         }
     }
+}
 
-    addingBuiltin?.let { preset ->
-        AddBuiltinProviderDialog(
-            providerName = preset,
-            colors = colors,
-            onDismiss = { addingBuiltin = null },
-            onAdd = { apiKey ->
-                viewModel.addBuiltinProvider(preset, apiKey)
-                addingBuiltin = null
-            }
-        )
+
+/** 管理工具栏属于左列；按真实文字宽决定横/纵，不靠FlowRow默认顶对齐或猜字符数。 */
+@Composable
+internal fun ProviderManagementHeader(
+    count: Int, onAdd: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
+    val countLabel = stringResource(Res.string.settings_panel_providers_count, count)
+    val addLabel = stringResource(Res.string.settings_panel_add_provider)
+    val measurer = rememberTextMeasurer()
+    val countWidth = measurer.measure(AnnotatedString(countLabel), style = WorkspaceStyle.Caption, softWrap = false).size.width
+    val addWidth = measurer.measure(AnnotatedString(addLabel), style = WorkspaceStyle.Body, softWrap = false).size.width
+    val required = with(LocalDensity.current) { (countWidth + addWidth).toDp() } +
+        MederiSpacing.MD * 2 + WorkspaceStyle.IconSize + MederiSpacing.Tight + MederiSpacing.SM
+    val label: @Composable () -> Unit = {
+        Text(countLabel, style = WorkspaceStyle.Caption, color = colors.textSecondary)
+    }
+    val action: @Composable () -> Unit = {
+        WorkspaceActionButton(addLabel, onAdd, primary = true, enabled = enabled, icon = FeatherIcons.Plus)
+    }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        if (maxWidth >= required) Row(Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            label(); action()
+        } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            label(); action()
+        }
     }
 }

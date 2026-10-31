@@ -15,6 +15,8 @@ interface ProjectFileTreeProvider {
     fun rootNode(): FileNode
     fun listChildren(dirPath: String): List<FileNode>
     fun readText(path: String): String?
+    /** 报告读取需要区分缺失与I/O错误；旧实现可继续只实现readText。 */
+    fun readTextResult(path: String): Result<String?> = runCatching { readText(path) }
     fun isDirectory(path: String): Boolean = false
     fun resolvePath(path: String): String = path
 }

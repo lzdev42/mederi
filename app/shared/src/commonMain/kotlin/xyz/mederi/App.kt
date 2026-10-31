@@ -15,12 +15,13 @@ fun App() {
     val appState = LocalAppState.current
     val theme by appState.theme.collectAsState()
     val language by appState.language.collectAsState()
+    val reducedMotion by appState.reducedMotion.collectAsState()
 
     // 语言切换生效链路：写 AppState.language → 这里同步 customAppLocale → AppEnvironment 提供
     // LocalAppLocale + key() 全树重组 → stringResource 按新 locale 重新解析
     customAppLocale = language.tag
 
-    AppTheme(themeMode = theme) {
+    AppTheme(themeMode = theme, reducedMotion = reducedMotion) {
         AppEnvironment {
             MainScreen()
         }

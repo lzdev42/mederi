@@ -10,6 +10,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.unit.Constraints
@@ -37,6 +38,7 @@ internal class MarkdownSelectionController(
 ) {
     val state = MarkdownSelectionState()
     val registry = SelectionCoordinateRegistry()
+    val textFragments = SelectionTextFragmentRegistry()
 
     private var index: SelectionModelIndex = SelectionModelIndex(emptyList())
     private val incrementalIndexBuilder = IncrementalSelectionIndexBuilder()
@@ -45,9 +47,9 @@ internal class MarkdownSelectionController(
     private val textLayoutsByBlock = mutableMapOf<Long, MutableMap<VisibleTextLayoutKey, VisibleRunTextLayout>>()
     private var clipboard: Clipboard? = null
     private var startAnchor: SelectionAnchor? = null
+    private var initialWordSelection: SelectionRange? = null
     private var draggedHandleAnchor: SelectionAnchor? by mutableStateOf(null)
     private var fixedHandleAnchor: SelectionAnchor? = null
-    private var skipNextTapClear: Boolean = false
 
     internal var fallbackTextMeasurementCount: Long = 0
         private set
@@ -106,6 +108,7 @@ internal class MarkdownSelectionController(
     }
 
     fun unregisterVisibleBlock(stableId: Long) {
+        textFragments.removeBlock(stableId)
         visibleLayoutBlocks.remove(stableId)
         geometryByStableId.remove(stableId)
         textLayoutsByBlock.remove(stableId)
@@ -175,6 +178,7 @@ internal class MarkdownSelectionController(
      * 坐标公式与 [PaintInlineLayoutContent] 放置一致：`left = run.frame.left - block.frame.left`。
      */
     fun highlightBoxesFor(stableId: Long): List<Rect> {
+        textFragments.highlightBoxes(stableId, state.range, index, registry.coordinatesOf(stableId))?.let { return it }
         val entry = index.entryOf(stableId) ?: return emptyList()
         val geometry = geometryByStableId[stableId] ?: return emptyList()
         val slices = runSlicesFor(stableId)
@@ -230,7 +234,8 @@ internal class MarkdownSelectionController(
 
     fun beginSelectionAt(windowOffset: Offset) {
         val anchor = anchorFromWindow(windowOffset) ?: return
-        skipNextTapClear = false
+        state.contextMenuAnchor = null
+        initialWordSelection = null
         startAnchor = anchor
         draggedHandleAnchor = null
         fixedHandleAnchor = null
@@ -243,19 +248,32 @@ internal class MarkdownSelectionController(
     fun extendSelectionTo(windowOffset: Offset) {
         val start = startAnchor ?: return
         val moving = anchorFromWindow(windowOffset) ?: return
-        state.range = index.normalize(start, moving)
+        val word = initialWordSelection
+        state.range = if (word == null) {
+            index.normalize(start, moving)
+        } else when {
+            index.compare(moving, word.start) < 0 -> index.normalize(wordBoundaryAt(moving).start, word.end)
+            index.compare(moving, word.end) > 0 -> index.normalize(word.start, wordBoundaryAt(moving).end)
+            else -> word
+        }
+    }
+
+    fun updateDragPointerAtRootLocal(rootLocal: Offset) {
+        state.dragPointerInWindow = registry.rootCoordinates?.takeIf { it.isAttached }?.localToWindow(rootLocal)
     }
 
     fun finishSelectionGesture() {
+        state.dragPointerInWindow = null
         state.activeHandle = SelectionActiveHandle.None
         state.isHandleDrag = false
         draggedHandleAnchor = null
         fixedHandleAnchor = null
         if (selectedText.isEmpty()) {
+            // 单击放置逻辑光标：下一次 Shift-click 可从这里扩选。
+            val caretAnchor = startAnchor.takeIf { state.isMouseInput }
             clearSelection()
+            startAnchor = caretAnchor
         } else {
-            // 鼠标框选后不吞下次点击：鼠标点击空白处应清选区（skipNextTapClear 不设）
-            if (!state.isMouseInput) skipNextTapClear = true
             if (!state.isMouseInput) state.toolbarRequestKey += 1
         }
     }
@@ -273,24 +291,39 @@ internal class MarkdownSelectionController(
     }
 
     fun clearSelection() {
-        skipNextTapClear = false
+        initialWordSelection = null
         startAnchor = null
         draggedHandleAnchor = null
         fixedHandleAnchor = null
         state.clear()
     }
 
+    fun selectAll() {
+        initialWordSelection = null
+        val first = index.firstAnchor ?: return
+        val last = index.lastAnchor ?: return
+        startAnchor = first
+        state.range = SelectionRange(first, last)
+        state.activeHandle = SelectionActiveHandle.None
+        state.isHandleDrag = false
+        state.contextMenuAnchor = null
+        if (!state.isMouseInput) state.toolbarRequestKey += 1
+    }
+
+    /** Shift-click 固定原来的锚点，只移动活动端点。 */
+    fun extendSelectionFromClick(rootLocal: Offset) {
+        if (startAnchor == null) startAnchor = state.range?.start
+        if (startAnchor == null) beginSelectionAtRootLocal(rootLocal)
+        else extendSelectionToRootLocal(rootLocal)
+    }
+
     fun clearSelectionFromTap() {
-        if (skipNextTapClear) {
-            skipNextTapClear = false
-            return
-        }
         clearSelection()
     }
 
     /**
      * 双击选词：把根容器 local 坐标解析为逻辑锚点，
-     * 在所属 block 的文本中查找词边界（字母数字序列），选中该词。
+     * 在所属 block 的文本中查找 Unicode 词边界，选中该词并保留拖选的两端。
      */
     fun selectWordAtRootLocal(rootLocal: Offset) {
         val root = registry.rootCoordinates?.takeIf { it.isAttached } ?: return
@@ -299,19 +332,26 @@ internal class MarkdownSelectionController(
         val text = entry.text
         if (text.isEmpty()) {
             state.range = SelectionRange(anchor, anchor)
-            if (!state.isMouseInput) skipNextTapClear = true
             if (!state.isMouseInput) state.toolbarRequestKey += 1
             return
         }
-        val pos = anchor.charInBlock.coerceIn(0, text.length - 1)
-        val start = findWordStart(text, pos)
-        val end = findWordEnd(text, pos)
-        state.range = index.normalize(
-            SelectionAnchor(anchor.blockStableId, start),
-            SelectionAnchor(anchor.blockStableId, end),
-        )
-        if (!state.isMouseInput) skipNextTapClear = true
+        state.range = wordBoundaryAt(anchor)
+        initialWordSelection = state.range
+        startAnchor = state.range?.start
+        state.contextMenuAnchor = null
         if (!state.isMouseInput) state.toolbarRequestKey += 1
+    }
+
+    private fun wordBoundaryAt(anchor: SelectionAnchor): SelectionRange {
+        val text = index.entryOf(anchor.blockStableId)?.text.orEmpty()
+        if (text.isEmpty()) return SelectionRange(anchor, anchor)
+        val pos = anchor.charInBlock.coerceIn(0, text.length - 1)
+        // 文本引擎负责 Unicode 词边界；不能用字母数字循环把中文整段当成一个词。
+        val word = textMeasurer.measure(AnnotatedString(text)).getWordBoundary(pos)
+        return SelectionRange(
+            SelectionAnchor(anchor.blockStableId, clampToCharBoundary(text, word.start)),
+            SelectionAnchor(anchor.blockStableId, clampToCharBoundary(text, word.end)),
+        )
     }
 
     /**
@@ -323,22 +363,11 @@ internal class MarkdownSelectionController(
         if (!hasSelection) {
             selectWordAtRootLocal(rootLocal)
         }
-        // showContextMenuAt 只由鼠标右键触发（isMouseInput=true），故不设——
-        // 下次左键点击（onTap）直接清选区
-        if (!state.isMouseInput) skipNextTapClear = true
+        registry.rootCoordinates?.takeIf { it.isAttached }?.let { root ->
+            val point = root.localToWindow(rootLocal)
+            state.contextMenuAnchor = Rect(point, point)
+        }
         state.toolbarRequestKey += 1
-    }
-
-    private fun findWordStart(text: String, pos: Int): Int {
-        var i = pos
-        while (i > 0 && text[i - 1].isLetterOrDigit()) i--
-        return i
-    }
-
-    private fun findWordEnd(text: String, pos: Int): Int {
-        var i = pos + 1
-        while (i < text.length && text[i].isLetterOrDigit()) i++
-        return i
     }
 
     fun beginSelectionHandleDrag(handle: SelectionActiveHandle) {
@@ -354,12 +383,12 @@ internal class MarkdownSelectionController(
             SelectionActiveHandle.End -> range.start
             SelectionActiveHandle.None -> return
         }
-        skipNextTapClear = false
         state.activeHandle = handle
         state.isHandleDrag = true
     }
 
     fun dragSelectionHandleToRootLocal(rootLocal: Offset) {
+        updateDragPointerAtRootLocal(rootLocal)
         if (!state.isHandleDrag) return
         val root = registry.rootCoordinates?.takeIf { it.isAttached } ?: return
         dragSelectionHandleTo(anchorFromWindow(root.localToWindow(rootLocal)) ?: return)
@@ -374,6 +403,7 @@ internal class MarkdownSelectionController(
     }
 
     fun finishSelectionHandleDrag() {
+        state.dragPointerInWindow = null
         if (!state.isHandleDrag) return
         state.activeHandle = SelectionActiveHandle.None
         state.isHandleDrag = false
@@ -382,7 +412,6 @@ internal class MarkdownSelectionController(
         if (selectedText.isEmpty()) {
             clearSelection()
         } else {
-            skipNextTapClear = false
             state.toolbarRequestKey += 1
         }
     }
@@ -402,6 +431,14 @@ internal class MarkdownSelectionController(
 
     fun selectionHandlePositionInRoot(handle: SelectionActiveHandle): SelectionHandlePosition? {
         val anchor = selectionAnchorForHandle(handle) ?: return null
+        textFragments.positionFor(anchor)?.let { windowPosition ->
+            val root = registry.rootCoordinates?.takeIf { it.isAttached } ?: return null
+            val local = root.windowToLocal(windowPosition)
+            if (local.x !in 0f..root.size.width.toFloat() || local.y !in 0f..root.size.height.toFloat()) {
+                return null
+            }
+            return SelectionHandlePosition(local)
+        }
         val entry = index.entryOf(anchor.blockStableId) ?: return null
         val geometry = geometryByStableId[anchor.blockStableId] ?: return null
         val blockSnapshot = registry.snapshotOf(anchor.blockStableId) ?: return null
@@ -489,7 +526,7 @@ internal class MarkdownSelectionController(
 
     /**
      * 把 window 坐标解析为逻辑锚点：
-     * 选择纵向最接近的可见 block，命中其 run，再用与布局一致的测量口径求字符偏移。
+     * 按纵向优先、横向次之选择可见 block，命中其 run，再用与布局一致的测量口径求字符偏移。
      */
     private fun anchorFromWindow(windowOffset: Offset): SelectionAnchor? {
         val visible = registry.visibleEntries(index)
@@ -503,18 +540,25 @@ internal class MarkdownSelectionController(
             val coords = registry.coordinatesOf(entry.stableId) ?: continue
             val local = coords.windowToLocal(windowOffset)
             val height = coords.size.height.toFloat()
-            val penalty = when {
+            val width = coords.size.width.toFloat()
+            val dy = when {
                 local.y < 0f -> -local.y
                 local.y > height -> local.y - height
                 else -> 0f
             }
+            val dx = when {
+                local.x < 0f -> -local.x
+                local.x > width -> local.x - width
+                else -> 0f
+            }
+            val penalty = dy * 1000f + dx
             if (penalty < bestPenalty) {
                 bestPenalty = penalty
                 best = entry
                 bestLocal = local
             }
             if (penalty == 0f) {
-                // Inside this block vertically; prefer it directly.
+                // 必须同时位于 X/Y 范围内；多列布局里的同一行不能总命中首列。
                 best = entry
                 bestLocal = local
                 break
@@ -522,6 +566,9 @@ internal class MarkdownSelectionController(
         }
 
         val entry = best ?: return null
+        textFragments.offsetAt(entry.stableId, windowOffset)?.let {
+            return SelectionAnchor(entry.stableId, it)
+        }
         val geometry = geometryByStableId[entry.stableId] ?: return null
         val inlineBlock = geometry.block as? LayoutInlineBlockModel
         if (inlineBlock == null) {

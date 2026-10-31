@@ -1,785 +1,215 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
+
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
-import kotlinx.coroutines.launch
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.contract.models.ModelOption
-import xyz.mederi.core.contract.models.ProviderConfig
-import xyz.mederi.core.contract.models.SubagentConfigItem
-import xyz.mederi.core.contract.models.SubagentGlobalSettings
-import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
-import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
-import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.theme.MederiColors
-import xyz.mederi.ui.DebugLog
+import xyz.mederi.core.contract.models.*
+import xyz.mederi.theme.*
 import xyz.mederi.ui.appstate.LocalAppState
-import xyz.mederi.ui.components.ChipSelectorPill
+import xyz.mederi.ui.components.ErrorBoard
 import xyz.mederi.ui.components.ModelPickerList
 import xyz.mederi.ui.components.formatReasoningLevelLabel
+import xyz.mederi.ui.components.atoms.*
 
-/**
- * Agent 代理角色模型与并发设置面板。
- */
+/** Route 仅绑定权威流和配置 VM；不会在重组中读写 Core。 */
 @Composable
 fun AgentSettingsPanel(isCompact: Boolean = false) {
     val appState = LocalAppState.current
-    val colors = LocalMederiColors.current
-    val scope = rememberCoroutineScope()
-    val scroll = rememberScrollState()
-
-    var configs by remember { mutableStateOf<List<SubagentConfigItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    val availableModels by appState.availableModels.collectAsState()
+    val vm: AgentSettingsViewModel = viewModel { AgentSettingsViewModel(appState.aiCore) }
+    LaunchedEffect(vm) { vm.reloadConfigs(); vm.reloadGlobal() }
+    val models by appState.availableModels.collectAsState()
     val providers by appState.providers.collectAsState()
     val parentModel by appState.selectedModel.collectAsState()
-
-    val refreshConfigs: () -> Unit = {
-        scope.launch {
-            val list = appState.aiCore.listSubagentConfigs().getOrDefault(emptyList())
-            DebugLog.info("AgentSettingsPanel", "Subagent configs fetched: count=${list.size}, configs=$list")
-            configs = list
-            isLoading = false
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        refreshConfigs()
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scroll),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // ─── 并发子代理上限（全局设置） ───
-        var globalSettings by remember { mutableStateOf<SubagentGlobalSettings?>(null) }
-        LaunchedEffect(Unit) {
-            globalSettings = appState.aiCore.getSubagentGlobalSettings().getOrNull()
-        }
-
-        SettingsCard(colors = colors) {
-            val current = globalSettings?.maxConcurrentAgents ?: 2
-            SettingsRow(
-                title = stringResource(Res.string.settings_agents_concurrency_title),
-                subtitle = stringResource(Res.string.settings_agents_concurrency_desc),
-                icon = FeatherIcons.Users,
-                iconTint = colors.accentPrimary,
-                colors = colors
-            ) {
-                NumberStepper(
-                    value = current,
-                    onValueChange = { newLimit ->
-                        scope.launch {
-                            appState.aiCore.updateSubagentGlobalSettings(
-                                UpdateSubagentGlobalSettingsInput(maxConcurrentAgents = newLimit)
-                            )
-                            globalSettings = appState.aiCore.getSubagentGlobalSettings().getOrNull()
-                        }
-                    },
-                    minValue = 1,
-                    maxValue = 16,
-                    colors = colors
-                )
-            }
-        }
-
-        // ─── 角色模型配置列表 ───
-        if (isLoading && configs.isEmpty()) {
-            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = colors.accentPrimary, strokeWidth = 2.dp)
-            }
-        } else {
-            configs.forEach { item ->
-                AgentConfigCard(
-                    item = item,
-                    availableModels = availableModels,
-                    providers = providers,
-                    parentModel = parentModel,
-                    isCompact = isCompact,
-                    colors = colors,
-                    onUpdate = { modelId, reasoningLevel, apiKeyId ->
-                        DebugLog.info("AgentSettingsPanel", "Update config for role=${item.role}: modelId=$modelId, reasoningLevel=$reasoningLevel, apiKeyId=$apiKeyId")
-                        scope.launch {
-                            appState.aiCore.updateSubagentConfig(
-                                item.role,
-                                UpdateSubagentConfigInput(modelId = modelId, reasoningLevel = reasoningLevel, apiKeyId = apiKeyId)
-                            )
-                            refreshConfigs()
-                        }
-                    }
-                )
-            }
-        }
-    }
+    AgentSettingsContent(vm.uiState, models, providers, parentModel,
+        AgentSettingsActions(vm::reloadConfigs, vm::reloadGlobal, vm::setConcurrency,
+            vm::selectModel, vm::selectReasoning, vm::selectKey), isCompact = isCompact)
 }
 
-/**
- * 单个 Agent 角色的现代化配置卡片。
- * 遵循不兜底原则：不自动偷塞默认模型写库，用户显式通过选择器指派或恢复继承。
- */
+internal data class AgentSettingsActions(
+    val reloadConfigs: () -> Unit,
+    val reloadGlobal: () -> Unit,
+    val concurrency: (Int) -> Unit,
+    val model: (String, ModelOption?) -> Unit,
+    val reasoning: (String, String?) -> Unit,
+    val key: (String, String?) -> Unit,
+)
+
 @Composable
-private fun AgentConfigCard(
-    item: SubagentConfigItem,
-    availableModels: List<ModelOption>,
-    providers: List<ProviderConfig>,
-    parentModel: ModelOption?,
-    isCompact: Boolean,
-    colors: MederiColors,
-    onUpdate: (modelId: String?, reasoningLevel: String?, apiKeyId: String?) -> Unit
-) {
-    val currentSelectedModel = remember(item.modelId, availableModels) {
-        item.modelId?.let { id -> availableModels.find { it.id == id } }
-    }
-    val effectiveModel = currentSelectedModel ?: parentModel
-    val reasoningLevels = effectiveModel?.reasoningLevels ?: emptyList()
-    val supportsReasoning = effectiveModel?.supportsThinking == true && reasoningLevels.isNotEmpty()
-
-    val (roleIcon, roleTint) = when (item.role) {
-        "RESEARCHER" -> FeatherIcons.Search to colors.accentSecondary
-        "BROWSER_OPERATOR", "BROWSER_BRAIN" -> FeatherIcons.Globe to colors.accentSuccess
-        else -> FeatherIcons.Cpu to colors.accentPrimary
-    }
-
-    SettingsCard(colors = colors) {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            // 1. 卡片头部：角色图标托盘 + 角色名与描述 + 状态徽章与操作
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f).padding(end = 12.dp)
-                ) {
-                    SettingsIconBadge(
-                        icon = roleIcon,
-                        tint = roleTint,
-                        size = 36.dp,
-                        iconSize = 18.dp,
-                        cornerRadius = 10.dp
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = item.displayName,
-                            color = colors.textPrimary,
-                            fontSize = 14.5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (item.description.isNotBlank()) {
-                            Text(
-                                text = item.description,
-                                color = colors.textMuted,
-                                fontSize = 11.5.sp,
-                                lineHeight = 15.sp
-                            )
-                        }
-                    }
-                }
-
-                // 右侧状态与操作
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (item.isInheriting) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(colors.surfaceWorkspace)
-                                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.settings_agents_status_inheriting),
-                                color = colors.textMuted,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    } else {
-                        // 已指定独立模型徽章
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(colors.accentPrimary.copy(alpha = 0.12f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.settings_agents_status_custom),
-                                color = colors.accentPrimary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-
-                        // 恢复继承按钮
-                        Text(
-                            text = stringResource(Res.string.settings_agents_inherit),
-                            color = colors.accentPrimary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onUpdate(null, null, null) }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
-
-            // 2. 卡片配置内容区
-            if (item.isInheriting) {
-                // 跟随主会话态：清晰展示继承事实
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceWorkspace)
-                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.weight(1f).padding(end = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.CornerDownRight,
-                            contentDescription = null,
-                            tint = colors.accentPrimary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = stringResource(
-                                Res.string.settings_agents_effective_desc,
-                                effectiveModel?.name ?: effectiveModel?.id ?: stringResource(Res.string.settings_panel_not_set)
-                            ),
-                            color = colors.textSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
-
-                    // 允许用户直接从菜单选择独立模型
-                    SubagentModelMenu(
-                        selectedModelId = null,
-                        selectedModelName = null,
-                        models = availableModels,
-                        providers = providers,
-                        compact = isCompact,
-                        colors = colors,
-                        buttonLabel = stringResource(Res.string.settings_agents_custom_action),
-                        onSelect = { selectedModel ->
-                            if (selectedModel != null) {
-                                onUpdate(selectedModel.id, null, item.apiKeyId)
-                            }
-                        }
-                    )
-                }
-            } else {
-                // 自定义模型态：展示整洁对齐的模型选择器与思考档位选择器
-                if (isCompact) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.settings_agents_model_label),
-                                color = colors.textMuted,
-                                fontSize = 12.sp
-                            )
-                            SubagentModelMenu(
-                                selectedModelId = item.modelId,
-                                selectedModelName = currentSelectedModel?.name ?: item.modelName,
-                                models = availableModels,
-                                providers = providers,
-                                compact = true,
-                                colors = colors,
-                                onSelect = { selectedModel ->
-                                    if (selectedModel == null) {
-                                        onUpdate(null, null, null)
-                                    } else {
-                                        val newLevels = selectedModel.reasoningLevels
-                                        val validReasoning = if (selectedModel.supportsThinking && item.reasoningLevel != null && newLevels.contains(item.reasoningLevel)) {
-                                            item.reasoningLevel
-                                        } else null
-                                        onUpdate(selectedModel.id, validReasoning, item.apiKeyId)
-                                    }
-                                }
-                            )
-                        }
-
-                        if (supportsReasoning) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(Res.string.settings_agents_reasoning_label),
-                                    color = colors.textMuted,
-                                    fontSize = 12.sp
-                                )
-                                SubagentReasoningMenu(
-                                    currentReasoningLevel = item.reasoningLevel,
-                                    levels = reasoningLevels,
-                                    colors = colors,
-                                    onSelect = { lvl -> onUpdate(item.modelId, lvl, item.apiKeyId) }
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(20.dp)
-                    ) {
-                        // 模型选择项
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.settings_agents_model_label),
-                                color = colors.textMuted,
-                                fontSize = 12.sp
-                            )
-                            SubagentModelMenu(
-                                selectedModelId = item.modelId,
-                                selectedModelName = currentSelectedModel?.name ?: item.modelName,
-                                models = availableModels,
-                                providers = providers,
-                                compact = false,
-                                colors = colors,
-                                onSelect = { selectedModel ->
-                                    if (selectedModel == null) {
-                                        onUpdate(null, null, null)
-                                    } else {
-                                        val newLevels = selectedModel.reasoningLevels
-                                        val validReasoning = if (selectedModel.supportsThinking && item.reasoningLevel != null && newLevels.contains(item.reasoningLevel)) {
-                                            item.reasoningLevel
-                                        } else null
-                                        onUpdate(selectedModel.id, validReasoning, item.apiKeyId)
-                                    }
-                                }
-                            )
-                        }
-
-                        // 推理思考档位选择项（仅当生效模型支持推理时展示）
-                        if (supportsReasoning) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(Res.string.settings_agents_reasoning_label),
-                                    color = colors.textMuted,
-                                    fontSize = 12.sp
-                                )
-                                SubagentReasoningMenu(
-                                    currentReasoningLevel = item.reasoningLevel,
-                                    levels = reasoningLevels,
-                                    colors = colors,
-                                    onSelect = { lvl -> onUpdate(item.modelId, lvl, item.apiKeyId) }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // API Key 选择器行：仅当生效模型所在供应商配置了 key 时显示
-                val effectiveProvider = effectiveModel?.let { m -> providers.find { it.id == m.provider } }
-                val keys = effectiveProvider?.apiKeys.orEmpty()
-                if (effectiveProvider != null && keys.isNotEmpty()) {
-                    val currentApiKeyId = item.apiKeyId
-                    var apiKeyExpanded by remember { mutableStateOf(false) }
-
-                    // "继承父会话"是设置项名称；运行时由 ApiKeyResolver 处理：
-                    // 同供应商→继承父的 key ID；不同供应商→父的 key 归属不通过，回落默认 key
-                    val apiKeyLabel = currentApiKeyId?.let { id ->
-                        keys.find { it.id == id }?.name
-                    } ?: stringResource(Res.string.settings_agents_apikey_inherit)
-
-                    SettingsRow(
-                        title = stringResource(Res.string.settings_agents_apikey_label),
-                        icon = FeatherIcons.Key,
-                        iconTint = colors.accentPrimary,
-                        colors = colors
-                    ) {
-                        Box {
-                            ChipSelectorPill(
-                                icon = FeatherIcons.Key,
-                                label = apiKeyLabel,
-                                onClick = { apiKeyExpanded = true }
-                            )
-                            DropdownMenu(
-                                expanded = apiKeyExpanded,
-                                onDismissRequest = { apiKeyExpanded = false },
-                                containerColor = colors.surfaceCard,
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier
-                                    .widthIn(min = 220.dp, max = 280.dp)
-                                    .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-                            ) {
-                                // 继承父会话（apiKeyId = null）
-                                val isKeyInheritSelected = currentApiKeyId == null
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = stringResource(Res.string.settings_agents_apikey_inherit),
-                                                fontSize = 12.sp,
-                                                fontWeight = if (isKeyInheritSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isKeyInheritSelected) colors.accentPrimary else colors.textPrimary
-                                            )
-                                            if (isKeyInheritSelected) {
-                                                Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
-                                            }
-                                        }
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                    onClick = {
-                                        onUpdate(item.modelId, item.reasoningLevel, null)
-                                        apiKeyExpanded = false
-                                    }
-                                )
-
-                                if (keys.isNotEmpty()) {
-                                    HorizontalDivider(
-                                        color = colors.divider.copy(alpha = 0.6f),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-
-                                // 各个具体 key
-                                keys.forEach { key ->
-                                    val isSelected = currentApiKeyId == key.id
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Column(
-                                                    verticalArrangement = Arrangement.spacedBy(1.dp),
-                                                    modifier = Modifier.weight(1f, fill = false)
-                                                ) {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = key.name,
-                                                            fontSize = 12.sp,
-                                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                                            color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis
-                                                        )
-                                                        if (key.isDefault) {
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .clip(RoundedCornerShape(4.dp))
-                                                                    .background(colors.accentSecondary.copy(alpha = 0.15f))
-                                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                            ) {
-                                                                Text(
-                                                                    stringResource(Res.string.input_default_tag),
-                                                                    fontSize = 9.sp,
-                                                                    color = colors.accentSecondary,
-                                                                    fontWeight = FontWeight.Medium,
-                                                                    maxLines = 1
-                                                                )
-                                                            }
-                                                        }
-                                                    }
-                                                    Text(
-                                                        text = key.maskedValue,
-                                                        fontSize = 10.sp,
-                                                        fontFamily = FontFamily.Monospace,
-                                                        color = colors.textMuted,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                }
-                                                if (isSelected) {
-                                                    Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
-                                                }
-                                            }
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                        onClick = {
-                                            onUpdate(item.modelId, item.reasoningLevel, key.id)
-                                            apiKeyExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 子代理模型选择器菜单。
- */
-@Composable
-private fun SubagentModelMenu(
-    selectedModelId: String?,
-    selectedModelName: String?,
+internal fun AgentSettingsContent(
+    state: AgentSettingsUiState,
     models: List<ModelOption>,
     providers: List<ProviderConfig>,
-    compact: Boolean,
-    colors: MederiColors,
-    buttonLabel: String? = null,
-    onSelect: (ModelOption?) -> Unit
+    parentModel: ModelOption?,
+    actions: AgentSettingsActions,
+    modifier: Modifier = Modifier,
+    isCompact: Boolean = false,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    val pillLabel = buttonLabel ?: if (selectedModelId == null) {
-        stringResource(Res.string.settings_agents_inherit)
-    } else {
-        selectedModelName ?: selectedModelId
-    }
-
-    Box {
-        ChipSelectorPill(
-            label = pillLabel,
-            onClick = { expanded = true }
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier
-                .widthIn(min = if (compact) 360.dp else 460.dp, max = if (compact) 440.dp else 520.dp)
-                .heightIn(max = 440.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
-        ) {
-            // 首项：继承主会话模型
-            val isInheritSelected = selectedModelId == null
-            DropdownMenuItem(
-                modifier = Modifier
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (isInheritSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent),
-                text = {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                FeatherIcons.CornerDownRight,
-                                null,
-                                tint = if (isInheritSelected) colors.accentPrimary else colors.textMuted,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = stringResource(Res.string.settings_agents_inherit),
-                                fontSize = if (compact) 12.sp else 12.5.sp,
-                                fontWeight = if (isInheritSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isInheritSelected) colors.accentPrimary else colors.textPrimary
-                            )
-                        }
-                        if (isInheritSelected) {
-                            Icon(FeatherIcons.Check, null, tint = colors.accentPrimary, modifier = Modifier.size(14.dp))
-                        }
+    val colors = LocalMederiColors.current
+    LazyColumn(modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        item(key = "concurrency") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingsRow(stringResource(Res.string.settings_agents_concurrency_title),
+                    stringResource(Res.string.settings_agents_concurrency_desc), icon = FeatherIcons.Users) {
+                    if (state.loadingGlobal) AgentSettingsProgress()
+                    else state.global?.let {
+                        NumberStepper(it.maxConcurrentAgents, actions.concurrency, minValue = 1, maxValue = 16,
+                            enabled = state.concurrencyEnabled)
                     }
-                },
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                onClick = {
-                    onSelect(null)
-                    expanded = false
                 }
-            )
-
-            HorizontalDivider(
-                color = colors.divider.copy(alpha = 0.6f),
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-
-            // 供应商分组模型列表
-            ModelPickerList(
-                models = models,
-                providers = providers,
-                selectedModelId = selectedModelId,
-                nameFontSize = if (compact) 12.sp else 12.5.sp,
-                unselectedContextColor = colors.textSecondary,
-                checkSize = 14.dp,
-                onSelect = { model ->
-                    onSelect(model)
-                    expanded = false
-                },
-                colors = colors,
-                itemWrapper = { _, isSelected, onClick, content ->
-                    DropdownMenuItem(
-                        modifier = Modifier
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent),
-                        text = { content() },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        onClick = onClick,
-                    )
-                },
-                groupWrapper = { groupIndex, content ->
-                    if (groupIndex > 0) {
-                        HorizontalDivider(
-                            color = colors.divider.copy(alpha = 0.6f),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                    content()
+                state.globalError?.let { message ->
+                    ErrorBoard(stringResource(message.key, *message.args.toTypedArray()), showContinue = true,
+                        onContinue = actions.reloadGlobal, continueLabel = stringResource(Res.string.settings_agents_retry))
                 }
-            )
+            }
+        }
+        item(key = "roles-status") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(Res.string.settings_agents_roles), style = WorkspaceStyle.Title, color = colors.textPrimary)
+                if (state.loadingConfigs) AgentSettingsProgress()
+                state.configsError?.let { message ->
+                    ErrorBoard(stringResource(message.key, *message.args.toTypedArray()), showContinue = true,
+                        onContinue = actions.reloadConfigs, continueLabel = stringResource(Res.string.settings_agents_retry))
+                }
+                if (state.configsReady && state.configs.isEmpty())
+                    Text(stringResource(Res.string.settings_agents_empty), style = WorkspaceStyle.Body, color = colors.textMuted)
+            }
+        }
+        items(state.configs, key = { "role:${it.role}" }) { item ->
+            AgentRoleSettings(item, models, providers, parentModel, state.rolesEnabled,
+                state.savingRole == item.role, actions, isCompact)
         }
     }
 }
 
-/**
- * 子代理推理等级菜单。
- */
 @Composable
-private fun SubagentReasoningMenu(
-    currentReasoningLevel: String?,
-    levels: List<String>,
-    colors: MederiColors,
-    onSelect: (String?) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val pillLabel = if (currentReasoningLevel == null) {
-        stringResource(Res.string.input_thinking_label, stringResource(Res.string.settings_agents_inherit_reasoning_short))
-    } else {
-        stringResource(Res.string.input_thinking_label, formatReasoningLevelLabel(currentReasoningLevel))
+private fun AgentSettingsProgress() {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        WorkspaceLoadingIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = LocalMederiColors.current.accentPrimary)
+        Text(stringResource(Res.string.settings_agents_loading), style = WorkspaceStyle.Caption,
+            color = LocalMederiColors.current.textMuted)
     }
+}
 
-    Box {
-        ChipSelectorPill(
-            icon = FeatherIcons.Sliders,
-            label = pillLabel,
-            onClick = { expanded = true }
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-                .widthIn(min = 160.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
-        ) {
-            val isInheritSelected = currentReasoningLevel == null
-            DropdownMenuItem(
-                text = {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(Res.string.settings_agents_inherit_reasoning),
-                            fontSize = 12.sp,
-                            fontWeight = if (isInheritSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isInheritSelected) colors.accentPrimary else colors.textPrimary
-                        )
-                        if (isInheritSelected) {
-                            Icon(
-                                FeatherIcons.Check,
-                                null,
-                                tint = colors.accentPrimary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                    }
-                },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                onClick = {
-                    onSelect(null)
-                    expanded = false
-                }
-            )
-
-            if (levels.isNotEmpty()) {
-                HorizontalDivider(
-                    color = colors.divider.copy(alpha = 0.6f),
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
+/** 每个角色复用相同设置行和菜单；展开状态只属于当前角色。 */
+@Composable
+internal fun AgentRoleSettings(
+    item: SubagentConfigItem,
+    models: List<ModelOption>,
+    providers: List<ProviderConfig>,
+    parentModel: ModelOption?,
+    enabled: Boolean,
+    saving: Boolean,
+    actions: AgentSettingsActions,
+    isCompact: Boolean = false,
+) {
+    val colors = LocalMederiColors.current
+    val selected = models.find { it.id == item.modelId }
+    // 与 Core 的模型删除回落一致；仍展示配置 ID，不伪装为继承。
+    val effectiveModel = selected ?: parentModel
+    val keys = providers.find { it.id == effectiveModel?.provider }?.apiKeys.orEmpty().filter { it.id != API_KEY_ROTATION_ID }
+    Column(Modifier.fillMaxWidth().testTag("agent-role:${item.role}"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(when (item.role) {
+                "RESEARCHER" -> FeatherIcons.Search
+                "BROWSER_OPERATOR", "BROWSER_BRAIN" -> FeatherIcons.Globe
+                else -> FeatherIcons.Cpu
+            }, null, Modifier.size(WorkspaceStyle.IconSize), tint = colors.textMuted)
+            Text(item.displayName, style = WorkspaceStyle.Title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            if (saving) Text(stringResource(Res.string.settings_agents_saving), style = WorkspaceStyle.Caption, color = colors.textMuted)
+        }
+        if (item.description.isNotBlank()) Text(item.description, style = WorkspaceStyle.Caption, color = colors.textMuted)
+        SettingsRow(stringResource(Res.string.settings_agents_model_label),
+            subtitle = if (item.modelId == null) stringResource(Res.string.settings_agents_effective_desc,
+                parentModel?.name ?: stringResource(Res.string.settings_panel_not_set)) else null) {
+            AgentModelMenu(item.modelId, selected?.name ?: item.modelName, models, providers, enabled, isCompact) {
+                actions.model(item.role, it)
             }
-
-            levels.forEach { lvl ->
-                val isSelected = currentReasoningLevel.equals(lvl, ignoreCase = true)
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = formatReasoningLevelLabel(lvl),
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isSelected) colors.accentPrimary else if (lvl == "NONE") colors.textSecondary else colors.textPrimary
-                            )
-                            if (isSelected) {
-                                Icon(
-                                    FeatherIcons.Check,
-                                    null,
-                                    tint = colors.accentPrimary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
-                        }
-                    },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    onClick = {
-                        onSelect(lvl)
-                        expanded = false
+        }
+        if (!item.isInheriting) {
+            if (effectiveModel?.supportsThinking == true && effectiveModel.reasoningLevels.isNotEmpty()) {
+                SettingsRow(stringResource(Res.string.settings_agents_reasoning_label)) {
+                    AgentChoiceMenu(item.reasoningLevel?.let { formatReasoningLevelLabel(it) }
+                        ?: stringResource(Res.string.settings_agents_inherit_reasoning_short),
+                        item.reasoningLevel, listOf(null to stringResource(Res.string.settings_agents_inherit_reasoning)) +
+                            effectiveModel.reasoningLevels.map { it to formatReasoningLevelLabel(it) }, enabled) {
+                        actions.reasoning(item.role, it)
                     }
-                )
+                }
+            }
+            if (keys.isNotEmpty() || item.apiKeyId != null) {
+                val label = when (item.apiKeyId) {
+                    null -> stringResource(Res.string.settings_agents_apikey_inherit)
+                    API_KEY_ROTATION_ID -> stringResource(Res.string.settings_agents_apikey_rotate)
+                    else -> keys.find { it.id == item.apiKeyId }?.name ?: item.apiKeyId
+                }
+                SettingsRow(stringResource(Res.string.settings_agents_apikey_label)) {
+                    AgentChoiceMenu(label, item.apiKeyId,
+                        listOf(null to stringResource(Res.string.settings_agents_apikey_inherit)) +
+                            (if (keys.size > 1) listOf(API_KEY_ROTATION_ID to stringResource(Res.string.settings_agents_apikey_rotate)) else emptyList()) +
+                            keys.map { it.id to it.name }, enabled, details = keys.associate { it.id to if (it.isDefault) "${it.maskedValue} · ${stringResource(Res.string.input_default_tag)}" else it.maskedValue }) {
+                        actions.key(item.role, it)
+                    }
+                }
+            }
+            WorkspaceActionButton(stringResource(Res.string.settings_agents_reset), { actions.model(item.role, null) },
+                enabled = enabled, icon = FeatherIcons.CornerDownRight)
+        }
+        HorizontalDivider(color = colors.divider, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+
+@Composable
+private fun AgentModelMenu(
+    selectedId: String?, selectedName: String?, models: List<ModelOption>, providers: List<ProviderConfig>,
+    enabled: Boolean, compact: Boolean, onSelect: (ModelOption?) -> Unit,
+) {
+    val colors = LocalMederiColors.current
+    var expanded by remember { mutableStateOf(false) }
+    LaunchedEffect(enabled) { if (!enabled) expanded = false }
+    Box {
+        WorkspaceActionButton(if (selectedId == null) stringResource(Res.string.settings_agents_inherit) else selectedName ?: selectedId,
+            { expanded = true }, modifier = Modifier.widthIn(max = 240.dp), enabled = enabled, icon = FeatherIcons.ChevronDown)
+        WorkspaceDropdownMenu(expanded, { expanded = false }, Modifier.widthIn(max = if (compact) 320.dp else 460.dp).heightIn(max = 440.dp)) {
+            WorkspaceMenuItem({ Text(stringResource(Res.string.settings_agents_inherit), style = WorkspaceStyle.Body) },
+                { expanded = false; onSelect(null) }, selected = selectedId == null)
+            ModelPickerList(models, providers, selectedId, WorkspaceStyle.Body.fontSize,
+                colors.textSecondary, WorkspaceStyle.IconSize, { expanded = false; onSelect(it) }, colors,
+                itemWrapper = { _, selected, click, content -> WorkspaceMenuItem(content, click, selected = selected, twoLines = true) },
+                groupWrapper = { _, content -> content() })
+        }
+    }
+}
+
+/** Key 与推理使用同一菜单行；选择语义和值来自调用方，不推导业务默认值。 */
+@Composable
+private fun AgentChoiceMenu(
+    label: String, selected: String?, options: List<Pair<String?, String>>, enabled: Boolean,
+    details: Map<String, String> = emptyMap(), onSelect: (String?) -> Unit,
+) {
+    val colors = LocalMederiColors.current
+    var expanded by remember { mutableStateOf(false) }
+    LaunchedEffect(enabled) { if (!enabled) expanded = false }
+    Box {
+        WorkspaceActionButton(label, { expanded = true }, modifier = Modifier.widthIn(max = 240.dp), enabled = enabled, icon = FeatherIcons.ChevronDown)
+        WorkspaceDropdownMenu(expanded, { expanded = false }, Modifier.widthIn(max = 320.dp).heightIn(max = 360.dp)) {
+            options.forEach { (id, text) ->
+                WorkspaceMenuItem({ Column {
+                    Text(text, style = WorkspaceStyle.Body, color = colors.textPrimary)
+                    details[id]?.let { Text(it, style = WorkspaceStyle.Caption, color = colors.textMuted) }
+                } }, { expanded = false; onSelect(id) }, selected = id == selected, twoLines = details.containsKey(id))
             }
         }
     }

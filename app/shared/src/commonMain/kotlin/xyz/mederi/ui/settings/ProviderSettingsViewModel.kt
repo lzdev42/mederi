@@ -192,7 +192,10 @@ internal fun isModelFree(
  *
  * @param providers 所有已加载的供应商列表（来自 appState.providers，含内置预设与自定义）
  * @param selectedProviderId 当前在右侧工作区选中的供应商 ID，null 且 isCreatingCustom=false 时显示空态
- * @param isCreatingCustom 是否正在新建自定义供应商（右侧显示创建表单）
+ * @param page 管理/详情/目录/自定义/预设凭据的唯一页面状态；isCreatingCustom为派生兼容属性
+ * @param providerQuery 已配置供应商名称/端点查询，与模型query独立
+ * @param presetQuery 内置目录名称查询
+ * @param providerIdsFilter 多个同预设配置时的明确ID集合过滤（不是providers副本）
  * @param searchQuery 模型搜索框关键字
  * @param capabilityFilter 当前选中的能力过滤器
  * @param isSavingCredentials 凭据保存/连接中状态
@@ -202,13 +205,23 @@ internal fun isModelFree(
 data class ProviderSettingsUiState(
     val providers: List<ProviderItemUiState> = emptyList(),
     val selectedProviderId: String? = null,
-    val isCreatingCustom: Boolean = false,
+    val page: ProviderPage = ProviderPage.Manage,
+    val providerQuery: String = "",
+    val presetQuery: String = "",
+    val providerIdsFilter: Set<String>? = null,
     val searchQuery: String = "",
     val capabilityFilter: CapabilityFilter = CapabilityFilter.ALL,
     val isSavingCredentials: Boolean = false,
     val successMessage: UiMessage? = null,
     val errorMessage: UiMessage? = null
 ) {
+    val isCreatingCustom: Boolean get() = page == ProviderPage.Custom
+
+    val filteredProviders: List<ProviderItemUiState> get() = providers.filter {
+        (providerIdsFilter == null || it.id in providerIdsFilter) &&
+            (it.name.contains(providerQuery.trim(), ignoreCase = true) || it.baseUrl.contains(providerQuery.trim(), ignoreCase = true))
+    }
+
     /** 当前选中的供应商 */
     val selectedProvider: ProviderItemUiState?
         get() = providers.find { it.id == selectedProviderId }
@@ -284,8 +297,7 @@ class ProviderSettingsViewModel(
 
     /**
      * 内置供应商预设名列表（如 "Google Gemini"、"Agnes SG"），来自 core 的 BuiltinProviders。
-     * UI 渲染"内置预设"区块；用户点选未添加的预设时弹出 Key 输入框，
-     * 提交调 [addBuiltinProvider]。
+     * 添加目录使用真实名称；点选未添加预设进入同区域凭据步骤，提交调[addBuiltinProvider]。
      */
     val builtinPresets: List<String> get() = appState.aiCore.builtinPresets
 
@@ -301,15 +313,17 @@ class ProviderSettingsViewModel(
         apiKey: String,
         onComplete: ((Result<ProviderConfig>) -> Unit)? = null
     ) {
+        if (uiState.isSavingCredentials) return
+        uiState = uiState.copy(isSavingCredentials = true, errorMessage = null, successMessage = null)
         viewModelScope.launch {
-            uiState = uiState.copy(isSavingCredentials = true, errorMessage = null)
-            val result = appState.aiCore.addBuiltinProvider(name, apiKey)
+            val result = appState.aiCore.addBuiltinProvider(name, apiKey.trim())
             result.fold(
                 onSuccess = { config ->
                     uiState = uiState.copy(
                         isSavingCredentials = false,
                         selectedProviderId = config.id,
-                        isCreatingCustom = false,
+                        page = ProviderPage.Detail,
+                        providerQuery = "", providerIdsFilter = null,
                         successMessage = UiMessage(Res.string.provider_added_success, listOf(config.name))
                     )
                     if (config.isConnected) {
@@ -405,9 +419,10 @@ class ProviderSettingsViewModel(
     // ==========================================
 
     fun selectProvider(providerId: String) {
+        if (uiState.isSavingCredentials) return
         uiState = uiState.copy(
             selectedProviderId = providerId,
-            isCreatingCustom = false,
+            page = ProviderPage.Detail,
             searchQuery = "",
             capabilityFilter = CapabilityFilter.ALL,
             successMessage = null,
@@ -416,13 +431,40 @@ class ProviderSettingsViewModel(
     }
 
     fun startCreateCustomProvider() {
-        uiState = uiState.copy(
-            selectedProviderId = null,
-            isCreatingCustom = true,
-            searchQuery = "",
-            successMessage = null,
-            errorMessage = null
-        )
+        if (uiState.isSavingCredentials) return
+        uiState = uiState.copy(page = ProviderPage.Custom, successMessage = null, errorMessage = null)
+    }
+
+    fun openProviderCatalog() {
+        if (uiState.isSavingCredentials) return
+        uiState = uiState.copy(page = ProviderPage.Catalog, successMessage = null, errorMessage = null)
+    }
+
+    fun returnToProviderManagement() {
+        if (uiState.isSavingCredentials) return
+        uiState = uiState.copy(page = ProviderPage.Manage, errorMessage = null)
+    }
+
+    fun updateProviderQuery(query: String) {
+        uiState = uiState.copy(providerQuery = query, providerIdsFilter = null)
+    }
+
+    fun updatePresetQuery(query: String) {
+        uiState = uiState.copy(presetQuery = query)
+    }
+
+    fun selectProviderPreset(name: String) {
+        if (uiState.isSavingCredentials || name !in builtinPresets) return
+        val matches = providerPresetItems(listOf(name), uiState.providers, "").single().configuredIds
+        when (matches.size) {
+            0 -> uiState = uiState.copy(page = ProviderPage.Preset(name), errorMessage = null)
+            1 -> {
+                selectProvider(matches.single())
+                uiState = uiState.copy(providerQuery = "", providerIdsFilter = null)
+            }
+            else -> uiState = uiState.copy(page = ProviderPage.Manage, selectedProviderId = null,
+                providerQuery = "", providerIdsFilter = matches.toSet(), errorMessage = null)
+        }
     }
 
     // ==========================================
@@ -435,6 +477,10 @@ class ProviderSettingsViewModel(
 
     fun setCapabilityFilter(filter: CapabilityFilter) {
         uiState = uiState.copy(capabilityFilter = filter)
+    }
+
+    fun clearSuccessMessage() {
+        uiState = uiState.copy(successMessage = null)
     }
 
     fun clearMessages() {
@@ -453,8 +499,9 @@ class ProviderSettingsViewModel(
         apiKey: String,
         reasoningLevels: Map<String, String?>
     ) {
+        if (uiState.isSavingCredentials) return
+        uiState = uiState.copy(isSavingCredentials = true, errorMessage = null, successMessage = null)
         viewModelScope.launch {
-            uiState = uiState.copy(isSavingCredentials = true, errorMessage = null)
             // 用户配置了推理参数则用用户的（levels 为空 map 视为未配置，core 侧回退协议默认工厂）
             val reasoningConfig = ReasoningConfigInput(levels = reasoningLevels)
                 .takeIf { reasoningLevels.isNotEmpty() }
@@ -475,7 +522,8 @@ class ProviderSettingsViewModel(
                         uiState = uiState.copy(
                             isSavingCredentials = false,
                             selectedProviderId = config.id,
-                            isCreatingCustom = false,
+                            page = ProviderPage.Detail,
+                            providerQuery = "", providerIdsFilter = null,
                             successMessage = UiMessage(Res.string.provider_created_success)
                         )
                         if (config.isConnected) {
@@ -613,7 +661,7 @@ class ProviderSettingsViewModel(
                     uiState = uiState.copy(
                         providers = updated,
                         selectedProviderId = updated.firstOrNull()?.id,
-                        isCreatingCustom = false,
+                        page = ProviderPage.Manage,
                         successMessage = UiMessage(Res.string.provider_deleted)
                     )
                 },

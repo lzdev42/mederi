@@ -1,9 +1,11 @@
 package xyz.mederi.ui
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+
 import androidx.compose.animation.*
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,10 +27,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Info
@@ -46,14 +45,15 @@ import mederi.app.shared.generated.resources.pick_directory_title
 import mederi.app.shared.generated.resources.sidebar_edge_handle
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.SidebarViewModel
-import xyz.mederi.ui.UiEffect
 import xyz.mederi.ui.RightDockPanel
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
+import xyz.mederi.ui.components.atoms.MederiDialog
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.ui.components.InitLoadingOverlay
-import xyz.mederi.ui.components.atoms.MederiCard
-import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
 import xyz.mederi.ui.settings.SettingsDialog
 import xyz.mederi.util.pickDirectory
 
@@ -66,24 +66,9 @@ fun MainScreen() {
     val sidebarViewModel: SidebarViewModel = viewModel { SidebarViewModel(appState) }
     val workspaceViewModel: WorkspaceViewModel = viewModel { WorkspaceViewModel(appState) }
 
-    var isSettingsVisible by remember { mutableStateOf(false) }
-
-    // 手动压缩被 core 预检跳过的一次性提示（ST1 派发的 effect）→ 落为本地状态后渲染模态；
-    // 「确定」关闭是纯本地 UI 动作（compactionNotice = null），不走效果通道，与 isSettingsVisible 同构。
-    var compactionNotice by remember { mutableStateOf<UiEffect.ShowCompactionNotice?>(null) }
-
-    // 一次性导航命令"打开设置"经 VM effects Channel 派发，这里 collect 后落为本地
-    // isSettingsVisible=true（effect → state 宿主）；关闭设置对话框的 onRequestClose 仍直接
-    // 置 false——关闭是纯本地 UI 动作，不走效果通道。
-    LaunchedEffect(workspaceViewModel) {
-        workspaceViewModel.effects.collect { effect ->
-            when (effect) {
-                is UiEffect.OpenSettings -> isSettingsVisible = true
-                is UiEffect.ShowCompactionNotice -> compactionNotice = effect
-                else -> {}
-            }
-        }
-    }
+    val effectState = rememberWorkspaceEffectState(workspaceViewModel.effects)
+    val isSettingsVisible = effectState.settingsVisible
+    val compactionNotice = effectState.compactionNotice
 
     // 设置页打开时收回浏览器面板：JCEF 是原生重量级窗口（heavyweight），
     // 永远渲染在 Compose 轻量级内容之上，不收回会穿透覆盖设置对话框。
@@ -150,14 +135,16 @@ fun MainScreen() {
                     isLeftSidebarOpen = isMobileDrawerOpen,
                     onToggleLeftSidebar = { isMobileDrawerOpen = !isMobileDrawerOpen },
                     onOpenProjectPicker = openProjectPicker,
-                    imeOverlayActive = isSettingsVisible || compactionNotice != null
+                    imeOverlayActive = isSettingsVisible || compactionNotice != null,
+                    projectMenuExpanded = effectState.projectMenuExpanded,
+                    onProjectMenuExpandedChange = effectState::updateProjectMenuExpanded
                 )
 
                 // 侧边栏抽屉半透明背景遮罩
                 AnimatedVisibility(
                     visible = isMobileDrawerOpen,
-                    enter = fadeIn(),
-                    exit = fadeOut()
+                    enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.panelSpec()),
+                    exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.panelSpec())
                 ) {
                     Box(
                         modifier = Modifier
@@ -170,12 +157,12 @@ fun MainScreen() {
                 // 左侧滑出抽屉
                 AnimatedVisibility(
                     visible = isMobileDrawerOpen,
-                    enter = slideInHorizontally(
-                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
-                    ) { -it } + fadeIn(),
-                    exit = slideOutHorizontally(
-                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
-                    ) { -it } + fadeOut()
+                    enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else slideInHorizontally(
+                        animationSpec = LocalWorkspaceMotion.current.panelSpec()
+                    ) { -it } + fadeIn(LocalWorkspaceMotion.current.panelSpec()),
+                    exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else slideOutHorizontally(
+                        animationSpec = LocalWorkspaceMotion.current.panelSpec()
+                    ) { -it } + fadeOut(LocalWorkspaceMotion.current.panelSpec())
                 ) {
                     Sidebar(
                         modifier = Modifier
@@ -266,7 +253,9 @@ fun MainScreen() {
                         isLeftSidebarOpen = true,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(false) },
                         onOpenProjectPicker = openProjectPicker,
-                        imeOverlayActive = isSettingsVisible || compactionNotice != null
+                        imeOverlayActive = isSettingsVisible || compactionNotice != null,
+                        projectMenuExpanded = effectState.projectMenuExpanded,
+                        onProjectMenuExpandedChange = effectState::updateProjectMenuExpanded
                     )
                 }
             } else {
@@ -282,7 +271,9 @@ fun MainScreen() {
                         isLeftSidebarOpen = isHoverRevealed,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(true) },
                         onOpenProjectPicker = openProjectPicker,
-                        imeOverlayActive = isSettingsVisible || compactionNotice != null
+                        imeOverlayActive = isSettingsVisible || compactionNotice != null,
+                        projectMenuExpanded = effectState.projectMenuExpanded,
+                        onProjectMenuExpandedChange = effectState::updateProjectMenuExpanded
                     )
 
                     // 屏幕左边缘指示把手（鼠标移过去自动弹出来，未常驻时常驻底层渲染避免重挂载抖动）
@@ -314,12 +305,12 @@ fun MainScreen() {
                     // 悬停滑出的浮层抽屉
                     AnimatedVisibility(
                         visible = isHoverRevealed,
-                        enter = slideInHorizontally(
-                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
-                        ) { -it } + fadeIn(),
-                        exit = slideOutHorizontally(
-                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)
-                        ) { -it } + fadeOut()
+                        enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else slideInHorizontally(
+                            animationSpec = LocalWorkspaceMotion.current.panelSpec()
+                        ) { -it } + fadeIn(LocalWorkspaceMotion.current.panelSpec()),
+                        exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else slideOutHorizontally(
+                            animationSpec = LocalWorkspaceMotion.current.panelSpec()
+                        ) { -it } + fadeOut(LocalWorkspaceMotion.current.panelSpec())
                     ) {
                         Box(
                             modifier = Modifier
@@ -365,7 +356,7 @@ fun MainScreen() {
 
         SettingsDialog(
             isVisible = isSettingsVisible,
-            onClose = { isSettingsVisible = false }
+            onClose = { effectState.dismissSettings() }
         )
 
         // 手动压缩被跳过的一次性提示（"确定" 单按钮关闭）
@@ -378,55 +369,31 @@ fun MainScreen() {
                 else -> stringResource(Res.string.compaction_skipped_low_tokens)
             }
             val okLabel = stringResource(Res.string.compaction_ok)
-            Dialog(onDismissRequest = { compactionNotice = null }) {
-                MederiCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 420.dp),
-                    padding = PaddingValues(20.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+            MederiDialog(
+                onDismiss = { effectState.dismissCompactionNotice() },
+                width = 420.dp,
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = FeatherIcons.Info,
-                                    contentDescription = null,
-                                    tint = colors.accentPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(
-                                    text = title,
-                                    color = colors.textPrimary,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                        Text(
-                            text = body,
-                            color = colors.textSecondary,
-                            fontSize = 13.sp
+                        Icon(
+                            imageVector = FeatherIcons.Info,
+                            contentDescription = null,
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(WorkspaceStyle.IconSize),
                         )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            MederiPrimaryDecisionButton(
-                                text = okLabel,
-                                onClick = { compactionNotice = null }
-                            )
-                        }
+                        Text(title, color = colors.textPrimary, style = WorkspaceStyle.Title)
                     }
+                },
+            ) {
+                Text(body, color = colors.textSecondary, style = WorkspaceStyle.Body)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    WorkspaceActionButton(
+                        text = okLabel,
+                        onClick = { effectState.dismissCompactionNotice() },
+                        primary = true,
+                    )
                 }
             }
         }
@@ -458,15 +425,15 @@ private fun SidebarEdgeIndicator(
 
     val animatedWidth by animateDpAsState(
         targetValue = if (active) 8.dp else 5.dp,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec()
     )
     val animatedHeight by animateDpAsState(
         targetValue = if (active) 100.dp else 72.dp,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec()
     )
     val indicatorColor by animateColorAsState(
         targetValue = if (active) colors.accentPrimary else colors.textMuted.copy(alpha = 0.45f),
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec()
     )
 
     Box(

@@ -1,12 +1,7 @@
 package xyz.mederi.ui.overview
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -28,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -39,34 +33,34 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertTriangle
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.ChevronRight
-import compose.icons.feathericons.Loader
 import compose.icons.feathericons.Minus
+import compose.icons.feathericons.Square
+import compose.icons.feathericons.Activity
 import compose.icons.feathericons.Users
-import compose.icons.feathericons.X
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.subagent_card_title
 import mederi.app.shared.generated.resources.subagent_running_count
 import mederi.app.shared.generated.resources.subagentui_empty
+import mederi.app.shared.generated.resources.subagentui_status_running
 import mederi.app.shared.generated.resources.subagentui_stop_task
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.components.atoms.MederiRoleTag
-import xyz.mederi.ui.components.atoms.WorkingAnimationStyle
-import xyz.mederi.ui.components.atoms.workingAnimation
 
 /**
  * 概览浮动窗子 Agent 行。
  *
- * 折叠态摘要：有运行中的子代理时显示强调色呼吸圆点 + 「N 运行中」（accentText），
+ * 折叠态摘要：有运行中的子代理时显示强调色圆点 + 「N 运行中」（accentText），
  * 否则只显示子代理总数计数（textSecondary 12sp）。
  *
  * 展开态：每个任务渲染一张内嵌卡片（角色标签 + mono 模型名 + 状态图标 + 单行预览 +
  * 运行中红色停止按钮 / 其余灰色 chevron），点击行打开右侧子代理对话面板；
- * 有运行中的子代理时整块列表区套 BorderBeam 流光边框（浅层余光提示，参照 SubAgentManagementCard）。
+ * 有运行中的子代理时整栏（含行头与展开内容）使用单色呼吸边框，折叠仍可见。
  * 列表倒序展示（最新启动在前）。
  */
 @Composable
@@ -85,14 +79,6 @@ fun OverviewSubAgentRow(
         title = stringResource(Res.string.subagent_card_title),
         summary = {
             if (runningCount > 0) {
-                // 呼吸圆点：0.35~1.0 opacity，1600ms Reverse（同 FloatingOverviewWindow 胶囊脉冲）
-                val pulseTransition = rememberInfiniteTransition(label = "overview_subagent_pulse")
-                val dotAlpha by pulseTransition.animateFloat(
-                    initialValue = 0.35f,
-                    targetValue = 1f,
-                    animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
-                    label = "overview_subagent_pulse_alpha",
-                )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
@@ -101,7 +87,7 @@ fun OverviewSubAgentRow(
                         modifier = Modifier
                             .size(6.dp)
                             .clip(CircleShape)
-                            .background(colors.accentPrimary.copy(alpha = dotAlpha))
+                            .background(colors.accentPrimary)
                     )
                     Text(
                         text = stringResource(Res.string.subagent_running_count, runningCount),
@@ -123,18 +109,10 @@ fun OverviewSubAgentRow(
         },
         expanded = expanded,
         onToggle = onToggle,
-        modifier = modifier,
+        modifier = modifier.overviewTaskIndicator(runningCount > 0),
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .workingAnimation(
-                    style = WorkingAnimationStyle.BorderBeam,
-                    enabled = runningCount > 0,
-                    shape = RoundedCornerShape(8.dp),
-                    primaryColor = colors.accentPrimary,
-                    secondaryColor = colors.accentSecondary,
-                ),
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
         ) {
             if (subagents.isEmpty()) {
@@ -197,7 +175,9 @@ private fun SubAgentOverviewCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(WorkspaceStyle.ObjectRadius))
             .background(if (isHovered) colors.surfaceHover else Color.Transparent)
+            .hoverable(interactionSource)
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .padding(horizontal = 4.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
@@ -231,8 +211,8 @@ private fun SubAgentOverviewCard(
                 Text(
                     text = previewText.replace("\n", " "),
                     color = colors.textPrimary,
-                    fontSize = 12.5.sp,
-                    maxLines = 1,
+                    style = WorkspaceStyle.Body,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -242,14 +222,14 @@ private fun SubAgentOverviewCard(
         if (isRunning) {
             Box(
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(WorkspaceStyle.IconTarget)
                     .clip(RoundedCornerShape(4.dp))
-                    .background(colors.accentDanger.copy(alpha = 0.12f))
+                    .background(Color.Transparent)
                     .clickable { onStop() },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = FeatherIcons.X,
+                    imageVector = FeatherIcons.Square,
                     contentDescription = stringResource(Res.string.subagentui_stop_task),
                     tint = colors.accentDanger,
                     modifier = Modifier.size(13.dp),
@@ -269,7 +249,7 @@ private fun SubAgentOverviewCard(
 /**
  * 子代理状态图标（20dp 指示器）。
  *
- * RUNNING → 旋转 Loader（自绘等效 spinner）；
+ * RUNNING → 静态 Activity 图标（整栏统一呼吸）；
  * COMPLETED → Check / accentSuccess；ERROR → AlertTriangle / accentDanger；else → Minus / textMuted。
  */
 @Composable
@@ -278,29 +258,12 @@ private fun SubAgentStatusIcon(
     colors: MederiColors,
 ) {
     if (subagent.status.equals("RUNNING", ignoreCase = true)) {
-        val infiniteTransition = rememberInfiniteTransition(label = "overview_subagent_spinner")
-        val rotation by infiniteTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1200, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart,
-            ),
-            label = "overview_subagent_spinner_rotation",
+        Icon(
+            imageVector = FeatherIcons.Activity,
+            contentDescription = stringResource(Res.string.subagentui_status_running),
+            tint = colors.accentText,
+            modifier = Modifier.size(14.dp),
         )
-        Box(
-            modifier = Modifier.size(20.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = FeatherIcons.Loader,
-                contentDescription = null,
-                tint = colors.accentPrimary,
-                modifier = Modifier
-                    .size(12.dp)
-                    .graphicsLayer { rotationZ = rotation },
-            )
-        }
     } else {
         val (icon, tint) = when (subagent.status.uppercase()) {
             "COMPLETED" -> FeatherIcons.Check to colors.accentSuccess

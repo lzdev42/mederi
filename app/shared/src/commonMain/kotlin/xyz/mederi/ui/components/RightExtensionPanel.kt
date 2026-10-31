@@ -1,5 +1,9 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -31,7 +35,8 @@ import xyz.mederi.ui.TerminalViewModel
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
-import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
+import xyz.mederi.ui.components.atoms.WorkspacePanelHeader
+import xyz.mederi.theme.WorkspaceStyle
 
 @Composable
 fun RightExtensionPanel(
@@ -96,8 +101,8 @@ fun RightExtensionPanel(
         AnimatedVisibility(
             visible = isOpen,
             // 右侧面板从右边缘展开/收缩（expandFrom=End）：居中展开会在动画期间两侧露出底层白缝
-            enter = fadeIn() + expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), expandFrom = Alignment.End),
-            exit = fadeOut() + shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy), shrinkTowards = Alignment.End)
+            enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.panelSpec()) + expandHorizontally(animationSpec = LocalWorkspaceMotion.current.panelSpec(), expandFrom = Alignment.End),
+            exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.panelSpec()) + shrinkHorizontally(animationSpec = LocalWorkspaceMotion.current.panelSpec(), shrinkTowards = Alignment.End)
         ) {
             RightExtensionPanelContent(
                 panelWidthDp = effectivePanelWidthDp,
@@ -147,7 +152,6 @@ private fun RightExtensionPanelContent(
             .fillMaxHeight()
             .then(if (isCompact) Modifier.fillMaxWidth() else Modifier.width(panelWidthDp.dp))
             .background(colors.surfaceWorkspace)
-            .border(width = 1.dp, color = colors.divider)
     ) {
         // 1. 可拖拽分割线 (Resize Handle) —— 仅桌面端显示
         if (!isCompact) {
@@ -168,7 +172,7 @@ private fun RightExtensionPanelContent(
                             onWidthChangeState.value(newWidth)
                         }
                     }
-                    .background(colors.divider.copy(alpha = 0.5f)),
+                    .background(colors.surfaceWorkspace),
                 contentAlignment = Alignment.Center
             ) {
                 Box(
@@ -187,14 +191,14 @@ private fun RightExtensionPanelContent(
                 .fillMaxHeight()
         ) {
             // 独立面板 Header
-            SinglePanelHeader(
+            WorkspacePanelHeader(
                 title = rightDockPanelTitle(panel),
                 icon = panelIcon,
                 onClose = onClose,
                 colors = colors
             )
 
-            HorizontalDivider(color = colors.divider)
+            HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
 
             // 独立面板内容
             Box(
@@ -227,49 +231,5 @@ private fun RightExtensionPanelContent(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SinglePanelHeader(
-    title: String,
-    icon: ImageVector,
-    onClose: () -> Unit,
-    colors: MederiColors
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .background(colors.surfaceSidebar)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = colors.accentPrimary,
-                modifier = Modifier.size(14.dp)
-            )
-            Text(
-                text = title,
-                color = colors.textPrimary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-
-        // 面板头关闭按钮：收敛为 MederiPanelHeaderIconButton（22dp / 透明 + textMuted，hover 反馈）
-        MederiPanelHeaderIconButton(
-            icon = FeatherIcons.X,
-            onClick = onClose,
-            contentDescription = stringResource(Res.string.dock_close_panel),
-            colors = colors,
-        )
     }
 }

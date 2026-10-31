@@ -1,7 +1,8 @@
 package xyz.mederi.ui.overview
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -249,15 +250,15 @@ private fun CompactThresholdSlider(
     val isActive = isHovered || isDragging
     val thumbSize by animateDpAsState(
         targetValue = if (isActive) 14.dp else 12.dp,
-        animationSpec = tween(durationMillis = 150),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
     )
     val innerDotSize by animateDpAsState(
         targetValue = if (isActive) 5.dp else 4.dp,
-        animationSpec = tween(durationMillis = 150),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
     )
     val thumbElevation by animateDpAsState(
         targetValue = if (isDragging) 3.dp else if (isHovered) 2.dp else 1.dp,
-        animationSpec = tween(durationMillis = 150),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
     )
 
     val trackHeight = 4.dp

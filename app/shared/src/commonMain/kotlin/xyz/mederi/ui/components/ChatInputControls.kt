@@ -1,11 +1,16 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.foundation.BorderStroke
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,8 +40,8 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiRadius
-import xyz.mederi.ui.components.atoms.MederiIconButton
 import xyz.mederi.ui.components.atoms.MederiSendRoundButton
 
 /** 自动审批开关与说明气泡。选中态订阅 AppState 派生流（唯一真理源）。 */
@@ -49,18 +55,16 @@ internal fun AgentModeSelector(viewModel: WorkspaceViewModel) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
-            .height(26.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .clickable {
+            .heightIn(min = WorkspaceStyle.ControlHeight)
+            .inputControlSurface(onClick = {
                 viewModel.selectAgentMode(if (isAutoApprove) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
-            }
-            .padding(horizontal = 4.dp)
+            })
+            .padding(horizontal = 6.dp)
     ) {
         Text(
             text = stringResource(Res.string.auto_approve_title),
             color = colors.textSecondary,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Medium
+            style = WorkspaceStyle.Body
         )
         HelpCircleTooltip(
             mainText = stringResource(Res.string.auto_approve_tooltip_main),
@@ -98,7 +102,7 @@ internal fun AutoApproveSwitch(
     val checked = selectedAgentMode == AgentMode.AUTONOMOUS
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) 14.dp else 2.dp,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "autoApproveThumb",
     )
     Box(
@@ -123,7 +127,7 @@ internal fun AutoApproveSwitch(
 /** 发送 / 停止按钮。输入存在时统一发送，工作中无输入时可中止。样式收敛为 MederiSendRoundButton（反色 send，KDoc 已注明）。 */
 @Composable
 internal fun SendButton(
-    size: Dp = 28.dp,
+    size: Dp = WorkspaceStyle.ControlHeight,
     isStreaming: Boolean,
     hasContent: Boolean = false,
     canSend: Boolean,
@@ -146,19 +150,16 @@ internal fun SendButton(
 internal fun ChipSelectorPill(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    height: Dp = 26.dp,
+    height: Dp = WorkspaceStyle.ControlHeight,
     maxWidth: Dp? = null,
     onClick: () -> Unit = {}
 ) {
     val colors = LocalMederiColors.current
     Row(
         modifier = Modifier
-            .height(height)
+            .heightIn(min = height)
             .then(if (maxWidth != null) Modifier.widthIn(max = maxWidth) else Modifier)
-            .clip(RoundedCornerShape(MederiRadius.Control))
-            .background(colors.surfaceHover)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(MederiRadius.Control))
-            .clickable(onClick = onClick)
+            .inputControlSurface(onClick = onClick)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -168,15 +169,13 @@ internal fun ChipSelectorPill(
                 imageVector = icon,
                 contentDescription = null,
                 tint = colors.textSecondary,
-                modifier = Modifier.size(13.dp)
+                modifier = Modifier.size(WorkspaceStyle.IconSize)
             )
         }
         Text(
             text = label,
             color = colors.textPrimary,
-            fontSize = 11.5.sp,
-            lineHeight = 11.5.sp,
-            fontWeight = FontWeight.Medium,
+            style = WorkspaceStyle.Body,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -189,17 +188,49 @@ internal fun ChipSelectorPill(
     }
 }
 
+/** 输入工具统一使用轻量热区，悬停/键盘聚焦才显出容器。 */
 @Composable
 internal fun IconToolButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     onClick: () -> Unit,
-    size: Int = 28
+    size: Int = 30,
+    contentDescription: String? = null,
 ) {
-    MederiIconButton(
-        icon = icon,
-        onClick = onClick,
-        size = size,
+    val colors = LocalMederiColors.current
+    Box(
+        modifier = Modifier.size(size.dp).inputControlSurface(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = colors.textSecondary,
+            modifier = Modifier.size(WorkspaceStyle.IconSize))
+    }
+}
+
+/** 所有输入选择器共用 hover / focus 表现；不持有任何模型或草稿状态。 */
+@Composable
+internal fun Modifier.inputControlSurface(
+    onClick: () -> Unit,
+    highlight: Boolean = false,
+): Modifier {
+    val colors = LocalMederiColors.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
+    val background by animateColorAsState(
+        targetValue = when {
+            highlight -> colors.warningBg
+            hovered || focused -> colors.surfaceHover
+            else -> Color.Transparent
+        },
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
+        label = "inputControlBackground",
     )
+    val shape = RoundedCornerShape(MederiRadius.Control)
+    return this.clip(shape)
+        .background(background)
+        .border(1.dp, if (focused) colors.accentFocus else Color.Transparent, shape)
+        .hoverable(interactionSource)
+        .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
 }
 
 @Composable
@@ -213,15 +244,8 @@ internal fun ContextToolChip(
     val contentColor = if (highlight) colors.accentWarning else colors.textSecondary
     Row(
         modifier = Modifier
-            .height(26.dp)
-            .clip(RoundedCornerShape(MederiRadius.Control))
-            .background(if (highlight) colors.accentWarning.copy(alpha = 0.10f) else colors.surfaceHover)
-            .border(
-                1.dp,
-                if (highlight) colors.accentWarning.copy(alpha = 0.5f) else colors.surfaceCardBorder,
-                RoundedCornerShape(MederiRadius.Control)
-            )
-            .clickable(onClick = onClick)
+            .heightIn(min = WorkspaceStyle.ControlHeight)
+            .inputControlSurface(onClick = onClick, highlight = highlight)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -230,14 +254,12 @@ internal fun ContextToolChip(
             imageVector = icon,
             contentDescription = null,
             tint = contentColor,
-            modifier = Modifier.size(12.dp)
+            modifier = Modifier.size(WorkspaceStyle.IconSize)
         )
         Text(
             text = label,
             color = contentColor,
-            fontSize = 11.5.sp,
-            lineHeight = 11.5.sp,
-            fontWeight = FontWeight.Medium,
+            style = WorkspaceStyle.Body,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )

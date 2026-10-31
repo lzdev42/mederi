@@ -1,11 +1,13 @@
 package xyz.mederi.ui.components.atoms
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,10 +33,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.LocalMederiColors
 
 /**
@@ -58,7 +61,7 @@ import xyz.mederi.theme.LocalMederiColors
  * @param expanded 当前是否展开（箭头朝向与展开动画的唯一真理源）
  * @param onExpandedChange 点击整行时回调新的展开态
  * @param modifier 外部修饰符，排在根 Column 链最前
- * @param icon 前置图标（14.dp，纯装饰）
+ * @param icon 前置图标（16.dp，纯装饰）
  * @param iconTint 图标着色，默认弱化文字色
  * @param label 单行主文案（超长省略号截断）
  * @param labelColor 主文案着色，默认次要文字色
@@ -88,9 +91,10 @@ fun ProcessRow(
     // hover 底色：过程层常态透明，鼠标移入才浮出（120ms 淡入）
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isFocused by interactionSource.collectIsFocusedAsState()
     val headerBg by animateColorAsState(
-        if (isHovered) colors.surfaceHover else Color.Transparent,
-        tween(120)
+        if (isHovered || isFocused) colors.surfaceHover else Color.Transparent,
+        LocalWorkspaceMotion.current.feedbackSpec()
     )
 
     Column(
@@ -100,14 +104,17 @@ fun ProcessRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(min = WorkspaceStyle.ControlHeight)
                 .clip(RoundedCornerShape(6.dp))
                 .then(
                     if (clickable) {
                         Modifier
                             .background(headerBg)
+                            .expansionSemantics(expanded, onExpandedChange)
                             .clickable(
                                 interactionSource = interactionSource,
-                                indication = null
+                                indication = null,
+                                role = Role.Button
                             ) { onExpandedChange(!expanded) }
                     } else {
                         Modifier
@@ -124,23 +131,22 @@ fun ProcessRow(
                     imageVector = icon,
                     contentDescription = null,
                     tint = iconTint,
-                    modifier = Modifier.size(14.dp)
+                    modifier = Modifier.size(WorkspaceStyle.IconSize)
                 )
             }
 
             Text(
                 text = label,
                 color = labelColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
+                style = WorkspaceStyle.Title,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = if (summary == null) Modifier.weight(1f, fill = false) else Modifier
             )
             if (summary != null) {
-                Crossfade(targetState = summary, animationSpec = tween(150),
+                Crossfade(targetState = summary, animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
                     modifier = Modifier.weight(1f), label = "processActivity") { activity ->
-                    Text(text = activity, color = colors.textMuted, fontSize = 12.sp,
+                    Text(text = activity, color = colors.textMuted, style = WorkspaceStyle.Caption,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -148,20 +154,20 @@ fun ProcessRow(
             if (clickable) {
                 // 箭头紧跟文字：spacedBy 已给 6dp，再补 2.dp 模拟「两个空格」的视觉间隔
                 Spacer(modifier = Modifier.width(2.dp))
-                ExpandChevron(expanded = expanded, tint = colors.textSecondary, size = 12.dp)
+                ExpandChevron(expanded = expanded, tint = colors.textSecondary, size = WorkspaceStyle.IconSize)
             }
         }
 
         // 展开内容容器：左侧一条导轨线（贯通）标出「这是本行的下级内容」，
-        // 导轨线对齐上方 Header 图标正中心 (horizontal 6dp + 14dp/2 = 13dp)，
-        // 内边距 padding(start=22.dp, end=12.dp) 给内容和导轨线之间留出 9dp 留白，右侧留出 12dp 边距防止顶边。
+        // 导轨线对齐上方 Header 图标正中心 (horizontal 6dp + 16dp/2 = 14dp)，
+        // 内边距 padding(start=24.dp, end=12.dp) 给内容和导轨线之间留出 9dp 留白，右侧留出 12dp 边距防止顶边。
         ExpandableContent(
             expanded = expanded,
             modifier = Modifier
                 .fillMaxWidth()
                 .drawBehind {
-                    val lineX = 13.dp.toPx()
-                    val strokeWidth = 2.dp.toPx()
+                    val lineX = 14.dp.toPx()
+                    val strokeWidth = 1.dp.toPx()
                     drawLine(
                         color = colors.divider,
                         start = Offset(lineX, 0f),
@@ -170,7 +176,7 @@ fun ProcessRow(
                         cap = StrokeCap.Round,
                     )
                 }
-                .padding(start = 22.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
+                .padding(start = 24.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
         ) {
             content()
         }

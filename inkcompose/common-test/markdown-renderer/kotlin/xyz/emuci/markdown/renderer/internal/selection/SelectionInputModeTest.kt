@@ -118,7 +118,7 @@ class SelectionInputModeTest {
     }
 
     @Test
-    fun touch_input_finish_first_tap_skips_clear_second_clears() = runComposeUiTest {
+    fun touch_input_finish_next_tap_clears() = runComposeUiTest {
         val block = inlineTextBlock(id = 1, text = "selectable text", width = 260f, height = 20f)
         var controllerRef: MarkdownSelectionController? = null
 
@@ -144,9 +144,7 @@ class SelectionInputModeTest {
             val c = requireNotNull(controllerRef)
             // 默认触屏 isMouseInput=false
             c.finishSelectionGesture()
-            c.clearSelectionFromTap()   // skipNextTapClear 挡住，不清
-            assertTrue(c.state.range != null)
-            c.clearSelectionFromTap()   // 第二次清
+            c.clearSelectionFromTap()   // 长按循环不会产生额外 tap；下一次点击立即清除
             assertEquals(null, c.state.range)
         }
     }

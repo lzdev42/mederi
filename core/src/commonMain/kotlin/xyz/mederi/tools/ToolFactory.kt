@@ -31,12 +31,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object ToolFactory {
 
-    // apply_patch 不注册给 AI（2026-09 裁定：模型实际不用，单文件场景 edit_file + replace_all 全覆盖）；
-    // 实现保留在 FileSystemTools.ApplyPatchTool，恢复时在此列表与下方注册表各加回一行
+    // apply_patch 与其他文件写工具共用角色裁剪、沙盒路径边界和进程级写锁。
     val FS_TOOL_NAMES: List<ToolName> = listOf(
         ToolName.READ_FILE,
         ToolName.WRITE_FILE,
         ToolName.EDIT_FILE,
+        ToolName.APPLY_PATCH,
         ToolName.LIST_DIRECTORY,
         ToolName.BASH
     )
@@ -123,9 +123,10 @@ object ToolFactory {
             ToolName.LIST_DIRECTORY to { fsTools.ListDirectoryTool() }
         )
         if (canWrite) {
-            // write_file/edit_file 属于非高危操作（可由 diff 追踪回滚），不触发授权
+            // 文件写操作由路径白名单和写锁约束，统一追踪 diff。
             fsToolMap[ToolName.WRITE_FILE] = { fsTools.WriteFileTool() }
             fsToolMap[ToolName.EDIT_FILE] = { fsTools.EditFileTool() }
+            fsToolMap[ToolName.APPLY_PATCH] = { fsTools.ApplyPatchTool() }
         }
         if (canExecute) {
             // 非破坏命令自由执行；OS 沙箱（macOS Seatbelt / Linux bwrap）锁写白名单

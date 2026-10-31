@@ -1,0 +1,4 @@
+<resources>
+    <string name="selection_copy">Copy</string>
+    <string name="selection_paste">Paste</string>
+</resources>

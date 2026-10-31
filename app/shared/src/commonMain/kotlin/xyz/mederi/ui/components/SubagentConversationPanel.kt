@@ -1,62 +1,65 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.*
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Square
-import compose.icons.feathericons.X
-import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.cancel
-import mederi.app.shared.generated.resources.subagentui_stop_task
-import mederi.app.shared.generated.resources.subagentui_stop_task_confirm_title
-import mederi.app.shared.generated.resources.subagentui_stop_task_confirm_message
-import mederi.app.shared.generated.resources.subagentui_status_running
-import mederi.app.shared.generated.resources.subagentui_status_completed
-import mederi.app.shared.generated.resources.subagentui_status_error
-import mederi.app.shared.generated.resources.subagentui_status_stopped
-import mederi.app.shared.generated.resources.subagentui_role_executor
-import mederi.app.shared.generated.resources.subagentui_role_researcher
-import mederi.app.shared.generated.resources.dock_close_panel
+import compose.icons.feathericons.Users
+import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.ui.ChatListContent
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.ui.ChatLayout
+import xyz.mederi.ui.ChatListContent
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.components.atoms.ConfirmDialog
-import xyz.mederi.ui.components.atoms.MederiRoleTag
-import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
+import xyz.mederi.ui.components.atoms.WorkspacePanelHeader
 
-/**
- * 右侧子代理对话视图面板（无输入框）。
- *
- * 复用 [ChatListContent] 渲染子代理对话（首条=主代理指令，下面=子代理实时工作流），
- * 与主对话像素级一致，只是不挂 ChatInputCard 且用户消息无回滚按钮。
- * Header：角色标签 + mono 模型名 + 状态徽标 + 运行中停止钮 + 关闭钮。
- */
+/** 只接线VM；详情继续使用主对话renderer与按agentId独立的阅读位置。 */
 @Composable
 fun SubagentConversationPanel(
     viewModel: WorkspaceViewModel,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val colors = LocalMederiColors.current
     val subagent = viewModel.activeSubagentPanel ?: return
     val lazyListState = key(subagent.agentId) { rememberLazyListState() }
+    SubagentPanelContent(subagent, onDismiss, viewModel::stopSubagent, modifier) {
+        ChatListContent(
+            viewModel = viewModel,
+            chatItems = viewModel.subagentChatItems,
+            lazyListState = lazyListState,
+            selectionMenuActions = emptyList(),
+            modifier = Modifier.fillMaxSize(),
+            contentMaxWidth = ChatLayout.contentMaxWidth,
+            showUserMessageActions = false,
+        )
+    }
+}
+
+/** 关闭只收起面板；停止必须经过确认，确认状态随目标切换复位。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun SubagentPanelContent(
+    subagent: SubagentState,
+    onDismiss: () -> Unit,
+    onStop: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val colors = LocalMederiColors.current
     val isRunning = subagent.status.equals("RUNNING", ignoreCase = true)
-    // 终结子任务需二次确认，避免误点；与"关闭页面"的 X 视觉/语义分离。
-    var showStopConfirm by remember { mutableStateOf(false) }
-    if (showStopConfirm) {
+    var showStopConfirm by remember(subagent.agentId) { mutableStateOf(false) }
+    LaunchedEffect(isRunning) { if (!isRunning) showStopConfirm = false }
+    if (showStopConfirm && isRunning) {
         ConfirmDialog(
             title = stringResource(Res.string.subagentui_stop_task_confirm_title),
             message = stringResource(Res.string.subagentui_stop_task_confirm_message),
@@ -65,95 +68,48 @@ fun SubagentConversationPanel(
             danger = true,
             confirmIcon = FeatherIcons.Square,
             onConfirm = {
-                viewModel.stopSubagent(subagent.agentId)
+                if (isRunning) onStop(subagent.agentId)
                 showStopConfirm = false
             },
             onDismiss = { showStopConfirm = false },
         )
     }
-
     val statusLabel = when (subagent.status.uppercase()) {
         "RUNNING" -> stringResource(Res.string.subagentui_status_running)
         "COMPLETED" -> stringResource(Res.string.subagentui_status_completed)
         "ERROR" -> stringResource(Res.string.subagentui_status_error)
-        else -> stringResource(Res.string.subagentui_status_stopped)
+        "STOPPED" -> stringResource(Res.string.subagentui_status_stopped)
+        else -> subagent.status
     }
-    val roleLabel = if (subagent.role.equals("RESEARCHER", ignoreCase = true))
-        stringResource(Res.string.subagentui_role_researcher)
-    else stringResource(Res.string.subagentui_role_executor)
+    val roleLabel = when (subagent.role.uppercase()) {
+        "RESEARCHER" -> stringResource(Res.string.subagentui_role_researcher)
+        "EXECUTOR" -> stringResource(Res.string.subagentui_role_executor)
+        else -> subagent.role
+    }
     val modelLabel = buildString {
         append(subagent.modelName.ifBlank { subagent.modelId })
         if (!subagent.reasoningLevel.isNullOrBlank()) append(" (${subagent.reasoningLevel})")
     }
-
-    // 与主对话共用底部锚定布局；增量内容无需事后滚底，翻阅历史也不会被拉回。
-
-    Column(
-        modifier = modifier
-            .fillMaxHeight()
-            .background(colors.surfaceWorkspace)
-            .border(width = 1.dp, color = colors.divider)
-    ) {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp)
-                .background(colors.surfaceSidebar)
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+    Column(modifier.fillMaxHeight().background(colors.surfaceWorkspace)) {
+        WorkspacePanelHeader(roleLabel, FeatherIcons.Users, onDismiss, subtitle = modelLabel)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = MederiSpacing.SM),
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+            verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+            itemVerticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                MederiRoleTag(text = roleLabel)
-                Text(
-                    text = modelLabel,
-                    color = colors.textSecondary,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                Text(
-                    text = statusLabel,
-                    color = if (isRunning) colors.accentPrimary else colors.textMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (isRunning) {
-                    MederiPanelHeaderIconButton(
-                        icon = FeatherIcons.Square,
-                        onClick = { showStopConfirm = true },
-                        contentDescription = stringResource(Res.string.subagentui_stop_task),
-                        colors = colors,
-                    )
-                }
-                MederiPanelHeaderIconButton(
-                    icon = FeatherIcons.X,
-                    onClick = onDismiss,
-                    contentDescription = stringResource(Res.string.dock_close_panel),
-                    colors = colors,
-                )
-            }
-        }
-        HorizontalDivider(color = colors.divider)
-
-        // Body：复用 ChatListContent（无输入框、用户消息无回滚按钮）
-        Box(modifier = Modifier.fillMaxSize()) {
-            ChatListContent(
-                viewModel = viewModel,
-                chatItems = viewModel.subagentChatItems,
-                lazyListState = lazyListState,
-                selectionMenuActions = emptyList(),
-                modifier = Modifier.fillMaxSize(),
-                contentMaxWidth = ChatLayout.contentMaxWidth,
-                showUserMessageActions = false,
+            Text(statusLabel, style = WorkspaceStyle.Caption,
+                color = when (subagent.status.uppercase()) {
+                    "RUNNING" -> colors.accentText
+                    "ERROR" -> colors.dangerText
+                    else -> colors.textSecondary
+                })
+            if (isRunning) WorkspaceActionButton(
+                text = stringResource(Res.string.subagentui_stop_task), icon = FeatherIcons.Square,
+                onClick = { showStopConfirm = true }, contentColor = colors.dangerText,
             )
         }
+        HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
+        Box(Modifier.fillMaxWidth().weight(1f)) { content() }
     }
 }

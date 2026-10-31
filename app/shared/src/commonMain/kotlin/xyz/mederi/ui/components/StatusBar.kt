@@ -1,12 +1,13 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
+
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,6 +47,7 @@ import mederi.app.shared.generated.resources.status_waiting_answer
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.TurnStatus
 import xyz.mederi.ui.parseRetryHint
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.LocalMederiColors
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -128,101 +130,47 @@ fun StatusBar(
         else -> ""
     }
 
-    val shape = RoundedCornerShape(6.dp)
     val indicatorColor = if (slowResponse) colors.accentWarning else tint
-
-    AnimatedVisibility(
-        visible = status.shouldDisplayInStatusBar,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically(),
+    // 主轮次反馈使用轻量行；真实计时与重试解析保持原样，后台任务不参与此处状态派生。
+    Column(
+        modifier = modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Column(
-            modifier = modifier
-                .clip(shape)
-                .background(colors.surfaceCode.copy(alpha = 0.88f))
-                .border(
-                    1.dp,
-                    if (slowResponse) colors.accentWarning.copy(alpha = 0.5f) else colors.divider,
-                    shape
-                )
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // 主行：极简线性/呼吸指示器 + 状态文案 + 等宽耗时微标
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // 左侧状态指示器（Option 3：极简线性呼吸微标）
-                when (status) {
-                    TurnStatus.Preparing, TurnStatus.Sending -> {
-                        val transition = rememberInfiniteTransition(label = "prep")
-                        val alpha by transition.animateFloat(
-                            initialValue = 0.35f,
-                            targetValue = 1f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(650, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse,
-                            ),
-                            label = "prepAlpha",
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(width = 3.dp, height = 11.dp)
-                                .clip(RoundedCornerShape(1.5.dp))
-                                .background(indicatorColor.copy(alpha = alpha)),
-                        )
-                    }
-                    TurnStatus.Retrying, TurnStatus.WaitingAnswer, TurnStatus.Compacting -> {
-                        icon?.let { Icon(it, contentDescription = null, tint = indicatorColor, modifier = Modifier.size(13.dp)) }
-                    }
-                    else -> {
-                        CircularProgressIndicator(
-                            color = indicatorColor,
-                            strokeWidth = 1.5.dp,
-                            modifier = Modifier.size(11.dp),
-                        )
-                    }
-                }
-
-                Text(
-                    text = labelText,
-                    color = if (slowResponse) colors.accentWarning else colors.textPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-
-                // 右侧等宽耗时微标（Monospace Badge）
-                if (timerText.isNotBlank()) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(colors.surfaceCard.copy(alpha = 0.6f))
-                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                    ) {
-                        Text(
-                            text = timerText,
-                            color = if (slowResponse) colors.accentWarning else colors.textMuted,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                }
-            }
-
-            // 重试：第二行显示供应商真实错误信息（serverMsg）
-            val serverMsg = retryHint?.serverMsg
-            if (status == TurnStatus.Retrying && !serverMsg.isNullOrBlank()) {
-                Text(
-                    text = serverMsg,
-                    color = colors.textMuted,
-                    fontSize = 11.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 11.dp),
+            if (icon != null) {
+                Icon(icon, contentDescription = null, tint = indicatorColor,
+                    modifier = Modifier.size(WorkspaceStyle.IconSize).align(Alignment.CenterVertically))
+            } else {
+                WorkspaceLoadingIndicator(
+                    color = indicatorColor,
+                    strokeWidth = 1.5.dp,
+                    modifier = Modifier.size(WorkspaceStyle.IconSize).align(Alignment.CenterVertically),
                 )
             }
+            Text(
+                text = labelText,
+                color = if (slowResponse) colors.accentWarning else colors.textPrimary,
+                style = WorkspaceStyle.Title,
+                modifier = Modifier.align(Alignment.CenterVertically),
+            )
+            if (timerText.isNotBlank()) {
+                Text(text = timerText, color = colors.textSecondary, style = WorkspaceStyle.Caption,
+                    modifier = Modifier.align(Alignment.CenterVertically))
+            }
+        }
+        val serverMsg = retryHint?.serverMsg
+        if (status == TurnStatus.Retrying && !serverMsg.isNullOrBlank()) {
+            Text(
+                text = serverMsg,
+                color = colors.textSecondary,
+                style = WorkspaceStyle.Caption,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 24.dp),
+            )
         }
     }
 }
@@ -234,7 +182,7 @@ private fun statusIconAndColor(
     TurnStatus.Sending -> null to colors.accentPrimary
     TurnStatus.Preparing -> null to colors.accentPrimary
     TurnStatus.Retrying -> FeatherIcons.RefreshCw to colors.accentWarning
-    TurnStatus.Compacting -> FeatherIcons.Archive to colors.accentSecondary
+    TurnStatus.Compacting -> FeatherIcons.Archive to colors.accentPrimary
     TurnStatus.Thinking -> FeatherIcons.Zap to colors.accentPrimary
     TurnStatus.CallingTool -> FeatherIcons.Terminal to colors.accentSecondary
     TurnStatus.Generating -> FeatherIcons.Edit2 to colors.accentPrimary

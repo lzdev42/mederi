@@ -342,7 +342,7 @@ val MetricLg    = TextStyle(fontSize = 24.sp,  fontWeight = WMedium, lineHeight 
 - **不用** elevation 阴影（无 `Modifier.shadow`）。
 - 仅保留两种 ring：
   - **focus ring**：输入卡聚焦时 `1dp iris-7` border + `1dp iris-7` 外 ring。
-  - **pulse glow ring**：running 状态 `0 0 0 2dp iris-5` 脉冲（1.5s）。
+  - **任务呼吸**：当前取消外扩glow ring；统一2400ms单色边界/圆点alpha变化，无缩放；减弱模式静态。
 - 其余一律无阴影。
 
 ### 4.4 Compose Shape 片段
@@ -355,3 +355,40 @@ val PillRadius  = 10.dp
 val BubbleRadius = 12.dp
 // user-bubble 用 RoundedCornerShape(12.dp, 12.dp, 2.dp, 12.dp)
 ```
+
+
+## 5. 已迁移工作台首批变体（2026-10-29）
+
+消息、输入、概览、第二批过程/交互卡及第三批文件/阅读器控件及第四批辅助面板的已迁移调用点消费 `theme/WorkspaceStyle.kt`，其余页面保留上文基础档位；不全局替换Theme。
+
+| 字段 | 值 | 用途 |
+|---|---|---|
+| MessageBody | 14sp / 22sp | 用户正文、输入；助手局部RenderStyle桥接 |
+| Body / Title | 13sp / 20sp；Title为Medium | 控件、过程与交互卡标题 |
+| PageTitle | 16sp / 24sp Medium | 设置页等已迁移页面标题 |
+| Caption | 12sp / 18sp | 诊断、说明和对象副信息 |
+| NavigationTabMaxWidth | 240dp | 横向滚动导航项上限，给内部标签确定可测宽度；超过时省略显示，完整标题数据保留 |
+| ControlHeight / IconTarget / IconSize | 最小30dp / 最小30dp / 16dp | 紧凑桌面视觉与可操作热区；菜单随字体放大增高 |
+| InputRadius / ObjectRadius | 12dp / 8dp | 输入外壳/对象与概览外壳 |
+| HoverMillis / ExpandMillis / TaskPulseMillis | 120 / 180 / 2400ms | 统一局部反馈和任务组活动 |
+| TooltipDelayMillis / TooltipHideMillis | 200 / 150ms | Dock/帮助提示显示与离开延迟 |
+| CopyFeedbackMillis | 1500ms | 工作台复制反馈；原始消息复用既有CopyFeedbackScope同值 |
+
+颜色仍走MederiColors。正文strong/标题内容语义保留；这里只调整body排版，不把富文本全部强制成同一字重。
+
+
+## 6. 统一动效真理源（2026-10-30）
+
+取值集中在 `theme/WorkspaceMotion.kt` 的 `WorkspaceMotionPolicy`，组件通过 `LocalWorkspaceMotion` 取得当前设备策略；WorkspaceStyle的旧时长常量仅兼容别名，不再为组件提供另一套可选时长。
+
+| 语义 | 标准 | 减弱 | 接口 |
+|---|---|---|---|
+| hover/focus/pressed/控件反馈 | 120ms FastOutSlowIn tween | 0ms | feedbackSpec<T>() |
+| 局部展开/箭头/摘要显隐 | 180ms FastOutSlowIn tween | 无Enter/Exit过渡、箭头0ms | disclosureSpec<T>() |
+| 面板/抽屉/遮罩进出 | 200ms FastOutSlowIn tween | 无Enter/Exit过渡 | panelSpec<T>() |
+| 任务运行 | 完整2400ms，1200ms反向，单色alpha呼吸 | 静态边界/状态点 | workspaceTaskPulseAlpha |
+| 无进度请求等待 | 1000ms线性旋转，固定圆弧 | 静态不定进度指示 | WorkspaceLoadingIndicator |
+
+复制成功1500ms、Tooltip进入200ms/离开150ms、真实耗时/倒计时不属于动画速度，不改其语义。无弹簧、无正文闪动、无扩散波纹/多色扫光；任务文字/数量必须独立可读。旧WorkingAnimations duration/style参数保留调用兼容但不改变本策略，不鼓励新调用传旧参数。
+
+范围为本应用自有Compose工作台/共享控件；浏览器专属代码交另一AI删除不迁移，平台/Material/InkCompose内部动画不冒充已覆盖。AppState.reducedMotion是设备本地布尔偏好，key=`ui.motion.reduced`，当前为应用手动选择，不宣称自动跟随系统。

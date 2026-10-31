@@ -1,238 +1,133 @@
 package xyz.mederi.ui.settings
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
-import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.provider_api_key
-import mederi.app.shared.generated.resources.provider_api_key_placeholder
-import mederi.app.shared.generated.resources.settings_panel_add
-import mederi.app.shared.generated.resources.settings_panel_add_provider
-import mederi.app.shared.generated.resources.settings_panel_builtin_base_url_hint
-import mederi.app.shared.generated.resources.settings_panel_cancel
-import mederi.app.shared.generated.resources.settings_panel_recommended_presets
+import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.theme.MederiColors
+import xyz.mederi.theme.*
 import xyz.mederi.ui.components.ProviderIcon
-import xyz.mederi.ui.components.atoms.MederiCard
-import xyz.mederi.ui.components.atoms.MederiGhostButton
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
+import xyz.mederi.ui.components.atoms.WorkspacePanelEmptyState
 
-// ============================================================================
-// 2. 侧边栏与预设组件
-// ============================================================================
+/** 同一搜索字段用于目录/已配置；查询与数据归VM，不在字段里持有副本。 */
+@Composable
+internal fun ProviderSearchField(query: String, label: String, onChange: (String) -> Unit, enabled: Boolean = true) {
+    val colors = LocalMederiColors.current
+    OutlinedTextField(query, onChange, enabled = enabled, singleLine = true,
+        label = { Text(label, style = WorkspaceStyle.Caption) },
+        textStyle = WorkspaceStyle.Body.copy(color = colors.textPrimary),
+        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(WorkspaceStyle.ObjectRadius),
+        leadingIcon = { Icon(FeatherIcons.Search, null, modifier = Modifier.size(WorkspaceStyle.IconSize)) },
+        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = colors.accentText,
+            unfocusedBorderColor = colors.surfaceCardBorder, focusedContainerColor = colors.surfaceInput,
+            unfocusedContainerColor = colors.surfaceInput))
+}
+
+/** 管理与目录共用一行外观；可选中项用Tab语义，目录选择用Button，不复制宽窄实现。 */
+@Composable
+internal fun ProviderChoiceRow(
+    name: String, subtitle: String?, detail: String?, selected: Boolean?, onClick: () -> Unit,
+    modifier: Modifier = Modifier, enabled: Boolean = true, baseUrl: String? = null,
+) {
+    val colors = LocalMederiColors.current
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    val focused by source.collectIsFocusedAsState()
+    val background by animateColorAsState(when {
+        selected == true -> colors.accentBg
+        enabled && (hovered || focused) -> colors.surfaceHover
+        else -> Color.Transparent
+    }, LocalWorkspaceMotion.current.feedbackSpec(), label = "providerRowFeedback")
+    Row(modifier.fillMaxWidth().heightIn(min = WorkspaceStyle.ControlHeight)
+        .clip(RoundedCornerShape(MederiRadius.Control)).background(background).hoverable(source)
+        .then(if (selected != null) Modifier.selectable(selected, enabled = enabled, role = Role.Tab,
+            interactionSource = source, indication = null, onClick = onClick)
+        else Modifier.clickable(enabled = enabled, interactionSource = source, indication = null, role = Role.Button, onClick = onClick))
+        .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ProviderIcon(name, baseUrl = baseUrl, size = 16.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(name, style = if (selected == true) WorkspaceStyle.Title else WorkspaceStyle.Body,
+                color = if (selected == true) colors.accentText else colors.textPrimary,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrBlank()) Text(subtitle, style = WorkspaceStyle.Caption,
+                color = colors.textSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        if (detail != null) Text(detail, style = WorkspaceStyle.Caption, color = colors.textSecondary,
+            modifier = Modifier.widthIn(max = 120.dp), maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
 
 @Composable
-internal fun BuiltinPresetsSection(
-    presets: List<String>,
-    existingProviderNames: Set<String>,
-    colors: MederiColors,
-    onAddPreset: (String) -> Unit
+internal fun ProviderCatalogContent(
+    items: List<ProviderPresetItem>, query: String, onQueryChange: (String) -> Unit,
+    onSelect: (String) -> Unit, onCustom: () -> Unit, onBack: () -> Unit,
+    listState: LazyListState, modifier: Modifier = Modifier, enabled: Boolean = true,
 ) {
-    val unaddedPresets = presets.filter { preset ->
-        existingProviderNames.none { it.equals(preset, ignoreCase = true) }
-    }
-    if (unaddedPresets.isEmpty()) return
-
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = ProviderTokens.SpacingXSmall),
-        verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingXSmall)
-    ) {
-        Text(
-            text = stringResource(Res.string.settings_panel_recommended_presets),
-            color = colors.textMuted,
-            fontSize = ProviderTokens.FontLabel,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        )
-        unaddedPresets.forEach { preset ->
-            MederiCard(
-                onClick = { onAddPreset(preset) },
-                padding = PaddingValues(horizontal = ProviderTokens.SpacingSmall, vertical = 6.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall),
-                        modifier = Modifier.weight(1f, fill = false)
-                    ) {
-                        ProviderIcon(name = preset, size = 15.dp)
-                        Text(
-                            text = preset,
-                            color = colors.textPrimary,
-                            fontSize = ProviderTokens.FontValue,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Text(stringResource(Res.string.settings_panel_add), color = colors.accentPrimary, fontSize = ProviderTokens.FontBadge)
-                }
+    val colors = LocalMederiColors.current
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        WorkspaceActionButton(stringResource(Res.string.provider_catalog_back), onBack, enabled = enabled, icon = FeatherIcons.ArrowLeft)
+        ProviderSearchField(query, stringResource(Res.string.provider_catalog_search), onQueryChange, enabled)
+        WorkspaceActionButton(stringResource(Res.string.provider_custom_entry), onCustom, enabled = enabled, icon = FeatherIcons.Plus)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(Res.string.provider_catalog_title), style = WorkspaceStyle.Title, color = colors.textPrimary)
+            Text(stringResource(Res.string.provider_catalog_count, items.size), style = WorkspaceStyle.Caption, color = colors.textSecondary)
+        }
+        if (items.isEmpty()) WorkspacePanelEmptyState(FeatherIcons.Search, stringResource(Res.string.provider_search_empty),
+            modifier = Modifier.weight(1f), action = {
+                if (query.isNotEmpty()) WorkspaceActionButton(stringResource(Res.string.provider_search_clear), { onQueryChange("") })
+            })
+        else LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(items, key = { it.name }) { item ->
+                ProviderChoiceRow(item.name, null,
+                    stringResource(if (item.configuredIds.isEmpty()) Res.string.provider_catalog_select else Res.string.provider_catalog_manage),
+                    null, { onSelect(item.name) }, enabled = enabled)
             }
         }
     }
 }
 
+/** Key只在对应凭据步骤的Composition里存在；失败不离开该步骤，不把secret存入偏好或目录状态。 */
 @Composable
-internal fun AddBuiltinProviderDialog(
-    providerName: String,
-    colors: MederiColors,
-    onDismiss: () -> Unit,
-    onAdd: (String) -> Unit
+internal fun ProviderPresetCredentials(
+    name: String, saving: Boolean, onSubmit: (String) -> Unit, onBack: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    var apiKey by remember { mutableStateOf("") }
-    Dialog(onDismissRequest = onDismiss) {
-        // 对话框壳走 MederiCard（RadiusCard 8dp = MederiRadius.Card、surfaceCard 底色与现状一致）
-        MederiCard(
-            modifier = Modifier.width(380.dp),
-            padding = PaddingValues(ProviderTokens.SpacingLarge)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingMedium)) {
-                Text(stringResource(Res.string.settings_panel_add_provider), color = colors.textPrimary, fontSize = ProviderTokens.FontTitle, fontWeight = FontWeight.SemiBold)
-                HorizontalDivider(color = colors.divider)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)) {
-                    ProviderIcon(name = providerName, size = 24.dp)
-                    Column {
-                        Text(providerName, color = colors.textPrimary, fontSize = ProviderTokens.FontValue, fontWeight = FontWeight.SemiBold)
-                        Text(stringResource(Res.string.settings_panel_builtin_base_url_hint), color = colors.textMuted, fontSize = ProviderTokens.FontLabel)
-                    }
-                }
-                LabeledTextField(
-                    label = stringResource(Res.string.provider_api_key),
-                    value = apiKey,
-                    onValueChange = { apiKey = it },
-                    placeholder = stringResource(Res.string.provider_api_key_placeholder),
-                    isPassword = true,
-                    colors = colors
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    MederiGhostButton(
-                        text = stringResource(Res.string.settings_panel_cancel),
-                        onClick = onDismiss
-                    )
-                    Spacer(Modifier.width(ProviderTokens.SpacingSmall))
-                    PrimaryActionBtn(
-                        text = stringResource(Res.string.settings_panel_add),
-                        colors = colors,
-                        enabled = apiKey.isNotBlank(),
-                        onClick = { onAdd(apiKey.trim()) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun AddProviderSidebarButton(
-    isSelected: Boolean,
-    colors: MederiColors,
-    onClick: () -> Unit
-) {
-    // 选中态动态底色（surfaceHover）MederiCard 无法表达（固定 surfaceCard 背景），保留等价 Box 链替代 M3 Surface
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(ProviderTokens.RadiusControl)
-            .background(if (isSelected) colors.surfaceHover else colors.surfaceCard)
-            .border(1.dp, colors.divider, ProviderTokens.RadiusControl)
-            .clickable { onClick() }
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = ProviderTokens.SpacingSmall, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall)
-        ) {
-            Icon(
-                imageVector = FeatherIcons.Plus,
-                contentDescription = null,
-                tint = if (isSelected) colors.accentPrimary else colors.textSecondary,
-                modifier = Modifier.size(13.dp)
-            )
-            Text(
-                text = stringResource(Res.string.settings_panel_add_provider),
-                color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                fontSize = ProviderTokens.FontValue,
-                fontWeight = FontWeight.Medium
-            )
-        }
-    }
-}
-
-@Composable
-internal fun ProviderSidebarRow(
-    provider: ProviderItemUiState,
-    isSelected: Boolean,
-    colors: MederiColors,
-    onClick: () -> Unit
-) {
-    val bg = if (isSelected) colors.surfaceHover else Color.Transparent
-    val border = if (isSelected) colors.divider else Color.Transparent
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(ProviderTokens.RadiusCard)
-            .background(bg)
-            .border(1.dp, border, ProviderTokens.RadiusCard)
-            .clickable { onClick() }
-            .padding(horizontal = ProviderTokens.SpacingSmall, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(ProviderTokens.SpacingSmall),
-            modifier = Modifier.weight(1f)
-        ) {
-            // 状态圆点：绿点(已连接) / 灰点(未连接)
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(if (provider.isConnected) colors.accentSuccess else colors.textMuted.copy(alpha = 0.4f))
-            )
-
-            ProviderIcon(name = provider.name, baseUrl = provider.baseUrl, size = 15.dp)
-
-            Text(
-                text = provider.name,
-                color = if (isSelected) colors.textPrimary else colors.textSecondary,
-                fontSize = ProviderTokens.FontValue,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        // 统一角标容器：统一展示 1/1 或 0
-        CountBadge(
-            countText = if (provider.isConnected) "${provider.enabledModelCount}/${provider.models.size}" else "0",
-            colors = colors
-        )
+    var apiKey by remember(name) { mutableStateOf("") }
+    val colors = LocalMederiColors.current
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        WorkspaceActionButton(stringResource(Res.string.provider_preset_back), onBack, enabled = !saving, icon = FeatherIcons.ArrowLeft)
+        Text(name, style = WorkspaceStyle.PageTitle, color = colors.textPrimary)
+        Text(stringResource(Res.string.settings_panel_builtin_base_url_hint), style = WorkspaceStyle.Caption, color = colors.textSecondary)
+        LabeledTextField(
+            stringResource(Res.string.provider_api_key), apiKey, { apiKey = it },
+            stringResource(Res.string.provider_api_key_placeholder), colors, isPassword = true, enabled = !saving)
+        WorkspaceActionButton(stringResource(if (saving) Res.string.provider_adding else Res.string.settings_panel_add),
+            { onSubmit(apiKey.trim()) }, enabled = !saving && apiKey.isNotBlank(), primary = true)
     }
 }

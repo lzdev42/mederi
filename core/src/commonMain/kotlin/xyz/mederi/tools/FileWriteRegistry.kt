@@ -27,14 +27,41 @@ object FileWriteRegistry {
      *
      * @return 冲突的文件（供错误信息展示）；null = 全部登记成功
      */
-    fun tryAcquire(paths: List<File>): File? {
-        val keys = paths.map { it.canonicalFile.absolutePath }.distinct().sorted()
-        synchronized(this) {
-            val conflict = keys.firstOrNull { it in lockedPaths }
-            if (conflict != null) return File(conflict)
-            keys.forEach { lockedPaths.add(it) }
+    fun tryAcquire(paths: List<File>): File? = acquireKeys(canonicalKeys(paths))
+
+    /** 带稳定键快照的锁租约：路径在操作中被重命名或替换，也必须释放最初获取的键。 */
+    internal sealed interface Acquisition {
+        data class Acquired(val lease: Lease) : Acquisition
+        data class Conflict(val file: File) : Acquisition
+    }
+
+    internal class Lease internal constructor(private val keys: List<String>) : AutoCloseable {
+        private var closed = false
+        override fun close() {
+            synchronized(FileWriteRegistry) {
+                // 重复 close 不能误释放随后另一个调用获取的同名锁。
+                if (!closed) {
+                    closed = true
+                    keys.forEach { lockedPaths.remove(it) }
+                }
+            }
         }
-        return null
+    }
+
+    internal fun tryAcquireLease(paths: List<File>): Acquisition {
+        val keys = canonicalKeys(paths)
+        val conflict = acquireKeys(keys)
+        return if (conflict == null) Acquisition.Acquired(Lease(keys)) else Acquisition.Conflict(conflict)
+    }
+
+    private fun canonicalKeys(paths: List<File>): List<String> =
+        paths.map { it.canonicalFile.absolutePath }.distinct().sorted()
+
+    private fun acquireKeys(keys: List<String>): File? = synchronized(this) {
+        val conflict = keys.firstOrNull { it in lockedPaths }
+        if (conflict != null) return@synchronized File(conflict)
+        keys.forEach { lockedPaths.add(it) }
+        null
     }
 
     /** 释放路径（写完或出错后调用；幂等，未占用路径移除为 no-op）。 */

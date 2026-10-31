@@ -3,6 +3,12 @@ package xyz.emuci.markdown.renderer.internal.compose
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.layout.onGloballyPositioned
+import xyz.emuci.markdown.renderer.internal.selection.LocalSelectionTextScope
+import xyz.emuci.markdown.renderer.internal.selection.LocalMarkdownSelectionController
+import xyz.emuci.syntax.renderer.LocalCodeTextSelectionObserver
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -30,12 +36,29 @@ internal fun PaintInlineLayoutContent(
     onTextLayout: ((TextLayoutResult) -> Unit)? = null,
     onTextItemLayout: ((List<LayoutInlineRunPlacement>, TextLayoutResult) -> Unit)? = null,
 ) {
+    val selectionScope = LocalSelectionTextScope.current
+    val selectionController = LocalMarkdownSelectionController.current
     val textMeasurer = rememberTextMeasurer()
     val textPaintStyle = remember(block.style) {
         textMeasurementStyle(block.style)
     }
     val placements = remember(block.lines, block.frame) {
         block.runPlacements()
+    }
+    val sourceOffsets = remember(placements) {
+        var cursor = 0
+        placements.associate { placement ->
+            val run = placement.run
+            val start = when (run) {
+                is LayoutTextRun -> run.sourceStart ?: cursor
+                is LayoutWidgetRun -> run.sourceStart ?: cursor
+            }
+            cursor = start + when (run) {
+                is LayoutTextRun -> run.text.length
+                is LayoutWidgetRun -> run.alternateText.length
+            }
+            (placement.lineIndex to placement.runIndex) to start
+        }
     }
     val paintItems = remember(placements, block.style, textMeasurer) {
         buildInlinePaintItems(
@@ -54,21 +77,27 @@ internal fun PaintInlineLayoutContent(
                         item.stableKey,
                         onTextLayout != null || onTextItemLayout != null,
                     ) {
+                        val sourceOffset = sourceOffsets[item.placements.first().let { it.lineIndex to it.runIndex }] ?: 0
+                        val observer = remember(selectionController, selectionScope, sourceOffset) {
+                            selectionScope?.let { scope ->
+                                selectionController?.textFragments?.observer(scope.blockStableId, scope.offset + sourceOffset)
+                            }
+                        }
+                        DisposableEffect(observer) { onDispose { observer?.onDispose?.invoke(0) } }
                         BasicText(
                             text = item.text,
-                            modifier = Modifier.clipToBounds(),
+                            modifier = Modifier.clipToBounds().onGloballyPositioned {
+                                observer?.onPositioned?.invoke(0, it)
+                            },
                             // InlineFlowLayout owns line spacing. Paint with the same
                             // line-height-free style used to measure the fixed run bounds.
                             style = textPaintStyle,
                             maxLines = 1,
                             softWrap = false,
-                            onTextLayout = if (onTextLayout != null || onTextItemLayout != null) {
-                                { result ->
-                                    onTextLayout?.invoke(result)
-                                    onTextItemLayout?.invoke(item.placements, result)
-                                }
-                            } else {
-                                null
+                            onTextLayout = { result ->
+                                observer?.onTextLayout?.invoke(0, result)
+                                onTextLayout?.invoke(result)
+                                onTextItemLayout?.invoke(item.placements, result)
                             },
                         )
                     }
@@ -76,8 +105,14 @@ internal fun PaintInlineLayoutContent(
                     is InlineWidgetPaintItem -> key(item.run.identity.stableId) {
                         val run = item.run
                         val payload = block.inlinePayloads[run.id]
-                        Box {
-                            payload?.content?.invoke()
+                        val sourceOffset = sourceOffsets[item.placement.lineIndex to item.placement.runIndex] ?: 0
+                        val observer = remember(selectionController, selectionScope, sourceOffset) {
+                            selectionScope?.let { scope ->
+                                selectionController?.textFragments?.observer(scope.blockStableId, scope.offset + sourceOffset)
+                            }
+                        }
+                        CompositionLocalProvider(LocalCodeTextSelectionObserver provides observer) {
+                            Box { payload?.content?.invoke() }
                         }
                     }
                 }

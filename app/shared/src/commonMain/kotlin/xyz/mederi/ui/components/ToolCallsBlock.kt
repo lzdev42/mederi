@@ -1,7 +1,8 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
+
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,9 +16,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
+import xyz.emuci.inkcompose.RenderStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import kotlinx.serialization.json.Json
@@ -85,13 +87,9 @@ import mederi.app.shared.generated.resources.tool_action_verify_one
 import mederi.app.shared.generated.resources.tool_action_verify_running
 import mederi.app.shared.generated.resources.tool_action_verify_running_target
 import mederi.app.shared.generated.resources.tool_action_verify_target
-import mederi.app.shared.generated.resources.subagent_strip_completed_one
 import mederi.app.shared.generated.resources.subagent_strip_dispatched_many
+import mederi.app.shared.generated.resources.subagent_dispatch_guidance
 import mederi.app.shared.generated.resources.subagent_strip_dispatched_one
-import mederi.app.shared.generated.resources.subagent_strip_failed_many
-import mederi.app.shared.generated.resources.subagent_strip_failed_one
-import mederi.app.shared.generated.resources.subagent_strip_running_many
-import mederi.app.shared.generated.resources.subagent_strip_running_one
 import mederi.app.shared.generated.resources.subagent_strip_view_overview
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.DebugLog
@@ -101,11 +99,11 @@ import xyz.mederi.ui.SubagentReportMarkdown
 import xyz.mederi.ui.chat.ToolActionGroup
 import xyz.mederi.ui.chat.ToolActionKind
 import xyz.mederi.ui.chat.groupToolCallsByAction
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.ExpandableRow
 import xyz.mederi.ui.components.atoms.MederiMarkdown
 import xyz.mederi.ui.components.atoms.ProcessRow
-import xyz.mederi.ui.components.atoms.StatusStrip
 
 /**
  * 工具调用时间线 (ToolCallsBlock)：按时序逐条展示极简动作行。
@@ -187,18 +185,18 @@ fun ToolActionGroupRow(
         isFailed -> Pair(FeatherIcons.AlertCircle, colors.accentDanger)
         group.kind == ToolActionKind.COMMAND -> Pair(TerminalPromptIcon, defaultMutedColor)
         group.kind == ToolActionKind.READ -> Pair(FeatherIcons.FileText, defaultMutedColor)
-        group.kind == ToolActionKind.EDIT -> Pair(FeatherIcons.Edit3, colors.thoughtAccent)
+        group.kind == ToolActionKind.EDIT -> Pair(FeatherIcons.Edit3, colors.textSecondary)
         group.kind == ToolActionKind.SEARCH -> Pair(FeatherIcons.Search, defaultMutedColor)
         group.kind == ToolActionKind.LIST -> Pair(FeatherIcons.Folder, defaultMutedColor)
-        group.kind == ToolActionKind.SUBAGENT -> Pair(FeatherIcons.Users, colors.thoughtAccent)
+        group.kind == ToolActionKind.SUBAGENT -> Pair(FeatherIcons.Users, colors.textSecondary)
         group.kind == ToolActionKind.MCP -> Pair(FeatherIcons.Cpu, defaultMutedColor)
         group.kind == ToolActionKind.ASK -> if (!isGroupRunning && !isAskDeclined) {
-            Pair(FeatherIcons.HelpCircle, colors.thoughtAccent)
+            Pair(FeatherIcons.HelpCircle, colors.textSecondary)
         } else {
             Pair(FeatherIcons.HelpCircle, defaultMutedColor)
         }
         group.kind == ToolActionKind.TODO -> Pair(FeatherIcons.CheckSquare, defaultMutedColor)
-        group.kind == ToolActionKind.VERIFY -> Pair(FeatherIcons.CheckCircle, colors.thoughtAccent)
+        group.kind == ToolActionKind.VERIFY -> Pair(FeatherIcons.CheckCircle, colors.textSecondary)
         else -> Pair(FeatherIcons.Zap, defaultMutedColor)
     }
 
@@ -269,10 +267,10 @@ fun ToolActionGroupRow(
         // 运行中的动作组以旋转指示器取代静态分类图标（运行中指示信息不丢）
         leading = if (isGroupRunning) {
             {
-                CircularProgressIndicator(
-                    color = colors.statusWorking,
+                WorkspaceLoadingIndicator(
+                    color = colors.accentPrimary,
                     strokeWidth = 1.4.dp,
-                    modifier = Modifier.size(12.dp)
+                    modifier = Modifier.size(WorkspaceStyle.IconSize)
                 )
             }
         } else {
@@ -349,14 +347,14 @@ private fun ToolCallExecutionDetails(
         // target 若已在原始参数中出现则不重复；命令也使用原始参数展示。
         call.target?.takeIf { it.isNotBlank() && it !in input.values }?.let { target ->
             SelectionContainer {
-                Text(target, color = colors.textSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Text(target, color = colors.textSecondary, fontFamily = FontFamily.Monospace, style = WorkspaceStyle.Caption)
             }
         }
         input.forEach { (name, value) ->
             SelectionContainer {
                 Column(Modifier.fillMaxWidth()) {
-                    Text(name, color = colors.textMuted, fontSize = 11.sp)
-                    Text(value, color = colors.textPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    Text(name, color = colors.textMuted, style = WorkspaceStyle.Caption)
+                    Text(value, color = colors.textPrimary, fontFamily = FontFamily.Monospace, style = WorkspaceStyle.Caption)
                 }
             }
         }
@@ -377,7 +375,7 @@ private fun ToolCallExecutionDetails(
             Text(
                 text = stringResource(status),
                 color = if (isFailed) colors.accentDanger else colors.textMuted,
-                fontSize = 12.sp,
+                style = WorkspaceStyle.Caption,
             )
         }
     }
@@ -399,11 +397,6 @@ private fun ToolCallOutputBlock(
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .background(colors.surfaceCode)
-            .border(
-                1.dp,
-                if (isFailed) colors.accentDanger.copy(alpha = 0.4f) else colors.surfaceCardBorder,
-                RoundedCornerShape(6.dp)
-            )
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         SelectionContainer {
@@ -411,8 +404,7 @@ private fun ToolCallOutputBlock(
                 text = output,
                 color = if (isFailed) colors.accentDanger else colors.onSurfaceCode,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.5.sp,
-                lineHeight = 16.sp,
+                style = WorkspaceStyle.Caption,
                 modifier = Modifier
                     .fillMaxWidth()
                     .containScroll()
@@ -443,28 +435,23 @@ private fun ToolCallReportBlock(
             DebugLog.event("UI", "ToolCallReportBlock clicked: callId=$callId, isExpanded=$newVal")
         },
         modifier = Modifier.fillMaxWidth(),
-        chevronTint = colors.thoughtAccent,
+        chevronTint = colors.textSecondary,
         header = {
             Text(
                 text = stringResource(Res.string.tool_detail_report),
-                color = colors.thoughtAccent,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 0.5.sp,
+                color = colors.textSecondary,
+                style = WorkspaceStyle.Title,
             )
         },
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .background(colors.surfaceCard)
-                .border(1.dp, colors.divider, RoundedCornerShape(6.dp))
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(vertical = 6.dp)
         ) {
             MederiMarkdown(
                 content = reportMarkdown,
+                style = RenderStyle.Chat.copy(bodyStyle = WorkspaceStyle.Body),
                 modifier = Modifier.fillMaxWidth(),
                 enableScrollOverride = false,
                 onLinkClick = onLinkClick,
@@ -648,14 +635,7 @@ private fun ToolCallAskBlock(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(colors.surfaceCode)
-            .border(
-                1.dp,
-                if (isFailed) colors.accentDanger.copy(alpha = 0.4f) else colors.surfaceCardBorder,
-                RoundedCornerShape(6.dp)
-            )
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items.forEachIndexed { index, item ->
@@ -671,17 +651,15 @@ private fun ToolCallAskBlock(
                 ) {
                     Text(
                         text = if (items.size > 1) "Q${index + 1}:" else "Q:",
-                        color = colors.thoughtAccent,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
+                        color = colors.textSecondary,
+                        style = WorkspaceStyle.Title,
                         fontFamily = FontFamily.Monospace,
                     )
                     SelectionContainer(modifier = Modifier.weight(1f)) {
                         Text(
                             text = item.prompt,
                             color = colors.textPrimary,
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
+                            style = WorkspaceStyle.Body,
                         )
                     }
                 }
@@ -695,8 +673,7 @@ private fun ToolCallAskBlock(
                     Text(
                         text = if (items.size > 1) "A${index + 1}:" else "A:",
                         color = if (item.isDeclined) colors.accentDanger else colors.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
+                        style = WorkspaceStyle.Title,
                         fontFamily = FontFamily.Monospace,
                     )
                     val answerText = when {
@@ -715,10 +692,8 @@ private fun ToolCallAskBlock(
                         Text(
                             text = answerText,
                             color = answerColor,
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
+                            style = WorkspaceStyle.Body,
                             fontWeight = if (item.answer != null) FontWeight.Medium else FontWeight.Normal,
-                            fontStyle = if (item.answer == null) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal,
                         )
                     }
                 }
@@ -728,12 +703,9 @@ private fun ToolCallAskBlock(
 }
 
 /**
- * 结构化子 Agent 调用通知微条 (SubagentCallsBlock)
- * 极简单行通知胶囊：显示派发的子 Agent 状态，
- * 点击整行直接滑开右侧概览（Overview）查看完整日志与多代理执行进度。
- *
- * 微条的外观壳（8dp 圆角 / surfaceCard 底 / hover 边框 / 流光动效 / 前置图标 / 单行文本 /
- * 右侧「文字 + 箭头」入口 / 整行点击）统一由 `atoms/StatusStrip.kt` 提供。
+ * 成功派发后的独立通知，不依赖模型正文，也不随工作过程折叠。
+ * 用留白、标题与细竖线区分层级，不叠加卡片底色、描边或持续运行动画。
+ * 这是派发记录而非实时状态：之后的运行详情由概览承接。
  */
 @Composable
 fun SubagentCallsBlock(
@@ -744,59 +716,61 @@ fun SubagentCallsBlock(
     onOpenOverview: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    if (subagents.isEmpty()) return
+    // 组件本身也守住成功边界，避免其它调用入口提前显示成功提示。
+    val dispatched = subagents.filter { call ->
+        val completed = call.state as? ToolCallState.Completed
+        return@filter !call.isFailed && completed != null &&
+            completed.input["action"] in setOf("SPAWN", "SPAWN_RESEARCHER") &&
+            !completed.output.startsWith("Error:")
+    }
+    if (dispatched.isEmpty()) return
 
     val colors = LocalMederiColors.current
-    val count = subagents.size
-
-    val anyFailed = hasFailed || subagents.any { it.isFailed || it.state is ToolCallState.Failed }
-    val anyRunning = (isRunning || isStreaming) && subagents.any {
-        it.state is ToolCallState.Running || it.state is ToolCallState.Pending
-    }
-
-    val statusText = when {
-        anyFailed -> if (count > 1) {
-            stringResource(Res.string.subagent_strip_failed_many, count)
-        } else {
-            stringResource(Res.string.subagent_strip_failed_one)
+    Row(
+        modifier = modifier.fillMaxWidth().padding(vertical = 8.dp).height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier.width(2.dp).fillMaxHeight()
+                .background(colors.accentPrimary.copy(alpha = 0.4f), RoundedCornerShape(1.dp))
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = FeatherIcons.Check,
+                    contentDescription = null,
+                    tint = colors.accentText,
+                    modifier = Modifier.size(WorkspaceStyle.IconSize),
+                )
+                Text(
+                    text = if (dispatched.size == 1) {
+                        stringResource(Res.string.subagent_strip_dispatched_one)
+                    } else {
+                        stringResource(Res.string.subagent_strip_dispatched_many, dispatched.size)
+                    },
+                    color = colors.textPrimary,
+                    style = WorkspaceStyle.Title,
+                )
+            }
+            Text(
+                text = stringResource(Res.string.subagent_dispatch_guidance),
+                color = colors.textSecondary,
+                style = WorkspaceStyle.Caption,
+            )
+            if (onOpenOverview != null) {
+                Text(
+                    text = stringResource(Res.string.subagent_strip_view_overview),
+                    color = colors.accentText,
+                    style = WorkspaceStyle.Caption,
+                    modifier = Modifier.heightIn(min = WorkspaceStyle.ControlHeight)
+                        .clickable(role = Role.Button, onClick = onOpenOverview).padding(vertical = 5.dp),
+                )
+            }
         }
-        anyRunning -> if (count > 1) {
-            stringResource(Res.string.subagent_strip_running_many, count)
-        } else {
-            stringResource(Res.string.subagent_strip_running_one)
-        }
-        else -> if (count > 1) {
-            stringResource(Res.string.subagent_strip_dispatched_many, count)
-        } else {
-            stringResource(Res.string.subagent_strip_dispatched_one)
-        }
     }
-
-    val icon = when {
-        anyRunning -> FeatherIcons.Loader
-        anyFailed -> FeatherIcons.AlertCircle
-        else -> FeatherIcons.Play
-    }
-
-    val iconTint = when {
-        anyRunning -> colors.accentSecondary
-        anyFailed -> colors.accentDanger
-        else -> colors.accentSecondary
-    }
-
-    StatusStrip(
-        text = statusText,
-        icon = icon,
-        iconTint = iconTint,
-        borderColor = if (anyRunning) colors.accentSecondary.copy(alpha = 0.35f) else colors.divider,
-        spinning = anyRunning,
-        animated = anyRunning,
-        actionLabel = if (onOpenOverview != null) {
-            stringResource(Res.string.subagent_strip_view_overview)
-        } else null,
-        onAction = onOpenOverview,
-        modifier = modifier.fillMaxWidth()
-    )
 }
 
 

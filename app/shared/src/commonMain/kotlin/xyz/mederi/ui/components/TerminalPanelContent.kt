@@ -1,45 +1,34 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.AlertCircle
 import compose.icons.feathericons.Plus
+import compose.icons.feathericons.RotateCw
 import compose.icons.feathericons.Terminal
 import compose.icons.feathericons.X
+import xyz.mederi.ui.TerminalUiState
 import xyz.mederi.ui.TerminalViewModel
 import xyz.mederi.ui.WorkspaceViewModel
-import xyz.mederi.ui.terminalCwdOf
 import xyz.mederi.ui.terminalTabTitle
 import xyz.mederi.theme.MederiColors
-import xyz.mederi.ui.components.atoms.MederiPanelHeaderIconButton
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.ui.components.atoms.WorkspaceIconButton
+import xyz.mederi.ui.components.atoms.WorkspacePanelEmptyState
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
+import xyz.mederi.ui.components.atoms.WorkspaceNavigationTab
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.term_all_closed
 import mederi.app.shared.generated.resources.term_all_closed_hint
@@ -49,130 +38,138 @@ import mederi.app.shared.generated.resources.term_new_tab
 import mederi.app.shared.generated.resources.term_reopen
 import mederi.app.shared.generated.resources.term_session_ended
 import mederi.app.shared.generated.resources.term_starting
-import mederi.app.shared.generated.resources.term_title
+import mederi.app.shared.generated.resources.term_tab_ended
+import mederi.app.shared.generated.resources.term_unread
 import mederi.app.shared.generated.resources.term_unavailable
 import mederi.app.shared.generated.resources.term_unavailable_hint
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * 终端面板：多 tab 终端（每 tab 一个独立 shell 会话，数量不设限）。
- * 全部状态机（tab/会话/未读/错误/结束标记）在 [TerminalViewModel]（ViewModelStore 管理，
- * dock 面板关闭重开不丢 tab 结构），本组件只做渲染与事件转发。
+ * 终端路由：会话生命周期仍由 TerminalViewModel 管理。
+ * 关闭面板不停止 shell；关闭单个 tab 仍转交 VM 的 closeTab，只作用于对应会话。
  */
 @Composable
 internal fun TerminalPanelContent(
     viewModel: WorkspaceViewModel,
     terminalVm: TerminalViewModel,
     colors: MederiColors,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
-    // 状态机在 TerminalViewModel（Route 层创建，ViewModelStore 管理生命周期），本组件只渲染与事件转发
     if (terminalVm.manager == null) {
         TerminalUnsupportedPlaceholder(colors, modifier)
         return
     }
-
     val terminalUiState = terminalVm.uiState
     val projects by terminalVm.projects.collectAsState()
     val selectedProjectId by terminalVm.selectedProjectId.collectAsState()
 
-    // 首次打开面板且零 tab → 自动开一个（点开即是终端）；项目 cwd 优先，无项目 → home
+    // 原有 bootstrap / ensureSession 入口与 key 保持不变。
     LaunchedEffect(selectedProjectId, projects) {
         terminalVm.bootstrapIfNeeded(selectedProjectId?.let { id -> projects.find { it.id == id } })
     }
-
-    // 兜底：激活 tab 无会话且无错误（如初始 local tab、重试清空后）→ 拉起
     LaunchedEffect(terminalUiState.activeKey) {
         terminalVm.ensureSession(terminalUiState.activeKey)
     }
-
+    val titles = terminalUiState.tabs.associate { tab ->
+        val title = terminalTabTitle(tab.key, terminalVm.sessionTitleOf(tab.key), projects)
+        tab.key to stringResource(title.key, *title.args.toTypedArray())
+    }
     Column(modifier = modifier.fillMaxSize().background(colors.surfaceWorkspace)) {
-        // ---- Tab 栏 ----
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(34.dp)
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            terminalUiState.tabs.forEach { tab ->
-                val key = tab.key
-                val isActive = key == terminalUiState.activeKey
-                val isEnded = tab.ended
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isActive) colors.surfaceCard else colors.surfaceWorkspace)
-                        .clickable { terminalVm.selectTab(key) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (!isActive && tab.unread && !isEnded) {
-                        Box(
-                            modifier = Modifier
-                                .padding(end = 4.dp)
-                                .size(5.dp)
-                                .clip(CircleShape)
-                                .background(colors.accentSecondary)
-                        )
-                    }
-                    val tabTitle = terminalTabTitle(key, terminalVm.sessionTitleOf(key), projects)
-                    Text(
-                        text = stringResource(tabTitle.key, *tabTitle.args.toTypedArray()),
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = if (isActive) FontWeight.Medium else FontWeight.Normal,
-                        color = when {
-                            isEnded -> colors.textMuted
-                            isActive -> colors.textPrimary
-                            else -> colors.textSecondary
-                        },
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(Res.string.term_close_tab),
-                        tint = colors.textMuted,
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clickable { terminalVm.closeTab(key) }
-                    )
-                }
-            }
-
-            // 新建 tab 按钮（收敛为 MederiPanelHeaderIconButton，获得 hover 反馈）
-            MederiPanelHeaderIconButton(
-                icon = FeatherIcons.Plus,
-                onClick = { terminalVm.addTab() },
-                contentDescription = stringResource(Res.string.term_new_tab),
-            )
-        }
-
-        // ---- 当前 tab 内容 ----
+        TerminalTabs(
+            uiState = terminalUiState,
+            titles = titles,
+            colors = colors,
+            onSelectTab = terminalVm::selectTab,
+            onCloseTab = terminalVm::closeTab,
+            onNewTab = { terminalVm.addTab() },
+        )
         val currentKey = terminalUiState.activeKey
         val currentError = terminalUiState.tabs.firstOrNull { it.key == currentKey }?.error
         Box(modifier = Modifier.fillMaxSize()) {
             when {
-                currentKey.isEmpty() -> TerminalCenterHint(stringResource(Res.string.term_all_closed), stringResource(Res.string.term_all_closed_hint), colors)
-
+                currentKey.isEmpty() -> TerminalCenterHint(
+                    title = stringResource(Res.string.term_all_closed),
+                    subtitle = stringResource(Res.string.term_all_closed_hint),
+                    colors = colors,
+                )
                 currentError != null -> TerminalErrorView(
                     message = stringResource(currentError.key, *currentError.args.toTypedArray()),
                     colors = colors,
-                    onRetry = { terminalVm.retryTab(currentKey) }
+                    onRetry = { terminalVm.retryTab(currentKey) },
                 )
-
                 terminalVm.sessionOf(currentKey) != null -> TerminalSessionView(
                     session = terminalVm.sessionOf(currentKey)!!,
                     colors = colors,
-                    onRestart = { terminalVm.restartTab(currentKey) }
+                    onRestart = { terminalVm.restartTab(currentKey) },
                 )
-
                 else -> TerminalCenterHint(stringResource(Res.string.term_starting), null, colors)
             }
         }
+    }
+}
+
+/**
+ * 纯 tab 视图。选择按钮和关闭按钮是并列点击区域，关闭不会冒泡触发选择。
+ * 标题由路由从现有项目/会话数据解析；该组件不访问 VM 或创建会话。
+ */
+@Composable
+internal fun TerminalTabs(
+    uiState: TerminalUiState,
+    titles: Map<String, String>,
+    colors: MederiColors,
+    onSelectTab: (String) -> Unit,
+    onCloseTab: (String) -> Unit,
+    onNewTab: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val closeLabel = stringResource(Res.string.term_close_tab)
+    val unreadLabel = stringResource(Res.string.term_unread)
+    val endedLabel = stringResource(Res.string.term_tab_ended)
+    Row(
+        modifier = modifier.fillMaxWidth().padding(horizontal = MederiSpacing.SM, vertical = MederiSpacing.Tight),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()).selectableGroup(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+        ) {
+            uiState.tabs.forEach { tab ->
+                key(tab.key) {
+                    val active = tab.key == uiState.activeKey
+                    val title = titles[tab.key] ?: tab.key
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!active && tab.unread && !tab.ended) {
+                            Box(
+                                modifier = Modifier.padding(start = 4.dp, end = 2.dp).size(6.dp)
+                                    .clip(CircleShape).background(colors.accentPrimary)
+                                    .semantics { contentDescription = unreadLabel },
+                            )
+                        }
+                        WorkspaceNavigationTab(
+                            text = title,
+                            selected = active,
+                            onClick = { onSelectTab(tab.key) },
+                            icon = FeatherIcons.Terminal,
+                            detail = endedLabel.takeIf { tab.ended },
+                        )
+                        WorkspaceIconButton(
+                            icon = FeatherIcons.X,
+                            contentDescription = "$closeLabel: $title",
+                            onClick = { onCloseTab(tab.key) },
+                            colors = colors,
+                        )
+                    }
+                }
+            }
+        }
+        WorkspaceIconButton(
+            icon = FeatherIcons.Plus,
+            contentDescription = stringResource(Res.string.term_new_tab),
+            onClick = onNewTab,
+            colors = colors,
+        )
     }
 }
 
@@ -183,100 +180,91 @@ private fun TerminalSessionView(
     onRestart: () -> Unit,
 ) {
     val isRunning by session.isRunning.collectAsState()
-
     Box(modifier = Modifier.fillMaxSize()) {
-        TerminalView(
-            session = session,
-            isDark = colors.isDark,
-            modifier = Modifier.fillMaxSize(),
-        )
+        // 原生终端视图接线与尺寸保持原样，不在表现层重建 session。
+        TerminalView(session = session, isDark = colors.isDark, modifier = Modifier.fillMaxSize())
         if (!isRunning) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
+            TerminalEndedView(
+                colors = colors,
+                onRestart = onRestart,
+                modifier = Modifier.fillMaxSize()
                     .background(colors.surfaceWorkspace.copy(alpha = 0.88f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = stringResource(Res.string.term_session_ended),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textSecondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(Res.string.term_reopen),
-                        fontSize = 12.sp,
-                        color = colors.accentSecondary,
-                        modifier = Modifier.clickable { onRestart() }
-                    )
-                }
-            }
+            )
         }
     }
 }
 
+/** 可独立验证的结束提示，重新打开只发出原有 restart 意图。 */
 @Composable
-private fun TerminalErrorView(message: String, colors: MederiColors, onRetry: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-            Text(text = message, fontSize = 12.sp, color = colors.textSecondary)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
+internal fun TerminalEndedView(
+    colors: MederiColors,
+    onRestart: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    WorkspacePanelEmptyState(
+        icon = FeatherIcons.Terminal,
+        title = stringResource(Res.string.term_session_ended),
+        modifier = modifier,
+        colors = colors,
+        action = {
+            WorkspaceActionButton(
+                text = stringResource(Res.string.term_reopen),
+                onClick = onRestart,
+                icon = FeatherIcons.RotateCw,
+                colors = colors,
+            )
+        },
+    )
+}
+
+/** 可独立验证的真实错误消息与重试入口，不以点击整块替代明确动作。 */
+@Composable
+internal fun TerminalErrorView(
+    message: String,
+    colors: MederiColors,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    WorkspacePanelEmptyState(
+        icon = FeatherIcons.AlertCircle,
+        title = message,
+        modifier = modifier,
+        colors = colors,
+        action = {
+            WorkspaceActionButton(
                 text = stringResource(Res.string.term_click_retry),
-                fontSize = 12.sp,
-                color = colors.accentSecondary,
-                modifier = Modifier.clickable { onRetry() }
+                onClick = onRetry,
+                icon = FeatherIcons.RotateCw,
+                colors = colors,
             )
-        }
-    }
+        },
+    )
 }
 
 @Composable
-private fun TerminalCenterHint(title: String, subtitle: String?, colors: MederiColors) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = title, fontSize = 12.sp, color = colors.textSecondary)
-            if (subtitle != null) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(text = subtitle, fontSize = 11.sp, color = colors.textMuted)
-            }
-        }
-    }
+internal fun TerminalCenterHint(
+    title: String,
+    subtitle: String?,
+    colors: MederiColors,
+    modifier: Modifier = Modifier,
+) {
+    WorkspacePanelEmptyState(
+        icon = FeatherIcons.Terminal,
+        title = title,
+        hint = subtitle,
+        colors = colors,
+        modifier = modifier,
+    )
 }
 
-/** 无终端能力端（wasm/移动遥控端）占位。 */
+/** 无能力提示无重试假按钮，不能将遥控端伪装成本地 PTY。 */
 @Composable
-private fun TerminalUnsupportedPlaceholder(colors: MederiColors, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier.fillMaxSize().background(colors.surfaceWorkspace),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(24.dp)
-        ) {
-            Icon(
-                imageVector = FeatherIcons.Terminal,
-                contentDescription = stringResource(Res.string.term_title),
-                tint = colors.textMuted,
-                modifier = Modifier.size(36.dp)
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = stringResource(Res.string.term_unavailable),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.textSecondary
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = stringResource(Res.string.term_unavailable_hint),
-                fontSize = 11.sp,
-                color = colors.textMuted
-            )
-        }
-    }
+internal fun TerminalUnsupportedPlaceholder(colors: MederiColors, modifier: Modifier = Modifier) {
+    WorkspacePanelEmptyState(
+        icon = FeatherIcons.Terminal,
+        title = stringResource(Res.string.term_unavailable),
+        hint = stringResource(Res.string.term_unavailable_hint),
+        colors = colors,
+        modifier = modifier.background(colors.surfaceWorkspace),
+    )
 }

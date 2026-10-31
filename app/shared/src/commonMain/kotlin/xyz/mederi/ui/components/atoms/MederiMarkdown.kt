@@ -4,7 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.emuci.inkcompose.RenderStyle
-import xyz.emuci.markdown.renderer.SelectionMenuAction
+import xyz.emuci.inkcompose.SelectionMenuAction
 import xyz.mederi.theme.MederiMarkdownConfig
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 
@@ -30,8 +30,9 @@ fun MederiMarkdown(
     compact: Boolean = false,
     style: RenderStyle = RenderStyle.Chat,
     onLinkClick: ((String) -> Unit)? = null,
-    selectionMenuActions: List<SelectionMenuAction> = emptyList(),
+    selectionMenuActions: List<SelectionMenuAction> = listOf(SelectionMenuAction.Copy, SelectionMenuAction.Paste),
     enableScrollOverride: Boolean? = null,
+    onPasteRequested: (() -> Unit)? = null,
 ) {
     MarkdownView(
         content = content,
@@ -43,5 +44,6 @@ fun MederiMarkdown(
         enableScrollOverride = enableScrollOverride,
         sessionKey = sessionKey,
         markdownConfig = MederiMarkdownConfig,
+        onPasteRequested = onPasteRequested,
     )
 }

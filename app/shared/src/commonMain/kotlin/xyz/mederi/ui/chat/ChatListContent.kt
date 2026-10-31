@@ -1,7 +1,6 @@
 package xyz.mederi.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
@@ -22,9 +21,11 @@ import mederi.app.shared.generated.resources.input_image_attachment
 import mederi.app.shared.generated.resources.input_image_n
 import mederi.app.shared.generated.resources.input_pasted_text_n
 import org.jetbrains.compose.resources.stringResource
+import xyz.emuci.inkcompose.RenderStyle
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.inkcompose.LocalSessionKey
-import xyz.emuci.markdown.renderer.SelectionMenuAction
+import xyz.emuci.inkcompose.SelectionMenuAction
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.WorkspaceViewModel.DocumentTarget
@@ -81,15 +82,7 @@ fun ChatListContent(
                     is ChatListItem.EventMessageCard -> {
                         EventMessageCard(
                             item = item,
-                            onOpenReport = { title, content ->
-                                viewModel.openDocument(
-                                    DocumentTarget.Content(
-                                        id = "report_${item.agentId}",
-                                        title = title,
-                                        content = content
-                                    )
-                                )
-                            },
+                            onOpenReport = { title -> viewModel.openEventReport(item, title) },
                             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                         )
                     }
@@ -319,16 +312,15 @@ fun ChatListContent(
                             horizontalArrangement = if (item.isUser) Arrangement.End else Arrangement.Start
                         ) {
                             if (item.isUser) {
-                                // 用户消息：提升饱和度气泡，右对齐
+                                // 用户消息：柔和背景区分发言者，不再叠加外框。
                                 SelectionContainer {
                                     val parsed = remember(item.text) { PromptComposer.parse(item.text) }
                                     Column(
                                         modifier = Modifier
                                             .widthIn(max = if (isCompact) ChatLayout.userBubbleCompactMaxWidth else ChatLayout.userBubbleMaxWidth)
-                                            .clip(RoundedCornerShape(12.dp, 12.dp, 2.dp, 12.dp))
-                                            .background(colors.userBubbleBackground)
-                                            .border(1.dp, colors.userBubbleBorder, RoundedCornerShape(12.dp, 12.dp, 2.dp, 12.dp))
-                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                            .clip(RoundedCornerShape(WorkspaceStyle.InputRadius))
+                                            .background(colors.surfaceHover)
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         if (item.images.isNotEmpty()) {
@@ -351,8 +343,7 @@ fun ChatListContent(
                                             Text(
                                                 text = parsed.instruction,
                                                 color = colors.textPrimary,
-                                                fontSize = 13.5.sp,
-                                                lineHeight = 21.6.sp
+                                                style = WorkspaceStyle.MessageBody
                                             )
                                         }
                                         if (parsed.pastedTexts.isNotEmpty()) {
@@ -399,10 +390,14 @@ fun ChatListContent(
                             } else {
                                 // 助手消息：渲染交付正文
                                 val assistantContent: @Composable (Modifier) -> Unit = { contentModifier ->
-                                    Column(modifier = contentModifier) {
+                                    Column(
+                                        modifier = contentModifier.padding(vertical = 4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
                                         if (item.text.isNotBlank()) {
                                             MederiMarkdown(
                                                 content = item.text,
+                                                style = RenderStyle.Chat.copy(bodyStyle = WorkspaceStyle.MessageBody),
                                                 sessionKey = item.conversationId,
                                                 modifier = Modifier.fillMaxWidth(),
                                                 isStreaming = item.isStreaming,

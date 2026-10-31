@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import xyz.emuci.markdown.renderer.internal.selection.LocalSelectionTextScope
+import xyz.emuci.markdown.renderer.internal.selection.plainText
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
@@ -268,22 +271,30 @@ private fun TableBlockModelLayout(
     Layout(
         modifier = modifier,
         content = {
-            for (row in rows) {
+            var textOffset = 0
+            val selectionScope = LocalSelectionTextScope.current
+            for ((rowIndex, row) in rows.withIndex()) {
                 for (colIndex in 0 until columnCount) {
                     val cell = row.cells.getOrNull(colIndex)
                     val alignment = alignments.getOrElse(colIndex) { Table.Alignment.NONE }
-                    TableBlockModelCellRenderer(
-                        cell = cell,
-                        alignment = alignment,
-                        isHeader = row.isHeader,
-                        modifier = Modifier
-                            .border(0.5.dp, theme.tableBorderColor)
-                            .let {
-                                if (row.isHeader) it.background(theme.tableHeaderBackground) else it
-                            }
-                            .padding(theme.tableCellPadding),
-                    )
+                    val cellOffset = textOffset
+                    CompositionLocalProvider(LocalSelectionTextScope provides selectionScope?.copy(offset = cellOffset)) {
+                        TableBlockModelCellRenderer(
+                            cell = cell,
+                            alignment = alignment,
+                            isHeader = row.isHeader,
+                            modifier = Modifier
+                                .border(0.5.dp, theme.tableBorderColor)
+                                .let {
+                                    if (row.isHeader) it.background(theme.tableHeaderBackground) else it
+                                }
+                                .padding(theme.tableCellPadding),
+                        )
+                    }
+                    if (cell != null) textOffset += cell.inline.plainText().length
+                    if (colIndex < row.cells.lastIndex) textOffset += 1 // tab separator
                 }
+                if (rowIndex < rows.lastIndex) textOffset += 1 // newline separator
             }
         },
     ) { measurables, constraints ->

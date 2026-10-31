@@ -1,9 +1,12 @@
 package xyz.mederi.ui
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+
 import androidx.compose.foundation.background
 import androidx.compose.animation.*
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import xyz.mederi.theme.WorkspaceStyle
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -33,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import xyz.emuci.markdown.renderer.MarkdownTheme
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
+import compose.icons.feathericons.Grid
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Shield
 import compose.icons.feathericons.Zap
@@ -59,7 +63,8 @@ import mederi.app.shared.generated.resources.ws_search
 import mederi.app.shared.generated.resources.ws_conversation_id
 import mederi.app.shared.generated.resources.ws_generated_image_n
 import mederi.app.shared.generated.resources.ws_new_conversation
-import mederi.app.shared.generated.resources.ws_open_extension
+import mederi.app.shared.generated.resources.overview_show
+import mederi.app.shared.generated.resources.overview_hide
 import mederi.app.shared.generated.resources.ws_open_menu
 import mederi.app.shared.generated.resources.ws_open_sidebar
 import org.jetbrains.compose.resources.stringResource
@@ -80,7 +85,10 @@ import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
 import xyz.mederi.ui.components.StatusBar
 import xyz.mederi.ui.components.WorkspaceFloatingOverlay
+import xyz.mederi.ui.overview.OverviewWindowState
 import xyz.mederi.ui.overview.FloatingOverviewWindow
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.zIndex
 import xyz.mederi.ui.components.ErrorDetailDialog
 import xyz.mederi.ui.components.UserPastedTextCard
@@ -93,7 +101,7 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import xyz.mederi.util.PromptComposer
 import xyz.mederi.util.encodeUrlQuery
 import xyz.emuci.inkcompose.InkImage
-import xyz.emuci.markdown.renderer.SelectionMenuAction
+import xyz.emuci.inkcompose.SelectionMenuAction
 import xyz.mederi.ui.components.atoms.ConfirmDialog
 
 import mederi.app.shared.generated.resources.cancel
@@ -114,7 +122,9 @@ fun Workspace(
     isLeftSidebarOpen: Boolean = true,
     onToggleLeftSidebar: () -> Unit = {},
     onOpenProjectPicker: () -> Unit = {},
-    imeOverlayActive: Boolean = false
+    imeOverlayActive: Boolean = false,
+    projectMenuExpanded: Boolean,
+    onProjectMenuExpandedChange: (Boolean) -> Unit,
 ) {
     val colors = LocalMederiColors.current
     val appState = LocalAppState.current
@@ -126,6 +136,20 @@ fun Workspace(
     val rawMessagesViewModel: RawMessagesViewModel = viewModel { RawMessagesViewModel(appState) }
     val terminalViewModel: TerminalViewModel = viewModel { TerminalViewModel(appState) }
     val isRightPanelOpen = viewModel.isRightPanelOpen
+    val overviewState = remember { OverviewWindowState() }
+    var overviewLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(appState.preferencesStore) {
+        overviewState.load(appState.preferencesStore)
+        overviewLoaded = true
+    }
+    LaunchedEffect(overviewState.visible, overviewLoaded) {
+        if (overviewLoaded) overviewState.save(appState.preferencesStore)
+    }
+
+    DisposableEffect(viewModel, overviewLoaded, overviewState.visible) {
+        val release = if (overviewLoaded && overviewState.visible) viewModel.observeBackgroundTasks() else null
+        onDispose { release?.invoke() }
+    }
 
     Column(
         modifier = modifier
@@ -146,7 +170,7 @@ fun Workspace(
                 modifier = Modifier.fillMaxSize()
             ) {
                 // 中央主工作区 (包含顶部 Header 与 聊天/消息区域 + 浮动概览窗 overlay)
-                Box(
+                BoxWithConstraints(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
@@ -281,19 +305,20 @@ fun Workspace(
                                     }
                                 }
 
-                                // 扩展面板开关键
+                                // 概览独立开关：选中状态直接对应窗口可见性，扩展面板仍由 Dock 控制。
                                 Box(
                                     modifier = Modifier
                                         .size(28.dp)
                                         .clip(RoundedCornerShape(6.dp))
-                                        .background(if (isRightPanelOpen) colors.accentPrimary.copy(alpha = 0.15f) else Color.Transparent)
-                                        .clickable { viewModel.toggleRightPanel() },
+                                        .background(if (overviewState.visible) colors.accentBg else Color.Transparent)
+                                        .semantics { selected = overviewState.visible }
+                                        .clickable { overviewState.visible = !overviewState.visible },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = FeatherIcons.Sidebar,
-                                        contentDescription = stringResource(Res.string.ws_open_extension),
-                                        tint = if (isRightPanelOpen) colors.accentPrimary else colors.textSecondary,
+                                        imageVector = FeatherIcons.Grid,
+                                        contentDescription = stringResource(if (overviewState.visible) Res.string.overview_hide else Res.string.overview_show),
+                                        tint = if (overviewState.visible) colors.accentText else colors.textSecondary,
                                         modifier = Modifier.size(15.dp)
                                     )
                                 }
@@ -348,7 +373,9 @@ fun Workspace(
                                             viewModel = viewModel,
                                             modifier = Modifier.fillMaxWidth(),
                                             onOpenProjectPicker = onOpenProjectPicker,
-                                            imeOverlayActive = wsOverlayActive
+                                            imeOverlayActive = wsOverlayActive,
+                                            projectMenuExpanded = projectMenuExpanded,
+                                            onProjectMenuExpandedChange = onProjectMenuExpandedChange
                                         )
                                     }
                                 }
@@ -389,7 +416,9 @@ fun Workspace(
                                             viewModel = viewModel,
                                             modifier = Modifier.fillMaxWidth(),
                                             onOpenProjectPicker = onOpenProjectPicker,
-                                            imeOverlayActive = wsOverlayActive
+                                            imeOverlayActive = wsOverlayActive,
+                                            projectMenuExpanded = projectMenuExpanded,
+                                            onProjectMenuExpandedChange = onProjectMenuExpandedChange
                                         )
                                     }
                                 }
@@ -402,6 +431,9 @@ fun Workspace(
                 FloatingOverviewWindow(
                     viewModel = viewModel,
                     rawVm = rawMessagesViewModel,
+                    state = overviewState,
+                    maxHeight = maxHeight,
+                    maxWidth = maxWidth,
                     modifier = Modifier.align(Alignment.TopEnd),
                 )
                 } // end Box（中央主工作区）
@@ -428,20 +460,14 @@ fun Workspace(
                     // 子代理对话面板（与 Dock 互斥；expandHorizontally 从右边缘展开）
                     AnimatedVisibility(
                         visible = viewModel.activeSubagentPanel != null,
-                        enter = fadeIn() +
+                        enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.panelSpec()) +
                             expandHorizontally(
-                                animationSpec = spring(
-                                    stiffness = Spring.StiffnessMediumLow,
-                                    dampingRatio = Spring.DampingRatioNoBouncy,
-                                ),
+                                animationSpec = LocalWorkspaceMotion.current.panelSpec(),
                                 expandFrom = Alignment.End,
                             ),
-                        exit = fadeOut() +
+                        exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.panelSpec()) +
                             shrinkHorizontally(
-                                animationSpec = spring(
-                                    stiffness = Spring.StiffnessMediumLow,
-                                    dampingRatio = Spring.DampingRatioNoBouncy,
-                                ),
+                                animationSpec = LocalWorkspaceMotion.current.panelSpec(),
                                 shrinkTowards = Alignment.End,
                             ),
                     ) {
@@ -461,8 +487,8 @@ fun Workspace(
                 // 半透明背景遮罩
                 androidx.compose.animation.AnimatedVisibility(
                     visible = isRightPanelOpen,
-                    enter = fadeIn(),
-                    exit = fadeOut()
+                    enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.panelSpec()),
+                    exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.panelSpec())
                 ) {
                     Box(
                         modifier = Modifier
@@ -475,8 +501,8 @@ fun Workspace(
                 // 右侧滑出抽屉
                 androidx.compose.animation.AnimatedVisibility(
                     visible = isRightPanelOpen,
-                    enter = slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { it } + fadeIn(),
-                    exit = slideOutHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { it } + fadeOut(),
+                    enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else slideInHorizontally(animationSpec = LocalWorkspaceMotion.current.panelSpec()) { it } + fadeIn(LocalWorkspaceMotion.current.panelSpec()),
+                    exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else slideOutHorizontally(animationSpec = LocalWorkspaceMotion.current.panelSpec()) { it } + fadeOut(LocalWorkspaceMotion.current.panelSpec()),
                     modifier = Modifier.align(Alignment.CenterEnd)
                 ) {
                     RightExtensionPanel(
@@ -495,8 +521,8 @@ fun Workspace(
                 // 子代理面板移动端抽屉（与 Dock 抽屉互斥）
                 androidx.compose.animation.AnimatedVisibility(
                     visible = viewModel.activeSubagentPanel != null,
-                    enter = fadeIn(),
-                    exit = fadeOut()
+                    enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.panelSpec()),
+                    exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.panelSpec())
                 ) {
                     Box(
                         modifier = Modifier
@@ -507,8 +533,8 @@ fun Workspace(
                 }
                 androidx.compose.animation.AnimatedVisibility(
                     visible = viewModel.activeSubagentPanel != null,
-                    enter = slideInHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { it } + fadeIn(),
-                    exit = slideOutHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy)) { it } + fadeOut(),
+                    enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else slideInHorizontally(animationSpec = LocalWorkspaceMotion.current.panelSpec()) { it } + fadeIn(LocalWorkspaceMotion.current.panelSpec()),
+                    exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else slideOutHorizontally(animationSpec = LocalWorkspaceMotion.current.panelSpec()) { it } + fadeOut(LocalWorkspaceMotion.current.panelSpec()),
                     modifier = Modifier.align(Alignment.CenterEnd)
                 ) {
                     SubagentConversationPanel(
@@ -530,10 +556,11 @@ fun Workspace(
         )
 
         // 详细错误报告弹窗
-        if (viewModel.isErrorDetailOpen) {
+        val feedbackState = viewModel.feedbackState
+        if (feedbackState.isDetailOpen) {
             ErrorDetailDialog(
-                errorSummary = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }.orEmpty(),
-                errorDiagnostic = viewModel.errorDiagnostic.orEmpty(),
+                errorSummary = feedbackState.message?.let { stringResource(it.key, *it.args.toTypedArray()) }.orEmpty(),
+                errorDiagnostic = feedbackState.diagnostic.orEmpty(),
                 onDismiss = viewModel::dismissErrorDetail
             )
         }
@@ -583,20 +610,20 @@ private fun MessageList(
         viewModel, addToInputLabel, copyLabel, searchLabel, pasteLabel, clipboard, clipboardScope,
     ) {
         listOf(
-            SelectionMenuAction(copyLabel, onClick = { text ->
+            SelectionMenuAction.Custom(copyLabel, onClick = { text ->
                 clipboard.copyText(clipboardScope, text)
             }),
-            SelectionMenuAction(searchLabel, onClick = { text ->
+            SelectionMenuAction.Custom(searchLabel, onClick = { text ->
                 viewModel.openLink("https://www.google.com/search?q=" + encodeUrlQuery(text))
             }),
-            SelectionMenuAction(pasteLabel, onClick = { _ ->
+            SelectionMenuAction.Custom(pasteLabel, onClick = { _ ->
                 clipboardScope.launch(start = CoroutineStart.UNDISPATCHED) {
                     val clip = PlatformClipboard.getTextAsync()
                         ?: readPlainTextFromClip(clipboard.getClipEntry())
                     if (!clip.isNullOrEmpty()) viewModel.appendToInput(clip)
                 }
             }),
-            SelectionMenuAction(addToInputLabel, onClick = { text ->
+            SelectionMenuAction.Custom(addToInputLabel, onClick = { text ->
                 viewModel.appendToInput(text)
             }),
         )

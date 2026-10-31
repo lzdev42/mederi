@@ -1,5 +1,7 @@
 package xyz.emuci.markdown.renderer
 
+import xyz.emuci.inkcompose.SelectionMenuAction
+
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
@@ -65,7 +67,8 @@ fun Markdown(
     imageContent: MarkdownImageRenderer? = null,
     onLinkClick: ((String) -> Unit)? = null,
     directivePlugins: List<MarkdownDirectivePlugin> = emptyList(),
-    selectionMenuActions: List<SelectionMenuAction> = emptyList(),
+    selectionMenuActions: List<SelectionMenuAction> = listOf(SelectionMenuAction.Copy, SelectionMenuAction.Paste),
+    onPasteRequested: (() -> Unit)? = null,
 ) {
     val directiveRegistry = remember(directivePlugins) { MarkdownDirectiveRegistry(directivePlugins) }
     val runtimePipeline = remember(directiveRegistry) { MarkdownDirectivePipeline(directiveRegistry) }
@@ -96,6 +99,7 @@ fun Markdown(
             onLinkClick = onLinkClick,
             directiveRegistry = directiveRegistry,
             selectionMenuActions = selectionMenuActions,
+            onPasteRequested = onPasteRequested,
         )
     }
 }
@@ -132,6 +136,8 @@ fun Markdown(
     imageContent: MarkdownImageRenderer? = null,
     onLinkClick: ((String) -> Unit)? = null,
     directivePlugins: List<MarkdownDirectivePlugin> = emptyList(),
+    selectionMenuActions: List<SelectionMenuAction> = listOf(SelectionMenuAction.Copy, SelectionMenuAction.Paste),
+    onPasteRequested: (() -> Unit)? = null,
 ) {
     val directiveRegistry = remember(directivePlugins) { MarkdownDirectiveRegistry(directivePlugins) }
     MarkdownDocumentRenderer(
@@ -149,6 +155,8 @@ fun Markdown(
         imageContent = imageContent,
         onLinkClick = onLinkClick,
         directiveRegistry = directiveRegistry,
+        selectionMenuActions = selectionMenuActions,
+        onPasteRequested = onPasteRequested,
     )
 }
 

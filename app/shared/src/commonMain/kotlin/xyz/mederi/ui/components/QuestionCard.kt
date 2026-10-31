@@ -1,11 +1,18 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -13,13 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.question_cancel
 import mederi.app.shared.generated.resources.question_custom_placeholder
 import mederi.app.shared.generated.resources.question_free_input_tag
@@ -33,22 +36,18 @@ import mederi.app.shared.generated.resources.question_title
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.ui.components.atoms.MederiGhostButton
-import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
-import xyz.mederi.ui.components.atoms.MederiSurfaceButton
+import xyz.mederi.theme.MederiRadius
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
+import xyz.mederi.ui.ChatLayout
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
+import xyz.mederi.ui.components.atoms.WorkspaceActionSurface
 
 /**
- * 3. 选择题/问询交互块 (QuestionCard，02-components §2.4 question：待办层卡片)
- *
- * 无状态组件：当前选中答案经 [selectedAnswers] 由调用方传入（唯一真理源 =
- * WorkspaceViewModel.questionAnswers），点击经 [onAnswer] 单向写回，卡片内不持有副本。
- * 支持三种模式：
- * 1. options 为空 -> 自由文本输入框（OutlinedTextField）
- * 2. options 非空且 multiSelect = false -> 单选列表（RadioButton）
- * 3. options 非空且 multiSelect = true -> 多选列表（Checkbox）
- * 选项题（options 非空）恒定附带自定义输入框：无论单选/多选，用户都可提交非选项的自定义回答
- * （自定义输入恒可用，该门禁协议字段已删除，不再作为门禁）。
+ * 需要用户处理的问答，选中值始终由调用方提供，组件不保存答案副本。
+ * 单选保留已有自定义回答，多选和自定义输入继续经同一 onAnswer 回调更新。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuestionCard(
     question: QuestionRequest?,
@@ -59,189 +58,161 @@ fun QuestionCard(
     onPrevPage: () -> Unit = {},
     onSubmit: () -> Unit = {},
     onCancel: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     if (question == null) return
     val colors = LocalMederiColors.current
     val qList = question.questions
     val qInfo = qList.getOrNull(currentIndex) ?: qList.firstOrNull() ?: return
+    val typeTag = when {
+        qInfo.options.isEmpty() -> stringResource(Res.string.question_free_input_tag)
+        qInfo.multiSelect -> stringResource(Res.string.question_multi_tag)
+        else -> stringResource(Res.string.question_single_tag)
+    }
 
-    // 待办层卡片壳：8dp 圆角（clip / border 共用同一 shape，避免重复字面量）
-    val shellShape = RoundedCornerShape(8.dp)
-
-    // accentBg 淡底 + accentBorder 描边 + 12dp 内边距，宽度受限 max 560（无左 rail，避免框套框）
-    Column(
-        modifier = modifier
-            .widthIn(max = 560.dp)
-            .clip(shellShape)
-            .background(colors.accentBg)
-            .border(1.dp, colors.accentBorder, shellShape)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val typeTag = when {
-                qInfo.options.isEmpty() -> stringResource(Res.string.question_free_input_tag)
-                qInfo.multiSelect -> stringResource(Res.string.question_multi_tag)
-                else -> stringResource(Res.string.question_single_tag)
-            }
-            Text(
-                text = (stringResource(Res.string.question_title, currentIndex + 1, qList.size) + " · $typeTag").uppercase(),
-                color = colors.accentText,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 0.6.sp
-            )
-        }
-
+    WorkspaceActionSurface(modifier = modifier.widthIn(max = ChatLayout.actionCardMaxWidth)) {
         Text(
-            text = qInfo.prompt,
-            color = colors.textPrimary,
-            fontSize = 12.5.sp,
-            lineHeight = 18.75.sp,
-            fontWeight = FontWeight.Medium
+            text = stringResource(Res.string.question_title, currentIndex + 1, qList.size) + " · $typeTag",
+            style = WorkspaceStyle.Caption,
+            color = colors.textSecondary,
         )
+        Text(text = qInfo.prompt, style = WorkspaceStyle.Title, color = colors.textPrimary)
 
-        // Options or Free-text input
         if (qInfo.options.isEmpty()) {
-            val freeText = selectedAnswers.firstOrNull() ?: ""
             OutlinedTextField(
-                value = freeText,
+                value = selectedAnswers.firstOrNull() ?: "",
                 onValueChange = { onAnswer(if (it.isBlank()) emptyList() else listOf(it)) },
-                placeholder = { Text(stringResource(Res.string.question_input_placeholder), fontSize = 11.5.sp, color = colors.textMuted) },
+                placeholder = {
+                    Text(stringResource(Res.string.question_input_placeholder),
+                        style = WorkspaceStyle.Body, color = colors.textMuted)
+                },
                 modifier = Modifier.fillMaxWidth(),
-                textStyle = TextStyle(fontSize = 11.5.sp, color = colors.textPrimary),
-                shape = RoundedCornerShape(6.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = colors.surfaceWorkspace,
-                    unfocusedContainerColor = colors.surfaceWorkspace,
-                    focusedBorderColor = colors.accentPrimary,
-                    unfocusedBorderColor = colors.divider,
-                    focusedTextColor = colors.textPrimary,
-                    unfocusedTextColor = colors.textPrimary,
-                    cursorColor = colors.accentPrimary
-                )
+                textStyle = WorkspaceStyle.Body.copy(color = colors.textPrimary),
+                shape = RoundedCornerShape(MederiRadius.Control),
+                colors = questionFieldColors(),
             )
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = if (qInfo.multiSelect) Modifier else Modifier.selectableGroup(),
+                verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+            ) {
                 qInfo.options.forEach { opt ->
                     val isSelected = selectedAnswers.contains(opt)
-                    val optionSource = remember { MutableInteractionSource() }
-                    val optionHovered by optionSource.collectIsHoveredAsState()
+                    val source = remember { MutableInteractionSource() }
+                    val hovered by source.collectIsHoveredAsState()
+                    val focused by source.collectIsFocusedAsState()
+                    val background by animateColorAsState(
+                        targetValue = when {
+                            isSelected -> colors.accentBg
+                            hovered || focused -> colors.surfaceHover
+                            else -> Color.Transparent
+                        },
+                        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
+                        label = "questionOptionBackground",
+                    )
+                    val onSelect = {
+                        if (qInfo.multiSelect) {
+                            onAnswer(if (isSelected) selectedAnswers - opt else selectedAnswers + opt)
+                        } else {
+                            val nonOptions = selectedAnswers.filter { it !in qInfo.options }
+                            onAnswer(listOf(opt) + nonOptions)
+                        }
+                    }
+                    val shape = RoundedCornerShape(MederiRadius.Control)
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(
-                                // 选中态用比卡片壳（accentBg）更实一档的 accent 淡底，否则与壳同色看不出选中
-                                when {
-                                    isSelected -> colors.accentPrimary.copy(alpha = 0.15f)
-                                    optionHovered -> colors.surfaceHover
-                                    else -> Color.Transparent
-                                }
-                            )
-                            .clickable(interactionSource = optionSource) {
-                                if (qInfo.multiSelect) {
-                                    onAnswer(if (isSelected) selectedAnswers - opt else selectedAnswers + opt)
-                                } else {
-                                    val nonOptions = selectedAnswers.filter { it !in qInfo.options }
-                                    onAnswer(listOf(opt) + nonOptions)
-                                }
-                            }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                            .heightIn(min = WorkspaceStyle.ControlHeight)
+                            .clip(shape).background(background)
+                            .border(1.dp, if (focused) colors.accentFocus else Color.Transparent, shape)
+                            .hoverable(source)
+                            .then(if (qInfo.multiSelect) {
+                                Modifier.toggleable(
+                                    value = isSelected, role = Role.Checkbox,
+                                    interactionSource = source, indication = null,
+                                    onValueChange = { onSelect() },
+                                )
+                            } else {
+                                Modifier.selectable(
+                                    selected = isSelected, role = Role.RadioButton,
+                                    interactionSource = source, indication = null,
+                                    onClick = onSelect,
+                                )
+                            })
+                            .padding(horizontal = MederiSpacing.SM, vertical = MederiSpacing.Tight),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
                     ) {
                         if (qInfo.multiSelect) {
                             Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = null,
+                                checked = isSelected, onCheckedChange = null,
+                                modifier = Modifier.size(20.dp),
                                 colors = CheckboxDefaults.colors(
                                     checkedColor = colors.accentPrimary,
                                     checkmarkColor = colors.onAccentPrimary,
-                                    uncheckedColor = colors.textMuted
-                                )
+                                    uncheckedColor = colors.textMuted,
+                                ),
                             )
                         } else {
                             RadioButton(
-                                selected = isSelected,
-                                onClick = null,
-                                colors = RadioButtonDefaults.colors(selectedColor = colors.accentPrimary)
+                                selected = isSelected, onClick = null,
+                                modifier = Modifier.size(20.dp),
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = colors.accentPrimary,
+                                    unselectedColor = colors.textMuted,
+                                ),
                             )
                         }
                         Text(
-                            text = opt,
-                            color = if (isSelected || optionHovered) colors.textPrimary else colors.textSecondary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
+                            text = opt, style = WorkspaceStyle.Body,
+                            color = if (isSelected || hovered || focused) colors.textPrimary else colors.textSecondary,
                         )
                     }
                 }
-
-                val customValue = selectedAnswers.firstOrNull { it !in qInfo.options } ?: ""
-                OutlinedTextField(
-                    value = customValue,
-                    onValueChange = { newCustom ->
-                        val currentOptions = selectedAnswers.filter { it in qInfo.options }
-                        val next = if (newCustom.isBlank()) currentOptions else currentOptions + newCustom
-                        onAnswer(next)
-                    },
-                    placeholder = { Text(stringResource(Res.string.question_custom_placeholder), fontSize = 11.sp, color = colors.textMuted) },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(fontSize = 11.sp, color = colors.textPrimary),
-                    shape = RoundedCornerShape(6.dp),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = colors.surfaceWorkspace,
-                        unfocusedContainerColor = colors.surfaceWorkspace,
-                        focusedBorderColor = colors.accentPrimary,
-                        unfocusedBorderColor = colors.divider,
-                        focusedTextColor = colors.textPrimary,
-                        unfocusedTextColor = colors.textPrimary,
-                        cursorColor = colors.accentPrimary
-                    )
-                )
             }
-        }
-
-        // Action Buttons (支持多题翻页 [上一步] / [下一步/提交])
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            MederiGhostButton(
-                text = stringResource(Res.string.question_cancel),
-                onClick = onCancel,
+            val customValue = selectedAnswers.firstOrNull { it !in qInfo.options } ?: ""
+            OutlinedTextField(
+                value = customValue,
+                onValueChange = { custom ->
+                    val options = selectedAnswers.filter { it in qInfo.options }
+                    onAnswer(if (custom.isBlank()) options else options + custom)
+                },
+                placeholder = {
+                    Text(stringResource(Res.string.question_custom_placeholder),
+                        style = WorkspaceStyle.Body, color = colors.textMuted)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = WorkspaceStyle.Body.copy(color = colors.textPrimary),
+                shape = RoundedCornerShape(MederiRadius.Control),
+                singleLine = true,
+                colors = questionFieldColors(),
             )
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (currentIndex > 0) {
-                    MederiSurfaceButton(
-                        text = stringResource(Res.string.question_prev),
-                        onClick = onPrevPage,
-                    )
-                }
-
-                if (currentIndex < qList.size - 1) {
-                    MederiSurfaceButton(
-                        text = stringResource(Res.string.question_next),
-                        onClick = onNextPage,
-                    )
-                } else {
-                    MederiPrimaryDecisionButton(
-                        text = stringResource(Res.string.question_submit),
-                        onClick = onSubmit,
-                    )
-                }
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+            verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+        ) {
+            WorkspaceActionButton(stringResource(Res.string.question_cancel), onCancel)
+            if (currentIndex > 0) WorkspaceActionButton(stringResource(Res.string.question_prev), onPrevPage)
+            if (currentIndex < qList.size - 1) {
+                WorkspaceActionButton(stringResource(Res.string.question_next), onNextPage, primary = true)
+            } else {
+                WorkspaceActionButton(stringResource(Res.string.question_submit), onSubmit, primary = true)
             }
         }
     }
+}
+
+@Composable
+private fun questionFieldColors(): TextFieldColors {
+    val colors = LocalMederiColors.current
+    return OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = colors.surfaceWorkspace,
+        unfocusedContainerColor = colors.surfaceWorkspace,
+        focusedBorderColor = colors.accentFocus,
+        unfocusedBorderColor = colors.divider,
+        focusedTextColor = colors.textPrimary,
+        unfocusedTextColor = colors.textPrimary,
+        cursorColor = colors.accentPrimary,
+    )
 }

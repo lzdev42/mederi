@@ -1,8 +1,18 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
+
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import kotlinx.coroutines.delay
 import kotlin.time.TimeSource
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -10,12 +20,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
@@ -36,7 +44,9 @@ import mederi.app.shared.generated.resources.status_thinking
 import mederi.app.shared.generated.resources.status_generating
 import mederi.app.shared.generated.resources.worktrace_waiting_response
 import mederi.app.shared.generated.resources.worktrace_waiting_subagents
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.LocalMederiColors
+import xyz.mederi.ui.components.atoms.expansionSemantics
 import xyz.mederi.ui.components.atoms.ProcessRow
 
 /**
@@ -67,7 +77,7 @@ fun WorkTraceCard(
     var userChoice by remember(workTrace.key) { mutableStateOf<Boolean?>(null) }
     val isExpanded = userChoice ?: false
 
-    // 点块底部按钮切换为抬大限高上限（600dp）的展开态，再点缩回默认限高
+    // 底部按钮可解除内部限高，由外层列表滚动；再次点击恢复原限高。
     var isUnbounded by remember(workTrace.key) { mutableStateOf(false) }
 
     // 起终点来自Core；运行中使用单调时钟递增，结束后只读持久化终点。
@@ -124,9 +134,9 @@ fun WorkTraceCard(
         label = titleText,
         labelColor = if (workTrace.hasFailedTool) colors.accentDanger else colors.textSecondary,
         summary = activitySummary,
-        leading = if (workTrace.isRunning) {
-            { CircularProgressIndicator(color = colors.accentPrimary, strokeWidth = 1.4.dp,
-                modifier = Modifier.size(14.dp)) }
+        leading = if (workTrace.isRunning && !isExpanded && workTrace.activity !is WorkTraceActivity.WaitingSubagents) {
+            { WorkspaceLoadingIndicator(color = colors.accentPrimary, strokeWidth = 1.4.dp,
+                modifier = Modifier.size(WorkspaceStyle.IconSize)) }
         } else null,
     ) {
         // 展开后的完整工作轨迹子项（导轨线由 ProcessRow 统一绘制）。
@@ -159,41 +169,56 @@ fun WorkTraceCard(
             }
 
             // 底部切换按钮：仅步骤溢出视口时出现（展开态下恒显示），不随步骤内容滚动
-            // （原型 height-toggle 样式：顶部 1dp divider 分割 + 居中 chevron 12dp + 11sp Medium textMuted 文案）
+            // 与独立推理共用轻量开关；热区、焦点与无障碍语义一致。
             if (showHeightToggle) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .drawBehind {
-                            drawRect(
-                                color = colors.divider,
-                                topLeft = Offset(0f, 0f),
-                                size = Size(size.width, 1.dp.toPx())
-                            )
-                        }
-                        .clickable {
-                            isUnbounded = !isUnbounded
-                        }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                        contentDescription = null,
-                        tint = colors.textMuted,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Text(
-                        text = stringResource(
-                            if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
-                        ),
-                        color = colors.textMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
+                ProcessHeightToggle(
+                    expanded = isUnbounded,
+                    onExpandedChange = { isUnbounded = it },
+                )
             }
         }
+    }
+}
+
+
+/** 过程与推理共用的内容限高开关，只改变呈现高度，不改变滚动归属。 */
+@Composable
+internal fun ProcessHeightToggle(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
+    val background by animateColorAsState(
+        targetValue = if (hovered || focused) colors.surfaceHover else Color.Transparent,
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
+        label = "processHeightToggleFeedback",
+    )
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = WorkspaceStyle.ControlHeight)
+            .clip(RoundedCornerShape(6.dp))
+            .background(background)
+            .expansionSemantics(expanded, onExpandedChange)
+            .clickable(interactionSource = interactionSource, role = Role.Button) { onExpandedChange(!expanded) }
+            .padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+    ) {
+        Icon(
+            imageVector = if (expanded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
+            contentDescription = null,
+            tint = colors.textSecondary,
+            modifier = Modifier.size(WorkspaceStyle.IconSize),
+        )
+        Text(
+            text = stringResource(if (expanded) Res.string.worktrace_collapse else Res.string.worktrace_expand),
+            color = colors.textSecondary,
+            style = WorkspaceStyle.Caption,
+        )
     }
 }

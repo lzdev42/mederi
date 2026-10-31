@@ -14,6 +14,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -54,8 +56,12 @@ import mederi.app.shared.generated.resources.input_select_project
 import mederi.app.shared.generated.resources.input_selected
 import mederi.app.shared.generated.resources.input_thinking_label
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.ui.components.atoms.WorkspaceDropdownMenu
+import xyz.mederi.ui.components.atoms.WorkspaceMenuItem
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.appstate.LocalAppState
+import xyz.mederi.theme.WorkspaceStyle
+import xyz.mederi.theme.MederiRadius
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.util.formatContextWindow
 
@@ -91,7 +97,7 @@ internal fun ModelPickerList(
     Column(modifier = modifier) {
         groupedModels.entries.forEachIndexed { groupIndex, (providerId, providerModels) ->
             val provider = providerMap[providerId]
-            val providerDisplayName = (provider?.name ?: providerId).uppercase()
+            val providerDisplayName = provider?.name ?: providerId
             groupWrapper(groupIndex) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     ModelPickerGroupHeader(
@@ -146,17 +152,17 @@ private fun ModelPickerGroupHeader(
             )
             Text(
                 text = providerDisplayName,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = WorkspaceStyle.Caption.fontSize,
+                fontWeight = FontWeight.Medium,
                 color = colors.textMuted,
-                letterSpacing = 0.5.sp,
+
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
         Text(
             text = "$count",
-            fontSize = 10.sp,
+            fontSize = WorkspaceStyle.Caption.fontSize,
             fontWeight = FontWeight.Medium,
             color = colors.textMuted.copy(alpha = 0.6f)
         )
@@ -187,14 +193,14 @@ private fun ModelPickerRowContent(
             Text(
                 text = model.name,
                 fontSize = nameFontSize,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                color = if (isSelected) colors.accentText else colors.textPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false)
             )
-            if (model.supportsThinking) ModelCapabilityTag(stringResource(Res.string.cap_thinking), colors.thoughtAccent)
-            if (model.supportsImages) ModelCapabilityTag(stringResource(Res.string.cap_image), colors.accentSecondary)
+            if (model.supportsThinking) ModelCapabilityTag(stringResource(Res.string.cap_thinking), colors.textSecondary)
+            if (model.supportsImages) ModelCapabilityTag(stringResource(Res.string.cap_image), colors.textSecondary)
         }
         Spacer(modifier = Modifier.width(8.dp))
         Row(
@@ -204,7 +210,7 @@ private fun ModelPickerRowContent(
             if (contextSizeStr != null) {
                 Text(
                     text = contextSizeStr,
-                    fontSize = 11.sp,
+                    fontSize = WorkspaceStyle.Caption.fontSize,
                     fontWeight = FontWeight.Medium,
                     fontFamily = FontFamily.Monospace,
                     color = if (isSelected) colors.textPrimary else unselectedContextColor
@@ -238,41 +244,40 @@ internal fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) 
 
     Box {
         ChipSelectorPill(
+            icon = FeatherIcons.Cpu,
             label = selectedModel?.name ?: stringResource(Res.string.input_select_model),
             // 封顶胶囊宽度：超长模型名省略作溢出兜底，不无限撑宽、不挤压 send/thinking 控件
             maxWidth = 260.dp,
             onClick = { expanded = true }
         )
-        DropdownMenu(
+        WorkspaceDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(10.dp),
             modifier = Modifier
-                .widthIn(min = if (compact) 400.dp else 500.dp, max = if (compact) 480.dp else 560.dp)
+                .widthIn(min = 280.dp, max = if (compact) 360.dp else 480.dp)
                 .heightIn(max = 480.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(10.dp))
         ) {
             ModelPickerList(
                 models = models,
                 providers = providers,
                 selectedModelId = selectedModel?.id,
-                nameFontSize = if (compact) 12.sp else 12.5.sp,
+                nameFontSize = WorkspaceStyle.Body.fontSize,
                 unselectedContextColor = colors.textSecondary,
-                checkSize = 14.dp,
+                checkSize = WorkspaceStyle.IconSize,
                 onSelect = {
                     viewModel.selectModel(it)
                     expanded = false
                 },
                 colors = colors,
                 itemWrapper = { _, isSelected, onClick, content ->
-                    DropdownMenuItem(
+                    InputSelectorMenuItem(
+                        selected = isSelected,
                         modifier = Modifier
                             .padding(horizontal = 4.dp, vertical = 1.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent),
+                            .clip(RoundedCornerShape(MederiRadius.Control))
+                            .background(if (isSelected) colors.accentBg else Color.Transparent),
                         text = { content() },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+
                         onClick = onClick,
                     )
                 },
@@ -317,18 +322,17 @@ internal fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
             label = selectedKey?.name ?: defaultKey?.name ?: stringResource(Res.string.input_default_key),
             onClick = { expanded = true }
         )
-        DropdownMenu(
+        WorkspaceDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(8.dp),
             modifier = Modifier
                 .widthIn(min = 220.dp, max = 280.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
         ) {
             keys.forEach { key ->
                 val isSelected = selectedId == key.id
-                DropdownMenuItem(
+                InputSelectorMenuItem(
+                    selected = isSelected,
+                    twoLines = true,
                     text = {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -342,9 +346,9 @@ internal fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
                                 ) {
                                     Text(
                                         text = key.name,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                        color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                                        fontSize = WorkspaceStyle.Body.fontSize,
+                                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                                        color = if (isSelected) colors.accentText else colors.textPrimary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -352,16 +356,16 @@ internal fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
                                         Box(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(4.dp))
-                                                .background(colors.accentSecondary.copy(alpha = 0.15f))
+                                                .background(colors.surfaceHover)
                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                         ) {
-                                            Text(stringResource(Res.string.input_default_tag), fontSize = 9.sp, color = colors.accentSecondary, fontWeight = FontWeight.Medium, maxLines = 1)
+                                            Text(stringResource(Res.string.input_default_tag), fontSize = WorkspaceStyle.Caption.fontSize, color = colors.textSecondary, fontWeight = FontWeight.Medium, maxLines = 1)
                                         }
                                     }
                                 }
                                 Text(
                                     text = key.maskedValue,
-                                    fontSize = 10.sp,
+                                    fontSize = WorkspaceStyle.Caption.fontSize,
                                     fontFamily = FontFamily.Monospace,
                                     color = colors.textMuted,
                                     maxLines = 1,
@@ -373,7 +377,7 @@ internal fun ApiKeySelectorMenu(viewModel: WorkspaceViewModel) {
                             }
                         }
                     },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+
                     onClick = {
                         viewModel.selectApiKey(providerId, key.id)
                         expanded = false
@@ -406,19 +410,17 @@ internal fun ThinkingLevelMenu(viewModel: WorkspaceViewModel) {
             label = stringResource(Res.string.input_thinking_label, formatReasoningLevelLabel(currentLevel)),
             onClick = { expanded = true }
         )
-        DropdownMenu(
+        WorkspaceDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceCard,
-            shape = RoundedCornerShape(8.dp),
             modifier = Modifier
                 .widthIn(min = 150.dp)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
         ) {
             // NONE（关闭）为 levels 首项（ReasoningMenu 推导），统一渲染
             levels.forEach { lvl ->
                 val isSelected = currentLevel.equals(lvl, ignoreCase = true)
-                DropdownMenuItem(
+                InputSelectorMenuItem(
+                    selected = isSelected,
                     text = {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -427,8 +429,8 @@ internal fun ThinkingLevelMenu(viewModel: WorkspaceViewModel) {
                         ) {
                             Text(
                                 text = formatReasoningLevelLabel(lvl),
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = WorkspaceStyle.Body.fontSize,
+                                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                                 color = if (isSelected) colors.accentPrimary else if (lvl == "NONE") colors.textSecondary else colors.textPrimary
                             )
                             if (isSelected) {
@@ -441,7 +443,7 @@ internal fun ThinkingLevelMenu(viewModel: WorkspaceViewModel) {
                             }
                         }
                     },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+
                     onClick = {
                         viewModel.updateThinkingLevel(lvl)
                         expanded = false
@@ -459,7 +461,8 @@ internal fun ProjectSelectorMenu(
     onSelect: (String?) -> Unit,
     iconOnly: Boolean = false,
     highlight: Boolean = false,
-    openRequest: Int = 0
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
 ) {
     val colors = LocalMederiColors.current
     val appState = LocalAppState.current
@@ -467,66 +470,70 @@ internal fun ProjectSelectorMenu(
     val selectedProjectId by appState.selectedProjectId.collectAsState()
     val selectedProject = projects.find { it.id == selectedProjectId }
 
-    var expanded by remember { mutableStateOf(false) }
-    // 引导条点击：外部请求打开菜单（openRequest 递增即打开一次）
-    LaunchedEffect(openRequest) {
-        if (openRequest > 0) expanded = true
-    }
     Box {
         if (iconOnly) {
             IconToolButton(
                 icon = FeatherIcons.Folder,
-                onClick = { expanded = true },
-                size = 28
+                onClick = { onExpandedChange(true) },
+                size = 30,
+                contentDescription = stringResource(Res.string.input_select_project),
             )
         } else {
             ContextToolChip(
                 icon = FeatherIcons.Folder,
                 label = selectedProject?.name ?: stringResource(Res.string.input_select_project),
-                onClick = { expanded = true },
+                onClick = { onExpandedChange(true) },
                 highlight = highlight
             )
         }
-        DropdownMenu(
+        WorkspaceDropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = colors.surfaceSidebar,
-            shape = RoundedCornerShape(6.dp),
-            modifier = Modifier.border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(6.dp))
+            onDismissRequest = { onExpandedChange(false) },
+            modifier = Modifier
         ) {
             if (selectedProjectId != null) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(Res.string.input_no_project), fontSize = 11.5.sp, color = colors.textSecondary) },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                InputSelectorMenuItem(
+                    text = { Text(stringResource(Res.string.input_no_project), fontSize = WorkspaceStyle.Caption.fontSize, color = colors.textSecondary) },
+
                     onClick = {
                         onSelect(null)
-                        expanded = false
+                        onExpandedChange(false)
                     }
                 )
                 if (projects.isNotEmpty()) HorizontalDivider(color = colors.divider)
             }
             projects.forEach { proj ->
-                DropdownMenuItem(
-                    text = { Text(proj.name, fontSize = 11.5.sp, color = colors.textPrimary) },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                val selected = proj.id == selectedProjectId
+                InputSelectorMenuItem(
+                    selected = selected,
+                    text = {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(proj.name, style = WorkspaceStyle.Body,
+                                color = if (selected) colors.accentText else colors.textPrimary,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            if (selected) Icon(FeatherIcons.Check, null, tint = colors.accentText,
+                                modifier = Modifier.size(WorkspaceStyle.IconSize))
+                        }
+                    },
+
                     onClick = {
                         onSelect(proj.id)
-                        expanded = false
+                        onExpandedChange(false)
                     }
                 )
             }
             if (projects.isNotEmpty()) HorizontalDivider(color = colors.divider)
-            DropdownMenuItem(
+            InputSelectorMenuItem(
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(FeatherIcons.Plus, null, tint = colors.accentPrimary, modifier = Modifier.size(11.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(Res.string.input_open_project), fontSize = 11.5.sp, color = colors.accentPrimary, fontWeight = FontWeight.Medium)
+                        Text(stringResource(Res.string.input_open_project), fontSize = WorkspaceStyle.Caption.fontSize, color = colors.accentPrimary, fontWeight = FontWeight.Medium)
                     }
                 },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+
                 onClick = {
-                    expanded = false
+                    onExpandedChange(false)
                     onOpenProjectPicker()
                 }
             )
@@ -594,7 +601,7 @@ internal fun MobileModelBottomSheet(
                         text = stringResource(Res.string.input_model_mode_settings),
                         color = colors.textPrimary,
                         fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Medium
                     )
                     Icon(
                         imageVector = FeatherIcons.X,
@@ -666,7 +673,7 @@ internal fun MobileModelBottomSheet(
                                 Text(
                                     text = stringResource(Res.string.input_reasoning_level),
                                     color = colors.textSecondary,
-                                    fontSize = 11.5.sp,
+                                    fontSize = WorkspaceStyle.Caption.fontSize,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
@@ -680,12 +687,12 @@ internal fun MobileModelBottomSheet(
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.15f) else colors.surfaceInput)
+                                            .clip(RoundedCornerShape(WorkspaceStyle.ObjectRadius))
+                                            .background(if (isSelected) colors.accentBg else colors.surfaceInput)
                                             .border(
                                                 1.dp,
-                                                if (isSelected) colors.accentPrimary else colors.surfaceCardBorder,
-                                                RoundedCornerShape(8.dp)
+                                                if (isSelected) colors.accentBorder else Color.Transparent,
+                                                RoundedCornerShape(WorkspaceStyle.ObjectRadius)
                                             )
                                             .clickable { viewModel.updateThinkingLevel(lvl) }
                                             .padding(vertical = 8.dp),
@@ -693,9 +700,9 @@ internal fun MobileModelBottomSheet(
                                     ) {
                                         Text(
                                             text = formatReasoningLevelLabel(lvl),
-                                            color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                                            color = if (isSelected) colors.accentText else colors.textPrimary,
+                                            fontSize = WorkspaceStyle.Body.fontSize,
+                                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
                                         )
                                     }
                                 }
@@ -708,7 +715,7 @@ internal fun MobileModelBottomSheet(
                         Text(
                             text = stringResource(Res.string.input_select_model),
                             color = colors.textSecondary,
-                            fontSize = 11.5.sp,
+                            fontSize = WorkspaceStyle.Caption.fontSize,
                             fontWeight = FontWeight.Medium
                         )
 
@@ -716,9 +723,9 @@ internal fun MobileModelBottomSheet(
                             models = models,
                             providers = providers,
                             selectedModelId = selectedModel?.id,
-                            nameFontSize = 13.sp,
+                            nameFontSize = WorkspaceStyle.Body.fontSize,
                             unselectedContextColor = colors.textMuted,
-                            checkSize = 15.dp,
+                            checkSize = WorkspaceStyle.IconSize,
                             onSelect = {
                                 viewModel.selectModel(it)
                                 onDismiss()
@@ -730,9 +737,10 @@ internal fun MobileModelBottomSheet(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 4.dp, vertical = 2.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(if (isSelected) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent)
-                                        .clickable(onClick = onClick)
+                                        .clip(RoundedCornerShape(WorkspaceStyle.ObjectRadius))
+                                        .background(if (isSelected) colors.accentBg else Color.Transparent)
+                                        .heightIn(min = WorkspaceStyle.ControlHeight)
+                                        .inputControlSurface(onClick = onClick)
                                         .padding(horizontal = 8.dp, vertical = 7.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
@@ -742,9 +750,7 @@ internal fun MobileModelBottomSheet(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(colors.surfaceInput)
-                                        .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(8.dp))
+                                        .clip(RoundedCornerShape(WorkspaceStyle.ObjectRadius))
                                         .padding(vertical = 4.dp)
                                 ) { content() }
                             },
@@ -754,4 +760,17 @@ internal fun MobileModelBottomSheet(
             }
         }
     }
+}
+
+
+/** 输入菜单共用行：单行30dp，密钥的名称和掩码两行允许48dp；选择语义保持一致。 */
+@Composable
+private fun InputSelectorMenuItem(
+    text: @Composable () -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    twoLines: Boolean = false,
+) {
+    WorkspaceMenuItem(text, onClick, modifier, selected, twoLines)
 }

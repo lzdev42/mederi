@@ -1,3 +1,4 @@
+// Portions adapted from openai/codex (Apache-2.0), commit 23934d31b15b1127c83535f84854e5009f7cd51d.
 package xyz.mederi.tools.patch
 
 /**
@@ -42,7 +43,9 @@ object PatchParser {
 
     /** 解析补丁文本为 hunk 列表。失败抛 [PatchParseException]（带行号）。 */
     fun parse(patch: String): List<PatchHunk> {
-        val lines = patch.trim().lines()
+        // Rust str::lines() splits LF / CRLF, but does not split standalone CR
+        // occurring inside an added line. Kotlin lines() would split it as data.
+        val lines = patch.trim().split('\n').map { it.removeSuffix("\r") }
         val patchLines = checkBoundaries(lines)
         return PatchLineParser(patchLines).parseAll()
     }
@@ -89,7 +92,14 @@ object PatchParser {
         fun parseAll(): List<PatchHunk> {
             for (line in lines) {
                 lineNumber += 1
-                processLine(line)
+                // Upstream finish() treats the final (possibly padded) End Patch marker
+                // separately from normal update lines, which retain indentation.
+                if (lineNumber == lines.size && line.trim() == END_PATCH_MARKER) {
+                    ensureUpdateHunkNotEmpty(END_PATCH_MARKER)
+                    mode = Mode.ENDED_PATCH
+                } else {
+                    processLine(line)
+                }
             }
             if (mode != Mode.ENDED_PATCH) {
                 throw PatchParseException.InvalidPatch("The last line of the patch must be '*** End Patch'")
@@ -284,13 +294,15 @@ object PatchParser {
         val oldLines: MutableList<String> = mutableListOf(),
         val newLines: MutableList<String> = mutableListOf(),
         var isEndOfFile: Boolean = false,
+        val contextLineIndices: MutableList<Pair<Int, Int>> = mutableListOf(),
     ) {
         fun pushContextLine(line: String) {
+            contextLineIndices.add(oldLines.size to newLines.size)
             oldLines.add(line)
             newLines.add(line)
         }
 
-        fun toChunk() = UpdateChunk(changeContext, oldLines.toList(), newLines.toList(), isEndOfFile)
+        fun toChunk() = UpdateChunk(changeContext, oldLines.toList(), newLines.toList(), isEndOfFile, contextLineIndices.toList())
     }
 }
 
@@ -341,4 +353,6 @@ data class UpdateChunk(
     val newLines: List<String> = emptyList(),
     /** true 表示 oldLines 必须命中文件末尾（用于末尾追加）。 */
     val isEndOfFile: Boolean = false,
+    /** Explicit context indices on both sides; preserve original bytes and terminators there. */
+    val contextLineIndices: List<Pair<Int, Int>> = emptyList(),
 )

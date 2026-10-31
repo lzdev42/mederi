@@ -93,6 +93,7 @@ data class SanitizedStreamDelta(
 
 @Serializable
 data class SanitizedResponsesAPIResponse(
+    val status: String? = null,
     val output: List<SanitizedResponsesOutputItem> = emptyList(),
     val usage: SanitizedResponsesUsage? = null,
     /** response.failed 事件携带的错误明细 */
@@ -127,6 +128,7 @@ data class SanitizedResponsesStreamEvent(
     val delta: String? = null,
     val text: String? = null,
     val arguments: String? = null,
+    val input: String? = null,
     val response: SanitizedResponsesAPIResponse? = null,
     val code: String? = null,
     val message: String? = null
@@ -145,7 +147,8 @@ data class SanitizedResponsesOutputItem(
     val status: String? = null,
     @SerialName("call_id") val callId: String? = null,
     val name: String? = null,
-    val arguments: String? = null
+    val arguments: String? = null,
+    val input: String? = null
 )
 
 /**

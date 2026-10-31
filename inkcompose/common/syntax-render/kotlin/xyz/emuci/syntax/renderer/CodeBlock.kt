@@ -16,6 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -69,6 +71,12 @@ fun CodeBlock(
     maxVisibleLines: Int? = null,
     onTokenClick: ((CodeToken) -> Unit)? = null
 ) {
+    val selectionObserver = LocalCodeTextSelectionObserver.current
+    val lineOffsets = remember(code) {
+        val offsets = mutableListOf(0)
+        code.forEachIndexed { index, char -> if (char == '\n') offsets += index + 1 }
+        offsets
+    }
     val highlighter = remember(language) { IncrementalHighlighter() }
 
     var isExpanded by remember { mutableStateOf(false) }
@@ -224,8 +232,16 @@ fun CodeBlock(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                 }
+                                val textOffset = lineOffsets[index]
+                                DisposableEffect(selectionObserver, textOffset) {
+                                    onDispose { selectionObserver?.onDispose?.invoke(textOffset) }
+                                }
                                 BasicText(
                                     text = displayText,
+                                    modifier = Modifier.onGloballyPositioned {
+                                        selectionObserver?.onPositioned?.invoke(textOffset, it)
+                                    },
+                                    onTextLayout = { selectionObserver?.onTextLayout?.invoke(textOffset, it) },
                                     style = theme.textStyleForLine(lineRender.kind)
                                 )
                                 if (isLastLine) {

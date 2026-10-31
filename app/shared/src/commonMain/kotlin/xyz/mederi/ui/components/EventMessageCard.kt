@@ -1,16 +1,34 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
+import xyz.mederi.theme.WorkspaceStyle
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.AlertCircle
+import compose.icons.feathericons.ChevronRight
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.Clock
 import compose.icons.feathericons.Info
 import compose.icons.feathericons.Terminal
 import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.event_message_no_content
 import mederi.app.shared.generated.resources.event_message_open_report_title
 import mederi.app.shared.generated.resources.event_message_strip_completed
 import mederi.app.shared.generated.resources.event_message_strip_completed_role
@@ -29,30 +47,16 @@ import mederi.app.shared.generated.resources.event_message_bg_task_title
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.ChatListItem
-import xyz.mederi.ui.components.atoms.StatusStrip
-import xyz.mederi.ui.host.LocalProjectFileTreeProvider
 
 /**
- * 通用事件消息卡片 (EventMessageCard)
- *
- * 极简单行微条：单行显示子代理终态（完成 / 失败 / 被手动取消）+ 角色名，低空间占用。
- * 报告摘要不再塞进状态行——点击整行直接滑开右侧阅读器（ARTIFACTS / Reader）查看完整 Markdown 汇报。
- *
- * 职责边界：本组件**只负责三件事**——
- * ① 终态判定（三档语义色映射）、② 报告正文取数（注入的文件树 provider，失败回落 summary）、
- * ③ 点击开阅读器（把标题与正文交给调用方）。
- * 单行微条的**外观壳**（8dp 圆角 / surfaceCard 底 / hover 边框 / 前置图标 / 单行省略文本 /
- * 右侧「文字 + 箭头」入口 / 整行可点与 pointer 手型光标）统一由 [StatusStrip] 提供，
- * 本文件不再自绘任何壳代码，只把「文案 + 图标 + 颜色」三组决策交给它。
- * 注意：状态**不再染色文字**（错误态红字已删），只保留图标色与 35% 边框色。
- *
- * 终态判定的**唯一真理源**在 `SubagentLabels.subagentTerminalKind`：历史事故 = 只判 ERROR/FAILED 二值、
- * 其余一律走 else，导致 STOPPED（手动取消）被显示成「已完成」。STOPPED 必须单独命中自己的分支。
+ * 子代理/后台任务的轻量终态事件行。状态由图标与本地化文字共同表达，
+ * 不用整圈边框强调历史事件；详情入口常显，整行支持键盘与触控打开报告。
+ * 点击仅回传本地化标题，报告异步读取由窗口表现层负责。
  */
 @Composable
 fun EventMessageCard(
     item: ChatListItem.EventMessageCard,
-    onOpenReport: ((title: String, content: String) -> Unit)? = null,
+    onOpenReport: ((title: String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMederiColors.current
@@ -69,17 +73,6 @@ fun EventMessageCard(
     // 后台任务事件（background_task_*）与子代理事件（subagent_*）走不同文案/标题，
     // 但共享终态判定（terminalKind）和图标/颜色逻辑。
     val isBackgroundTask = item.eventType.startsWith("background_task_")
-
-    // 读取完整报告正文：优先走注入的 LocalProjectFileTreeProvider（commonMain 禁用 JVM 文件 API，
-    // KMP 硬性约束）；provider 为 null（未注入的平台）或读不出内容时回落 item.summary 原文。
-    // 注意：CompositionLocal.current 是 @Composable 读，必须在 composable 作用域内取出，
-    // 再作为 remember 的 key 传进计算块（不能写进 remember lambda 内部）。
-    val fileTreeProvider = LocalProjectFileTreeProvider.current
-    val reportContent = remember(item.reportPath, item.summary, fileTreeProvider) {
-        val fileText = item.reportPath?.takeIf { it.isNotBlank() }
-            ?.let { path -> fileTreeProvider?.readText(path) }
-        if (!fileText.isNullOrBlank()) fileText else item.summary
-    }
 
     // hasRole / roleLabel 先无条件计算（hasSpecificRole / roleLabelOf 是 @Composable 函数，
     // 避免在条件分支内调用 @Composable 的编译器问题），仅子代理路径使用。
@@ -136,36 +129,66 @@ fun EventMessageCard(
         }
     }
 
-    val contentToOpen = reportContent.ifBlank { stringResource(Res.string.event_message_no_content) }
-
-    StatusStrip(
-        text = statusText,
-        // 1. 左侧状态图标：COMPLETED=对勾(绿) / STOPPED=Info(中性灰) / ERROR+OTHER=AlertCircle(红)；
-        //    后台任务（background_task_*）按类型用 Terminal/Clock，颜色仍按终态
-        icon = if (isBackgroundTask) {
-            if (item.taskType == "timer") FeatherIcons.Clock else FeatherIcons.Terminal
-        } else {
-            when {
-                useErrorStyle -> FeatherIcons.AlertCircle
-                useNeutralStyle -> FeatherIcons.Info
-                else -> FeatherIcons.Check
-            }
-        },
-        iconTint = when {
-            useErrorStyle -> colors.statusError
-            useNeutralStyle -> colors.textSecondary
-            else -> colors.accentSuccess
-        },
-        // TODO(i18n)：这里仍是 core 的原始英文枚举（COMPLETED/ERROR/STOPPED），
-        // 只在无障碍树朗读，本次不引入新的 event_message_status_* 资源键。
-        iconContentDescription = item.status,
-        // 2. 状态表达只在图标色与边框色上：文字一律主文字色（STOPPED/ERROR 都不染色）
-        borderColor = if (useErrorStyle) colors.statusError.copy(alpha = 0.35f) else colors.divider,
-        // 3. 右侧「查看详情 + 箭头」入口：仅在有阅读器回调时出现
-        actionLabel = if (onOpenReport != null) stringResource(Res.string.event_message_view_detail) else null,
-        // onOpenReport 是 (title, content) -> Unit，与 StatusStrip 的 (() -> Unit) 不是同一类型，
-        // 必须包一层把标题与正文固定住再交给壳；为 null 时整行不可点。
-        onAction = onOpenReport?.let { open -> { open(openReportTitle, contentToOpen) } },
-        modifier = modifier
+    val detailLabel = stringResource(Res.string.event_message_view_detail)
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val background by animateColorAsState(
+        targetValue = if (hovered && onOpenReport != null) colors.surfaceHover else Color.Transparent,
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
+        label = "eventRowBackground",
     )
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(WorkspaceStyle.ObjectRadius))
+            .background(background)
+            .then(if (onOpenReport != null) {
+                Modifier.clickable(
+                    interactionSource = interactionSource,
+                    role = Role.Button,
+                    onClickLabel = detailLabel,
+                ) { onOpenReport(openReportTitle) }
+            } else Modifier)
+            .heightIn(min = WorkspaceStyle.ControlHeight)
+            .padding(horizontal = 6.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = if (isBackgroundTask) {
+                if (item.taskType == "timer") FeatherIcons.Clock else FeatherIcons.Terminal
+            } else {
+                when {
+                    useErrorStyle -> FeatherIcons.AlertCircle
+                    useNeutralStyle -> FeatherIcons.Info
+                    else -> FeatherIcons.Check
+                }
+            },
+            contentDescription = null,
+            tint = when {
+                useErrorStyle -> colors.accentDanger
+                useNeutralStyle -> colors.textSecondary
+                else -> colors.accentSuccess
+            },
+            modifier = Modifier.size(WorkspaceStyle.IconSize),
+        )
+        Text(
+            text = statusText,
+            color = colors.textSecondary,
+            style = WorkspaceStyle.Body,
+            modifier = Modifier.weight(1f),
+        )
+        if (onOpenReport != null) {
+            Text(
+                text = detailLabel,
+                color = colors.textSecondary,
+                style = WorkspaceStyle.Caption,
+            )
+            Icon(
+                imageVector = FeatherIcons.ChevronRight,
+                contentDescription = null,
+                tint = colors.textMuted,
+                modifier = Modifier.size(WorkspaceStyle.IconSize),
+            )
+        }
+    }
 }

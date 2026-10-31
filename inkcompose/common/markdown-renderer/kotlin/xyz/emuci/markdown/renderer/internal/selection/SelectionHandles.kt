@@ -33,6 +33,8 @@ private val HandleStemWidth = 2.dp
 
 @Composable
 internal fun SelectionHandlesHost(controller: MarkdownSelectionController) {
+    // 鼠标选区不能生成覆盖端点的触摸手柄，否则后续鼠标按下会被 Popup 抢走。
+    if (controller.state.isMouseInput) return
     val range = controller.state.range ?: return
     if (range.start == range.end) return
     val activeHandle = controller.state.activeHandle

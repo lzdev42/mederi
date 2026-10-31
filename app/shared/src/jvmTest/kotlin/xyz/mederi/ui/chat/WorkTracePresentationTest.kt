@@ -61,4 +61,41 @@ class WorkTracePresentationTest {
         assertEquals(8_000L, workTraceElapsedMs(trace.startedAt, trace.completedAt, trace.isRunning, 50_000))
         assertTrue(trace.items.filterIsInstance<ChatListItem.Reasoning>().all { it.durationMs == 0L })
     }
+    @Test
+    fun `successful dispatch stays visible outside folded work without any model reply`() {
+        for (action in listOf("SPAWN", "SPAWN_RESEARCHER")) {
+            val call = ChatBlock.ToolCall("dispatch", "subagent",
+                ToolCallState.Completed(mapOf("action" to action, "task" to "inspect browser"), "dispatched"))
+            val input = message("dispatch_message", 1_000).copy(blocks = listOf(call))
+            for (working in listOf(true, false)) {
+                val items = computeChatItems(listOf(input), working, null)
+                assertEquals(1, items.filterIsInstance<ChatListItem.SubagentCalls>().size)
+                assertTrue(items.filterIsInstance<ChatListItem.WorkTraceBlock>().all { trace ->
+                    trace.items.none { it is ChatListItem.SubagentCalls }
+                })
+            }
+        }
+    }
+
+    @Test
+    fun `pending failed and management calls never produce a successful dispatch notice`() {
+        val spawn = mapOf("action" to "SPAWN")
+        val states = listOf(
+            ToolCallState.Pending(spawn),
+            ToolCallState.Running(spawn),
+            ToolCallState.Failed(spawn, "unavailable"),
+            ToolCallState.Completed(spawn, "Error: concurrency limit reached"),
+            ToolCallState.Completed(mapOf("action" to "STATUS"), "running"),
+            ToolCallState.Completed(mapOf("action" to "STOP"), "stopped"),
+        )
+        for (state in states) {
+            val input = message("call_message", 1_000).copy(
+                blocks = listOf(ChatBlock.ToolCall("call", "subagent", state)))
+            val items = computeChatItems(listOf(input), true, null)
+            assertTrue(items.none { it is ChatListItem.SubagentCalls }, "unexpected notice for $state")
+            assertTrue(items.filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+                .items.any { it is ChatListItem.ToolCalls }, "tool details must remain accessible")
+        }
+    }
+
 }

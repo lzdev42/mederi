@@ -1,12 +1,18 @@
 package xyz.mederi.ui.overview
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,7 +21,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import xyz.mederi.theme.WorkspaceStyle
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import xyz.mederi.ui.components.atoms.expansionSemantics
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,15 +50,8 @@ import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.theme.MederiTypeScale
 
 /**
- * 概览浮动窗的手风琴行壳（8 个行共用）。
- *
- * 折叠态：34dp 高行头（icon + 标题 + 弹性占位 + 右侧摘要 slot + chevron），
- * hover 时浮出 `surfaceHover` 底色（参照 ProcessRow / MederiCards 的
- * MutableInteractionSource + collectIsHoveredAsState 范式）；顶部 1dp divider 分隔线
- * 由 [showTopDivider] 控制（容器层第一行传 false 不画）。
- *
- * 展开态：AnimatedVisibility(expandVertically / shrinkVertically, tween(180)) 平滑展开，
- * 内容区左右 12dp、下 12dp 内边距。
+ * 概览共用折叠行：以留白和轻背景分组，只有必要时显式添加分隔线。
+ * 整行可键盘操作，展开状态有语义，箭头和内容使用同一180ms节奏。
  */
 @Composable
 fun OverviewAccordionRow(
@@ -56,7 +61,7 @@ fun OverviewAccordionRow(
     expanded: Boolean,                         // 是否展开
     onToggle: () -> Unit,                      // 点击行头切换展开
     modifier: Modifier = Modifier,
-    showTopDivider: Boolean = true,            // false = 第一行不画顶部分隔线
+    showTopDivider: Boolean = false,            // false = 第一行不画顶部分隔线
     content: @Composable () -> Unit,           // 展开内容
 ) {
     val colors = LocalMederiColors.current
@@ -64,6 +69,22 @@ fun OverviewAccordionRow(
     // hover 底色：常态透明，鼠标移入才浮出
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val background by animateColorAsState(
+        targetValue = when {
+            isHovered || isFocused -> colors.surfaceHover
+            expanded -> colors.surfaceHover.copy(alpha = 0.45f)
+            else -> Color.Transparent
+        },
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
+        label = "overviewRowBackground",
+    )
+    val angle by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = LocalWorkspaceMotion.current.disclosureSpec(),
+        label = "overviewChevron",
+    )
+
 
     Column(modifier = modifier) {
         if (showTopDivider) {
@@ -77,11 +98,14 @@ fun OverviewAccordionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(34.dp)
-                .background(if (isHovered) colors.surfaceHover else Color.Transparent)
+                .heightIn(min = 40.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(background)
+                .expansionSemantics(expanded) { if (it != expanded) onToggle() }
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
+                    role = Role.Button,
                     onClick = onToggle,
                 )
                 .padding(horizontal = MederiSpacing.MD),
@@ -97,11 +121,11 @@ fun OverviewAccordionRow(
             Text(
                 text = title,
                 color = colors.textPrimary,
-                style = MederiTypeScale.Title,
+                style = WorkspaceStyle.Title,
+                modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(modifier = Modifier.weight(1f))
             summary()
             Icon(
                 imageVector = FeatherIcons.ChevronDown,
@@ -109,13 +133,13 @@ fun OverviewAccordionRow(
                 tint = colors.textMuted,
                 modifier = Modifier
                     .size(14.dp)
-                    .graphicsLayer { rotationZ = if (expanded) 180f else 0f },
+                    .graphicsLayer { rotationZ = angle },
             )
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(animationSpec = tween(180)),
-            exit = shrinkVertically(animationSpec = tween(180)),
+            enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else expandVertically(animationSpec = LocalWorkspaceMotion.current.disclosureSpec()),
+            exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else shrinkVertically(animationSpec = LocalWorkspaceMotion.current.disclosureSpec()),
         ) {
             Column(
                 modifier = Modifier.padding(

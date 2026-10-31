@@ -465,11 +465,13 @@ class WorkspaceViewModel(
     var reasoningExpanded by mutableStateOf<Map<String, Boolean>>(emptyMap()); private set
 
     // ------------------------------------------------------------------
-    // diff 面板状态（内部收敛为单一 diffState；对外属性名/类型不变）
+    // diff查询由会话级表现协作者持有，对外只保留只读兼容投影
     // ------------------------------------------------------------------
 
-    /** diff 面板内部存储（items/selectedPath/showPanel 单点状态） */
-    private var diffState by mutableStateOf(DiffUiState())
+    /** Core内容真理源不变；查询/选择反馈由DiffPresenter按会话持有。 */
+    private val diffPresenter = DiffPresenter(appState.aiCore, viewModelScope)
+    internal val diffPanelState: DiffUiState get() = diffPresenter.state
+    private val diffState: DiffUiState get() = diffPanelState
 
     /** 当前会话的文件 diff 列表 */
     val diffItems: List<FileDiff> get() = diffState.items
@@ -478,7 +480,7 @@ class WorkspaceViewModel(
     val selectedDiffFilePath: String? get() = diffState.selectedPath
 
     /** diff 面板是否展开 */
-    val showDiffPanel: Boolean get() = diffState.showPanel
+    val showDiffPanel: Boolean get() = activeDockPanel == RightDockPanel.DIFF
 
     /** 未绑定会话时的 Dock 面板激活状态兜底 */
     private var unattachedDockPanel by mutableStateOf<RightDockPanel?>(null)
@@ -498,6 +500,10 @@ class WorkspaceViewModel(
      * 更新当前活动栏激活面板：写入当前会话状态机与缓存。
      */
     private fun updateActiveDockPanel(panel: RightDockPanel?) {
+        diffPresenter.setVisible(panel == RightDockPanel.DIFF)
+        if (panel == RightDockPanel.ARTIFACTS) {
+            selectedReport()?.let { reportLoader.activate(it.request.key) } ?: reportLoader.deactivate()
+        } else reportLoader.deactivate()
         val convId = conversationId
         val current = conversationState
         DebugLog.event("UI-Dock", "updateActiveDockPanel: convId=$convId, panel=$panel")
@@ -511,16 +517,16 @@ class WorkspaceViewModel(
     }
 
     fun toggleDockPanel(panel: RightDockPanel) {
-        val target = if (activeDockPanel == panel) null else {
-            if (panel == RightDockPanel.DIFF) openDiff()
-            panel
+        if (activeDockPanel != panel && panel == RightDockPanel.DIFF) {
+            openDiff()
+            return
         }
-        updateActiveDockPanel(target)
+        updateActiveDockPanel(if (activeDockPanel == panel) null else panel)
         closeSubagentPanel()
     }
 
     fun openDockPanel(panel: RightDockPanel) {
-        if (panel == RightDockPanel.DIFF) openDiff()
+        if (panel == RightDockPanel.DIFF) { openDiff(); return }
         updateActiveDockPanel(panel)
         closeSubagentPanel()
     }
@@ -606,26 +612,83 @@ class WorkspaceViewModel(
     /** 当前展示的计划内容。写操作只经 openPlanInExtension（单向数据流） */
     var currentPlan by mutableStateOf<PlanItem?>(null); private set
 
-    /** 产物与媒体附件集合 */
-    val artifactItems = mutableStateListOf<ArtifactItem>()
+    private val reportLoader = ReportLoadPresenter(viewModelScope)
+    internal fun reportState(key: ReportKey): ReportLoadState = reportLoader.state(key)
 
-    /** 当前激活的产物 ID。写操作只经 openArtifact / open*InExtension（单向数据流） */
-    var activeArtifactId by mutableStateOf<String?>(null); private set
+    private fun selectedReport(): ArtifactItem.Report? =
+        readerState.activeItem as? ArtifactItem.Report
 
-    /** 激活已有产物（产物面板 tab 点击） */
+    fun openEventReport(item: ChatListItem.EventMessageCard, title: String) {
+        // 后台命令/定时器的详情本来就是事件正文，没有独立报告文件，不能伪报文件缺失。
+        if (item.eventType.startsWith("background_task_") && item.reportPath.isNullOrBlank()) {
+            openDocument(DocumentTarget.Content("event:${conversationId}:${item.key}", title, item.summary))
+            return
+        }
+        val sessionId = conversationId ?: return
+        val request = ReportRequest(ReportKey(sessionId, item.key), item.reportPath, item.summary)
+        openDocument(DocumentTarget.Report("report:$sessionId:${item.key}", title, request))
+    }
+
+    private fun openReportInExtension(id: String, title: String, request: ReportRequest, force: Boolean = false) {
+        beginReaderAction(cancelReport = false)
+        val provider = appState.fileTreeProvider
+        val read: (suspend () -> Result<String?>)? = provider?.let { source ->
+            { request.path?.takeIf { it.isNotBlank() }?.let { source.readTextResult(it) } ?: Result.success(null) }
+        }
+        reportLoader.select(request, provider, read, force)
+        val updated = ArtifactItem.Report(id, title, request)
+        updateReader { it.open(updated) }
+        openDockPanel(RightDockPanel.ARTIFACTS)
+    }
+
+    fun retryReport(key: ReportKey) {
+        val item = selectedReport()?.takeIf { it.request.key == key } ?: return
+        if (activeDockPanel != RightDockPanel.ARTIFACTS) return
+        fileOpenRequestSeq++
+        if (key.sessionId == conversationId) openReportInExtension(item.id, item.title, item.request, force = true)
+        else reportLoader.retry(key) // 旧会话的已打开标签复用原来源，不能改读当前项目的相对路径。
+    }
+
+    private val readerStates = mutableStateMapOf<ReaderOwner, ReaderPresentationState>()
+    private val readerOwner: ReaderOwner
+        get() = conversationId?.let { ReaderOwner.Session(it) } ?: ReaderOwner.Draft(appState.selectedProjectId.value)
+    private val readerState: ReaderPresentationState get() = readerStates[readerOwner] ?: ReaderPresentationState()
+    private fun updateReader(change: (ReaderPresentationState) -> ReaderPresentationState) {
+        readerStates[readerOwner] = change(readerState)
+    }
+
+    /** 只读兼容投影；标签/选择/待确认意图只有readerStates一个写入口。 */
+    val artifactItems: List<ArtifactItem> get() = readerState.items
+    val activeArtifactId: String? get() = readerState.activeId
+    internal val readerPanelState: ReaderPanelState
+        get() {
+            val state = readerState
+            val selected = state.activeItem
+            val live = if (selected is ArtifactItem.Text) getLiveArtifactItem(selected.id) ?: selected else selected
+            return ReaderPanelState(state.items, live, (live as? ArtifactItem.Report)?.let { reportState(it.request.key) } ?: ReportLoadState.Idle)
+        }
+
+    private fun beginReaderAction(cancelReport: Boolean = true) {
+        fileOpenRequestSeq++
+        pendingFileOpen = null
+        if (cancelReport) reportLoader.deactivate()
+    }
+
+    /** 激活当前owner中存在的标签；过期/跨会话的回调无副作用。 */
     fun openArtifact(artifactId: String) {
-        activeArtifactId = artifactId
+        if (artifactItems.none { it.id == artifactId }) return
+        beginReaderAction(cancelReport = false)
+        updateReader { it.select(artifactId) }
+        if (activeDockPanel == RightDockPanel.ARTIFACTS) {
+            selectedReport()?.let { reportLoader.activate(it.request.key) } ?: reportLoader.deactivate()
+        } else reportLoader.deactivate()
     }
 
     fun openImageInExtension(title: String, imageUrl: String) {
+        beginReaderAction()
         val existing = artifactItems.filterIsInstance<ArtifactItem.Image>().find { it.imageUrl == imageUrl }
-        if (existing != null) {
-            activeArtifactId = existing.id
-        } else {
-            val id = "img_${xyz.mederi.currentTimeMillis()}"
-            artifactItems.add(ArtifactItem.Image(id = id, title = title, imageUrl = imageUrl))
-            activeArtifactId = id
-        }
+        val image = existing ?: ArtifactItem.Image(id = kotlin.uuid.Uuid.random().toString(), title = title, imageUrl = imageUrl)
+        updateReader { it.open(image) }
         openDockPanel(RightDockPanel.ARTIFACTS)
         DebugLog.event("UI", "openImageInExtension: title='$title', activeArtifactId=$activeArtifactId")
     }
@@ -638,8 +701,8 @@ class WorkspaceViewModel(
         id: String? = null,
         isStreaming: Boolean = false,
     ) {
+        beginReaderAction()
         val targetId = id ?: "txt_${title.hashCode().toUInt()}"
-        val existingIndex = artifactItems.indexOfFirst { it.id == targetId }
         val updatedItem = ArtifactItem.Text(
             id = targetId,
             title = title,
@@ -648,19 +711,15 @@ class WorkspaceViewModel(
             charCount = charCount,
             isStreaming = isStreaming,
         )
-        if (existingIndex != -1) {
-            artifactItems[existingIndex] = updatedItem
-            activeArtifactId = targetId
-        } else {
-            artifactItems.add(updatedItem)
-            activeArtifactId = targetId
-        }
+        updateReader { it.open(updatedItem) }
         openDockPanel(RightDockPanel.ARTIFACTS)
         DebugLog.event("UI", "openTextInExtension: title='$title', activeArtifactId=$activeArtifactId, chars=$charCount, isStreaming=$isStreaming")
     }
 
     /** 文件打开确认态（EXTERNAL / REVEAL 档），非 null 时 Workspace 渲染 ConfirmDialog。 */
-    var pendingFileOpen by mutableStateOf<PendingFileOpen?>(null); private set
+    var pendingFileOpen: PendingFileOpen?
+        get() = readerState.pendingFileOpen
+        private set(value) { updateReader { it.copy(pendingFileOpen = value) } }
 
     /**
      * 文件打开请求序号：异步解析（读盘 / 查默认应用名）期间用户又点了别的文件时，
@@ -679,11 +738,14 @@ class WorkspaceViewModel(
      * 命令等待带超时（PlatformUtils 侧），绝不在点击回调里同步起进程。
      */
     fun openFile(path: String) {
-        val resolvedPath = appState.fileTreeProvider?.resolvePath(path) ?: path
+        beginReaderAction()
+        val owner = readerOwner
+        val provider = appState.fileTreeProvider
+        val resolvedPath = provider?.resolvePath(path) ?: path
         val fileName = resolvedPath.substringAfterLast('/').ifBlank { resolvedPath }
 
         // 1. 目录点击处理（Directory Target）：桌面端弹窗提示打开该目录；非桌面端忽略
-        if (appState.fileTreeProvider?.isDirectory(resolvedPath) == true) {
+        if (provider?.isDirectory(resolvedPath) == true) {
             if (isDesktopPlatform) {
                 pendingFileOpen = PendingFileOpen.OpenDirectory(resolvedPath)
             }
@@ -695,8 +757,8 @@ class WorkspaceViewModel(
             FileOpenTarget.INTERNAL_TEXT -> {
                 val requestId = ++fileOpenRequestSeq
                 viewModelScope.launch {
-                    val content = withContext(Dispatchers.Default) { appState.fileTreeProvider?.readText(resolvedPath) }
-                    if (requestId != fileOpenRequestSeq) return@launch // 已被更新的点击取代
+                    val content = withContext(Dispatchers.Default) { provider?.readText(resolvedPath) }
+                    if (requestId != fileOpenRequestSeq || readerOwner != owner) return@launch // 新目标/会话/项目已取代
                     if (content == null || content.contains('\u0000')) {
                         // 二进制 / 读不到 → 若为桌面端则尝试查询应用或打开目录；非桌面端直接忽略
                         if (!isDesktopPlatform) return@launch
@@ -738,9 +800,10 @@ class WorkspaceViewModel(
     /** EXTERNAL 档：查系统默认应用名，有则「用 [appName] 打开」，查不到降级「打开文件所在目录？」。非桌面端不弹。 */
     private fun routeExternalOrReveal(path: String, requestId: Int) {
         if (!isDesktopPlatform) return
+        val owner = readerOwner
         viewModelScope.launch {
             val appName = withContext(Dispatchers.Default) { defaultAppNameFor(path) }
-            if (requestId != fileOpenRequestSeq) return@launch // 已被更新的点击取代
+            if (requestId != fileOpenRequestSeq || readerOwner != owner) return@launch // 新目标/会话/项目已取代
             pendingFileOpen = if (appName != null) {
                 PendingFileOpen.OpenExternally(path, appName)
             } else {
@@ -784,6 +847,9 @@ class WorkspaceViewModel(
             val isStreaming: Boolean = false,
         ) : DocumentTarget
 
+        /** 按需异步读取的事件报告，来源/摘要由本地请求绑定。 */
+        data class Report(val id: String, val title: String, val request: ReportRequest) : DocumentTarget
+
         /** 图片资源（网络链接或本地图片路径） */
         data class Image(val title: String, val url: String) : DocumentTarget
     }
@@ -795,6 +861,7 @@ class WorkspaceViewModel(
     fun openDocument(target: DocumentTarget) {
         when (target) {
             is DocumentTarget.Path -> openFile(target.filePath)
+            is DocumentTarget.Report -> openReportInExtension(target.id, target.title, target.request)
             is DocumentTarget.Content -> openTextInExtension(
                 title = target.title,
                 content = target.content,
@@ -992,9 +1059,7 @@ class WorkspaceViewModel(
     // imageStrippedNotice 轻提示）仍保留为 VM state（见 UiEffect KDoc 的迁移边界说明）——
     // 它们由 UI 常驻展示并在合适时机清空，不是"触发一次的导航命令"。
     //
-    // receiveAsFlow 是单消费者语义：同一时刻通常只有一个 UI 实例在收集
-    // （两个 ChatInputCard 共享同一 VM，但实际可见的输入框一般只有一个）；
-    // 多实例同时可见时的广播竞争是已知边缘情况，可接受（见 ChatInputCard 收集处注释）。
+    // 只有MainScreen Route通过rememberWorkspaceEffectState消费；叶子不得订阅此流。
     private val _effects = Channel<UiEffect>(Channel.BUFFERED)
     val effects: kotlinx.coroutines.flow.Flow<UiEffect> = _effects.receiveAsFlow()
 
@@ -1003,17 +1068,29 @@ class WorkspaceViewModel(
         _effects.trySend(UiEffect.OpenSettings)
     }
 
-    /** 打开项目选择菜单（一次性命令，UI 收集后递增计数触发 ProjectSelectorMenu） */
+    /** 打开项目选择菜单（一次性命令，Route消费后置项目菜单展开，叶子只接收受控状态） */
     fun openProjectMenu() {
         _effects.trySend(UiEffect.OpenProjectMenu)
     }
 
     // ------------------------------------------------------------------
-    // 错误族状态（内部存储收敛为单一 errorState；对外属性名/类型不变）
+    // 错误反馈按会话/草稿归档，兼容属性只读同一投影
     // ------------------------------------------------------------------
 
-    /** 错误族内部存储（message/diagnostic/id/断流标记/详情弹窗单点状态） */
-    private var errorState by mutableStateOf(ErrorState())
+    /** Core投影与本地失败/关闭/详情意图分离，异步结果绑定原操作票据。 */
+    private val feedbackPresenter = WorkspaceFeedbackPresenter()
+    private val feedbackOwner: FeedbackOwner
+        get() = conversationId?.let { FeedbackOwner.Session(it) } ?: FeedbackOwner.Draft(appState.selectedProjectId.value)
+    internal val feedbackState: ErrorState get() = feedbackPresenter.state
+    private val errorState: ErrorState get() = feedbackState
+
+    private fun acceptCoreFeedback(id: String, snap: ConversationState) {
+        feedbackPresenter.accept(FeedbackOwner.Session(id), ErrorState(
+            message = snap.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
+            diagnostic = snap.errorDiagnostic, id = snap.errorId,
+            isStreamInterrupted = snap.errorIsStreamInterrupted,
+        ))
+    }
 
     /**
      * 当前会话的头条错误简报（null = 无错误）。
@@ -1058,15 +1135,9 @@ class WorkspaceViewModel(
      */
     val isErrorDetailOpen: Boolean get() = errorState.isDetailOpen
 
-    fun showErrorDetail() {
-        if (!errorDiagnostic.isNullOrBlank() || error != null) {
-            errorState = errorState.copy(isDetailOpen = true)
-        }
-    }
+    fun showErrorDetail() { feedbackPresenter.showDetail() }
 
-    fun dismissErrorDetail() {
-        errorState = errorState.copy(isDetailOpen = false)
-    }
+    fun dismissErrorDetail() { feedbackPresenter.dismissDetail() }
 
     // 乐观用户消息（sessionCache.pendingUserMessages）与 StatusBar 计时锚点（sessionCache.turnStartByConv）
     // 已收敛进 [sessionCache]（SessionUiCache，见文件底部），语义与文档随成员迁移。
@@ -1409,9 +1480,14 @@ class WorkspaceViewModel(
     fun subagentReportMarkdown(toolName: String, resultJson: String): String? =
         SubagentReportMarkdown.fromToolResult(toolName, resultJson)
 
-    /** 后台任务列表（命令+定时器）；2 秒轮询 listBackgroundTasks，仅在概览窗可见时轮询。 */
-    var backgroundTasks by mutableStateOf<List<xyz.mederi.core.contract.models.BackgroundTaskInfo>>(emptyList())
-        private set
+    private val backgroundTaskPresenter = BackgroundTaskPresenter(appState.aiCore, viewModelScope)
+    internal val backgroundTaskState: BackgroundTaskQueryState get() = backgroundTaskPresenter.state
+    val backgroundTasks get() = backgroundTaskState.tasks
+
+    /** Route持有可见性租约；叶子不调度轮询，释放只暂停读取。 */
+    fun observeBackgroundTasks(): () -> Unit = backgroundTaskPresenter.observe()
+    fun refreshBackgroundTasks() = backgroundTaskPresenter.refresh()
+    fun clearBackgroundTaskStopError(taskId: String) = backgroundTaskPresenter.dismissStopError(taskId)
 
     /**
      * 展平后的聊天列表（派生缓存）。
@@ -1424,10 +1500,6 @@ class WorkspaceViewModel(
     val chatItems: List<ChatListItem> by derivedStateOf {
         computeChatItems(messages)
     }
-
-    /** 用户是否手动点击了关闭子智能体工作浮条 */
-    var isSubagentBannerDismissed by mutableStateOf(false)
-        private set
 
     /**
      * 当前会话是否正在手动压缩中（compaction RUNNING/IDLE STATUS 事件维护的 VM 本地态）。
@@ -1456,22 +1528,11 @@ class WorkspaceViewModel(
     /**
      * 是否有子智能体正在工作（当前会话存在 RUNNING 状态的子代理）。
      * 状态判定复用 `ui/SubagentLifecycleNotification.kt` 的纯函数 [hasRunningSubagents]（同一谓词单一真理源，
-     * 以 SUBAGENT_* 事件驱动），不再叠加 chatItems 层判定，保证浮条与概览的 SubAgentManagementCard 同步。
+     * 以 SUBAGENT_* 事件驱动），不再叠加 chatItems 层判定。
      */
     val hasRunningSubagents: Boolean by derivedStateOf {
         hasRunningSubagents(subagents)
     }
-
-    /** 是否应当展示子智能体正在工作的浮条：有在工作的子智能体，且用户未手动关闭 */
-    val showSubagentRunningBanner: Boolean by derivedStateOf {
-        hasRunningSubagents && !isSubagentBannerDismissed
-    }
-
-    /** 用户手动关闭子智能体工作浮条 */
-    fun dismissSubagentRunningBanner() {
-        isSubagentBannerDismissed = true
-    }
-
 
     // ==========================================
     // 派生展示状态（View 直接读取，零业务逻辑）
@@ -1619,6 +1680,7 @@ class WorkspaceViewModel(
     private val pendingOptReconciled = mutableSetOf<String>()
 
     init {
+        feedbackPresenter.bind(feedbackOwner)
         viewModelScope.launch {
             appState.selectedConversationId.collect { id ->
                 if (id != conversationId) attach(id)
@@ -1628,9 +1690,19 @@ class WorkspaceViewModel(
             appState.selectedProjectId.collect { id ->
                 if (id != inputProjectId) {
                     inputProjectId = id
-                    if (conversationId == null) inputContextVersion++
+                    if (conversationId == null) {
+                        fileOpenRequestSeq++
+                        reportLoader.deactivate()
+                        readerStates.keys.filterIsInstance<ReaderOwner.Draft>().forEach { owner ->
+                            readerStates[owner]?.let { readerStates[owner] = it.copy(pendingFileOpen = null) }
+                        }
+                        inputContextVersion++
+                    }
                 }
-                if (conversationId == null) restoreUnacceptedInputs("new:$id")
+                if (conversationId == null) {
+                    feedbackPresenter.bind(FeedbackOwner.Draft(id))
+                    restoreUnacceptedInputs("new:$id")
+                }
             }
         }
 
@@ -1677,13 +1749,15 @@ class WorkspaceViewModel(
 
     fun attach(id: String?) {
         DebugLog.event("UI", "attach: id=$id")
+        backgroundTaskPresenter.bind(id)
+        diffPresenter.bind(id)
         if (conversationId != id) {
+            beginReaderAction()
             inputContextVersion++
             if (creationDraftTarget != id) creationDraftTarget = null
         }
         draftDebounceJob?.cancel()
         resetQuestionState()
-        isSubagentBannerDismissed = false
         // compaction 本地态不随会话走：切会话复位，防别的会话压缩事件串台
         isCompacting = false
         compactionCompletedNotice = false
@@ -1692,16 +1766,14 @@ class WorkspaceViewModel(
             conversationState = null
             isAttached = false
             pendingOptReconciled.clear()
-            // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted）
-            errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
+            feedbackPresenter.bind(feedbackOwner)
             inputDraft = TextFieldValue(unattachedDraft)
             restoreUnacceptedInputs("new:${appState.selectedProjectId.value}")
             return
         }
         conversationId = id
         pendingOptReconciled.clear()
-        // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted，由后续 applySnapshot 覆盖）
-        errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
+        feedbackPresenter.bind(feedbackOwner)
 
         // 切换只换渲染源：立即用该会话的缓存状态机渲染（后台观察流一直在持续更新它），
         // 不再 conversationState = null 再从 store 重建，也绝不 cancel 该会话的观察 Job——
@@ -1710,12 +1782,7 @@ class WorkspaceViewModel(
         if (cached != null) {
             conversationState = cached
             isAttached = true
-            errorState = errorState.copy(
-                message = cached.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
-                diagnostic = cached.errorDiagnostic,
-                id = cached.errorId,
-                isStreamInterrupted = cached.errorIsStreamInterrupted,
-            )
+            acceptCoreFeedback(id, cached)
             // 切换到已缓存的会话时，显式按缓存会话对象直接恢复设置（model / agent / apiKey / thinkingLevel）。
             // 仅在切换回当前对话时允许读一次设置，其他时候绝不允许读取或覆盖。
             applySessionSettings(cached.conversation)
@@ -1735,6 +1802,8 @@ class WorkspaceViewModel(
             }
         }
         ensureObserving(id)
+        diffPresenter.setVisible(activeDockPanel == RightDockPanel.DIFF)
+        if (activeDockPanel == RightDockPanel.ARTIFACTS) selectedReport()?.let { reportLoader.activate(it.request.key) }
     }
 
     /**
@@ -1785,19 +1854,15 @@ class WorkspaceViewModel(
         val effectiveSnap = mergeLocalUiState(snap, prevSnap)
         val effectiveConv = effectiveSnap.conversation
         sessionCache.conversationStates[id] = effectiveSnap
+        acceptCoreFeedback(id, effectiveSnap)
         if (conversationId == id) {
             conversationState = effectiveSnap
+            diffPresenter.setVisible(activeDockPanel == RightDockPanel.DIFF)
             isAttached = true
             // 首次收到快照且该会话尚未水合过设置（冷启动等场景）：水合一次会话设置
             if (hydratedSessions.add(id)) {
                 applySessionSettings(effectiveConv)
             }
-            errorState = errorState.copy(
-                message = snap.errorMessage?.let { UiMessage(Res.string.err_generic, listOf(it)) },
-                diagnostic = snap.errorDiagnostic,
-                id = snap.errorId,
-                isStreamInterrupted = snap.errorIsStreamInterrupted,
-            )
             // compaction 兜底复位：当前会话快照已 Idle/Error（MESSAGE_COMPLETED/ERROR）而
             // compaction IDLE 事件丢失时，isCompacting 可能卡 true——按快照状态复位。
             if (snap.conversation.status == ConversationStatus.Idle || snap.conversation.status == ConversationStatus.Error) {
@@ -1933,23 +1998,22 @@ class WorkspaceViewModel(
         val projectId = if (convId == null) appState.selectedProjectId.value else null
         if (convId == null && projectId == null) {
             DebugLog.event("UI", "send blocked: no conversation and no project")
-            errorState = errorState.copy(message = UiMessage(Res.string.err_select_project_or_conversation))
+            feedbackPresenter.showLocal(feedbackOwner, UiMessage(Res.string.err_select_project_or_conversation))
             return
         }
         if (!appState.isReady.value) {
             DebugLog.event("UI", "send blocked: engine not ready")
-            errorState = errorState.copy(message = UiMessage(Res.string.err_engine_not_ready))
+            feedbackPresenter.showLocal(feedbackOwner, UiMessage(Res.string.err_engine_not_ready))
             return
         }
         val model = appState.selectedModel.value
         if (model == null) {
             DebugLog.event("UI", "send blocked: no model selected")
-            errorState = errorState.copy(message = UiMessage(Res.string.err_select_model_first))
+            feedbackPresenter.showLocal(feedbackOwner, UiMessage(Res.string.err_select_model_first))
             return
         }
         if (hasImages && !guardImageSupport(model)) return
-        // 错误族批量重置（与旧实现一致：这里不重置 isStreamInterrupted，由 applySnapshot 覆盖）
-        errorState = errorState.copy(message = null, diagnostic = null, id = null, isDetailOpen = false)
+        val sendFeedback = feedbackPresenter.begin(feedbackOwner)
 
         // 组装最终提示词：用户主指令在前，粘贴大文本在后；Core 的 TurnExecutor 会追加 metaNote 保证 metaNote 恒在最底部
         val pastedAttachments = pendingPastedTexts.toList()
@@ -2057,10 +2121,9 @@ class WorkspaceViewModel(
                     if (conversationCreation === creation) conversationCreation = null
                     val ex = created.exceptionOrNull()
                     DebugLog.error("UI", "auto create conversation failed: ${ex?.message}", ex)
-                    errorState = errorState.copy(
-                        message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
-                            ?: UiMessage(Res.string.err_create_conversation_failed)
-                    )
+                    feedbackPresenter.publish(sendFeedback,
+                        ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                            ?: UiMessage(Res.string.err_create_conversation_failed))
                     sessionCache.removePendingUserMessage(pendingKey, messageId)
                     recoverInput(null)
                     return@launch
@@ -2071,6 +2134,11 @@ class WorkspaceViewModel(
                 if (conversationId == null && inputContextVersion == originalContextVersion &&
                     appState.selectedProjectId.value == projectId
                 ) {
+                    // 首发创建成功且用户仍在原草稿：打开的文档随草稿移交给新会话。
+                    // 切去已有会话或创建失败均不转移，避免同项目不同对话共用标签。
+                    readerStates.remove(ReaderOwner.Draft(projectId))?.let { draft ->
+                        readerStates[ReaderOwner.Session(conv.id)] = draft.copy(pendingFileOpen = null)
+                    }
                     creationDraftTarget = conv.id
                     appState.selectConversation(conv.id)
                 }
@@ -2080,15 +2148,15 @@ class WorkspaceViewModel(
             // StatusBar 计时锚点：从"发送请求时刻"起算（切会话回来不重置）
             sessionCache.turnStartByConv.getOrPut(targetConvId) { xyz.mederi.currentTimeMillis() }
 
+            val targetFeedback = if (convId == null) feedbackPresenter.begin(FeedbackOwner.Session(targetConvId)) else sendFeedback
             val r = appState.aiCore.sendMessage(targetConvId, input)
             DebugLog.event("UI", "sendMessage result: isSuccess=${r.isSuccess}")
             if (r.isFailure) {
                 val ex = r.exceptionOrNull()
                 DebugLog.error("UI", "sendMessage failed: ${ex?.let { it::class.simpleName }}: ${ex?.message}", ex)
-                errorState = errorState.copy(
-                    message = ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
-                        ?: UiMessage(Res.string.err_send_failed)
-                )
+                feedbackPresenter.publish(targetFeedback,
+                    ex?.message?.let { UiMessage(Res.string.err_generic, listOf(it)) }
+                        ?: UiMessage(Res.string.err_send_failed))
                 sessionCache.removePendingUserMessage(targetConvId, messageId)
                 recoverInput(targetConvId)
                 if (sessionCache.pendingUserMessages[targetConvId].isNullOrEmpty() && !isWorking) {
@@ -2113,36 +2181,8 @@ class WorkspaceViewModel(
         }
     }
 
-    /** 轮询后台任务列表（概览窗可见时每 2 秒调用）。 */
-    fun pollBackgroundTasks() {
-        val convId = conversationId ?: return
-        viewModelScope.launch {
-            try {
-                appState.aiCore.isReady.first { it }
-                val result = appState.aiCore.listBackgroundTasks(convId)
-                result.onSuccess { tasks ->
-                    backgroundTasks = tasks
-                }.onFailure { e ->
-                    DebugLog.error("UI", "pollBackgroundTasks failed: ${e.message}", e)
-                }
-            } catch (e: Exception) {
-                DebugLog.error("UI", "pollBackgroundTasks exception: ${e.message}", e)
-            }
-        }
-    }
-
-    /** 停止后台任务（UI 停止按钮调用）。 */
-    fun stopBackgroundTask(taskId: String) {
-        viewModelScope.launch {
-            val r = appState.aiCore.stopBackgroundTask(taskId)
-            if (r.isFailure) {
-                val ex = r.exceptionOrNull()
-                DebugLog.error("UI", "stopBackgroundTask failed: ${ex?.message}", ex)
-            }
-            // 立即刷新列表
-            pollBackgroundTasks()
-        }
-    }
+    /** 停止目标与反馈绑定当前会话；查询刷新由协作者串行合流。 */
+    fun stopBackgroundTask(taskId: String) = backgroundTaskPresenter.stop(taskId)
 
     /**
      * 断流"继续"：重发英文 Continue 走正常发消息流程（新 turn），
@@ -2172,30 +2212,18 @@ class WorkspaceViewModel(
     }
 
     fun openDiff(messageId: String? = null, initialFilePath: String? = null) {
-        val id = conversationId ?: return
-        viewModelScope.launch {
-            val r = appState.aiCore.getFileDiffs(id, messageId)
-            if (r.isSuccess) {
-                val items = r.getOrDefault(emptyList())
-                diffState = DiffUiState(
-                    items = items,
-                    selectedPath = initialFilePath ?: items.firstOrNull()?.filePath,
-                    showPanel = true,
-                )
-                updateActiveDockPanel(RightDockPanel.DIFF)
-            }
-        }
+        if (conversationId != null) diffPresenter.open(messageId, initialFilePath)
+        updateActiveDockPanel(RightDockPanel.DIFF)
+        closeSubagentPanel()
     }
 
-    fun selectDiffFile(path: String) {
-        diffState = diffState.copy(selectedPath = path)
-    }
+    /** 刷新当前范围，不将单轮变更悄悄切回全会话。 */
+    fun refreshDiff() { diffPresenter.refresh() }
+
+    fun selectDiffFile(path: String) { diffPresenter.select(path) }
 
     fun closeDiff() {
-        diffState = diffState.copy(showPanel = false)
-        if (activeDockPanel == RightDockPanel.DIFF) {
-            updateActiveDockPanel(null)
-        }
+        if (activeDockPanel == RightDockPanel.DIFF) updateActiveDockPanel(null)
     }
 
     fun toggleReasoning(blockId: String) {
@@ -2216,8 +2244,7 @@ class WorkspaceViewModel(
     }
 
     fun clearError() {
-        // 错误族全量重置（含断流标记与详情弹窗）
-        errorState = ErrorState()
+        feedbackPresenter.dismiss()
     }
 
     /** 关闭"图片已剔除"轻提示（右上角 × 按钮入口）。 */
@@ -2251,7 +2278,12 @@ class WorkspaceViewModel(
      * 用户可切换模型/模式/Agent、修改内容后自行发送，而非原封不动自动重试。
      */
     fun rollbackMessage(conversationId: String, messageId: String, messageText: String) {
-        val currentSnap = snapshot
+        val rollbackFeedback = feedbackPresenter.begin(FeedbackOwner.Session(conversationId))
+        val rollbackContextVersion = inputContextVersion
+        val rollbackDraftText = inputDraft.text
+        val rollbackPasted = pendingPastedTexts.toList()
+        val rollbackImages = pendingImages.toList()
+        val currentSnap = snapshot?.takeIf { it.conversation.id == conversationId }
         val targetMsg = currentSnap?.messages?.find { it.id == messageId }
         // 先验后切：附着物反解在此完成，回滚失败时输入框与附件队列保持原状
         val restored = restoreInputFromMessage(targetMsg, messageText)
@@ -2307,7 +2339,7 @@ class WorkspaceViewModel(
             if (rollbackResult.isFailure) {
                 val ex = rollbackResult.exceptionOrNull()
                 DebugLog.error("UI", "rollbackMessage rollbackToMessage failed: ${ex?.message}", ex)
-                errorState = errorState.copy(message = UiMessage(Res.string.err_rollback_failed, listOf(ex?.message ?: "?")))
+                feedbackPresenter.publish(rollbackFeedback, UiMessage(Res.string.err_rollback_failed, listOf(ex?.message ?: "?")))
                 return@launch
             }
 
@@ -2315,7 +2347,10 @@ class WorkspaceViewModel(
                 DebugLog.info("UI", "rollbackMessage: nothing to restore, leaving input untouched")
                 return@launch
             }
-            // 回退成功 → 用回退内容重建输入区（替换现有草稿/附件，语义 = "重新编辑这条消息"）
+            // Core回滚照常完成；仅原输入上下文仍有效且未被更新操作取代时恢复编辑。
+            if (this@WorkspaceViewModel.conversationId != conversationId || inputContextVersion != rollbackContextVersion ||
+                !feedbackPresenter.isCurrent(rollbackFeedback) || inputDraft.text != rollbackDraftText ||
+                pendingPastedTexts.toList() != rollbackPasted || pendingImages.toList() != rollbackImages) return@launch
             clearPendingAttachments()
             inputDraft = TextFieldValue(restored.instruction, TextRange(restored.instruction.length))
             if (restored.images.isNotEmpty()) pendingImages.addAll(restored.images)
@@ -2328,6 +2363,9 @@ class WorkspaceViewModel(
     }
 
     override fun onCleared() {
+        diffPresenter.close()
+        reportLoader.close()
+        backgroundTaskPresenter.close()
         sessionCache.observeJobs.values.forEach { it.cancel() }
         sessionCache.observeJobs.clear()
         super.onCleared()

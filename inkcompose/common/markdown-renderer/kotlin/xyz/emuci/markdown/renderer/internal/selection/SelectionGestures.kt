@@ -1,17 +1,14 @@
 package xyz.emuci.markdown.renderer.internal.selection
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.focus.FocusRequester
@@ -24,151 +21,116 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalTextToolbar
-import androidx.compose.ui.platform.TextToolbarStatus
 
 /**
- * 选区手势：通过 nestedScroll 让父级滚动容器（LazyColumn）优先消费拖拽量，
- * 仅当父级无法继续滚动（已到边界）时才启动文本选区。
- *
- * 原实现 detectDragGestures 直接 consume 了所有拖拽事件，父级 LazyColumn 完全收不到，
- * 导致在列表中拖拽 Markdown 内容时列表"粘住拉不动"。
+ * 鼠标按下即固定锚点；触摸普通滑动交给滚动容器，只有长按后才消费拖动。
+ * 使用同一手势循环处理右键和左键，避免多个 detector 争抢同一次按下。
  */
 internal fun Modifier.markdownSelectionGestures(
     controller: MarkdownSelectionController,
 ): Modifier = this.composed {
-    val dispatcher = remember { NestedScrollDispatcher() }
     val focusRequester = remember { FocusRequester() }
-
     this
         .focusRequester(focusRequester)
-        .focusable()
         .onKeyEvent { event ->
-            if (event.type == KeyEventType.KeyDown) {
-                val isCopyKey = event.key == Key.C || event.key == Key.Insert
-                val isModifierPressed = event.isMetaPressed || event.isCtrlPressed
-                val isCopyShortcut = (isModifierPressed && isCopyKey) || event.key == Key.Copy
-
-                if (isCopyShortcut) {
-                    println("[MarkdownSelection] KeyDown Copy shortcut: isMeta=${event.isMetaPressed}, isCtrl=${event.isCtrlPressed}, key=${event.key}, hasSelection=${controller.hasSelection}, textLength=${controller.selectedText.length}")
-                    if (controller.hasSelection) {
-                        controller.copySelection()
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
+            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+            val command = event.isMetaPressed || event.isCtrlPressed
+            when {
+                command && event.key == Key.A -> { controller.selectAll(); true }
+                event.key == Key.Escape && controller.hasSelection -> { controller.clearSelection(); true }
+                ((command && event.key == Key.C) ||
+                    (event.isCtrlPressed && event.key == Key.Insert) || event.key == Key.Copy) &&
+                    controller.hasSelection -> { controller.copySelection(); true }
+                else -> false
             }
         }
-        .nestedScroll(
-            connection = object : NestedScrollConnection {},
-            dispatcher = dispatcher,
-        )
+        .focusable()
         .pointerInput(controller) {
+            var previousClickTime = Long.MIN_VALUE
+            var previousClickPosition = Offset.Zero
             awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 controller.state.isMouseInput = down.type == PointerType.Mouse
-                // 不消费：detectDragGestures/detectTapGestures 仍能收到该 down
-            }
-        }
-        .pointerInput(controller, dispatcher) {
-            var selectionActive = false
-            var pendingStart: Offset? = null
-
-            detectDragGestures(
-                onDragStart = { offset ->
+                if (down.type == PointerType.Mouse) {
+                    val event = currentEvent
+                    if (event.isSecondaryClick()) {
+                        focusRequester.requestFocus()
+                        controller.showContextMenuAt(down.position)
+                        down.consume()
+                        return@awaitEachGesture
+                    }
+                    if (!event.buttons.isPrimaryPressed) return@awaitEachGesture
                     focusRequester.requestFocus()
-                    pendingStart = offset
-                    selectionActive = false
-                },
-                onDragEnd = {
-                    if (selectionActive) {
-                        controller.finishSelectionGesture()
+                    val doubleClick = previousClickTime != Long.MIN_VALUE &&
+                        down.uptimeMillis - previousClickTime <= viewConfiguration.doubleTapTimeoutMillis &&
+                        (down.position - previousClickPosition).getDistance() <= viewConfiguration.touchSlop
+                    if (event.keyboardModifiers.isShiftPressed) {
+                        controller.extendSelectionFromClick(down.position)
+                    } else if (doubleClick) {
+                        controller.selectWordAtRootLocal(down.position)
+                    } else {
+                        controller.beginSelectionAtRootLocal(down.position)
                     }
-                    selectionActive = false
-                    pendingStart = null
-                },
-                onDragCancel = {
-                    if (selectionActive) {
-                        controller.finishSelectionGesture()
-                    }
-                    selectionActive = false
-                    pendingStart = null
-                },
-                onDrag = { change, dragAmount ->
-                    if (change.type == PointerType.Mouse) {
-                        // 鼠标拖拽 = 直接框选，不把拖拽量让给父级滚动容器（列表滚动交滚轮/触控板）
-                        if (!selectionActive && pendingStart != null) {
-                            controller.beginSelectionAtRootLocal(pendingStart!!)
-                            selectionActive = true
+                    // 让子组件收到原始 down。链接拥有点击时，跨过拖动阈值才抢占它。
+                    awaitPointerEvent(PointerEventPass.Main)
+                    val slop = if (down.isConsumed) viewConfiguration.touchSlop else 0f
+                    var moved = false
+                    try {
+                        while (true) {
+                            val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                                .firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                if (moved) change.consume()
+                                break
+                            }
+                            if (!moved && (change.position - down.position).getDistance() <= slop) continue
+                            moved = true
+                            controller.updateDragPointerAtRootLocal(change.position)
+                            controller.extendSelectionToRootLocal(change.position)
+                            change.consume()
                         }
-                        if (selectionActive) {
+                    } finally {
+                        controller.finishSelectionGesture()
+                    }
+                    if (!moved && !doubleClick) {
+                        previousClickTime = down.uptimeMillis
+                        previousClickPosition = down.position
+                    } else previousClickTime = Long.MIN_VALUE
+                } else {
+                    // 此前不消费 down/move：父级滚动或子组件点击有权取消长按。
+                    awaitPointerEvent(PointerEventPass.Main)
+                    val longPress = awaitLongPressOrCancellation(down.id)
+                    if (longPress == null) {
+                        val change = currentEvent.changes.firstOrNull { it.id == down.id }
+                        if (change != null && !change.pressed && !change.isConsumed &&
+                            (change.position - down.position).getDistance() <= viewConfiguration.touchSlop
+                        ) controller.clearSelectionFromTap()
+                        return@awaitEachGesture
+                    }
+                    focusRequester.requestFocus()
+                    controller.selectWordAtRootLocal(longPress.position)
+                    controller.state.activeHandle = SelectionActiveHandle.End
+                    controller.state.toolbarRequestKey = 0
+                    longPress.consume()
+                    controller.updateDragPointerAtRootLocal(longPress.position)
+                    try {
+                        while (true) {
+                            val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                                .firstOrNull { it.id == longPress.id } ?: break
+                            // 长按后连 up 一起消费，防止松手意外打开链接。
+                            change.consume()
+                            if (!change.pressed) break
+                            controller.updateDragPointerAtRootLocal(change.position)
                             controller.extendSelectionToRootLocal(change.position)
                         }
-                    } else {
-                        // 触屏：nestedScroll 先喂父级（LazyColumn），父级能滚就消费并取消选区，到边界才选
-                        // 通过 nestedScroll 把拖拽量先分发给父级（LazyColumn）。
-                        // 父级能滚动就消费，不能滚动（到边界）则返回 0。
-                        val consumedByParent = dispatcher.dispatchPreScroll(
-                            available = dragAmount,
-                            source = NestedScrollSource.UserInput,
-                        )
-
-                        if (consumedByParent != Offset.Zero) {
-                            // 父级滚动了 → 取消已启动的选区
-                            if (selectionActive) {
-                                controller.finishSelectionGesture()
-                                selectionActive = false
-                            }
-                        } else {
-                            // 父级没滚动 → 启动/扩展选区
-                            if (!selectionActive && pendingStart != null) {
-                                controller.beginSelectionAtRootLocal(pendingStart!!)
-                                selectionActive = true
-                            }
-                            if (selectionActive) {
-                                controller.extendSelectionToRootLocal(change.position)
-                            }
-                        }
-                    }
-                    change.consume()
-                },
-            )
-        }
-        .pointerInput(controller) {
-            detectTapGestures(
-                onTap = {
-                    focusRequester.requestFocus()
-                    controller.clearSelectionFromTap()
-                },
-                onDoubleTap = { offset ->
-                    focusRequester.requestFocus()
-                    controller.selectWordAtRootLocal(offset)
-                },
-            )
-        }
-        .pointerInput(controller) {
-            awaitPointerEventScope {
-                while (true) {
-                    val event = awaitPointerEvent()
-                    if (event.type == PointerEventType.Press) {
-                        val change = event.changes.firstOrNull() ?: continue
-                        if (change.type == PointerType.Mouse && event.isSecondaryClick()) {
-                            change.consume()
-                            focusRequester.requestFocus()
-                            controller.showContextMenuAt(change.position)
-                        }
+                    } finally {
+                        controller.finishSelectionGesture()
                     }
                 }
             }
@@ -176,46 +138,29 @@ internal fun Modifier.markdownSelectionGestures(
 }
 
 @Composable
-internal fun SelectionToolbarHost(controller: MarkdownSelectionController) {
+internal fun SelectionToolbarHost(
+    controller: MarkdownSelectionController,
+    onPasteRequested: (() -> Unit)? = null,
+) {
+    val latestPaste by rememberUpdatedState(onPasteRequested)
+    val canPaste = onPasteRequested != null
     val textToolbar = LocalTextToolbar.current
     val range = controller.state.range
     val toolbarRequestKey = controller.state.toolbarRequestKey
     val activeHandle = controller.state.activeHandle
-    var watchExternalDismiss by remember(controller) { mutableStateOf(false) }
-    LaunchedEffect(range, toolbarRequestKey, activeHandle) {
+    LaunchedEffect(range, toolbarRequestKey, activeHandle, canPaste) {
         if (range == null || activeHandle != SelectionActiveHandle.None) {
-            watchExternalDismiss = false
             textToolbar.hide()
-        } else if (toolbarRequestKey > 0) {
-            val rect = controller.selectionBoundsInWindow() ?: return@LaunchedEffect
+        } else if (toolbarRequestKey > 0 && controller.hasSelection) {
+            val rect = controller.state.contextMenuAnchor ?: controller.selectionBoundsInWindow()
+                ?: return@LaunchedEffect
             textToolbar.showMenu(
                 rect = rect,
-                onCopyRequested = {
-                    controller.copySelection()
-                    controller.clearSelection()
-                },
+                onCopyRequested = controller::copySelection,
+                onSelectAllRequested = controller::selectAll,
+                onPasteRequested = if (canPaste) ({ latestPaste?.invoke() }) else null,
             )
-            watchExternalDismiss = true
         }
     }
-    LaunchedEffect(textToolbar, range, activeHandle, watchExternalDismiss) {
-        if (range == null || activeHandle != SelectionActiveHandle.None || !watchExternalDismiss) {
-            return@LaunchedEffect
-        }
-        var seenShown = textToolbar.status == TextToolbarStatus.Shown
-        snapshotFlow { textToolbar.status }.collect { status ->
-            when (status) {
-                TextToolbarStatus.Shown -> seenShown = true
-                TextToolbarStatus.Hidden -> {
-                    if (seenShown &&
-                        controller.state.range != null &&
-                        controller.state.activeHandle == SelectionActiveHandle.None
-                    ) {
-                        watchExternalDismiss = false
-                        controller.clearSelection()
-                    }
-                }
-            }
-        }
-    }
+    // Dismissing a menu does not discard the selection; users can still copy with the keyboard.
 }

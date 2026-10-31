@@ -1,6 +1,7 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.animation.core.*
+import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -14,11 +15,10 @@ import mederi.app.shared.generated.resources.reasoning_thinking
 import mederi.app.shared.generated.resources.reasoning_thinking_for
 import mederi.app.shared.generated.resources.reasoning_thought
 import mederi.app.shared.generated.resources.reasoning_thought_for
-import mederi.app.shared.generated.resources.worktrace_collapse
-import mederi.app.shared.generated.resources.worktrace_expand
 import org.jetbrains.compose.resources.stringResource
+import xyz.emuci.inkcompose.RenderStyle
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.ui.components.atoms.MederiGhostButton
 import xyz.mederi.ui.components.atoms.MederiMarkdown
 import xyz.mederi.ui.components.atoms.ProcessRow
 
@@ -35,7 +35,7 @@ private val ReasoningMaxContentHeight = 200.dp
  * 严格还原极简设计：大脑图标胶囊 + 展开后轻量导轨线。
  *
  * 折叠头（行高 / 圆角 / hover / 箭头 / 导轨线）统一由 `atoms/ProcessRow.kt` 提供，
- * 本组件只负责「图标 + 文案 + 进行中脉冲色 + 展开后的推理正文视口」。
+ * 本组件只负责「图标 + 文案 + 真实运行标记 + 展开后的推理正文视口」。
  *
  * 顶层独立显示（enforceMaxHeight=true）时：展开内容高度自适应（wrap content），
  * 未点展开按钮时最高高度上限为 [ReasoningMaxContentHeight]，内容溢出时在视口内滚动 + 流式即时吸底；
@@ -65,16 +65,6 @@ fun ReasoningBlock(
     // 限高滚动容器状态
     val contentScroll = rememberScrollState()
 
-    val infiniteTransition = rememberInfiniteTransition()
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.4f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        )
-    )
-
     // 折叠头文案：进行中 / 已完成 × 有无耗时，四态（资源文案与耗时拼法一字不改）
     val durationText = if (durationMs > 0) {
         val sec = durationMs / 1000
@@ -87,9 +77,6 @@ fun ReasoningBlock(
         durationText.isNotBlank() -> stringResource(Res.string.reasoning_thought_for, durationText)
         else -> stringResource(Res.string.reasoning_thought)
     }
-
-    // 进行中：800ms 脉冲的 accent 色（图标沿用原有脉冲色，文案同色高亮）
-    val activePulseColor = colors.accentPrimary.copy(alpha = pulseAlpha)
 
     // 流式吸底：限高视口期间文本增长（maxValue 增大）即时同步吸附到底部，无异步延迟
     LaunchedEffect(text, isStreaming, shouldScroll) {
@@ -109,10 +96,17 @@ fun ReasoningBlock(
         onExpandedChange = { localExpanded = it },
         modifier = modifier.fillMaxWidth(),
         icon = BrainIcon,
-        iconTint = if (isReasoningActive) activePulseColor else colors.textMuted,
+        iconTint = colors.textMuted,
         label = label,
         clickable = text.isNotBlank(),
-        labelColor = if (isReasoningActive) activePulseColor else colors.textSecondary,
+        labelColor = colors.textSecondary,
+        leading = if (isReasoningActive) {
+            { WorkspaceLoadingIndicator(
+                color = colors.accentPrimary,
+                strokeWidth = 1.5.dp,
+                modifier = Modifier.size(WorkspaceStyle.IconSize),
+            ) }
+        } else null,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -137,7 +131,7 @@ fun ReasoningBlock(
                 MederiMarkdown(
                     content = text,
                     isStreaming = isStreaming,
-                    compact = true,
+                    style = RenderStyle.Chat.copy(bodyStyle = WorkspaceStyle.Body, blockSpacing = 5.dp),
                     enableScrollOverride = false,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -145,15 +139,9 @@ fun ReasoningBlock(
 
             if (showHeightToggle) {
                 // 底部切换按钮：仅内容溢出视口时出现（点开摊开后恒显示），不随推理内容滚动
-                MederiGhostButton(
-                    text = stringResource(
-                        if (isUnbounded) Res.string.worktrace_collapse else Res.string.worktrace_expand
-                    ),
-                    icon = if (isUnbounded) FeatherIcons.ChevronUp else FeatherIcons.ChevronDown,
-                    onClick = {
-                        isUnbounded = !isUnbounded
-                    },
-                    modifier = Modifier.fillMaxWidth(),
+                ProcessHeightToggle(
+                    expanded = isUnbounded,
+                    onExpandedChange = { isUnbounded = it },
                 )
             }
         }

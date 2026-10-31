@@ -90,7 +90,7 @@
 | `.raw-log-item` | body none | 展开显示 JSON | 点 raw-log-header |
 | `.tree-children-container` | `.collapsed` → display none | 去 `.collapsed` → display | 点 tree-node-row |
 
-> **Compose 落地裁定**：原型瞬切在网页上可接受，但 Compose 里建议用 `AnimatedVisibility`（`expandVertically` / `shrinkVertically`，`spring` 或 `tween(120)`）做平滑展开——视觉上更顺且不违背原型意图（原型只是没做，不是禁止）。**保留 chevron 旋转**作为状态指示。若要严格贴合原型，`AnimatedVisibility` 的展开时长用 `~120ms` 与 transition 对齐。
+> **当前Compose裁定（2026-10-30）**：展开与箭头统一消费WorkspaceMotionPolicy.disclosureSpec（180ms），不再允许spring或独立120ms；减弱模式Enter/Exit.None，箭头即时切换。
 
 ## 5. Chevron 旋转规格
 
@@ -102,7 +102,7 @@
 
 > Compose：chevron 用 `Modifier.rotate(degrees)` + `animateFloatAsState(durationMillis = 200)`。
 
-## 6. 动画 Keyframe
+## 6. 历史原型动画 Keyframe（当前实现以§14为准）
 
 ### 6.1 `pulse-glow`（运行中脉冲点）
 
@@ -114,7 +114,7 @@
 /* .pulse-dot: 6dp, bg iris-9, box-shadow 0 0 0 2dp iris-5, 1.5s infinite ease-in-out */
 ```
 
-Compose 落地：`rememberInfiniteTransition` + `animateFloat`（scale 1↔1.3、alpha 1↔0.6），`repeatMode = Restart`，1.5s；glow ring 用 `Modifier.drawBehind` 画 2dp iris-5 描边或 `shadow`。对应现有 `WorkingAnimations.kt`。
+历史原型说明：此缩放/外扩环方案已取消，不能作为当前WorkingAnimations的实现依据；当前只允许§14的单色alpha循环。
 
 ### 6.2 `panel-spin`（刷新按钮旋转）
 
@@ -131,7 +131,7 @@ Compose：`rememberInfiniteTransition` + `Modifier.rotate`，0.8s linear。触�
 
 > **裁定**：补 `@keyframes blink { 50% { opacity: 0 } }`（1s step），让光标真正闪烁。Compose 用 `rememberInfiniteTransition` + alpha 1↔0。
 
-## 7. Transition 规格
+## 7. 历史原型 Transition 规格（当前实现以§14为准）
 
 | 对象 | 时长 | easing | 属性 |
 |---|---|---|---|
@@ -209,14 +209,60 @@ Compose：`rememberInfiniteTransition` + `Modifier.rotate`，0.8s linear。触�
 
 | 原型机制 | Compose 实现 | 备注 |
 |---|---|---|
-| `display: none ↔ flex` 展开折叠 | `AnimatedVisibility`（`expandVertically`/`shrinkVertically`, `tween(120)`） | 比原型更顺，不违背意图 |
-| chevron `transform: rotate` + `transition` | `Modifier.rotate` + `animateFloatAsState(200)` | — |
+| `display: none ↔ flex` 展开折叠 | `AnimatedVisibility` + disclosureSpec（减弱模式None） | 比原型更顺，不违背意图 |
+| chevron `transform: rotate` + `transition` | `Modifier.rotate` + animateFloatAsState(disclosureSpec) | — |
 | dock→panel 瞬切 | `AnimatedContent` 或直接切 `visible` | 不要求宽度动画 |
 | 主题瞬切 | `MederiColors` 整体替换；可选 `animateColorAsState` 平滑 | — |
-| `pulse-glow` keyframe | `rememberInfiniteTransition` + scale/alpha | 对齐 `WorkingAnimations.kt` |
-| `panel-spin` keyframe | `rememberInfiniteTransition` + rotate | — |
-| `blink` keyframe（缺失） | `rememberInfiniteTransition` + alpha 1↔0（1s） | 补齐 |
-| `transition 120ms ease` | `animateColorAsState(tween(120))` | 统一 |
+| `pulse-glow` 历史keyframe | 单色alpha呼吸2400ms，无scale | WorkspaceMotionPolicy |
+| 请求等待旋转 | WorkspaceLoadingIndicator，1000ms线性 | 减弱模式静态 |
+| 历史`blink` keyframe | 不新增UI正文闪烁；原生终端光标归终端宿主 | 专用控件边界 |
+| `transition 120ms ease` | `animateColorAsState(feedbackSpec())` | 统一 |
 | `box-shadow` focus ring | `Modifier.border(1dp, iris-7)` + 外 ring `drawBehind` | 无 elevation |
 | feather icon | compose-icons feather / Material Symbols | 尺寸/描边照 `02-components` |
 | 无响应式 | 桌面三栏；移动端待定 | — |
+
+
+## 13. 工作台首批局部交互覆盖（2026-10-29）
+
+已迁移消息/输入/概览使用WorkspaceStyle：hover/focus颜色120ms，诊断/折叠/箭头180ms，无弹跳；任务整组2400ms呼吸，文字/小圆点/单行图标不叠加循环。概览显示/隐藏不再经过最小化胶囊；受真实内容区宽高约束，标题关闭按钮固定、正文滚动。此批没有实现全局ReducedMotion或其它面板动效迁移，保留为主计划后续任务。
+
+
+第二批过程与交互卡沿用上述120ms hover/focus、180ms展开/箭头/临时提示进出。移除推理文字循环呼吸和StatusStrip装饰动效；真实活动使用状态标记。提问/审批/错误不加入循环动画，内容变化不借机阻塞输入。未实现的快捷键不显示提示；全局ReducedMotion仍为后续任务。
+
+
+第三批文件与阅读器沿用上述反馈：导航/树/搜索/按钮120ms、目录箭头180ms；树展开内容不额外叠加弹跳或循环动画。工具栏内容随可用宽度换行，不锁死36dp高度。文档Tab保留原横向滚动，图片原比例保留双轴滚动，正文仍由InkCompose持有阅读滚动。刷新不清除查询/展开/选中；文件/文档打开路由与焦点策略不在视觉批次变更。
+
+
+第四批Dock/子代理面板（桌面与移动抽屉）及自动化浮动详情统一180ms tween进出，不再弹簧展开；hover/focus120ms。关闭面板只隐藏内容，后台工作继续；终端tab关闭保留终止对应shell语义；子代理停止保留目标确认；同目标进入终态收起确认，切换目标清理旧确认。标题和次级身份不占固定行高，长标题先省略自己；关键关闭/新增/恢复入口固定或自然换行。自动化Dock不受浮动展开状态控制，列表有独立滚动；用户翻阅历史时不因新增步骤强制拉走。
+
+
+第五批诊断/概览步骤继续120ms hover/focus、180ms展开及共享1500ms复制反馈，不增加运行装饰动画。概览共享栏头以最小40dp而非固定高度布局，键盘焦点有同族反馈，提供Expand/Collapse动作。资源展开只改变阅读层，不改变采样；原始JSON在限高后滚动，复制不遮内容；Todo与计划步骤只共享表现，不产生相互状态联动。通用Tooltip/Menu/Dialog、全局ReducedMotion与全页回焦仍待独立验收。
+
+
+第六批公共弹层沿用120ms控件反馈，Tooltip显示200ms/离开150ms共享WorkspaceStyle。hover提示不抢输入焦点；帮助支持点击并临时聚焦popover接收键盘，Escape收起后不因锚点回焦而重开；Dock点击仍直接开关目标面板，不附带停止工作。平台菜单保留原生方向键与Escape dismiss。弹窗长文/大字体通过有界滚动与动作回流保持可达，未引入Enter默认确认危险动作。完整APP跨弹窗回焦/原生宿主遮挡仍待实机，不能由组件测试推定。
+
+
+供应商S2a管理/添加以单一ProviderPage驱动，宽屏管理+详情，窄屏下钻；目录整区替换，无叠层目录弹窗。惰性目录按名、管理按ID保持稳定；query/scroll在添加步骤返回时保留。两种新查询不复用模型查询。真实请求失败留在步骤，成功才回详情；Key草稿退出即离开Composition，不持久化。原详情成功反馈4秒只清成功，错误由共同ErrorBoard明确关闭；统一120ms控件反馈，无装饰循环。
+
+
+供应商S2b控件继续120ms反馈，选择/菜单/表单/确认同族；详情整体阅读滚动按provider.id归属，切换供应商回其身份，新模型更新不清同一阅读状态。宽窄布局不复制回调，操作有独立热区。弹窗按目标隔离、编辑对象移除则收起；无可用动作不显示假关闭/详情。保留成功4秒反馈；自动设置仍需原确认，数据权限仍由Core强制。
+
+
+## 14. 当前统一动效实现（2026-10-30，覆盖上述历史原型与局部交付说明）
+
+唯一策略/精确取值见01-tokens §6。MainScreen/Workspace/Sidebar/扩展面板、概览行、输入、过程/事件/决策、文件树/diff、共享按钮/开关/导航/弹层动作均消费LocalWorkspaceMotion，不用自定tween/spring或AnimatedVisibility默认动画。减弱模式开合使用None而不是仅将动画跑快；发送按钮取消按下缩放，但可用/焦点/选中状态不消失。
+
+任务组优先整栏呼吸，折叠/展开均保留；子Agent与后台任务正文和单行图标不叠加循环。展开工作过程时去掉外层等待转圈，内部真实活动仍可显示共同请求等待；等待子Agent时外层不伪装请求转圈。Sidebar等待用户状态静态；会话运行点/旧badge/兼容WorkingAnimations共用同一周期，没有波纹/缩放/扫光。
+
+持续动画只在running且裁剪后的boundsInWindow有面积且非reduced时创建；组件移出组合自动释放，裁掉后暂停、重新进入重新启动表现周期，不影响真实工作。当前不包含窗口失焦/应用后台检测，不能宣称已做。Loading使用共同不定进度语义，减弱模式静态而任务文字/数量保留。真实计时与静态复制反馈寿命不随动效偏好改变。
+
+外观设置有“标准动效/减弱动效”同源单选，AppState设备偏好持久化，经AppTheme全树注入；没有Core状态或API参数副本。浏览器专属代码明确排除；Material/原生菜单、输入/第三方渲染器内部动效仍按各自平台机制，本批不宣称修改它们。完整APP/原生窗口录屏和三平台动画观感待idea-mcp实机验证。
+
+
+## 15. 一次性命令与受控展开（R03a）
+
+VM一次性效果只由窗口Route收集；叶子View接只读显示状态和回调，不各自订阅同一Channel、广播所有效果或保存递增打开计数。项目菜单的按钮/外部命令/选择/取消共享同一展开状态；关闭后重建输入分支仍关闭，不把历史打开请求重播。普通关闭只修改本地表现，不产生新的业务命令。此规则不改变菜单样式/动效，也不改变异步工作与输入可用性。
+
+### 阅读上下文归属（R02a/b第一步）
+
+阅读器标签与选择随会话恢复，同名/同ID文档在不同会话互不覆盖；新对话按项目保存独立阅读上下文，首发成功并仍在原草稿时移交新会话。新文档意图替代旧文件确认，切走不携带待确认弹框。关闭面板保留阅读状态，后台任务不受影响。阅读面板只消费VM投影与回调，实时正文继续同源Core，不能由View缓存第二份流式正文。所有外观/动效仍使用原Reader、Tab与公共组件，无新增风格。

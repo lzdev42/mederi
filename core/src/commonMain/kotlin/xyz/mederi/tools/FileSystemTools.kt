@@ -5,17 +5,12 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.validate
 import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
-import xyz.mederi.tools.diff.FileChangeStatus
-import xyz.mederi.tools.diff.PatchChange
 import xyz.mederi.tools.diff.TurnDiffTracker
-import xyz.mederi.tools.patch.PatchApplyException
-import xyz.mederi.tools.patch.PatchApplier
-import xyz.mederi.tools.patch.PatchHunk
 import xyz.mederi.tools.patch.PatchParseException
 import xyz.mederi.tools.patch.PatchParser
+import xyz.mederi.tools.patch.ApplyPatchProtocol
 
 import java.io.File
-import java.io.IOException
 import java.nio.file.Path
 import kotlin.io.path.Path
 import kotlin.io.path.absolute
@@ -35,15 +30,6 @@ import kotlin.io.path.writeText
  */
 fun interface AgentsSubtreeDiscovery {
     fun onAccessed(accessedPath: String): xyz.mederi.project.AgentsFileLoader.AgentsFile?
-}
-
-/**
- * apply_patch dry-run 验证产物：单个文件的变更。
- */
-private sealed interface VerifiedChange {
-    data class Add(val content: String) : VerifiedChange
-    data class Delete(val content: String) : VerifiedChange
-    data class Update(val newContent: String, val moveTarget: File?) : VerifiedChange
 }
 
 /**
@@ -109,21 +95,8 @@ class FileSystemTools(
 
     @Serializable
     data class ApplyPatchArgs(
-        @LLMDescription(
-            "完整的补丁文本（原样文本）。格式：\n" +
-                "*** Begin Patch\n" +
-                "*** Add File: <path>      （新增文件，后跟若干以 + 开头的内容行）\n" +
-                "*** Delete File: <path>   （删除文件）\n" +
-                "*** Update File: <path>   （修改文件，后跟变更块）\n" +
-                "*** Move to: <path>       （可选，仅 Update File 后、第一个变更块前：移动/重命名）\n" +
-                "@@ <可选上下文行>          （开启一个变更块，@@ 后可带单行定位上下文）\n" +
-                " <上下文行>               （以单个空格开头的行是上下文行，原样保留）\n" +
-                "-<要删除的行>             （以 - 开头：删除行）\n" +
-                "+<要新增的行>             （以 + 开头：新增行）\n" +
-                "*** End of File           （可选：本变更块必须命中文件末尾，用于末尾追加）\n" +
-                "*** End Patch"
-        )
-        val patch: String = ""
+        @LLMDescription(ApplyPatchProtocol.PATCH_DESCRIPTION)
+        val patch: String
     )
 
     // ==================== 工具实现 ====================
@@ -365,179 +338,23 @@ class FileSystemTools(
         }
     }
 
-    /**
-     * apply_patch 工具：一份补丁文本一次性对多个文件执行新增/删除/更新（含移动）。
-     *
-     * 执行分三阶段（对照 Codex apply_patch）：
-     * 1. 解析：[PatchParser] 状态机解析为 hunk 列表；
-     * 2. dry-run 验证：校验所有路径（含 move 目标）在允许目录内、检测重复路径、
-     *    为每个 Update hunk 基于原文件计算出完整新内容——任何失败则磁盘零改动；
-     * 3. 应用：逐 hunk 落盘（Add 建父目录写文件；Delete 校验非目录后删除；
-     *    Update 直接写或 Move 先写目标再删源），输出 git 风格 A/M/D 摘要。
-     */
+    /** 一份补丁整体预检并加锁，落盘失败尝试恢复；执行细节见 [PatchFileTransaction]。 */
     inner class ApplyPatchTool : SimpleTool<ApplyPatchArgs>(
         argsType = typeToken<ApplyPatchArgs>(),
         name = ToolName.APPLY_PATCH.value,
-        description =
-            "应用一份补丁，一次性对多个文件执行新增/修改/删除/移动操作。适合同时修改多个文件、一个文件的多个位置、" +
-                "或新增+修改+删除混合操作；单文件单处小改动用 edit_file 即可。应用前会整体校验，任何一处匹配失败则全部不落盘。"
+        description = ApplyPatchProtocol.TOOL_DESCRIPTION,
     ) {
         override suspend fun execute(args: ApplyPatchArgs): String {
-            if (args.patch.isBlank()) {
-                return "Error: patch is empty. The patch must start with '*** Begin Patch' and end with '*** End Patch'."
-            }
-
-            // 阶段 1：解析
             val hunks = try {
                 PatchParser.parse(args.patch)
             } catch (e: PatchParseException) {
-                return "apply_patch verification failed: ${e.message}"
+                return "Error: apply_patch verification failed: ${e.message}. No files were modified."
             }
-            if (hunks.isEmpty()) return "No files were modified."
-
-            // 阶段 2：dry-run 验证（磁盘零改动）
-            val verified = try {
-                verifyHunks(hunks)
-            } catch (e: Exception) {
-                return "apply_patch verification failed: ${e.message}"
-            }
-
-            // 阶段 3：应用
-            return try {
-                val result = applyHunks(hunks, verified)
-                if (onFileTouched != null && !result.startsWith("apply_patch failed")) {
-                    verified.keys.forEach { onFileTouched.invoke(it) }
-                }
-                result
-            } catch (e: Exception) {
-                "apply_patch failed: ${e.message}"
-            }
-        }
-
-        /** dry-run 验证所有 hunk：路径校验、重复路径检测、新内容计算。 */
-        private fun verifyHunks(hunks: List<PatchHunk>): Map<String, VerifiedChange> {
-            val changes = LinkedHashMap<String, VerifiedChange>()
-            for (hunk in hunks) {
-                when (hunk) {
-                    is PatchHunk.AddFile -> {
-                        val file = resolveForWrite(hunk.path, mustExist = false, mustBeFile = true)
-                        checkDuplicate(changes, file)
-                        changes[keyOf(file)] = VerifiedChange.Add(hunk.contents)
-                    }
-
-                    is PatchHunk.DeleteFile -> {
-                        val file = resolveForWrite(hunk.path, mustExist = true, mustBeFile = true)
-                        checkDuplicate(changes, file)
-                        val content = try {
-                            file.readText()
-                        } catch (e: IOException) {
-                            throw PatchApplyException("Failed to read ${displayPath(file)}")
-                        }
-                        changes[keyOf(file)] = VerifiedChange.Delete(content)
-                    }
-
-                    is PatchHunk.UpdateFile -> {
-                        val file = resolveForWrite(hunk.path, mustExist = true, mustBeFile = true)
-                        checkDuplicate(changes, file)
-                        val moveTarget = hunk.movePath?.let {
-                            resolveForWrite(it, mustExist = false, mustBeFile = true)
-                        }
-                        val newContent = try {
-                            PatchApplier.deriveNewContents(file.readText(), displayPath(file), hunk.chunks)
-                        } catch (e: IOException) {
-                            throw PatchApplyException("Failed to read file to update ${displayPath(file)}")
-                        }
-                        changes[keyOf(file)] = VerifiedChange.Update(newContent, moveTarget)
-                    }
-                }
-            }
-            return changes
-        }
-
-        /** 应用已验证的 hunk，返回 git 风格 A/M/D 摘要。 */
-        private fun applyHunks(hunks: List<PatchHunk>, verified: Map<String, VerifiedChange>): String {
-            val added = mutableListOf<String>()
-            val modified = mutableListOf<String>()
-            val deleted = mutableListOf<String>()
-            val patchChanges = mutableListOf<PatchChange>()
-
-            for (hunk in hunks) {
-                when (hunk) {
-                    is PatchHunk.AddFile -> {
-                        val file = resolveForWrite(hunk.path, mustExist = false, mustBeFile = true)
-                        writeFileWithParentRetry(file, hunk.contents)
-                        val display = displayPath(file)
-                        added.add(display)
-                        patchChanges.add(PatchChange(display, FileChangeStatus.ADDED, null, hunk.contents))
-                    }
-
-                    is PatchHunk.DeleteFile -> {
-                        val file = resolveForWrite(hunk.path, mustExist = true, mustBeFile = true)
-                        val content = file.readText()
-                        val display = displayPath(file)
-                        if (file.isDirectory) {
-                            throw PatchApplyException("Failed to delete file $display: it is a directory")
-                        }
-                        if (!file.delete()) {
-                            throw PatchApplyException("Failed to delete file $display")
-                        }
-                        deleted.add(display)
-                        patchChanges.add(PatchChange(display, FileChangeStatus.DELETED, content, null))
-                    }
-
-                    is PatchHunk.UpdateFile -> {
-                        val src = resolveForWrite(hunk.path, mustExist = true, mustBeFile = true)
-                        val oldContent = src.readText()
-                        val change = verified[keyOf(src)] as VerifiedChange.Update
-                        val displaySrc = displayPath(src)
-                        if (hunk.movePath != null) {
-                            val dest = change.moveTarget
-                                ?: throw PatchApplyException("Missing resolved move target for $displaySrc")
-                            writeFileWithParentRetry(dest, change.newContent)
-                            if (!src.delete()) {
-                                throw PatchApplyException(
-                                    "Failed to remove original $displaySrc " +
-                                        "(target ${displayPath(dest)} was already written)",
-                                )
-                            }
-                            val displayDest = displayPath(dest)
-                            modified.add(displayDest)
-                            patchChanges.add(PatchChange(displayDest, FileChangeStatus.MODIFIED, oldContent, change.newContent))
-                        } else {
-                            src.writeText(change.newContent)
-                            modified.add(displaySrc)
-                            patchChanges.add(PatchChange(displaySrc, FileChangeStatus.MODIFIED, oldContent, change.newContent))
-                        }
-                    }
-                }
-            }
-
-            diffTracker?.trackPatch(patchChanges)
-
-            return buildString {
-                appendLine("Success. Updated the following files:")
-                added.forEach { appendLine("A $it") }
-                modified.forEach { appendLine("M $it") }
-                deleted.forEach { appendLine("D $it") }
-            }.trimEnd('\n')
-        }
-
-        private fun checkDuplicate(changes: Map<String, VerifiedChange>, file: File) {
-            if (changes.containsKey(keyOf(file))) {
-                throw PatchApplyException("multiple operations target ${displayPath(file)}")
-            }
-        }
-
-        private fun keyOf(file: File): String = file.toPath().absolute().normalize().toString()
-
-        /** 写文件，失败时尝试创建父目录后重试（对照 Codex write_file_with_missing_parent_retry）。 */
-        private fun writeFileWithParentRetry(file: File, content: String) {
-            try {
-                file.writeText(content)
-            } catch (e: IOException) {
-                file.parentFile?.mkdirs()
-                file.writeText(content)
-            }
+            return PatchFileTransaction(allowedDirectories, reportChanges = { changes ->
+                diffTracker?.trackPatch(changes)
+                // 上报绝对路径，move 的源与目标都在 changes 中；不能只记录目标。
+                changes.forEach { onFileTouched?.invoke(it.path) }
+            }).apply(hunks)
         }
     }
 

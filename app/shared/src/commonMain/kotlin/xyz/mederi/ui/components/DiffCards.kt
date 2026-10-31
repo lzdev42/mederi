@@ -1,38 +1,42 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.*
+import compose.icons.feathericons.File
 import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.diff_files_changed
 import mederi.app.shared.generated.resources.diff_review
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.contract.models.TurnDiffSummaryUi
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.ui.components.atoms.MederiSurfaceButton
+import xyz.mederi.theme.MederiRadius
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
+import xyz.mederi.ui.ChatLayout
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 
-/**
- * 单个文件的变更行组件（对照用户图 1 与图 2 列表项样式）。
- */
+/** 文件名优先、完整路径可选择复制；计数始终独立于长路径的宽度。 */
 @Composable
 fun FileDiffRow(
     path: String,
@@ -42,144 +46,65 @@ fun FileDiffRow(
     onClick: (() -> Unit)? = null,
 ) {
     val colors = LocalMederiColors.current
-    val fileName = path.substringAfterLast("/")
-    val parentDir = path.substringBeforeLast("/", "").let {
-        if (it.isNotEmpty()) ".../$it" else ""
-    }
-
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-    val rowBg by animateColorAsState(
-        targetValue = if (isHovered) colors.surfaceHover else Color.Transparent,
-        animationSpec = tween(120),
-        label = "fileRowBg",
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    val focused by source.collectIsFocusedAsState()
+    val background by animateColorAsState(
+        if (onClick != null && (hovered || focused)) colors.surfaceHover else Color.Transparent,
+        LocalWorkspaceMotion.current.feedbackSpec(), label = "fileRowBackground",
     )
-
     Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(rowBg)
-            .hoverable(interactionSource)
-            .then(if (onClick != null) Modifier.clickable(interactionSource = interactionSource, onClick = onClick) else Modifier)
-            .padding(horizontal = 6.dp, vertical = 3.dp),
+        modifier = modifier.fillMaxWidth().heightIn(min = WorkspaceStyle.ControlHeight)
+            .clip(RoundedCornerShape(MederiRadius.Control)).background(background)
+            .then(if (onClick != null) Modifier.hoverable(source).clickable(
+                interactionSource = source, indication = null, role = Role.Button, onClick = onClick,
+            ) else Modifier)
+            .padding(horizontal = MederiSpacing.SM, vertical = MederiSpacing.XS),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
     ) {
-        // 左侧紫色文件图标
-        Icon(
-            imageVector = FeatherIcons.Edit3,
-            contentDescription = null,
-            tint = colors.accentPrimary,
-            modifier = Modifier.size(14.dp)
-        )
-
-        // 文件名（等宽高亮）
-        Text(
-            text = fileName,
-            color = colors.textPrimary,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            fontFamily = FontFamily.Monospace,
-            maxLines = 1
-        )
-
-        // 所在目录缩略（灰色省略）
-        if (parentDir.isNotEmpty()) {
-            Text(
-                text = parentDir,
-                color = colors.textMuted,
-                fontSize = 10.5.sp,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-        } else {
-            Spacer(modifier = Modifier.weight(1f))
+        Icon(FeatherIcons.File, null, tint = colors.textSecondary, modifier = Modifier.size(WorkspaceStyle.IconSize))
+        SelectionContainer(modifier = Modifier.weight(1f)) {
+            Column {
+                Text(path.replace('\\', '/').substringAfterLast('/'), color = colors.textPrimary, style = WorkspaceStyle.Body,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val hasDirectory = path.contains('/') || path.contains('\\')
+                if (hasDirectory) Text(path, color = colors.textMuted,
+                    style = WorkspaceStyle.Caption.copy(fontFamily = FontFamily.Monospace),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
-
-        // 增删行数统计
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
             if (additions > 0 || (additions == 0 && deletions == 0)) {
-                Text(
-                    text = "+$additions",
-                    color = colors.successText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    fontFamily = FontFamily.Monospace
-                )
+                Text("+$additions", color = colors.successText, style = WorkspaceStyle.Caption)
             }
-            if (deletions > 0) {
-                Text(
-                    text = "-$deletions",
-                    color = colors.dangerText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
+            if (deletions > 0) Text("-$deletions", color = colors.dangerText, style = WorkspaceStyle.Caption)
         }
     }
 }
 
-/**
- * 轮次结束后的文件变更汇总卡片（对照用户图 2）。
- */
-
+/** 对话中的变更事实与Review入口；操作由调用方路由，不在卡片持有文件状态。 */
 @Composable
 fun TurnDiffSummaryCard(
-    summary: xyz.mederi.core.contract.models.TurnDiffSummaryUi,
+    summary: TurnDiffSummaryUi,
     onReviewClick: () -> Unit,
     onFileClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (summary.files.isEmpty()) return
     val colors = LocalMederiColors.current
-
     Column(
-        modifier = modifier
-            .widthIn(max = 560.dp)
-            .padding(vertical = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        modifier = modifier.widthIn(max = ChatLayout.actionCardMaxWidth).padding(vertical = MederiSpacing.XS),
+        verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
     ) {
-        // 头部：N files changed +X -Y 与 Review 按钮
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(Res.string.diff_files_changed, summary.files.size, summary.totalAdditions, summary.totalDeletions),
-                color = colors.textPrimary,
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.Medium
-            )
-
-            // Review 按钮
-            MederiSurfaceButton(
-                text = stringResource(Res.string.diff_review),
-                icon = FeatherIcons.BookOpen,
-                onClick = onReviewClick
-            )
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM)) {
+            Text(stringResource(Res.string.diff_files_changed, summary.files.size, summary.totalAdditions, summary.totalDeletions),
+                color = colors.textPrimary, style = WorkspaceStyle.Title, modifier = Modifier.weight(1f))
+            WorkspaceActionButton(text = stringResource(Res.string.diff_review), onClick = onReviewClick)
         }
-
-        // 文件列表
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            summary.files.forEach { file ->
-                FileDiffRow(
-                    path = file.path,
-                    additions = file.additions,
-                    deletions = file.deletions,
-                    onClick = { onFileClick(file.path) }
-                )
-            }
+        summary.files.forEach { file ->
+            FileDiffRow(file.path, file.additions, file.deletions, onClick = { onFileClick(file.path) })
         }
     }
 }

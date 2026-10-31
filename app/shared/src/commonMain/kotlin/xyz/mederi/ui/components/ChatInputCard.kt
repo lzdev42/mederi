@@ -1,7 +1,10 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+
 import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -95,13 +98,15 @@ import xyz.mederi.ui.components.command.SlashCommandItem
 import xyz.mederi.ui.components.command.SlashCommandMenu
 import xyz.mederi.ui.components.command.SlashCommandRegistry
 import xyz.mederi.ui.DebugLog
-import xyz.mederi.ui.UiEffect
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.RemoteCapabilityNotice
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.isDesktopPlatform
 import xyz.mederi.isDomTextInput
 import xyz.mederi.theme.LocalMederiColors
+import mederi.app.shared.generated.resources.input_attach_text
+import mederi.app.shared.generated.resources.input_attach_image
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiRadius
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -140,7 +145,7 @@ internal fun ModelCapabilityTag(text: String, tint: Color) {
             text = text,
             color = tint,
             fontSize = 9.5.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Medium,
             letterSpacing = 0.2.sp,
             maxLines = 1,
             softWrap = false,
@@ -154,7 +159,9 @@ fun ChatInputCard(
     viewModel: WorkspaceViewModel,
     modifier: Modifier = Modifier,
     onOpenProjectPicker: () -> Unit = {},
-    imeOverlayActive: Boolean = false
+    imeOverlayActive: Boolean = false,
+    projectMenuExpanded: Boolean,
+    onProjectMenuExpandedChange: (Boolean) -> Unit,
 ) {
     val colors = LocalMederiColors.current
     val appState = LocalAppState.current
@@ -267,7 +274,7 @@ fun ChatInputCard(
     // 压缩不阻止提交新输入；Core 负责等待安全边界，期间不提供停止压缩按钮。
     val isCompacting = viewModel.isCompacting
     val isStreaming = viewModel.isWorking && !isWaitingPlanApproval && !isCompacting && viewModel.pendingQuestion == null
-    val errorMessage = viewModel.error?.let { stringResource(it.key, *it.args.toTypedArray()) }
+    val feedbackState = viewModel.feedbackState
     // 输入框 placeholder（wasmJs 走 textarea 的 placeholder 属性 + CSS，其他平台走 Compose placeholder）
     val placeholderText = stringResource(Res.string.input_placeholder)
     // 一次性轻提示：发送时图片被剔除放行（值为模型名，null=不显示），非错误走 error
@@ -278,17 +285,7 @@ fun ChatInputCard(
 
     // 未挂会话且未选项目：发送必被拦，提前把要求摆到明面上（醒目引导条 + 高亮项目选择器）
     val needProjectGuide = viewModel.conversationId == null && selectedProjectId == null
-    // 项目菜单打开计数（一次性命令"打开项目菜单"的本地落位）：打开请求经 VM effects
-    // Channel 派发，这里 collect 后递增计数（原 projectMenuOpenRequest 计数器语义），
-    // 触发 ProjectSelectorMenu 展开。两个 ChatInputCard 实例共享同一 VM/Channel，
-    // receiveAsFlow 是单消费者——多实例同时可见时存在广播竞争的理论风险，但实际 UI 中
-    // 同一时刻一般只有一个输入框可见，风险极低（原行为是各自 remember 独立计数）。
-    var projectMenuOpenCount by remember { mutableStateOf(0) }
-    LaunchedEffect(viewModel) {
-        viewModel.effects.collect { effect ->
-            if (effect is UiEffect.OpenProjectMenu) projectMenuOpenCount++
-        }
-    }
+
 
     // 状态变化日志
     val lastStreaming = remember { mutableStateOf(false) }
@@ -391,11 +388,10 @@ fun ChatInputCard(
 
         // 错误显示板（ErrorBoard）：错误/警告唯一出口，平时不占空间，点击展开详细报告
         // 断流（isStreamInterrupted）时显示"继续"按钮——重发 Continue 续写半截回复
-        ErrorBoard(
-            errorMessage = errorMessage,
+        WorkspaceFeedbackContent(
+            state = feedbackState,
             onShowDetail = viewModel::showErrorDetail,
             onDismiss = viewModel::clearError,
-            showContinue = viewModel.isStreamInterrupted,
             onContinue = viewModel::continueAfterInterruption,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -403,19 +399,12 @@ fun ChatInputCard(
         // 对话框顶部排队信息展示：点击展开查看排队详情，可点击立即发送（引导模式）
 
 
-        // 输入卡片（聚焦 ring：常驻 1dp 透明外环预留避免聚焦抖动；聚焦时外环 accentFocus + 卡片自身 border 同步切换）
+        // 输入外壳只保留一条边界；聚焦只变边框颜色，不额外叠加 ring。
         Box(
-            modifier = Modifier
-                .border(
-                    1.dp,
-                    if (focused) colors.accentFocus else Color.Transparent,
-                    RoundedCornerShape(MederiRadius.Card)
-                )
-                .padding(1.dp)
-                .onGloballyPositioned { cardCoords = it }
+            modifier = Modifier.onGloballyPositioned { cardCoords = it }
         ) {
             Card(
-                shape = RoundedCornerShape(MederiRadius.Card),
+                shape = RoundedCornerShape(WorkspaceStyle.InputRadius),
                 colors = CardDefaults.cardColors(containerColor = colors.surfaceCard),
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
@@ -550,16 +539,15 @@ fun ChatInputCard(
                     textStyle = TextStyle(
                         // wasmJs 上 DOM textarea 是唯一可见文字面，Compose Canvas 文字透明
                         color = if (isDomTextInput) Color.Transparent else colors.textPrimary,
-                        fontSize = 13.5.sp,
-                        lineHeight = 20.sp
+                        fontSize = WorkspaceStyle.MessageBody.fontSize,
+                        lineHeight = WorkspaceStyle.MessageBody.lineHeight
                     ),
                     placeholder = if (isDomTextInput) null else {
                         {
                             Text(
                                 text = placeholderText,
                                 color = colors.textSecondary,
-                                fontSize = 13.5.sp,
-                                lineHeight = 20.sp
+                                style = WorkspaceStyle.MessageBody
                             )
                         }
                     },
@@ -728,19 +716,22 @@ fun ChatInputCard(
                             onOpenProjectPicker = onOpenProjectPicker,
                             onSelect = { viewModel.selectProject(it) },
                             highlight = needProjectGuide,
-                            openRequest = projectMenuOpenCount
+                            expanded = projectMenuExpanded,
+                            onExpandedChange = onProjectMenuExpandedChange
                         )
-                        IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText, size = 28)
+                        IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText,
+                            contentDescription = stringResource(Res.string.input_attach_text))
                         if (modelSupportsImages) {
-                            IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage, size = 28)
+                            IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage,
+                                contentDescription = stringResource(Res.string.input_attach_image))
                         }
                         AgentModeSelector(viewModel = viewModel)
                         ApiKeySelectorMenu(viewModel = viewModel)
                         ModelSelectorMenu(viewModel = viewModel, compact = false)
                         AnimatedVisibility(
                             visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
-                            enter = fadeIn(tween(180)) + expandHorizontally(tween(180)),
-                            exit = fadeOut(tween(180)) + shrinkHorizontally(tween(180))
+                            enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.disclosureSpec()) + expandHorizontally(LocalWorkspaceMotion.current.disclosureSpec()),
+                            exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.disclosureSpec()) + shrinkHorizontally(LocalWorkspaceMotion.current.disclosureSpec())
                         ) {
                             ThinkingLevelMenu(viewModel = viewModel)
                         }
@@ -748,7 +739,7 @@ fun ChatInputCard(
                     Spacer(modifier = Modifier.width(6.dp))
                     // 发送/停止：钉在第一行最右，永不参与换行（Top 对齐回流区首行）
                     SendButton(
-                        size = 28.dp,
+                        size = WorkspaceStyle.ControlHeight,
                         isStreaming = isStreaming,
                         hasContent = hasContent,
                         canSend = canSend,
@@ -827,7 +818,8 @@ private fun SlashMenuPopupContent(
 ) {
     AnimatedVisibility(
         visible = true,
-        enter = expandVertically(tween(160)) + fadeIn(tween(160)),
+        enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else expandVertically(LocalWorkspaceMotion.current.disclosureSpec()) + fadeIn(LocalWorkspaceMotion.current.disclosureSpec()),
+        exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else shrinkVertically(LocalWorkspaceMotion.current.disclosureSpec()) + fadeOut(LocalWorkspaceMotion.current.disclosureSpec()),
         modifier = modifier
     ) {
         SlashCommandMenu(

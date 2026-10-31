@@ -14,7 +14,7 @@ import xyz.mederi.core.contract.models.FileDiff
  */
 
 /**
- * 错误族状态（单点存储错误 5 字段，WorkspaceViewModel 内部经 private errorState 持有）。
+ * 错误族只读投影；WorkspaceFeedbackPresenter分离Core事实、本地失败与用户关闭/详情意图。
  *
  * @property message 当前会话的头条错误简报（null = 无错误）
  * @property diagnostic 完整诊断报告纯文本（来自 ConversationSnapshot.errorDiagnostic）
@@ -30,17 +30,15 @@ data class ErrorState(
     val isDetailOpen: Boolean = false,
 )
 
-/**
- * diff 面板状态（单点存储 diff 3 字段；activeDockPanel 同时服务全部 dock 面板，保留独立状态）。
- *
- * @property items 当前会话的文件 diff 列表
- * @property selectedPath 当前选中的 diff 文件路径
- * @property showPanel diff 面板是否展开
- */
+/** Core查询的会话级表现快照；面板显隐只派生自Dock，不再在此重复持有。 */
 data class DiffUiState(
     val items: List<FileDiff> = emptyList(),
     val selectedPath: String? = null,
-    val showPanel: Boolean = false,
+    val messageId: String? = null,
+    val requested: Boolean = false,
+    val loading: Boolean = false,
+    val loaded: Boolean = false,
+    val error: UiMessage? = null,
 )
 
 /**

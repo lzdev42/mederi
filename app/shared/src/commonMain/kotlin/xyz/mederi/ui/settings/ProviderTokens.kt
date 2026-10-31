@@ -1,26 +1,25 @@
 package xyz.mederi.ui.settings
 
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import xyz.mederi.theme.MederiRadius
+import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
 
-// ============================================================================
-// 1. 设计 Token 定义 (Design Tokens)
-// ============================================================================
+/** 兼容既有供应商调用点；所有值转发canonical工作台规格，不建立第二套刻度。 */
 internal object ProviderTokens {
-    val SpacingXSmall = 4.dp
-    val SpacingSmall = 8.dp
-    val SpacingMedium = 12.dp
-    val SpacingLarge = 16.dp
-    val SpacingXLarge = 24.dp
+    val SpacingXSmall = MederiSpacing.XS
+    val SpacingSmall = MederiSpacing.SM
+    val SpacingMedium = MederiSpacing.MD
+    val SpacingLarge = MederiSpacing.LG
+    val SpacingXLarge = MederiSpacing.XXL
 
-    val RadiusBadge = RoundedCornerShape(4.dp)
-    val RadiusControl = RoundedCornerShape(6.dp)
-    val RadiusCard = RoundedCornerShape(8.dp)
-    val RadiusWorkspace = RoundedCornerShape(10.dp)
+    val RadiusBadge = RoundedCornerShape(MederiRadius.Badge)
+    val RadiusControl = RoundedCornerShape(MederiRadius.Control)
+    val RadiusCard = RoundedCornerShape(WorkspaceStyle.ObjectRadius)
+    val RadiusWorkspace = RoundedCornerShape(WorkspaceStyle.InputRadius)
 
-    val FontTitle = 13.5.sp
-    val FontValue = 12.sp
-    val FontLabel = 11.sp
-    val FontBadge = 10.5.sp
+    val FontTitle = WorkspaceStyle.Title.fontSize
+    val FontValue = WorkspaceStyle.Body.fontSize
+    val FontLabel = WorkspaceStyle.Caption.fontSize
+    val FontBadge = WorkspaceStyle.Caption.fontSize
 }

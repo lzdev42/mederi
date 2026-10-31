@@ -1,41 +1,45 @@
 package xyz.mederi.ui.settings
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.Check
+import compose.icons.feathericons.Copy
+import mederi.app.shared.generated.resources.copy
+import mederi.app.shared.generated.resources.copy_done
 import compose.icons.feathericons.Minus
 import compose.icons.feathericons.Plus
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.settings_stepper_decrease
 import mederi.app.shared.generated.resources.settings_stepper_increase
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.ui.components.atoms.WorkspaceIconButton
+import xyz.mederi.ui.components.atoms.WorkspaceNavigationTab
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiRadius
 import xyz.mederi.theme.MederiSpacing
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiTypeScale
 
 /**
  * 设置页统一卡片容器。
- * 现状 12dp 圆角：MederiRadius 通用刻度无 12（Card=8 / Dialog=12 为弹窗保留），按现状直用并注释。
+ * 同一8dp中性分组底，不叠加常态边框；普通设置分区也可直接使用无框SettingsSection。
  */
 @Composable
 fun SettingsCard(
@@ -47,9 +51,8 @@ fun SettingsCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp)) // 12 不在 MederiRadius 通用刻度（Card=8/Dialog=12 弹窗保留），现状直用
+            .clip(RoundedCornerShape(WorkspaceStyle.ObjectRadius))
             .background(colors.surfaceCard)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(12.dp))
             .padding(padding),
         content = content
     )
@@ -74,13 +77,13 @@ fun SettingsSection(
             Text(
                 text = title,
                 color = colors.textPrimary,
-                style = MederiTypeScale.H2.copy(fontWeight = FontWeight.Bold) // 16sp Bold（H2 默认 Medium）
+                style = WorkspaceStyle.Title
             )
             if (!description.isNullOrBlank()) {
                 Text(
                     text = description,
                     color = colors.textMuted,
-                    style = MederiTypeScale.Body.copy(lineHeight = 16.sp) // 12sp Normal + 现状 16sp 行高
+                    style = WorkspaceStyle.Caption
                 )
             }
         }
@@ -101,40 +104,27 @@ fun SettingsRow(
     colors: MederiColors = LocalMederiColors.current,
     action: @Composable () -> Unit
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(
-            modifier = Modifier.weight(1f).padding(end = MederiSpacing.LG),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.MD)
-        ) {
-            if (icon != null) {
-                SettingsIconBadge(
-                    icon = icon,
-                    tint = iconTint ?: colors.accentPrimary,
-                    size = 32.dp, // 32 不在 MederiSpacing 刻度，现状直用
-                    iconSize = MederiSpacing.LG
-                )
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.Micro)) {
-                Text(
-                    text = title,
-                    color = colors.textPrimary,
-                    style = MederiTypeScale.Section.copy(fontWeight = FontWeight.SemiBold) // 13.5sp SemiBold
-                )
-                if (!subtitle.isNullOrBlank()) {
-                    Text(
-                        text = subtitle,
-                        color = colors.textMuted,
-                        style = MederiTypeScale.BodyCompact.copy(lineHeight = 15.sp) // 11.5sp Normal + 现状 15sp 行高
-                    )
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val text: @Composable () -> Unit = {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (icon != null) Icon(icon, null, tint = iconTint ?: colors.textSecondary,
+                    modifier = Modifier.size(WorkspaceStyle.IconSize))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, color = colors.textPrimary, style = WorkspaceStyle.Body)
+                    if (!subtitle.isNullOrBlank()) Text(subtitle, color = colors.textSecondary, style = WorkspaceStyle.Caption)
                 }
             }
         }
-        action()
+        val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
+        if (maxWidth < 440.dp * fontScale) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                text()
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) { action() }
+            }
+        } else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Box(Modifier.weight(1f)) { text() }
+            action()
+        }
     }
 }
 
@@ -176,103 +166,60 @@ fun NumberStepper(
     modifier: Modifier = Modifier,
     minValue: Int = 1,
     maxValue: Int = 32,
-    colors: MederiColors = LocalMederiColors.current
+    colors: MederiColors = LocalMederiColors.current,
+    enabled: Boolean = true,
 ) {
     Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(MederiRadius.Card))
-            .background(colors.surfaceWorkspace)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(MederiRadius.Card))
-            .padding(horizontal = MederiSpacing.XS, vertical = MederiSpacing.Tiny),
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS)
+        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
     ) {
-        val canDecrease = value > minValue
-        val canIncrease = value < maxValue
-
-        // 减号按钮
-        Box(
-            modifier = Modifier
-                .size(MederiSpacing.XXL) // 24dp
-                .clip(RoundedCornerShape(MederiRadius.Control))
-                .background(if (canDecrease) colors.surfaceCard else Color.Transparent)
-                .clickable(enabled = canDecrease) { onValueChange(value - 1) },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = FeatherIcons.Minus,
-                contentDescription = stringResource(Res.string.settings_stepper_decrease),
-                tint = if (canDecrease) colors.textPrimary else colors.iconMuted.copy(alpha = 0.4f),
-                modifier = Modifier.size(MederiSpacing.MD)
-            )
-        }
-
-        // 数值显示
+        WorkspaceIconButton(
+            icon = FeatherIcons.Minus,
+            onClick = { onValueChange(value - 1) },
+            contentDescription = stringResource(Res.string.settings_stepper_decrease),
+            enabled = enabled && value > minValue,
+            colors = colors,
+        )
         Text(
             text = value.toString(),
-            color = colors.textPrimary,
-            style = MederiTypeScale.Title.copy(fontWeight = FontWeight.Bold), // 13sp Bold
-            modifier = Modifier.widthIn(min = 28.dp).wrapContentWidth(Alignment.CenterHorizontally) // 28 不在刻度，直用
+            color = if (enabled) colors.textPrimary else colors.textMuted,
+            style = WorkspaceStyle.Body,
+            modifier = Modifier.widthIn(min = WorkspaceStyle.ControlHeight)
+                .wrapContentWidth(Alignment.CenterHorizontally),
         )
-
-        // 加号按钮
-        Box(
-            modifier = Modifier
-                .size(MederiSpacing.XXL) // 24dp
-                .clip(RoundedCornerShape(MederiRadius.Control))
-                .background(if (canIncrease) colors.surfaceCard else Color.Transparent)
-                .clickable(enabled = canIncrease) { onValueChange(value + 1) },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = FeatherIcons.Plus,
-                contentDescription = stringResource(Res.string.settings_stepper_increase),
-                tint = if (canIncrease) colors.textPrimary else colors.iconMuted.copy(alpha = 0.4f),
-                modifier = Modifier.size(MederiSpacing.MD)
-            )
-        }
+        WorkspaceIconButton(
+            icon = FeatherIcons.Plus,
+            onClick = { onValueChange(value + 1) },
+            contentDescription = stringResource(Res.string.settings_stepper_increase),
+            enabled = enabled && value < maxValue,
+            colors = colors,
+        )
     }
 }
 
-/**
- * 紧凑型胶囊双选项切换控件（Segmented Pill Toggle）。
- */
+/** 复用工作台选择项；窄屏按自然宽度换行，选择仍由调用方持有。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SegmentedPillToggle(
     selectedIndex: Int,
     options: List<String>,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    colors: MederiColors = LocalMederiColors.current
+    colors: MederiColors = LocalMederiColors.current,
 ) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(MederiRadius.Card))
-            .background(colors.surfaceWorkspace)
-            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(MederiRadius.Card))
-            .padding(MederiSpacing.Micro),
-        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.Micro),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        options.forEachIndexed { index, title ->
-            val isSelected = selectedIndex == index
-            val bg by animateColorAsState(if (isSelected) colors.surfaceCard else Color.Transparent)
-            val textColor by animateColorAsState(if (isSelected) colors.textPrimary else colors.textMuted)
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(MederiRadius.Control))
-                    .background(bg)
-                    .clickable { onSelect(index) }
-                    .padding(horizontal = MederiSpacing.Compact, vertical = 5.dp), // 5 不在 MederiSpacing 刻度（XS=4/Tight=6），现状直用
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
+    CompositionLocalProvider(LocalMederiColors provides colors) {
+        FlowRow(
+            modifier = modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+            verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+        ) {
+            options.forEachIndexed { index, title ->
+                WorkspaceNavigationTab(
                     text = title,
-                    color = textColor,
-                    style = MederiTypeScale.BodyCompact.copy(
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
-                    ) // 11.5sp
+                    selected = selectedIndex == index,
+                    onClick = { onSelect(index) },
+                    role = Role.RadioButton,
                 )
             }
         }
@@ -325,5 +272,29 @@ fun SettingsInputField(
             )
         }
         trailingIcon?.invoke()
+    }
+}
+
+
+/** 系统信息和遥控地址共用同一完整值/复制布局；回调提供精确原值。 */
+@Composable
+internal fun SettingsCopyableValue(
+    label: String,
+    value: String,
+    onCopy: (String) -> Unit,
+    copied: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SettingsRow(label) {
+            xyz.mederi.ui.components.atoms.WorkspaceActionButton(
+                org.jetbrains.compose.resources.stringResource(if (copied) mederi.app.shared.generated.resources.Res.string.copy_done else mederi.app.shared.generated.resources.Res.string.copy),
+                { onCopy(value) }, icon = if (copied) compose.icons.FeatherIcons.Check else compose.icons.FeatherIcons.Copy)
+        }
+        androidx.compose.foundation.text.selection.SelectionContainer {
+            Text(value, style = WorkspaceStyle.Body, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = colors.textPrimary)
+        }
     }
 }

@@ -145,8 +145,10 @@ Example (shape to follow; content from your real task):
 ```
 
 After approval, per subtask: generate_spec(planId, subtaskIndex, spec) as an ordered checklist,
-then subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background, END YOUR TURN —
-you will be auto-woken with the result), then verify_subtask(planId, subtaskIndex, status, evidence).
+then execute — either directly (apply_patch/edit_file/write_file + bash) or via
+subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background, END YOUR TURN —
+you will be auto-woken with the result) — then verify_subtask(planId, subtaskIndex, status, evidence).
+Choose per the Execution Path Selection criteria in the Plan Loop section.
 """.trimIndent()
 
     /**

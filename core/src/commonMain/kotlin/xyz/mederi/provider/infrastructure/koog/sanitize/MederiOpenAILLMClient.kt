@@ -13,6 +13,7 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.ResponseMetaInfo
 import ai.koog.prompt.streaming.StreamFrame
+import ai.koog.prompt.streaming.StreamFrameFlowBuilder
 import ai.koog.prompt.streaming.buildStreamFrameFlow
 import ai.koog.prompt.streaming.emitEnd
 import ai.koog.prompt.streaming.emitReasoningDelta
@@ -46,6 +47,8 @@ import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
 import xyz.mederi.http.SseIdleTimeoutException
+import xyz.mederi.tools.patch.ApplyPatchProtocol
+import java.net.URI
 
 class MederiOpenAILLMClient(
     apiKey: String,
@@ -61,6 +64,16 @@ class MederiOpenAILLMClient(
 ) {
 
     private val responsesAPIPath: String = chatCompletionsPath.replace("chat/completions", "responses")
+
+    // Custom tools are an OpenAI Responses feature, not part of the compatible-server contract.
+    private val supportsCustomApplyPatch = runCatching {
+        fun isOfficialOrigin(uri: URI): Boolean = uri.scheme.equals("https", ignoreCase = true) &&
+            uri.host.equals("api.openai.com", ignoreCase = true) && uri.userInfo == null &&
+            (uri.port == -1 || uri.port == 443)
+        val endpoint = URI(chatCompletionsPath)
+        isOfficialOrigin(URI(settings.baseUrl)) &&
+            (!endpoint.isAbsolute && endpoint.rawAuthority == null || isOfficialOrigin(endpoint))
+    }.getOrDefault(false)
 
     override val clientName: String = "MederiOpenAILLMClient"
 
@@ -359,6 +372,12 @@ class MederiOpenAILLMClient(
         DebugLog.data("SSE", "response length", rawResponse.length)
 
         val response = sanitizeJson.decodeFromString<SanitizedResponsesAPIResponse>(rawResponse)
+        if (response.output.any { it.type == "custom_tool_call" }) {
+            require(response.status == null || response.status == "completed") { "Incomplete apply_patch response: ${response.status}" }
+            require(response.output.none { it.type == "custom_tool_call" && it.status != null && it.status != "completed" }) {
+                "Incomplete apply_patch output item"
+            }
+        }
 
         val parts = mutableListOf<MessagePart.ResponsePart>()
         var finishReason: String? = null
@@ -383,12 +402,15 @@ class MederiOpenAILLMClient(
                         }
                     }
                 }
-                "function_call" -> {
+                "function_call", "custom_tool_call" -> {
+                    val isCustom = item.type == "custom_tool_call"
+                    require(!isCustom || item.name == ApplyPatchProtocol.TOOL_NAME) { "Unsupported custom tool: ${item.name}" }
                     parts.add(
                         MessagePart.Tool.Call(
                             id = item.callId ?: "",
                             tool = item.name ?: "",
-                            args = item.arguments ?: "{}"
+                            args = if (isCustom) ApplyPatchProtocol.encodeArguments(requireNotNull(item.input) { "Missing apply_patch input" })
+                                else item.arguments ?: "{}"
                         )
                     )
                 }
@@ -404,7 +426,7 @@ class MederiOpenAILLMClient(
         )
     }
 
-    private fun buildResponsesRequestJson(
+    internal fun buildResponsesRequestJson(
         prompt: Prompt,
         model: LLModel,
         tools: List<ToolDescriptor>,
@@ -419,10 +441,20 @@ class MederiOpenAILLMClient(
                 tools.forEach { tool ->
                     val chatTool = tool.toOpenAIChatTool()
                     add(buildJsonObject {
-                        put("type", "function")
+                        val isCustom = supportsCustomApplyPatch && tool.name == ApplyPatchProtocol.TOOL_NAME
+                        put("type", if (isCustom) "custom" else "function")
                         put("name", chatTool.function.name)
-                        chatTool.function.description?.let { put("description", it) }
-                        chatTool.function.parameters?.let { put("parameters", it) }
+                        if (isCustom) {
+                            put("description", ApplyPatchProtocol.FREEFORM_DESCRIPTION)
+                            put("format", buildJsonObject {
+                                put("type", "grammar")
+                                put("syntax", "lark")
+                                put("definition", ApplyPatchProtocol.LARK_GRAMMAR)
+                            })
+                        } else {
+                            chatTool.function.description?.let { put("description", it) }
+                            chatTool.function.parameters?.let { put("parameters", it) }
+                        }
                     })
                 }
             })
@@ -440,17 +472,38 @@ class MederiOpenAILLMClient(
                         }
                     }
                     is Message.User -> {
-                        add(buildJsonObject {
-                            put("role", "user")
-                            put("content", buildJsonArray {
-                                message.parts.filterIsInstance<MessagePart.Text>().forEach {
-                                    add(buildJsonObject {
+                        // Tool results are user parts in Koog. Preserve their causal position;
+                        // treating them as ordinary text silently drops the result on the next request.
+                        val texts = mutableListOf<MessagePart.Text>()
+                        fun flushText() {
+                            if (texts.isEmpty()) return
+                            add(buildJsonObject {
+                                put("role", "user")
+                                put("content", buildJsonArray {
+                                    texts.forEach { text -> add(buildJsonObject {
                                         put("type", "input_text")
-                                        put("text", it.text)
+                                        put("text", text.text)
+                                    }) }
+                                })
+                            })
+                            texts.clear()
+                        }
+                        message.parts.forEach { part ->
+                            when (part) {
+                                is MessagePart.Text -> texts.add(part)
+                                is MessagePart.Tool.Result -> {
+                                    flushText()
+                                    add(buildJsonObject {
+                                        val custom = supportsCustomApplyPatch && part.tool == ApplyPatchProtocol.TOOL_NAME
+                                        put("type", if (custom) "custom_tool_call_output" else "function_call_output")
+                                        put("call_id", part.id ?: "")
+                                        put("output", part.output)
                                     })
                                 }
-                            })
-                        })
+                                else -> {}
+                            }
+                        }
+                        flushText()
                     }
                     is Message.Assistant -> {
                         message.parts.forEach { part ->
@@ -460,7 +513,7 @@ class MederiOpenAILLMClient(
                                         put("role", "assistant")
                                         put("content", buildJsonArray {
                                             add(buildJsonObject {
-                                                put("type", "input_text")
+                                                put("type", "output_text")
                                                 put("text", part.text)
                                             })
                                         })
@@ -468,10 +521,12 @@ class MederiOpenAILLMClient(
                                 }
                                 is MessagePart.Tool.Call -> {
                                     add(buildJsonObject {
-                                        put("type", "function_call")
+                                        val custom = supportsCustomApplyPatch && part.tool == ApplyPatchProtocol.TOOL_NAME
+                                        put("type", if (custom) "custom_tool_call" else "function_call")
                                         put("call_id", part.id ?: "")
                                         put("name", part.tool)
-                                        put("arguments", part.args)
+                                        if (custom) put("input", ApplyPatchProtocol.decodeArguments(part.args))
+                                        else put("arguments", part.args)
                                     })
                                 }
                                 is MessagePart.Reasoning -> {}
@@ -498,8 +553,9 @@ class MederiOpenAILLMClient(
      * - function_call_arguments.delta → [StreamFrame.ToolCallDelta]（call_id/name 取自 output_item.added）
      * - response.completed → usage 记账 + End 帧
      *
-     * Complete 帧不手工发：Koog 的 StreamFrameFlowBuilder 在帧类型切换和 End 时
-     * 自动把累计的 delta 冲刷成对应 Complete 帧，[toMessageResponse] 据此重建完整消息。
+     * text/reasoning 由 Koog builder 生成 Complete；工具按 output_index 独立累计，
+     * 在 done/completed 事件确认后生成唯一 ToolCallComplete，避免并行工具或正文交错时
+     * 单 pending 槽把未完成补丁提前冲成非法 JSON。所有输入 delta 仍在到达时立刻外显。
      */
     private fun executeStreamingResponsesAPI(
         prompt: Prompt,
@@ -617,96 +673,141 @@ class MederiOpenAILLMClient(
         }
     }
 
-    private fun processResponsesStreamingFlow(
+    internal fun processResponsesStreamingFlow(
         events: Flow<SanitizedResponsesStreamEvent>
-    ): Flow<StreamFrame> = buildStreamFrameFlow {
-        // output_index → function_call 元数据（call_id/name 在 added 事件里，后续 delta 只有 item_id）
+    ): Flow<StreamFrame> = flow {
+        val output = this
+        // The Koog builder has one pending tool slot. Responses may interleave tool
+        // indices and commentary, so tools are accumulated independently below. The
+        // builder still owns text/reasoning completions and flushes at tool boundaries.
+        val frames = StreamFrameFlowBuilder(output)
         val toolMetaByIndex = HashMap<Int, SanitizedResponsesOutputItem>()
-        // item_id → output_index：部分端点的 *.delta 事件不带 output_index，
-        // 而 Koog 的 StreamFrameFlowBuilder 对工具调用的 index 序列不一致直接抛
-        // UnexpectedPartialToolCallIndex——用 added 事件建立的映射兜底，保证自洽
         val indexByItemId = HashMap<String, Int>()
+        val customInputs = HashMap<Int, ApplyPatchProtocol.StreamingArguments>()
+        val functionInputs = HashMap<Int, StringBuilder>()
+        val completedTools = mutableSetOf<Int>()
+
+        suspend fun emitToolFrame(frame: StreamFrame) {
+            frames.tryEmitPendingText()
+            frames.tryEmitPendingReasoning()
+            output.emit(frame)
+        }
+
+        fun indexOf(event: SanitizedResponsesStreamEvent): Int? =
+            event.outputIndex ?: event.itemId?.let { indexByItemId[it] }
+                ?: event.item?.id?.let { indexByItemId[it] }
+
+        suspend fun completeTool(index: Int, finalItem: SanitizedResponsesOutputItem? = null, finalInput: String? = null) {
+            // input.done can precede output_item.done; validate final item status even
+            // when its arguments were already completed by the earlier event.
+            if (index in customInputs) {
+                require(finalItem?.status == null || finalItem.status == "completed") { "Incomplete apply_patch output item" }
+            }
+            if (index in completedTools) {
+                customInputs[index]?.completeArguments(finalInput ?: finalItem?.input)
+                return
+            }
+            val meta = requireNotNull(toolMetaByIndex[index]) { "Tool completion without an added item" }
+            val encoder = customInputs[index]
+            val arguments = if (encoder != null) {
+                val suffix = encoder.close(finalInput ?: finalItem?.input)
+                emitToolFrame(StreamFrame.ToolCallDelta(meta.callId, meta.name, suffix, index))
+                encoder.completeArguments()
+            } else {
+                val received = requireNotNull(functionInputs[index])
+                finalItem?.arguments?.let { final ->
+                    require(final.startsWith(received.toString())) { "Function arguments disagree with streamed deltas" }
+                    val suffix = final.substring(received.length)
+                    if (suffix.isNotEmpty()) {
+                        received.append(suffix)
+                        emitToolFrame(StreamFrame.ToolCallDelta(meta.callId, meta.name, suffix, index))
+                    }
+                }
+                received.toString().ifEmpty { "{}" }
+            }
+            emitToolFrame(StreamFrame.ToolCallComplete(meta.callId, requireNotNull(meta.name), arguments, index))
+            completedTools.add(index)
+        }
 
         events.collect { event ->
-            DebugLog.debug("SSE-Frame", "responses event: type=${event.type}, outputIndex=${event.outputIndex}, itemId=${event.itemId}")
             when (event.type) {
                 "response.output_item.added" -> {
                     val item = event.item ?: return@collect
-                    DebugLog.event(
-                        "SSE-Frame",
-                        "responses added: type=${item.type}, id=${item.id}, outputIndex=${event.outputIndex}, " +
-                            "callId=${item.callId}, name=${item.name}, argsLen=${item.arguments?.length ?: 0}"
-                    )
-                    val index = event.outputIndex
-                    if (index != null && item.id != null) indexByItemId[item.id] = index
-                    if (item.type == "function_call") {
-                        if (index != null) toolMetaByIndex[index] = item
-                        emitToolCallDelta(
-                            id = item.callId,
-                            name = item.name,
-                            args = item.arguments?.takeIf { it.isNotEmpty() },
-                            index = index
-                        )
+                    if (item.type == "function_call" || item.type == "custom_tool_call") {
+                        val index = event.outputIndex ?: (toolMetaByIndex.keys.maxOrNull()?.plus(1) ?: 0)
+                        require(index !in toolMetaByIndex) { "Duplicate tool output index: $index" }
+                        item.id?.let { indexByItemId[it] = index }
+                        toolMetaByIndex[index] = item
+                        val args = if (item.type == "custom_tool_call") {
+                            require(item.name == ApplyPatchProtocol.TOOL_NAME) { "Unsupported custom tool: ${item.name}" }
+                            ApplyPatchProtocol.StreamingArguments().also { customInputs[index] = it }.open(item.input.orEmpty())
+                        } else {
+                            item.arguments.orEmpty().also { functionInputs[index] = StringBuilder(it) }
+                        }
+                        emitToolFrame(StreamFrame.ToolCallDelta(item.callId, item.name, args, index))
                     }
                 }
-                "response.reasoning_text.delta" -> {
+                "response.reasoning_text.delta" -> event.delta?.takeIf { it.isNotEmpty() }?.let {
+                    frames.emitReasoningDelta(id = event.itemId, text = it, index = event.outputIndex)
+                }
+                "response.reasoning_summary_text.delta" -> event.delta?.takeIf { it.isNotEmpty() }?.let {
+                    frames.emitReasoningDelta(id = event.itemId, summary = it, index = event.outputIndex)
+                }
+                "response.output_text.delta", "response.refusal.delta" -> event.delta?.takeIf { it.isNotEmpty() }?.let {
+                    frames.emitTextDelta(it, event.outputIndex)
+                }
+                "response.custom_tool_call_input.delta", "response.function_call_arguments.delta" -> {
+                    val index = requireNotNull(indexOf(event)) { "Tool input delta without an added item" }
+                    require(index !in completedTools) { "Tool input delta after completion" }
+                    val meta = requireNotNull(toolMetaByIndex[index]) { "Tool delta without metadata" }
                     event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
-                        emitReasoningDelta(id = event.itemId, text = delta, index = event.outputIndex)
+                        val args = if (event.type == "response.custom_tool_call_input.delta") {
+                            requireNotNull(customInputs[index]) { "Custom input for a function tool" }.append(delta)
+                        } else {
+                            requireNotNull(functionInputs[index]) { "Function arguments for a custom tool" }.append(delta)
+                            delta
+                        }
+                        emitToolFrame(StreamFrame.ToolCallDelta(meta.callId, meta.name, args, index))
                     }
                 }
-                "response.reasoning_summary_text.delta" -> {
-                    event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
-                        emitReasoningDelta(id = event.itemId, summary = delta, index = event.outputIndex)
-                    }
+                "response.custom_tool_call_input.done" -> {
+                    completeTool(requireNotNull(indexOf(event)), finalInput = event.input)
                 }
-                "response.output_text.delta", "response.refusal.delta" -> {
-                    event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
-                        emitTextDelta(delta, event.outputIndex)
-                    }
-                }
-                "response.function_call_arguments.delta" -> {
-                    event.delta?.takeIf { it.isNotEmpty() }?.let { delta ->
-                        val resolvedIndex = event.outputIndex ?: event.itemId?.let { indexByItemId[it] }
-                        val meta = resolvedIndex?.let { toolMetaByIndex[it] }
-                        DebugLog.event(
-                            "SSE-Frame",
-                            "responses argsDelta: wireOutputIndex=${event.outputIndex}, resolvedIndex=$resolvedIndex " +
-                                "(itemId=${event.itemId}), metaFound=${meta != null}, deltaLen=${delta.length}"
-                        )
-                        emitToolCallDelta(
-                            id = meta?.callId ?: event.itemId,
-                            name = meta?.name,
-                            args = delta,
-                            index = resolvedIndex
-                        )
-                    }
+                "response.output_item.done" -> {
+                    val index = indexOf(event)
+                    if (index != null && index in toolMetaByIndex) completeTool(index, finalItem = event.item)
                 }
                 "response.completed", "response.incomplete" -> {
+                    require(event.type != "response.incomplete" || customInputs.isEmpty()) { "Incomplete apply_patch response" }
                     val response = event.response
-                    val metaInfo = responsesMetaInfo(response?.usage)
-                    val finishReason = response?.output
-                        ?.lastOrNull { it.type == "message" }?.status
+                    if (customInputs.isNotEmpty()) {
+                        require(response?.status == null || response.status == "completed") { "Incomplete apply_patch response: ${response?.status}" }
+                        require(response?.output.orEmpty().none {
+                            it.type == "custom_tool_call" && it.status != null && it.status != "completed"
+                        }) { "Incomplete apply_patch output item" }
+                    }
+                    toolMetaByIndex.keys.sorted().forEach { index ->
+                        val meta = toolMetaByIndex.getValue(index)
+                        val finalItem = response?.output?.firstOrNull { it.callId == meta.callId }
+                        if (index in completedTools) {
+                            customInputs[index]?.completeArguments(finalItem?.input)
+                        } else {
+                            if (index in customInputs) {
+                                require(event.type == "response.completed" && finalItem?.input != null) { "Incomplete apply_patch input stream" }
+                            }
+                            completeTool(index, finalItem)
+                        }
+                    }
+                    val finishReason = response?.output?.lastOrNull { it.type == "message" }?.status
                         ?: if (event.type == "response.completed") "completed" else "incomplete"
-                    DebugLog.event(
-                        "SSE-Frame",
-                        "responses ${event.type}: finishReason=$finishReason, " +
-                            "outputTypes=${response?.output?.joinToString { it.type }}, pendingToolMeta=${toolMetaByIndex.size}"
-                    )
-                    emitEnd(finishReason, metaInfo)
+                    frames.emitEnd(finishReason, responsesMetaInfo(response?.usage))
                 }
                 "response.failed" -> {
                     val error = response_error(event)
-                    throw LLMClientException(
-                        clientName,
-                        "Responses stream failed: ${error.first} ${error.second}".trim()
-                    )
+                    throw LLMClientException(clientName, "Responses stream failed: ${error.first} ${error.second}".trim())
                 }
-                "error" -> {
-                    throw LLMClientException(
-                        clientName,
-                        "Responses stream error: ${event.code.orEmpty()} ${event.message.orEmpty()}".trim()
-                    )
-                }
+                "error" -> throw LLMClientException(clientName,
+                    "Responses stream error: ${event.code.orEmpty()} ${event.message.orEmpty()}".trim())
             }
         }
     }

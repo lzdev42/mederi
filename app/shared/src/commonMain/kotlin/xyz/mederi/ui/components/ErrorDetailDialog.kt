@@ -1,8 +1,6 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,27 +12,22 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import xyz.mederi.util.rememberClipboardCopy
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.delay
+import xyz.mederi.theme.WorkspaceStyle
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
+import xyz.mederi.ui.components.atoms.WorkspaceIconButton
 import xyz.mederi.ui.buildBugReportMarkdown
 import xyz.mederi.ui.cleanErrorSummary
 import xyz.mederi.ui.extractErrorCategory
 import xyz.mederi.ui.extractErrorSuggestion
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.ui.components.atoms.MederiCard
-import xyz.mederi.ui.components.atoms.MederiGhostButton
-import xyz.mederi.ui.components.atoms.MederiPrimaryDecisionButton
-import xyz.mederi.ui.components.atoms.MederiSurfaceButton
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
 import mederi.app.shared.generated.resources.error_report_app_version
@@ -77,7 +70,7 @@ fun ErrorDetailDialog(
     var copyHint by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(copyHint) {
         if (copyHint != null) {
-            delay(2000)
+            delay(WorkspaceStyle.CopyFeedbackMillis)
             copyHint = null
         }
     }
@@ -117,207 +110,63 @@ fun ErrorDetailDialog(
         )
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        // 诊断面板壳走 MederiCard（surfaceCard 底色/描边一致；圆角按 Card 8dp 收敛，原 14dp 属对话框壳特例）
-        MederiCard(
-            modifier = modifier
-                .fillMaxWidth()
-                .widthIn(max = 680.dp)
-                .padding(vertical = 16.dp),
-            padding = PaddingValues(20.dp)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                // 1. 顶部标题栏
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.AlertCircle,
-                            contentDescription = null,
-                            tint = colors.accentDanger,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = stringResource(Res.string.error_report_title),
-                            color = colors.textPrimary,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Icon(
-                        imageVector = FeatherIcons.X,
-                        contentDescription = stringResource(Res.string.close),
-                        tint = colors.textSecondary,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable { onDismiss() }
-                    )
-                }
+    xyz.mederi.ui.components.atoms.MederiDialog(onDismiss, modifier, width = 680.dp) {
+        ErrorDetailContent(
+            categoryBadge, cleanSummary, suggestion,
+            errorDiagnostic.ifBlank { errorSummary.ifBlank { stringResource(Res.string.error_report_no_logs) } },
+            copyHint,
+            onCopy = { copyToClipboard(bugReportMarkdown); copyHint = copyDoneHint },
+            onSubmitBug = {
+                copyToClipboard(bugReportMarkdown)
+                copyHint = copiedGithubHint
+                val issueTitle = "[Bug]: ${cleanSummary.take(80)}".encodeURLParameter()
+                val issueBody = bugReportMarkdown.encodeURLParameter()
+                uriHandler.openUri("https://github.com/lzdev42/mederi/issues/new?title=$issueTitle&body=$issueBody")
+            },
+            onDismiss = onDismiss,
+        )
+    }
+}
 
-                // 2. 错误分类与简述卡片
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.accentDanger.copy(alpha = 0.12f))
-                        .border(1.dp, colors.accentDanger.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (categoryBadge != null) {
-                        // 实心危险徽标：MederiBadges 无 solid accentDanger 变体，保留等价 Box 链替代 M3 Surface
-                        Box(
-                            modifier = Modifier
-                                .padding(end = 2.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(colors.accentDanger)
-                        ) {
-                            Text(
-                                text = categoryBadge,
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                    SelectionContainer(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = cleanSummary.ifBlank { stringResource(Res.string.error_report_fallback_summary) },
-                            color = colors.accentDanger,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            lineHeight = 17.sp
-                        )
-                    }
-                }
-
-                // 3. 恢复建议（如果提取到了 Suggestion）
-                if (!suggestion.isNullOrBlank()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(colors.accentWarning.copy(alpha = 0.1f))
-                            .border(1.dp, colors.accentWarning.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = FeatherIcons.Info,
-                            contentDescription = null,
-                            tint = colors.accentWarning,
-                            modifier = Modifier.size(16.dp).padding(top = 2.dp)
-                        )
-                        Text(
-                            text = suggestion,
-                            color = colors.textPrimary,
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp
-                        )
-                    }
-                }
-
-                // 4. 详细诊断日志（等宽字体、滚动区）
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = stringResource(Res.string.error_report_logs_title),
-                        color = colors.textSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 120.dp, max = 280.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(colors.surfaceSidebar)
-                            .border(1.dp, colors.divider, RoundedCornerShape(8.dp))
-                            .padding(10.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        SelectionContainer {
-                            Text(
-                                text = errorDiagnostic.ifBlank { errorSummary.ifBlank { stringResource(Res.string.error_report_no_logs) } },
-                                color = colors.textPrimary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                lineHeight = 16.sp
-                            )
-                        }
-                    }
-                }
-
-                // 5. 底部操作栏
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 状态提示反馈（如“已复制日志”）
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (copyHint != null) {
-                            Text(
-                                text = copyHint.orEmpty(),
-                                color = colors.accentPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 复制日志按钮
-                        MederiSurfaceButton(
-                            text = stringResource(Res.string.error_report_copy_logs),
-                            icon = FeatherIcons.Copy,
-                            onClick = {
-                                copyToClipboard(bugReportMarkdown)
-                                copyHint = copyDoneHint
-                            }
-                        )
-
-                        // 提交 Bug 按钮（自动预填好标题与内容模板并调起浏览器）
-                        MederiPrimaryDecisionButton(
-                            text = stringResource(Res.string.error_report_submit_bug),
-                            icon = FeatherIcons.ExternalLink,
-                            onClick = {
-                                copyToClipboard(bugReportMarkdown)
-                                copyHint = copiedGithubHint
-                                val issueTitle = "[Bug]: ${cleanSummary.take(80)}".encodeURLParameter()
-                                val issueBody = bugReportMarkdown.encodeURLParameter()
-                                val githubIssueUrl = "https://github.com/lzdev42/mederi/issues/new?title=$issueTitle&body=$issueBody"
-                                uriHandler.openUri(githubIssueUrl)
-                            }
-                        )
-
-                        // 关闭按钮
-                        MederiGhostButton(
-                            text = stringResource(Res.string.close),
-                            onClick = onDismiss
-                        )
-                    }
-                }
+/** 诊断纯展示：报告构造/剪贴板/URI保持在调用层，操作不等同停止工作。 */
+@Composable
+internal fun ErrorDetailContent(
+    category: String?, summary: String, suggestion: String?, diagnostic: String, copyHint: String?,
+    onCopy: () -> Unit, onSubmitBug: () -> Unit, onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(FeatherIcons.AlertCircle, null, tint = colors.dangerText, modifier = Modifier.size(WorkspaceStyle.IconSize))
+            Text(stringResource(Res.string.error_report_title), style = WorkspaceStyle.Title,
+                color = colors.textPrimary, modifier = Modifier.weight(1f))
+            WorkspaceIconButton(FeatherIcons.X, onDismiss, stringResource(Res.string.close))
+        }
+        if (!category.isNullOrBlank()) Text(category, style = WorkspaceStyle.Caption, color = colors.textSecondary)
+        SelectionContainer {
+            Text(summary.ifBlank { stringResource(Res.string.error_report_fallback_summary) },
+                style = WorkspaceStyle.Body, color = colors.textPrimary)
+        }
+        if (!suggestion.isNullOrBlank()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                Icon(FeatherIcons.Info, null, tint = colors.textSecondary, modifier = Modifier.size(WorkspaceStyle.IconSize))
+                Text(suggestion, style = WorkspaceStyle.Body, color = colors.textSecondary)
             }
+        }
+        Text(stringResource(Res.string.error_report_logs_title), style = WorkspaceStyle.Caption, color = colors.textSecondary)
+        SelectionContainer {
+            Text(diagnostic, style = WorkspaceStyle.Caption, fontFamily = FontFamily.Monospace,
+                color = colors.textPrimary,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)
+                    .clip(RoundedCornerShape(WorkspaceStyle.ObjectRadius)).background(colors.surfaceCode)
+                    .containScroll().verticalScroll(rememberScrollState()).padding(10.dp))
+        }
+        if (copyHint != null) Text(copyHint, style = WorkspaceStyle.Caption, color = colors.accentText)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            WorkspaceActionButton(stringResource(Res.string.error_report_copy_logs), onCopy, icon = FeatherIcons.Copy)
+            WorkspaceActionButton(stringResource(Res.string.error_report_submit_bug), onSubmitBug, icon = FeatherIcons.ExternalLink)
+            WorkspaceActionButton(stringResource(Res.string.close), onDismiss)
         }
     }
 }

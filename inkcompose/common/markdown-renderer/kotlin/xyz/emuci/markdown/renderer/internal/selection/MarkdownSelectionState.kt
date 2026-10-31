@@ -1,5 +1,7 @@
 package xyz.emuci.markdown.renderer.internal.selection
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,13 +19,20 @@ internal class MarkdownSelectionState {
     /** 输入模式标志：true=鼠标，false=触屏。默认触屏。 */
     var isMouseInput: Boolean by mutableStateOf(false)
 
-    val hasSelection: Boolean get() = range != null
+    /** 自动滚动期间固定在窗口坐标的活动指针；手势结束即清空。 */
+    var dragPointerInWindow: Offset? by mutableStateOf(null)
+
+    /** 鼠标菜单使用点击位置；触屏工具条使用选区边界。 */
+    var contextMenuAnchor: Rect? by mutableStateOf(null)
+
+    val hasSelection: Boolean get() = range?.let { it.start != it.end } == true
 
     fun clear() {
         range = null
         activeHandle = SelectionActiveHandle.None
         isHandleDrag = false
         toolbarRequestKey = 0
-        isMouseInput = false
+        contextMenuAnchor = null
+        dragPointerInWindow = null
     }
 }

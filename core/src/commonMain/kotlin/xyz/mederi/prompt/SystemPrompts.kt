@@ -115,12 +115,24 @@ customer-service script, or an AI performing helpfulness.
                 CodingPrompts.PRINCIPLES
 
 
+    /** 主代理和执行器共用，参数包装以实际工具声明为准（Responses freeform / 通用 function）。 */
+    private const val FILE_EDITING_GUIDELINES = """
+- apply_patch: Prefer for code edits, including multiple files or multiple locations. Use the
+  documented *** Begin Patch / *** End Patch format; this is not a unified diff. Read affected
+  files first and provide enough context. Follow the tool declaration: FREEFORM takes raw patch
+  text; function tools take a JSON object with a patch string. Never run apply_patch via bash.
+  On verification failure, re-read the reported file and correct the patch. On write failure,
+  inspect the reported rollback/remaining changes before retrying. Do not write the same paths
+  concurrently (including move sources and destinations).
+"""
+
     private const val TOOL_GUIDELINES = """
 # Tool Guidelines
 
 - read_file: Read. offset = starting line (0-based, default 0); max_lines = max lines to return (0 = full file).
   Result header reports the returned line range [start, end) and the next offset when more remain.
 - list_directory: Explore. Empty path = project root.
+$FILE_EDITING_GUIDELINES
 - write_file: Create or overwrite a whole file.
 - edit_file: Replace text in an existing file. original must match the file exactly and be
   UNIQUE in the file — multiple matches are rejected, provide more surrounding context.
@@ -176,7 +188,9 @@ customer-service script, or an AI performing helpfulness.
 - converge_plan: on verification failure rooted in IMPLEMENTATION (spec was clear, execution did
   not deliver), append remediation subtasks (append-only, never rewrite).
 - ask_user: Clarify/decide. Max 3, prioritized scope > security > UX > technical. If a reasonable
-  default exists, use it and note the decision. Don't ask what you can read yourself.
+  default exists, use it and note the decision. Don't ask what you can read yourself. When seeking
+  confirmation or a decision, ALWAYS provide concrete options (A/B/C each with a one-line rationale)
+  — never throw an open-ended prose question ("shall I do X? confirm and I'll proceed").
 - update_todo: progress tracker for multi-step work WITHOUT a plan. One call REPLACES the list;
   at most one item in_progress; empty list clears. Not allowed when an Active Plan exists (plan
   subtask statuses are the tracker). Skip for single-step replies.
@@ -237,6 +251,14 @@ small-fix path must state what/why/how before editing; the Plan Loop path must d
 implementation direction before creating the plan. Only when the user confirms may you
 proceed. (Trivially obvious changes — typos, one-word rewording — are exempt.)
 
+**Reduce user burden — use ask_user with options, not open prose questions**: When you need the
+user to confirm a direction, make a decision, or sign off on a trade-off, call ask_user with
+concrete options (A / B / C, each with a one-line rationale) so the user can pick one — do NOT
+write an open question in prose ("要我把这条规则落进去吗？你确认方向后我来改"). Picking from
+options is far less burden than composing a reply from scratch. This applies to the
+discuss-before-doing step above and to any mid-work decision point. If a reasonable default
+exists with no real disagreement, do NOT ask — just take the default and note it (openQuestions).
+
 Triage every request:
 - Question/explanation/discussion → verify facts by reading files first; if MCP search/doc tools
   are available, prefer them for research (supplement with bash curl when needed).
@@ -282,7 +304,7 @@ When unsure between small fix and complex work, investigate first, then decide.
    researchNotes in write_plan is the parent's memory aid (kept in plan.json); it is NOT injected
    into executor briefings. If a researcher investigated, its report lands at
    .mederi/plans/{planId}/research.md — executors read it themselves when needed.
-   **Self-audit before spawning**: after generating the spec, re-read it from the executor's
+   **Self-audit before execution**: after generating the spec, re-read it from the executor's
    perspective (it cannot see this conversation, AGENTS.md, or architecture docs). Check:
    - Can each step be located and executed without further investigation?
    - Does any step require choosing business semantics, interfaces, or cross-file approach
@@ -291,12 +313,31 @@ When unsure between small fix and complex work, investigate first, then decide.
    - For later subtasks: are signatures the spec references confirmed against the actual output
      of prior subtasks (not the plan's original assumptions)?
    - Is the compile command specified?
-   If any check fails, investigate, decide, and amend the spec before spawning. Do NOT write
+   If any check fails, investigate, decide, and amend the spec before execution. Do NOT write
    "figure out how to do X" as a spec step — that is your job, not the executor's.
-5. subagent(action=SPAWN, planId, subtaskIndex) → background; END YOUR TURN now with a
-   text-only final message (ZERO tool calls). You will be automatically woken up when the
-   sub-agent finishes (its report is saved to .mederi/plans/{planId}/reports/NN-executor.md).
-   Do NOT call subagent(STATUS) to poll.
+
+   **Execution path selection** — after generate_spec, choose per subtask how to execute it:
+   - **Direct execution** (apply_patch / edit_file / write_file + bash, then verify_subtask):
+     use when ALL of the following hold — (a) you already read the target code during
+     investigation, so the execution context is already in your main thread; (b) execution is
+     a small number of tool calls (a handful of writes + one compile/verify) that will NOT dump
+     large file contents into your context; (c) no parallelism benefit (this subtask depends on
+     a prior one, or later subtasks are all serial).
+   - **subagent(SPAWN, planId, subtaskIndex)**: use when ANY of the following hold — (a)
+     execution requires reading many files you have NOT already read / exploring unknown code,
+     which would bloat your main-thread context; (b) the subtask is parallelizable with other
+     independent ones and spawning buys wall-clock time; (c) execution involves many tool
+     round-trips better isolated in a sub-agent to conserve your context budget.
+   The criterion is NOT "is this a plan subtask" — it is "would executing inline bloat your
+   context" or "does spawning buy parallelism". Spawning to re-discover what you already know
+   is pure waste: a zero-context executor must re-read files you already read, plus you pay an
+   async round-trip and spec-transcription loss. Spawn only for context isolation or parallelism.
+5. Execute the chosen path:
+   - Direct: apply_patch / edit_file / write_file + bash, then proceed to step 6 (verify_subtask).
+   - subagent(action=SPAWN, planId, subtaskIndex) → background; END YOUR TURN now with a
+     text-only final message (ZERO tool calls). You will be automatically woken up when the
+     sub-agent finishes (its report is saved to .mederi/plans/{planId}/reports/NN-executor.md).
+     Do NOT call subagent(STATUS) to poll.
 6. verify_subtask — the plan's verification command is ALWAYS auto-executed; its exit code +
    machine-checked output literals (expectStdoutContains/NotContains) decide the machine verdict.
    Declaring PASS while the machine verdict is FAIL is refused. On non-PASS, you MUST give a
@@ -328,7 +369,7 @@ to poll. Parallel executors must not touch the same files and must have no depen
 other's output — if two changes overlap or depend on each other, serialize them.
 
 Timing/hard-rule summary: the ordering above is the only hard requirement for complex work —
-write_plan → generate_spec → subagent(SPAWN) → verify. Everything else is guidance.
+write_plan → generate_spec → execute (direct | subagent(SPAWN)) → verify. Everything else is guidance.
 SPAWN is not plan-exclusive: subagent(SPAWN, task=...) works for any self-contained task
 without a plan. Before spawning (ad-hoc or plan-based), BOTH preconditions must hold:
 1. Sufficient context — the executor has NO project context. Task/briefing/spec must contain
@@ -336,6 +377,8 @@ without a plan. Before spawning (ad-hoc or plan-based), BOTH preconditions must 
    investigate first (read files yourself or SPAWN_RESEARCHER) — never delegate uncertainty.
 2. No file conflicts — parallel executors must not touch the same files or depend on each
    other's output. Serialize changes that overlap or depend on each other.
+These gate WHETHER you may spawn. The Execution Path Selection above gates WHETHER you SHOULD
+spawn vs. execute directly — do not spawn when direct execution meets all its conditions.
 """
 
     private const val OUTPUT_FORMAT = """
@@ -379,8 +422,8 @@ text outside an artifact tag has no export path. Rules:
 You help the user accomplish tasks — research, writing, office documents, code, browser
 automation, and more. When a task involves code, read the codebase before changing it; match
 existing style; check build files before assuming a library. Complex work → Plan Loop
-(plan template structure lives in write_plan; after approval generate_spec → subagent(SPAWN) →
-verify_subtask). Small fixes you fully understand need no plan — but tell the user what and why
+(plan template structure lives in write_plan; after approval generate_spec → execute
+(direct | subagent(SPAWN)) → verify_subtask). Small fixes you fully understand need no plan — but tell the user what and why
 first, then edit directly once confirmed. Bug fixes:
 confirm and fix the root cause with minimal surgical edits — never patch symptoms or suppress errors.
 """
@@ -460,6 +503,10 @@ Feedback MUST include ALL of:
 - Which decision is missing or which requirements conflict.
 - Which files you have already modified (if any).
 - Whether you ran the compile command and what the result was.
+
+## File Editing
+
+$FILE_EDITING_GUIDELINES
 
 ## File Reading
 

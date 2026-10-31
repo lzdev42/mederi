@@ -278,7 +278,12 @@ fun computeChatItems(
 
                     is ChatBlock.ToolCall -> {
                         val toolUi = toToolCallUi(block, snapshot)
-                        val isSubagent = toolUi.name in SUBAGENT_TOOL_NAMES
+                        // 派发通知只确认已经成功的 SPAWN；准备中、失败、查询和停止仍走普通工具过程。
+                        // subagent 的已知 Error: 协议可能以 Completed 返回，不能据此宣称启动成功。
+                        val completed = toolUi.state as? ToolCallState.Completed
+                        val isSubagent = toolUi.name in SUBAGENT_TOOL_NAMES && completed != null &&
+                            completed.input["action"] in setOf("SPAWN", "SPAWN_RESEARCHER") &&
+                            !completed.output.startsWith("Error:")
                         if (isSubagent) {
                             rawChronologicalItems.add(
                                 ChatListItem.SubagentCalls(
@@ -286,7 +291,6 @@ fun computeChatItems(
                                     subagents = listOf(toolUi),
                                     isStreaming = msg.isStreaming,
                                     isTurnStart = false,
-                                    isRunning = isStreaming && toolUi.state is ToolCallState.Running,
                                     hasFailed = toolUi.isFailed,
                                 )
                             )

@@ -1,34 +1,32 @@
 package xyz.mederi.ui.components.atoms
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.*
+import xyz.mederi.theme.WorkspaceStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import xyz.mederi.theme.LocalMederiColors
@@ -36,7 +34,7 @@ import xyz.mederi.theme.MederiRadius
 import xyz.mederi.theme.MederiSpacing
 
 /**
- * 统一对话框基底（12dp 圆角 + surfaceSidebar + surfaceCardBorder 描边 + width + Column(spacedBy(12))）。
+ * 统一对话框基底（12dp圆角、中性底色、20dp内部留白、有界滚动）。
  * 对齐 Sidebar/SkillManagementCard 等既有对话框的视觉结构，消灭 10+ 处复制粘贴骨架。
  * 壳用等价 Box 修饰链替代 M3 Surface（MederiDialog 自身即对话框壳原子，无需再套 MederiCard）。
  */
@@ -48,30 +46,40 @@ fun MederiDialog(
     title: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val colors = LocalMederiColors.current
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Box(
-            modifier = modifier
-                .width(width)
-                .padding(MederiSpacing.LG)
-                .clip(RoundedCornerShape(MederiRadius.Dialog))
-                .background(colors.surfaceSidebar)
-                .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(MederiRadius.Dialog)),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.MD)) {
-                title?.invoke()
-                content()
-            }
-        }
+        MederiDialogContent(modifier = modifier, width = width, title = title, content = content)
+    }
+}
+
+/** 独立于平台窗口的共同壳；先限制高度再滚动，长表单与大字体保持可达。 */
+@Composable
+internal fun MederiDialogContent(
+    modifier: Modifier = Modifier,
+    width: Dp = 320.dp,
+    title: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = LocalMederiColors.current
+    Column(
+        modifier = modifier.padding(MederiSpacing.LG).widthIn(max = width).fillMaxWidth()
+            .heightIn(max = 560.dp)
+            .clip(RoundedCornerShape(MederiRadius.Dialog))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.surfaceCardBorder, RoundedCornerShape(MederiRadius.Dialog))
+            .verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(MederiSpacing.MD),
+    ) {
+        title?.invoke()
+        content()
     }
 }
 
 /**
  * 确认对话框：标题 + 正文 + (取消 | 确认) 尾部按钮。
- * [danger] = true 时确认按钮用 accentDanger（[MederiPrimaryDecisionButton.danger]）；[confirmIcon] 可选前置图标。
+ * [danger] = true 时确认按钮用 accentDanger（危险文字色）；[confirmIcon] 可选前置图标。
  */
 @Composable
 fun ConfirmDialog(
@@ -85,28 +93,19 @@ fun ConfirmDialog(
     confirmIcon: ImageVector? = null,
     width: Dp = 320.dp,
     titleColor: Color = LocalMederiColors.current.textPrimary,
+    enabled: Boolean = true,
+    supportingContent: (@Composable () -> Unit)? = null,
 ) {
     val colors = LocalMederiColors.current
     MederiDialog(
-        onDismiss = onDismiss,
+        onDismiss = { if (enabled) onDismiss() },
         width = width,
-        title = { Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = titleColor) },
+        title = { Text(title, style = WorkspaceStyle.Title, color = titleColor) },
     ) {
-        Text(message, fontSize = 12.sp, color = colors.textSecondary)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MederiGhostButton(text = cancelLabel, onClick = onDismiss)
-            Spacer(Modifier.width(6.dp))
-            MederiPrimaryDecisionButton(
-                text = confirmLabel,
-                onClick = onConfirm,
-                danger = danger,
-                icon = confirmIcon,
-            )
-        }
+        Text(message, style = WorkspaceStyle.Body, color = colors.textSecondary)
+        supportingContent?.invoke()
+        WorkspaceDialogActions(confirmLabel, cancelLabel, onConfirm, onDismiss,
+            confirmEnabled = enabled, cancelEnabled = enabled, danger = danger, confirmIcon = confirmIcon)
     }
 }
 
@@ -130,34 +129,10 @@ fun InputDialog(
     MederiDialog(
         onDismiss = onDismiss,
         width = width,
-        title = { Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary) },
+        title = { Text(title, style = WorkspaceStyle.Title, color = colors.textPrimary) },
     ) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = { value = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(placeholder, fontSize = 12.sp) },
-            singleLine = true,
-            shape = RoundedCornerShape(MederiRadius.Card),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = colors.accentPrimary,
-                unfocusedBorderColor = colors.surfaceCardBorder,
-                focusedContainerColor = colors.surfaceInput,
-                unfocusedContainerColor = colors.surfaceInput,
-            ),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MederiGhostButton(text = cancelLabel, onClick = onDismiss)
-            Spacer(Modifier.width(6.dp))
-            MederiPrimaryDecisionButton(
-                text = confirmLabel,
-                onClick = { onConfirm(value) },
-                enabled = value.isNotBlank(),
-            )
-        }
+        WorkspaceTextField(value, { value = it }, Modifier.fillMaxWidth(), placeholder = placeholder)
+        WorkspaceDialogActions(confirmLabel, cancelLabel, { onConfirm(value) }, onDismiss,
+            confirmEnabled = value.isNotBlank())
     }
 }

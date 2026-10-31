@@ -1,0 +1,4 @@
+<resources>
+    <string name="selection_copy">复制</string>
+    <string name="selection_paste">粘贴</string>
+</resources>

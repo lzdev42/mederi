@@ -1,11 +1,12 @@
 package xyz.mederi.ui.components
 
+import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,7 +57,7 @@ fun InitLoadingOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            CircularProgressIndicator(
+            WorkspaceLoadingIndicator(
                 color = colors.accentPrimary,
                 strokeWidth = 3.dp,
                 modifier = Modifier.size(36.dp)

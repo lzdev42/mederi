@@ -103,7 +103,7 @@ data class SubagentConfigItem(
     val reasoningLevel: String? = null,
     /**
      * 子代理的 API Key 策略：null=继承父会话选定 key；具体 keyId=指定 key；
-     * "API_KEY_ROTATION"=轮询（core `API_KEY_ROTATION_ID` 常量）。
+     * "__rotate__"=轮询（core `API_KEY_ROTATION_ID` 常量）。
      */
     val apiKeyId: String? = null,
     val isInheriting: Boolean = true
@@ -118,7 +118,7 @@ data class UpdateSubagentConfigInput(
     val reasoningLevel: String? = null,
     /**
      * 子代理的 API Key 策略：null=继承父会话选定 key；具体 keyId=指定 key；
-     * "API_KEY_ROTATION"=轮询（core `API_KEY_ROTATION_ID` 常量）。
+     * "__rotate__"=轮询（core `API_KEY_ROTATION_ID` 常量）。
      */
     val apiKeyId: String? = null
 )

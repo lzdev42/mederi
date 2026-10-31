@@ -1,5 +1,7 @@
 package xyz.emuci.markdown.renderer
 
+import xyz.emuci.inkcompose.SelectionMenuAction
+
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,6 +16,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboard
@@ -29,6 +34,7 @@ import xyz.emuci.markdown.renderer.internal.compose.ComposeRenderEnvironment
 import xyz.emuci.markdown.renderer.internal.selection.LocalMarkdownSelectionController
 import xyz.emuci.markdown.renderer.internal.selection.PopupTextToolbar
 import xyz.emuci.markdown.renderer.internal.selection.PopupTextToolbarHost
+import xyz.emuci.markdown.renderer.internal.selection.SelectionAutoScrollHost
 import xyz.emuci.markdown.renderer.internal.selection.SelectionHandlesHost
 import xyz.emuci.markdown.renderer.internal.selection.SelectionToolbarHost
 import xyz.emuci.markdown.renderer.internal.selection.markdownSelectionGestures
@@ -79,7 +85,8 @@ internal fun MarkdownDocumentRenderer(
     imageContent: MarkdownImageRenderer? = null,
     onLinkClick: ((String) -> Unit)? = null,
     directiveRegistry: MarkdownDirectiveRegistry = MarkdownDirectiveRegistry.Empty,
-    selectionMenuActions: List<SelectionMenuAction> = emptyList(),
+    selectionMenuActions: List<SelectionMenuAction> = listOf(SelectionMenuAction.Copy, SelectionMenuAction.Paste),
+    onPasteRequested: (() -> Unit)? = null,
 ) {
     val renderMode = remember(enableScroll) {
         resolveMarkdownRenderMode(enableScroll = enableScroll)
@@ -157,6 +164,8 @@ internal fun MarkdownDocumentRenderer(
                 }
                 selectionController?.bindClipboard(LocalClipboard.current)
                 val popupToolbar = remember { PopupTextToolbar() }
+                val selectionScrollDispatcher = remember { NestedScrollDispatcher() }
+                val selectionScrollConnection = remember { object : NestedScrollConnection {} }
                 val navigationController = rememberMarkdownNavigationController(
                     renderMode = renderMode,
                     enableScroll = enableScroll,
@@ -204,6 +213,7 @@ internal fun MarkdownDocumentRenderer(
                     modifier = if (selectionController != null) {
                         Modifier
                             .onGloballyPositioned { selectionController.registry.setRoot(it) }
+                            .nestedScroll(selectionScrollConnection, selectionScrollDispatcher)
                             .markdownSelectionGestures(selectionController)
                     } else {
                         Modifier
@@ -240,8 +250,9 @@ internal fun MarkdownDocumentRenderer(
                             )
                         }
                         if (selectionController != null) {
+                            SelectionAutoScrollHost(selectionController, lazyListState, enableScroll, selectionScrollDispatcher)
                             SelectionHandlesHost(selectionController)
-                            SelectionToolbarHost(selectionController)
+                            SelectionToolbarHost(selectionController, onPasteRequested)
                             PopupTextToolbarHost(popupToolbar, selectionController, selectionMenuActions)
                         }
                     }

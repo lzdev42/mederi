@@ -1,8 +1,9 @@
 package xyz.mederi.ui.components.atoms
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -180,7 +181,7 @@ fun MederiPrimaryDecisionButton(
             hovered -> lerp(base, textColor, 0.12f) // hover 向 text 色 lerp（iris-4 等效）
             else -> base
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "primaryDecisionBg",
     )
     val border by animateColorAsState(
@@ -189,12 +190,12 @@ fun MederiPrimaryDecisionButton(
             hovered -> if (danger) colors.dangerText else colors.accentFocus
             else -> if (danger) colors.dangerText.copy(alpha = 0.35f) else colors.accentBorder
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "primaryDecisionBorder",
     )
     val contentColor by animateColorAsState(
         targetValue = if (enabled) textColor else colors.textMuted,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "primaryDecisionContent",
     )
     MederiTextButtonBase(
@@ -234,17 +235,17 @@ fun MederiSurfaceButton(
     val hovered by interactionSource.collectIsHoveredAsState()
     val bg by animateColorAsState(
         targetValue = if (hovered && enabled) colors.surfaceHover else colors.surfaceCard,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "surfaceButtonBg",
     )
     val border by animateColorAsState(
         targetValue = if (hovered && enabled) colors.borderStrong else colors.surfaceCardBorder,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "surfaceButtonBorder",
     )
     val contentColor by animateColorAsState(
         targetValue = if (enabled) colors.textPrimary else colors.textMuted,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "surfaceButtonContent",
     )
     MederiTextButtonBase(
@@ -283,7 +284,7 @@ fun MederiGhostButton(
     val hovered by interactionSource.collectIsHoveredAsState()
     val bg by animateColorAsState(
         targetValue = if (hovered && enabled) colors.surfaceHover else Color.Transparent,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "ghostButtonBg",
     )
     val contentColor by animateColorAsState(
@@ -292,7 +293,7 @@ fun MederiGhostButton(
             hovered -> colors.textPrimary
             else -> colors.textSecondary
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "ghostButtonContent",
     )
     MederiTextButtonBase(
@@ -332,7 +333,7 @@ fun MederiCompactStrokeButton(
     val hovered by interactionSource.collectIsHoveredAsState()
     val border by animateColorAsState(
         targetValue = if (hovered && enabled) colors.borderStrong else colors.surfaceCardBorder,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "compactStrokeBorder",
     )
     val contentColor = if (enabled) colors.textPrimary else colors.textMuted
@@ -381,7 +382,7 @@ fun MederiMinimalIconButton(
             state.hovered -> colors.surfaceHover
             else -> Color.Transparent
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "minimalIconBg",
     )
     val tint by animateColorAsState(
@@ -391,7 +392,7 @@ fun MederiMinimalIconButton(
             state.hovered -> colors.textPrimary
             else -> colors.textSecondary
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "minimalIconTint",
     )
     MederiIconButtonBase(
@@ -435,7 +436,7 @@ fun MederiIconSquareButton(
             state.hovered -> colors.borderStrong
             else -> colors.surfaceCardBorder
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "iconSquareBorder",
     )
     val tint by animateColorAsState(
@@ -445,7 +446,7 @@ fun MederiIconSquareButton(
             state.hovered -> colors.textPrimary
             else -> colors.textSecondary
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "iconSquareTint",
     )
     MederiIconButtonBase(
@@ -482,7 +483,7 @@ fun MederiPanelHeaderIconButton(
     val state = rememberIconButtonState(interactionSource)
     val bg by animateColorAsState(
         targetValue = if (state.hovered && enabled) colors.surfaceHover else Color.Transparent,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "panelHeaderIconBg",
     )
     val tint by animateColorAsState(
@@ -491,7 +492,7 @@ fun MederiPanelHeaderIconButton(
             state.hovered -> colors.textPrimary
             else -> colors.textMuted
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "panelHeaderIconTint",
     )
     MederiIconButtonBase(
@@ -534,13 +535,13 @@ fun MederiSendRoundButton(
             state.hovered -> colors.bgInvertedHover
             else -> colors.bgInverted
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "sendRoundBg",
     )
     val tint = if (enabled) colors.onInverted else colors.textMuted
     val scale by animateFloatAsState(
-        targetValue = if (state.pressed && enabled) 0.96f else 1f,
-        animationSpec = tween(80),
+        targetValue = if (state.pressed && enabled && !LocalWorkspaceMotion.current.reducedMotion) 0.96f else 1f,
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "sendRoundScale",
     )
     MederiIconButtonBase(

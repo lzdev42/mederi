@@ -1,7 +1,8 @@
 package xyz.mederi.ui
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -307,7 +308,7 @@ fun Sidebar(
             val plusHovered by plusInteraction.collectIsHoveredAsState()
             val plusBg by animateColorAsState(
                 targetValue = if (plusHovered) colors.surfaceHover else Color.Transparent,
-                animationSpec = tween(120),
+                animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
                 label = "sectionHeaderPlusBg",
             )
             Box(
@@ -369,7 +370,7 @@ fun Sidebar(
                 val settingsHovered by settingsInteraction.collectIsHoveredAsState()
                 val settingsBg by animateColorAsState(
                     targetValue = if (settingsHovered) colors.surfaceHover else Color.Transparent,
-                    animationSpec = tween(120),
+                    animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
                     label = "settingsButtonBg",
                 )
                 Row(
@@ -517,7 +518,7 @@ private fun SidebarMenuItem(
             hovered -> colors.surfaceHover
             else -> Color.Transparent
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "sidebarMenuItemBg",
     )
     val contentColor by animateColorAsState(
@@ -527,7 +528,7 @@ private fun SidebarMenuItem(
             hovered -> colors.textPrimary
             else -> colors.textSecondary
         },
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "sidebarMenuItemContent",
     )
     Row(
@@ -609,7 +610,7 @@ private fun ProjectTreeRow(
                 isExpanded -> colors.surfaceCard.copy(alpha = 0.5f)
                 else -> Color.Transparent
             },
-            animationSpec = tween(120),
+            animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
             label = "projectRowBg",
         )
         Row(
@@ -664,7 +665,7 @@ private fun ProjectTreeRow(
                 val plusHovered by plusInteraction.collectIsHoveredAsState()
                 val plusBg by animateColorAsState(
                     targetValue = if (plusHovered) colors.surfaceHover else Color.Transparent,
-                    animationSpec = tween(120),
+                    animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
                     label = "projectPlusBg",
                 )
                 Box(
@@ -692,7 +693,7 @@ private fun ProjectTreeRow(
                 val moreHovered by moreInteraction.collectIsHoveredAsState()
                 val moreBg by animateColorAsState(
                     targetValue = if (moreHovered) colors.surfaceHover else Color.Transparent,
-                    animationSpec = tween(120),
+                    animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
                     label = "projectMoreBg",
                 )
                 Box(
@@ -842,12 +843,12 @@ private fun ConversationTreeRow(
     val hovered by interactionSource.collectIsHoveredAsState()
     val bg by animateColorAsState(
         targetValue = if (hovered || isSelected) colors.surfaceHover else Color.Transparent,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "conversationRowBg",
     )
     val textColor by animateColorAsState(
         targetValue = if (hovered || isSelected) colors.textPrimary else colors.textSecondary,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "conversationRowText",
     )
     // 相对活动时间随 nowTick（60s 周期）定时刷新
@@ -895,7 +896,7 @@ private fun ConversationTreeRow(
         val moreHovered by moreInteraction.collectIsHoveredAsState()
         val moreBg by animateColorAsState(
             targetValue = if (moreHovered) colors.surfaceHover else Color.Transparent,
-            animationSpec = tween(120),
+            animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
             label = "conversationMoreBg",
         )
         Box(
@@ -990,7 +991,7 @@ fun SidebarResizeHandle(
     val hovered by interactionSource.collectIsHoveredAsState()
     val bg by animateColorAsState(
         targetValue = if (hovered) colors.borderStrong else Color.Transparent,
-        animationSpec = tween(120),
+        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "resizeHandleBg",
     )
     Box(

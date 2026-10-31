@@ -1,9 +1,16 @@
 package xyz.mederi.ui.components.atoms
 
+import xyz.mederi.theme.LocalWorkspaceMotion
+
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import xyz.mederi.isDesktopPlatform
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
@@ -26,19 +33,20 @@ fun MederiMiniSwitch(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    contentDescription: String? = null,
 ) {
     val colors = LocalMederiColors.current
-    val thumbOffset by animateDpAsState(if (checked) 14.dp else 2.dp, tween(120), label = "miniSwitchThumb")
-    Box(
-        modifier = modifier.size(width = 28.dp, height = 16.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (checked) colors.accentPrimary else colors.divider)
-            .clickable { onCheckedChange(!checked) }
-    ) {
-        Box(
-            Modifier.size(12.dp).offset(x = thumbOffset, y = 2.dp)
-                .clip(CircleShape)
-                .background(if (checked) colors.onAccentPrimary else colors.textPrimary)
-        )
+    val thumbOffset by animateDpAsState(if (checked) 14.dp else 2.dp, LocalWorkspaceMotion.current.feedbackSpec(), label = "miniSwitchThumb")
+    val target = if (isDesktopPlatform) 30.dp else 44.dp
+    Box(modifier.sizeIn(minWidth = target, minHeight = target)
+        .semantics { if (contentDescription != null) this.contentDescription = contentDescription }
+        .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange),
+        contentAlignment = Alignment.Center) {
+        Box(Modifier.size(width = 28.dp, height = 16.dp).clip(RoundedCornerShape(10.dp))
+            .background(if (checked) colors.accentPrimary else colors.divider)) {
+            Box(Modifier.size(12.dp).offset(x = thumbOffset, y = 2.dp).clip(CircleShape)
+                .background(if (checked) colors.onAccentPrimary else colors.textPrimary))
+        }
     }
 }

@@ -183,7 +183,7 @@ flowchart TD
 
 插话在接收时即落库，消费前从 AI 视图排除；当前响应和工具结果原子插入未消费输入之前，保留历史的因果顺序。注入时使用完整 parts（含图片），消费后更新标记。若输入先到、提问/审批后挂起，Core 在挂起事件上自动处理已有输入，不让其悬空。接收确认 `SESSION_UPDATED{inputAccepted=true}` 回查不会清除挂起或未落库响应。UI 仅按 ID 移除对应乐观消息。
 
-过程进入折叠块；Core 正常收尾确认本轮完整回复，含派发子代理后等待的阶段回复。阶段回复与派发状态条在折叠块外保留；只有整项工作结束才写 workCompletedAt。UI 以用户消息切分显示段，同一 turnId 不跨插话气泡合并后续推理。取消、异常和截断不确认最终交付；收尾未消费输入不能静默清掉。历史重开使用持久化标记，不依赖 UI 猜测。
+过程进入折叠块；Core 正常收尾确认本轮完整回复，含派发子代理后等待的阶段回复。阶段回复与成功派发通知在折叠块外保留；UI 仅在 `subagent` 的 SPAWN/SPAWN_RESEARCHER 工具 Completed 且结果非 `Error:` 时生成固定通知（已启动子 Agent / 概览查看详情 / 可继续与主 AI 对话，不影响子 Agent），不依赖模型输出文字；未完成、失败及 STATUS/STOP 保留在工具过程内。通知是历史派发记录，实时状态由概览展示；只有整项工作结束才写 workCompletedAt。UI 以用户消息切分显示段，同一 turnId 不跨插话气泡合并后续推理。取消、异常和截断不确认最终交付；收尾未消费输入不能静默清掉。历史重开使用持久化标记，不依赖 UI 猜测。
 
 ## 3. 事件 → UI 状态机聚合流程
 
@@ -295,6 +295,11 @@ sequenceDiagram
 **问与计划挂起时用户直接回复**（三条硬规则之一）：`sendMessageInternal` 检测到 pending 时先 `injectNeutralPlanToolResult`（补写中性 ToolResult 落库，非批准/非拒绝）再 abort 旧 turn——计划保持 PENDING_APPROVAL，AI 响应新消息，绝不反问"为什么"。计划无"拒绝"态，只有批准/作废/被无视三态。
 
 ### 4.1 子代理生命周期与事件流（spawn → 终态）
+
+UI 提示与主对话可交互性分离：成功派发后在对话折叠块外保留固定派发记录（提示概览详情与可继续聊天）；输入框上方不再重复显示子 Agent 运行横条。概览整块子 Agent 手风琴（含折叠行头）在有 RUNNING 子代理时呼吸描边，终态自动停止；该运行标记不表示主 AI 当前轮次正在执行。Workspace 标题栏 Grid 按钮与窗口 X 共用 OverviewWindowState.visible，仅切换显示/隐藏（无最小化胶囊），隐藏保留展开项，重新显示恢复；显隐偏好写设备本地 preferences.json。
+
+2026-10-29首批表现调整只改变展示层：助手诊断在本地按需展开、消息/文档/终态通知减重；输入仍走原send/submit回调；概览标题固定、内容限高滚动，按同一展开状态驱动箭头与内容；运行由整栏统一呼吸而非文字闪动表达。关闭/显隐/滚动不调用停止，任务、接续和交付状态流未变化。
+
 
 ```mermaid
 sequenceDiagram
@@ -732,17 +737,28 @@ sequenceDiagram
     M->>M: 观察 remoteControlEnabled → 自动启停内嵌 Server
 ```
 
-## 12. apply_patch 工具三阶段（已注销，不注册给 AI——实现保留备用）
+## 12. apply_patch 工具（主代理与 EXECUTOR）
 
 ```mermaid
-flowchart LR
-    A["模型产出 Codex 风格补丁<br/>*** Begin Patch / Add/Delete/Update File / Move to / @@ / End Patch"] --> P["PatchParser.parse<br/>逐行状态机; heredoc 剥离兜底<br/>→ List[PatchHunk]"]
-    P --> V["verifyHunks: deriveNewContents dry-run 全部校验<br/>(PatchApplier.seekSequence 四级放宽匹配:<br/>精确→trimEnd→trim→Unicode标点归一化)"]
-    V -- "任一失败" --> F["拒绝: 磁盘零改动, 返回错误"]
-    V -- "全部通过" --> AP["applyHunks: computeReplacements(游标只增不减)<br/>→ applyReplacements(倒序应用)<br/>支持 Add/Delete/Update+Move"]
-    AP --> T["产出 A/M/D 摘要 + List[PatchChange]<br/>→ TurnDiffTracker.trackPatch"]
-    T --> D["turn 收尾 captureSnapshot → TurnDiff 落 diffs 表<br/>→ UI Diff 面板(unifiedDiff LCS 渲染)"]
+flowchart TD
+    W["每次 LLM 请求的工具声明"] --> O["官方 OpenAI Responses: custom + 固定 Lark grammar<br/>custom_tool_call_input.delta 逐片编码为 Koog JSON 参数"]
+    W --> G["Chat / 兼容端点 / 其他供应商: function<br/>必填 patch 字符串 + 完整格式说明"]
+    O --> P["统一 ApplyPatchArgs → PatchParser.parse"]
+    G --> P
+    P --> L["解析源/移动目标全部路径<br/>白名单、符号链接、canonical 冲突检查<br/>FileWriteRegistry 整体 try-lock"]
+    L --> V["读取原始字节快照，严格 UTF-8 解码<br/>PatchApplier dry-run 全部计算<br/>保留 LF/CRLF/CR/混合行尾和上下文"]
+    V -- "预检失败" --> F["磁盘零改动；Error 含路径/行号/缺失上下文"]
+    V -- "通过" --> A["重新校验快照/路径后逐项写入或删除"]
+    A -- "I/O 失败" --> R["尽力按字节快照回滚<br/>如实返回残余变化与回滚错误"]
+    A -- "成功" --> D["A/M/D 摘要 + diff + onFileTouched<br/>移动源/目标独立追踪，覆盖保留原目标内容"]
+    R --> T["仍有残余改动时按实际磁盘追踪"]
+    D --> U["finally 释放全部路径写锁"]
+    T --> U
+    F --> U
+    U --> H["结果经相同 call_id 回传<br/>Responses custom_tool_call_output / function_call_output"]
 ```
+
+系统静态提示词在主代理和 EXECUTOR 中均说明补丁调用包装、匹配失败重读及写入失败后先核对回滚结果；RESEARCHER 不注册写工具。固定上游版本、兼容性差异与更新步骤见 `docs/apply-patch.md`。
 
 ## 13. 图片发送链路（能力门禁）
 
@@ -810,3 +826,310 @@ flowchart TD
 ```
 
 SubagentManager 同步追加 progressEvents 并编号；快照重放后按序号去重，终态不被旧 RUNNING 快照覆盖，空快照成员集合有效。客户端不从普通文本猜消息类型，也不从下一工具事件推测上个工具已完成。
+
+
+### 对话表现层第二批（2026-10-29）
+
+过程折叠继续由组件本地展开态驱动，新增标准expand/collapse语义不改变Core交付/任务状态。问答仍以外部selectedAnswers为真理源，单/多选、自定义、翻页、提交、取消沿原回调；计划查看与pending批准为独立点击目标，其他状态仅显示真实标签。错误详情/恢复/关闭互不触发；StatusBar继续只读既有TurnStatus和计时锚点，背景任务不参与全局忙态。共享卡壳/动作按钮仅表达视觉，未改send/abort/接续/审批链路。
+
+
+### 文件与阅读器表现层第三批（2026-10-29）
+
+FilesPanelTabs/ArtifactTabs/DiffFilesContent仍向原VM入口转发选择/刷新；文件卡/树仍经openDocument统一路由，不另建文件打开或任务生命周期。ProjectTreeContent刷新按钮递增refreshTick并使树内容key失效→重新查询同一provider→使用既有query/expandedPaths/activePath渲染；没有把刷新理解成清空阅读位置。图片工具栏只切本地比例，文本工具栏只发复制/导出回调；导出继续原DocumentExporter与exportingNow互斥机制。多文档只减少工具栏重复标题，不修改Markdown正文，也不改变主输入焦点与异步任务接续机制。
+
+
+### 辅助面板表现层第四批（2026-10-29）
+
+共同Header关闭→原onClose/onDismiss→隐藏面板，不改任务事实；TerminalTabs关闭→原closeTab(key)→终止该shell，和隐藏终端面板分开。终端Route的bootstrap/ensureSession与session.isRunning监听保持，纯视图只显示事实和转发选择/关闭/新增/恢复意图。
+
+子代理停止→按当前agentId持有确认表现态→用户确认且仍RUNNING→原stopSubagent(agentId)；切agentId复位确认，同目标完成也收起并清理确认，不保留过期停止操作。对话正文仍共用ChatListContent与按agentId阅读状态。
+
+浏览器自动化Dock→直接渲染BrowserAutomationPanelContent（不依赖浮动展开）；浮动Popover→同一内容。stop/preview沿原VM入口；状态只读BrowserAutomationUiState，不从结束推导成功。全部步骤使用稳定step.id，用户在底部才跟随追加；流式推理/输出独立滚动。网页宿主BROWSER路由保持，无host显示真实说明；原生PTY/网页遮挡与focus不以组件测试替代实机验收。
+
+
+### 工作台第五批：诊断与概览步骤（2026-10-29）
+
+资源采集仍由AppState提供ProcessStats → Workspace收集 → SystemInfoBar；点击只改变View本地expanded，默认收起，不暂停/启动采样。原始消息仍由RawMessagesViewModel绑定会话、派生字段与格式化JSON，UI按会话+seq保存展开/复制呈现，复制prettyJson维持原行为；JSON独立工具栏不阻挡阅读。Todo与计划通过WorkspaceTaskStep共用图形表现，状态与数据独立；计划批准、原文、Spec仍发VM原目标，步骤展开按计划ID隔离。所有动作不改变主对话与后台任务并行生命周期。
+
+
+### 工作台第六批：公共弹层（2026-10-29）
+
+模型/Key/推理/项目选择的数据与VM写入不变，菜单仅委托共享壳/行；原生dismiss独立于选择回调。确认/输入仍由调用方决定关闭和业务操作，公共Dialog只处理布局与原平台dismiss，View本地草稿不变；关闭弹层不产生停止任务意图。Dock点击只发onSelectPanel目标，selected读activePanel，Tooltip不介入选择。Help点击/焦点/hover只控制呈现，Esc/外部点击收起。错误报告仍调用既有formatter构造，复制相同Markdown、提交Bug仍复制并打开相同预填URI，不自动发送Issue。
+
+
+### 设置S1：布局与设备偏好（2026-10-29）
+
+SettingsDialog仍默认AGENTS，七类路由保留。SettingsOverlay背景点击或显式关闭→原onClose；内容空白拦截穿透不发关闭，关闭设置不发后台任务停止。SettingsWorkspaceContent只发分类选择和关闭，宽窄导航共用同一selectedTab。GeneralSettingsPanel收集AppState.theme/language→纯Content→原setTheme/setLanguage设备本地持久化，未建立第二套配置；SystemSettingsPanel复制原完整值，沿用CopyFeedbackScope反馈。保存/服务/供应商链路无变化。
+
+
+### 供应商S2a：管理/目录/凭据（2026-10-29）
+
+```mermaid
+stateDiagram-v2
+    [*] --> Manage
+    Manage --> Catalog: 添加供应商
+    Manage --> Detail: 选已配置ID（窄屏下钻）
+    Detail --> Manage: 返回列表
+    Catalog --> Manage: 返回管理
+    Catalog --> Preset: 未配置预设
+    Catalog --> Detail: 单个已配置内置ID
+    Catalog --> Manage: 多个匹配ID集合过滤
+    Catalog --> Custom: 自定义端点
+    Preset --> Catalog: 返回（清Key草稿、保留目录query/scroll）
+    Custom --> Catalog: 返回或取消
+    Preset --> Preset: 提交失败，保留Key与真实错误
+    Preset --> Detail: AiCore成功，新ID选中/原自动同步
+    Custom --> Detail: 原创建成功
+```
+
+宽屏Manage/Detail同为已配置列表+原详情；目录替换整供应商工作区，静态preset名单不再常驻管理侧栏。三种查询分别管理providers、presets、models；不互相覆盖。添加/保存同步置saving防重复，期间不能切添加步骤；结果失败不关闭，成功后才回Detail，字段只在Composition中不进偏好。ErrorBoard是统一错误呈现；原详情成功计时只清success，不能误清后来失败。未改变Core/REST/存储契约。
+
+
+## InkCompose 文本选区与菜单（2026-10）
+
+```mermaid
+flowchart TD
+    Input[鼠标按下拖动 / 触摸长按] --> Gesture[SelectionGestures]
+    Gesture --> Anchor[实际文字布局坐标 → stableId + 字符偏移]
+    Anchor --> Range[MarkdownSelectionController 归一化跨块选区]
+    Range --> Highlight[可见文本片段高亮 / 触屏手柄]
+    Range --> Edge[拖至可见区边缘 → 逐帧滚动内部或父列表 → 重算字符锚点]
+    Range --> Menu[右键或触屏松手请求菜单]
+    Menu --> Items[按 SelectionMenuAction 数组渲染]
+    Items --> Copy[Copy → 全文逻辑索引抽取 → 平台剪贴板]
+    Items --> Paste[Paste → 宿主 onPasteRequested → 可编辑目标]
+    Items --> Custom[Custom → 开发者回调 + 选中文本]
+    Menu --> Dismiss[关闭菜单保留选区]
+```
+
+普通触摸滑动不启动选区；正文、代码行和表格单元格共用逻辑选区；TEXT/CODE 字面量入口与 Markdown 使用同一菜单链。没有粘贴目标时 Paste 禁用，不修改只读文档。菜单默认仅 Copy/Paste，自定义数组完整决定内容和顺序，空数组无菜单。
+
+
+### 供应商S2b：纯详情与表单（2026-10-30）
+
+ProviderSettingsViewModel事实 → Route绑定ProviderDetailActions → ProviderDetailContent/ModelItemRow发原精确目标回调；模型查询/筛选/批量/刷新/自动设置/新增/删除维持原链路。UI按provider.id隔离弹窗与阅读状态，移除正在编辑的model后收起，避免旧目标兜底。同步失败使用共同ErrorBoard，只有刷新恢复动作，无假的dismiss；成功计时仍只清success。
+
+编辑模型按现有权限分支：MANUAL完整onSave → updateModelConfig → 原AiCore；FETCHED其他字段只读、图片onSave → 已有setImageOverride → AiCore.updateProviderModel(supportsImages=...)，不发送被保护元数据。Key编辑保持原名称/端点/JSON原值，只有新Key输入才写入；空Key沿原VM变成null保留，DTO掩码不再作为请求值。Key管理仍按keyId设默认/删除，旋转哨兵不作真实Key呈现。此批没有改Core权威或REST/存储。
+
+
+### Agents 设置 S3：读取、保存、失败恢复（2026-10-30）
+
+```mermaid
+flowchart TD
+    Route[AgentSettingsPanel 进入] --> VM[AgentSettingsViewModel]
+    VM --> R1[listSubagentConfigs]
+    VM --> R2[getSubagentGlobalSettings]
+    R1 --> UI[不可变快照到纯 Content]
+    R2 --> UI
+    UI -->|角色模型 / 推理 / 精确 Key ID| W1[updateSubagentConfig 全量三个字段]
+    UI -->|并发步进| W2[updateSubagentGlobalSettings]
+    W1 -->|成功，保持角色操作禁用| R1
+    W2 -->|成功，保持并发操作禁用| R2
+    W1 -->|失败，保留原快照| E[共同 ErrorBoard]
+    W2 -->|失败，保留原快照| E
+    R1 -->|失败，不作为空配置| E
+    R2 -->|失败，不制造默认并发值| E
+    E -->|重新读取对应区| VM
+```
+
+角色/并发是独立请求区；角色的三个字段通过现有API全量保存，写和回读结束前拒绝下一次角色写，避免旧快照覆盖。模型切换保留该模型支持的原推理值，否则送null；恢复继承提交三个null。Key null/精确ID/`API_KEY_ROTATION_ID` 原样传递Core，UI不解析运行时凭据。配置列表读取失败保留旧快照但禁用写；global读取失败置null，禁止伪装默认2。写失败可保留已确认快照继续操作。并发UI仍1–16；如果Core已有更大值，允许按原步进规则减小，不自动钳制写库。此链路仅设置表现协调，不改变子代理派发/异步工作生命周期。
+
+
+### Skill/MCP 管理弹窗 P0（2026-10-30）
+
+```mermaid
+flowchart TD
+    Draft[弹窗局部草稿] -->|非空提交，按原规则trim| Guard[DialogSubmissionState 同步busy去重]
+    Guard --> Callback[领域回调]
+    Callback --> Store[原SkillStore / McpStore]
+    Store --> Core[原AiCore API]
+    Core -->|Result成功| Refresh[Store按原流程刷新]
+    Refresh --> Close[成功关闭弹窗]
+    Core -->|Result失败| Error[保留草稿/目标，显示共同ErrorBoard]
+    Error -->|再次提交| Guard
+    Guard -->|在途| Disable[禁用字段/确认/取消及Escape外部关闭]
+```
+
+安装、目录保存、MCP新增/编辑保持原API与trim边界，MCP JSON内部内容原样传递Core。Skill卸载原回调忽略Result，现回传Result给共用提交协调器：成功关闭、失败留在共同危险确认内显示错误，精确技能名称由Overview原目标传入。局部提交scope随弹窗释放，取消异常不转成失败提示；没有新业务Store或服务端契约。目录挑选取消不保存；挑选期间禁用操作但不冒充正在保存。压缩跳过提示只换共同表现，原单确定/事件路由保持。
+
+
+### 统一动效偏好与表现生命周期（2026-10-30）
+
+```mermaid
+flowchart TD
+    Pref[设备 PreferencesStore ui.motion.reduced] --> Hydrate[AppState.hydrate]
+    Choice[外观设置 标准 / 减弱] --> Set[AppState.setReducedMotion]
+    Set --> Pref
+    Hydrate --> Flow[reducedMotion StateFlow]
+    Set --> Flow
+    Flow --> App[App collect → AppTheme]
+    App --> Policy[LocalWorkspaceMotion]
+    Policy --> Finite[反馈120 / 展开180 / 面板200；减弱即时]
+    Policy --> Loop{running 且可见面积 且非减弱}
+    Bounds[布局裁剪后 boundsInWindow] --> Loop
+    Loop -->|是| Animate[任务2400单色alpha / 请求1000线性旋转]
+    Loop -->|否| Static[静态状态与文字/数量；不创建循环]
+```
+
+显隐/终态/设备动效偏好只控制表现，不触发停止任务/阻塞输入/切会话/改工作计时。组件移出组合释放动画；移出裁剪区停止循环，再出现重新开始视觉周期，不把视觉相位当真实进度。此链不经过AiCore/Server，两个设备连接同Core可分别选择动效。窗口失焦与系统偏好自动检测未实现；第三方/原生控件内部不宣称统一。
+
+
+### 设置 S5：宿主控制与局部草稿（2026-10-30）
+
+```mermaid
+flowchart TD
+    Hook[SandboxHooks宿主能力] --> VM[SandboxSettingsViewModel.reload]
+    VM -->|Default读取状态或失败| Sandbox[SandboxSettingsContent]
+    Pref[AppState白名单流] --> Sandbox
+    Sandbox -->|精确路径列表| Write[AppState.setSandboxExtraPaths]
+    Write --> Store[原设备偏好持久化与Hooks写穿]
+    Remote[AppState遥控/隧道流 + 宿主地址] --> Content[RemoteSettingsContent]
+    Content -->|密码草稿随原开关提交| Toggle[AppState.setRemoteControl]
+    Content -->|Token/domain原值即时提交| Setter[AppState原setter]
+    Content -->|开始/停止/失败重试| Actions[AppState原服务/隧道动作]
+    Content -->|页面隐藏/切换| None[仅释放表现，无服务动作]
+```
+
+无hooks不展示可编辑白名单，也不把设备路径当成远端路径；未知/错误不假设可用。遥控缺LAN地址只说明，不构造假LAN；隧道没有URL但已运行时仍允许原停止动作。密码显隐不保存/重启，密码编辑仍需关闭再开启生效；Token与域名仍按原立即保存。内嵌server端口回退/密码门、cloudflared命令、服务/隧道互相依赖与真实启停规则均未改变。全部验证使用fake callbacks/hooks，不启动网络服务。
+
+
+### R03a：一次性效果路由（2026-10-30）
+
+```mermaid
+flowchart TD
+    VM[WorkspaceViewModel既有UI命令入口] --> Ch[Channel UiEffect · 稳定receiveAsFlow]
+    Ch --> Host[MainScreen Route唯一rememberWorkspaceEffectState]
+    Host --> Settings[settingsVisible → SettingsDialog]
+    Host --> Notice[compactionNotice → 原提示]
+    Host --> Menu[projectMenuExpanded]
+    Menu --> Workspace[Workspace三种布局]
+    Workspace --> Composer[ChatInputCard欢迎/有消息分支]
+    Composer --> Selector[受控ProjectSelectorMenu]
+    Selector -->|打开/关闭、选择或目录入口| Local[updateProjectMenuExpanded]
+    Local --> Menu
+    Settings -->|关闭| Close[仅改Route本地状态，不发命令]
+    Notice -->|确定/关闭| Close
+```
+
+输入框不再与MainScreen竞争receiveAsFlow，也不再用递增openRequest重开菜单。原先计数大于0的菜单关闭后，重建输入分支仍可能再次执行LaunchedEffect并重开；现在同一bool已经false，重建叶子保持关闭，只有新命令或按钮才打开。Route重组不换收集器，切会话不重播已消费命令；窗口卸载取消收集，新的未消费缓冲命令仍按原Channel语义交给下次Route。目录选择前先关闭菜单，再发原回调。Core/会话/输入/压缩业务生命周期与原生目录选择机制不变。
+
+
+### R03b：后台任务查询订阅、会话与停止隔离（2026-10-30）
+
+```mermaid
+flowchart TD
+    Route[Workspace Route · 概览偏好已加载且可见] --> Lease[observe租约；最后释放只暂停查询]
+    Attach[WorkspaceViewModel.attach] --> Bind[Presenter.bind session]
+    Lease --> Job[唯一当前poll Job]
+    Bind --> Job
+    Job --> Ready[等待Core ready]
+    Ready --> Read[listBackgroundTasks session · 串行]
+    Read --> Guard{session与generation仍有效?}
+    Guard -->|否| Ignore[丢弃迟到结果]
+    Guard -->|是| State[对应会话任务快照/错误]
+    State --> Wait[等待2秒或合流刷新信号]
+    Wait --> Read
+    State --> UI[纯概览Content]
+    UI -->|用户停止精确running任务| Stop[捕获session+taskId，逐ID去重]
+    Stop --> Core[原AiCore.stopBackgroundTask]
+    Core -->|成功| Refresh[当前仍同会话时刷新；不造终态]
+    Refresh --> Wait
+    Core -->|失败| Err[原会话逐ID stopErrors，直到重试成功或关闭]
+    Err --> UI
+```
+
+取消查询/隐藏概览/切会话不调用Core停止。旧请求即使NonCancellable晚返回也被代际拒绝；同会话隐藏再显示也形成新代际。用户明确发出的停止不受query租约取消影响，结果只回原session；新会话不能发出旧任务ID停止。成功读取不清停止错误。查询失败保留最近成功任务快照并显示错误，不假空成功；取消不伪装失败。首次加载用共同等待指示，有快照后定期刷新静默以避免周期布局跳动。对话输入/主turn生命周期与后台任务执行不变。
+
+### R03c：点击报告后的本地读取流（2026-10-30）
+
+```mermaid
+flowchart TD
+    Event[事件卡点击，只传title] --> VM[VM按session+event构造ReportRequest]
+    VM --> Kind{后台事件且无独立报告?}
+    Kind -->|是| Text[按原事件正文打开Text]
+    Kind -->|否| Tab[Report产物立即打开]
+    Tab --> Loader[ReportLoadPresenter.select]
+    Loader --> Cached{请求和来源身份匹配缓存?}
+    Cached -->|是| Display[纯ReportReaderContent]
+    Cached -->|否| Read[Default dispatcher宿主readTextResult]
+    Read --> Guard{活动目标和Entry代际仍有效?}
+    Guard -->|否| Ignore[忽略旧返回，不改标签或选择]
+    Guard -->|是| Result[Content / Missing / Error]
+    Result --> Display
+    Display -->|显式重读| Retry[强制新代际读取]
+    Retry --> Read
+    Switch[换文档/隐藏面板/换会话] --> Cancel[取消读取，Loading回Idle]
+    Cancel --> Guard
+```
+
+报告完成不触发文档选择，不阻塞主对话和后台任务。关闭只取消本地读取，重新打开复用缓存或原来源继续读取；旧会话标签不误用新项目根。异常与缺失明确区分，摘要单独标明来源并保留原值，不当全文；后台任务原始事件正文不经过报告缺失分支。原复制/导出流程保持。
+
+### R02a/b阅读上下文切换（2026-10-30）
+
+```mermaid
+flowchart TD
+    Intent[打开/选择文档] --> Owner{当前阅读归属}
+    Owner -->|已有会话| Session[ReaderOwner.Session]
+    Owner -->|新对话| Draft[ReaderOwner.Draft 当前project]
+    Session --> Store[VM不可变ReaderPresentationState]
+    Draft --> Store
+    Store --> Projection[当前活动Text叠加Core实时投影，Report叠加读取状态]
+    Projection --> View[纯ReaderPanelContent]
+    View -->|选择/重读| Intent
+    Switch[切会话/项目] --> Cancel[使请求序号失效，清待确认，暂停报告读取]
+    Cancel --> Owner
+    File[异步文件读取捕获owner与provider] --> Guard{owner与序号仍匹配?}
+    Guard -->|是| Store
+    Guard -->|否| Ignore[忽略，不打开文档/确认]
+    First[首发创建成功且仍在原草稿] --> Promote[Draft标签移交新Session，删除旧draft条目]
+    Promote --> Store
+```
+
+Core快照不参与本地文档列表/选中ID合并，因此不冲掉用户选择。明确关闭Dock不丢文档，切回恢复原会话选择，报告仅在阅读器可见时继续加载；主对话与后台工作互不阻塞。本批保留原Dock兼容归属及导出流程，不把纯View接口误称为全部Route/Screen迁移。
+
+### R02a/b diff查询的可见性与范围（2026-10-31）
+
+```mermaid
+flowchart TD
+    Open[打开全会话或指定messageId的变更] --> Dock[立即打开DIFF面板]
+    Open --> Request[DiffPresenter记录session+messageId与初始文件路径]
+    Dock --> Visible[setVisible true]
+    Visible --> Load[Core getFileDiffs 原查询契约]
+    Request --> Load
+    Load --> Guard{仍为当前session/代际且可见?}
+    Guard -->|否| Ignore[忽略返回，不打开Dock]
+    Guard -->|是| State[成功快照/真实空结果/错误反馈]
+    State --> UI[纯DiffQueryContent]
+    UI -->|刷新/重试| Same[保留当前messageId与有效选择]
+    Same --> Load
+    Leave[关闭/其它面板/切会话] --> Cancel[取消查询并推进代际]
+    Cancel --> Guard
+    Return[切回同会话] --> Cache[恢复范围/选择/内容]
+    Cache -->|此前未完成且面板可见| Load
+```
+
+查询完成不调用updateActiveDockPanel，避免关闭后回弹或新会话被旧结果覆盖。同范围刷新保留最近快照，新范围清旧内容；失败不当成成功空结果，取消不当失败。停止/回滚/任务执行链路不变，后台工作与主对话不受影响。主对话错误归属另批处理。
+
+### R02a/b主对话错误与操作反馈（2026-10-31）
+
+```mermaid
+flowchart TD
+    Core[会话Core快照错误事实] --> Accept[按Session接受ErrorState投影]
+    Op[发送/创建/回滚的用户操作] --> Ticket[捕获原Session或Draft与sequence]
+    Ticket --> Await[原Core接口照常执行]
+    Await -->|失败| Guard{原目标sequence仍有效?}
+    Guard -->|是| Local[仅写原目标本地错误]
+    Guard -->|否| Ignore[忽略过时反馈，不取消Core结果]
+    Accept --> State[当前owner只读错误投影]
+    Local --> State
+    State --> UI[原ErrorBoard与ErrorDetailDialog]
+    UI -->|关闭| Dismiss[记录具体Core错误身份，清本地提示/详情，递增sequence]
+    Dismiss --> State
+    Core -->|同一错误快照| Keep[保留用户关闭]
+    Core -->|不同非空错误| Fresh[新错误可见，旧票据失效，旧详情关闭]
+    Fresh --> State
+    Switch[切会话或新对话项目] --> Bind[换owner，关闭离开目标的详情]
+    Bind --> State
+```
+
+本地失败不继承Core诊断/ID/断流“继续”能力；Core为运行错误事实唯一来源，关闭不修改Core。创建失败归原项目Draft，创建后的发送失败归新Session。回滚成功仅在原会话/输入上下文、票据、草稿文本与附件都仍匹配时恢复编辑，避免迟到结果覆盖新会话或后来输入；Core回滚本身不受UI守卫取消。发送接纳/稳定ID/对账与后台异步工作机制保持。

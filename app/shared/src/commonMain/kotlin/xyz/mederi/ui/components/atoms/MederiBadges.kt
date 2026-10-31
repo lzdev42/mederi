@@ -1,11 +1,5 @@
 package xyz.mederi.ui.components.atoms
 
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -18,13 +12,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -113,15 +105,7 @@ fun MederiTabBadge(
     }
 }
 
-/**
- * 运行中脉冲徽标（02-components §3.6 `running-pulse-badge`）。
- *
- * 标准：1/6dp、radius Pill、accent 软底 + border iris-6、`accent-text` 10sp/500 + 6dp pulse dot
- * （accent + glow ring，1.5s scale 1↔1.3 / opacity 1↔0.6）。
- * 标准参照：RoundedCornerShape(10.dp) + accentPrimary.copy(alpha=0.12f) 底 +
- * [RadarPulseDot] + 10sp Medium accentPrimary，现状无描边；
- * 按标准补 accent 级 border（accentPrimary.copy(alpha=0.35f)）。
- */
+/** 运行中徽标：单色圆点共同呼吸；减弱动效时保留静态圆点。 */
 @Composable
 fun MederiRunningPulseBadge(
     text: String,
@@ -150,54 +134,9 @@ fun MederiRunningPulseBadge(
     }
 }
 
-/**
- * running-pulse-badge 的 6dp 脉冲圆点（02-components §3.6）：accent 实心 + 呼吸光环。
- * 1.5s scale 1↔1.3 / opacity 1↔0.6 反向循环（rememberInfiniteTransition 实现）。
- */
 @Composable
-private fun RunningPulseDot(
-    color: Color,
-) {
-    val transition = rememberInfiniteTransition(label = "running_pulse_dot")
-    val scale by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.3f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "running_pulse_scale"
-    )
-    val alpha by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.6f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "running_pulse_alpha"
-    )
-    Box(
-        modifier = Modifier.size(6.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        // 光环：随 scale 放大、随 alpha 变淡
-        Box(
-            modifier = Modifier
-                .size(6.dp)
-                .graphicsLayer(scaleX = scale, scaleY = scale, alpha = alpha)
-                .clip(CircleShape)
-                .border(1.5.dp, color, CircleShape)
-        )
-        // 核心点：呼吸透明度
-        Box(
-            modifier = Modifier
-                .size(6.dp)
-                .graphicsLayer(alpha = alpha)
-                .clip(CircleShape)
-                .background(color)
-        )
-    }
+private fun RunningPulseDot(color: Color) {
+    RadarPulseDot(color = color, size = 6.dp)
 }
 
 /**
