@@ -27,16 +27,20 @@ class PromptCompositionTest {
     fun executor_hasIndependentPrompt() {
         val prompt = SystemPrompts.forSubagent(SubagentRole.EXECUTOR)
         assertTrue(prompt.contains("Executor Subagent"), "Executor 应包含独立身份标识")
-        assertTrue(prompt.contains("Verify, Not Test"), "Executor 应包含验证约束")
+        assertTrue(prompt.contains("## Plan-based execution"), "Executor 应区分计划执行规则")
         assertTrue(prompt.contains("SPEC_FEEDBACK"), "Executor 应包含 SPEC_FEEDBACK 格式")
-        assertTrue(prompt.contains("Do NOT explore the codebase"), "Executor 应包含读码边界约束")
+        assertTrue(prompt.contains("Do NOT explore the codebase broadly"), "计划执行器应包含读码边界约束")
         // 5 类 SPEC_FEEDBACK 类别必须全部出现
         assertTrue(prompt.contains("SPEC_FEEDBACK(missing)"), "Executor 应包含 missing 类别")
         assertTrue(prompt.contains("SPEC_FEEDBACK(ambiguous)"), "Executor 应包含 ambiguous 类别")
         assertTrue(prompt.contains("SPEC_FEEDBACK(vs-reality)"), "Executor 应包含 vs-reality 类别")
         assertTrue(prompt.contains("SPEC_FEEDBACK(unsatisfiable)"), "Executor 应包含 unsatisfiable 类别")
         assertTrue(prompt.contains("SPEC_FEEDBACK(compile-blocked)"), "Executor 应包含 compile-blocked 类别")
-        // 执行器不得自行发现编译命令——编译命令由 spec 指定
+        // 编译限制只适用于计划；无计划的 Office/研究等交付不需要编译。
+        assertTrue(prompt.contains("## Ad-hoc execution (no stored spec)"))
+        assertTrue(prompt.contains("No compile command is required\nfor non-software work"))
+        assertTrue(prompt.contains("do not apply plan-only", ignoreCase = true))
+        // 计划执行器不得自行发现编译命令——适用的命令由 spec 指定
         assertTrue(prompt.contains("do NOT discover or select a build command"), "Executor 不得自行发现编译命令")
         assertFalse(prompt.contains("# General Principles"), "Executor 不应包含通用原则（主代理的）")
         assertFalse(prompt.contains("# Coding Principles"), "Executor 不应包含编码原则（主代理的）")

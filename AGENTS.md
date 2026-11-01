@@ -1,5 +1,13 @@
 # Mederi AGENTS.md
 
+## 适用范围：如何开发 Mederi
+
+本文件指导开发代理如何理解、修改和验证 Mederi 仓库，**不是 Mederi 产品内置的代理提示词**。文中描述的运行时规则用于说明产品设计与开发约束，不代表应把本文件当作产品提示词修改。
+
+- 用户要求优化 Mederi 的提示词、分诊、计划、子代理或交互行为时，修改代码中的提示词及相关工具实现（入口为 `core/src/commonMain/kotlin/xyz/mederi/prompt/`），并按需同步架构文档；不能通过修改 AGENTS.md 代替产品改动。
+- 不将本项目的 AGENTS.md 内容作为产品通用提示词的组成部分或优化对象；其他项目有各自的项目规则。
+- 只有用户明确要求调整本仓库的开发规则，或产品变更确实需要同步开发约束时，才修改本文件；产品提示词优化本身不构成修改本文件的理由。
+
 > 本文件只装**规则、不变量、真理源、指路**。机制实现细节、领域深度规则按需拆到 `docs/` 下各文档，
 > AI 在对应场景改动时 `read_file` 取——不需要时刻背着。
 
@@ -162,7 +170,7 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 **不变量（代码强制，全平台）**：
 - 文件工具（write_file/edit_file/apply_patch）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
 - **同文件并发写硬拒绝**（`FileWriteRegistry` try-lock，跨 turn/跨子代理/跨 session 生效）
-- bash：macOS Seatbelt / Linux bwrap（只检测不代装）/ Windows 降级警告
+- bash：macOS Seatbelt / Linux bwrap（只检测不代装；完整配置不可用时阻止命令，不回退裸跑）/ Windows 降级警告
 - 进程回收：`list_processes`/`stop_process` 宿主侧按 `ProcessRegistry` 整组回收；**只杀 mederi 自己启动的进程**
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行
 - `subagent`(action=SPAWN) planId/subtaskIndex 可选：携带时硬校验 spec 存在性；不带 planId 走 ad-hoc 执行路径

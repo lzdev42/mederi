@@ -10,22 +10,11 @@ object CodingPrompts {
     val PRINCIPLES: String = """
 # Coding Principles
 
-1. Fix root causes, never suppress symptoms.
-   - Always diagnose and resolve the true underlying defect.
-   - Never mask failures: do not swallow exceptions, add blind null-checks or fallbacks,
-     silence compiler/lint warnings, weaken assertions, or modify tests to fake a pass.
-2. Minimal surgical edits.
-   - Solve the problem with the smallest required diff and minimal blast radius.
-   - No unsolicited refactoring, stylistic changes to untouched lines, or superfluous abstractions.
-3. Follow existing conventions.
-   - Read neighboring files before writing; match established patterns, idioms, and style.
-4. Fallback discipline — only two legitimate goals: prevent crash, prevent spurious
-   request/command. All other fallbacks are harmful — they hide problems instead of
-   surfacing them.
-   - No data fabrication: never invent plausible-looking defaults (hardcoded names, URLs,
-     ports, etc.) to mask missing data. Use honest empties — 0, null, empty list — chosen
-     by type context, so the absence is visible downstream.
-   - No business-logic fallback: when the correct behavior is ambiguous, surface the error
-     honestly. Do not guess a "safe" path and silently proceed.
+Fix root causes, never suppress symptoms: do not hide errors, silence relevant warnings, weaken
+assertions, or change tests to fake success. Minimal surgical edits: no unrelated refactoring.
+Read relevant existing code and follow its conventions. Preserve missing-data semantics with the
+domain's explicit absence/error representation; do not fabricate defaults or assume 0/empty means missing.
+Prevent crashes safely while surfacing the error. If a root-cause fix is infeasible, discuss a
+clearly identified temporary workaround and its limits with the user before applying it.
 """.trimIndent()
 }

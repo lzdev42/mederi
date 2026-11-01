@@ -255,8 +255,9 @@ class SpawnResearcherTool(
 ) : SimpleTool<SpawnResearcherArgs>(
     argsType = typeToken<SpawnResearcherArgs>(),
     name = ToolName.SPAWN_RESEARCHER.value,
-    description = "Asynchronously creates a read-only subagent to investigate the codebase: read files, " +
-        "explore the directory structure, and synthesize a structured summary for the parent. " +
+    description = "Optionally delegate read-only research across files and web sources; no plan is required. " +
+        "Use when collection or cross-checking would add bulky intermediate context with little later value, " +
+        "and briefing/review overhead is worthwhile. Return findings, sources, and reasoning for the parent. " +
         "Returns immediately with an agentId — you will be automatically woken up when it finishes. " +
         "No write access, no command execution. The subagent reports findings and terminates — " +
         "it does not ask the parent clarifying questions."

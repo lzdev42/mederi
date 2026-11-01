@@ -218,34 +218,38 @@ flowchart TD
 
 **BROWSER_TASK_* 与 SUBAGENT_* 全量收敛（2026-10）**：`SUBAGENT_*` 与 `BROWSER_TASK_*` 全量收敛入 `ConversationStateReducer` 驱动 `ConversationState` 更新，彻底废除了 ViewModel 内部的旁路协程和私有缓存 Map；会话切换直接从状态机池（`sessionCache.conversationStates`）恢复，各会话的子代理列表、Dock 展开状态、浏览器自动化流程天然隔离且绝不丢失。
 
-## 4. Plan Loop（复杂改动主流程）
+## 4. 通用协作与软件 Plan Loop
 
 ```mermaid
 flowchart TD
-    U["用户请求"] --> T{"主代理分诊(Triage Flow, 提示词强制)"}
-    T -- "纯读" --> R1["直接读文件回答<br/>不够深 → subagent(SPAWN_RESEARCHER) → 报告(始终落盘, 父收摘要+路径) → 回答"]
-    T -- "小改动(已知根因/几行代码)" --> R2["主代理直接 edit/write<br/>进度走 update_todo(无Plan)"]
-    T -- "复杂改动" --> RES["(理解不足先 subagent(SPAWN_RESEARCHER))"]
-    RES --> CP["write_plan(WHAT, 拆小可验证: 每子任务=spec+verification)<br/>前置 voidActivePlans 作废同会话旧计划（发 PLAN_PROGRESS 'voided'）<br/>validatePlan 硬门禁: 每子任务 expectStdoutContains≥1 字面量(规则1)、两 parallelizable 子任务同 gradle 模块 reject(规则4)<br/>PlanStore.save(.mederi/plans/{id}.json+md)"]
-    CP --> MODE{"agentMode"}
-    MODE -- "AUTONOMOUS" --> AUTO["自动 APPROVED"]
-    MODE -- "APPROVAL" --> WAIT["PLAN_APPROVAL_REQUESTED → UI PlanApprovalCard<br/>用户批准/拒绝(resolvePlanApproval)"]
-    WAIT -- "拒绝" --> REJ["告知用户结束/修改"]
-    WAIT -- "批准" --> GEN
-    AUTO --> GEN["generate_spec(planId, subtaskIndex, spec)<br/>逐子任务派生 HOW(行级规范), brief 恒不变<br/>不转录文件摘录:executor 自己 read_file 原文件"]
-    GEN --> SPAWN["subagent(action=SPAWN, planId?, subtaskIndex?)<br/>planId 非空 → 硬校验 subtaskIndex/spec 存在 → updatePlan 原子置 IN_PROGRESS<br/>planId 为空 → ad-hoc 路径: task+briefing 直接派 executor(跳过 spec/IN_PROGRESS)<br/>PLAN_PROGRESS('subtask-started'+subtasks 全量 JSON 列表)<br/>briefing 简化注入: 只 task + planDetail(意图)<br/>(researchNotes/appendix 不再注入,executor 自己 read_file research.md/原文件)<br/>异步派工: 立即返回 agentId(不阻塞父 turn)<br/>独立子任务可同消息并行 spawn(无上限)"]
-    SPAWN --> ENDTURN["END TURN（父代理 turn 结束,不阻塞）"]
-    ENDTURN --> SUB["Executor 子代理(一次性,独立TurnExecutor)<br/>buildExecutorInput 组装: plan 路径只传 spec+planDetail(task/args.briefing 不进输入)<br/>spec 注入其唯一用户消息,自顶向下执行,不问用户,不猜<br/>完成时报告落盘 {planId}/reports/NN-executor.md, 父上下文只收尾部1500字符+路径(捕获SPEC_FEEDBACK)<br/>5 类 SPEC_FEEDBACK: missing/ambiguous/vs-reality/unsatisfiable/compile-blocked"]
-    SUB --> WAKE["子代理终态 → SUBAGENT_COMPLETED/ERROR/STOPPED 事件(eventBus, NonCancellable emit)<br/>→ handleSubagentTerminalEvent 组 &lt;event_message&gt; → pendingEventMessages 入队<br/>→ 父 turn 空闲 dispatchPendingEventMessages 批量合并唤醒<br/>(同会话多个完成合并成一条内部消息,一次 turn)<br/>2026-10: 冲刷前查 runningCountForSession——仍有 RUNNING 子代理则延后,<br/>等全部终态事件聚合后再一次性唤醒(不做中间态多次唤醒)"]
-    WAKE --> VER["verify_subtask(planId, subtaskIndex, status, evidence)<br/>自动执行 Subtask.verification 命令(30s)"]
-    VER --> CHK{"verify 结果"}
-    CHK -- "PASS(且命令 exit=0)" --> NEXT["子任务 COMPLETED → 下一个子任务"]
-    CHK -- "执行错(FAIL/PARTIAL)" --> CONV["converge_plan 追加补救子任务 → 重执行"]
-    CHK -- "spec 错" --> REGEN["重新 generate_spec 覆盖 → 重执行"]
-    NEXT --> MORE{"还有子任务?"}
-    MORE -- "是" --> SPAWN
-    MORE -- "否" --> ARCH["全部 COMPLETED → plan 置 COMPLETED<br/>planStore.archive → .mederi/plans-done/{planId}/<br/>planStore.writeWalkthrough → plans/{planId}/walkthrough.md (archive 时随之移动)"]
-    CONV & REGEN --> SPAWN
+    U["用户请求"] --> R["只读调查，理解目标与证据"]
+    R --> Q{"需要执行修改或操作?"}
+    Q -- "否" --> ANSWER["交付分析/回答"]
+    Q -- "是" --> DISCUSS["讨论具体方案与验收；ask_user 确认实质决策<br/>已有确认不重复问；Mermaid 按需辅助"]
+    DISCUSS --> KIND{"复杂且软件本身是交付物?"}
+    KIND -- "否" --> GENERAL["执行已确认方案，可用 Todo<br/>研究/浏览器/Office 再复杂也不进现有 Plan<br/>临时脚本不改变此边界"]
+    GENERAL --> CHECK["按文档/表格/浏览器等实际结果检查并交付"]
+    KIND -- "是" --> PLAN["write_plan：已确认方案，无开放问题"]
+    PLAN --> APPROVAL["APPROVAL 用户批准 / AUTONOMOUS 自动批准"]
+    APPROVAL --> SPEC["generate_spec：实际代码、约束、适用构建检查"]
+    SPEC --> CHOOSE{"按总效率/成本/上下文后续价值选择"}
+    CHOOSE -- "直接" --> DIRECT["主代理执行"]
+    CHOOSE -- "可选委派" --> SPAWN["独立 specs 先保存，再并行 SPAWN<br/>下一响应为无工具阶段交付，等待自动唤醒"]
+    SPAWN --> SUB["Executor 计划路径按存储 spec 执行<br/>报告落盘，摘要+路径回传"]
+    SUB --> WAKE["终态 eventBus 事件，全部完成后批量唤醒"]
+    DIRECT --> VER["verify_subtask 无条件执行验证契约"]
+    WAKE --> VER
+    VER --> RESULT{"先核实现，再核计划"}
+    RESULT -- "IMPLEMENTATION" --> REMEDY["converge_plan 追加补救"]
+    RESULT -- "PLAN" --> AMEND["append-only 修订 spec/验证契约"]
+    REMEDY --> SPEC
+    AMEND --> SPEC
+    RESULT -- "内部不可满足" --> ASK["ask_user 决定冲突意图"]
+    ASK --> AMEND
+    RESULT -- "PASS" --> NEXT{"全部子任务通过?"}
+    NEXT -- "否" --> SPEC
+    NEXT -- "是" --> ARCH["Walkthrough + 归档 + 自足交付"]
+
 ```
 
 **并行执行（2026-09，2026-09-14 异步化，2026-09 并发上限硬门禁）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行；**子代理单会话并发受限**（设置页可配，默认 2，见下述并发门禁），同父会话内 EXECUTOR 与 RESEARCHER 同池计数，达到上限时 spawn 工具返回指导文案让模型结束 turn 等待唤醒；浏览器任务不经 SubagentManager，天然排除在外。约束：`write_plan` 单独发；`write_plan` 支持 update 路径：planId 非空时更新已有 PENDING_APPROVAL 计划（不新建，空字段保留原值）；**禁止同消息混发 generate_spec 与 subagent(SPAWN)**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 subagent(SPAWN)/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）+ 主动上报（2026-09-25）**：子代理统一为单一 `subagent` 工具 action 分流（SPAWN/SPAWN_RESEARCHER/STATUS/STOP，原 6 个独立工具封装合并；`agent_status`/`stop_agent` 工具类保留但不向 AI 注册）。`subagent(SPAWN)` 支持 planId 可选：有 planId 走计划流程（spec 硬校验+IN_PROGRESS），无 planId 走 ad-hoc 路径（task+briefing 直接派 executor，跳过 spec/IN_PROGRESS）。派工异步（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；子代理终态经主 eventBus 发 `SUBAGENT_COMPLETED/ERROR/STOPPED` 事件（NonCancellable emit），父 TurnExecutor 订阅后 `handleSubagentTerminalEvent` 合成 `<event_message>` 入 `pendingEventMessages` 队列，父 turn 空闲时 `dispatchPendingEventMessages` 批量合并成一条内部消息自动唤起新 turn（同会话多个完成合并成一次 turn；竞态（父会话正忙）时放回队列等 turn 收尾 finally 冲刷；abortAndJoin 清空该会话队列）。agent 丢失/归档（不在内存表）时 `subagent(STATUS)` 返回 NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），父代理据此判断已改动文件（与 targetFiles 比对查越界）再决定重跑或接受部分成果。`wait_agent` 枚举值已删，父代理不再阻塞拉取。**轮询拦截 + 返回值增强 + 冲刷延后（2026-10）**：`subagent(STATUS)` 先查 `SubagentManager.runningCountForSession(parentSessionId)`——本会话仍有 RUNNING 子代理时返回合成引导文案（"Subagents are still running. Do NOT poll — end your turn now..."）而非实际状态，杜绝父代理 STATUS 轮询；`SPAWN/SPAWN_RESEARCHER` 成功返回在 JSON 后追加 `\nSubagent dispatched. N subagent(s) running. End your turn... Do NOT call subagent(STATUS) to poll.`（N = 派工后的 runningCount，含刚派出的这个；Error 原样透传）；`dispatchPendingEventMessages` 冲刷前查 runningCount>0 则延后派发（不加定时器/轮询——最后一个子代理终态事件触发再次冲刷，此时 runningCount=0 才真正唤醒），使同会话多个并发子代理完成只唤醒父代理一次、父代理拿到的是一次性聚合结果。**diff 合并子代理改动（2026-09-23）**：主 turn runTurn 开头 `ParentDiffRegistry.register`，子代理 turn 结束时把文件改动经 `onTurnDiff` 回调 + `ParentDiffRegistry.mergeInto` 合并进父 turn 的 `TurnDiffTracker`（`mergeChanges`），finally 里 `unregister`——修复"turn 改动摘要不含子代理改动"的 bug。子代理自身 diff 仍独立落库（其临时 InMemory store），合并只影响父 turn 的 TurnDiff 聚合。**walkthrough 自动生成（2026-09-23）**：计划全部子任务 COMPLETED 时，`PlanStore.writeWalkthrough(plan)` 自动装配 walkthrough 文档写至 `plans/{planId}/walkthrough.md`（archive 时随整个计划目录移到 `plans-done/{planId}/walkthrough.md`，内容由 `buildWalkthrough` 聚合 plan/subtask/spec/verification/changes；`verify_subtask` 全 PASS 文案亦指向该路径）。
@@ -1133,3 +1137,23 @@ flowchart TD
 ```
 
 本地失败不继承Core诊断/ID/断流“继续”能力；Core为运行错误事实唯一来源，关闭不修改Core。创建失败归原项目Draft，创建后的发送失败归新Session。回滚成功仅在原会话/输入上下文、票据、草稿文本与附件都仍匹配时恢复编辑，避免迟到结果覆盖新会话或后来输入；Core回滚本身不受UI守卫取消。发送接纳/稳定ID/对账与后台异步工作机制保持。
+
+
+### Linux 命令沙盒准备与执行（2026-10-31）
+
+```mermaid
+flowchart TD
+    Shell[ShellTools 前台或后台命令] --> Wrap[CommandSandbox.wrap]
+    Wrap --> Version[LinuxCommandSandbox: bwrap 版本探测]
+    Version --> Roots[canonical 白名单校验及精确创建缺失目录]
+    Roots --> Probe[只读根 + 白名单 bind + 自建 dev + PID 隔离 proc 完整烟测]
+    Version -->|失败/超时| Error[保留原始错误；命令不执行]
+    Roots -->|非法路径或创建失败| Error
+    Probe -->|失败/超时| Error
+    Probe -->|通过；每 turn 缓存配置| Exec[setsid + 同一挂载配置 + shell 命令]
+    Exec --> Registry[ProcessRegistry 登记与原有回收链]
+    Error --> Foreground[前台返回 exitCode=-1]
+    Error --> Background[后台返回启动错误；不创建任务]
+```
+
+版本探测与完整烟测各限 10 秒。Linux 不再降级裸跑，不把失败统一归因于 AppArmor；安装或修正宿主配置后，下个 turn 重新探测。macOS/Windows 的命令路径保持原行为，Windows 后台启动结果补齐原有降级警告。

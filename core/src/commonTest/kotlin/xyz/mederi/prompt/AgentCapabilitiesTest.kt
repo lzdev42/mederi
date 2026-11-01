@@ -55,6 +55,15 @@ class AgentCapabilitiesTest {
         assertTrue(result.contains("# Available Skills"))
         assertTrue(result.contains("**csv-analysis**: Parse CSV files (SKILL.md at `/skills/csv-analysis/SKILL.md`)"))
         assertTrue(result.contains("**latex-format**: Format LaTeX"))
+        assertTrue(result.contains("csv-analysis/SKILL.md`)\n- **latex-format**"), "每个 skill 必须独立成行")
+    }
+
+    @Test
+    fun withSkills_separatesCatalogFromActiveWorkflow() {
+        val skill = SkillInfo(name = "csv", description = "Analyze CSV", location = "/skills/csv/SKILL.md")
+        val result = SystemPrompts.withSkillsAndActive("BASE", listOf(skill), listOf("csv" to "Workflow body"))
+        assertTrue(result.contains("csv/SKILL.md`)\n\n# Active Skill Workflows"), "已激活正文必须与清单分段")
+        assertTrue(result.contains("## csv\n\nWorkflow body"))
     }
 
     @Test

@@ -59,6 +59,7 @@ tasks.withType<Zip> {
 compose.desktop {
     application {
         mainClass = "xyz.mederi.MainKt"
+        providers.gradleProperty("mederi.releaseJavaHome").orNull?.let { javaHome = it }
         jvmArgs += listOf(
             "--enable-native-access=jcef",
             "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",

@@ -12,7 +12,7 @@
 **不变量（代码强制，全平台）**：
 - 文件工具（write_file/edit_file/apply_patch）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
 - **同文件并发写硬拒绝（2026-09）**：write_file/edit_file/apply_patch 落盘前经进程级 `FileWriteRegistry`（`tools/FileWriteRegistry.kt`）try-lock——文件已被其他并发工具调用占用则直接返回 Error，写完（含异常）finally 释放；键 = canonical path，跨 turn/跨子代理/跨 session 生效。bash 与 MCP 工具是外部进程，不在注册表管辖内（提示词约束兜底）
-- bash：macOS Seatbelt（sandbox-exec）/ Linux bwrap（只检测不代装）/ Windows 降级警告；shell 探测链 bash→sh（Windows bash.exe→cmd）
+- bash：macOS Seatbelt（sandbox-exec）/ Linux bwrap（只检测不代装；完整挂载探测失败保留原始错误并阻止命令，不退回裸跑）/ Windows 降级警告；shell 探测链 bash→sh（Windows bash.exe→cmd）
 - **进程回收**：每条命令是独立进程组，bash 启动即登记 `ProcessRegistry`；`list_processes`/`stop_process` 宿主侧（沙箱外）按注册表整组回收——macOS 沙箱内信号不可用（profile 无 process-signal，实测 unbound），只能靠宿主侧。**只杀 mederi 自己启动的进程**，注册表查不到 pid 即拒绝，沙箱内命令无法写注册表
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行
 - `subagent`(action=SPAWN) planId/subtaskIndex 可选：携带 planId+subtaskIndex 时硬校验 spec 存在性（spec 不存在即拒）；不带 planId 走 ad-hoc 执行路径（task+briefing 直接派 executor，无 spec 门禁）
@@ -26,8 +26,7 @@
 - 并行批量时杜绝竞争：同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（占用即 Error，AI 下轮重试）；不重复执行同一命令仍靠 AI 自律（shell 是外部进程，管不了）。
 - 因并行而生，plan 状态写入必须原子：`subagent`(SPAWN) 的 IN_PROGRESS 标记、`generate_spec` 的 spec 写入、`verify_subtask` 的验证结果一律走 `PlanStore.updatePlan`（原子读改写，进程级锁），禁止裸 load→copy→save。
 
-**系统环境注入**：每条用户消息尾部 `<<<NOT_FOR_UI>>>` 隐藏块注入时间、OS/版本/arch、
-shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该让用户重复输入的环境事实。
+**系统环境注入**：`EnvironmentInfoProvider` 每轮将时间、shell/沙箱和项目目录等环境事实追加到系统提示词动态后缀；用户消息不重复携带整份环境快照。
 
 **提示词拼装**：`core/prompt/SystemPrompts.kt` 是骨架（身份/原则/工具清单/工作流拼接），
 `core/prompt/PromptGuides.kt` 是教程素材库（SANDBOX_USAGE 等）——新主题在此加常量往骨架拼。
@@ -40,7 +39,7 @@ shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该
 |---|---|---|---|
 | 主代理 | 唯一决策者：分诊、调研结论、计划、验证、收敛；小改动亲自动手 | 全套（含写） | 长期存活 |
 | Researcher | 眼睛：只读深度调研，输出完整报告，不做决定、不写文件 | read_file + list_directory（+ MCP 工具） | 一次任务即死 |
-| Executor | 手：照 spec 清单自顶向下执行，不问用户，不猜——5 类 SPEC_FEEDBACK（missing/ambiguous/vs-reality/unsatisfiable/compile-blocked）回报 spec 缺失/歧义/矛盾；编译命令由 spec 指定，不自行发现 | 全套（无 plan/spawn/verify/ask_user）+ MCP 工具 + skills 提示词注入 | 一次任务即死 |
+| Executor | 执行已确认任务：计划路径照 spec 执行，5 类 SPEC_FEEDBACK 回报阻塞，适用构建检查由 spec 指定；ad-hoc 路径按 task+briefing 完成任意交付并适当核验，不强套编译/禁测试规则 | 全套（无 plan/spawn/verify/ask_user）+ MCP 工具 + skills 提示词注入 | 一次任务即死 |
 
 > **代理继承策略中心化（硬性）**：主/子代理"是否继承 MCP / 注入 skills"一律读 `AgentCapabilities`（domain/model/AgentCapabilities.kt）这张**唯一表**——`MAIN(true,true)` / `EXECUTOR(true,true)` / `RESEARCHER(true,false)`。TurnExecutor 开 MCP 会话、SystemPrompts 注入 skills 段都只查此表，**禁止**在别处再写 `subagentRole == EXECUTOR` 之类的散装判断。新增子代理角色 = `SubagentRole` 加值 + `AgentCapabilities` 加行 + `of()` 加分支，其余装配自动生效。
 
@@ -53,7 +52,7 @@ shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该
   `.mederi/plans/{planId}/plan.md`，主代理按需 `read_file` 取（活动子任务 spec 仍挂：spawn 前确认要用）。
   段尾给两个路径指针：`plan.md`（静态详情）+ `research.md`（researcher 报告）。
 - **轻量 todo（update_todo，2026-09）**：todo-list 与 plan 彻底解耦——todo-list 只由 update_todo 驱动（session.todos 列，每轮挂 `# Current Todo` 段，turn 边界刷新），plan 期间也允许 update_todo 记录 plan 之外的独立事项；plan 子任务展示由 planApprovals 投影表驱动
-- **Executor**：spec（Subtask.spec）+ brief（planDetail）注入其唯一一条用户消息；
+- **Executor**：计划路径只注入存储 spec（Subtask.spec），不追加 task/briefing/planDetail；ad-hoc 路径注入 task+briefing；
   不再注入 researchNotes 全文或 appendix 摘录（appendix 字段已删）。需要调研结论时 read_file
   `.mederi/plans/{planId}/research.md`；需要某个原文件认知时直接 read_file 该路径——executor 是
   干脏活的便宜模型，自己读盘，模型不必预先转述文件内容。报告完成时落盘到
@@ -103,7 +102,7 @@ shell 与沙箱状态、项目目录、Java 版本——AI 需要知道但不该
 ### 安全网
 
 1. **沙盒（代码强制）**：文件工具只能写项目目录 + `.mederi/` + 全局白名单；命令走 OS 级写沙箱
-2. **分诊判断（提示词强制）**：先调研再动手、小改直接改、复杂走 Plan Loop
+2. **分诊与协作**：只读调查 → 讨论确认 → 执行验收；仅复杂软件开发走 Plan Loop，其他交付可用 Todo。子代理按效率、成本与上下文后续价值选择，不由复杂度强制触发。
 3. plan 从"写文件通行证"降级为"复杂工作的审批流程"——用户批准点保留（APPROVAL 模式），不再锁所有写
 
 ## 3. 审计备忘（暂不修，记录以免重复分析）

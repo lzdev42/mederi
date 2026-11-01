@@ -748,3 +748,10 @@ WorkspaceViewModel.effects仍是稳定val的Channel.receiveAsFlow，没有Shared
 - send校验用showLocal；验证通过begin票据，创建失败publish到原Draft；创建成功后的发送使用新Session票据，既有会话发送用原票据。Core调度、稳定消息ID、乐观对账与未接纳输入恢复路径保持。旧响应只能发布原owner且需sequence仍有效，不能污染当前其它会话/项目。
 - rollbackMessage为原Session begin票据并捕获inputContextVersion/草稿文本/图片与粘贴附件，快照只取匹配参数conversationId的当前会话。Core回滚照常执行；失败publish原目标；成功恢复编辑前要求仍为原上下文、票据未被新操作替代、输入与附件未被后来编辑。切会话、离开再返回、新发送或后来打字均不被旧结果覆盖。不改变Core回滚契约或删改数据行为。
 - 新`ui/components/WorkspaceFeedbackContent.kt`：纯`WorkspaceFeedbackContent(state,onShowDetail,onDismiss,onContinue,modifier=Modifier)`仅本地化UiMessage并委托原ErrorBoard，不另造View/样式/动效。ChatInputCard消费分组feedbackState，Workspace错误详情也从同一分组取summary/diagnostic/isDetailOpen并复用ErrorDetailDialog。无新资源/依赖、AiCore/Server或数据库变更。
+
+### 独立 Server 发布变体
+
+`server/Application.kt` 薄入口支持含内嵌页面的完整包和不含页面的 API-only 包；启动日志按 `MEDERI_WEBAPP_DIR`、
+classpath `static/index.html` 的实际存在性报告 external/embedded/disabled，不把缺少页面的 API 包报告为自托管。
+无页面时根路径由既有 `serverModule` 返回 404，REST/SSE 契约不变；显式外部目录仍可托管页面。
+打包任务及三平台产物见 [00-overview.md §1.1](00-overview.md#11-发布构建) 与 [release-build.md](../release-build.md)。

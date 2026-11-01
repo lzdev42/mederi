@@ -58,6 +58,18 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 └── AGENTS.md                            ← 业务规则唯一权威
 ```
 
+## 1.1 发布构建
+
+`build_release.sh` 在 macOS/Linux/Windows 本机分别产出 Desktop、Server 完整版（JVM + 内嵌 wasmJs 页面）、
+Server API 版（无 JVM/页面），不交叉编译。Desktop 使用 `createReleaseDistributable`，macOS 交付 `.app`，
+Linux 为 tar.gz、Windows 为 ZIP；不生成安装器。`mederi.releaseJavaHome` 将 Desktop 打包与完整 Server 运行时固定到同一 JBR/JCEF SDK。
+
+`server/build.gradle.kts` 的 `installServerBundled` 组合标准 `installDist` 与完整 JBR；
+`apiJar` 仅取类和源资源（排除 `static/**`），`apiStartScripts` + `installServerApi` 组成无 JVM/API-only 分发，
+与默认 `processResources → wasmJsBrowserDistribution` 路径分离，避免旧页面污染 API 包。
+发布脚本增加根目录启动器并压缩；macOS 保留 Desktop CEF Frameworks 补全与签名。
+完整说明与验证入口见 [`../release-build.md`](../release-build.md)。
+
 ## 2. 模块依赖关系图
 
 ```mermaid

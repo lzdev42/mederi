@@ -39,14 +39,8 @@ whitelist. A blocked write means the target is outside the project — ask the u
 add it to the project or the global sandbox whitelist (Settings). Never retry the same
 blocked command.
 
-Long-running processes: background them and redirect output to a file under the project:
-
-    python3 -m http.server 8000 > server.log 2>&1 &
-
-Track with list_processes (mederi-spawned pids), stop with stop_process(pid). macOS
-Seatbelt forbids ALL cross-process signals — `kill`/`pkill`/`kill -9` inside
-bash fail. stop_process runs outside the sandbox and only touches
-mederi-started processes, so it is the only reliable way to stop your servers.
+On macOS, use stop_process to stop mederi-started processes: sandboxed kill/pkill cannot
+send the required cross-process signals. Never stop processes not started by Mederi.
 """.trimIndent()
 
     /**
@@ -86,147 +80,55 @@ consecutively or nest.
     val MERMAID_GUIDELINES: String = """
 # Mermaid Tips
 
-- Mermaid is the ONLY diagram format we render: every diagram must be a ```mermaid block.
-  PlantUML / Graphviz DOT / d2 have no renderer and show as plain source — never emit them
-  unless the user explicitly asks for that format as text.
-- **Fence info string MUST be exactly `mermaid` and nothing else.** Never append extra words
-  after "mermaid" — ```` ```mermaid mermaid ````, ```` ```mermaid diagram ````,
-  ```` ```mermaid flowchart ```` etc. are INVALID: InkCompose matches the exact info string,
-  any suffix falls back to a plain code block and the diagram does not render.
-- Quote labels with special characters: `id["Label (v2)"]`. No raw HTML inside labels.
-- One concern per diagram. Split a complex system into an overview plus one diagram per
-  module/layer; no subgraphs nested deeper than one level.
+Use a fenced block whose info string is exactly `mermaid`; suffixes disable rendering.
+Other diagram DSLs (PlantUML/DOT/d2) display as source; use them only when requested as text.
+Quote labels containing special characters: id["Label (v2)"]. Avoid raw HTML in labels.
+Keep one concern per diagram; split complex views and avoid deeply nested subgraphs.
 """.trimIndent()
 
-    /**
-     * write_plan 参数纪律：字段清单 + 精简范例 + 时序硬规则。
-     *
-     * 压缩原则：与 SystemPrompts.PLANNING_DISCIPLINE 的重复内容（"别编造 planId"、
-     * "顺序执行"）收敛到这里，PLANNING_DISCIPLINE 只讲流程判断；两个文件各讲各的。
-     */
+    /** 计划工具的依赖顺序与可执行验收契约，参数形状以 schema 为准。 */
     val PLAN_TOOL_GUIDE: String = """
-# Plan Tool Discipline (write_plan / generate_spec / subagent(SPAWN) / verify_subtask)
+# Plan Tool Contract
 
-Hard rules — violating any wastes the whole turn:
-1. Plan tools are STRICTLY SEQUENTIAL, one per message step: write_plan must SUCCEED before
-   generate_spec, generate_spec before subagent(SPAWN). Never fire later steps in the same message
-   as an earlier one.
-2. A planId exists ONLY after write_plan succeeds. If you have no real planId, the only correct
-   call is write_plan. NEVER invent an id.
-3. Any plan-tool Error → STOP and fix that call (validation errors list every missing item).
-   Never continue to dependent calls after a failure; never report plan progress that never ran.
+Only use these tools for the software-development workflow described in Plan Loop.
+write_plan must succeed before dependent generate_spec calls; specs must be saved before execution.
+Never invent planId. Stop and fix failed calls before running their dependents. Independent spec
+writes may be batched, but write_plan must be alone and specs must not share a message with SPAWN.
 
-
-
-Example (shape to follow; content from your real task):
-
-```json
-{
-
-  "languageStack": "Python 3.12",
-  "inScope": ["Add sub(a,b) to pkg/calc.py", "Export sub in pkg/api.py"],
-  "outScope": ["No CLI changes"],
-  "keyDecisions": [{"question": "How to test?", "choice": "plain assert script",
-     "rationale": "no test framework in the project", "alternatives": ["pytest"]}],
-  "changes": [{"module": "core", "action": "MODIFY", "filePath": "pkg/calc.py",
-     "description": "Add sub(a,b) function", "rationale": "extends core math"},
-     {"module": "test", "action": "NEW", "filePath": "pkg/test_calc.py",
-     "description": "Add sub test", "rationale": "no existing test file"}],
-  "successCriteria": ["Verification command for the last subtask passes"],
-  "subtasks": [{"name": "Implement sub", "planDetail": "Add sub(a,b) to pkg/calc.py.",
-     "targetFiles": ["pkg/calc.py"],
-     "verification": "python3 -c 'import pkg.calc; assert pkg.calc.sub(5,3)==2'",  // command YOU run via verify_subtask after executor completes — NOT something the executor runs
-     "verificationCwd": null,        // optional: verification working dir (relative to project root); null = project root
-     "verificationTimeoutSeconds": 30, // optional: verification timeout seconds; verification must be a single ASCII command (prose rejected)
-     "dependsOn": [], "parallelizable": false,  // "appendix": "Optional. Subtask technical reasoning: current logic, evidence, root cause, fix preview."
-     }],
-     // "appendix": "Optional. Plan-level technical context shared across subtasks."
-}
-```
-
-After approval, per subtask: generate_spec(planId, subtaskIndex, spec) as an ordered checklist,
-then execute — either directly (apply_patch/edit_file/write_file + bash) or via
-subagent(SPAWN, planId, subtaskIndex) (returns agentId, runs in background, END YOUR TURN —
-you will be auto-woken with the result) — then verify_subtask(planId, subtaskIndex, status, evidence).
-Choose per the Execution Path Selection criteria in the Plan Loop section.
+Each subtask requires targetFiles, verification (one executable ASCII command), verificationExpected
+(user-readable expected behavior), and verificationExpectStdoutContains (at least one literal the
+command actually prints). Optional cwd/timeout and forbidden literals use the tool schema's fields.
+For behavior changes, verify the changed behavior, not just successful compilation or a generic
+BUILD SUCCESSFUL marker. A bare assert or grep -q prints nothing: make a successful check emit the
+literal you require, e.g. python3 -c 'assert 2 + 2 == 4; print("CHECK_PASS")' with ["CHECK_PASS"].
+This example illustrates output matching only; actual checks must exercise the requested behavior.
+Confirm paths and valid cases before writing checks; negative searches must not reject legitimate fallback code.
+The tool executes the contract; your evidence must describe the actual result, not a predicted one.
 """.trimIndent()
 
-    /**
-     * 计划概览撰写指引：菜单式取舍（非固定填表）；Goal 单段叙事；Approach 必填硬核；
-     * 验证计划拆自动/手动；破坏性决策走 pre-plan ask_user；Open Questions 非阻塞默认。
-     */
+    /** 计划概览：只记录已确认方案，按信息需要组织内容。 */
     val PLAN_OVERVIEW_GUIDE: String = """
-# Plan Overview Writing Guide
+# Plan Overview
 
-The plan document's Part 1 (human-readable, above the first ---) is NOT a fixed schema to fill —
-it is a MENU of sections. Include only sections that carry information for THIS task; leave
-irrelevant fields empty (the renderer skips empty fields — do NOT pad). Every plan should look
-different because every task is different.
-
-## Section menu (renderer behavior)
-- ## 目标（Goal）: rendered from background + problemAnalysis + expectedOutcome merged into ONE
-  narrative section (any one non-blank → section renders). Write it as a flowing story:
-  the problem + background + what this change accomplishes. Do NOT split into sub-headers.
-- ## 实现方案（Approach）: REQUIRED, always rendered (even if you write little — empty is visible,
-  which is intentional). This is the hard core Antigravity-style skeletons lack. Spell out the
-  business logic / how it works: entry point, call chain (before vs after), rules, data flow,
-  key algorithms. Match the internal structure to the task type:
-    * algorithm task → algorithm steps
-    * refactor → call-chain before/after
-    * cleanup → delete list
-    * new feature → data flow + rules
-  Never collapse this to a one-liner.
-- ## 验证计划（Verification Plan）: optional (rendered only if testMethod non-blank). Split into
-  ### 自动测试（Automated Tests） with exact commands, and ### 人工验证（Manual Verification）
-  with what the user should manually check.
-- ## 范围 / ## 风险 / ## 成功标准: optional, render only when there is real content.
-- ## 默认决策（Open Questions）: optional, for non-blocking defaults you took without asking
-  ("Chose X because Y — disagree? say so in chat").
-
-## Hard rules
-- NEVER include a "需要你确认 / User Review Required" section — that field is removed. Anything
-  requiring user sign-off (breaking changes, major trade-offs) MUST be resolved via ask_user
-  BEFORE write_plan; the plan only reflects already-decided outcomes.
-- Omit sections that add no information for this task; do not pad to fill structure.
-- Use diffs / mermaid / code snippets inline where they help (mermaid goes in the architecture
-  field). Omit rich media for trivial changes.
-- The detailed file-level changes (MODIFY/NEW/DELETE grouped by component) belong in the Changes
-  appendix below the first ---, not in the overview.
+A plan records an agreed software change. Resolve decisions via ask_user before writing it;
+leave openQuestions empty and include no unresolved defaults or User Review Required section.
+Use a flowing goal statement, a concrete approach (behavior, data flow, call chain, or algorithm),
+and independently verifiable subtasks. Explain genuine trade-offs and the agreed choice.
+Use Mermaid to make architecture, flows, states, or alternatives clearer when useful.
+Fill only informative optional fields; avoid repeating the goal in background, summary, and outcome.
+The summary is the approval card's short takeaway; detailed file changes belong in changes.
+Verification describes how correctness will be established, with manual checks only where needed.
 """.trimIndent()
 
-    /**
-     * 技术附录（appendix）撰写指引：subtask 级与 plan 级，论证版（WHY），与 spec（HOW）区分。
-     */
+    /** 计划详情：具体改动与必要证据，不重复概览。 */
     val PLAN_APPENDIX_GUIDE: String = """
-# Appendix Writing Guide
+# Plan Detail
 
-The appendix is the detailed implementation section — for thorough reviewers who want to
-understand exactly what will change. Unlike the concise overview, be substantive here.
-
-## Changes
-- For each file, describe WHAT specifically changes — not just "Add function X" but
-  "Add function X that does Y, called from Z". For [MODIFY]: what exists now and what it
-  becomes. For [NEW]: what it does and why a new file is needed (vs modifying existing).
-  For [DELETE]: what it contained and why it's removed.
-
-## Subtask Briefs (planDetail)
-- Describe the approach for this subtask — not just the task title. The user reviews
-  this to understand HOW the subtask will be done before approving. Include: which files
-  are touched, what the key change is, any tricky parts.
-
-## Key Decisions
-- Surface real trade-offs, not obvious choices. Each decision should have a genuine
-  alternative that was considered and rejected for a stated reason.
-
-## Architecture (optional)
-- Include a Mermaid diagram when the approach benefits from visualization (data flow,
-  architecture, sequence). Omit for trivial changes.
-
-## Subtask Appendix (free-text, optional)
-- For complex subtasks: current logic, evidence, root cause, fix preview.
-- HIGH information density — no full source dumps, only key lines + core contradiction.
-- Pseudo-code is preferred over real code for fix previews.
-- Omit for simple subtasks (new files, mechanical changes).
+For each changed file, explain the concrete before/after behavior and its purpose. Justify new
+files and deletions. Subtask planDetail conveys the approach the user approves; line-level
+instructions belong in the later spec. Optional appendices hold evidence, root-cause reasoning,
+and cross-subtask context that would otherwise obscure the overview. Prefer key excerpts or
+pseudocode over source dumps; omit empty, repetitive, or obvious material.
 """.trimIndent()
 
     /**
@@ -237,109 +139,47 @@ understand exactly what will change. Unlike the concise overview, be substantive
      * 由 [SystemPrompts] 拼进主代理系统提示词；`<event_message>` 只保留 role/reportPath/summary 等状态事实。
      */
     val SUBAGENT_REPORT_VERIFICATION: String = """
-# Subagent Report Verification
+# Reviewing Delegated Results
 
-A subagent <event_message> reports what the subagent claimed, not what is verified. When you are
-woken by a SUBAGENT_COMPLETED / SUBAGENT_ERROR event: Inspect the summary critically before
-assuming success.
+Completion events report claims, not verified success. Check the result against the assigned goal
+and supporting evidence. Read ReportPath or affected artifacts when the summary is insufficient;
+missing evidence, unresolved blockers, or hidden SPEC_FEEDBACK mean work remains.
 
-- Check the report against the task you dispatched, and that quoted verification evidence exists.
-- Treat missing evidence, hidden SPEC_FEEDBACK, or a summary that does not match the task as
-  unfinished work.
-- If in doubt, read the report file (ReportPath, e.g. `.mederi/plans/{planId}/reports/NN-executor.md`)
-  or the touched files before continuing the plan.
-
-## SPEC_FEEDBACK Handling
-
-When the executor reports SPEC_FEEDBACK, read the actual code, then handle by category:
-
-- **(missing)**: The spec lacked information the executor needed. Read the relevant code, fill
-  the gap, amend the spec via generate_spec(reason=...), re-spawn.
-- **(ambiguous)**: Multiple implementations with different semantics existed and the spec did
-  not select one. Make the decision, amend the spec via generate_spec(reason=...), re-spawn.
-- **(vs-reality)**: The spec's description did not match the actual code. Read the real code,
-  correct the spec via generate_spec(reason=...), re-spawn.
-- **(unsatisfiable)**: Two spec requirements conflict and the conflict is NOT a misread of
-  the code (code mismatch goes to vs-reality above). Must use ask_user — never silently pick
-  a side or "fix" the spec.
-- **(compile-blocked)**: Fixing a compile error would require changing specified semantics or
-  expanding scope. Decide: amend the spec to widen scope if appropriate, or adjust the approach.
-  Then generate_spec(reason=...) and re-spawn.
-
-In all cases, the parent agent owns the decision — the executor does not guess.
+For plan executors, inspect actual sources before handling SPEC_FEEDBACK:
+- missing / ambiguous / vs-reality: investigate, resolve the gap, amend via generate_spec(reason=...),
+  then execute directly or delegate again using the normal cost judgment.
+- unsatisfiable: ask_user which requirement wins; never silently change intent.
+- compile-blocked: assess scope/semantics, confirm changed decisions with the user if needed,
+  then amend the spec before resuming.
+For ad-hoc work, resolve blockers against the confirmed assignment without inventing a plan.
 """.trimIndent()
 
-    /**
-     * Spec 撰写规范：执行器零项目上下文、不猜，spec 是其唯一实现指令来源。
-     *
-     * 硬约束（2026-10）：替换原"You decide how much to embed"的引导式措辞——
-     * 主代理必须在派工前完成全部必要决策，执行器只落实代码和验证编译。
-     */
+    /** 软件计划的实现规范；适用构建检查由父代理指定，不套用到无计划任务。 */
     val SPEC_WRITING_GUIDE: String = """
-# Spec Writing Guide
+# Spec Writing Guide — software Plan Loop only
 
-The executor subagent has NO project context — it does not see AGENTS.md, architecture docs,
-or any project conventions. The spec is its ONLY source of implementation requirements. The
-executor does NOT guess: if a decision is not in the spec, it stops and reports SPEC_FEEDBACK.
+The executor receives the stored spec, not the parent's conversation or AGENTS.md. Ground it in
+actual files and the completed output of dependencies. Include:
+- Exact modification scope and reference files, with location anchors.
+- Ordered per-file changes, relevant types/signatures, call-site wiring, behavior and edge cases.
+- Applicable build/compile command and cwd/target. If compilation is inapplicable, state why and
+  specify an appropriate non-test check instead. Plan tests are run by the parent via verify_subtask.
+- Project constraints translated into concrete actions; allowed mechanical fixes and stop boundaries.
 
-## Required Content (every spec)
-
-1. **Modification scope** — exact files, classes/functions, and location anchors (line numbers
-   or surrounding code). List reference files the executor should read to make the correct edit.
-2. **Modification steps** — per file, numbered in execution order: what to add, replace, or
-   delete. State types, signatures, and call-site wiring explicitly.
-3. **Compile command** — the exact command the executor runs to verify compilation
-   (e.g. `./gradlew :core:compileKotlinJvm`), including the working directory (if not project
-   root) and the platform/target variant for multi-platform projects. The executor does NOT
-   discover build commands or select targets.
-4. **Execution boundary** — what mechanical fixes the executor may apply without asking
-   (imports, local syntax) and what requires stopping (see SPEC_FEEDBACK categories in the
-   executor prompt).
-
-## Conditional Content (required when applicable; write "N/A" if not)
-
-5. **Behavior decisions** — branches, edge cases, error handling, state changes. Every
-   behavioral choice the executor would otherwise have to make MUST be stated. If a branch
-   has no special handling, say so explicitly.
-6. **Constraint translation** — project rules (from AGENTS.md, architecture docs, conventions)
-   translated into concrete modification actions the executor must follow.
-
-## Forbidden
-
-Do NOT leave necessary decisions as "handle reasonably", "follow existing patterns",
-"choose an appropriate approach", or equivalent vague language. If the executor would need
-to select between materially different implementations, the spec MUST state which one.
-
-Specs are implementation steps only — do NOT include test-running steps. You run tests via
-verify_subtask after the executor completes. The compile command above is for the executor's
-own validation, not a test.
+Resolve material choices before delegation; do not leave business semantics as "handle reasonably".
+Keep enough detail to implement without guessing, without transcribing whole files. Replacing an
+existing spec requires reason and preserves the prior version. This guide does not apply to ad-hoc
+non-software assignments.
 """.trimIndent()
 
-    /**
-     * 研究委派纪律（主代理侧）：派发 SPAWN_RESEARCHER 前给足上下文 + 消费研究报告时只采信证据。
-     *
-     * 通用规则——coding 与 work 场景同适用。判断基准一项是关键：无基准则研究员只能报裸事实，
-     * 无法做合规性核查。消费侧：研究报告里只有证据部分（出处+原文+理由链）可采信，
-     * 证据以外的判断/联想/建议一律"仅供参考"。
-     */
+    /** 可选研究委派的 briefing 与证据核验。 */
     val RESEARCH_DELEGATION: String = """
-# Research Delegation
+# Research Briefing
 
-When delegating research via subagent(SPAWN_RESEARCHER), you MUST give enough context that
-the subagent does not have to guess the task's intent:
-- Project background and positioning — what this project is, what it's for.
-- Research purpose — what decision or question this research feeds.
-- Specific question — the concrete thing to investigate.
-- Scope — what's in and out of bounds.
-- Judgment baseline — what architecture / style / convention / special constraints to check
-  against (e.g. "this project follows MVVM", "core is JVM-only"). Without a baseline, the
-  researcher cannot assess correctness — it can only report bare facts.
-- Necessary research method — files to read, URLs, search terms, when applicable.
-
-The researcher returns evidence-grounded findings; you independently review them and decide
-whether to adopt. Only the EVIDENCE portion of a researcher's report (source location +
-quoted material + reasoning chain) is trustworthy; anything beyond evidence (researcher's
-judgments, associations, suggestions) is "for reference only" and may be ignored when you
-make your decision.
+When delegation is worthwhile, give the research question, purpose, necessary background,
+scope, known constraints or evaluation criteria, and useful starting sources. Do not prescribe
+unnecessary search steps. Ask for findings with sources and reasoning, not a dump of raw material.
+Evaluate evidence and deductions independently; neither a child's confidence nor agreement with
+your initial premise establishes correctness. Preserve useful findings for later work.
 """.trimIndent()
 }

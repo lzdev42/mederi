@@ -125,7 +125,7 @@ class BrowserArchitectureFlowTest {
         val calls = mutableListOf<Call>()
         private val queue = ArrayDeque(decisions)
 
-        /** Operator decide 调用（systemPrompt 含 agent 标记）收到的截图（已门控）。 */
+        /** Operator decide 调用（systemPrompt 含页面快照契约标题）收到的截图（已门控）。 */
         fun decideImages(): List<ByteArray?> =
             calls.filter { DECIDE_MARKER in it.systemPrompt }.map { it.image }
 
@@ -159,7 +159,8 @@ class BrowserArchitectureFlowTest {
         }
 
         companion object {
-            const val DECIDE_MARKER = "browser automation agent"
+            // 用操作器专属的页面契约识别请求，不依赖可删改的角色扮演句。
+            const val DECIDE_MARKER = "# Page snapshot"
             const val REPORT_MARKER = "summarizing"
             val DEFAULT_DECIDE_RESPONSE = BrowserLLMResponse(
                 toolCalls = listOf(

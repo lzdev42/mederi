@@ -185,7 +185,7 @@ class PlanTools(
             "REQUIRED. Literal strings the command's output MUST contain — " +
                 "MACHINE-CHECKED. Exiting 0 is not enough: if any literal here is missing from the real " +
                 "output, verification is mechanically judged FAIL. Pin the actual expectation " +
-                "(e.g. [\"3 passed\", \"BUILD SUCCESSFUL\"]) so a partially-passing command cannot slip through."
+                "(e.g. [\"3 passed\", \"BEHAVIOR_CHECK_PASS\"]) so a partially-passing command cannot slip through."
         )
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val verificationExpectStdoutContains: List<String> = emptyList(),
@@ -246,11 +246,7 @@ class PlanTools(
         @LLMDescription("Out of scope: what this plan will NOT do.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val outScope: List<String> = emptyList(),
-        @LLMDescription(
-            "Optional. Non-blocking defaults you chose WITHOUT asking the user. Each entry reads like " +
-                "'Chose X because Y — if you disagree, just say so in chat.' In the user's language. " +
-                "Omit when every decision was asked about, or no defaults were taken."
-        )
+        @LLMDescription("Legacy compatibility field. Leave empty: resolve all substantive decisions with the user via ask_user before writing a plan.")
         @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val openQuestions: List<String> = emptyList(),
         @LLMDescription("Key decisions: trade-offs, breaking changes, and rationale.")
@@ -296,12 +292,12 @@ class PlanTools(
                 "each step concrete and independently verifiable, in execution order. The executor " +
                 "has NO project context and does NOT guess — the spec is its sole source of " +
                 "implementation requirements. Follow the Spec Writing Guide: state modification " +
-                "scope (files, anchors), per-file steps (types, signatures, wiring), compile " +
+                "scope (files, anchors), per-file steps (types, signatures, wiring), applicable build/check " +
                 "command, execution boundary, and all behavior decisions (branches, edge cases, " +
                 "error handling). Translate project rules into concrete actions. Do NOT leave " +
                 "decisions as 'handle reasonably' or 'follow existing patterns'. Specs are " +
-                "implementation only — do NOT include test-running steps; include the compile " +
-                "command for the executor's own validation."
+                "implementation only — do NOT include test-running steps. Supply an applicable compile/build " +
+                "command, or state why compilation is inapplicable and give a non-test validation check."
         )
         val spec: String,
         @LLMDescription(
@@ -316,7 +312,9 @@ class PlanTools(
     inner class WritePlanTool : SimpleTool<WritePlanArgs>(
         argsType = typeToken<WritePlanArgs>(),
         name = ToolName.WRITE_PLAN.value,
-        description = "Create a new plan or update an existing PENDING_APPROVAL plan. Without planId: " +
+        description = "Software-development workflow only; not for browser, research, office, or document tasks, " +
+            "even when temporary scripts are used. Resolve substantive decisions via ask_user first; " +
+            "leave openQuestions empty. Create or update a PENDING_APPROVAL plan. Without planId: " +
             "creates a new plan (voids prior active plans in this session). With planId: updates the existing " +
             "plan in place — only provide fields you want to change, blank/empty fields keep their existing " +
             "values. Only PENDING_APPROVAL plans can be updated. APPROVED/IN_PROGRESS plans: use converge_plan " +
@@ -677,13 +675,14 @@ class PlanTools(
         name = ToolName.GENERATE_SPEC.value,
         description = "Generate the detailed implementation spec for ONE subtask of an APPROVED plan, " +
             "grounded in the actual codebase (read the real files first: function names, signatures, " +
-            "data structures must match reality). Call this right before spawning an agent for the " +
-            "subtask — and re-call it (with reason=) to CORRECT the spec whenever verification shows " +
+            "data structures must match reality). Call this before executing a subtask, directly or via an " +
+            "optional subagent — and re-call it (with reason=) to CORRECT the spec whenever verification shows " +
             "the spec itself is wrong. Corrections are append-only: the full old spec text is preserved " +
             "in the audit trail (specChanges). The spec is stored per (planId, subtaskIndex); " +
             "subagent(SPAWN) will execute exactly this spec. The executor does NOT guess — the spec is " +
-            "its sole source of implementation requirements. Include the compile command for the " +
-            "executor's own validation. Do NOT include test-running steps; you test via verify_subtask."
+            "its sole source of implementation requirements. Include an applicable build/compile check, " +
+            "or explain why compilation is inapplicable and specify a non-test check. " +
+            "Do NOT include test-running steps; you test via verify_subtask."
     ) {
         override suspend fun execute(args: GenerateSpecArgs): String {
             val plan = planStore.load(args.planId)
@@ -740,7 +739,8 @@ class PlanTools(
                 timestamp = Instant.now().toString()
             ))
             return "Spec saved for Subtask ${args.subtaskIndex} (${st.name}). " +
-                "Spawn an agent with planId=${args.planId}, subtaskIndex=${args.subtaskIndex} to execute it."
+                "Execute it directly or optionally delegate with planId=${args.planId}, " +
+                "subtaskIndex=${args.subtaskIndex}; choose based on total cost and context value. Then verify_subtask."
         }
     }
 
@@ -933,7 +933,8 @@ class PlanTools(
         internal fun checkLiteralRequired(st: SubtaskArg): String? =
             if (st.verificationExpectStdoutContains.isEmpty())
                 "verificationExpectStdoutContains is REQUIRED — pin >=1 literal the output MUST contain " +
-                    "(e.g. [\"PASS\",\"BUILD SUCCESSFUL\"]). Bare exit-code/compile-only verification is rejected: " +
+                    "(e.g. [\"BEHAVIOR_CHECK_PASS\"]). Use behavior assertions for behavior changes; a compile-success " +
+                    "literal alone is not evidence of changed behavior. An empty literal list is rejected: " +
                     "it cannot catch 'the work was not done' (a glitched executor that compiles would false-pass)."
             else null
 

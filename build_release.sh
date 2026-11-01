@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 # ==========================================
 # Mederi Release Build Script (Compose Multiplatform)
 # Usage: ./build_release.sh [--skip-sign] [--output <dir>] [--no-clean]
+# Windows: run in Git Bash. Each invocation builds packages for the current OS/architecture.
 # ==========================================
 
 SKIP_SIGN=false
@@ -14,6 +15,7 @@ APP_NAME="${APP_NAME:-Mederi}"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --name|-n)
+            [[ $# -ge 2 && -n "$2" ]] || { echo "Missing --name value"; exit 1; }
             APP_NAME="$2"
             shift 2
             ;;
@@ -26,6 +28,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --output|-o)
+            [[ $# -ge 2 && -n "$2" ]] || { echo "Missing --output value"; exit 1; }
             OUTPUT_DIR="$2"
             shift 2
             ;;
@@ -38,6 +41,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-clean        Skip cleaning build artifacts"
             echo "  --output, -o DIR  Output directory (default: ./release)"
             echo "  --help, -h        Show this help"
+            echo "Builds desktop, server-bundled (JVM + Web UI), server-api (no JVM/Web UI)."
+            echo "Requires a JBR 25 SDK with JCEF; Windows requires Git Bash."
             exit 0
             ;;
         *)
@@ -46,6 +51,10 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+[[ "$APP_NAME" =~ ^[a-zA-Z0-9._-]+$ && "$APP_NAME" != "." && "$APP_NAME" != ".." ]] || {
+    echo "Invalid application name: use letters, digits, dots, underscores or hyphens"; exit 1;
+}
 
 SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
 OS="$(uname -s)"
@@ -79,6 +88,7 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="$SCRIPT_DIR/release"
 fi
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
 
 # ==========================================
 # 1. 确保使用 JBR (with JCEF)
@@ -87,11 +97,11 @@ JBR_ROOT=""
 
 if [[ "$PLATFORM" == "macos" ]]; then
     # 优先检测已有的 JAVA_HOME
-    if [[ -n "$JAVA_HOME" ]]; then
-        if [[ -d "$(dirname "$JAVA_HOME")/Frameworks/cef_server.app" ]]; then
-            JBR_ROOT="$(cd "$(dirname "$JAVA_HOME")/.." && pwd)"
+    if [[ -n "${JAVA_HOME:-}" ]]; then
+        if [[ -d "$(dirname "${JAVA_HOME:-}")/Frameworks/cef_server.app" ]]; then
+            JBR_ROOT="$(cd "$(dirname "${JAVA_HOME:-}")/.." && pwd)"
         elif [[ -d "$JAVA_HOME/Frameworks/cef_server.app" ]]; then
-            JBR_ROOT="$JAVA_HOME"
+            JBR_ROOT="${JAVA_HOME:-}"
         elif [[ -d "$JAVA_HOME/../Contents/Frameworks/cef_server.app" ]]; then
             JBR_ROOT="$(cd "$JAVA_HOME/.." && pwd)"
         fi
@@ -110,46 +120,55 @@ if [[ "$PLATFORM" == "macos" ]]; then
         done
     fi
 
-    if [[ -n "$JBR_ROOT" ]]; then
-        echo "☕ 命中 JBR JCEF: $JBR_ROOT"
-        echo "☕ JAVA_HOME:     $JAVA_HOME"
-    else
-        echo "⚠️  未找到 JBR JCEF，使用系统默认 Java: $(which java)"
-    fi
-else
-    # Linux / Windows: 直接复用当前配置好的 JAVA_HOME / java
-    if [[ -z "$JAVA_HOME" ]]; then
-        echo "⚠️  JAVA_HOME 未显式设置，将使用 PATH 中的 Java: $(which java)"
-    else
-        echo "☕ JAVA_HOME: $JAVA_HOME"
-    fi
 fi
+
+# Linux/Windows 使用显式 JAVA_HOME；macOS 可自动发现本机 JBR JCEF。
+[[ -n "${JAVA_HOME:-}" ]] || { echo "❌ 请设置 JAVA_HOME 为 JBR 25 SDK with JCEF"; exit 1; }
+if [[ "$PLATFORM" == "windows" ]]; then
+    JAVA_HOME=$(cygpath -u "$JAVA_HOME")
+fi
+export JAVA_HOME
+[[ -f "$JAVA_HOME/jmods/jcef.jmod" ]] || {
+    echo "❌ JAVA_HOME 必须指向带 JCEF 的 JBR SDK: $JAVA_HOME"; exit 1;
+}
+RELEASE_JAVA_HOME="$JAVA_HOME"
+if [[ "$PLATFORM" == "windows" ]]; then
+    RELEASE_JAVA_HOME=$(cygpath -m "$JAVA_HOME")
+fi
+echo "☕ Release JBR: $JAVA_HOME"
 
 # ==========================================
 # 2. 执行 Gradle 打包
 # ==========================================
 cd "$PROJECT_DIR"
 
-echo "🛑 关闭现有 Gradle Daemon..."
-./gradlew --stop
-
+GRADLE_ARGS=(--no-configuration-cache "-Pmederi.releaseJavaHome=$RELEASE_JAVA_HOME")
 if [[ "$CLEAN_BUILD" == "true" ]]; then
     echo "🧹 清理旧构建..."
-    ./gradlew :app:desktopApp:clean --no-configuration-cache
+    ./gradlew :app:desktopApp:clean :server:clean "${GRADLE_ARGS[@]}"
 fi
 
-echo "🚀 执行 Gradle Desktop 打包..."
-case "$PLATFORM" in
-    macos)
-        ./gradlew :app:desktopApp:packageReleaseDistributionForCurrentOS --no-configuration-cache
-        ;;
-    linux)
-        ./gradlew :app:desktopApp:createReleaseDistributable --no-configuration-cache
-        ;;
-    windows)
-        ./gradlew :app:desktopApp:packageReleaseDistributionForCurrentOS --no-configuration-cache
-        ;;
-esac
+echo "🚀 构建 Desktop 和两种 Server 发布目录..."
+./gradlew :app:desktopApp:createReleaseDistributable \
+    :server:installServerBundled :server:installServerApi "${GRADLE_ARGS[@]}"
+
+# 所有整理操作在仓库 temp 下进行，避免污染 Gradle 输出与临时目录外溢。
+mkdir -p "$PROJECT_DIR/temp"
+STAGING=$(mktemp -d "$PROJECT_DIR/temp/release.XXXXXX")
+trap 'rm -rf "$STAGING"' EXIT
+
+archive_folder() {
+    local folder="$1"
+    local name="$(basename "$folder")"
+    if [[ "$PLATFORM" == "windows" ]]; then
+        # JDK jar 生成标准 ZIP，Git Bash 无需额外安装 zip/7-Zip。
+        "$JAVA_HOME/bin/jar" --create --no-manifest \
+            --file "$(cygpath -m "$OUTPUT_DIR/$name.zip")" \
+            -C "$(cygpath -m "$(dirname "$folder")")" "$name"
+    else
+        tar -czf "$OUTPUT_DIR/$name.tar.gz" -C "$(dirname "$folder")" "$name"
+    fi
+}
 
 # ==========================================
 # 3. 产物整理与平台后处理
@@ -202,58 +221,57 @@ case "$PLATFORM" in
             codesign --force -s - "$FINAL_APP"
         fi
 
-        # 创建 DMG
-        DMG_NAME="${APP_NAME}-$ARCH_NAME.dmg"
-        DMG_PATH="$OUTPUT_DIR/$DMG_NAME"
-        DMG_TEMP="$OUTPUT_DIR/dmg_temp"
-        rm -rf "$DMG_TEMP" "$DMG_PATH"
-        mkdir -p "$DMG_TEMP"
-        cp -R "$FINAL_APP" "$DMG_TEMP/"
-        ln -s /Applications "$DMG_TEMP/Applications"
-
-        hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_TEMP" -ov -format UDZO "$DMG_PATH"
-        rm -rf "$DMG_TEMP"
-        echo "✓ DMG 创建完成: $DMG_NAME"
+        echo "✓ macOS App: $FINAL_APP"
         ;;
 
-    linux)
-        echo "🐧 打包 Linux 绿色便携包 (tar.gz，内含完整 JBR JCEF)..."
+    linux|windows)
         GRADLE_APP_PARENT="$PROJECT_DIR/app/desktopApp/build/compose/binaries/main-release/app"
-        APP_DIR=$(find "$GRADLE_APP_PARENT" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -n 1)
-        if [[ -z "$APP_DIR" || ! -d "$APP_DIR" ]]; then
-            echo "❌ 未找到构建产物目录"
-            exit 1
+        APP_DIR=$(find "$GRADLE_APP_PARENT" -maxdepth 1 -mindepth 1 -type d | head -n 1)
+        [[ -n "$APP_DIR" ]] || { echo "❌ 未找到 Desktop 产物"; exit 1; }
+        DESKTOP_DIR="$STAGING/${APP_NAME}-desktop-$PLATFORM-$ARCH_NAME"
+        cp -R "$APP_DIR" "$DESKTOP_DIR"
+        # jlink 不保证保留 JCEF 的全部 native 辅助文件；绿色版直接带完整 JBR。
+        if [[ "$PLATFORM" == "linux" ]]; then
+            DESKTOP_RUNTIME="$DESKTOP_DIR/lib/runtime"
+        else
+            DESKTOP_RUNTIME="$DESKTOP_DIR/runtime"
         fi
-
-        FOLDER_NAME="$(basename "$APP_DIR")"
-        TAR_NAME="${APP_NAME}-$ARCH_NAME.tar.gz"
-
-        # 在应用根目录创建一个简易启动脚本，方便解压后直接在根目录运行
-        EXEC_BIN=$(find "$APP_DIR/bin" -maxdepth 1 -type f -executable 2>/dev/null | head -n 1)
-        if [[ -n "$EXEC_BIN" ]]; then
-            BIN_REL="bin/$(basename "$EXEC_BIN")"
-            cat << EOF > "$APP_DIR/run.sh"
-#!/usr/bin/env bash
-HERE="\$(cd "\$(dirname "\$0")"; pwd)"
-exec "\$HERE/$BIN_REL" "\$@"
-EOF
-            chmod +x "$APP_DIR/run.sh"
-        fi
-
-        cd "$GRADLE_APP_PARENT"
-        tar -czf "$OUTPUT_DIR/$TAR_NAME" "$FOLDER_NAME"
-        cd "$PROJECT_DIR"
-        echo "✓ 绿色便携包创建完成: $OUTPUT_DIR/$TAR_NAME"
-        ;;
-
-    windows)
-        RELEASE_BIN="$PROJECT_DIR/app/desktopApp/build/compose/binaries/main-release"
-        # 复制 msi 安装包
-        find "$RELEASE_BIN/msi" -name "*.msi" -exec cp {} "$OUTPUT_DIR/" \; 2>/dev/null || true
-        # 复制免安装目录
-        find "$RELEASE_BIN/app" -maxdepth 1 -mindepth 1 -type d -exec cp -r {} "$OUTPUT_DIR/" \; 2>/dev/null || true
+        rm -rf "$DESKTOP_RUNTIME"
+        mkdir -p "$(dirname "$DESKTOP_RUNTIME")"
+        cp -R "$JAVA_HOME" "$DESKTOP_RUNTIME"
+        archive_folder "$DESKTOP_DIR"
         ;;
 esac
+
+# Gradle Application 插件的 bin/server(.bat) 保留标准参数转发与 JAVA_OPTS 支持。
+for variant in bundled api; do
+    SERVER_DIR="$STAGING/${APP_NAME}-server-$variant-$PLATFORM-$ARCH_NAME"
+    cp -R "$PROJECT_DIR/server/build/install/server-$variant" "$SERVER_DIR"
+    if [[ "$variant" == "bundled" ]]; then
+        if [[ "$PLATFORM" == "macos" ]]; then
+            RUNTIME_HOME="runtime/Contents/Home"
+        else
+            RUNTIME_HOME="runtime"
+        fi
+        cat > "$SERVER_DIR/run.sh" <<EOF
+#!/usr/bin/env sh
+HERE=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
+export JAVA_HOME="\$HERE/$RUNTIME_HOME"
+exec "\$HERE/bin/server" "\$@"
+EOF
+        # Windows 分发使用 CRLF，且固定指向包内运行时，不受系统 JAVA_HOME 影响。
+        printf '@echo off\r\nsetlocal\r\nset "JAVA_HOME=%%~dp0runtime"\r\ncall "%%~dp0bin\server.bat" %%*\r\nexit /b %%errorlevel%%\r\n' > "$SERVER_DIR/run.bat"
+    else
+        cat > "$SERVER_DIR/run.sh" <<'EOF'
+#!/usr/bin/env sh
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$HERE/bin/mederi-server" "$@"
+EOF
+        printf '@echo off\r\ncall "%%~dp0bin\mederi-server.bat" %%*\r\nexit /b %%errorlevel%%\r\n' > "$SERVER_DIR/run.bat"
+    fi
+    chmod +x "$SERVER_DIR/run.sh"
+    archive_folder "$SERVER_DIR"
+done
 
 echo ""
 echo "=============================================="

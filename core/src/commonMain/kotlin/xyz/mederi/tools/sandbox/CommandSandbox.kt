@@ -23,53 +23,36 @@ data class SandboxStatus(
  *   内置构建缓存（~/.gradle ~/.m2 ~/.cache ~/.konan ~/Library/Caches ~/Library/Java）+
  *   /dev 设备文件 + 全局白名单（SandboxConfig.extraWritablePaths）。
  * - 平台机制：macOS Seatbelt（sandbox-exec，系统自带零依赖）；
- *   Linux bubblewrap（只检测不代装，缺失降级警告）；Windows 无原语，降级警告。
+ *   Linux bubblewrap（只检测不代装，不可用时阻止命令）；Windows 无原语，降级警告。
  * - **shell 探测链**：macOS/Linux bash→sh（AI 生成 bash 语法，dash 执行会踩坑）；
  *   Windows bash.exe(Git Bash)→cmd /c。探测结果随环境块注入系统提示词。
  *
- * 每 turn 新建实例：bwrap 探测每 turn 重跑（~10ms），用户安装后无需重启。
+ * 每 turn 新建实例：完整 bwrap 配置每 turn 探测一次，用户安装后无需重启。
  * JVM-only：ProcessBuilder + 平台二进制调用，无 KMP 替代品（core 当前仅 jvm 目标）。
  *
  * @param projectDirs 会话所属项目的目录列表（first 为主目录）
  */
-class CommandSandbox(
-    private val projectDirs: List<String>
+class CommandSandbox private constructor(
+    private val projectDirs: List<String>,
+    private val platformName: String,
+    private val linuxSandboxOverride: LinuxCommandSandbox?,
 ) {
+    constructor(projectDirs: List<String>) : this(projectDirs, System.getProperty("os.name"), null)
+
+    /** 在任意宿主验证 Linux 失败路径，不改 JVM 全局 os.name，也不影响其他并行测试。 */
+    internal constructor(projectDirs: List<String>, linuxSandbox: LinuxCommandSandbox) :
+        this(projectDirs, "Linux", linuxSandbox)
 
     /** 探测到的 shell 可执行名（bash/sh/cmd），构造时确定，每 turn 复用 */
     val shell: String by lazy { detectShell() }
 
     /** Windows 下 cmd 模式标记 */
-    private val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+    private val isWindows = platformName.lowercase().contains("windows")
 
-    private val isMac = System.getProperty("os.name").lowercase().contains("mac")
+    private val isMac = platformName.lowercase().contains("mac")
 
-    /** bwrap 是否已安装（版本探测），lazy 一次 */
-    private val bwrapInstalled: Boolean by lazy {
-        !isWindows && !isMac && runCatching {
-            ProcessBuilder("bwrap", "--version").start().waitFor() == 0
-        }.getOrDefault(false)
-    }
-
-    /**
-     * bwrap 沙箱是否实际可用（功能烟测）。
-     *
-     * --version 成功 ≠ 沙箱可用：Ubuntu 23.10+ 默认 AppArmor 限制 unprivileged user
-     * namespaces，bwrap 存在但建不了 namespace（Codex 社区已知坑）。必须真实建一次
-     * 沙箱跑个 no-op 命令验证；失败则降级为无沙箱 + 精确提示原因。
-     */
-    private val bwrapFunctional: Boolean by lazy {
-        bwrapInstalled && runCatching {
-            val p = ProcessBuilder(
-                "bwrap",
-                "--ro-bind", "/", "/",
-                "--dev", "/dev",
-                "--proc", "/proc",
-                "--tmpfs", "/tmp",
-                "/bin/true"
-            ).start()
-            p.waitFor() == 0
-        }.getOrDefault(false)
+    private val linuxSandbox by lazy {
+        linuxSandboxOverride ?: LinuxCommandSandbox(projectDirs, SandboxConfig.extraWritablePaths)
     }
 
     /** bash 是否可用（探测链第一优先），lazy 探测一次 */
@@ -98,21 +81,7 @@ class CommandSandbox(
             backend = "Seatbelt", available = true, shell = shell,
             detail = "macOS Seatbelt：写仅限项目目录/临时目录/构建缓存，读全盘放行。"
         )
-        bwrapFunctional -> SandboxStatus(
-            backend = "bubblewrap", available = true, shell = shell,
-            detail = "Linux bubblewrap：写仅限项目目录/临时目录/构建缓存，读全盘放行。"
-        )
-        else -> SandboxStatus(
-            backend = "none", available = false, shell = shell,
-            detail = if (!bwrapInstalled) {
-                "未检测到 bubblewrap，命令未沙箱运行。" +
-                    "安装: sudo apt install bubblewrap / sudo dnf install bubblewrap / sudo pacman -S bubblewrap"
-            } else {
-                "bubblewrap 已安装但无法创建沙箱（常见于 Ubuntu 23.10+ 的 AppArmor " +
-                    "对 unprivileged user namespaces 的限制），命令未沙箱运行。" +
-                    "解决: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 或发行版等效配置"
-            }
-        )
+        else -> linuxSandbox.status(shell)
     }
 
     /** 组装好的命令：argv + 可选警告前缀 + 是否已是独立进程组（直接子进程 pid==pgid）。 */
@@ -127,7 +96,7 @@ class CommandSandbox(
     )
 
     /**
-     * 组装执行 argv：沙箱可用时包一层 OS 沙箱，否则裸命令（可能带警告）。
+     * 组装执行 argv：Linux 不可用时抛 MederiStateException；Windows 保留裸跑警告。
      *
      * 同时给每条命令套进程组长包装（posix）：macOS 用系统自带 perl 的 `setpgrp(0,0)` 后
      * `exec sandbox-exec`，Linux 用 setsid——让整条命令树共享一个新 PGID（= 直接子进程 pid）。
@@ -142,8 +111,7 @@ class CommandSandbox(
             isWindows -> if (shell == "bash.exe") listOf("bash.exe", "-c", command)
                          else listOf("cmd", "/c", command)
             isMac -> listOf("sandbox-exec", "-f", seatbeltProfileFile().absolutePath, shell, "-c", command)
-            bwrapFunctional -> bwrapArgv(listOf(shell, "-c", command))
-            else -> listOf(shell, "-c", command)
+            else -> linuxSandbox.wrap(listOf(shell, "-c", command))
         }
         val warning = if (status.available) null else "[sandbox] ${status.detail}\n"
 
@@ -247,24 +215,6 @@ class CommandSandbox(
         appendLine("  (literal \"/dev/stdout\")")
         appendLine("  (literal \"/dev/stderr\")")
         appendLine(")")
-    }
-
-    // ==================== Linux bubblewrap ====================
-
-    private fun bwrapArgv(baseArgv: List<String>): List<String> {
-        val argv = mutableListOf(
-            "bwrap",
-            "--ro-bind", "/", "/",
-            "--dev", "/dev",
-            "--proc", "/proc",
-            "--tmpfs", "/tmp"
-        )
-        writableDirs().forEach { dir ->
-            val f = File(dir)
-            if (f.exists()) argv.addAll(listOf("--bind", dir, dir))
-        }
-        argv.addAll(baseArgv)
-        return argv
     }
 
     companion object {

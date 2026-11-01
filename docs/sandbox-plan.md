@@ -9,7 +9,7 @@
 | D1 | **沙盒永远开，无开关**。不感知的安全不需要配置。设置页只放"全局写白名单"编辑器 + 状态展示 |
 | D2 | **全局策略，项目级路径**。开关/白名单是应用级全局设置；写白名单路径按当前会话所属项目的 directories 动态生成 |
 | D3 | **Windows 不做命令沙箱**：裸跑 + 警告前缀。文件工具的纯 Kotlin 路径校验全平台兜底 |
-| D4 | **Linux 只检测不代装**：探测 bwrap；缺失 → 警告前缀 + 安装命令文案（每 turn 一次，不刷屏） |
+| D4 | **Linux 只检测不代装**：探测 bwrap；缺失/完整配置不可用 → 明确错误 + 阻止命令，不回退裸跑；下个 turn 重新检测 |
 | D5 | **macOS Seatbelt**（sandbox-exec，零依赖，本机实测通过） |
 | D6 | **shell 探测链**：macOS/Linux `bash → sh`；Windows `bash.exe(Git Bash) → cmd /c`；探测结果注入系统提示词 |
 | D7 | **无逐操作询问**。沙箱兜底，执行路径由主代理按 Triage Flow 分诊判断（见 `AGENTS.md §5.6`）。计划审批工作流（create_plan → 用户批准）**保留不动** |
@@ -39,7 +39,7 @@ ShellTools.runCommand → 启动即注册 → ProcessRegistry（全局单例，�
             → list_processes / stop_process（宿主侧 kill -- -pgid 整组回收，沙箱外）
 ```
 
-- CommandSandbox 每 turn 新建实例 → bwrap 探测每 turn 重跑（~10ms；用户装完无需重启）
+- CommandSandbox 每 turn 新建实例 → bwrap 探测每 turn 重跑（版本与完整配置各限 10 秒；用户装完无需重启）
 - 白名单合并发生在 CommandSandbox 内部（canonicalPath + macOS /tmp→/private/tmp 变体去重）
 - SBPL profile 文本按「目录集合 hash」缓存临时文件复用
 
@@ -117,23 +117,24 @@ AI 无法用 stop_process 杀任何非 mederi 启动的进程。沙箱内命令�
 
 ## 5. bwrap argv 模板（Linux）
 
-```
-bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp
-  --bind <dir> <dir> ...   ; 白名单目录（覆盖 ro-bind）
-  --bind "$TMPDIR" "$TMPDIR" (若存在)
-  bash -c <command>
+```text
+setsid bwrap --unshare-pid --die-with-parent --cap-drop ALL --ro-bind / /
+  --bind <canonical-white-path> <canonical-white-path> ...
+  --dev /dev --proc /proc -- bash -c <command>
 ```
 
-未装 bwrap：输出前缀 `未检测到 bubblewrap，命令未沙箱运行。安装: sudo apt install bubblewrap / sudo dnf install bubblewrap / sudo pacman -S bubblewrap`。
+- Linux 路径策略独立于 macOS：项目目录、全局白名单、`/tmp`/`$TMPDIR`/JVM 临时目录和 Linux 构建缓存。canonical 去重并合并父子挂载；缺失路径按目录精确创建，已有文件仍可单文件挂载；不扩大可写父目录。
+- `/dev` 由 bwrap 创建，不额外 bind `/dev/stdin`、`stdout`、`stderr`（magic links 可能指向 pipe/socket，导致真实执行配置失败）。根目录及 `/proc`、`/dev`、`/sys` 重叠白名单拒绝，不能覆盖隔离挂载。
+- 保留宿主临时目录读写，避免 tmpfs 隐藏跨命令产物和构建 daemon sockets。
+- 独立 PID namespace，`/proc` 不暴露宿主进程；网络保持可用。外部 `setsid` 与原宿主进程组回收机制配合。
+- `LinuxCommandSandbox` 每实例先验证版本，再用**同一完整挂载配置**跑 `/bin/true`；每次探测限 10 秒，持续排空输出且保留最多 8KiB。保留实际 bwrap 错误，不把任意故障一概归因于 AppArmor，也不建议全局关闭安全策略。
+- bwrap 缺失或配置失败时，前台返回失败，后台返回启动错误；不执行用户命令，不产生后台任务。下个 turn 可重试。
 
 ## 6. 风险与边界（诚实清单）
 
-- **Linux 未经真机验证**：macOS 全链路实测通过，Linux bwrap 路径只有代码 review。
-  已做代码防御：bwrap 探测为**真实建沙箱烟测**（`bwrap --ro-bind / / ... /bin/true`），
-  因为 Ubuntu 23.10+ 默认 AppArmor 限制 unprivileged user namespaces——bwrap 装着但建不了沙箱
-  （Codex 社区已知坑）。烟测失败降级为无沙箱 + 精确区分两种原因（未安装 vs AppArmor 限制+解法）。
-  **待真机验证**：Ubuntu 24.04（AppArmor 默认开）跑通/降级路径；Fedora（无限制）全功能；
-  gradle 编译任务在 bwrap 内的 /dev、/proc、$TMPDIR 覆盖是否完整。
+- **Linux 真机验证仍待完成**：当前开发宿主是 macOS，Docker daemon 未启动。JVM 确定性测试覆盖挂载构造、缺失路径、canonical 合并、错误保留及拒绝执行；Linux 集成测试实际验证写白名单、外部只读、标准流、缓存首次创建、PID namespace、退出码及临时文件跨命令保留。
+  Linux 上运行：`MEDERI_REQUIRE_LINUX_SANDBOX=1 ./gradlew :core:jvmTest --tests '*LinuxCommandSandboxTest'`。此标志要求 Linux 主机；Linux 上缺少可用 bwrap 直接失败，不能静默跳过。
+  发行版的 AppArmor/user namespace 限制仍需宿主按实际错误配置；程序不安装 bwrap，也不修改宿主安全策略。
 - **macOS 沙箱内信号不可用是平台限制，非 bug**：profile 无 process-signal 放行项（实测
   unbound variable）。进程回收已由宿主侧注册表补齐（§4.5）。实测影响：JVM `Process.destroy()`/
   `destroyForcibly()` 在沙箱内**静默失效**（不报错、子进程杀不掉）——Gradle 正常跑测试靠

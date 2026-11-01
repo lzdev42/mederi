@@ -12,7 +12,8 @@ import java.io.File
  * Mederi Server：独立 JVM 进程运行的遥控端点（headless 部署用）。
  *
  * 与 desktop 内嵌 server 共享同一套 Ktor 配置（见 shared jvmMain 的 Server/serverModule）。
- * 默认自托管内置 wasmJs Web UI（同源访问）；若指定 `MEDERI_WEBAPP_DIR` 则优先从外部目录加载（开发调试用）。
+ * 完整发布包自托管内置 wasmJs Web UI；API-only 包不含页面。
+ * 若指定 `MEDERI_WEBAPP_DIR` 则优先从外部目录加载（开发调试用）。
  *
  * 启动参数（环境变量）：
  * - MEDERI_SERVER_PORT（默认 8081）
@@ -35,7 +36,13 @@ fun main() {
     println("[MederiServer] LLM retry: maxRetries=${retryMaxRetries ?: "default"}, " +
         "backoff=${retryMinDelayMs ?: "default"}-${retryMaxDelayMs ?: "default"}ms")
 
-    println("[MederiServer] Web UI hosting: ${webappDir?.let { "external directory ($it)" } ?: "embedded wasmJs resources (classpath:/static)"}")
+    val webHosting = when {
+        webappDir != null -> "external directory ($webappDir)"
+        Thread.currentThread().contextClassLoader.getResource("static/index.html") != null ->
+            "embedded wasmJs resources (classpath:/static)"
+        else -> "disabled (API-only distribution)"
+    }
+    println("[MederiServer] Web UI hosting: $webHosting")
 
     val aiCore = MederiAiCore(
         configDir,

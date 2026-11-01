@@ -21,7 +21,7 @@ private const val BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) 
  *
  * 命令在项目主目录（第一个目录）下执行，经 [CommandSandbox] 包装：
  * - macOS Seatbelt / Linux bubblewrap：写仅限白名单（项目目录/临时/构建缓存），读全盘
- * - Windows / 未装 bwrap：裸跑 + 警告前缀
+ * - Linux bwrap 不可用：返回原始错误并阻止命令；Windows：裸跑 + 警告前缀
  * - shell 探测链：bash → sh（Windows: bash.exe → cmd /c）
  *
  * 无权限弹窗（已拆除）：沙箱 + diff 追踪 + git 是安全网，不再逐操作询问。
@@ -55,8 +55,12 @@ class ShellTools(
     suspend fun runCommand(command: String, timeoutSeconds: Int = 120, cwd: String? = null): CommandResult {
         if (command.isBlank()) return CommandResult("Error: command is empty", -1)
 
-            val wrapped = sandbox?.wrap(command)
-                ?: CommandSandbox.WrappedCommand(listOf(sandbox?.shell ?: "sh", "-c", command), null, false)
+            val wrapped = try {
+                sandbox?.wrap(command)
+                    ?: CommandSandbox.WrappedCommand(listOf("sh", "-c", command), null, false)
+            } catch (e: xyz.mederi.api.exception.MederiStateException) {
+                return CommandResult("[sandbox] ${e.message}", -1)
+            }
             val workDir = cwd?.takeIf { it.isNotBlank() }?.let { File(it) } ?: File(allowedDirectories.first())
             val builder = ProcessBuilder(wrapped.argv)
             builder.directory(workDir)
@@ -130,7 +134,8 @@ class ShellTools(
                 workDir = workDir.absolutePath,
                 timeoutSeconds = timeoutSeconds
             )
-            "Background task started: $taskId\nCommand: $command\nYou will be notified with the output when it completes. You can continue working with the user."
+            (wrapped.warning ?: "") +
+                "Background task started: $taskId\nCommand: $command\nYou will be notified with the output when it completes. You can continue working with the user."
         }.getOrElse { e ->
             "Error starting background command: ${e.message}"
         }

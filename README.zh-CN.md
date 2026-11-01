@@ -14,7 +14,10 @@ Mederi™ 是一个基于 Kotlin Multiplatform 的 AI Agent 应用框架，构�
 
 ## 发布
 
-Release 版本以独立产物分别发布：
+应用发布运行 `./build_release.sh`：每个平台生成 Desktop、带 JVM/Web UI 的 Server、无 JVM/Web UI 的 Server。
+macOS Desktop 为 `.app`，Linux/Windows 为绿色压缩包。见[三平台发布说明](docs/release-build.md)。
+
+库模块以独立产物分别发布：
 
 - **core** — 领域模型、Manager、Koog 适配与存储。
 - **server** — Ktor 薄 REST/SSE 层。

@@ -1,0 +1,50 @@
+# 三平台发布
+
+`build_release.sh` 在当前宿主系统/CPU 架构上构建三份独立产物，不做跨系统编译。
+Windows 使用 Git Bash（不是 WSL；WSL 会构建 Linux 包）。构建依赖 JBR **25 SDK with JCEF**，
+Linux/Windows 必须配置 `JAVA_HOME`；macOS 也可自动发现 `~/Library/Java/JavaVirtualMachines/jbrsdk_jcef*`。
+首次构建还需要 Gradle、Kotlin/Wasm 工具链及项目依赖可下载。
+
+```bash
+./build_release.sh
+./build_release.sh --no-clean --skip-sign --output ./release
+```
+
+| 产物 | macOS | Linux | Windows |
+|---|---|---|---|
+| Desktop（带 JVM、Web UI） | `.app` | `Mederi-desktop-linux-<arch>.tar.gz` | `Mederi-desktop-windows-<arch>.zip` |
+| Server 完整版（带 JVM、Web UI） | `Mederi-server-bundled-macos-<arch>.tar.gz` | `Mederi-server-bundled-linux-<arch>.tar.gz` | `Mederi-server-bundled-windows-<arch>.zip` |
+| Server API 版（无 JVM、无 Web UI） | `Mederi-server-api-macos-<arch>.tar.gz` | `Mederi-server-api-linux-<arch>.tar.gz` | `Mederi-server-api-windows-<arch>.zip` |
+
+`<arch>` 为 `x64` 或 `arm64`；JBR 与宿主必须匹配。`--name` 修改压缩包文件名前缀，
+不修改 `.app` 的 bundle 名、应用标识或可执行文件名。脚本不生成 MSI、DEB、DMG 安装包。
+绿色版表示解压即用，不表示用户数据存进程序目录：默认数据仍在 `~/.mederi`。
+
+## 启动
+
+Desktop：macOS 打开 `.app`；Linux 执行解压目录的 `bin/` 下启动器；Windows 打开目录内 `.exe`。
+
+两种 Server：Unix 执行根目录 `./run.sh`；Windows 执行 `run.bat`。
+完整版启动器强制使用包内 JBR，API 版使用系统 `JAVA_HOME`/`PATH` 的 Java **25 或更高版本**。
+API 版保留全部后端依赖，只移除 JVM 与 `static/` 页面资源，不是单个无依赖 JAR。
+普通 JVM 可运行 API 版，JCEF 浏览器能力需要匹配的 JBR/JCEF 运行环境。
+
+完整版默认在 `http://localhost:8081/` 提供页面；API 版没有内置页面，根路径返回 404，REST/SSE 保持可用。
+两种版本均支持 `MEDERI_SERVER_PORT`、`MEDERI_CONFIG_DIR`、`MEDERI_SERVER_PASSWORD`；
+显式设置 `MEDERI_WEBAPP_DIR` 可额外托管外部页面（见 `server/Application.kt`）。
+
+Linux/Windows 的 Desktop 与完整 Server 复制完整 JBR SDK，以保留 JCEF native 辅助文件，包体积会比裁剪 JVM 大。
+macOS Desktop 保留原有 `.app` runtime/CEF 补全和 ad-hoc 签名流程，`--skip-sign` 跳过签名。
+自包含 JVM 不包含操作系统库；Linux 图形桌面/JCEF 仍依赖宿主图形环境，headless 浏览器需 Xvfb。
+
+## Gradle 入口和验证
+
+- `:app:desktopApp:createReleaseDistributable`：仅生成当前系统应用目录，不依赖 MSI/DEB 安装工具。
+- `:server:installServerBundled -Pmederi.releaseJavaHome=<JBR SDK home>`：`server/build/install/server-bundled`，含完整 JBR 和内嵌 Web UI。
+- `:server:installServerApi`：`server/build/install/server-api`，独立 `apiJar`/`apiStartScripts`，不触发 server 的 wasm 页面资源处理任务。
+
+Gradle 入口生成标准 `bin/` 启动器，发布脚本再增加根目录 `run.sh`/`run.bat`、整理目录和压缩。
+API JAR 直接取编译类和源资源并排除 `static/**`，与完整版同一次构建或 `--no-clean` 连续构建不会混入旧页面。
+
+`python3 scripts/test-release-packaging.py` 用模拟 Gradle/JBR 验证三平台装配、压缩包、启动脚本和相对输出路径，
+不启动 APP/server，也不替代各平台真实构建与运行验收。
