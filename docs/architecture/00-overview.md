@@ -63,9 +63,9 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 
 `build_release.sh` 在 macOS/Linux/Windows 本机分别产出 Desktop、Server 完整版（JVM + 内嵌 wasmJs 页面）、
 Server API 版（无 JVM/页面），不交叉编译。Desktop 使用 `createReleaseDistributable`，macOS 交付 `.app`，
-Linux 为 tar.gz、Windows 为 ZIP。`mederi.releaseJavaHome` 指定 Desktop 的 JBR/JCEF SDK，`mederi.serverJavaHome` 指定 Server 的普通 Java 25 JDK。
+Linux 为 tar.gz、Windows 为 ZIP。`mederi.releaseJavaHome` 为两个发行包指定同一套 JBR 25 SDK。独立构建 Server 时可通过 `mederi.serverJavaHome` 另选 Java 25。
 
-`server/build.gradle.kts` 的 `installServerBundled` 组合标准 `installDist` 与普通 Java 25 JDK；
+`server/build.gradle.kts` 的 `installServerBundled` 组合标准 `installDist` 与 Java 25 运行时。输入是 JBR/JCEF 时，`linkServerRuntime` 用 `jlink` 排除 JCEF；
 `apiJar` 仅取类和源资源（排除 `static/**`），`apiStartScripts` + `installServerApi` 组成无 JVM/API-only 分发，
 与默认 `processResources → wasmJsBrowserDistribution` 路径分离，避免旧页面污染 API 包。
 发布脚本增加根目录启动器并压缩；macOS 保留 Desktop CEF Frameworks 补全与签名。

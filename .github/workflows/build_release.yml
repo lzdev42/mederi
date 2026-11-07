@@ -66,17 +66,6 @@ jobs:
           fi
           test "$(/usr/bin/arch -x86_64 /usr/bin/uname -m)" = x86_64
 
-      - name: Setup Java 25 for Server
-        uses: actions/setup-java@v6
-        with:
-          java-version: '25'
-          distribution: 'temurin'
-          architecture: ${{ matrix.architecture }}
-
-      - name: Save Server Java Home
-        shell: bash
-        run: printf 'MEDERI_SERVER_JAVA_HOME=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
-
       - name: Setup Java 25 (JBR with JCEF)
         uses: actions/setup-java@v6
         env:
@@ -113,11 +102,11 @@ jobs:
           fi
           export MEDERI_TEST_RUNTIME_HOME="$MEDERI_RUNTIME_HOME"
 
-          test_args=(jvmTest test -x :app:androidApp:test -x :server:test --continue --no-configuration-cache)
+          test_args=(jvmTest test -x :app:androidApp:test --continue --no-configuration-cache)
           case "${{ matrix.platform }}-${{ matrix.arch }}" in
             macos-arm64)
               export CHROME_BIN='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-              ./gradlew allTests test -x :server:test --continue --no-configuration-cache
+              ./gradlew allTests test --continue --no-configuration-cache
               ;;
             macos-x64)
               /usr/bin/arch -x86_64 /bin/bash ./gradlew "${test_args[@]}"
@@ -130,20 +119,8 @@ jobs:
               ;;
           esac
 
-      - name: Run Server Tests on Standard Java
-        id: server_tests
-        if: success() || steps.platform_tests.outcome == 'failure'
-        shell: bash
-        run: |
-          export JAVA_HOME="$MEDERI_SERVER_JAVA_HOME"
-          if [[ "${{ matrix.platform }}-${{ matrix.arch }}" == macos-x64 ]]; then
-            /usr/bin/arch -x86_64 /bin/bash ./gradlew :server:test --no-configuration-cache -Porg.gradle.java.installations.auto-detect=false "-Porg.gradle.java.installations.paths=$JAVA_HOME"
-          else
-            ./gradlew :server:test --no-configuration-cache -Porg.gradle.java.installations.auto-detect=false "-Porg.gradle.java.installations.paths=$JAVA_HOME"
-          fi
-
       - name: Upload Failed Test Results
-        if: failure() && (steps.platform_tests.outcome == 'failure' || steps.server_tests.outcome == 'failure')
+        if: failure() && steps.platform_tests.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.platform }}-${{ matrix.arch }}
@@ -175,6 +152,10 @@ jobs:
           [[ "$modules" == java.base@25* ]]
           [[ ! "$modules" =~ (^|[[:space:]])jcef(@|[[:space:]]|$) ]]
           test ! -e "$runtime/jmods/jcef.jmod"
+          if find "$runtime" \( -iname '*jcef*' -o -iname 'libcef*' -o -iname 'cef_server*' -o -iname '*chromium*' \) -print -quit | grep -q .; then
+            echo 'Server runtime contains a CEF file'
+            exit 1
+          fi
 
       - name: Verify and Archive macOS Desktop
         if: matrix.platform == 'macos'

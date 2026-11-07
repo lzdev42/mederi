@@ -40,9 +40,6 @@ class ReleasePackagingTest(unittest.TestCase):
                 (java_home / 'jmods/java.base.jmod').touch()
                 (java_home / 'jmods/jcef.jmod').touch()
                 (java_home / 'release').write_text('JAVA_VERSION="25.0.5"\nMODULES="java.base jcef"\n')
-                server_java = root / 'server-java'
-                server_java.mkdir()
-                (server_java / 'release').write_text('JAVA_VERSION="25.0.5"\nMODULES="java.base"\n')
                 if platform == 'macos':
                     (jbr / 'Contents/Frameworks/cef_server.app').mkdir(parents=True)
                 # Real ZIP assembly with the same CLI shape as jar, so archive contents can be checked.
@@ -72,7 +69,7 @@ if [[ " $* " == *createReleaseDistributable* ]]; then
     fi
 fi
 if [[ " $* " == *installServerBundled* ]]; then
-    test "$JAVA_HOME" = "$MEDERI_SERVER_JAVA_HOME"
+    test -f "$JAVA_HOME/jmods/jcef.jmod"
     for variant in bundled api; do
         mkdir -p "server/build/install/server-$variant/bin" "server/build/install/server-$variant/lib"
         touch "server/build/install/server-$variant/lib/$variant.jar"
@@ -82,8 +79,8 @@ if [[ " $* " == *installServerBundled* ]]; then
 fi
 ''')
                 env = dict(os.environ, JAVA_HOME=str(java_home), FAKE_PLATFORM=platform,
-                           MEDERI_SERVER_JAVA_HOME=str(server_java),
                            PATH=f'{tools}:{os.environ["PATH"]}')
+                env.pop('MEDERI_SERVER_JAVA_HOME', None)
                 result = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign',
                                          '--output', 'relative output'], cwd=root, env=env,
                                         capture_output=True, text=True)
@@ -118,17 +115,10 @@ fi
                     self.assertTrue((output / f'Mederi-desktop-{platform}-{arch}{suffix}').is_file())
                 calls = (root / 'gradle-calls').read_text()
                 self.assertIn(':server:installServerApi', calls)
-                self.assertIn(f'-Pmederi.serverJavaHome={server_java}', calls)
+                self.assertIn(f'-Pmederi.releaseJavaHome={java_home}', calls)
                 self.assertNotIn('packageReleaseDistributionForCurrentOS', calls)
                 self.assertEqual(list((root / 'temp').iterdir()), [])
 
-                # A custom runtime can contain JCEF even when its jmods directory is absent.
-                (server_java / 'release').write_text('JAVA_VERSION="25.0.5"\nMODULES="java.base jcef"\n')
-                env['MEDERI_SERVER_JAVA_HOME'] = str(server_java)
-                rejected = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign'],
-                                          cwd=root, env=env, capture_output=True, text=True)
-                self.assertNotEqual(rejected.returncode, 0)
-                self.assertIn('MEDERI_SERVER_JAVA_HOME', rejected.stdout)
 
 
 if __name__ == '__main__':

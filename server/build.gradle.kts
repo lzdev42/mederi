@@ -73,26 +73,59 @@ val installServerApi by tasks.registering(Sync::class) {
 }
 
 val serverJavaHome = providers.gradleProperty("mederi.serverJavaHome")
+    .orElse(providers.gradleProperty("mederi.releaseJavaHome"))
     .orElse(providers.environmentVariable("MEDERI_SERVER_JAVA_HOME"))
+    .orElse(providers.systemProperty("java.home"))
+    .map { file(it) }
+val serverJavaModules = serverJavaHome.map { home ->
+    val release = home.resolve("release")
+    require(release.isFile) { "Missing Java release metadata: $home" }
+    val metadata = release.readLines()
+    val version = metadata.firstOrNull { it.startsWith("JAVA_VERSION=") }?.substringAfter('=')?.trim('"')
+    val modules = metadata.firstOrNull { it.startsWith("MODULES=") }?.substringAfter('=')?.trim('"')?.split(' ').orEmpty()
+    require(version?.substringBefore('.') == "25" && "java.base" in modules) {
+        "Bundled server requires a Java 25 runtime: $home"
+    }
+    modules
+}
+val serverJavaHasJcef = serverJavaModules.zip(serverJavaHome) { modules, home ->
+    "jcef" in modules || home.resolve("jmods/jcef.jmod").exists()
+}
+val linkedServerRuntime = layout.buildDirectory.dir("server-runtime")
+val linkServerRuntime by tasks.registering(Exec::class) {
+    onlyIf("source Java contains JCEF") { serverJavaHasJcef.get() }
+    inputs.file(serverJavaHome.map { it.resolve("release") })
+    inputs.dir(serverJavaHome.map { it.resolve("jmods") }).optional()
+    outputs.dir(linkedServerRuntime)
+    doFirst {
+        val home = serverJavaHome.get()
+        val jlink = home.resolve("bin/jlink").takeIf { it.isFile } ?: home.resolve("bin/jlink.exe")
+        val jmods = home.resolve("jmods")
+        require(jlink.isFile && jmods.resolve("java.base.jmod").isFile) {
+            "Building a Server runtime from JBR with JCEF requires the full JBR SDK: $home"
+        }
+        val runtime = linkedServerRuntime.get().asFile
+        check(runtime.deleteRecursively()) { "Cannot replace Server runtime: $runtime" }
+        val modules = serverJavaModules.get().filterNot { it == "jcef" }.joinToString(",")
+        commandLine(jlink.absolutePath, "--module-path", jmods.absolutePath,
+            "--add-modules", modules, "--output", runtime.absolutePath)
+    }
+    doLast {
+        val release = linkedServerRuntime.get().file("release").asFile
+        val modules = release.readLines().first { it.startsWith("MODULES=") }
+            .substringAfter('=').trim('"').split(' ')
+        check("jcef" !in modules) { "Linked Server runtime contains JCEF" }
+    }
+}
 val installServerBundled by tasks.registering(Sync::class) {
-    dependsOn(tasks.named("installDist"))
+    dependsOn(tasks.named("installDist"), linkServerRuntime)
     into(layout.buildDirectory.dir("install/server-bundled"))
     from(tasks.named("installDist"))
-    from(serverJavaHome.map { file(it) }) { into("runtime") }
-    doFirst {
-        require(serverJavaHome.isPresent) { "Set MEDERI_SERVER_JAVA_HOME to a standard Java 25 JDK" }
-        val home = file(serverJavaHome.get())
-        val release = home.resolve("release")
-        val metadata = if (release.isFile) release.readLines() else emptyList()
-        val version = metadata.firstOrNull { it.startsWith("JAVA_VERSION=") }?.substringAfter('=')?.trim('"')
-        val modules = metadata.firstOrNull { it.startsWith("MODULES=") }?.substringAfter('=')?.trim('"')?.split(' ').orEmpty()
-        val hasJava = home.resolve("bin/java").isFile || home.resolve("bin/java.exe").isFile
-        require(hasJava && version?.substringBefore('.') == "25" && "java.base" in modules &&
-            "jcef" !in modules && !home.resolve("jmods/jcef.jmod").exists()
-        ) {
-            "Bundled server requires a standard Java 25 JDK without JCEF: $home"
-        }
-    }
+    from(serverJavaHasJcef.flatMap { hasJcef ->
+        if (hasJcef) linkedServerRuntime.map { it.asFile } else serverJavaHome
+    }) { into("runtime") }
+    // JDK license files may be read-only. Remove the previous generated image before replacing it.
+    doFirst { delete(destinationDir.resolve("runtime")) }
 }
 
 dependencies {
