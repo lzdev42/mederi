@@ -8,8 +8,13 @@ Linux/Windows 必须配置 `JAVA_HOME`；macOS 也可自动发现 `~/Library/Jav
 ## GitHub Actions 测试打包
 
 任意分支 push 后，`Test Release Packaging` 调用 `build_release.sh --skip-sign` 构建 macOS arm64、macOS x64、
-Linux x64 和 Windows x64。也可在 Actions 手动触发。每组的 Desktop 和两种 Server 包仅上传到该次运行的
-Artifacts，保留 7 天。macOS 的 `.app` 先封装成 tar.gz，保留可执行权限和符号链接。
+Linux x64 和 Windows x64。也可在 Actions 手动触发。每组各上传三个 Artifact，每个只含一个发行包，保留 7 天。
+
+- `Mederi-desktop-<platform>-<arch>`：Desktop
+- `Mederi-server-with-wasmjs-<platform>-<arch>`：Server 完整版，带 JVM 和 WasmJS 页面
+- `Mederi-server-api-without-wasmjs-<platform>-<arch>`：Server API 版，无 JVM 和 WasmJS 页面
+
+macOS 的 `.app` 先封装成 tar.gz，保留可执行权限和符号链接。
 
 两组 macOS 构建都使用 ARM64 的 `macos-26` runner。x64 组用 Rosetta 运行
 `arch -x86_64 /bin/bash ./build_release.sh --skip-sign`，并使用 x64 版 JBR 25 SDK with JCEF。

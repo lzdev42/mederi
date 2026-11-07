@@ -42,6 +42,7 @@ jobs:
 
     env:
       APP_NAME: Mederi
+      ARCHIVE_EXTENSION: ${{ matrix.platform == 'windows' && 'zip' || 'tar.gz' }}
       GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g
 
     steps:
@@ -87,6 +88,7 @@ jobs:
           if [[ "${{ matrix.arch }}" == x64 ]]; then
             expected_arch=x86_64
           fi
+          echo "Expected macOS architecture: $expected_arch"
           apps=(release/*.app)
           if [[ ${#apps[@]} -ne 1 || ! -d "${apps[0]}" ]]; then
             echo "Expected exactly one macOS app bundle in release/"
@@ -97,19 +99,38 @@ jobs:
           for binary in "$app/Contents/MacOS/$launcher" \
             "$app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib" \
             server/build/install/server-bundled/runtime/Contents/Home/lib/server/libjvm.dylib; do
-            echo "$binary"
-            lipo -archs "$binary"
-            lipo -verify_arch "$expected_arch" "$binary"
+            actual_archs=$(lipo "$binary" -archs)
+            echo "$binary: $actual_archs"
+            if ! lipo "$binary" -verify_arch "$expected_arch"; then
+              echo "Architecture mismatch for $binary: expected $expected_arch, found $actual_archs" >&2
+              exit 1
+            fi
           done
           tar -czf "release/$APP_NAME-desktop-macos-${{ matrix.arch }}.tar.gz" -C release "${app##*/}"
 
-      - name: Upload Build Artifact
+      - name: Upload Desktop
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            release/*.tar.gz
-            release/*.zip
+          name: ${{ env.APP_NAME }}-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/${{ env.APP_NAME }}-desktop-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.ARCHIVE_EXTENSION }}
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload Server with WasmJS
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-server-with-wasmjs-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/${{ env.APP_NAME }}-server-bundled-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.ARCHIVE_EXTENSION }}
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload Server API without WasmJS
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-server-api-without-wasmjs-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/${{ env.APP_NAME }}-server-api-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.ARCHIVE_EXTENSION }}
           retention-days: 7
           if-no-files-found: error
           compression-level: 0
