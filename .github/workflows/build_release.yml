@@ -80,7 +80,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap xvfb xauth libgtk-3-0t64 libgbm1 libnss3 libasound2t64
+          sudo apt-get install -y bubblewrap libgtk-3-0t64 libgbm1 libnss3 libasound2t64
 
       - name: Run Tests on Target Platform
         shell: bash
@@ -111,7 +111,7 @@ jobs:
               /usr/bin/arch -x86_64 /bin/bash ./gradlew "${test_args[@]}"
               ;;
             linux-*)
-              MEDERI_REQUIRE_LINUX_SANDBOX=1 xvfb-run -a ./gradlew "${test_args[@]}"
+              MEDERI_REQUIRE_LINUX_SANDBOX=1 ./gradlew "${test_args[@]}"
               ;;
             *)
               ./gradlew "${test_args[@]}"

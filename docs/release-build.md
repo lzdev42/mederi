@@ -8,7 +8,7 @@ Linux/Windows 必须配置 `JAVA_HOME`；macOS 也可自动发现 `~/Library/Jav
 ## GitHub Actions 测试打包
 
 任意分支 push 后，`Test Release Packaging` 在 macOS arm64、macOS x64、Linux x64、Linux arm64 和 Windows x64 上分别运行 JVM 测试。
-每组使用自身目标架构的 JBR，测试通过后才调用 `build_release.sh --skip-sign` 打包。Linux 在 Xvfb 下运行图形测试，并验证真实的 bubblewrap 沙盒。
+每组使用自身目标架构的 JBR，测试通过后才调用 `build_release.sh --skip-sign` 打包。Linux 直接运行 Gradle 测试，并强制验证真实的 bubblewrap 沙盒。
 也可在 Actions 手动触发。每组各上传三个 Artifact，每个只含一个发行包，保留 7 天。
 
 macOS ARM64 运行 `./gradlew allTests test --continue --no-configuration-cache`，同时覆盖 Android 宿主、WasmJS 浏览器、iOS 模拟器和 Android 应用单元测试，随后运行打包脚本模拟测试。
