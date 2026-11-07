@@ -43,11 +43,11 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import mederi.app.shared.generated.resources.*
+import org.jetbrains.compose.resources.getString
 import xyz.mederi.theme.AppTheme
 import xyz.mederi.ui.WorkspaceDialogs
 import xyz.mederi.ui.appstate.LocalAppState
@@ -635,11 +635,11 @@ class WorkspaceProductionRoutesTest {
                     projectId,
                     xyz.mederi.workspace.ProjectEnvironment(
                         "env_ui", "UiEnv", 0L,
-                        setup = xyz.mederi.workspace.PlatformScript(default = "printf setup_ok"),
+                        setup = xyz.mederi.workspace.PlatformScript(default = "echo setup_ok"),
                         actions = listOf(
                             xyz.mederi.workspace.EnvironmentAction(
                                 "act_ui", "UiAction",
-                                script = xyz.mederi.workspace.PlatformScript(default = "printf action_ok")
+                                script = xyz.mederi.workspace.PlatformScript(default = "echo action_ok")
                             )
                         )
                     ),
@@ -696,9 +696,9 @@ class WorkspaceProductionRoutesTest {
         val info = asm.realCore.getConversationWorkspace(asm.convId).getOrThrow()
         val active = info.active
         return if (active.workspace.kind == xyz.mederi.core.contract.models.WorkspaceKind.LOCAL) {
-            org.jetbrains.compose.resources.getString(Res.string.workspace_kind_local)
+            getString(Res.string.workspace_kind_local)
         } else {
-            active.branch ?: active.workspace.taskBranchName ?: org.jetbrains.compose.resources.getString(Res.string.workspace_kind_worktree)
+            active.branch ?: active.workspace.taskBranchName ?: getString(Res.string.workspace_kind_worktree)
         }
     }
 
@@ -719,6 +719,8 @@ class WorkspaceProductionRoutesTest {
         Dispatchers.setMain(Dispatchers.Unconfined)
         val asm = realUiAssembly(WorkspaceKind.LOCAL)
         try {
+            val handoffMenuLabel = getString(Res.string.workspace_open_handoff)
+            val executeHandoffLabel = getString(Res.string.handoff_execute_action)
             setContent {
                 AppTheme {
                     CompositionLocalProvider(LocalAppState provides asm.appState) {
@@ -734,7 +736,7 @@ class WorkspaceProductionRoutesTest {
             onNodeWithText(localLabel).performClick()
             waitForIdle()
             // 真实菜单项：迁移工作区
-            onNodeWithText("迁移工作区 (Handoff)...").performClick()
+            onNodeWithText(handoffMenuLabel).performClick()
             waitForIdle()
             // preview 调用：targetKind 从真实 Local 状态推导为 MANAGED_WORKTREE（不是 UI 猜的）
             waitUntil(null, 15_000) { asm.recording.previewHandoffCalls.isNotEmpty() }
@@ -751,8 +753,8 @@ class WorkspaceProductionRoutesTest {
             assertEquals(xyz.mederi.core.contract.models.WorkspaceKind.MANAGED_WORKTREE, preview.target.workspace.kind, "面板目标必须是真实 preview 的 MANAGED")
             assertEquals(xyz.mederi.core.contract.models.WorkspaceKind.LOCAL, preview.source.workspace.kind, "面板源必须是真实 preview 的 LOCAL")
             // 真实确认点击：开始交接
-            assertTouchHeightAtLeast44("开始交接")
-            onNodeWithText("开始交接").performClick()
+            assertTouchHeightAtLeast44(executeHandoffLabel)
+            onNodeWithText(executeHandoffLabel).performClick()
             waitForIdle()
             waitUntil(null, 60_000) { asm.recording.handoffCalls.isNotEmpty() }
             // 提交的 token 必须等于真实 preview 的 token（未重猜）
@@ -769,7 +771,7 @@ class WorkspaceProductionRoutesTest {
             val managedLabel = realSelectorLabel(asm)
             onNodeWithText(managedLabel).performClick()
             waitForIdle()
-            onNodeWithText("迁移工作区 (Handoff)...").performClick()
+            onNodeWithText(handoffMenuLabel).performClick()
             waitForIdle()
             waitUntil(null, 15_000) { asm.recording.previewHandoffCalls.size >= 2 }
             assertEquals(xyz.mederi.core.contract.models.WorkspaceKind.LOCAL, asm.recording.previewHandoffCalls[1].second.targetKind, "反向 targetKind 必须从真实 Managed 推导为 LOCAL")
@@ -777,7 +779,7 @@ class WorkspaceProductionRoutesTest {
                 (asm.vm.dialogState.value as? WorkspaceViewModel.WorkspaceDialogState.Handoff)?.preview != null
             }
             val backPreview = (asm.vm.dialogState.value as WorkspaceViewModel.WorkspaceDialogState.Handoff).preview!!
-            onNodeWithText("开始交接").performClick()
+            onNodeWithText(executeHandoffLabel).performClick()
             waitForIdle()
             waitUntil(null, 60_000) { asm.recording.handoffCalls.size >= 2 }
             assertEquals(backPreview.token, asm.recording.handoffCalls[1].second.previewToken, "反向确认必须提交真实 preview token")
@@ -801,6 +803,15 @@ class WorkspaceProductionRoutesTest {
         val containerWidthPx = 320f
         val currentWidth = androidx.compose.runtime.mutableStateOf(320.dp)
         try {
+            val editEnvironmentLabel = getString(Res.string.workspace_env_edit)
+            val saveEnvironmentLabel = getString(Res.string.workspace_env_save)
+            val runActionLabel = getString(Res.string.workspace_env_run_action)
+            val worktreeSettingsLabel = getString(Res.string.workspace_worktree_settings)
+            val saveSettingsLabel = getString(Res.string.workspace_host_settings_save)
+            val branchMenuLabel = getString(Res.string.workspace_create_branch)
+            val createBranchLabel = getString(Res.string.workspace_create_branch_create)
+            val restoreLabel = getString(Res.string.workspace_restore_action)
+            val newWorktreeRoot = File(asm.root, "worktrees").canonicalPath
             setContent {
                 CompositionLocalProvider(LocalDensity provides Density(1f, 1.6f)) {
                     AppTheme {
@@ -832,7 +843,7 @@ class WorkspaceProductionRoutesTest {
             // a. 环境编辑：真实入口 → 真实表单 → 保存
             onNodeWithText(label).performClick()
             waitForIdle()
-            onNodeWithText("编辑环境").performClick()
+            onNodeWithText(editEnvironmentLabel).performClick()
             waitForIdle()
             waitUntil(null, 15_000) { asm.vm.environmentEditorState.value is WorkspaceViewModel.EnvironmentEditorState.Editing }
             // 预置环境经真实桥回读：动作行可见
@@ -841,10 +852,10 @@ class WorkspaceProductionRoutesTest {
             onNodeWithContentDescription("env_name_field").performTextClearance()
             onNodeWithContentDescription("env_name_field").performTextInput("UiEnvV2")
             onNodeWithContentDescription("env_setup_field").performTextClearance()
-            onNodeWithContentDescription("env_setup_field").performTextInput("printf setup_v2")
-            assertTouchHeightAtLeast44("保存环境")
-            assertNoHorizontalOverflow("保存环境", containerWidthPx)
-            onNodeWithText("保存环境").performClick()
+            onNodeWithContentDescription("env_setup_field").performTextInput("echo setup_v2")
+            assertTouchHeightAtLeast44(saveEnvironmentLabel)
+            assertNoHorizontalOverflow(saveEnvironmentLabel, containerWidthPx)
+            onNodeWithText(saveEnvironmentLabel).performClick()
             waitForIdle()
             waitUntil(null, 15_000) { asm.recording.saveEnvCalls.isNotEmpty() }
             val saveCall = asm.recording.saveEnvCalls.first()
@@ -861,8 +872,8 @@ class WorkspaceProductionRoutesTest {
             }
 
             // b. 运行动作：环境面板真实按钮
-            assertTouchHeightAtLeast44("运行动作")
-            onNodeWithText("运行动作").performClick()
+            assertTouchHeightAtLeast44(runActionLabel)
+            onNodeWithText(runActionLabel).performClick()
             waitForIdle()
             waitUntil(null, 30_000) { asm.recording.runActionCalls.isNotEmpty() }
             val runCall = asm.recording.runActionCalls.first()
@@ -881,39 +892,39 @@ class WorkspaceProductionRoutesTest {
             // c. 宿主工作副本设置：根/最大副本数/自动清理
             onNodeWithText(label).performClick()
             waitForIdle()
-            onNodeWithText("工作副本设置").performClick()
+            onNodeWithText(worktreeSettingsLabel).performClick()
             waitUntil(timeoutMillis = 15_000) {
                 onAllNodesWithContentDescription("worktree_root_field").fetchSemanticsNodes().isNotEmpty()
             }
             onNodeWithContentDescription("worktree_root_field").performTextClearance()
-            onNodeWithContentDescription("worktree_root_field").performTextInput("/tmp/wt-root-ui")
+            onNodeWithContentDescription("worktree_root_field").performTextInput(newWorktreeRoot)
             onNodeWithContentDescription("worktree_max_field").performTextClearance()
             onNodeWithContentDescription("worktree_max_field").performTextInput("15")
-            assertTouchHeightAtLeast44("保存设置")
-            assertNoHorizontalOverflow("保存设置", containerWidthPx)
-            onNodeWithText("保存设置").performClick()
+            assertTouchHeightAtLeast44(saveSettingsLabel)
+            assertNoHorizontalOverflow(saveSettingsLabel, containerWidthPx)
+            onNodeWithText(saveSettingsLabel).performClick()
             waitForIdle()
             waitUntil(null, 15_000) { asm.recording.worktreeSettingsCalls.isNotEmpty() }
             val wtCall = asm.recording.worktreeSettingsCalls.first()
-            assertEquals("/tmp/wt-root-ui", wtCall.rootPath, "root 必须是输入值")
+            assertEquals(newWorktreeRoot, wtCall.rootPath, "root 必须是输入值")
             assertEquals(15, wtCall.maxManagedWorktrees, "max 必须是输入值")
             assertTrue(wtCall.automaticCleanup, "自动清理保持开启")
             // 持久回读：真实桥 getWorktreeSettings 返回保存值
             waitUntil(null, 15_000) {
                 runBlocking {
-                    asm.realCore.getWorktreeSettings().getOrNull()?.rootPath == "/tmp/wt-root-ui"
+                    asm.realCore.getWorktreeSettings().getOrNull()?.rootPath == newWorktreeRoot
                 }
             }
 
             // d. 建分支：名称 + expectedGeneration（真实状态）；同名冲突错误可见
             onNodeWithText(label).performClick()
             waitForIdle()
-            onNodeWithText("创建分支").performClick()
+            onNodeWithText(branchMenuLabel).performClick()
             waitForIdle()
             onNodeWithContentDescription("branch_name_field").performTextInput("ui-test-branch")
-            assertTouchHeightAtLeast44("创建分支")
-            assertNoHorizontalOverflow("创建分支", containerWidthPx)
-            onNodeWithText("创建分支").performClick()
+            assertTouchHeightAtLeast44(createBranchLabel)
+            assertNoHorizontalOverflow(createBranchLabel, containerWidthPx)
+            onNodeWithText(createBranchLabel).performClick()
             waitForIdle()
             waitUntil(null, 30_000) { asm.recording.createBranchCalls.isNotEmpty() }
             val branchCall = asm.recording.createBranchCalls.first()
@@ -931,10 +942,10 @@ class WorkspaceProductionRoutesTest {
             waitForIdle()
             onNodeWithText(label).performClick()
             waitForIdle()
-            onNodeWithText("创建分支").performClick()
+            onNodeWithText(branchMenuLabel).performClick()
             waitForIdle()
             onNodeWithContentDescription("branch_name_field").performTextInput("ui-test-branch")
-            onNodeWithText("创建分支").performClick()
+            onNodeWithText(createBranchLabel).performClick()
             waitForIdle()
             waitUntil(null, 30_000) {
                 (asm.vm.dialogState.value as? WorkspaceViewModel.WorkspaceDialogState.CreateBranch)?.errorMessage != null
@@ -945,8 +956,8 @@ class WorkspaceProductionRoutesTest {
             // e. 恢复：RECOVERY_REQUIRED 操作（预置经真实 store）→ 状态条恢复按钮可见 → 44dp 触达 → 真实点击
             asm.vm.dismissDialog()
             waitForIdle()
-            assertTouchHeightAtLeast44("恢复")
-            onNodeWithText("恢复").performClick()
+            assertTouchHeightAtLeast44(restoreLabel)
+            onNodeWithText(restoreLabel).performClick()
             waitForIdle()
             waitUntil(null, 15_000) { asm.recording.recoveryPreviewCalls.isNotEmpty() }
             assertEquals("op_recovery_ui", asm.recording.recoveryPreviewCalls.first(), "恢复点击必须预览预置的 RECOVERY_REQUIRED 操作")
@@ -956,28 +967,28 @@ class WorkspaceProductionRoutesTest {
             // ── 在 280.dp 窄屏下重复关键路径（触达≥44dp 且 节点宽度不横向溢出） ──
             currentWidth.value = 280.dp
             waitForIdle()
-            assertTouchHeightAtLeast44("恢复")
-            assertNoHorizontalOverflow("恢复", 280f)
+            assertTouchHeightAtLeast44(restoreLabel)
+            assertNoHorizontalOverflow(restoreLabel, 280f)
 
             // 环境编辑面板关键路径
             onNodeWithText(label).performClick()
             waitForIdle()
-            onNodeWithText("编辑环境").performClick()
+            onNodeWithText(editEnvironmentLabel).performClick()
             waitUntil(timeoutMillis = 15_000) {
-                onAllNodesWithText("保存环境").fetchSemanticsNodes().isNotEmpty()
+                onAllNodesWithText(saveEnvironmentLabel).fetchSemanticsNodes().isNotEmpty()
             }
-            assertTouchHeightAtLeast44("保存环境")
-            assertNoHorizontalOverflow("保存环境", 280f)
+            assertTouchHeightAtLeast44(saveEnvironmentLabel)
+            assertNoHorizontalOverflow(saveEnvironmentLabel, 280f)
             onNodeWithContentDescription("Close").performClick()
             waitForIdle()
 
             // 创建分支面板关键路径
             onNodeWithText(label).performClick()
             waitForIdle()
-            onNodeWithText("创建分支").performClick()
+            onNodeWithText(branchMenuLabel).performClick()
             waitForIdle()
-            assertTouchHeightAtLeast44("创建分支")
-            assertNoHorizontalOverflow("创建分支", 280f)
+            assertTouchHeightAtLeast44(createBranchLabel)
+            assertNoHorizontalOverflow(createBranchLabel, 280f)
             onNodeWithContentDescription("Close").performClick()
             waitForIdle()
         } finally {

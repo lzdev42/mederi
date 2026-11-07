@@ -113,9 +113,11 @@ class AgentSettingsDeliveryTest {
                     listOf(fast), listOf(provider()), fast, actions(events), Modifier.width(280.dp).height(800.dp), isCompact = true)
             }
         } }
-        onNodeWithText(reset).performScrollTo().assertIsNotEnabled()
+        onNode(hasScrollToIndexAction()).performScrollToNode(hasText(reset))
+        onNodeWithText(reset).assertIsNotEnabled()
         runOnIdle { enabled.value = true }
-        onNodeWithText(reset).performScrollTo().assertIsDisplayed().performClick()
+        onNode(hasScrollToIndexAction()).performScrollToNode(hasText(reset))
+        onNodeWithText(reset).assertIsDisplayed().performClick()
         runOnIdle { assertEquals(listOf("model:RESEARCHER:null"), events) }
     }
 

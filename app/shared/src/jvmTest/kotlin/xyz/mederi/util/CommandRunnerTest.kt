@@ -14,11 +14,17 @@ import kotlin.test.assertTrue
  * 这里锁死两条最小契约：超时命令在限定时间内返回 null（而不是无限挂等），快命令正常出结果。
  */
 class CommandRunnerTest {
+    private val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+    private val slowCommand = if (isWindows) {
+        listOf("ping.exe", "-n", "6", "127.0.0.1")
+    } else {
+        listOf("/bin/sleep", "5")
+    }
 
     @Test
     fun longRunningCommandIsKilledWithinTimeout() {
         val start = System.nanoTime()
-        val result = runCommand(listOf("/bin/sleep", "5"), timeoutMillis = 300)
+        val result = runCommand(slowCommand, timeoutMillis = 300)
         val elapsedMs = (System.nanoTime() - start) / 1_000_000
 
         assertNull(result, "超时命令必须返回 null")
@@ -30,7 +36,12 @@ class CommandRunnerTest {
 
     @Test
     fun quickCommandReturnsTrimmedOutput() {
-        val out = runCommand(listOf("/bin/echo", "hello world"), timeoutMillis = 3_000)
+        val command = if (isWindows) {
+            listOf("cmd.exe", "/d", "/c", "echo hello world")
+        } else {
+            listOf("/bin/echo", "hello world")
+        }
+        val out = runCommand(command, timeoutMillis = 3_000)
         assertEquals("hello world", out, "正常快命令应返回 stdout 的 trim 文本")
     }
 
@@ -43,7 +54,7 @@ class CommandRunnerTest {
     @Test
     fun exitCodeVariantAlsoHonorsTimeout() {
         val start = System.nanoTime()
-        val code = runCommandExitCode(listOf("/bin/sleep", "5"), timeoutMillis = 300)
+        val code = runCommandExitCode(slowCommand, timeoutMillis = 300)
         val elapsedMs = (System.nanoTime() - start) / 1_000_000
 
         assertNull(code, "超时命令的 exit code 应为 null")
@@ -52,7 +63,12 @@ class CommandRunnerTest {
 
     @Test
     fun exitCodeVariantReturnsCodeForQuickCommand() {
-        val code = runCommandExitCode(listOf("/bin/sh", "-c", "exit 42"), timeoutMillis = 3_000)
+        val command = if (isWindows) {
+            listOf("cmd.exe", "/d", "/c", "exit 42")
+        } else {
+            listOf("/bin/sh", "-c", "exit 42")
+        }
+        val code = runCommandExitCode(command, timeoutMillis = 3_000)
         assertNotNull(code)
         assertEquals(42, code)
     }

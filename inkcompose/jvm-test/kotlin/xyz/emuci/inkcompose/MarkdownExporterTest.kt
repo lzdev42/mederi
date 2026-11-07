@@ -1,6 +1,7 @@
 package xyz.emuci.inkcompose
 
 import kotlinx.coroutines.runBlocking
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import xyz.kbrowser.webview.JcefChecker
 import xyz.kbrowser.webview.KBrowser
@@ -8,7 +9,6 @@ import xyz.kbrowser.webview.initializeKBrowser
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class MarkdownExporterTest {
@@ -47,16 +47,15 @@ class MarkdownExporterTest {
 
     @Test
     fun should_export_pdf_when_jcef_available() = runBlocking {
-        if (!JcefChecker.isJcefAvailable) {
-            println("Skipping should_export_pdf_when_jcef_available because JCEF is not available")
-            return@runBlocking
+        assumeTrue("PDF export requires JCEF", JcefChecker.isJcefAvailable)
+        if (System.getProperty("os.name").startsWith("Linux", ignoreCase = true)) {
+            assumeTrue("Linux JCEF uses X11 and requires DISPLAY", !System.getenv("DISPLAY").isNullOrBlank())
         }
 
         val testStorageDir = File(System.getProperty("java.io.tmpdir"), "inkcompose_test_kbrowser").absolutePath
         File(testStorageDir).mkdirs()
         KBrowser.initializeConfig(testStorageDir, useOsr = true)
         initializeKBrowser()
-        MarkdownExporter.setBrowser(KBrowser)
 
         val md = """
             # PDF 导出测试
@@ -79,7 +78,7 @@ class MarkdownExporterTest {
         val tmpPdf = File.createTempFile("inkcompose_export_test_", ".pdf")
         tmpPdf.deleteOnExit()
 
-        val result = MarkdownExporter.toPdf(md, tmpPdf.absolutePath)
+        val result = MarkdownExporter.toPdf(md, tmpPdf.absolutePath, PdfExportOptions(browser = KBrowser))
         assertTrue(result.isSuccess, "PDF export should succeed: ${result.exceptionOrNull()?.message}")
 
         assertTrue(tmpPdf.exists(), "PDF file must exist")

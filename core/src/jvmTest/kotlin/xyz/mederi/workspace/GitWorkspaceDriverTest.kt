@@ -79,13 +79,14 @@ class GitWorkspaceDriverTest {
         val mainRepo = File(testBaseDir, "special-paths-repo")
         initRepoWithCommit(mainRepo)
 
-        val names = listOf(
+        val names = mutableListOf(
             "-leading-dash.txt",
             "file with spaces.txt",
-            "file\nwith\nnewlines.txt",
-            "file\twith\ttab.txt",
             "中文文件.txt"
         )
+        if (File.separatorChar != '\\') {
+            names += listOf("file\nwith\nnewlines.txt", "file\twith\ttab.txt")
+        }
 
         for (name in names) {
             val file = File(mainRepo, name)

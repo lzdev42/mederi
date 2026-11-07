@@ -1,6 +1,7 @@
 package xyz.mederi.tools.sandbox
 
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -47,17 +48,24 @@ class ProcessRegistryTest {
             "/usr/bin/perl", "-e", """setpgrp(0,0) or die ${'$'}!; exec @ARGV""", "--", "sleep", "60"
         ).start()
         val pid = leader.pid()
-        ProcessRegistry.register(pid, pid, "sleep 60", File("/tmp").absolutePath)
+        try {
+            ProcessRegistry.register(pid, pid, "sleep 60", File("/tmp").absolutePath)
+            val entry = checkNotNull(ProcessRegistry.get(pid))
+            // start() 返回时 Perl 可能还没执行 setpgrp。
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (leader.isAlive && !entry.isAlive() && System.nanoTime() < deadline) {
+                Thread.sleep(10)
+            }
+            assertTrue(entry.isAlive(), "leader group should be alive")
 
-        // sleep 是组长 exec 后继承 pgid==pid，group 存活
-        assertTrue(ProcessRegistry.get(pid)?.isAlive() == true, "leader group should be alive")
-
-        // 宿主侧整组回收
-        ProcessRegistry.killGroup(pid, pid, force = true)
-        leader.waitFor()
-        Thread.sleep(200)
-        assertFalse(ProcessRegistry.isAlive(pid, pid), "group should be dead after SIGKILL")
-        assertTrue(ProcessRegistry.list().isEmpty(), "dead group should be pruned from list()")
+            ProcessRegistry.killGroup(pid, pid, force = true)
+            assertTrue(leader.waitFor(5, TimeUnit.SECONDS), "SIGKILL should terminate the leader")
+            assertFalse(ProcessRegistry.isAlive(pid, pid), "group should be dead after SIGKILL")
+            assertTrue(ProcessRegistry.list().isEmpty(), "dead group should be pruned from list()")
+        } finally {
+            if (leader.isAlive) leader.destroyForcibly().waitFor(5, TimeUnit.SECONDS)
+            ProcessRegistry.remove(pid)
+        }
     }
 
     /** POSIX：非进程组（无 pgid）退化为单进程 kill。 */

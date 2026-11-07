@@ -129,7 +129,6 @@ class GFMSpecTest {
                 failures.forEach { appendLine(it); appendLine() }
             }
         }
-        java.io.File("/tmp/gfm-results.txt").writeText(report)
         System.err.println(report)
     }
 }

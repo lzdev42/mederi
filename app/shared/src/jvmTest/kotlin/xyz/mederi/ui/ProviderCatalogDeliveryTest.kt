@@ -223,11 +223,13 @@ class ProviderCatalogDeliveryTest {
             Fixture(state, Modifier.width(900.dp).height(650.dp))
         } }
         val label = onNodeWithText(count).fetchSemanticsNode().boundsInRoot
-        val field = onNodeWithText(search).fetchSemanticsNode().boundsInRoot
+        val field = onNode(hasText(search) and hasSetTextAction()).fetchSemanticsNode().boundsInRoot
         val button = onNodeWithText(add).fetchSemanticsNode().boundsInRoot
         val detail = onNodeWithText("Detail: configured").fetchSemanticsNode().boundsInRoot
-        assertTrue(kotlin.math.abs(label.center.y - button.center.y) <= 1f)
-        assertTrue(label.left >= field.left && button.right <= field.right + 1f)
+        // The left column can stack the toolbar when localized labels do not fit side by side.
+        assertTrue(label.left >= field.left - 1f && label.right <= field.right + 1f)
+        assertTrue(button.left >= field.left - 1f && button.right <= field.right + 1f)
+        assertTrue(label.bottom <= field.top + 1f && button.bottom <= field.top + 1f)
         assertTrue(detail.top <= field.top, "The detail should start alongside the toolbar, not below it")
     }
 

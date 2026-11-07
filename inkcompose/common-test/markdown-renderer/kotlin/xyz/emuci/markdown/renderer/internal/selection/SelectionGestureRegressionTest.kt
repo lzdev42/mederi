@@ -143,7 +143,9 @@ class SelectionGestureRegressionTest {
                 enableScrollOverride = false,
                 onLinkClick = { opened = it })
         }
-        waitUntil { onAllNodesWithText("Visit example").fetchSemanticsNodes().isNotEmpty() }
+        awaitSelectionTestContent("parsed Markdown link") {
+            onAllNodesWithText("Visit example").fetchSemanticsNodes().isNotEmpty()
+        }
         onNodeWithText("Visit example").performMouseInput {
             moveTo(center)
             press()
@@ -217,7 +219,9 @@ class SelectionGestureRegressionTest {
                     onLinkClick = { opened = true })
             }
         }
-        waitUntil { onAllNodesWithText("Visit example website").fetchSemanticsNodes().isNotEmpty() }
+        awaitSelectionTestContent("parsed Markdown link") {
+            onAllNodesWithText("Visit example website").fetchSemanticsNodes().isNotEmpty()
+        }
         onNodeWithText("Visit example website").performMouseInput {
             moveTo(Offset(2f, 5f)); press(); moveTo(Offset(90f, 5f)); release()
         }

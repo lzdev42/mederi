@@ -80,7 +80,9 @@ class SelectionMenuRenderingTest {
         setContent {
             MenuFixture(toolbar) { copy, paste -> copyLabel = copy; pasteLabel = paste }
         }
-        waitForIdle()
+        awaitSelectionTestContent("localized copy and paste labels") {
+            copyLabel.isNotBlank() && pasteLabel.isNotBlank()
+        }
         onAllNodes(hasClickAction()).assertCountEquals(2)
         onNodeWithText(copyLabel).assertIsDisplayed().assertIsEnabled()
         onNodeWithText(pasteLabel).assertIsDisplayed().assertIsNotEnabled().performTouchInput { click() }
@@ -101,7 +103,7 @@ class SelectionMenuRenderingTest {
         var pasteLabel = ""
         toolbar.showMenu(Rect(40f, 40f, 40f, 40f), { copies++ }, { pastes++ }, {}, {})
         setContent { MenuFixture(toolbar) { _, paste -> pasteLabel = paste } }
-        waitForIdle()
+        awaitSelectionTestContent("localized paste label") { pasteLabel.isNotBlank() }
         onAllNodes(hasClickAction()).assertCountEquals(2)
         onNodeWithText(pasteLabel).assertIsEnabled().performClick()
         runOnIdle {

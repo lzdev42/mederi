@@ -2,9 +2,11 @@ package xyz.mederi.browser.install
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CamoufoxInstallerTest {
@@ -42,28 +44,44 @@ class CamoufoxInstallerTest {
     }
 
     @Test
-    fun `findLatestForPlatform returns a release with current platform asset`() = runBlocking {
-        // 真实网络调用（GitHub API）——本地验证官方命名/存在性
-        val home = BrowserHome(java.io.File.createTempFile("camoufox-home-", "").apply { delete() })
-        val installer = CamoufoxInstaller(home)
-        withTimeout(30_000) {
-            val release = installer.findLatestForPlatform()
-            if (CamoufoxPlatform.supported) {
-                assertNotNull(release, "本平台应有可用 release")
-                assertTrue(release!!.assets.any { it.name.endsWith(CamoufoxPlatform.assetSuffix) })
-            } else {
-                // 不支持平台（win.arm64）→ 允许为 null
+    fun `findLatestForPlatform searches history for a matching asset`(): Unit = runBlocking {
+        val home = BrowserHome(Files.createTempDirectory("camoufox-home-").toFile())
+        try {
+            CamoufoxReleaseServer().use { server ->
+                val latest = CamoufoxRelease(tagName = "v2.0.0")
+                val compatible = server.platformRelease("v1.0.0")
+                server.respondLatest(latest)
+                server.respondHistory(latest, compatible)
+                val installer = CamoufoxInstaller(home, server.releasesUrl)
+
+                val release = withTimeout(30_000) { installer.findLatestForPlatform() }
+                assertEquals(compatible, release)
+                assertNotNull(release?.platformAsset())
             }
+        } finally {
+            home.rootDir.deleteRecursively()
         }
     }
 
     @Test
-    fun `checkForUpdate never crashes without installation`() = runBlocking {
-        val home = BrowserHome(java.io.File.createTempFile("camoufox-home-", "").apply { delete() })
-        val installer = CamoufoxInstaller(home)
-        withTimeout(30_000) {
-            val info = installer.checkForUpdate()
-            assertTrue(info.supported || !CamoufoxPlatform.supported)
+    fun `checkForUpdate reports latest version without installation`() = runBlocking {
+        val home = BrowserHome(Files.createTempDirectory("camoufox-home-").toFile())
+        try {
+            CamoufoxReleaseServer().use { server ->
+                val latest = server.platformRelease("v1.0.0")
+                server.respondLatest(latest)
+                val installer = CamoufoxInstaller(home, server.releasesUrl)
+
+                val info = withTimeout(30_000) { installer.checkForUpdate() }
+                assertEquals(CamoufoxPlatform.supported, info.supported)
+                assertNull(info.installedVersion)
+                if (CamoufoxPlatform.supported) {
+                    assertTrue(info.hasUpdate)
+                    assertEquals(latest.tagName, info.latestAvailableVersion)
+                }
+            }
+        } finally {
+            home.rootDir.deleteRecursively()
         }
     }
 }

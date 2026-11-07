@@ -89,7 +89,7 @@ class SandboxPathsTest {
         assertFailsWith<IllegalArgumentException> {
             SandboxPaths(emptyList(), emptyList(), emptyList(), deniedPaths = listOf("relative"))
         }
-        val denyAll = SandboxPaths(emptyList(), emptyList(), emptyList(), deniedPaths = listOf(File.listRoots().first().path))
+        val denyAll = SandboxPaths(emptyList(), emptyList(), emptyList(), deniedPaths = listOf(root.toPath().root.toString()))
         assertFalse(denyAll.allowsRead(root.toPath()))
     }
 

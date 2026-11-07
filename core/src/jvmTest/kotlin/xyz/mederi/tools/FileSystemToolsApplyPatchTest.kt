@@ -51,7 +51,7 @@ class FileSystemToolsApplyPatchTest {
         assertEquals("moved\n", File(root, "dest.txt").readText())
         assertFalse(File(root, "source.txt").exists())
         assertFalse(File(root, "delete.txt").exists())
-        assertEquals(setOf("nested/new.txt", "edit.txt", "delete.txt", "source.txt", "dest.txt"), touched.map { File(it).relativeTo(root).path }.toSet())
+        assertEquals(setOf("nested/new.txt", "edit.txt", "delete.txt", "source.txt", "dest.txt"), touched.map { File(it).relativeTo(root).invariantSeparatorsPath }.toSet())
         val changes = tracker.buildDiff(null, "now").changes.associateBy { it.path }
         assertEquals(FileChangeStatus.DELETED, changes.getValue("source.txt").status)
         assertEquals("overwritten\n", changes.getValue("dest.txt").before)

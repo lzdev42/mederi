@@ -84,7 +84,7 @@ class SkillManagerImplTest {
         assertEquals(1, skills.size)
         assertEquals("csv-analysis", skills[0].name)
         assertEquals("desc of csv-analysis", skills[0].description)
-        assertTrue(skills[0].location.endsWith("csv-analysis/SKILL.md"))
+        assertEquals(File(root, "csv-analysis/SKILL.md").canonicalFile, File(skills[0].location).canonicalFile)
     }
 
     @Test

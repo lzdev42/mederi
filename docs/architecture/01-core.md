@@ -629,7 +629,7 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 | jvmMain | `…/browser/bidi/{BiDiBrowser,BiDiPage,BiDiTransport,BiDiSnapshot,BiDiLocator,BiDiJsScripts,HumanMouse,BiDiLog}.kt` | BiDi 协议层（从 BrowserPilot 直接 copy 改造：包名 + AILogger→BiDiLog）。**`CamoufoxConfig`（BiDiBrowser.kt，@Serializable）**：指纹覆盖字段**全可空**（null = 不注入，交 Camoufox 自动生成；已删 `os` 字段、不再无条件注入 navigator.platform/locale——写死的 platform 会与自动 UA 冲突致泄漏）；新增 `humanize`(+humanizeMaxSeconds) / `blockImages` / `proxyPrefs: Map<String,Any>`（BiDiBrowserControl 透传，`writeUserJs()` 写 Firefox prefs）/ `advancedConfig` 原样透传；BiDiPage 人类化接线（performHumanClick/Hover 分支） |
 | commonMain | `…/browser/install/BrowserHome.kt` | 浏览器工作目录（**强制设置**）：camoufox/version.json/skills/drills/reports/records/profiles/config。2026-10 从 jvmMain 移入（仅依赖 java.io.File），供 Mederi 复用目录布局真源 |
 | jvmMain | `…/browser/install/CamoufoxPlatform.kt` | 平台检测：os(mac/lin/win) + arch(arm64/x86_64/i686)；win.arm64 等官方无 asset → supported=false |
-| jvmMain | `…/browser/install/CamoufoxInstaller.kt` | 下载/安装/更新：GitHub 官方 releases，命名 `camoufox-{ver}-{os}.{arch}.zip`；`findLatestForPlatform` 从最新往回找本平台 asset（跨平台发布不同步）；下载→解压→找二进制→写 version.json |
+| jvmMain | `…/browser/install/CamoufoxInstaller.kt` | 下载/安装/更新：默认查询 GitHub 官方 releases，内部构造可注入测试用 release 地址；命名 `camoufox-{ver}-{os}.{arch}.zip`；`findLatestForPlatform` 从最新往回找本平台 asset（跨平台发布不同步）；`installFromRelease(release, asset)` 读取 asset 下载地址→解压→找二进制→写 version.json |
 | jvmMain | `…/browser/install/CamoufoxModels.kt` | release/version.json 数据模型 + 更新检查结果 |
 
 **关键设计决策**：

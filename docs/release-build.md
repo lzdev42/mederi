@@ -15,6 +15,7 @@ macOS ARM64 运行 `./gradlew allTests test --continue --no-configuration-cache`
 其余组运行 `./gradlew jvmTest test -x :app:androidApp:test --continue --no-configuration-cache`，覆盖当前宿主上的 JVM 测试。
 Gradle 从各模块的标准测试源集自动发现测试。在现有测试源集添加测试类或用例，无需改 workflow。
 Android 真机测试和需要单独启动服务或配置凭据的 E2E 脚本单独运行。
+测试步骤失败时，各平台上传 Gradle XML 和 HTML 测试报告，产物名为 `test-results-<platform>-<arch>`。
 
 - `Mederi-desktop-<platform>-<arch>`：Desktop
 - `Mederi-server-with-wasmjs-<platform>-<arch>`：Server 完整版，带 JVM 和 WasmJS 页面

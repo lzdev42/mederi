@@ -30,9 +30,12 @@ import java.util.zip.ZipInputStream
  *
  * 目录/下载都必须在设置好的 [BrowserHome] 内（强制设置目录，浏览器体积大，不许落临时目录）。
  */
-class CamoufoxInstaller(
-    private val home: BrowserHome
+class CamoufoxInstaller internal constructor(
+    private val home: BrowserHome,
+    private val releasesUrl: String
 ) {
+    constructor(home: BrowserHome) : this(home, "https://api.github.com/repos/daijro/camoufox/releases")
+
     private val client: HttpClient by lazy {
         HttpClient(CIO) {
             install(UserAgent) { agent = MederiHttpClientFactory.userAgent }
@@ -79,7 +82,7 @@ class CamoufoxInstaller(
         val suffix = CamoufoxPlatform.assetSuffix
         // 先看 latest
         val latest = try {
-            fetchReleases("https://api.github.com/repos/daijro/camoufox/releases/latest")
+            fetchReleases("$releasesUrl/latest")
         } catch (e: Exception) {
             DebugLog.error("Camoufox", "latest release 查询失败: ${e.message}")
             null
@@ -125,12 +128,11 @@ class CamoufoxInstaller(
 
     /**
      * 管线核心：下载 asset → 解压 → 探测二进制 → 写 version.json → 返回二进制路径。
-     * 独立出来供测试（真实 release 解析 + 可替换 asset 字节）。默认下载真实 URL。
+     * 下载地址来自 release 的 asset。
      */
     internal suspend fun installFromRelease(
         release: CamoufoxRelease,
-        asset: CamoufoxReleaseAsset,
-        downloadUrlOverride: String? = null
+        asset: CamoufoxReleaseAsset
     ): String {
         if (!CamoufoxPlatform.supported) throw CamoufoxUnsupportedException(CamoufoxPlatform.unsupportedReason)
         home.ensureDirectories()
@@ -144,9 +146,8 @@ class CamoufoxInstaller(
         }
 
         // 下载（覆盖旧的同名 zip）
-        val url = downloadUrlOverride ?: asset.browserDownloadUrl
         DebugLog.info("Camoufox", "downloading ${asset.name} (${asset.size / 1024 / 1024} MB) → $zipFile")
-        download(url, zipFile)
+        download(asset.browserDownloadUrl, zipFile)
 
         // 解压到 {camoufox}/{version}/
         if (versionDir.exists()) versionDir.deleteRecursively()
@@ -294,7 +295,7 @@ class CamoufoxInstaller(
     }
 
     private suspend fun fetchReleaseList(page: Int): List<CamoufoxRelease> {
-        val url = "https://api.github.com/repos/daijro/camoufox/releases?per_page=30&page=$page"
+        val url = "$releasesUrl?per_page=30&page=$page"
         val text = client.get(url).bodyAsText()
         return CamoufoxJson.json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(CamoufoxRelease.serializer()),
@@ -303,7 +304,7 @@ class CamoufoxInstaller(
     }
 
     private suspend fun fetchReleaseByTag(tag: String): CamoufoxRelease? {
-        val url = "https://api.github.com/repos/daijro/camoufox/releases/tags/$tag"
+        val url = "$releasesUrl/tags/$tag"
         return try {
             fetchReleases(url)
         } catch (e: Exception) {

@@ -33,9 +33,7 @@ class RichSelectionGestureTest {
                 },
             )
         }
-        // 首次异步解析/字体加载可能超过 UI test 的 1s 默认等待。
-        waitUntil(timeoutMillis = 10_000) { controller != null }
-        waitForIdle()
+        awaitSelectionTestContent("parsed Markdown and selection controller") { controller != null }
         val readerBounds = onNodeWithTag("reader").fetchSemanticsNode().boundsInRoot
         val first = onNodeWithText("opening").fetchSemanticsNode().boundsInRoot
         val last = onNodeWithText("omega").fetchSemanticsNode().boundsInRoot

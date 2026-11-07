@@ -3,11 +3,13 @@ package xyz.mederi.browser.install
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.builtins.ListSerializer
 import java.io.File
 import java.net.InetSocketAddress
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -16,10 +18,7 @@ import kotlin.test.assertTrue
 /**
  * Camoufox 安装管线测试。
  *
- * release 解析走**真实 GitHub**（findLatestForPlatform 真调 API 拿真实 release/asset）。
- * 唯一无法避免的替换：300MB 真实二进制字节 —— 用本地 HTTP 服务器提供一个小 zip，
- * 但 zip 内部结构与真实 Camoufox 一致（mac=.app/Contents/MacOS，win=.exe，lin=camoufox 可执行）。
- * 这样 download→解压→findBinary→version.json→路径 全链路都是真实代码路径。
+ * 由本地 HTTP 提供 release 元数据和平台 ZIP，覆盖查询、下载、解压和版本记录。
  */
 class CamoufoxInstallerPipelineTest {
 
@@ -44,17 +43,6 @@ class CamoufoxInstallerPipelineTest {
         return baos.toByteArray()
     }
 
-    /** 起一个本地 HTTP 服务器，返回 (server, baseUrl)；服务一个路径返回指定字节。 */
-    private fun serve(route: String, bytes: ByteArray): Pair<HttpServer, String> {
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext(route) { exchange ->
-            exchange.sendResponseHeaders(200, bytes.size.toLong())
-            exchange.responseBody.use { it.write(bytes) }
-        }
-        server.start()
-        return server to "http://127.0.0.1:${server.address.port}"
-    }
-
     private fun tempHome(): BrowserHome {
         val dir = java.nio.file.Files.createTempDirectory("camoufox-test-home-").toFile()
         return BrowserHome(dir)
@@ -62,17 +50,21 @@ class CamoufoxInstallerPipelineTest {
 
     // ── 测试 ──
 
-    /** 真 HTTP 下载：从 GitHub 真实下载一个小的真实文件（releases API JSON），校验字节。 */
     @Test
-    fun `download fetches real bytes over real HTTP`() { runBlocking {
-        val installer = CamoufoxInstaller(tempHome())
-        val target = File.createTempFile("camoufox-dl-", ".json")
-        withTimeout(30_000) {
-            installer.download("https://api.github.com/repos/daijro/camoufox/releases/latest", target)
-        }
-        val text = target.readText()
-        assertTrue(text.contains("tag_name"), "应下载到真实 GitHub API 响应（含 tag_name），实际: ${text.take(80)}")
-        target.delete()
+    fun `download preserves bytes from HTTP response`() = runBlocking {
+        val bytes = ByteArray(256 * 1024 + 17) { it.toByte() }
+        val home = tempHome()
+        try {
+            CamoufoxReleaseServer().use { server ->
+                server.respond("/download", bytes)
+                val target = File(home.rootDir, "download.bin")
+                withTimeout(30_000) {
+                    CamoufoxInstaller(home).download("${server.baseUrl}/download", target)
+                }
+                assertContentEquals(bytes, target.readBytes())
+            }
+        } finally {
+            home.rootDir.deleteRecursively()
         }
     }
 
@@ -127,51 +119,31 @@ class CamoufoxInstallerPipelineTest {
         zip.delete()
     }
 
-    /**
-     * 端到端管线：真实 GitHub 解析出真实 release + 真实 asset 名，
-     * 字节源换成本地小 zip（唯一替换），跑完整 installFromRelease。
-     */
     @Test
-    fun `installFromRelease runs full pipeline with real GitHub release`() { runBlocking {
+    fun `install follows release asset URL and records installed version`() = runBlocking {
         if (!CamoufoxPlatform.supported) return@runBlocking
 
         val home = tempHome()
-        val installer = CamoufoxInstaller(home)
+        try {
+            CamoufoxReleaseServer().use { server ->
+                val release = server.platformRelease("v1.0.0")
+                server.respondLatest(release)
+                server.respond("/camoufox.zip", buildFakeCamoufoxZip())
 
-        // 1) 真实 GitHub：拿到本平台真实最新 release + 真实 asset
-        val release = withTimeout(30_000) { installer.findLatestForPlatform() }
-        assertNotNull(release, "真实 GitHub 应返回 release")
-        val asset = release!!.platformAsset()
-        assertNotNull(asset, "release ${release.tagName} 应有本平台 asset: ${release.assets.map { it.name }}")
+                val installer = CamoufoxInstaller(home, server.releasesUrl)
+                val binaryPath = withTimeout(30_000) { installer.install() }
+                assertTrue(File(binaryPath).isFile, "安装后应有可执行文件: $binaryPath")
 
-        // 2) 本地服务器服务一个小 zip（结构同真实）
-        val (server, baseUrl) = serve("/camoufox.zip", buildFakeCamoufoxZip())
-
-        // 3) 跑完整管线：下载→解压→找二进制→写 version.json
-        val binaryPath = withTimeout(60_000) {
-            installer.installFromRelease(release, asset, downloadUrlOverride = "$baseUrl/camoufox.zip")
-        }
-
-        // 4) 断言
-        val binary = File(binaryPath)
-        assertTrue(binary.exists(), "返回的二进制路径应存在: $binaryPath")
-
-        // version.json 记录真实 tag
-        val info = installer.readInstalledVersion()
-        assertNotNull(info, "应写入 version.json")
-        assertEquals(release.tagName, info!!.version, "version.json 应记录真实 tag")
-        assertEquals(CamoufoxPlatform.os, info.os)
-        assertEquals(CamoufoxPlatform.arch, info.arch)
-        assertEquals(binaryPath, info.binaryPath)
-
-        // 二次读取：installedBinaryPath 走 version.json 拿回同一路径
-        assertEquals(binaryPath, installer.installedBinaryPath())
-
-        // 已装同版本 → install() 直接复用，不再下载（zip 已被清理）
-        val zipFile = File(home.camoufoxDir, "${release.tagName}.zip")
-        assertTrue(!zipFile.exists(), "安装后 zip 应被清理")
-
-        server.stop(0)
+                val info = assertNotNull(installer.readInstalledVersion(), "应写入 version.json")
+                assertEquals(release.tagName, info.version)
+                assertEquals(CamoufoxPlatform.os, info.os)
+                assertEquals(CamoufoxPlatform.arch, info.arch)
+                assertEquals(release.platformAsset()?.name, info.assetName)
+                assertEquals(binaryPath, installer.installedBinaryPath())
+                assertTrue(!File(home.camoufoxDir, "${release.tagName}.zip").exists(), "安装后 zip 应被清理")
+            }
+        } finally {
+            home.rootDir.deleteRecursively()
         }
     }
 
@@ -205,4 +177,38 @@ class CamoufoxInstallerPipelineTest {
         assertNull(installer.installedBinaryPath(), "二进制不存在时不应返回路径")
         }
     }
+}
+
+internal class CamoufoxReleaseServer : AutoCloseable {
+    private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply { start() }
+    val baseUrl = "http://127.0.0.1:${server.address.port}"
+    val releasesUrl = "$baseUrl/releases"
+
+    fun platformRelease(tag: String) = CamoufoxRelease(
+        tagName = tag,
+        assets = listOf(
+            CamoufoxReleaseAsset(
+                name = "camoufox-$tag${CamoufoxPlatform.assetSuffix}",
+                browserDownloadUrl = "$baseUrl/camoufox.zip"
+            )
+        )
+    )
+
+    fun respondLatest(release: CamoufoxRelease) {
+        respond("/releases/latest", CamoufoxJson.json.encodeToString(CamoufoxRelease.serializer(), release).toByteArray())
+    }
+
+    fun respondHistory(vararg releases: CamoufoxRelease) {
+        val body = CamoufoxJson.json.encodeToString(ListSerializer(CamoufoxRelease.serializer()), releases.toList())
+        respond("/releases", body.toByteArray())
+    }
+
+    fun respond(route: String, bytes: ByteArray) {
+        server.createContext(route) { exchange ->
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+    }
+
+    override fun close() = server.stop(0)
 }

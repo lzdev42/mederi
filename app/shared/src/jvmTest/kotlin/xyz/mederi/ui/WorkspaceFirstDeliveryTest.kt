@@ -148,7 +148,8 @@ class WorkspaceFirstDeliveryTest {
             }
         }
         val normalHeight = onNodeWithTag("scalingControl").fetchSemanticsNode().boundsInRoot.height
-        runOnIdle { fontScale.value = 2f }
+        // Exceed the minimum control height even with fonts whose 2x glyphs still fit.
+        runOnIdle { fontScale.value = 3f }
         val scaledHeight = onNodeWithTag("scalingControl").fetchSemanticsNode().boundsInRoot.height
         assertTrue(scaledHeight > normalHeight, "control should grow from $normalHeight to fit scaled text, actual $scaledHeight")
     }

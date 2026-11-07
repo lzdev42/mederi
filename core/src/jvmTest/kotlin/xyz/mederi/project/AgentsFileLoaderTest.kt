@@ -52,7 +52,7 @@ class AgentsFileLoaderTest {
 
         assertEquals(listOf("repo level", "nested level"), chain.map { it.content })
         // git 根相对项目目录隔两层，相对路径含 ..
-        assertEquals("../..${File.separator}AGENTS.md", chain[0].relativePath)
+        assertEquals(listOf("..", "..", "AGENTS.md").joinToString(File.separator), chain[0].relativePath)
     }
 
     @Test
@@ -76,7 +76,7 @@ class AgentsFileLoaderTest {
         val chain = AgentsFileLoader().loadInstructionChain(project.absolutePath)
 
         assertEquals(listOf("nested level"), chain.map { it.content })
-        assertEquals("mederi/AGENTS.md", chain.single().relativePath)
+        assertEquals(File("mederi", "AGENTS.md").path, chain.single().relativePath)
     }
 
     @Test
