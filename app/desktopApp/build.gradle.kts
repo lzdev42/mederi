@@ -43,6 +43,10 @@ val wasmJsDistTask = wasmJsProject.tasks.named("wasmJsBrowserDistribution")
 
 tasks.named<ProcessResources>("processResources") {
     dependsOn(wasmJsDistTask)
+    from(rootProject.layout.projectDirectory.dir("scripts/runtime")) {
+        include("install.sh", "install.ps1")
+        into("runtime")
+    }
     from(wasmJsProject.layout.buildDirectory.dir("dist/wasmJs/productionExecutable")) {
         into("static")
     }

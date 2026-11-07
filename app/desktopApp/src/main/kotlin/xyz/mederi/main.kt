@@ -1,27 +1,37 @@
 package xyz.mederi
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import xyz.mederi.core.bridge.MederiAiCore
+import xyz.mederi.mcp.runtime.McpRuntime
+import xyz.mederi.runtime.RuntimeSetupPage
 import xyz.mederi.server.Server
 import xyz.mederi.server.terminal.PtyTerminalHub
 import xyz.mederi.ui.appstate.AppState
 import xyz.mederi.ui.host.LocalProjectFileTreeProvider
 import xyz.mederi.ui.host.ProjectFileTreeProviderJvm
+import java.awt.Desktop
 import java.io.File
 
 /** 终端会话注册表（desktop 全局单例，随进程生命周期）。 */
 private val terminalHub = PtyTerminalHub()
 
 fun main() = application {
+    val missingRuntimes = remember { mutableStateOf<Set<McpRuntime.Component>?>(null) }
+    LaunchedEffect(Unit) {
+        missingRuntimes.value = withContext(Dispatchers.IO) { McpRuntime.missing() }
+    }
+
     // 持有 AppState 引用：退出前 flush 未落盘的偏好写（内部带 2s 兜底超时）
     val appStateHolder = remember { mutableStateOf<AppState?>(null) }
 
@@ -44,18 +54,40 @@ fun main() = application {
             }
     }
 
+    fun requestClose() {
+        // null means detection is still in progress. Only a successful probe unlocks exit.
+        if (missingRuntimes.value?.isEmpty() != true) return
+        Server.stop()
+        terminalHub.shutdown()
+        appStateHolder.value?.uiBrowserHost?.shutdown()
+        xyz.mederi.browser.KBrowserRuntime.shutdown()
+        appStateHolder.value?.remoteControl?.stopTunnel()
+        appStateHolder.value?.let { runBlocking { it.flushAll() } }
+        exitApplication()
+    }
+
+    DisposableEffect(Unit) {
+        // macOS Command-Q and the system Quit menu can bypass the window close event.
+        val desktop = if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null
+        val quitDesktop = desktop?.takeIf { it.isSupported(Desktop.Action.APP_QUIT_HANDLER) }
+        quitDesktop?.setQuitHandler { _, response ->
+            response.cancelQuit()
+            requestClose()
+        }
+        onDispose { quitDesktop?.setQuitHandler(null) }
+    }
+
     Window(
-        onCloseRequest = {
-            Server.stop()
-            terminalHub.shutdown()
-            appStateHolder.value?.uiBrowserHost?.shutdown()
-            xyz.mederi.browser.KBrowserRuntime.shutdown()
-            appStateHolder.value?.remoteControl?.stopTunnel()
-            appStateHolder.value?.let { runBlocking { it.flushAll() } }
-            exitApplication()
-        },
+        onCloseRequest = ::requestClose,
         title = "Mederi",
+        visible = missingRuntimes.value != null,
     ) {
+        val missing = missingRuntimes.value ?: return@Window
+        if (missing.isNotEmpty()) {
+            RuntimeSetupPage(missing) { missingRuntimes.value = it }
+            return@Window
+        }
+
         // 注入文件树数据源（desktop 宿主专属）：根 = 当前工作目录（AppState 项目目录在 MederiApp 内
         // 创建才可得，宿主注入点取不到，按 S3 spec 退路用 user.dir）
         val fileTreeProvider = remember { ProjectFileTreeProviderJvm(File(System.getProperty("user.dir") ?: ".")) }

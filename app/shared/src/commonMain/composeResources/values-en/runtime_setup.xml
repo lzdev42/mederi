@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="runtime_setup_title">Set up the MCP runtimes</string>
+    <string name="runtime_setup_description">Select Install automatically to download and install the missing components below. Administrator access is unnecessary.</string>
+    <string name="runtime_setup_busy">Setup or verification may take a few minutes. Keep this window open.</string>
+    <string name="runtime_setup_missing">Some components are still unavailable. Try again or follow the terminal instructions below.</string>
+    <string name="runtime_setup_install">Install automatically</string>
+    <string name="runtime_setup_check">Check again</string>
+    <string name="runtime_setup_manual">Install in Terminal</string>
+    <string name="runtime_setup_windows">2. Press Win + R, type powershell, and press Enter. A PowerShell window opens.</string>
+    <string name="runtime_setup_macos">2. Press Command + Space, type Terminal, and press Return.</string>
+    <string name="runtime_setup_linux">2. Open Terminal from your apps menu, or try Ctrl + Alt + T.</string>
+    <string name="runtime_setup_copy">Copy command</string>
+    <string name="runtime_setup_required">The workspace opens once all components pass the check. This window stays open until setup is complete.</string>
+    <string name="runtime_setup_step_copy">1. Select Copy command below.</string>
+    <string name="runtime_setup_paste_windows">3. In PowerShell, press Ctrl + V, then Enter. If the paste shortcut fails, right-click in the window. Wait for Mederi runtime setup complete.</string>
+    <string name="runtime_setup_paste_macos">3. In Terminal, press Command + V, then Return. Wait for Mederi runtime setup complete.</string>
+    <string name="runtime_setup_paste_linux">3. In Terminal, press Ctrl + Shift + V, then Enter. Wait for Mederi runtime setup complete. If Ubuntu or Debian reports that curl and wget are missing, enter sudo apt install curl and press Enter. Then run the copied command again.</string>
+    <string name="runtime_setup_step_return">4. Return to this window and select Check again. The workspace opens automatically when the check passes.</string>
+    <string name="runtime_setup_command_error">The terminal command could not be prepared. Try Install automatically again.</string>
+</resources>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="runtime_setup_title">安装 MCP 运行环境</string>
+    <string name="runtime_setup_description">点击「一键安装」，Mederi 会下载并安装下面缺少的组件。无需管理员权限。</string>
+    <string name="runtime_setup_busy">正在安装或检查，可能需要几分钟。请保持窗口打开。</string>
+    <string name="runtime_setup_missing">还有组件不可用。你可以重试，或按下面的终端步骤安装。</string>
+    <string name="runtime_setup_install">一键安装</string>
+    <string name="runtime_setup_check">重新检查</string>
+    <string name="runtime_setup_manual">终端安装</string>
+    <string name="runtime_setup_windows">2. 按 Win + R，输入 powershell，再按 Enter。会打开一个 PowerShell 窗口。</string>
+    <string name="runtime_setup_macos">2. 按 Command + 空格，输入「终端」，再按 Return。</string>
+    <string name="runtime_setup_linux">2. 从应用菜单打开「终端」，也可以试试 Ctrl + Alt + T。</string>
+    <string name="runtime_setup_copy">复制命令</string>
+    <string name="runtime_setup_required">所有组件都通过检查后，Mederi 才会打开工作台。安装完成前，此窗口会保持打开。</string>
+    <string name="runtime_setup_step_copy">1. 点击下方的「复制命令」。</string>
+    <string name="runtime_setup_paste_windows">3. 在 PowerShell 窗口按 Ctrl + V，再按 Enter。如果没有粘贴成功，可以在窗口里单击右键。等待出现 Mederi runtime setup complete.</string>
+    <string name="runtime_setup_paste_macos">3. 在终端按 Command + V，再按 Return。等待出现 Mederi runtime setup complete.</string>
+    <string name="runtime_setup_paste_linux">3. 在终端按 Ctrl + Shift + V，再按 Enter。等待出现 Mederi runtime setup complete. 如果提示缺少 curl 或 wget，Ubuntu 和 Debian 用户可以先输入 sudo apt install curl，按 Enter 完成安装，再运行复制的命令。</string>
+    <string name="runtime_setup_step_return">4. 回到这个窗口，点击「重新检查」。检查通过后，工作台会自动打开。</string>
+    <string name="runtime_setup_command_error">无法准备终端安装命令。请重试「一键安装」。</string>
+</resources>

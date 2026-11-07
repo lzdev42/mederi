@@ -7,8 +7,14 @@ Linux/Windows 必须配置 `JAVA_HOME`；macOS 也可自动发现 `~/Library/Jav
 
 ## GitHub Actions 测试打包
 
-任意分支 push 后，`Test Release Packaging` 调用 `build_release.sh --skip-sign` 构建 macOS arm64、macOS x64、
-Linux x64 和 Windows x64。也可在 Actions 手动触发。每组各上传三个 Artifact，每个只含一个发行包，保留 7 天。
+任意分支 push 后，`Test Release Packaging` 在 macOS arm64、macOS x64、Linux x64、Linux arm64 和 Windows x64 上分别运行 JVM 测试。
+每组使用自身目标架构的 JBR，测试通过后才调用 `build_release.sh --skip-sign` 打包。Linux 在 Xvfb 下运行图形测试，并验证真实的 bubblewrap 沙盒。
+也可在 Actions 手动触发。每组各上传三个 Artifact，每个只含一个发行包，保留 7 天。
+
+macOS ARM64 运行 `./gradlew allTests test --continue --no-configuration-cache`，同时覆盖 Android 宿主、WasmJS 浏览器、iOS 模拟器和 Android 应用单元测试，随后运行打包脚本模拟测试。
+其余组运行 `./gradlew jvmTest test -x :app:androidApp:test --continue --no-configuration-cache`，覆盖当前宿主上的 JVM 测试。
+Gradle 从各模块的标准测试源集自动发现测试。在现有测试源集添加测试类或用例，无需改 workflow。
+Android 真机测试和需要单独启动服务或配置凭据的 E2E 脚本单独运行。
 
 - `Mederi-desktop-<platform>-<arch>`：Desktop
 - `Mederi-server-with-wasmjs-<platform>-<arch>`：Server 完整版，带 JVM 和 WasmJS 页面
@@ -16,9 +22,10 @@ Linux x64 和 Windows x64。也可在 Actions 手动触发。每组各上传三�
 
 macOS 的 `.app` 先封装成 tar.gz，保留可执行权限和符号链接。
 
-两组 macOS 构建都使用 ARM64 的 `macos-26` runner。x64 组用 Rosetta 运行
+两组 macOS 构建都使用 ARM64 runner。x64 组用 Rosetta 运行
 `arch -x86_64 /bin/bash ./build_release.sh --skip-sign`，并使用 x64 版 JBR 25 SDK with JCEF。
-workflow 会校验 Desktop 启动器及 Desktop、Server 完整版内置 JVM 的架构，再上传产物。
+Linux ARM64 组使用 `ubuntu-26.04-arm` runner 与 aarch64 版 JBR 25 SDK with JCEF，原生生成 `linux-arm64` 发行包。
+workflow 会从空目录安装 MCP 运行时并执行实际命令探测，也会校验 Desktop 启动器及 Desktop、Server 完整版内置 JVM 的架构，再上传产物。
 JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自动提供的 token，无需手工配置。
 
 ## 本地打包
@@ -42,6 +49,12 @@ JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自�
 
 Desktop：macOS 打开 `.app`；Linux 执行解压目录的 `bin/` 下启动器；Windows 打开目录内 `.exe`。
 
+桌面端每次启动时检查 Node.js（22+，含 npm 和 npx）、Python（3.10+）和 uv（含 uvx）。缺少组件时点击「一键安装」，
+当前用户的运行时装在 `~/.mederi/runtime`（Windows 为 `%USERPROFILE%\.mederi\runtime`）。
+Windows 由应用直接调用 PowerShell。三个平台都可以按引导页步骤复制命令，在终端运行应用内置的脚本。
+所有组件通过检查前，引导页保持开启，工作台不会加载。
+Linux 上脚本需要 Bash、curl 或 wget、tar 和 SHA-256 校验工具。
+
 两种 Server：Unix 执行根目录 `./run.sh`；Windows 执行 `run.bat`。
 完整版启动器强制使用包内 JBR，API 版使用系统 `JAVA_HOME`/`PATH` 的 Java **25 或更高版本**。
 API 版保留全部后端依赖，只移除 JVM 与 `static/` 页面资源，不是单个无依赖 JAR。
@@ -64,5 +77,5 @@ macOS Desktop 保留原有 `.app` runtime/CEF 补全和 ad-hoc 签名流程，`-
 Gradle 入口生成标准 `bin/` 启动器，发布脚本再增加根目录 `run.sh`/`run.bat`、整理目录和压缩。
 API JAR 直接取编译类和源资源并排除 `static/**`，与完整版同一次构建或 `--no-clean` 连续构建不会混入旧页面。
 
-`python3 scripts/test-release-packaging.py` 用模拟 Gradle/JBR 验证三平台装配、压缩包、启动脚本和相对输出路径，
+`python3 scripts/test-release-packaging.py` 用模拟 Gradle/JBR 验证三平台装配（含 Linux ARM64）、压缩包、启动脚本和相对输出路径，
 不启动 APP/server，也不替代各平台真实构建与运行验收。

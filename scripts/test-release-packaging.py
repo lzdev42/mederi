@@ -14,8 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ReleasePackagingTest(unittest.TestCase):
     def test_platform_packages(self):
-        for platform, uname in [('macos', 'Darwin'), ('linux', 'Linux'), ('windows', 'MINGW64_NT')]:
-            with self.subTest(platform=platform), tempfile.TemporaryDirectory(dir=ROOT / 'temp') as scratch:
+        targets = [
+            ('macos', 'Darwin', 'x86_64', 'x64'),
+            ('linux', 'Linux', 'x86_64', 'x64'),
+            ('linux', 'Linux', 'aarch64', 'arm64'),
+            ('windows', 'MINGW64_NT', 'x86_64', 'x64'),
+        ]
+        for platform, uname, machine, arch in targets:
+            with self.subTest(platform=platform, arch=arch), tempfile.TemporaryDirectory(dir=ROOT / 'temp') as scratch:
                 root = Path(scratch)
                 shutil.copy(ROOT / 'build_release.sh', root)
                 tools = root / 'tools'
@@ -26,7 +32,7 @@ class ReleasePackagingTest(unittest.TestCase):
                     path.write_text(body)
                     path.chmod(0o755)
 
-                executable(tools / 'uname', f'#!/bin/sh\n[ "$1" = -m ] && echo x86_64 || echo {uname}\n')
+                executable(tools / 'uname', f'#!/bin/sh\n[ "$1" = -m ] && echo {machine} || echo {uname}\n')
                 executable(tools / 'cygpath', '#!/bin/sh\nprintf "%s\\n" "$2"\n')
                 jbr = root / 'jbr'
                 java_home = jbr / 'Contents/Home' if platform == 'macos' else jbr
@@ -73,7 +79,7 @@ mkdir -p server/build/install/server-bundled/runtime
                 output = root / 'relative output'
                 suffix = '.zip' if platform == 'windows' else '.tar.gz'
                 for variant in ['bundled', 'api']:
-                    stem = f'Mederi-server-{variant}-{platform}-x64'
+                    stem = f'Mederi-server-{variant}-{platform}-{arch}'
                     archive = output / (stem + suffix)
                     if platform == 'windows':
                         with zipfile.ZipFile(archive) as z:
@@ -94,7 +100,7 @@ mkdir -p server/build/install/server-bundled/runtime
                     self.assertTrue((output / 'Mederi.app').is_dir())
                     self.assertFalse(list(output.glob('*.dmg')))
                 else:
-                    self.assertTrue((output / f'Mederi-desktop-{platform}-x64{suffix}').is_file())
+                    self.assertTrue((output / f'Mederi-desktop-{platform}-{arch}{suffix}').is_file())
                 calls = (root / 'gradle-calls').read_text()
                 self.assertIn(':server:installServerApi', calls)
                 self.assertNotIn('packageReleaseDistributionForCurrentOS', calls)
