@@ -49,6 +49,13 @@ class WorkspaceRepairIntegrationTest {
         return out.trim()
     }
 
+    private fun assertRegisteredWorktree(source: File, checkout: File) {
+        val worktrees = git(source, "worktree", "list", "--porcelain", "-z").split('\u0000')
+            .filter { it.startsWith("worktree ") }
+            .map { File(it.removePrefix("worktree ")).canonicalFile }
+        assertTrue(checkout.canonicalFile in worktrees, "Expected $checkout in registered worktrees: $worktrees")
+    }
+
     /**
      * RF-04 故障注入 Store：在指定次数的 saveWorkspace 上抛 IOException（默认永不触发）。
      * 计数包含所有 saveWorkspace（创建/准备/归档/交接/恢复），测试在关键副作用前 arm 绝对阈值。
@@ -475,9 +482,7 @@ class WorkspaceRepairIntegrationTest {
             assertTrue(restored.exists(), "恢复后 checkout 应存在: ${restored}")
 
             // 1. linked worktree 注册验证：原仓库 worktree list 出现恢复路径，且 common-dir 指向原仓库
-            val worktreeList = git(source, "worktree", "list")
-            assertTrue(worktreeList.contains(restored.canonicalPath),
-                "恢复的 checkout 应出现在原仓库 worktree list 中: $worktreeList")
+            assertRegisteredWorktree(source, restored)
             val commonDirFromRestored = File(git(restored, "rev-parse", "--path-format=absolute", "--git-common-dir")).canonicalPath
             assertEquals(originalCommonDir, commonDirFromRestored,
                 "恢复的 checkout 必须与原仓库共享 common-dir，而不是独立 git init 仓库")
@@ -509,9 +514,7 @@ class WorkspaceRepairIntegrationTest {
 
             val restored2 = File(ws.checkoutRoot)
             assertTrue(restored2.exists(), "二次恢复后 checkout 应存在: ${restored2}")
-            val worktreeList2 = git(source, "worktree", "list")
-            assertTrue(worktreeList2.contains(restored2.canonicalPath),
-                "二次恢复的 checkout 仍应注册在原仓库 worktree list 中: $worktreeList2")
+            assertRegisteredWorktree(source, restored2)
             val commonDirFromRestored2 = File(git(restored2, "rev-parse", "--path-format=absolute", "--git-common-dir")).canonicalPath
             assertEquals(originalCommonDir, commonDirFromRestored2,
                 "二次恢复的 checkout 仍必须与原仓库共享 common-dir")

@@ -555,7 +555,11 @@ class WorkspaceRecoveryTest {
         val newWs = wsStore.getWorkspace(newWsId)!!
         val driver = GitWorkspaceDriver()
         assertEquals(localWs.gitCommonDirectory, driver.getGitCommonDir(newWs.checkoutRoot))
-        assertTrue(driver.runGit(srcRepo.path, listOf("worktree", "list", "--porcelain")).stdoutString.contains(newWs.checkoutRoot))
+        val worktreeList = driver.runGit(srcRepo.path, listOf("worktree", "list", "--porcelain", "-z"))
+        assertEquals(0, worktreeList.exitCode)
+        val checkout = File(newWs.checkoutRoot).canonicalFile
+        assertTrue(worktreeList.stdoutString.split('\u0000').filter { it.startsWith("worktree ") }
+            .any { File(it.removePrefix("worktree ")).canonicalFile == checkout })
         assertTrue(File(newWs.checkoutRoot, "README.md").exists(), "快照内容完整还原到新目录")
         assertTrue(File(managedWs.checkoutRoot).exists(), "旧 Managed 副本完整保留未被覆盖")
     }

@@ -148,12 +148,23 @@ jobs:
           runtime=server/build/install/server-bundled/runtime
           java="$runtime/bin/java"
           if [[ "$RUNNER_OS" == Windows ]]; then java="$java.exe"; fi
+          if ! java_settings=$("$java" -XshowSettings:properties -version 2>&1); then
+            printf 'Cannot start the bundled Server Java\n%s\n' "$java_settings"
+            exit 1
+          fi
+          if ! grep -Eq '^[[:space:]]*java\.specification\.version = 25[[:space:]]*$' <<< "$java_settings"; then
+            printf 'Expected Java 25 in the bundled Server runtime\n%s\n' "$java_settings"
+            exit 1
+          fi
           modules=$("$java" --list-modules)
-          [[ "$modules" == java.base@25* ]]
-          [[ ! "$modules" =~ (^|[[:space:]])jcef(@|[[:space:]]|$) ]]
-          test ! -e "$runtime/jmods/jcef.jmod"
-          if find "$runtime" \( -iname '*jcef*' -o -iname 'libcef*' -o -iname 'cef_server*' -o -iname '*chromium*' \) -print -quit | grep -q .; then
-            echo 'Server runtime contains a CEF file'
+          if ! grep -Eq '^java\.base(@[^[:space:]]+)?[[:space:]]*$' <<< "$modules" ||
+             grep -Eq '^jcef(@[^[:space:]]+)?[[:space:]]*$' <<< "$modules"; then
+            printf 'Unexpected modules in the bundled Server runtime\n%s\n' "$modules"
+            exit 1
+          fi
+          cef_file=$(find "$runtime" \( -iname '*jcef*' -o -iname 'libcef*' -o -iname 'cef_server*' -o -iname '*chromium*' \) -print -quit)
+          if [[ -n "$cef_file" ]]; then
+            printf 'Server runtime contains a CEF file: %s\n' "$cef_file"
             exit 1
           fi
 

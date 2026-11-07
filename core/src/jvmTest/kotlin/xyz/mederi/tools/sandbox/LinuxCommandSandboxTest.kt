@@ -160,6 +160,7 @@ class LinuxCommandSandboxTest {
 
     @Test
     fun explicitDeniedPathsUseAnonymousReadOnlyMasksAndSurviveFullAccess() = fixture { root ->
+        assumeTrue("Linux file masking uses a POSIX Bash launcher", File.separatorChar != '\\')
         val project = File(root, "project").apply { mkdirs() }
         val directory = File(project, "private").apply { mkdirs() }
         val file = File(project, "credentials").apply { writeText("original-secret") }
