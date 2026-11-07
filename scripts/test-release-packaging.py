@@ -39,9 +39,10 @@ class ReleasePackagingTest(unittest.TestCase):
                 (java_home / 'jmods').mkdir(parents=True)
                 (java_home / 'jmods/java.base.jmod').touch()
                 (java_home / 'jmods/jcef.jmod').touch()
+                (java_home / 'release').write_text('JAVA_VERSION="25.0.5"\nMODULES="java.base jcef"\n')
                 server_java = root / 'server-java'
-                (server_java / 'jmods').mkdir(parents=True)
-                (server_java / 'jmods/java.base.jmod').touch()
+                server_java.mkdir()
+                (server_java / 'release').write_text('JAVA_VERSION="25.0.5"\nMODULES="java.base"\n')
                 if platform == 'macos':
                     (jbr / 'Contents/Frameworks/cef_server.app').mkdir(parents=True)
                 # Real ZIP assembly with the same CLI shape as jar, so archive contents can be checked.
@@ -121,7 +122,9 @@ fi
                 self.assertNotIn('packageReleaseDistributionForCurrentOS', calls)
                 self.assertEqual(list((root / 'temp').iterdir()), [])
 
-                env['MEDERI_SERVER_JAVA_HOME'] = str(java_home)
+                # A custom runtime can contain JCEF even when its jmods directory is absent.
+                (server_java / 'release').write_text('JAVA_VERSION="25.0.5"\nMODULES="java.base jcef"\n')
+                env['MEDERI_SERVER_JAVA_HOME'] = str(server_java)
                 rejected = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign'],
                                           cwd=root, env=env, capture_output=True, text=True)
                 self.assertNotEqual(rejected.returncode, 0)

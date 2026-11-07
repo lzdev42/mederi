@@ -83,9 +83,13 @@ val installServerBundled by tasks.registering(Sync::class) {
         require(serverJavaHome.isPresent) { "Set MEDERI_SERVER_JAVA_HOME to a standard Java 25 JDK" }
         val home = file(serverJavaHome.get())
         val release = home.resolve("release")
-        require(release.isFile && release.useLines { lines ->
-            lines.any { it == "JAVA_VERSION=\"25\"" || it.startsWith("JAVA_VERSION=\"25.") }
-        } && home.resolve("jmods/java.base.jmod").isFile && !home.resolve("jmods/jcef.jmod").exists()) {
+        val metadata = if (release.isFile) release.readLines() else emptyList()
+        val version = metadata.firstOrNull { it.startsWith("JAVA_VERSION=") }?.substringAfter('=')?.trim('"')
+        val modules = metadata.firstOrNull { it.startsWith("MODULES=") }?.substringAfter('=')?.trim('"')?.split(' ').orEmpty()
+        val hasJava = home.resolve("bin/java").isFile || home.resolve("bin/java.exe").isFile
+        require(hasJava && version?.substringBefore('.') == "25" && "java.base" in modules &&
+            "jcef" !in modules && !home.resolve("jmods/jcef.jmod").exists()
+        ) {
             "Bundled server requires a standard Java 25 JDK without JCEF: $home"
         }
     }

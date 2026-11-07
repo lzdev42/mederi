@@ -139,9 +139,10 @@ if [[ "$PLATFORM" == "windows" ]]; then
     RELEASE_JAVA_HOME=$(cygpath -m "$JAVA_HOME")
     SERVER_JAVA_HOME=$(cygpath -m "$SERVER_JAVA_HOME")
 fi
-[[ -f "$SERVER_JAVA_HOME/jmods/java.base.jmod" && ! -e "$SERVER_JAVA_HOME/jmods/jcef.jmod" ]] || {
+if [[ ! -f "$SERVER_JAVA_HOME/release" || -e "$SERVER_JAVA_HOME/jmods/jcef.jmod" ]] ||
+    grep -Eq '^MODULES="(.* )?jcef( |")' "$SERVER_JAVA_HOME/release"; then
     echo "❌ MEDERI_SERVER_JAVA_HOME 必须指向不含 JCEF 的 Java 25 JDK: $SERVER_JAVA_HOME"; exit 1;
-}
+fi
 echo "☕ Release JBR: $JAVA_HOME"
 
 # ==========================================
