@@ -19,14 +19,42 @@ import java.io.File
 import java.net.URI
 import java.util.concurrent.TimeUnit
 
-actual fun openUrl(url: String) {
-    try {
-        if (Desktop.isDesktopSupported()) {
-            Desktop.getDesktop().browse(URI(url))
+actual fun openUrl(url: String): Boolean = openExternalWebUrl(
+    url = url,
+    osName = hostOsName,
+    runCommand = { argv -> runCommandExitCode(argv, DEFAULT_COMMAND_TIMEOUT_MILLIS) },
+    desktopBrowse = { uri ->
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+            Desktop.getDesktop().browse(uri)
+            true
+        } else false
+    },
+)
+
+/**
+ * macOS 使用 LaunchServices 的 open，避免 Desktop.browse 失败后静默无动作。
+ * OS 派发独立于真实进程，测试不会打开用户浏览器；URL 始终是单独 argv，禁止 shell 拼接。
+ */
+internal fun openExternalWebUrl(
+    url: String,
+    osName: String,
+    runCommand: (List<String>) -> Int?,
+    desktopBrowse: (URI) -> Boolean,
+): Boolean = runCatching {
+    val uri = URI(url)
+    if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.host.isNullOrBlank() || uri.userInfo != null) {
+        false
+    } else {
+        val os = osName.lowercase()
+        when {
+            os.contains("mac") || os.contains("darwin") -> runCommand(listOf("open", url)) == 0
+            os.contains("linux") || os.contains("nix") || os.contains("nux") -> {
+                runCatching { desktopBrowse(uri) }.getOrDefault(false) || runCommand(listOf("xdg-open", url)) == 0
+            }
+            else -> desktopBrowse(uri)
         }
-    } catch (_: Exception) {
     }
-}
+}.getOrDefault(false)
 
 /**
  * 用系统默认应用打开本地文件。

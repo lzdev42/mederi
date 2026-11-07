@@ -27,7 +27,11 @@ internal fun ensureMederiDir(projectDirectories: List<String>): File? {
     return mederi
 }
 
-class PlanStore(private val projectDirectories: List<String>) {
+class PlanStore(
+    private val projectDirectories: List<String>,
+    private val artifactRoot: String? = null,
+    private val authorityRoot: String? = null
+) {
 
     private companion object {
         /**
@@ -39,9 +43,59 @@ class PlanStore(private val projectDirectories: List<String>) {
 
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
-    private val plansDir: File? get() = findMederiDir(projectDirectories)?.let { File(it, "plans") }
+    private val authorityDirectory: File? get() = authorityRoot?.let { root ->
+        val artifactDirectory = artifactRoot?.let(::File) ?: File(projectDirectories.first(), ".mederi")
+        val logicalRoot = File(artifactDirectory.absoluteFile.parentFile.canonicalFile, artifactDirectory.name)
+        val workspaceKey = sha256(logicalRoot.path.toByteArray())
+        File(root, "plan-evidence/$workspaceKey")
+    }
 
-    private val writePlansDir: File? get() = ensureMederiDir(projectDirectories)?.let { File(it, "plans") }
+    private fun sha256(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    private fun decodePlan(file: File): Plan? =
+        runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }.getOrNull()
+
+    private fun authoritativePlan(planId: String): File? =
+        authorityDirectory?.takeIf { planId.matches(Regex("[A-Za-z0-9_-]+")) }?.resolve("$planId.json")
+
+    private fun readProjection(file: File): Plan? = decodePlan(file)?.takeUnless {
+        authorityRoot != null && it.subtasks.any { task -> task.acceptanceCases.isNotEmpty() }
+    }
+
+    private fun writePlanFile(file: File, payload: String) {
+        file.parentFile.mkdirs()
+        val temp = File.createTempFile(".plan-", ".tmp", file.parentFile)
+        try {
+            temp.writeText(payload)
+            java.nio.file.Files.move(temp.toPath(), file.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            temp.delete()
+        }
+    }
+
+    private fun getMederiDir(): File? {
+        if (artifactRoot != null) return File(artifactRoot)
+        return findMederiDir(projectDirectories)
+    }
+
+    private fun getEnsureMederiDir(): File? {
+        if (artifactRoot != null) {
+            val f = File(artifactRoot)
+            if (!f.exists()) f.mkdirs()
+            File(f, "plans").mkdirs()
+            File(f, "plans-done").mkdirs()
+            val notebook = File(f, "notebook.md")
+            if (!notebook.exists()) notebook.writeText("# 工作日志\n")
+            return f
+        }
+        return ensureMederiDir(projectDirectories)
+    }
+
+    private val plansDir: File? get() = getMederiDir()?.let { File(it, "plans") }
+
+    private val writePlansDir: File? get() = getEnsureMederiDir()?.let { File(it, "plans") }
 
     /**
      * 计划目录：`plans/{planId}/`。一个计划一个目录，下面挂 plan.json / plan.md /
@@ -64,15 +118,25 @@ class PlanStore(private val projectDirectories: List<String>) {
      * - `plan.md`：纯人读 Markdown（无 JSON 注释块），批准 UI / 用户点开阅读的就是它
      */
     fun save(plan: Plan) {
+        val payload = json.encodeToString(Plan.serializer(), plan)
+        val authority = if (plan.subtasks.any { it.acceptanceCases.isNotEmpty() }) authoritativePlan(plan.id) else null
+        if (authority != null) {
+            val artifactDirectory = artifactRoot?.let(::File) ?: File(projectDirectories.first(), ".mederi")
+            val expectedRoot = File(artifactDirectory.absoluteFile.parentFile.canonicalFile, artifactDirectory.name)
+            val expectedDir = File(expectedRoot, "plans/${plan.id}")
+            require(expectedDir.canonicalFile == expectedDir) { "Plan projection directory must not traverse symlinks." }
+            writePlanFile(authority, payload)
+        }
         val dir = writePlanDir(plan.id) ?: return
-        File(dir, "plan.json").writeText(json.encodeToString(Plan.serializer(), plan))
-        File(dir, "plan.md").writeText(buildMarkdown(plan))
+        writePlanFile(File(dir, "plan.json"), payload)
+        writePlanFile(File(dir, "plan.md"), buildMarkdown(plan))
     }
 
     fun load(planId: String): Plan? {
+        if (!planId.matches(Regex("[A-Za-z0-9_-]+"))) return null
+        authoritativePlan(planId)?.takeIf { it.exists() }?.let { return decodePlan(it) }
         val file = planDir(planId)?.let { File(it, "plan.json") } ?: return null
-        if (!file.exists()) return null
-        return runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }.getOrNull()
+        return if (file.exists()) readProjection(file) else null
     }
 
     /**
@@ -84,31 +148,120 @@ class PlanStore(private val projectDirectories: List<String>) {
      * [Plan.isTerminal] 兜底排除，兼顾移出失败/历史数据的边界。
      */
     fun loadBySession(sessionId: String): Plan? =
-        allPlans()
-            .filter { it.sessionId == sessionId && !it.isTerminal }
-            .maxByOrNull { it.createdAt }
+        listBySession(sessionId).firstOrNull { !it.isTerminal }
 
     /**
      * 按 sessionId 加载该会话的所有历史与活跃计划（涵盖 plans/、plans-done/、plans-voided/），
      * 按 createdAt 降序排列。
      */
     fun listBySession(sessionId: String): List<Plan> {
-        val mederi = findMederiDir(projectDirectories) ?: return emptyList()
-        val all = mutableListOf<Plan>()
+        val authoritative = authorityDirectory?.listFiles { file -> file.extension == "json" }
+            ?.mapNotNull(::decodePlan).orEmpty()
+        val authoritativeIds = authoritative.mapTo(mutableSetOf()) { it.id }
+        val all = authoritative.filter { it.sessionId == sessionId }.toMutableList()
+        val mederi = getMederiDir() ?: return all.sortedByDescending { it.createdAt }
         for (sub in listOf("plans", "plans-done", "plans-voided")) {
             val dir = File(mederi, sub)
             if (!dir.isDirectory) continue
             dir.listFiles { f -> f.isDirectory }?.forEach { subDir ->
                 val file = File(subDir, "plan.json")
                 if (file.exists()) {
-                    runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }
-                        .getOrNull()
-                        ?.let { if (it.sessionId == sessionId) all.add(it) }
+                    readProjection(file)?.let {
+                        if (it.id !in authoritativeIds && it.sessionId == sessionId) all.add(it)
+                    }
                 }
             }
         }
         return all.sortedByDescending { it.createdAt }
     }
+
+    internal fun recordManualAcceptance(
+        sessionId: String, planId: String, caseId: String, observed: String, evidence: String, confirmedBy: String
+    ): Plan? = updatePlan(planId) { plan ->
+        if (plan.sessionId != sessionId || plan.status !in setOf(PlanStatus.APPROVED, PlanStatus.IN_PROGRESS))
+            return@updatePlan null
+        val task = plan.subtasks.firstOrNull { it.acceptanceCases.any { case -> case.id == caseId && case.manual } }
+            ?: return@updatePlan null
+        if (task.overallAcceptance && !readyForOverallAcceptance(plan, task)) return@updatePlan null
+        val case = task.acceptanceCases.first { it.id == caseId }
+        val sourceDigests = implementationDigests(plan, task)
+        val runs = task.acceptanceRuns + AcceptanceRun.manual(case, observed, evidence, confirmedBy)
+            .copy(sourceDigests = sourceDigests)
+        val latest = task.acceptanceCases.map { expected ->
+            runs.asReversed().firstNotNullOfOrNull { run ->
+                run.observations.firstOrNull { it.caseId == expected.id }?.let { run to it }
+            }?.takeIf { (run, _) -> run.sourceDigests == sourceDigests }?.second?.verdict
+        }
+        val status = when {
+            latest.all { it == AcceptanceVerdict.PASS } -> SubtaskStatus.COMPLETED
+            latest.any { it == AcceptanceVerdict.FAIL } -> SubtaskStatus.FAILED
+            else -> SubtaskStatus.IN_PROGRESS
+        }
+        val updated = plan.copy(subtasks = plan.subtasks.map {
+            if (it.index == task.index) task.copy(status = status, acceptanceRuns = runs) else it
+        })
+        if (updated.isAllCompleted) updated.copy(status = PlanStatus.COMPLETED) else updated
+    }
+
+    fun acceptanceReport(sessionId: String, planId: String): String? = synchronized(planWriteLock) {
+        if (!planId.matches(Regex("[A-Za-z0-9_-]+"))) return null
+        val plan = load(planId) ?: getMederiDir()?.let { dir ->
+            listOf("plans-done", "plans-voided").firstNotNullOfOrNull { folder ->
+                readProjection(File(dir, "$folder/$planId/plan.json"))
+            }
+        }
+        plan?.takeIf { it.sessionId == sessionId && it.id == planId }?.let(::buildAcceptanceReport)
+    }
+
+    internal fun pinAcceptanceFiles(paths: List<String>): Map<String, String> {
+        val project = File(projectDirectories.first()).canonicalFile
+        return paths.associateWith { path ->
+            val requested = File(path)
+            require(path.isNotBlank() && !requested.isAbsolute &&
+                requested.toPath().none { it.toString() in setOf("..", ".git", ".mederi", ".codex", ".agents", ".aws") }) {
+                "Acceptance file must be a project-relative collector, assertion or fixture: $path"
+            }
+            val file = File(project, path).canonicalFile
+            require(file.toPath().startsWith(project.toPath()) && file.isFile && file.length() <= 16 * 1024 * 1024) {
+                "Acceptance file is missing, outside the workspace, or larger than 16 MiB: $path"
+            }
+            sha256(file.readBytes())
+        }
+    }
+
+    /** Scope is the files declared in the plan, not a snapshot of the entire checkout. */
+    internal fun implementationDigests(plan: Plan, task: Subtask): Map<String, String> {
+        val project = File(projectDirectories.first()).canonicalFile
+        val paths = if (task.overallAcceptance) plan.subtasks.flatMap { it.targetFiles } + plan.changes.map { it.filePath }
+            else task.targetFiles
+        return paths.filterNot { it.endsWith('/') }.distinct().sorted().associateWith { path ->
+            runCatching {
+                val requested = File(path)
+                val file = (if (requested.isAbsolute) requested else File(project, path)).canonicalFile
+                when {
+                    !file.toPath().startsWith(project.toPath()) -> "outside-workspace"
+                    file.isFile && file.length() <= 16 * 1024 * 1024 -> sha256(file.readBytes())
+                    file.isDirectory -> "directory"
+                    !file.exists() -> "missing"
+                    else -> "unavailable"
+                }
+            }.getOrDefault("unavailable")
+        }
+    }
+
+    internal fun readyForOverallAcceptance(plan: Plan, overall: Subtask): Boolean =
+        plan.subtasks.filter { it.index != overall.index }.all { task ->
+            if (task.status != SubtaskStatus.COMPLETED || !acceptanceFilesMatch(task)) return@all false
+            val current = implementationDigests(plan, task)
+            task.acceptanceCases.all { case ->
+                val run = task.acceptanceRuns.lastOrNull { attempt -> attempt.observations.any { it.caseId == case.id } }
+                run != null && run.sourceDigests == current &&
+                    run.observations.any { it.caseId == case.id && it.verdict == AcceptanceVerdict.PASS }
+            }
+        }
+
+    internal fun acceptanceFilesMatch(subtask: Subtask): Boolean =
+        runCatching { pinAcceptanceFiles(subtask.acceptanceFiles.keys.toList()) == subtask.acceptanceFiles }.getOrDefault(false)
 
     fun loadActive(): Plan? =
         allPlans()
@@ -137,24 +290,15 @@ class PlanStore(private val projectDirectories: List<String>) {
      * @return 被作废的计划 id列表（由调用方用于发 PLAN_PROGRESS(voided) 事件）。
      */
     fun voidActivePlans(sessionId: String): List<String> {
-        val dir = plansDir ?: return emptyList()
-        val subDirs = dir.listFiles { f -> f.isDirectory } ?: return emptyList()
-        val voided = mutableListOf<String>()
-        for (subDir in subDirs) {
-            val planId = subDir.name
-            val plan = load(planId) ?: continue
-            if (plan.sessionId == sessionId && !plan.isTerminal) {
-                updatePlan(plan.id) { it.copy(status = PlanStatus.VOIDED) }
-                moveToVoided(plan.id)
-                voided += plan.id
-            }
+        return listBySession(sessionId).filterNot { it.isTerminal }.mapNotNull { plan ->
+            val voided = updatePlan(plan.id) { if (it.isTerminal) null else it.copy(status = PlanStatus.VOIDED) }
+            voided?.id?.also(::moveToVoided)
         }
-        return voided
     }
 
     /** 把整个 `plans/{planId}/` 目录移入 `plans-voided/{planId}/`（作废留痕，对称 archive）。 */
     private fun moveToVoided(planId: String) {
-        val dst = ensureMederiDir(projectDirectories)?.let { File(it, "plans-voided") } ?: return
+        val dst = getEnsureMederiDir()?.let { File(it, "plans-voided") } ?: return
         dst.mkdirs()
         val src = planDir(planId, write = true) ?: return
         if (src.exists()) {
@@ -168,7 +312,7 @@ class PlanStore(private val projectDirectories: List<String>) {
      * 返回 plan 文件相对项目目录的路径，如 ".mederi/plans/plan_abc/plan.md"。
      */
     fun getPlanRelativePath(planId: String): String? {
-        val mederi = findMederiDir(projectDirectories) ?: return null
+        val mederi = getMederiDir() ?: return null
         for (sub in listOf("plans", "plans-done", "plans-voided")) {
             val file = File(File(mederi, sub), "$planId/plan.md")
             if (file.exists()) return ".mederi/$sub/$planId/plan.md"
@@ -181,7 +325,7 @@ class PlanStore(private val projectDirectories: List<String>) {
      * 调用方（UI/桥接层）无需项目目录上下文即可直接读取文件。
      */
     fun getPlanAbsolutePath(planId: String): String? {
-        val mederi = findMederiDir(projectDirectories) ?: return null
+        val mederi = getMederiDir() ?: return null
         for (sub in listOf("plans", "plans-done", "plans-voided")) {
             val file = File(File(mederi, sub), "$planId/plan.md")
             if (file.exists()) return file.absolutePath
@@ -197,7 +341,7 @@ class PlanStore(private val projectDirectories: List<String>) {
         writePlanDir(planId)?.absolutePath
 
     fun archive(planId: String) {
-        val dst = ensureMederiDir(projectDirectories)?.let { File(it, "plans-done") } ?: return
+        val dst = getEnsureMederiDir()?.let { File(it, "plans-done") } ?: return
         dst.mkdirs()
         val src = planDir(planId, write = true) ?: return
         if (src.exists()) {
@@ -218,7 +362,8 @@ class PlanStore(private val projectDirectories: List<String>) {
      */
     fun writeWalkthrough(plan: Plan) {
         val dir = writePlanDir(plan.id) ?: return
-        File(dir, "walkthrough.md").writeText(buildWalkthrough(plan))
+        writePlanFile(File(dir, "walkthrough.md"), buildWalkthrough(plan))
+        writePlanFile(File(dir, "acceptance-report.md"), buildAcceptanceReport(plan))
     }
 
     /**
@@ -242,7 +387,7 @@ class PlanStore(private val projectDirectories: List<String>) {
      * 返回：写入文件的绝对路径；写盘失败返回 null。
      */
     fun writeStandaloneResearchReport(text: String): String? {
-        val mederi = ensureMederiDir(projectDirectories) ?: return null
+        val mederi = getEnsureMederiDir() ?: return null
         val dir = File(mederi, "research").apply { mkdirs() }
         val fileName = "${java.time.Instant.now().toString().replace(":", "-").replace(".", "-")}.md"
         val file = File(dir, fileName)
@@ -346,11 +491,15 @@ class PlanStore(private val projectDirectories: List<String>) {
         updated
     }
 
+    fun planMarkdown(plan: Plan): String = buildMarkdown(plan)
+
     private fun buildMarkdown(plan: Plan): String {
         val sb = StringBuilder()
+        val structured = plan.subtasks.any { it.acceptanceCases.isNotEmpty() }
         // ===== Part 1: Implementation Plan（给人读，纯 Markdown）=====
         // 段名规范化：用户语言（中文）+ 英文括注；正文内容由 AI 按提示词规则用用户语言撰写
         sb.appendLine("# 计划（Plan）：${plan.title}")
+        plan.replacesPlanId?.let { sb.appendLine("替代计划版本：`$it`") }
         sb.appendLine()
         // 内部状态（Status/Created/AgentMode）由 UI 卡片与侧边栏呈现，不写进文档
         sb.appendLine("## 项目背景（Project Context）")
@@ -394,7 +543,7 @@ class PlanStore(private val projectDirectories: List<String>) {
         sb.appendLine(plan.approach)
         sb.appendLine()
 
-        if (plan.testMethod.isNotBlank()) {
+        if (!structured && plan.testMethod.isNotBlank()) {
             sb.appendLine("## 验证计划（Verification Plan）")
             sb.appendLine(plan.testMethod)
             sb.appendLine()
@@ -430,11 +579,20 @@ class PlanStore(private val projectDirectories: List<String>) {
         // ===== Part 2: 子任务（Brief 批准时可见；Spec 批准后由 generate_spec 派生）=====
         sb.appendLine("## 子任务（Subtasks）")
         sb.appendLine()
+        if (structured && plan.keyDecisions.isNotEmpty()) {
+            sb.appendLine("### 关键决策")
+            plan.keyDecisions.forEach { decision ->
+                sb.appendLine("- ${decision.question} · ${decision.choice} · ${decision.rationale}")
+            }
+            sb.appendLine()
+        }
         plan.subtasks.forEach { st ->
             sb.appendLine("### 子任务 ${st.index + 1}：${st.name}")
             sb.appendLine("**状态**：${st.status}")
             if (st.targetFiles.isNotEmpty()) sb.appendLine("**文件**：${st.targetFiles.joinToString(", ")}")
-            if (st.dependsOn.isNotEmpty()) sb.appendLine("**依赖**：${st.dependsOn.joinToString(", ")}")
+            if (st.dependsOn.isNotEmpty()) sb.appendLine("**依赖**：${st.dependsOn.joinToString(", ") { "T-${it + 1}" }}")
+            if (st.acceptanceCases.isNotEmpty())
+                sb.appendLine("**任务 ID**：T-${st.index + 1} · **验收用例**：${st.acceptanceCases.joinToString { it.id }}")
             if (st.parallelizable) sb.appendLine("**可并行**：是")
             sb.appendLine()
             sb.appendLine("#### 简述（Brief）")
@@ -467,6 +625,7 @@ class PlanStore(private val projectDirectories: List<String>) {
                 }
                 sb.appendLine()
             }
+            if (st.acceptanceCases.isNotEmpty()) return@forEach
             sb.appendLine("#### 验证（Verification）")
             sb.appendLine(st.verification.command)
             if (st.verification.expected.isNotBlank()) sb.appendLine("预期结果：${st.verification.expected}")
@@ -491,7 +650,7 @@ class PlanStore(private val projectDirectories: List<String>) {
                 r.commandExitCode?.let { sb.appendLine("- 命令退出码：$it") }
                 if (r.machineMismatch) sb.appendLine("- ⚠ 机器判定与模型判定矛盾（异常态，已要求主代理告知用户）")
                 r.commandOutput?.takeIf { it.isNotBlank() }?.let {
-                    sb.appendLine("- 命令真实输出（截断；完整输出见 plan.json）：")
+                    sb.appendLine("- 命令真实输出（截断；plan.json 中也仅保留截断输出）：")
                     sb.appendLine("```")
                     sb.appendLine(it.take(800))
                     sb.appendLine("```")
@@ -502,6 +661,26 @@ class PlanStore(private val projectDirectories: List<String>) {
 
         sb.appendLine("---")
         sb.appendLine()
+
+        if (structured) {
+            sb.appendLine("## 验收用例（Acceptance Cases）")
+            sb.appendLine()
+            if (plan.testMethod.isNotBlank()) {
+                sb.appendLine(plan.testMethod)
+                sb.appendLine()
+            }
+            plan.subtasks.forEach { task ->
+                val section = if (task.overallAcceptance) "整体验收" else "任务验收"
+                sb.appendLine("### $section · T-${task.index + 1} · ${task.name}")
+                sb.appendLine()
+                if (task.verification.command.isNotBlank()) sb.appendLine("- 取证命令：${task.verification.command}")
+                task.acceptanceFiles.forEach { (path, digest) -> sb.appendLine("- 验收文件 `$path` · SHA-256 `$digest`") }
+                task.acceptanceCases.forEach { case -> appendAcceptanceCase(sb, case) }
+                sb.appendLine()
+            }
+            sb.appendLine("---")
+            sb.appendLine()
+        }
 
         // ===== Part 3: 计划级附录区域（给控制者看的技术深水区，顶部概要的可选项）=====
         // 计划级技术附录（自由文本，跨子任务共享技术上下文；空则不渲染）
@@ -516,7 +695,7 @@ class PlanStore(private val projectDirectories: List<String>) {
             sb.appendLine(plan.businessLogic)
             sb.appendLine()
         }
-        if (plan.keyDecisions.isNotEmpty()) {
+        if (!structured && plan.keyDecisions.isNotEmpty()) {
             sb.appendLine("## 关键决策（Key Decisions）")
             plan.keyDecisions.forEach { d ->
                 sb.appendLine("- **${d.question}** -> ${d.choice}")

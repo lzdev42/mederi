@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import mederi.app.shared.generated.resources.Res
@@ -55,6 +56,7 @@ class ChatScrollLayoutTest {
             }
         }
         onNodeWithText(header).performClick()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText(expandLabel).fetchSemanticsNodes().isNotEmpty() }
         waitForIdle()
         val bottom = bottoms.last()
         runOnIdle { bottoms.clear() }

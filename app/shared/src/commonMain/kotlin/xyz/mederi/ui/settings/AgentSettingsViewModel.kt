@@ -27,7 +27,11 @@ internal data class AgentSettingsUiState(
     val concurrencyEnabled get() = global != null && !loadingGlobal && !savingGlobal
 }
 
-internal class AgentSettingsViewModel(private val core: AiCore) : ViewModel() {
+internal class AgentSettingsViewModel(
+    private val core: AiCore,
+    private val conversationId: String? = null,
+    private val draft: DraftSubagentSettings? = null,
+) : ViewModel() {
     var uiState by mutableStateOf(AgentSettingsUiState())
         private set
 
@@ -51,8 +55,8 @@ internal class AgentSettingsViewModel(private val core: AiCore) : ViewModel() {
     }
 
     private suspend fun readConfigs() {
-        core.listSubagentConfigs().fold(onSuccess = {
-            uiState = uiState.copy(configs = it, loadingConfigs = false, configsReady = true)
+        (conversationId?.let { core.listSessionSubagentConfigs(it) } ?: core.listSubagentConfigs()).fold(onSuccess = {
+            uiState = uiState.copy(configs = draft?.applyDefaults(it) ?: it, loadingConfigs = false, configsReady = true)
         }, onFailure = {
             uiState = uiState.copy(loadingConfigs = false, configsReady = false,
                 configsError = UiMessage(Res.string.settings_agents_load_failed, listOf(it.message.orEmpty())))
@@ -60,8 +64,8 @@ internal class AgentSettingsViewModel(private val core: AiCore) : ViewModel() {
     }
 
     private suspend fun readGlobal() {
-        core.getSubagentGlobalSettings().fold(onSuccess = {
-            uiState = uiState.copy(global = it, loadingGlobal = false)
+        (conversationId?.let { core.getSessionSubagentGlobalSettings(it) } ?: core.getSubagentGlobalSettings()).fold(onSuccess = {
+            uiState = uiState.copy(global = draft?.applyDefaults(it) ?: it, loadingGlobal = false)
         }, onFailure = {
             // 保存成功但回读失败时不允许沿用旧值继续覆盖。
             uiState = uiState.copy(global = null, loadingGlobal = false,
@@ -76,7 +80,7 @@ internal class AgentSettingsViewModel(private val core: AiCore) : ViewModel() {
             (value > 16 && value != current - 1)) return
         uiState = uiState.copy(savingGlobal = true, globalError = null)
         viewModelScope.launch {
-            core.updateSubagentGlobalSettings(UpdateSubagentGlobalSettingsInput(value)).fold(onSuccess = {
+            writeConcurrency(UpdateSubagentGlobalSettingsInput(value)).fold(onSuccess = {
                 readGlobal()
             }, onFailure = {
                 uiState = uiState.copy(globalError = UiMessage(Res.string.settings_agents_save_failed, listOf(it.message.orEmpty())))
@@ -102,12 +106,38 @@ internal class AgentSettingsViewModel(private val core: AiCore) : ViewModel() {
         update(role, UpdateSubagentConfigInput(item.modelId, item.reasoningLevel, keyId))
     }
 
-    private fun update(role: String, input: UpdateSubagentConfigInput) {
+    fun restoreRoleDefault(role: String) {
+        if (conversationId == null && draft == null) return
+        update(role, null)
+    }
+
+    fun restoreConcurrencyDefault() {
+        if (conversationId == null && draft == null) return
+        if (!uiState.concurrencyEnabled) return
+        uiState = uiState.copy(savingGlobal = true, globalError = null)
+        viewModelScope.launch {
+            writeConcurrency(null).fold(onSuccess = {
+                readGlobal()
+            }, onFailure = {
+                uiState = uiState.copy(globalError = UiMessage(Res.string.settings_agents_save_failed, listOf(it.message.orEmpty())))
+            })
+            uiState = uiState.copy(savingGlobal = false)
+        }
+    }
+
+    private suspend fun writeConcurrency(input: UpdateSubagentGlobalSettingsInput?): Result<Unit> =
+        draft?.let { runCatching { it.update(input) } }
+            ?: conversationId?.let { core.updateSessionSubagentGlobalSettings(it, input) }
+            ?: core.updateSubagentGlobalSettings(requireNotNull(input))
+
+    private fun update(role: String, input: UpdateSubagentConfigInput?) {
         if (!uiState.rolesEnabled) return
         // 同一角色的三个字段是一次全量提交，回读前不接受下一次写，避免陈旧快照覆盖。
         uiState = uiState.copy(savingRole = role, configsError = null)
         viewModelScope.launch {
-            core.updateSubagentConfig(role, input).fold(onSuccess = {
+            (draft?.let { runCatching { it.update(role, input) } }
+                ?: conversationId?.let { core.updateSessionSubagentConfig(it, role, input) }
+                ?: core.updateSubagentConfig(role, requireNotNull(input))).fold(onSuccess = {
                 readConfigs()
             }, onFailure = {
                 uiState = uiState.copy(configsError = UiMessage(Res.string.settings_agents_save_failed, listOf(it.message.orEmpty())))

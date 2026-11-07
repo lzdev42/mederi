@@ -18,7 +18,8 @@ import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.prompt.streaming.toMessageResponse
 import ai.koog.utils.time.KoogClock
-import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 
 /**
  * 把流式帧重建为 Assistant 消息，带 ToolCallComplete args 解析容错。
@@ -71,7 +72,8 @@ internal fun List<StreamFrame>.mergeFragmentedReasoning(): List<StreamFrame> {
     val out = mutableListOf<StreamFrame>()
     for (frame in this) {
         val last = out.lastOrNull()
-        if (frame is StreamFrame.ReasoningComplete && last is StreamFrame.ReasoningComplete) {
+        if (frame is StreamFrame.ReasoningComplete && last is StreamFrame.ReasoningComplete &&
+            frame.encrypted == null && last.encrypted == null) {
             val mergedContent = last.content + frame.content
             val lastSummary = last.summary
             val frameSummary = frame.summary
@@ -108,8 +110,26 @@ internal fun List<StreamFrame>.mergeFragmentedText(): List<StreamFrame> {
 
 internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
     val start = System.nanoTime()
+    // 未完成的推理也是真实输出；Koog 只从 Complete 帧重建消息，不能丢掉末尾 delta。
+    val normalized = mutableListOf<StreamFrame>()
+    val pendingReasoning = StringBuilder()
+    for (frame in this) {
+        when (frame) {
+            is StreamFrame.ReasoningDelta -> pendingReasoning.append(frame.text.orEmpty())
+            is StreamFrame.ReasoningComplete -> pendingReasoning.clear()
+            is StreamFrame.End -> if (pendingReasoning.isNotEmpty()) {
+                normalized.add(StreamFrame.ReasoningComplete(null, listOf(pendingReasoning.toString())))
+                pendingReasoning.clear()
+            }
+            else -> Unit
+        }
+        normalized.add(frame)
+    }
+    if (pendingReasoning.isNotEmpty()) {
+        normalized.add(StreamFrame.ReasoningComplete(null, listOf(pendingReasoning.toString())))
+    }
     val rebuilt = try {
-        mergeFragmentedToolCalls()
+        normalized.mergeFragmentedToolCalls()
             .mergeFragmentedReasoning()
             .mergeFragmentedText()
             .toMessageResponse()
@@ -162,6 +182,30 @@ internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
             "tookMs=${(System.nanoTime() - start) / 1_000_000}"
     )
     return guarded
+}
+
+/** 网络抛错时保留已输出正文/推理，再向上抛原异常；绝不执行中断的工具调用。 */
+private suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
+    persister: TurnIncrementalPersister?, responseId: String?,
+): Message.Assistant {
+    val frames = mutableListOf<StreamFrame>()
+    try {
+        collect { frames.add(it) }
+    } catch (error: Throwable) {
+        if (error is kotlinx.coroutines.CancellationException) throw error
+        val partial = frames.filter { it is StreamFrame.TextDelta || it is StreamFrame.TextComplete ||
+            it is StreamFrame.ReasoningDelta || it is StreamFrame.ReasoningComplete }
+        if (partial.isNotEmpty()) {
+            // 中断正文也可能只有delta；仅无Complete时补齐，避免把完整正文重复拼接。
+            val text = partial.filterIsInstance<StreamFrame.TextDelta>().joinToString("") { it.text }
+            val readable = if (text.isNotEmpty() && partial.none { it is StreamFrame.TextComplete })
+                partial + StreamFrame.TextComplete(text) else partial
+            val response = readable.toAssistantMessageSafe().let { if (responseId != null) it.copy(id = responseId) else it }
+            persister?.persistAssistant(response)
+        }
+        throw error
+    }
+    return frames.toAssistantMessageSafe()
 }
 
 /**
@@ -248,7 +292,7 @@ private fun nodeLLMSendToolResultsPersistable(
             // 故围绕 requestLLMStreaming 前后测量真实流耗时（含推理+正文）。
             val startNs = System.nanoTime()
             val responseId = persister?.beginResponse()
-            val response = requestLLMStreaming().toList().toAssistantMessageSafe().let {
+            val response = requestLLMStreaming().collectAssistantPreservingPartial(persister, responseId).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
             val durationMs = (System.nanoTime() - startNs) / 1_000_000
@@ -271,7 +315,7 @@ fun mederiSingleRunStrategy(
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
                 val responseId = persister?.beginResponse()
-            val response = requestLLMStreaming().toList().toAssistantMessageSafe().let {
+            val response = requestLLMStreaming().collectAssistantPreservingPartial(persister, responseId).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000
@@ -338,7 +382,7 @@ fun mederiSingleRunStrategyWithCompression(
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
                 val responseId = persister?.beginResponse()
-            val response = requestLLMStreaming().toList().toAssistantMessageSafe().let {
+            val response = requestLLMStreaming().collectAssistantPreservingPartial(persister, responseId).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000

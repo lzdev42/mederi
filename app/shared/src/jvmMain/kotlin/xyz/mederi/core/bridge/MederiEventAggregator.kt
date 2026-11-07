@@ -13,6 +13,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import xyz.mederi.api.SessionApi
 import xyz.mederi.core.contract.ConversationStateReducer
 import xyz.mederi.core.contract.SnapshotReducer
+import xyz.mederi.core.contract.withPendingInteractionStatus
+import xyz.mederi.core.contract.models.ExecutionApprovalRequest
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.ConversationState
 import xyz.mederi.core.contract.dto.MessagesPage
@@ -52,7 +54,11 @@ object MederiEventAggregator {
         modelToProvider: (String) -> String?,
         planApproval: suspend (String) -> PlanApprovalRequest? = { null },
         planApprovals: suspend (String) -> List<PlanApprovalRequest> = { emptyList() },
-        lastError: (String) -> LastSessionError? = { null }
+        executionApprovals: (String) -> List<ExecutionApprovalRequest> = { emptyList() },
+        lastError: (String) -> LastSessionError? = { null },
+        // T09：会话重连/首次订阅时水合当前绑定工作区与活跃操作（与 getSnapshot 同源），
+        // 避免冷启动快照丢失工作区投影。仅决定"填进快照的数据"，不决定渲染位置。
+        workspaceInfo: suspend (String) -> xyz.mederi.core.contract.models.ConversationWorkspaceInfo? = { null }
     ): Flow<ConversationSnapshot> = flow {
         DebugLog.section("Aggregator", "MederiEventAggregator.observe start")
         DebugLog.data("Aggregator", "conversationId", conversationId)
@@ -69,6 +75,8 @@ object MederiEventAggregator {
         val hydratedQuestion = if (session.status == xyz.mederi.domain.model.SessionStatus.RUNNING) {
             hydratePendingQuestion(mappedMessages, conversationId)
         } else null
+        // T09：初始快照水合工作区投影（active/associated + 活跃操作），与 getSnapshot 保持一致。
+        val hydratedWsInfo = workspaceInfo(conversationId)
         val base = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let(modelToProvider)).let { conv ->
                 if (hydratedQuestion != null) conv.copy(status = ConversationStatus.WaitingUser) else conv
@@ -79,6 +87,7 @@ object MederiEventAggregator {
             cost = MederiModelMapper.toCostSummary(),
             todos = MederiModelMapper.toTodos(session.todos),
             pendingPlanApproval = planApproval(conversationId),
+            pendingExecutionApprovals = executionApprovals(conversationId),
             planApprovals = planApprovals(conversationId),
             subagents = sessions.listSubagentsForSession(conversationId).map { bg ->
                 xyz.mederi.core.contract.models.SubagentState(
@@ -96,9 +105,11 @@ object MederiEventAggregator {
             },
             pendingQuestion = hydratedQuestion,
             requestCount = backfill.requestCount,
-            lastRequestUsage = backfill.lastRequestUsage
+            lastRequestUsage = backfill.lastRequestUsage,
+            workspaceInfo = hydratedWsInfo,
+            activeWorkspaceOperation = hydratedWsInfo?.operation
         )
-        var snapshot = hydrateLastError(base, lastError(conversationId))
+        var snapshot = hydrateLastError(base, lastError(conversationId)).withPendingInteractionStatus()
         DebugLog.event("Aggregator", "initial snapshot built: status=${snapshot.conversation.status}, messages=${snapshot.messages.size}")
         emit(snapshot)
 

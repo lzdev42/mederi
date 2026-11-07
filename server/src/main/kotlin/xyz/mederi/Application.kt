@@ -20,8 +20,7 @@ import java.io.File
  * - MEDERI_CONFIG_DIR（默认 ~/.mederi）
  * - MEDERI_SERVER_PASSWORD（非空则 /v1 需要 Bearer 鉴权）
  * - MEDERI_WEBAPP_DIR（可选，覆盖内置 wasmJs Web UI 静态资源目录）
- * - MEDERI_LLM_RETRY_MAX（限流重试次数，默认 10；0 = 关闭重试）
- * - MEDERI_LLM_RETRY_MIN_MS / MEDERI_LLM_RETRY_MAX_MS（随机退避边界，默认 1000 / 10000）
+ * - MEDERI_LLM_RETRY_MIN_MS / MEDERI_LLM_RETRY_MAX_MS（随机退避边界，默认 0 / 30000）
  */
 fun main() {
     val port = System.getenv("MEDERI_SERVER_PORT")?.toIntOrNull() ?: 8081
@@ -30,11 +29,9 @@ fun main() {
     val webappDir = System.getenv("MEDERI_WEBAPP_DIR")?.takeIf { it.isNotBlank() && File(it).isDirectory }
 
     // 限流重试设定（经 MederiAiCore 构造参数注入）
-    val retryMaxRetries = System.getenv("MEDERI_LLM_RETRY_MAX")?.toIntOrNull()
     val retryMinDelayMs = System.getenv("MEDERI_LLM_RETRY_MIN_MS")?.toLongOrNull()
     val retryMaxDelayMs = System.getenv("MEDERI_LLM_RETRY_MAX_MS")?.toLongOrNull()
-    println("[MederiServer] LLM retry: maxRetries=${retryMaxRetries ?: "default"}, " +
-        "backoff=${retryMinDelayMs ?: "default"}-${retryMaxDelayMs ?: "default"}ms")
+    println("[MederiServer] LLM retry: unlimited, delay=${retryMinDelayMs ?: "default"}-${retryMaxDelayMs ?: "default"}ms")
 
     val webHosting = when {
         webappDir != null -> "external directory ($webappDir)"
@@ -46,7 +43,6 @@ fun main() {
 
     val aiCore = MederiAiCore(
         configDir,
-        retryMaxRetries = retryMaxRetries,
         retryMinDelayMs = retryMinDelayMs,
         retryMaxDelayMs = retryMaxDelayMs
     )

@@ -4,6 +4,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import xyz.mederi.domain.model.AIModel
 
+@Serializable
+enum class ProviderAuthentication { API_KEY, CHATGPT_OAUTH }
+
 /**
  * 供应商聚合根（可序列化，用于 JSON 配置）。
  *
@@ -35,7 +38,10 @@ data class Provider(
     val responseSanitization: Boolean = false,
     val modelsDevKey: String? = null,
     @Transient
-    val apiKeys: List<ProviderApiKey> = emptyList()
+    val apiKeys: List<ProviderApiKey> = emptyList(),
+    val authentication: ProviderAuthentication = ProviderAuthentication.API_KEY,
+    /** Runtime-only credential refresh; never serialized or exposed through UI DTOs. */
+    @Transient val accessTokenProvider: (suspend () -> String)? = null
 ) {
     /**
      * 获取默认 API 密钥。

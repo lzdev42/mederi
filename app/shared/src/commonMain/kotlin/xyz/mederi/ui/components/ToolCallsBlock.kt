@@ -1,6 +1,5 @@
 package xyz.mederi.ui.components
 
-import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -264,18 +263,7 @@ fun ToolActionGroupRow(
         iconTint = iconTint,
         label = titleText,
         labelColor = if (isFailed) colors.accentDanger else defaultMutedColor,
-        // 运行中的动作组以旋转指示器取代静态分类图标（运行中指示信息不丢）
-        leading = if (isGroupRunning) {
-            {
-                WorkspaceLoadingIndicator(
-                    color = colors.accentPrimary,
-                    strokeWidth = 1.4.dp,
-                    modifier = Modifier.size(WorkspaceStyle.IconSize)
-                )
-            }
-        } else {
-            null
-        },
+        labelRunning = isGroupRunning && !isFailed,
     ) {
         // 展开后的具体执行明细：无输出时也明确呈现真实执行状态。
         Column(

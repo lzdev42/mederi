@@ -6,7 +6,12 @@ import mederi.app.shared.generated.resources.*
 
 /** 仅为窗口阅读器的本地身份，不属于Core或持久化契约。 */
 data class ReportKey(val sessionId: String, val eventId: String)
-data class ReportRequest(val key: ReportKey, val path: String?, val summary: String)
+data class ReportRequest(
+    val key: ReportKey,
+    val path: String?,
+    val summary: String,
+    val planId: String? = null,
+)
 
 internal sealed interface ReportLoadState {
     data object Idle : ReportLoadState
@@ -77,7 +82,7 @@ internal class ReportLoadPresenter(
 
     private fun start(entry: Entry) {
         val key = entry.request.key
-        if (entry.request.path.isNullOrBlank() || entry.read == null) {
+        if (entry.read == null) {
             states[key] = ReportLoadState.Missing
             return
         }

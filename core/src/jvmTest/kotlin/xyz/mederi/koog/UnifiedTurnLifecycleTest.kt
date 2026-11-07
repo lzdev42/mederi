@@ -50,7 +50,7 @@ class UnifiedTurnLifecycleTest {
         override suspend fun addModel(providerId: String, providerModelId: String, name: String, supportsReasoning: Boolean, reasoningLevel: ReasoningLevel, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean, reasoningLevels: List<ReasoningLevel>, isEnabled: Boolean, inputPricePerMillion: Double?, outputPricePerMillion: Double?) = unused()
         override suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean) = unused()
         override suspend fun applyRemoteMetadata(providerId: String, modelId: String, endpoint: xyz.mederi.provider.domain.model.RemoteModelInfo?, catalog: xyz.mederi.metadata.ModelMetadata?) = unused()
-        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?) = unused()
+        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?, optimizeForRequestCount: Boolean?) = unused()
         override suspend fun deleteModel(providerId: String, modelId: String) = unused()
         override suspend fun getModel(modelId: String) = unused()
         override suspend fun listAllModels() = unused()
@@ -89,7 +89,10 @@ class UnifiedTurnLifecycleTest {
         override fun getBasicJsonSchemaGenerator() = delegate.getBasicJsonSchemaGenerator()
     }
 
-    private class Fixture(script: suspend FlowCollector<StreamFrame>.(Prompt, Int) -> Unit) {
+    private class Fixture(
+        childModel: AIModel? = null,
+        script: suspend FlowCollector<StreamFrame>.(Prompt, Int) -> Unit,
+    ) {
         private val root = generateSequence(File(System.getProperty("user.dir"))) { it.parentFile }.first { File(it, "gradlew").exists() }
         val directory = File(root, "temp/unified-turn-${UUID.randomUUID()}").apply { mkdirs() }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -98,12 +101,28 @@ class UnifiedTurnLifecycleTest {
         val events = CopyOnWriteArrayList<MederiEvent>()
         val bus = MutableSharedFlow<MederiEvent>(extraBufferCapacity = 128)
         val model = AIModel(id = "test-model", providerModelId = "test-model", name = "Test", supportsImages = true)
-        val provider = Provider("test-provider", "Test", ProviderType.OPENAI_CHAT, "http://unused.invalid/v1", models = listOf(model),
+        val provider = Provider("test-provider", "Test", ProviderType.OPENAI_CHAT, "http://unused.invalid/v1", models = listOfNotNull(model, childModel),
             apiKeys = listOf(ProviderApiKey("key", "Test", "***", true)))
         val client = ScriptClient(provider, script)
         val executor = TurnExecutor(sessions, history, bus, TestProviderManager(provider),
             StubProjectManager(Project("project", "Test", directory.absolutePath, "now", "now")),
             scope = scope, llmClientFactory = { _, _ -> client })
+        val childManager = xyz.mederi.tools.subagent.SubagentManager(
+            xyz.mederi.tools.subagent.SubagentRunnerImpl(
+                providerManager = TestProviderManager(provider),
+                projectManager = StubProjectManager(Project("project", "Test", directory.absolutePath, "now", "now")),
+                llmClientFactory = { _, _ -> client }), scope, bus)
+        suspend fun spawnChild(selectedModel: AIModel = model): String = childManager.spawn(task = "analyze", briefing = null, plan = null,
+            role = SubagentRole.EXECUTOR, directories = listOf(directory.absolutePath), aiModel = selectedModel,
+            reasoningLevel = ReasoningLevel.NONE, projectId = "project", parentSessionId = "parent")
+        suspend fun childTerminal(): MederiEvent = withTimeout(15_000) {
+            while (true) {
+                events.firstOrNull { it.type in setOf(EventType.SUBAGENT_ERROR, EventType.SUBAGENT_COMPLETED) }
+                    ?.let { return@withTimeout it }
+                delay(10)
+            }
+            error("unreachable")
+        }
         init { scope.launch(start = CoroutineStart.UNDISPATCHED) { bus.collect { events.add(it) } } }
         suspend fun initialize() {
             val now = java.time.Instant.now().toString()
@@ -125,10 +144,89 @@ class UnifiedTurnLifecycleTest {
         }
     }
 
+    @Test
+    fun parentAndChildUseTheCurrentPolicyOfTheirOwnModels() = runBlocking {
+        val childModel = AIModel("child-model", "test-free", "Child model", optimizeForRequestCount = true)
+        val fixture = Fixture(childModel) { _, _ -> answer("done") }
+        try {
+            fixture.initialize()
+            fixture.send("request", "Inspect")
+            fixture.completed()
+            // 即使调用方的模型快照较旧，提示词也使用供应商目录的当前值。
+            fixture.spawnChild(childModel.copy(optimizeForRequestCount = false))
+            assertEquals(EventType.SUBAGENT_COMPLETED, fixture.childTerminal().type)
+            val (parent, child) = fixture.client.prompts.map { it.toString() }
+            val billing = "This model is billed per request"
+            assertFalse(billing in parent)
+            assertTrue(billing in child)
+        } finally { fixture.close() }
+    }
+
     private suspend fun FlowCollector<StreamFrame>.answer(text: String, reason: String = "stop") {
         emit(StreamFrame.TextDelta(text))
         emit(StreamFrame.TextComplete(text))
         emit(StreamFrame.End(reason, ResponseMetaInfo.create(KoogClock.System)))
+    }
+
+    @Test
+    fun subagentDiagnosticNeverEntersParentHistoryOrLlmPrompt() = runBlocking {
+        val fixture = Fixture { _, _ -> answer("acknowledged") }
+        try {
+            fixture.initialize()
+            fixture.send("request", "work")
+            fixture.completed()
+            val diagnostic = "PRIVATE_HUMAN_DIAGNOSTIC\nStack Trace:\n" + "internal stack line\n".repeat(200)
+            fixture.bus.emit(MederiEvent(type = EventType.SUBAGENT_ERROR, sessionId = "session",
+                timestamp = java.time.Instant.now().toString(), payload = mapOf(
+                    "agentId" to "child", "role" to "EXECUTOR", "status" to "ERROR",
+                    "error" to "[NETWORK] Connection is closed", "errorId" to "err-human-only",
+                    "errorBody" to "ORIGINAL_PROVIDER_ERROR_BODY",
+                    "fullDiagnostic" to diagnostic,
+                    // 即使旧调用方仍在 result 中混入诊断，模型入口也必须只取摘要。
+                    "result" to "[subagent error] [NETWORK] Connection is closed\nError ID: err-human-only\n$diagnostic")))
+            withTimeout(15_000) { while (fixture.client.calls.get() < 2) delay(10) }
+            val eventText = fixture.history.load("session").flatMap { it.parts }.filterIsInstance<MessagePart.Text>()
+                .map { it.text }.single { it.contains("<event_message") }
+            assertTrue(eventText.contains("[NETWORK] Connection is closed"))
+            assertTrue(eventText.contains("ORIGINAL_PROVIDER_ERROR_BODY"))
+            assertFalse(eventText.contains("PRIVATE_HUMAN_DIAGNOSTIC"))
+            assertFalse(eventText.contains("err-human-only"))
+            val prompt = fixture.client.prompts.last().toString()
+            assertTrue(prompt.contains("Connection is closed"))
+            assertTrue(prompt.contains("ORIGINAL_PROVIDER_ERROR_BODY"))
+            assertFalse(prompt.contains("PRIVATE_HUMAN_DIAGNOSTIC"))
+            assertFalse(prompt.contains("err-human-only"))
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun batchReadsSeveralFilesBeforeNextModelRequest() = runBlocking {
+        val fixture = Fixture { prompt, call ->
+            if (call == 1) {
+                val calls = listOf("first.txt", "second.txt", "third.txt").map { path ->
+                    xyz.mederi.tools.BatchTool.Call("read_file", xyz.mederi.tools.BatchTool.Parameters(path = path))
+                }
+                val args = kotlinx.serialization.json.Json.encodeToString(xyz.mederi.tools.BatchTool.Args(calls))
+                emit(StreamFrame.ToolCallComplete("batch-read", "batch", args))
+                emit(StreamFrame.End("tool_calls", ResponseMetaInfo.create(KoogClock.System)))
+            } else {
+                assertEquals(2, call, "Three reads must not introduce three model round trips")
+                for (evidence in listOf("first evidence", "second evidence", "third evidence")) {
+                    assertTrue(prompt.toString().contains(evidence), "All file results must arrive together")
+                }
+                answer("analysis complete")
+            }
+        }
+        try {
+            fixture.initialize()
+            for (name in listOf("first", "second", "third")) {
+                File(fixture.directory, "$name.txt").writeText("$name evidence")
+            }
+            fixture.send("batch-request", "analyze the three files")
+            fixture.completed()
+            assertEquals(2, fixture.client.calls.get())
+            assertEquals(1, fixture.events.count { it.type == EventType.TOOL_RESULT })
+        } finally { fixture.close() }
     }
 
     @Test
@@ -320,9 +418,201 @@ class UnifiedTurnLifecycleTest {
         try {
             fixture.initialize()
             fixture.send("initial", "analyze")
-            withTimeout(10_000) { while (fixture.events.none { it.type == EventType.MESSAGE_COMPLETED }) delay(10) }
-            assertTrue(fixture.events.last { it.type == EventType.MESSAGE_COMPLETED }.payload["finalMessageId"] == null)
+            withTimeout(10_000) { while (fixture.events.none { it.type == EventType.MESSAGE_ERROR }) delay(10) }
+            assertTrue(fixture.events.none { it.type == EventType.MESSAGE_COMPLETED })
+            assertTrue(fixture.events.last { it.type == EventType.MESSAGE_ERROR }.payload["error"].orEmpty().contains("length"))
             assertTrue(fixture.history.load("session").none { it.isFinalAnswer == true })
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun normalStopWithoutBodyContinuesAndEventuallyDelivers() = runBlocking {
+        for (reason in listOf("stop", "completed", "end_turn")) {
+            for (reasoningOnly in listOf(false, true)) {
+                val fixture = Fixture { prompt, call ->
+                    if (call == 1) {
+                        if (reasoningOnly) {
+                            emit(StreamFrame.ReasoningDelta(text = "reasoning without answer"))
+                            emit(StreamFrame.ReasoningComplete(null, listOf("reasoning without answer")))
+                        }
+                        emit(StreamFrame.End(reason, ResponseMetaInfo.create(KoogClock.System)))
+                    } else {
+                        assertEquals(2, call)
+                        assertEquals("Continue", prompt.messages.last().parts.filterIsInstance<ai.koog.prompt.message.MessagePart.Text>().single().text.lineSequence().first())
+                        answer("completed answer")
+                    }
+                }
+                try {
+                    fixture.spawnChild()
+                    assertEquals(EventType.SUBAGENT_COMPLETED, fixture.childTerminal().type)
+                    assertEquals(2, fixture.client.calls.get())
+                    assertTrue(fixture.events.none { it.type == EventType.SUBAGENT_ERROR })
+                } finally { fixture.close() }
+            }
+        }
+    }
+
+    @Test
+    fun repeatedEmptyStopReportsActualMissingBodyAndStopsAfterOneContinue() = runBlocking {
+        val fixture = Fixture { _, _ -> emit(StreamFrame.End("stop", ResponseMetaInfo.create(KoogClock.System))) }
+        try {
+            fixture.spawnChild()
+            val terminal = fixture.childTerminal()
+            assertEquals(EventType.SUBAGENT_ERROR, terminal.type)
+            assertEquals(2, fixture.client.calls.get())
+            val report = terminal.payload["fullDiagnostic"].orEmpty()
+            for (detail in listOf("没有有效正文", "finishReason=stop", "textChars=0", "reasoningChars=0", "toolCalls=0")) {
+                assertTrue(report.contains(detail), "Missing diagnostic: $detail")
+            }
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun idleTimeoutAndEmptyStopShareOneContinuationBudget() = runBlocking {
+        val fixture = Fixture { _, call ->
+            if (call == 1) throw xyz.mederi.http.SseIdleTimeoutException("local patience exhausted")
+            emit(StreamFrame.End("stop", ResponseMetaInfo.create(KoogClock.System)))
+        }
+        try {
+            fixture.spawnChild()
+            assertEquals(EventType.SUBAGENT_ERROR, fixture.childTerminal().type)
+            assertEquals(2, fixture.client.calls.get())
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun childLocalIdleTimeoutContinuesEvenWithoutFirstFrame() = runBlocking {
+        for (partialOutput in listOf(false, true)) {
+            val fixture = Fixture { prompt, call ->
+                if (call == 1) {
+                    if (partialOutput) emit(StreamFrame.ReasoningDelta(text = "partial reasoning"))
+                    throw xyz.mederi.http.SseIdleTimeoutException("no SSE lines for 90s")
+                } else {
+                    assertEquals(2, call)
+                    assertEquals("Continue", prompt.messages.last().parts.filterIsInstance<ai.koog.prompt.message.MessagePart.Text>().single().text.lineSequence().first())
+                    answer("continued successfully")
+                }
+            }
+            try {
+                fixture.spawnChild()
+                assertEquals(EventType.SUBAGENT_COMPLETED, fixture.childTerminal().type)
+                assertEquals(2, fixture.client.calls.get())
+                assertTrue(fixture.events.none { it.type == EventType.SUBAGENT_ERROR })
+            } finally { fixture.close() }
+        }
+    }
+
+    @Test
+    fun childMissingEndContinuesOnceWithoutAFirstFrame() = runBlocking {
+        val fixture = Fixture { prompt, call ->
+            if (call == 2) {
+                val input = prompt.messages.last().parts.filterIsInstance<ai.koog.prompt.message.MessagePart.Text>().single()
+                assertEquals("Continue", input.text.lineSequence().first())
+            }
+            throw ai.koog.prompt.streaming.IncompleteStreamException()
+        }
+        try {
+            fixture.spawnChild()
+            val terminal = fixture.childTerminal()
+            assertEquals(EventType.SUBAGENT_ERROR, terminal.type)
+            assertEquals(2, fixture.client.calls.get())
+            assertTrue(terminal.payload["fullDiagnostic"].orEmpty().contains("IncompleteStreamException"))
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun repeatedLocalIdleTimeoutEndsWithOriginalDiagnosticAfterBoundedContinuation() = runBlocking {
+        val fixture = Fixture { _, _ -> throw xyz.mederi.http.SseIdleTimeoutException("original local idle timeout") }
+        try {
+            fixture.spawnChild()
+            val terminal = fixture.childTerminal()
+            assertEquals(EventType.SUBAGENT_ERROR, terminal.type)
+            assertEquals(2, fixture.client.calls.get())
+            assertTrue(terminal.payload["fullDiagnostic"].orEmpty().contains("original local idle timeout"))
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun localIdleContinuationRetainsCompletedToolResultsWithoutReplayingTool() = runBlocking {
+        val fixture = Fixture { prompt, call ->
+            when (call) {
+                1 -> {
+                    emit(StreamFrame.ToolCallComplete("read-once", "read_file", buildJsonObject { put("path", "once.txt") }.toString()))
+                    emit(StreamFrame.End("tool_calls", ResponseMetaInfo.create(KoogClock.System)))
+                }
+                2 -> throw xyz.mederi.http.SseIdleTimeoutException("no SSE lines for 90s")
+                else -> {
+                    assertEquals(3, call)
+                    assertTrue(prompt.toString().contains("completed tool evidence"))
+                    assertTrue(prompt.toString().contains("Continue"))
+                    answer("resumed from existing evidence")
+                }
+            }
+        }
+        try {
+            fixture.initialize()
+            File(fixture.directory, "once.txt").writeText("completed tool evidence")
+            fixture.send("idle-request", "analyze")
+            fixture.completed()
+            assertEquals(3, fixture.client.calls.get())
+            assertEquals(1, fixture.events.count { it.type == EventType.TOOL_RESULT })
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun reasoningOnlyChildDisconnectContinuesAndEventuallyDelivers() = runBlocking {
+        for (networkException in listOf(false, true)) {
+            val fixture = Fixture { prompt, call ->
+                if (call == 1) {
+                    emit(StreamFrame.ReasoningDelta(text = "unfinished reasoning"))
+                    if (networkException) throw java.io.EOFException("stream ended during reasoning")
+                    emit(StreamFrame.End(null, ResponseMetaInfo.create(KoogClock.System)))
+                } else {
+                    assertTrue(prompt.messages.any { msg -> msg.parts.any { it is ai.koog.prompt.message.MessagePart.Text && it.text.contains("Continue") } })
+                    answer("complete answer")
+                }
+            }
+            try {
+                fixture.spawnChild()
+                assertEquals(EventType.SUBAGENT_COMPLETED, fixture.childTerminal().type)
+                assertEquals(2, fixture.client.calls.get())
+                assertTrue(fixture.events.none { it.type == EventType.SUBAGENT_ERROR })
+            } finally { fixture.close() }
+        }
+    }
+
+    @Test
+    fun reasoningOnlyChildDisconnectExhaustionIsFailureWithOriginalDiagnostic() = runBlocking {
+        val fixture = Fixture { _, _ ->
+            emit(StreamFrame.ReasoningDelta(text = "unfinished reasoning"))
+            emit(StreamFrame.End(null, ResponseMetaInfo.create(KoogClock.System)))
+        }
+        try {
+            val id = fixture.spawnChild()
+            val terminal = fixture.childTerminal()
+            assertEquals(EventType.SUBAGENT_ERROR, terminal.type)
+            assertEquals(2, fixture.client.calls.get())
+            assertTrue(terminal.payload["error"].orEmpty().contains("结束标记"))
+            assertNotNull(terminal.payload["fullDiagnostic"])
+            assertEquals(xyz.mederi.tools.subagent.SubagentManager.SubagentStatus.ERROR,
+                fixture.childManager.listForSession("parent").single { it.agentId == id }.status)
+            assertTrue(fixture.events.none { it.type == EventType.SUBAGENT_COMPLETED })
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun reasoningOnlyLengthLimitIsFailureWithoutBlindContinuation() = runBlocking {
+        val fixture = Fixture { _, _ ->
+            emit(StreamFrame.ReasoningDelta(text = "unfinished reasoning"))
+            emit(StreamFrame.End("length", ResponseMetaInfo.create(KoogClock.System)))
+        }
+        try {
+            fixture.spawnChild()
+            val terminal = fixture.childTerminal()
+            assertEquals(EventType.SUBAGENT_ERROR, terminal.type)
+            assertEquals(1, fixture.client.calls.get())
+            assertTrue(terminal.payload["error"].orEmpty().contains("length"))
+            assertTrue(fixture.events.none { it.type == EventType.SUBAGENT_COMPLETED })
         } finally { fixture.close() }
     }
 

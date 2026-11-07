@@ -19,11 +19,11 @@ internal class BlockStarters(
     /**
      * 从当前游标位置尝试开启新块。
      */
-    fun tryStartBlock(cursor: LineCursor, lineIdx: Int, tip: OpenBlock): OpenBlock? {
+    fun tryStartBlock(cursor: LineCursor, lineIdx: Int, tip: OpenBlock, allowFrontMatter: Boolean = true): OpenBlock? {
         val snap = cursor.snapshot()
 
         // 文档开头的前置元数据
-        if (lineIdx == 0) {
+        if (lineIdx == 0 && allowFrontMatter) {
             tryStartFrontMatter(cursor, lineIdx)?.let { return it }
             cursor.restore(snap)
         }

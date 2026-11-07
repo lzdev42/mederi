@@ -195,14 +195,24 @@ class WorkspaceFifthDeliveryTest {
         var approvals = 0; var opens = 0
         val specs = mutableListOf<PlanSubtaskOverview>()
         var approve = ""; var read = ""; var spec = ""; var expand = ""
+        var report = ""
+        var reportTitle = ""
+        var openedReport: Pair<String, String>? = null
         setContent { AppTheme {
             approve = stringResource(Res.string.dock_plan_approve)
             read = stringResource(Res.string.plan_read_full)
             spec = stringResource(Res.string.step_spec)
             expand = stringResource(Res.string.worktrace_expand)
-            OverviewPlanItemContent(current.value, { approvals++ }, { opens++ }, { specs += it }, Modifier.width(320.dp))
+            report = stringResource(Res.string.plan_open_acceptance_report)
+            reportTitle = stringResource(Res.string.plan_acceptance_report_title, current.value.title)
+            val item = current.value
+            OverviewPlanItemContent(
+                item, { approvals++ }, { opens++ }, { specs += it }, Modifier.width(320.dp),
+                onOpenAcceptanceReport = { openedReport = item.id to it },
+            )
         } }
         onNodeWithText("CUSTOM_STATE").assertIsDisplayed()
+        onNodeWithText(report).assertDoesNotExist()
         onNodeWithText(read).performClick()
         onNodeWithText(spec).performClick()
         runOnIdle { assertEquals(1, opens); assertEquals(listOf(current.value.subtasks[0]), specs); assertEquals(0, approvals) }
@@ -213,6 +223,8 @@ class WorkspaceFifthDeliveryTest {
         onNodeWithText("Step 4", substring = true).assertIsDisplayed()
         runOnIdle { current.value = plan("plan-b", PlanOverviewStatus.Completed) }
         onNodeWithText(approve).assertDoesNotExist()
+        onNodeWithText(report).performClick()
+        runOnIdle { assertEquals("plan-b" to reportTitle, openedReport) }
         onNodeWithText("Step 4", substring = true).assertDoesNotExist()
     }
 
@@ -248,7 +260,7 @@ class WorkspaceFifthDeliveryTest {
                 Column(Modifier.width(290.dp)) {
                     OverviewTodoContent(TodoStatus.entries.map { TodoItem(it.name, "Task ${it.name}", it) }, true, {})
                 }
-                OverviewPlanItemContent(plan(), {}, {}, {}, Modifier.weight(1f))
+                OverviewPlanItemContent(plan(), {}, {}, {}, Modifier.weight(1f), onOpenAcceptanceReport = {})
             }
         } }
         for (theme in listOf(AppThemeMode.DARK, AppThemeMode.LIGHT)) {

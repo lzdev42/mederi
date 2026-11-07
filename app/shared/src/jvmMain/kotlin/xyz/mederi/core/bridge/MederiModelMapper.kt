@@ -76,6 +76,10 @@ object MederiModelMapper {
             apiKeyId = session.apiKeyId,
             directory = null,
             draftText = session.draftText,
+            workspaceId = session.workspaceId,
+            associatedWorktreeId = session.associatedWorktreeId,
+            archivedAt = session.archivedAt,
+            pinned = session.pinned
         )
 
     private fun toConversationStatus(status: SessionStatus): ConversationStatus = when (status) {
@@ -88,7 +92,8 @@ object MederiModelMapper {
     // Provider / Model
     // ------------------------------------------------------------------
 
-    fun toProviderConfig(provider: CoreProvider): ProviderConfig {
+    fun toProviderConfig(provider: CoreProvider, oauthConnected: Boolean = false): ProviderConfig {
+        val oauth = provider.authentication == xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH
         val isBuiltin = BuiltinProviders.isBuiltinName(provider.name)
         val rp = provider.reasoningParameter
         return ProviderConfig(
@@ -96,16 +101,17 @@ object MederiModelMapper {
             name = provider.name,
             type = if (isBuiltin) UiProviderType.Builtin else UiProviderType.Custom,
             baseUrl = provider.baseUrl,
-            isConnected = provider.defaultApiKey != null,
+            isConnected = if (oauth) oauthConnected else provider.defaultApiKey != null,
             models = provider.models.map { toModelOption(it, provider.id, provider.reasoningParameter) },
             customModels = provider.models.map { toCustomModelEntry(it) },
-            supportsApiKey = true,
-            supportsBaseUrl = !isBuiltin,
+            supportsApiKey = !oauth,
+            supportsBaseUrl = !isBuiltin && !oauth,
             protocolType = ProtocolType.valueOf(provider.type.name),
             apiKeys = provider.apiKeys.map { toApiKeyOption(it) },
             // 完整回显每档配置（含 NONE 档），供编辑对话框回显
             reasoningLevels = rp?.levels?.mapKeys { it.key.name } ?: emptyMap(),
-            responseSanitization = provider.responseSanitization
+            responseSanitization = provider.responseSanitization,
+            isChatGptOAuth = oauth
         )
     }
 
@@ -172,7 +178,8 @@ object MederiModelMapper {
             maxTokens = model.maxTokens,
             inputPricePerMillion = model.inputPricePerMillion,
             outputPricePerMillion = model.outputPricePerMillion,
-            isEnabled = model.isEnabled
+            isEnabled = model.isEnabled,
+            optimizeForRequestCount = model.optimizeForRequestCount,
         )
     }
 

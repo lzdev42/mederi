@@ -22,7 +22,7 @@ import kotlin.test.*
 @OptIn(ExperimentalTestApi::class)
 class ProviderFormsDeliveryTest {
     private data class ModelSave(val id: String, val name: String, val images: Boolean,
-        val thinking: Boolean, val context: Int?, val output: Int?, val levels: List<String>)
+        val thinking: Boolean, val context: Int?, val output: Int?, val levels: List<String>, val optimizeForRequestCount: Boolean = false)
 
     @Composable
     private fun FormHost(scroll: Boolean = true, content: @Composable () -> Unit) {
@@ -40,34 +40,37 @@ class ProviderFormsDeliveryTest {
     )
 
     @Test
-    fun fetchedMetadataIsReadOnlyWhileImageOverridePreservesEveryOtherOriginalField() = runComposeUiTest {
-        val original = model(ModelOrigin.FETCHED)
+    fun fetchedModelAllowsFillingMissingMetadataAndSavingEveryEditedField() = runComposeUiTest {
+        val original = model(ModelOrigin.FETCHED).copy(
+            contextWindow = null, maxTokens = null, supportsThinking = false, reasoningLevels = emptyList())
         var saved: ModelSave? = null
-        var name = ""; var context = ""; var output = ""; var thinking = ""; var image = ""
+        var name = ""; var context = ""; var output = ""; var thinking = ""; var image = ""; var billing = ""
         setContent { AppTheme {
             name = stringResource(Res.string.settings_panel_display_name)
             context = stringResource(Res.string.settings_panel_context_window)
             output = stringResource(Res.string.settings_panel_max_output)
             thinking = stringResource(Res.string.settings_panel_support_thinking)
             image = stringResource(Res.string.settings_panel_support_images)
+            billing = stringResource(Res.string.settings_panel_billed_per_request)
             FormHost {
                 ModelConfigurationContent(original, "Fetched fixture", "Save fixture", LocalMederiColors.current, {},
-                    { id, n, images, t, cw, mt, levels -> saved = ModelSave(id, n, images, t, cw, mt, levels) })
+                    { id, n, images, t, cw, mt, levels, optimizeForRequestCount ->
+                        saved = ModelSave(id, n, images, t, cw, mt, levels, optimizeForRequestCount)
+                    })
             }
         } }
-        onNodeWithContentDescription(name).assertIsDisplayed()
-        onNodeWithContentDescription(context).assertIsDisplayed()
-        onNodeWithContentDescription(output).assertIsDisplayed()
-        onNodeWithText("128000").assertIsDisplayed()
-        onNodeWithText("8192").assertIsDisplayed()
-        onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        onNodeWithContentDescription(thinking).assertIsNotEnabled()
-        onNodeWithText("HIGH").assertIsNotEnabled()
+        onAllNodes(hasSetTextAction()).assertCountEquals(3)
+        onNodeWithContentDescription(name).performTextReplacement("  Local model  ")
+        onNodeWithContentDescription(context).performScrollTo().performTextReplacement("262144")
+        onNodeWithContentDescription(output).performScrollTo().performTextReplacement("32768")
+        onNodeWithContentDescription(thinking).performScrollTo().assertIsEnabled().performClick()
+        onNodeWithText("HIGH").performScrollTo().assertIsEnabled().performClick()
         onNodeWithContentDescription(image).performScrollTo().assertIsEnabled().performClick()
+        onNodeWithContentDescription(billing).performScrollTo().assertIsOff().performClick()
         onNodeWithText("Save fixture").performScrollTo().performClick()
         runOnIdle {
-            assertEquals(ModelSave(original.providerModelId, original.name, true, original.supportsThinking,
-                original.contextWindow, original.maxTokens, original.reasoningLevels), saved)
+            assertEquals(ModelSave(original.providerModelId, "Local model", true, true,
+                262144, 32768, listOf("HIGH"), true), saved)
         }
     }
 
@@ -82,7 +85,9 @@ class ProviderFormsDeliveryTest {
             output = stringResource(Res.string.settings_panel_max_output)
             FormHost {
                 ModelConfigurationContent(original, "Manual fixture", "Save fixture", LocalMederiColors.current, {},
-                    { id, n, images, t, cw, mt, levels -> saved = ModelSave(id, n, images, t, cw, mt, levels) })
+                    { id, n, images, t, cw, mt, levels, optimizeForRequestCount ->
+                        saved = ModelSave(id, n, images, t, cw, mt, levels, optimizeForRequestCount)
+                    })
             }
         } }
         onNodeWithContentDescription(name).performTextReplacement("  New model  ")
@@ -101,7 +106,9 @@ class ProviderFormsDeliveryTest {
             nameLabel = stringResource(Res.string.settings_panel_display_name)
             FormHost {
                 ModelConfigurationContent(null, "Add fixture", "Add fixture model", LocalMederiColors.current, {},
-                    { id, n, images, t, cw, mt, levels -> saved = ModelSave(id, n, images, t, cw, mt, levels) })
+                    { id, n, images, t, cw, mt, levels, optimizeForRequestCount ->
+                        saved = ModelSave(id, n, images, t, cw, mt, levels, optimizeForRequestCount)
+                    })
             }
         } }
         onNodeWithText("Add fixture model").performScrollTo().assertIsNotEnabled()
@@ -209,7 +216,7 @@ class ProviderFormsDeliveryTest {
         setContent { AppTheme(mode.value) {
             FormHost {
                 ModelConfigurationContent(model(ModelOrigin.FETCHED), "Catalog model", "Save fixture", LocalMederiColors.current, {},
-                    { _, _, _, _, _, _, _ -> })
+                    { _, _, _, _, _, _, _, _ -> })
             }
         } }
         for (theme in listOf(AppThemeMode.DARK, AppThemeMode.LIGHT)) {

@@ -238,7 +238,8 @@ class BrowserArchitectureFlowTest {
             maxTokens: Int?,
             supportsImages: Boolean?,
             reasoningLevels: List<ReasoningLevel>?,
-            isEnabled: Boolean?
+            isEnabled: Boolean?,
+            optimizeForRequestCount: Boolean?,
         ): AIModel = untouched()
 
         override suspend fun deleteModel(providerId: String, modelId: String): Unit = untouched()

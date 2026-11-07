@@ -119,6 +119,18 @@ class TerminalViewModel(
         launchSession(key, terminalCwdOf(key, projects), "")
     }
 
+    /** 工作区专属终端 tab：按 workspace:<id>#<tab> 归属，隔离不同工作区的 PTY 会话 */
+    fun addTabForWorkspace(workspaceId: String, cwd: String, title: String = "") {
+        val mainKey = "workspace:$workspaceId"
+        var n = 2
+        val key = if (uiState.tabs.any { it.key == mainKey }) {
+            while (uiState.tabs.any { it.key == "$mainKey#$n" }) n++
+            "$mainKey#$n"
+        } else mainKey
+        uiState = uiState.copy(tabs = uiState.tabs + TerminalTab(key), activeKey = key)
+        launchSession(key, cwd, title.ifBlank { workspaceId })
+    }
+
     /** 会话结束后重开：杀干净旧 watcher/会话残留再拉起 */
     fun restartTab(key: String) {
         watchers.remove(key)?.forEach { it.cancel() }
@@ -205,6 +217,12 @@ class TerminalViewModel(
     }
 }
 
+/** tab key → 工作区 ID（如果以 workspace: 开头） */
+internal fun terminalWorkspaceIdOf(key: String): String? {
+    if (!key.startsWith("workspace:")) return null
+    return key.removePrefix("workspace:").substringBefore('#')
+}
+
 /** tab key → 项目（projects 由 UI 订阅后传入，保证响应式） */
 internal fun terminalProjectOf(key: String, projects: List<Project>): Project? {
     if (!key.startsWith("project:")) return null
@@ -220,6 +238,14 @@ internal fun terminalCwdOf(key: String, projects: List<Project>): String? =
 internal fun terminalTabTitle(key: String, sessionTitle: String?, projects: List<Project>): UiMessage {
     sessionTitle?.takeIf { it.isNotBlank() }?.let { return UiMessage(Res.string.term_session_title, listOf(it)) }
     return when {
+        key.startsWith("workspace:") -> {
+            val id = key.removePrefix("workspace:").substringBefore('#')
+            val suffix = key.substringAfter('#', "")
+            when {
+                suffix.isEmpty() -> UiMessage(Res.string.term_session_title, listOf(id))
+                else -> UiMessage(Res.string.term_session_title, listOf("$id ($suffix)"))
+            }
+        }
         key.startsWith("project:") -> {
             val id = key.removePrefix("project:").substringBefore('#')
             val base = projects.find { it.id == id }?.name

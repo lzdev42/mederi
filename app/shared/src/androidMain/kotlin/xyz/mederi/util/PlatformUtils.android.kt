@@ -1,8 +1,6 @@
 package xyz.mederi.util
 
-actual fun openUrl(url: String) {
-    // Android: would use Intent.ACTION_VIEW; stub for now
-}
+actual fun openUrl(url: String): Boolean = false // 未注入 Android Activity，由调用方明确处理不可用。
 
 actual fun openFile(path: String): Boolean {
     // Android: would use FileProvider + Intent.ACTION_VIEW; stub for now

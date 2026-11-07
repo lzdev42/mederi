@@ -38,7 +38,7 @@ class FakeProviderManager(
     override suspend fun addModel(providerId: String, providerModelId: String, name: String, supportsReasoning: Boolean, reasoningLevel: ReasoningLevel, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean, reasoningLevels: List<ReasoningLevel>, isEnabled: Boolean, inputPricePerMillion: Double?, outputPricePerMillion: Double?): AIModel = throw NotImplementedError()
     override suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean): AIModel = throw NotImplementedError()
     override suspend fun applyRemoteMetadata(providerId: String, modelId: String, endpoint: RemoteModelInfo?, catalog: ModelMetadata?): AIModel = throw NotImplementedError()
-    override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?): AIModel = throw NotImplementedError()
+    override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?, optimizeForRequestCount: Boolean?): AIModel = throw NotImplementedError()
     override suspend fun deleteModel(providerId: String, modelId: String) {}
     override suspend fun listAllModels(): List<AIModel> = models.values.toList()
     override suspend fun fetchRemoteModels(providerId: String): List<RemoteModelInfo> = emptyList()

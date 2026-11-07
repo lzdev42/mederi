@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import xyz.mederi.core.contract.AiCore
 import xyz.mederi.core.contract.dto.ChatPromptInput
+import xyz.mederi.core.contract.dto.CreateConversationInput
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.ImageAttachment
@@ -23,6 +24,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class UnifiedInputDeliveryTest {
@@ -90,6 +93,12 @@ class UnifiedInputDeliveryTest {
                     finish.await()
                     return backend.createConversation(projectId, agent)
                 }
+                override suspend fun createConversation(input: CreateConversationInput): Result<Conversation> {
+                    creates.incrementAndGet()
+                    entered.complete(Unit)
+                    finish.await()
+                    return backend.createConversation(input)
+                }
                 override suspend fun sendMessage(conversationId: String, input: ChatPromptInput): Result<Unit> {
                     destinations.add(conversationId)
                     received.add(input)
@@ -126,6 +135,11 @@ class UnifiedInputDeliveryTest {
                     entered.complete(Unit)
                     finish.await()
                     return backend.createConversation(projectId, agent)
+                }
+                override suspend fun createConversation(input: CreateConversationInput): Result<Conversation> {
+                    entered.complete(Unit)
+                    finish.await()
+                    return backend.createConversation(input)
                 }
                 override suspend fun sendMessage(conversationId: String, input: ChatPromptInput): Result<Unit> {
                     received.complete(Unit)
@@ -173,11 +187,13 @@ class UnifiedInputDeliveryTest {
             until { vm.conversationId == other.id && vm.isAttached }
             vm.updateInputDraft(TextFieldValue("keep other draft"))
             finish.complete(Unit)
-            until { vm.error != null }
+            // 原会话的失败不应显示到当前会话；切回原会话后再检查反馈。
+            assertNull(vm.error)
             assertEquals("keep other draft", vm.inputDraft.text)
             assertTrue(vm.pendingImages.isEmpty())
             state.selectConversation(original.id)
             until { vm.conversationId == original.id && vm.inputDraft.text.contains("restore original") }
+            assertNotNull(vm.error)
             assertEquals(listOf("img"), vm.pendingImages.map { it.id })
         } finally { scope.cancel() }
     }

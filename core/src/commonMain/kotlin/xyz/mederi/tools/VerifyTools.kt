@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.Serializable
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
+import xyz.mederi.plan.AcceptanceRun
+import xyz.mederi.plan.PlanStatus
 import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.RootCause
 import xyz.mederi.plan.Subtask
@@ -119,7 +121,9 @@ class VerifyTools(
         )
         val rootCause: String? = null,
         @LLMDescription("For FAIL: how to fix. Required when status is FAIL.")
-        val remediation: String? = null
+        val remediation: String? = null,
+        @LLMDescription("default runs the stored verification command in the sandbox. network/off requests one-time user permission for that exact verification command; it never changes the stored verification contract.")
+        val sandbox: String = "default"
     )
 
     inner class VerifySubtaskTool : SimpleTool<VerifySubtaskArgs>(
@@ -136,7 +140,15 @@ class VerifyTools(
             val subtask = plan.subtasks.getOrNull(args.subtaskIndex)
                 ?: return "Error: Subtask index ${args.subtaskIndex} not found (0..${plan.subtasks.size - 1})"
 
-            val verifyStatus = try {
+            if (plan.sessionId != sessionId || plan.status !in setOf(PlanStatus.APPROVED, PlanStatus.IN_PROGRESS))
+                return "Error: Only this session's approved active plan can be verified."
+            val structured = subtask.acceptanceCases.isNotEmpty()
+            if (subtask.acceptanceCases.any { it.manual })
+                return "Error: This task requires a human operator to submit observed values via manual acceptance."
+            if (structured && subtask.overallAcceptance && !planStore.readyForOverallAcceptance(plan, subtask))
+                return "Error: Finish or re-verify implementation tasks on the current files before overall acceptance."
+
+            val declaredStatus = try {
                 VerifyStatus.valueOf(args.status)
             } catch (e: IllegalArgumentException) {
                 return "Error: Invalid status '${args.status}'. Use PASS, PARTIAL, or FAIL."
@@ -146,7 +158,7 @@ class VerifyTools(
                 try { RootCause.valueOf(it) } catch (e: IllegalArgumentException) { null }
             }
 
-            if (verifyStatus != VerifyStatus.PASS && rootCause == null) {
+            if (declaredStatus != VerifyStatus.PASS && rootCause == null) {
                 return "Error: rootCause is required when status is PARTIAL or FAIL. Use IMPLEMENTATION " +
                     "(the spec said it clearly but the execution did not deliver) or PLAN (the execution " +
                     "matched the spec, but the plan's own logic/verification/expectation is wrong). " +
@@ -154,13 +166,13 @@ class VerifyTools(
                     "followed the spec; only if it did may you attribute the failure to the plan."
             }
 
-            if (verifyStatus == VerifyStatus.FAIL && args.remediation.isNullOrBlank()) {
+            if (declaredStatus == VerifyStatus.FAIL && args.remediation.isNullOrBlank()) {
                 return "Error: remediation is required when status is FAIL."
             }
 
             // 规则 2（空产出门禁，2026-10）：executor 报零改动 + 子任务有真实文件目标 → 拒 PASS。
             // 防 S15 事故：空报告 + 编译验证通过 = 假绿。没有产出物就不可能实现子任务。
-            if (verifyStatus == VerifyStatus.PASS && shouldRejectEmptyOutputPass(subtask)) {
+            if (!structured && declaredStatus == VerifyStatus.PASS && shouldRejectEmptyOutputPass(subtask)) {
                 return emptyOutputRejectionMessage(subtask)
             }
 
@@ -168,13 +180,46 @@ class VerifyTools(
             // 不能依赖模型自觉。命令退出码 + 字面量预期是机器判据，真实输出一律摆到桌面。
             val spec = subtask.verification
             val verifyCmd = spec.command.takeIf { it.isNotBlank() }
-            val autoVerify: CommandResult? = if (verifyCmd != null) {
+            val filesMatch = !structured || planStore.acceptanceFilesMatch(subtask)
+            var blocked = when {
+                !filesMatch -> "Approved collector or fixture changed. Restore it or submit a new plan for approval."
+                structured && verifyCmd == null -> "The approved collector command is missing."
+                structured && shellTools == null -> "The shell runner is unavailable."
+                else -> null
+            }
+            val sourceDigests = if (structured) planStore.implementationDigests(plan, subtask) else emptyMap()
+            val autoVerify: CommandResult? = if (verifyCmd != null && blocked == null) {
                 val shell = shellTools
                     ?: return "Error: this subtask has a verification command but the shell runner is not " +
                         "available in this assembly. That is a configuration fault, not a verification result — " +
                         "refusing to record anything. Do not declare PASS."
-                runCatching { shell.runCommand(verifyCmd, spec.timeoutSeconds ?: 30, spec.cwd) }.getOrNull()
+                try {
+                    shell.runCommand(verifyCmd, spec.timeoutSeconds ?: 30, spec.cwd, args.sandbox, "verify_subtask")
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    if (!structured)
+                        return "Error: verification command could not execute: ${failure.message}. No verification result was recorded."
+                    blocked = "Collector could not execute: ${failure.message}"
+                    null
+                }
             } else null
+
+            if (structured && autoVerify?.timedOut == true) blocked = "Collector timed out."
+            if (structured && autoVerify != null && !planStore.acceptanceFilesMatch(subtask))
+                blocked = "Approved collector or fixture changed during the run."
+            if (structured && autoVerify != null && planStore.implementationDigests(plan, subtask) != sourceDigests)
+                blocked = "Declared implementation files changed during the run. Re-run on a stable checkout."
+            val acceptanceRun = if (structured) AcceptanceRun.evaluate(
+                subtask.acceptanceCases,
+                autoVerify?.output.orEmpty(),
+                autoVerify?.takeUnless { it.timedOut }?.exitCode,
+                blocked
+            ).copy(
+                sourceDigests = sourceDigests,
+                executionNotes = listOfNotNull(args.evidence.takeIf { it.isNotBlank() }, args.remediation)
+                    .joinToString("\n").take(8000)
+            ) else null
+            val verifyStatus = if (acceptanceRun != null && !acceptanceRun.passed) VerifyStatus.FAIL else declaredStatus
 
             val literalCheck = autoVerify?.let {
                 checkOutputLiterals(it.output, spec.expectStdoutContains, spec.expectStdoutNotContains)
@@ -187,7 +232,7 @@ class VerifyTools(
             }
 
             // 模型声明 PASS：机器判定必须放行（这是防"命令失败/预期未达成却盖章 PASS"的硬门）
-            if (verifyStatus == VerifyStatus.PASS) {
+            if (!structured && verifyStatus == VerifyStatus.PASS) {
                 when (machineOutcome) {
                     VerifyCommandOutcome.TIMEOUT -> return "Verification command (auto-executed) TIMED OUT " +
                         "(inconclusive):\n  $verifyCmd\n" +
@@ -205,8 +250,8 @@ class VerifyTools(
 
             // 机器判定通过、模型却坚持未通过 → 异常态。用户裁定：算未通过（不 PASS），
             // 但必须让主代理如实告知用户"机器证明预期已达成、模型判定不同"。
-            val contradiction = verifyStatus != VerifyStatus.PASS &&
-                machineOutcome == VerifyCommandOutcome.PASS
+            val contradiction = declaredStatus != VerifyStatus.PASS &&
+                (acceptanceRun?.passed ?: (machineOutcome == VerifyCommandOutcome.PASS))
 
             // scope 越界检查（信任 AI 哲学：只报告、不硬拒 PASS/FAIL 判定）：
             // 执行器实际改动的文件（Subtask.executorTouchedFiles）vs 子任务声明的 targetFiles——
@@ -239,17 +284,26 @@ class VerifyTools(
             // 裸 load→copy→save 会让后写的 plan 覆盖先写的结果（验证结果静默丢失）。
             // 全部子任务 PASS 时顺带收尾：plan status → COMPLETED（随后归档）。
             val finalizedPlan = planStore.updatePlan(args.planId) { p ->
-                if (p.subtasks.getOrNull(args.subtaskIndex) == null) return@updatePlan null
+                val current = p.subtasks.getOrNull(args.subtaskIndex) ?: return@updatePlan null
+                if (p.sessionId != sessionId || p.status !in setOf(PlanStatus.APPROVED, PlanStatus.IN_PROGRESS) ||
+                    current.verification != spec || current.acceptanceCases != subtask.acceptanceCases ||
+                    current.acceptanceFiles != subtask.acceptanceFiles ||
+                    (current.overallAcceptance && !planStore.readyForOverallAcceptance(p, current)))
+                    return@updatePlan null
                 val withResult = p.copy(
                     subtasks = p.subtasks.map { st ->
-                        if (st.index == args.subtaskIndex) st.copy(status = newStatus, verificationResult = result)
+                        if (st.index == args.subtaskIndex) st.copy(
+                            status = newStatus,
+                            verificationResult = result,
+                            acceptanceRuns = if (acceptanceRun == null) st.acceptanceRuns else st.acceptanceRuns + acceptanceRun
+                        )
                         else st
                     }
                 )
                 if (verifyStatus == VerifyStatus.PASS && withResult.isAllCompleted)
                     withResult.copy(status = xyz.mederi.plan.PlanStatus.COMPLETED)
                 else withResult
-            } ?: return "Error: Plan not found: ${args.planId}"
+            } ?: return "Error: The plan or its prerequisite evidence changed during the run. Reload the plan and retry."
             if (finalizedPlan.status == xyz.mederi.plan.PlanStatus.COMPLETED) {
                 // 先落 Walkthrough（结果总结，自动装配自 Plan 数据）再归档——归档只移整个计划目录
                 runCatching { planStore.writeWalkthrough(finalizedPlan) }
@@ -274,33 +328,37 @@ class VerifyTools(
                     "failed" to failed.toString(),
                     "pending" to pending.toString(),
                     "lastSubtaskIndex" to args.subtaskIndex.toString(),
-                    "lastSubtaskStatus" to args.status,
+                    "lastSubtaskStatus" to verifyStatus.name,
                     "lastSubtaskRootCause" to (args.rootCause ?: ""),
                     "subtasks" to subtasksJson
                 ),
                 timestamp = Instant.now().toString()
             ))
 
-            val verifyNote = autoVerify?.let { vr ->
+            val verifyNote = acceptanceRun?.let { run ->
+                "\n\nAcceptance run ${run.id}: ${run.detail}\n" + run.observations.joinToString("\n") { item ->
+                    "${item.caseId}: ${item.verdict}, expected=${item.expected}, observed=${item.actual ?: "(missing)"}"
+                }
+            } ?: autoVerify?.let { vr ->
                 "\n\nVerification command output (auto-executed, exit ${vr.exitCode}):\n${vr.output.take(2000)}"
             } ?: ""
 
-            val contradictionNotice = if (contradiction) buildContradictionNotice(
-                verifyCmd ?: "", spec, args.status
-            ) else ""
+            val contradictionNotice = when {
+                contradiction && structured -> "\nCore's observed values matched the approved cases, but your assessment differed. Report the disagreement."
+                contradiction -> buildContradictionNotice(verifyCmd ?: "", spec, args.status)
+                else -> ""
+            }
 
             return if (finalizedPlan.status == xyz.mederi.plan.PlanStatus.COMPLETED) {
-                "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: PASS. All subtasks completed — " +
-                    "plan ${args.planId} archived to .mederi/plans-done/${args.planId}/, walkthrough at " +
-                    ".mederi/plans-done/${args.planId}/walkthrough.md. Report completion to the user in their language " +
-                    "(what changed, what was tested, results); optionally enrich the walkthrough's Notes section " +
-                    "(key findings; screenshots for UI changes).$verifyNote$contradictionNotice"
+                val next = if (structured) "Open the acceptance report for plan ${args.planId}. Explain individual results and evidence."
+                    else "Plan ${args.planId} archived. The acceptance report marks legacy cases as lacking structured evidence."
+                "Subtask #${args.subtaskIndex} verified: PASS. $next$verifyNote$contradictionNotice"
             } else if (verifyStatus == VerifyStatus.PASS) {
                 "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: PASS. ($passed passed, $failed failed, $pending pending)$verifyNote$contradictionNotice"
             } else {
-                "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: ${args.status}" +
+                "Subtask #${args.subtaskIndex} (0-based, of ${plan.subtasks.size}) verified: ${verifyStatus.name}" +
                     (args.rootCause?.let { " ($it)" } ?: "") +
-                    ". ($passed passed, $failed failed, $pending pending) ${guidanceFor(rootCause)}$verifyNote$contradictionNotice"
+                    ". ($passed passed, $failed failed, $pending pending) ${if (structured) "Repair and retry the same cases, or submit a replacement plan for approval." else guidanceFor(rootCause)}$verifyNote$contradictionNotice"
             }
         }
     }

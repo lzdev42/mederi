@@ -32,7 +32,16 @@ import xyz.mederi.browser.resolveProfileDir
 import xyz.mederi.browser.toCamoufoxConfig
 import xyz.mederi.browser.toFirefoxPrefs
 import xyz.mederi.core.autotitle.SessionTitleService
+import xyz.mederi.core.contract.models.ChatGptAuthState
+import xyz.mederi.core.contract.models.ChatGptUsage
+import xyz.mederi.core.contract.models.CHATGPT_USAGE_API_UNAVAILABLE
 import xyz.mederi.core.contract.AiCore
+import xyz.mederi.core.contract.PendingInteractionTracker
+import xyz.mederi.core.contract.SandboxStatusInfo
+import xyz.mederi.core.contract.withPendingInteractionStatus
+import xyz.mederi.core.contract.models.ExecutionApprovalRequest
+import xyz.mederi.core.contract.models.ExecutionPermissionMode
+import xyz.mederi.core.contract.models.SandboxSettings
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
 import xyz.mederi.core.contract.dto.UpdateConversationSettingsInput
@@ -85,14 +94,17 @@ data class LastSessionError(
 )
 
 /** 从 MESSAGE_ERROR 事件 payload 解析 LastSessionError（payload 键与 SnapshotReducer 读取的一致：error/errorId/fullDiagnostic/failureMode）。 */
-internal fun lastErrorFromPayload(payload: Map<String, String>): LastSessionError =
-    LastSessionError(
-        errorMessage = payload["error"],
-        errorId = payload["errorId"],
-        errorDiagnostic = payload["fullDiagnostic"],
-        isStreamInterrupted = payload["failureMode"] == "PREMATURE_CLOSE",
+internal fun lastErrorFromPayload(payload: Map<String, String>): LastSessionError {
+    // 与公共 reducer 一致：切会话/遥端重新取快照不能把主动取消重新显示成错误。
+    val cancelled = payload["errorCategory"] == "CANCELLED"
+    return LastSessionError(
+        errorMessage = if (cancelled) null else payload["error"],
+        errorId = if (cancelled) null else payload["errorId"],
+        errorDiagnostic = if (cancelled) null else payload["fullDiagnostic"],
+        isStreamInterrupted = !cancelled && payload["failureMode"] == "PREMATURE_CLOSE",
         atMs = xyz.mederi.currentTimeMillis(),
     )
+}
 
 /**
  * MESSAGE_ERROR 事件到达时按权威会话状态决定侧边栏状态点：
@@ -142,10 +154,9 @@ internal fun hydrateLastError(snapshot: ConversationSnapshot, error: LastSession
 class MederiAiCore(
     override val configDir: String,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val retryMaxRetries: Int? = null,
     private val retryMinDelayMs: Long? = null,
     private val retryMaxDelayMs: Long? = null,
-) : AiCore, xyz.mederi.core.contract.SandboxHooks {
+) : AiCore {
 
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val stateMutex = Mutex()
@@ -192,20 +203,42 @@ class MederiAiCore(
     private lateinit var browserSettingsManager: xyz.mederi.browser.BrowserSettingsManager
     private lateinit var browserSettingsApi: xyz.mederi.api.BrowserSettingsApi
 
-    /**
-     * 沙盒全局白名单写穿：设置页改白名单后实时写入进程级 SandboxConfig，
-     * 下一个 turn 的 CommandSandbox 即生效，无需重启。
-     * 仅嵌入式 core 支持（sandbox 配置是本机进程偏好，不进 AiCore 契约）。
-     */
-    override fun setSandboxExtraPaths(paths: List<String>) {
-        xyz.mederi.tools.sandbox.SandboxConfig.extraWritablePaths = paths
+    override suspend fun getSandboxSettings(projectId: String): Result<SandboxSettings> = runCatching {
+        mederi.sandbox.getSettings(projectId).toContract()
     }
 
-    /** 平台沙箱状态（设置页状态卡）：项目无关，探测一次即用 */
-    override fun sandboxStatus(): xyz.mederi.core.contract.SandboxStatusInfo {
-        val status = xyz.mederi.tools.sandbox.CommandSandbox(emptyList()).status()
-        return xyz.mederi.core.contract.SandboxStatusInfo(status.backend, status.available, status.shell, status.detail)
+    override suspend fun updateSandboxSettings(projectId: String, settings: SandboxSettings): Result<SandboxSettings> = runCatching {
+        mederi.sandbox.updateSettings(projectId, xyz.mederi.tools.sandbox.SandboxSettings(
+            mode = xyz.mederi.tools.sandbox.ExecutionPermissionMode.valueOf(settings.mode.name),
+            extraWritablePaths = settings.extraWritablePaths,
+            version = settings.version,
+            deniedPaths = settings.deniedPaths,
+            allowedCommands = settings.allowedCommands,
+            deniedCommands = settings.deniedCommands,
+        )).toContract()
     }
+
+    override suspend fun getSandboxStatus(projectId: String): Result<SandboxStatusInfo> = runCatching {
+        val status = mederi.sandbox.getStatus(projectId)
+        SandboxStatusInfo(status.backend, status.available, status.shell, status.detail)
+    }
+
+    override suspend fun resolveExecutionApproval(conversationId: String, requestId: String, approved: Boolean): Result<Unit> = runCatching {
+        mederi.sandbox.resolveExecutionApproval(conversationId, requestId, approved)
+    }
+
+    private fun xyz.mederi.tools.sandbox.SandboxSettings.toContract() = SandboxSettings(
+        mode = ExecutionPermissionMode.valueOf(mode.name), extraWritablePaths = extraWritablePaths, version = version,
+        deniedPaths = deniedPaths, allowedCommands = allowedCommands, deniedCommands = deniedCommands,
+    )
+
+    private fun liveExecutionApprovals(conversationId: String): List<ExecutionApprovalRequest> =
+        mederi.sandbox.pendingApprovals(conversationId).map { request ->
+            ExecutionApprovalRequest(request.id, request.conversationId, request.executionSessionId,
+                request.toolName, request.command, request.paths, request.cwd, request.access, request.reason)
+        }
+
+    private val pendingInteractions = PendingInteractionTracker()
 
     // modelId -> providerId，用于 Conversation.modelProvider 回填
     private var modelToProvider: Map<String, String> = emptyMap()
@@ -230,7 +263,6 @@ class MederiAiCore(
     override suspend fun initialize(): Result<Unit> = runCatching {
         withContext(dispatcher) {
             // 宿主注入的限流重试参数写回 core 全局（RetryableLLMClient 在包装时读取）
-            retryMaxRetries?.let { LlmRetryConfig.maxRetries = it }
             retryMinDelayMs?.let { LlmRetryConfig.minDelayMs = it }
             retryMaxDelayMs?.let { LlmRetryConfig.maxDelayMs = it }
             mederi = Mederi.create {
@@ -285,6 +317,12 @@ class MederiAiCore(
             )
             cleanupLegacyBuiltinProviders()
             cleanupStaleRunningSessions()
+            // R09: 生产初始化门禁——重启后扫描并恢复上次崩溃残留的未完成工作区操作
+            // （RUNNING/TRANSFERRING/ARCHIVING 等，含 SUCCEEDED Handoff 的绑定坏账核对）。
+            // desktop 与 server 共用本桥，任一宿主初始化都触发同一恢复扫描；必须在 _isReady
+            // 放行新执行之前完成，避免 readiness 前的并发执行踩到未归位的工作区。
+            runCatching { mederi.workspaceManager.scanAndRecoverPendingOperations() }
+                .onFailure { DebugLog.event("AiCore", "Workspace crash recovery scan failed: ${it.message}") }
             syncBuiltinProviders()
             refreshGlobalState()
             _isReady.value = true
@@ -303,6 +341,7 @@ class MederiAiCore(
         }
     }
 
+    /** 只读导入宿主旧偏好；新配置优先，绝不改写/删除 preferences.json。 */
     /**
      * 启动时静默检查 Camoufox 是否有更新（不自动下载——浏览器体积大，只在有 browserHome
      * 配置时才查，结果打日志；后续 UI 可订阅/展示）。
@@ -335,6 +374,7 @@ class MederiAiCore(
     private fun startSessionStatusSync() {
         scope.launch {
             mederi.sessions.events().collect { event ->
+                pendingInteractions.accept(MederiModelMapper.toCoreEvent(event))
                 // 子代理运行中跟踪：STARTED 记入集合并置 Working；终态移出集合，
                 // 集合清空且主 turn 不活跃时才回 Idle（主 turn 运行中由 SESSION_UPDATED/MESSAGE_COMPLETED 驱动状态）。
                 when (event.type) {
@@ -395,9 +435,15 @@ class MederiAiCore(
                     xyz.mederi.domain.model.EventType.QUESTION_RESOLVED -> ConversationStatus.Working
                     xyz.mederi.domain.model.EventType.PLAN_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
                     xyz.mederi.domain.model.EventType.PLAN_APPROVAL_RESOLVED -> ConversationStatus.Working
+                    xyz.mederi.domain.model.EventType.EXECUTION_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
+                    xyz.mederi.domain.model.EventType.EXECUTION_APPROVAL_RESOLVED ->
+                        if (mainTurnActive[event.sessionId] == true || runningSubagentIds[event.sessionId]?.isNotEmpty() == true)
+                            ConversationStatus.Working else ConversationStatus.Idle
                     else -> null
                 }
-                if (newStatus != null) {
+                if (pendingInteractions.isWaiting(event.sessionId)) {
+                    updateConversationStatus(event.sessionId, ConversationStatus.WaitingUser)
+                } else if (newStatus != null) {
                     updateConversationStatus(event.sessionId, newStatus)
                 }
                 // 终态错误内存注册表：MESSAGE_ERROR 与带断流警告的 MESSAGE_COMPLETED 写入，
@@ -635,8 +681,14 @@ class MederiAiCore(
     // Conversation / Session
     // ------------------------------------------------------------------
 
-    override suspend fun createConversation(projectId: String, agent: AgentOption?): Result<Conversation> = runCatching {
-        val agentMode = agent?.let {
+    override suspend fun createConversation(projectId: String, agent: AgentOption?): Result<Conversation> =
+        createConversation(xyz.mederi.core.contract.dto.CreateConversationInput(projectId = projectId, agent = agent))
+
+    override suspend fun createConversation(input: xyz.mederi.core.contract.dto.CreateConversationInput): Result<Conversation> = runCatching {
+        if (!::mederi.isInitialized) {
+            _isReady.first { it }
+        }
+        val agentMode = input.agent?.let {
             runCatching { AgentMode.valueOf(it.mode.name) }.getOrNull()
         } ?: AgentMode.AUTONOMOUS
         val session = mederi.sessions.create(
@@ -644,12 +696,22 @@ class MederiAiCore(
                 agentConfig = AgentConfig(
                     agentMode = agentMode
                 ),
-                projectId = projectId,
-                title = ""
+                projectId = input.projectId,
+                title = "",
+                workspaceSelection = input.workspaceSelection.toCore()
             )
         )
+        // 为会话创建关联的 workspace (REQUESTED)
+        val project = mederi.projects.get(input.projectId)
+        mederi.workspaceManager.createWorkspace(
+            projectId = input.projectId,
+            sourceRepoRoot = project.directory,
+            selection = input.workspaceSelection.toCore(),
+            sessionId = session.id
+        )
         refreshProjects()
-        MederiModelMapper.toConversation(session, providerId = modelToProvider[session.aiModel?.id])
+        val updatedSession = mederi.sessions.get(session.id)
+        MederiModelMapper.toConversation(updatedSession, providerId = modelToProvider[updatedSession.aiModel?.id])
     }
 
     override suspend fun deleteConversation(conversationId: String): Result<Unit> = runCatching {
@@ -690,95 +752,61 @@ class MederiAiCore(
             modelToProvider = { modelToProvider[it] },
             planApproval = { id -> initialPlanApproval(id) },
             planApprovals = { id -> initialPlanApprovals(id) },
-            lastError = { lastErrorBySessionId[it] }
+            executionApprovals = ::liveExecutionApprovals,
+            lastError = { lastErrorBySessionId[it] },
+            // T09：初始快照水合工作区投影（与 getSnapshot 同源）。
+            workspaceInfo = { id -> runCatching { mederi.workspaceManager.getConversationWorkspace(id).toContract() }.getOrNull() }
         )
     }
 
-    /**
-     * 会话重开时的计划审批展示项 hydration（"批准与 turn 解耦"配套，见 P3）：
-     * 读该会话当前活跃（最新非终态）计划，投影为契约层 [PlanApprovalRequest] 填入快照，
-     * 让重启/翻历史后 UI 仍能看到本次计划并（审批模式）补触发跨 turn 批准。
-     *
-     * 职能边界：core **只负责把计划当前状态作为数据give给 UI**，不负责判定计划卡片必须
-     * 渲染在对话内还是外。status 按计划模式区分：
-     * - APPROVAL 模式 + PENDING_APPROVAL → "PENDING"（待用户批准）
-     * - 其他（自动模式已 APPOVED / 执行中 IN_PROGRESS / 已完成等非终态）→ "AUTO_APPROVED"
-     *   （已自动批准，UI 可展示"已自动审批"而非完全不展示）
-     * 计划无/已终态 → 返回 null（无卡片可展示）。
-     */
-    private suspend fun initialPlanApproval(conversationId: String): xyz.mederi.core.contract.models.PlanApprovalRequest? {
-        return runCatching {
-            val session = mederi.sessions.get(conversationId)
-            val project = mederi.projects.get(session.projectId)
-            val plan = xyz.mederi.plan.PlanStore(listOf(project.directory)).loadBySession(conversationId) ?: return@runCatching null
-            // pendingPlanApproval 语义仅限当前正在等待用户审批的计划；非 PENDING 计划绝不能作为待审批项
-            if (plan.agentMode != AgentMode.APPROVAL || plan.status != xyz.mederi.plan.PlanStatus.PENDING_APPROVAL) {
-                return@runCatching null
-            }
-            val planPath = xyz.mederi.plan.PlanStore(listOf(project.directory)).getPlanAbsolutePath(plan.id)
-            xyz.mederi.core.contract.models.PlanApprovalRequest(
-                id = plan.id,
-                conversationId = conversationId,
-                planPath = planPath ?: "",
-                title = plan.title,
-                summary = plan.summary,
-                subtaskCount = plan.subtasks.size,
-                planContent = planPath?.let { p -> runCatching { java.io.File(p).readText() }.getOrNull() },
-                status = "PENDING",
-                subtasks = plan.subtasks.map { st ->
-                    xyz.mederi.core.contract.models.PlanSubtaskItem(
-                        index = st.index,
-                        name = st.name,
-                        status = st.status.name,
-                        spec = st.spec,
-                        planDetail = st.planDetail
-                    )
-                }
-            )
-        }.getOrNull()
+    private suspend fun planStoreForSession(conversationId: String): xyz.mederi.plan.PlanStore {
+        val session = mederi.sessions.get(conversationId)
+        val project = mederi.projects.get(session.projectId)
+        return xyz.mederi.plan.PlanStore(
+            listOf(project.directory),
+            authorityRoot = mederi.sandboxManager.protectedDirectories.firstOrNull()
+        )
     }
 
-    /**
-     * 会话历史制定过的全部计划列表 hydration（包含活跃与历史归档/作废计划），
-     * 供概览面板计划列表完整展示各计划状态与关联子任务 Spec。
-     */
-    private suspend fun initialPlanApprovals(conversationId: String): List<xyz.mederi.core.contract.models.PlanApprovalRequest> {
-        return runCatching {
-            val session = mederi.sessions.get(conversationId)
-            val project = mederi.projects.get(session.projectId)
-            val planStore = xyz.mederi.plan.PlanStore(listOf(project.directory))
-            val plans = planStore.listBySession(conversationId)
-            plans.map { plan ->
-                val planPath = planStore.getPlanAbsolutePath(plan.id)
-                val statusStr = when (plan.status) {
-                    xyz.mederi.plan.PlanStatus.PENDING_APPROVAL -> "PENDING"
-                    xyz.mederi.plan.PlanStatus.APPROVED -> "APPROVED"
-                    xyz.mederi.plan.PlanStatus.IN_PROGRESS -> "IN_PROGRESS"
-                    xyz.mederi.plan.PlanStatus.COMPLETED -> "COMPLETED"
-                    xyz.mederi.plan.PlanStatus.VOIDED -> "VOIDED"
-                }
-                xyz.mederi.core.contract.models.PlanApprovalRequest(
-                    id = plan.id,
-                    conversationId = conversationId,
-                    planPath = planPath ?: "",
-                    title = plan.title,
-                    summary = plan.summary,
-                    subtaskCount = plan.subtasks.size,
-                    planContent = planPath?.let { p -> runCatching { java.io.File(p).readText() }.getOrNull() },
-                    status = statusStr,
-                    subtasks = plan.subtasks.map { st ->
-                        xyz.mederi.core.contract.models.PlanSubtaskItem(
-                            index = st.index,
-                            name = st.name,
-                            status = st.status.name,
-                            spec = st.spec,
-                            planDetail = st.planDetail
-                        )
+    private fun xyz.mederi.plan.Plan.toApprovalRequest(store: xyz.mederi.plan.PlanStore) =
+        xyz.mederi.core.contract.models.PlanApprovalRequest(
+            id = id,
+            conversationId = sessionId,
+            planPath = store.getPlanAbsolutePath(id).orEmpty(),
+            title = title,
+            summary = summary,
+            subtaskCount = subtasks.size,
+            planContent = store.planMarkdown(this),
+            status = if (status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL) "PENDING" else status.name,
+            subtasks = subtasks.map { task ->
+                xyz.mederi.core.contract.models.PlanSubtaskItem(
+                    index = task.index,
+                    name = task.name,
+                    status = task.status.name,
+                    spec = task.spec,
+                    planDetail = task.planDetail,
+                    acceptanceCases = task.acceptanceCases.map { case ->
+                        xyz.mederi.core.contract.models.PlanAcceptanceCaseSummary(case.id, case.manual)
                     }
                 )
             }
+        )
+
+    /** 重开会话时还原待审批计划，包括自主模式下需要用户批准的替代计划。 */
+    private suspend fun initialPlanApproval(conversationId: String): xyz.mederi.core.contract.models.PlanApprovalRequest? =
+        runCatching {
+            val store = planStoreForSession(conversationId)
+            store.loadBySession(conversationId)
+                ?.takeIf { it.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL }
+                ?.toApprovalRequest(store)
+        }.getOrNull()
+
+    /** 使用 Core 的权威计划内容还原活跃、已完成和已作废计划。 */
+    private suspend fun initialPlanApprovals(conversationId: String): List<xyz.mederi.core.contract.models.PlanApprovalRequest> =
+        runCatching {
+            val store = planStoreForSession(conversationId)
+            store.listBySession(conversationId).map { it.toApprovalRequest(store) }
         }.getOrDefault(emptyList())
-    }
 
     /**
      * 构建会话当前完整快照（不订阅事件流）。
@@ -795,6 +823,8 @@ class MederiAiCore(
         val hydratedQuestion = if (session.status == xyz.mederi.domain.model.SessionStatus.RUNNING) {
             MederiEventAggregator.hydratePendingQuestion(mappedMessages, conversationId)
         } else null
+        // T09：快照水合工作区投影（active/associated + 活跃操作）；未绑定工作区的会话返回 null（runCatching 吞未找到异常）。
+        val hydratedWsInfo = runCatching { mederi.workspaceManager.getConversationWorkspace(conversationId).toContract() }.getOrNull()
         val base = ConversationSnapshot(
             conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }).let { conv ->
                 if (hydratedQuestion != null) conv.copy(status = ConversationStatus.WaitingUser) else conv
@@ -806,6 +836,7 @@ class MederiAiCore(
             todos = MederiModelMapper.toTodos(session.todos),
             // 重启/翻历史恢复：当前活跃计划（审批模式待批准 / 自动模式已自动审批），UI 自由决定卡片渲染位置
             pendingPlanApproval = initialPlanApproval(conversationId),
+            pendingExecutionApprovals = liveExecutionApprovals(conversationId),
             planApprovals = initialPlanApprovals(conversationId),
             // 切换/重连重放与实时相同的标准子事件，不能只水合元数据而丢失推理/工具结果。
             subagents = mederi.sessions.listSubagentsForSession(conversationId).map { bg ->
@@ -827,14 +858,110 @@ class MederiAiCore(
             },
             pendingQuestion = hydratedQuestion,
             requestCount = backfill.requestCount,
-            lastRequestUsage = backfill.lastRequestUsage
+            lastRequestUsage = backfill.lastRequestUsage,
+            workspaceInfo = hydratedWsInfo,
+            activeWorkspaceOperation = hydratedWsInfo?.operation
         )
-        hydrateLastError(base, lastErrorBySessionId[conversationId])
+        hydrateLastError(base, lastErrorBySessionId[conversationId]).withPendingInteractionStatus()
     }
 
     // ------------------------------------------------------------------
     // Provider / Model
     // ------------------------------------------------------------------
+
+    private val chatGptModelsSynced = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val chatGptModelSyncErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val chatGptModelSyncLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+    private val chatGptLoginObservers = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+
+    /** 授权成功后由 AiCore 自动同步，不依赖设置页仍在观察。 */
+    private fun observeChatGptLogin(providerId: String) {
+        chatGptLoginObservers.remove(providerId)?.cancel()
+        val observer = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            repeat(600) {
+                val state = mederi.chatGptAuth.state(providerId)
+                if (state.status != "PENDING") {
+                    if (state.status == "CONNECTED") syncChatGptModels(providerId)
+                    refreshProvidersAndAgents()
+                    return@launch
+                }
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+        chatGptLoginObservers[providerId] = observer
+        observer.start()
+    }
+
+    private suspend fun syncChatGptModels(providerId: String) {
+        chatGptModelSyncLocks.computeIfAbsent(providerId) { Mutex() }.withLock {
+            if (!chatGptModelsSynced.add(providerId)) return@withLock
+            // 授权与模型同步是两个结果；目录暂时失败不撤销已经成功的授权。
+            try {
+                mederi.providers.refreshModels(providerId)
+                chatGptModelSyncErrors.remove(providerId)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                chatGptModelsSynced.remove(providerId)
+                throw cancelled
+            } catch (failure: Exception) {
+                chatGptModelSyncErrors[providerId] = failure.message ?: "Model synchronization failed"
+            }
+            refreshProvidersAndAgents()
+        }
+    }
+
+    private suspend fun requireChatGptProvider(providerId: String): Provider {
+        val provider = mederi.providerManager.require(providerId)
+        require(provider.authentication == xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH) {
+            "Provider does not use ChatGPT authorization"
+        }
+        return provider
+    }
+
+    override val supportsChatGptLogin: Boolean get() = true
+
+    override suspend fun startChatGptLogin(providerId: String?): Result<ChatGptAuthState> = runCatching {
+        val provider = if (providerId == null) mederi.providerManager.createChatGptProvider() else requireChatGptProvider(providerId)
+        chatGptLoginObservers.remove(provider.id)?.cancel()
+        chatGptModelsSynced.remove(provider.id)
+        chatGptModelSyncErrors.remove(provider.id)
+        val state = mederi.chatGptAuth.start(provider.id)
+        observeChatGptLogin(provider.id)
+        refreshProvidersAndAgents()
+        ChatGptAuthState(state.providerId, state.status, state.authUrl, state.email, state.error)
+    }
+
+    override suspend fun getChatGptAuthState(providerId: String): Result<ChatGptAuthState> = runCatching {
+        requireChatGptProvider(providerId)
+        val state = mederi.chatGptAuth.state(providerId)
+        if (state.status == "CONNECTED") syncChatGptModels(providerId)
+        ChatGptAuthState(state.providerId, state.status, state.authUrl, state.email, state.error, chatGptModelSyncErrors[providerId])
+    }
+
+    override suspend fun cancelChatGptLogin(providerId: String): Result<Unit> = runCatching {
+        requireChatGptProvider(providerId)
+        chatGptLoginObservers.remove(providerId)?.cancel()
+        mederi.chatGptAuth.cancel(providerId)
+        refreshProvidersAndAgents()
+    }
+
+    override suspend fun disconnectChatGpt(providerId: String): Result<Unit> = runCatching {
+        requireChatGptProvider(providerId)
+        chatGptLoginObservers.remove(providerId)?.cancel()
+        try {
+            mederi.chatGptAuth.disconnect(providerId)
+        } finally {
+            chatGptModelsSynced.remove(providerId)
+            chatGptModelSyncErrors.remove(providerId)
+            refreshProvidersAndAgents()
+        }
+    }
+
+    override suspend fun readChatGptUsage(providerId: String): Result<ChatGptUsage> = runCatching {
+        requireChatGptProvider(providerId)
+        check(mederi.chatGptAuth.isConnected(providerId)) { "ChatGPT is not connected" }
+        // 新 SIWC 文档未提供可验证的订阅额度 HTTP 接口；不可用 token 消耗估算套餐额度。
+        ChatGptUsage(unavailableReason = CHATGPT_USAGE_API_UNAVAILABLE)
+    }
 
     override suspend fun configureProvider(
         providerId: String,
@@ -857,6 +984,9 @@ class MederiAiCore(
     }
 
     override suspend fun deleteProvider(providerId: String): Result<Unit> = runCatching {
+        chatGptLoginObservers.remove(providerId)?.cancel()
+        chatGptModelsSynced.remove(providerId)
+        chatGptModelSyncErrors.remove(providerId)
         mederi.providers.delete(providerId)
         refreshProvidersAndAgents()
     }
@@ -906,7 +1036,8 @@ class MederiAiCore(
         contextWindow: Int?,
         maxTokens: Int?,
         reasoningLevels: List<String>?,
-        isEnabled: Boolean?
+        isEnabled: Boolean?,
+        optimizeForRequestCount: Boolean?,
     ): Result<Unit> = runCatching {
         val parsedLevels = reasoningLevels?.mapNotNull { lvl ->
             runCatching { xyz.mederi.provider.domain.model.ReasoningLevel.valueOf(lvl) }.getOrNull()
@@ -921,7 +1052,8 @@ class MederiAiCore(
                 contextWindow = contextWindow,
                 maxTokens = maxTokens,
                 reasoningLevels = parsedLevels,
-                isEnabled = isEnabled
+                isEnabled = isEnabled,
+                optimizeForRequestCount = optimizeForRequestCount,
             )
         )
         refreshProvidersAndAgents()
@@ -940,6 +1072,7 @@ class MederiAiCore(
         // 必须走 ProviderApi.refreshModels（拉取 + 合并落库）；
         // 不能用 providerManager.fetchRemoteModelIds —— 那是只拉取不落库的裸方法
         val ids = mederi.providers.refreshModels(providerId)
+        chatGptModelSyncErrors.remove(providerId)
         // 落库后必须刷新 UI StateFlow，否则设置页模型列表停留在旧数据
         refreshProvidersAndAgents()
         ids
@@ -1038,6 +1171,18 @@ class MederiAiCore(
         answers: List<List<String>>
     ): Result<Unit> = runCatching {
         mederi.sessions.resolveQuestion(conversationId, questionId, answers)
+    }
+
+    override suspend fun recordPlanManualAcceptance(
+        conversationId: String, planId: String, input: xyz.mederi.core.contract.models.ManualPlanAcceptanceInput
+    ): Result<Unit> = runCatching {
+        mederi.sessions.recordPlanManualAcceptance(
+            conversationId, planId, input.caseId, input.observed, input.evidence, input.confirmedBy
+        )
+    }
+
+    override suspend fun getPlanAcceptanceReport(conversationId: String, planId: String): Result<String> = runCatching {
+        mederi.sessions.getPlanAcceptanceReport(conversationId, planId)
     }
 
     override suspend fun resolvePlanApproval(
@@ -1311,7 +1456,10 @@ class MederiAiCore(
 
         _projects.value = coreProjects.map { coreProject ->
             val conversations = sessionMap[coreProject.id].orEmpty().map { session ->
-                MederiModelMapper.toConversation(session, modelToProvider[session.aiModel?.id])
+                MederiModelMapper.toConversation(session, modelToProvider[session.aiModel?.id]).let { conversation ->
+                    if (pendingInteractions.isWaiting(session.id) || mederi.sandbox.pendingApprovals(session.id).isNotEmpty())
+                        conversation.copy(status = ConversationStatus.WaitingUser) else conversation
+                }
             }
             MederiModelMapper.toProject(coreProject, conversations)
         }
@@ -1329,11 +1477,11 @@ class MederiAiCore(
         val coreProviders = mederi.providers.list()
         rebuildModelToProvider(coreProviders)
 
-        _providers.value = coreProviders.map { MederiModelMapper.toProviderConfig(it) }
+        _providers.value = coreProviders.map { MederiModelMapper.toProviderConfig(it, mederi.chatGptAuth.isConnected(it.id)) }
         // 只暴露已配置 API Key 的供应商模型，未填 Key 的模型不出现在可选列表；
         // 用户关闭（isEnabled=false）的模型也不出现
         _availableModels.value = coreProviders
-            .filter { it.defaultApiKey != null }
+            .filter { it.defaultApiKey != null || (it.authentication == xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH && mederi.chatGptAuth.isConnected(it.id)) }
             .flatMap { provider ->
                 provider.models
                     .filter { it.isEnabled }
@@ -1651,6 +1799,48 @@ class MederiAiCore(
         )
     }
 
+    override suspend fun listSessionSubagentConfigs(conversationId: String): Result<List<SubagentConfigItem>> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.subagentConfigs.list(sessionId = conversationId).map {
+            SubagentConfigItem(
+                role = it.role.name, displayName = it.displayName, description = it.description,
+                modelId = it.modelId, modelName = it.modelName, reasoningLevel = it.reasoningLevel?.name,
+                apiKeyId = it.apiKeyId, isInheriting = it.isInheriting, usesDefault = it.usesDefault
+            )
+        }
+    }
+
+    override suspend fun updateSessionSubagentConfig(
+        conversationId: String, role: String, input: UpdateSubagentConfigInput?
+    ): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val subagentRole = xyz.mederi.domain.model.SubagentRole.valueOf(role)
+        if (input == null) {
+            mederi.subagentConfigs.clear(subagentRole, conversationId)
+        } else {
+            mederi.subagentConfigs.update(subagentRole, xyz.mederi.api.UpdateSubagentConfigRequest(
+                modelId = input.modelId,
+                reasoningLevel = input.reasoningLevel?.let { xyz.mederi.provider.domain.model.ReasoningLevel.valueOf(it) },
+                apiKeyId = input.apiKeyId
+            ), sessionId = conversationId)
+        }
+    }
+
+    override suspend fun getSessionSubagentGlobalSettings(conversationId: String): Result<SubagentGlobalSettings> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val settings = mederi.subagentConfigs.getGlobalSettings(sessionId = conversationId)
+        SubagentGlobalSettings(settings.maxConcurrentAgents, usesDefault = settings.usesDefault)
+    }
+
+    override suspend fun updateSessionSubagentGlobalSettings(
+        conversationId: String, input: UpdateSubagentGlobalSettingsInput?
+    ): Result<Unit> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        if (input == null) mederi.subagentConfigs.clearGlobalSettings(conversationId)
+        else mederi.subagentConfigs.updateGlobalSettings(
+            xyz.mederi.api.UpdateSubagentGlobalSettingsRequest(input.maxConcurrentAgents), sessionId = conversationId)
+    }
+
     override suspend fun getSubagentReport(agentId: String): Result<SubagentReportDto> = runCatching {
         if (!::mederi.isInitialized) {
             _isReady.first { it }
@@ -1707,5 +1897,154 @@ class MederiAiCore(
         // null = 任务不存在，如实抛错而非伪装成功（调用方/UI 会看到真实失败）
         mederi.sessions.stopBrowserTask(taskId)
             ?: throw NoSuchElementException("Browser task not found: $taskId")
+    }
+
+    // ------------------------------------------------------------------
+    // Workspace Management
+    // ------------------------------------------------------------------
+
+    override suspend fun getRepositoryInfo(projectId: String): Result<xyz.mederi.core.contract.models.RepositoryInfo> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val project = mederi.projects.get(projectId)
+        mederi.workspaceManager.getRepositoryInfo(project.directory).toContract()
+    }
+
+    override suspend fun listWorkspaces(projectId: String): Result<List<xyz.mederi.core.contract.models.WorkspaceInfo>> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.listWorkspaces(projectId).map { it.toContract() }
+    }
+
+    override suspend fun getConversationWorkspace(sessionId: String): Result<xyz.mederi.core.contract.models.ConversationWorkspaceInfo> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.getConversationWorkspace(sessionId).toContract()
+    }
+
+    override suspend fun previewWorkspaceHandoff(sessionId: String, input: xyz.mederi.core.contract.models.HandoffPreviewInput): Result<xyz.mederi.core.contract.models.HandoffPreview> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.previewHandoff(sessionId, input.toCore()).toContract()
+    }
+
+    override suspend fun handoffWorkspace(sessionId: String, input: xyz.mederi.core.contract.models.HandoffInput): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val op = mederi.workspaceManager.executeHandoff(sessionId, input.toCore()).toContract()
+        refreshProjects()
+        op
+    }
+
+    override suspend fun restoreWorkspace(workspaceId: String, input: xyz.mederi.core.contract.models.RestoreWorkspaceInput): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val op = mederi.workspaceManager.restoreWorkspace(workspaceId, input.toCore()).toContract()
+        refreshProjects()
+        op
+    }
+
+    override suspend fun archiveWorkspace(workspaceId: String, input: xyz.mederi.core.contract.models.ArchiveWorkspaceInput): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val op = mederi.workspaceManager.archiveWorkspace(workspaceId, input.toCore()).toContract()
+        refreshProjects()
+        op
+    }
+
+    override suspend fun createWorkspaceBranch(workspaceId: String, input: xyz.mederi.core.contract.models.CreateWorkspaceBranchInput): Result<xyz.mederi.core.contract.models.WorkspaceInfo> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.createWorkspaceBranch(workspaceId, input.toCore()).toContract()
+    }
+
+    override suspend fun getWorkspaceOperation(id: String): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.getOperation(id).toContract()
+    }
+
+    override suspend fun cancelWorkspaceOperation(id: String): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.cancelOperation(id).toContract()
+    }
+
+    override suspend fun listWorkspaceOperations(projectId: String): Result<List<xyz.mederi.core.contract.models.WorkspaceOperation>> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.listWorkspaceOperations(projectId).map { it.toContract() }
+    }
+
+    override suspend fun setConversationArchived(sessionId: String, archived: Boolean, requestId: String): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val op = mederi.workspaceManager.setConversationArchived(sessionId, archived, requestId).toContract()
+        refreshProjects()
+        op
+    }
+
+    override suspend fun setConversationPinned(sessionId: String, pinned: Boolean): Result<Conversation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val session = mederi.workspaceManager.setConversationPinned(sessionId, pinned)
+        refreshProjects()
+        MederiModelMapper.toConversation(session, providerId = modelToProvider[session.aiModel?.id])
+    }
+
+    override suspend fun listArchivedConversations(projectId: String): Result<List<Conversation>> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.sessions.list()
+            .filter { it.projectId == projectId && it.archivedAt != null }
+            .map { MederiModelMapper.toConversation(it, providerId = modelToProvider[it.aiModel?.id]) }
+    }
+
+    override suspend fun getWorktreeSettings(): Result<xyz.mederi.core.contract.models.WorktreeSettings> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.getWorktreeSettings().toContract()
+    }
+
+    override suspend fun updateWorktreeSettings(settings: xyz.mederi.core.contract.models.WorktreeSettings): Result<xyz.mederi.core.contract.models.WorktreeSettings> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.updateWorktreeSettings(settings.toCore()).toContract()
+    }
+
+    override suspend fun listProjectEnvironments(projectId: String, workspaceId: String?): Result<List<xyz.mederi.core.contract.models.ProjectEnvironment>> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.listProjectEnvironments(projectId, workspaceId).map { it.toContract() }
+    }
+
+    override suspend fun saveProjectEnvironment(projectId: String, environment: xyz.mederi.core.contract.models.ProjectEnvironment, expectedVersion: Long, workspaceId: String?): Result<xyz.mederi.core.contract.models.ProjectEnvironment> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.saveProjectEnvironment(projectId, environment.toCore(), expectedVersion, workspaceId).toContract()
+    }
+
+    override suspend fun runWorkspaceAction(workspaceId: String, input: xyz.mederi.core.contract.models.WorkspaceActionInput): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.runWorkspaceAction(workspaceId, input.toCore()).toContract()
+    }
+
+    override suspend fun getWorkspaceOperationLog(id: String, afterOffset: Long, maxBytes: Int): Result<xyz.mederi.core.contract.models.LogChunk> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.getWorkspaceOperationLog(id, afterOffset, maxBytes).toContract()
+    }
+
+    override suspend fun listWorkspaceFiles(workspaceId: String, path: String, area: xyz.mederi.core.contract.models.WorkspaceFileArea): Result<List<xyz.mederi.core.contract.models.WorkspaceFileEntry>> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.listWorkspaceFiles(workspaceId, path, area.toCore()).map { it.toContract() }
+    }
+
+    override suspend fun readWorkspaceFile(workspaceId: String, path: String, offset: Long, maxBytes: Int, area: xyz.mederi.core.contract.models.WorkspaceFileArea): Result<xyz.mederi.core.contract.models.WorkspaceFileContent> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.readWorkspaceFile(workspaceId, path, offset, maxBytes, area.toCore()).toContract()
+    }
+
+    override suspend fun retryWorkspacePreparation(sessionId: String, failedOperationId: String, requestId: String): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaces.retryWorkspacePreparation(sessionId, failedOperationId, requestId).toContract()
+    }
+
+    override suspend fun retryWorkspaceSetup(workspaceId: String, failedOperationId: String, expectedEnvironmentHash: String, requestId: String): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.retrySetup(workspaceId, failedOperationId, expectedEnvironmentHash, requestId).toContract()
+    }
+
+    override suspend fun previewWorkspaceRecovery(operationId: String, strategy: xyz.mederi.core.contract.models.RecoveryStrategy, snapshotId: String?, keepWorkspaceId: String?): Result<xyz.mederi.core.contract.models.RecoveryPreview> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        mederi.workspaceManager.previewRecovery(operationId, strategy.toCore(), snapshotId, keepWorkspaceId).toContract()
+    }
+
+    override suspend fun recoverWorkspaceOperation(operationId: String, input: xyz.mederi.core.contract.models.WorkspaceRecoveryInput): Result<xyz.mederi.core.contract.models.WorkspaceOperation> = runCatching {
+        if (!::mederi.isInitialized) _isReady.first { it }
+        val op = mederi.workspaceManager.executeRecovery(input.toCore()).toContract()
+        refreshProjects()
+        op
     }
 }

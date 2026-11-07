@@ -8,8 +8,7 @@ import org.junit.Test
 /**
  * 锁定 web 工具（web_search / web_fetch）的名册注册与输入校验：
  * - WEB_TOOL_NAMES 恰为 ["web_search", "web_fetch"] 且都在 ALL_TOOL_NAMES（否则会被 TurnExecutor 的名字白名单静默裁剪）
- * - 输入校验在 runCommand 之前执行——空 query / 含单引号 query、非 http(s) URL / 含单引号 URL / 空 URL
- *   一律拒绝，不走 curl、不需要网络
+ * - 空 query / 非 http(s) URL / 空 URL 拒绝；引号通过HTTP原样/URL编码传递，不经过shell。
  */
 class WebSearchToolTest {
 
@@ -31,10 +30,12 @@ class WebSearchToolTest {
     }
 
     @Test
-    fun `WebSearchTool 拒绝含单引号的 query`() = runBlocking {
-        val tool = ShellTools(listOf("/tmp")).WebSearchTool()
+    fun `WebSearchTool safely encodes quotes without invoking a shell`() = runBlocking {
+        var requested = ""
+        val tool = ShellTools(listOf("/tmp"), webReader = { url, _ -> requested = url; "<html>safe search</html>" }).WebSearchTool()
         val result = tool.execute(ShellTools.WebSearchArgs(query = "kotlin'"))
-        assertTrue("expected an Error for single-quote query, got: $result", result.contains("Error"))
+        assertTrue(requested.contains("kotlin%27"))
+        assertTrue(result.contains("safe search"))
     }
 
     @Test
@@ -45,10 +46,12 @@ class WebSearchToolTest {
     }
 
     @Test
-    fun `WebFetchTool 拒绝含单引号的 URL`() = runBlocking {
-        val tool = ShellTools(listOf("/tmp")).WebFetchTool()
-        val result = tool.execute(ShellTools.WebFetchArgs(url = "https://example.com'"))
-        assertTrue("expected an Error for single-quote url, got: $result", result.contains("Error"))
+    fun `WebFetchTool passes quoted paths directly to HTTP`() = runBlocking {
+        var requested = ""
+        val tool = ShellTools(listOf("/tmp"), webReader = { url, _ -> requested = url; "<html>safe fetch</html>" }).WebFetchTool()
+        val result = tool.execute(ShellTools.WebFetchArgs(url = "https://example.com/a'b"))
+        assertEquals("https://example.com/a'b", requested)
+        assertTrue(result.contains("safe fetch"))
     }
 
     @Test

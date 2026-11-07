@@ -725,7 +725,8 @@ fun ChatInputCard(
                             IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage,
                                 contentDescription = stringResource(Res.string.input_attach_image))
                         }
-                        AgentModeSelector(viewModel = viewModel)
+                        PermissionPlanSelector(viewModel = viewModel)
+                        WorkspaceSelector(viewModel = viewModel)
                         ApiKeySelectorMenu(viewModel = viewModel)
                         ModelSelectorMenu(viewModel = viewModel, compact = false)
                         AnimatedVisibility(

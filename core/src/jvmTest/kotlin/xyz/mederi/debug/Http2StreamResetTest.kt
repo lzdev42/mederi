@@ -95,7 +95,6 @@ class Http2StreamResetTest {
 
         val retryClient = RetryableLLMClient(
             delegate = fakeClient,
-            maxRetries = 3,
             minDelayMs = 10,
             maxDelayMs = 20
         )
@@ -141,7 +140,6 @@ class Http2StreamResetTest {
 
         val retryClient = RetryableLLMClient(
             delegate = fakeClient,
-            maxRetries = 3,
             minDelayMs = 10,
             maxDelayMs = 20
         )

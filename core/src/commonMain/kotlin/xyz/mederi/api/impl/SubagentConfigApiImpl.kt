@@ -1,5 +1,6 @@
 package xyz.mederi.api.impl
 
+import xyz.mederi.api.exception.mederiCall
 import xyz.mederi.api.SubagentConfigApi
 import xyz.mederi.api.SubagentGlobalSettingsDto
 import xyz.mederi.api.SubagentRoleConfigDto
@@ -18,17 +19,17 @@ class SubagentConfigApiImpl(
     private val providerManager: ProviderManager
 ) : SubagentConfigApi {
 
-    override suspend fun list(): List<SubagentRoleConfigDto> {
-        return SubagentRole.entries.map { role ->
-            get(role)
+    override suspend fun list(sessionId: String?): List<SubagentRoleConfigDto> = mederiCall {
+        SubagentRole.entries.filter { sessionId == null || it == SubagentRole.EXECUTOR || it == SubagentRole.RESEARCHER }.map { role ->
+            get(role, sessionId)
         }
     }
 
-    override suspend fun get(role: SubagentRole): SubagentRoleConfigDto {
-        val config = subagentConfigManager.get(role)
+    override suspend fun get(role: SubagentRole, sessionId: String?): SubagentRoleConfigDto = mederiCall {
+        val config = subagentConfigManager.get(role, sessionId)
         val model = config.modelId?.let { providerManager.getModel(it) }
         val (displayName, description) = roleMetadata(role)
-        return SubagentRoleConfigDto(
+        SubagentRoleConfigDto(
             role = role,
             displayName = displayName,
             description = description,
@@ -36,26 +37,40 @@ class SubagentConfigApiImpl(
             modelName = model?.name,
             reasoningLevel = config.reasoningLevel,
             apiKeyId = config.apiKeyId,
-            isInheriting = config.isInheriting
+            isInheriting = config.isInheriting,
+            usesDefault = subagentConfigManager.usesDefault(role, sessionId)
         )
     }
 
-    override suspend fun update(role: SubagentRole, request: UpdateSubagentConfigRequest) {
+    override suspend fun update(role: SubagentRole, request: UpdateSubagentConfigRequest, sessionId: String?) = mederiCall {
         subagentConfigManager.set(
             role,
             SubagentModelConfig(
                 modelId = request.modelId,
                 reasoningLevel = request.reasoningLevel,
                 apiKeyId = request.apiKeyId
-            )
+            ),
+            sessionId
         )
     }
 
-    override suspend fun getGlobalSettings(): SubagentGlobalSettingsDto =
-        SubagentGlobalSettingsDto(maxConcurrentAgents = subagentConfigManager.getMaxConcurrentSubagents())
+    override suspend fun getGlobalSettings(sessionId: String?): SubagentGlobalSettingsDto = mederiCall {
+        SubagentGlobalSettingsDto(
+            maxConcurrentAgents = subagentConfigManager.getMaxConcurrentSubagents(sessionId),
+            usesDefault = subagentConfigManager.usesDefaultConcurrency(sessionId)
+        )
+    }
 
-    override suspend fun updateGlobalSettings(request: UpdateSubagentGlobalSettingsRequest) {
-        subagentConfigManager.setMaxConcurrentSubagents(request.maxConcurrentAgents)
+    override suspend fun updateGlobalSettings(request: UpdateSubagentGlobalSettingsRequest, sessionId: String?) = mederiCall {
+        subagentConfigManager.setMaxConcurrentSubagents(request.maxConcurrentAgents, sessionId)
+    }
+
+    override suspend fun clear(role: SubagentRole, sessionId: String) = mederiCall {
+        subagentConfigManager.clear(role, sessionId)
+    }
+
+    override suspend fun clearGlobalSettings(sessionId: String) = mederiCall {
+        subagentConfigManager.clearMaxConcurrentSubagents(sessionId)
     }
 
     private fun roleMetadata(role: SubagentRole): Pair<String, String> = when (role) {

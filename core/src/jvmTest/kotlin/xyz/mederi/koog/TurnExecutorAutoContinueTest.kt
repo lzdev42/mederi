@@ -72,7 +72,7 @@ class TurnExecutorAutoContinueTest {
         override suspend fun addModel(providerId: String, providerModelId: String, name: String, supportsReasoning: Boolean, reasoningLevel: ReasoningLevel, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean, reasoningLevels: List<ReasoningLevel>, isEnabled: Boolean, inputPricePerMillion: Double?, outputPricePerMillion: Double?) = unused()
         override suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean) = unused()
         override suspend fun applyRemoteMetadata(providerId: String, modelId: String, endpoint: xyz.mederi.provider.domain.model.RemoteModelInfo?, catalog: xyz.mederi.metadata.ModelMetadata?) = unused()
-        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?) = unused()
+        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?, optimizeForRequestCount: Boolean?) = unused()
         override suspend fun deleteModel(providerId: String, modelId: String) = unused()
         override suspend fun getModel(modelId: String) = unused()
         override suspend fun listAllModels() = unused()
@@ -150,6 +150,22 @@ class TurnExecutorAutoContinueTest {
     }
 
     @Test
+    fun hasEmittedTokens_reasoningWithoutBody_isTrue() = runBlocking {
+        val history = InMemoryHistoryStore()
+        history.append("reasoning", assistant("", "reasoning").copy(
+            parts = listOf(MessagePart.Reasoning(content = listOf("unfinished thought")))))
+        assertTrue(invokeHasEmittedTokens(newExecutor(history), "reasoning"))
+    }
+
+    @Test
+    fun hasEmittedTokens_blankReasoning_isFalse() = runBlocking {
+        val history = InMemoryHistoryStore()
+        history.append("reasoning", assistant("", "reasoning").copy(
+            parts = listOf(MessagePart.Reasoning(content = listOf("  ")))))
+        assertFalse(invokeHasEmittedTokens(newExecutor(history), "reasoning"))
+    }
+
+    @Test
     fun hasEmittedTokens_trailingUserAfterAssistant_isTrue() = runBlocking {
         val history = InMemoryHistoryStore()
         history.append("sess_trail", user("hello", "sess_trail"))
@@ -159,12 +175,12 @@ class TurnExecutorAutoContinueTest {
         assertTrue(invokeHasEmittedTokens(executor, "sess_trail"), "最后一条是 user 但前面 assistant 已吐 token")
     }
 
-    // ── PrematureCloseSignal（runTurn 重抛信号）──
+    // ── TurnContinuationSignal（runTurn 重抛信号）──
 
     @Test
-    fun prematureCloseSignal_carriesPayloadAndCause() {
-        val cls = Class.forName("xyz.mederi.infrastructure.koog.TurnExecutor\$PrematureCloseSignal")
-        val ctor = cls.getDeclaredConstructor(Map::class.java, Throwable::class.java)
+    fun turnContinuationSignal_carriesPayloadCauseAndPolicy() {
+        val cls = Class.forName("xyz.mederi.infrastructure.koog.TurnExecutor\$TurnContinuationSignal")
+        val ctor = cls.getDeclaredConstructor(Map::class.java, Throwable::class.java, Boolean::class.javaPrimitiveType)
         ctor.isAccessible = true
         val cause = RuntimeException("stream closed before end marker")
         val payload = mapOf(
@@ -172,14 +188,16 @@ class TurnExecutorAutoContinueTest {
             "error" to "服务器关闭连接但未发送结束标记",
             "errorId" to "err_1"
         )
-        val signal = ctor.newInstance(payload, cause) as RuntimeException
-        assertNotNull(signal, "PrematureCloseSignal 可构造（runTurn catch 重抛用）")
+        val signal = ctor.newInstance(payload, cause, false) as RuntimeException
         assertEquals(cause.message, signal.cause?.message, "信号 cause 保留原始异常的 message")
         assertTrue(signal.cause === cause, "信号 cause 保留原始异常")
 
         @Suppress("UNCHECKED_CAST")
         val carried = cls.getDeclaredMethod("getErrorPayload").apply { isAccessible = true }.invoke(signal) as Map<String, String>
         assertEquals(payload, carried, "errorPayload 原样携带（auto-continue 耗尽时 emit MESSAGE_ERROR 用）")
+        val policy = cls.getDeclaredMethod("getContinueWithoutOutput").apply { isAccessible = true }
+        assertEquals(false, policy.invoke(signal), "有输出时才允许普通断流续跑")
+        assertEquals(true, policy.invoke(ctor.newInstance(payload, cause, true)), "允许指定空交付续跑")
     }
 
     // ── 集成测试说明（@Ignore）──
@@ -188,7 +206,7 @@ class TurnExecutorAutoContinueTest {
     @Ignore("需要 mock SSE 流中断：LLM client 由 runTurn 内部 KoogClientFactory.create 硬编码创建，无注入点；见类注释")
     fun autoContinueIntegration_prematureCloseThenContinue() {
         // 预期场景（人工/集成验证）：
-        // 1. fake LLMClient 首次 execute 返回半截回复后抛 PREMATURE_CLOSE 异常 → runTurn catch 重抛 PrematureCloseSignal
+        // 1. fake LLMClient 首次 execute 返回半截回复后抛 PREMATURE_CLOSE 异常 → runTurn catch 重抛 TurnContinuationSignal
         // 2. auto-continue 循环：attempt < AUTO_CONTINUE_MAX_RETRIES && hasEmittedTokens → historyStore 追加 "Continue" + 重跑 runTurn
         // 3. fake LLMClient 第二次 execute 正常完成 → MESSAGE_COMPLETED 事件发出，未发 MESSAGE_ERROR
     }

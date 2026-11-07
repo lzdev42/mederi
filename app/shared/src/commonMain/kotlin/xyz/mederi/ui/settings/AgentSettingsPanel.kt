@@ -45,6 +45,8 @@ internal data class AgentSettingsActions(
     val model: (String, ModelOption?) -> Unit,
     val reasoning: (String, String?) -> Unit,
     val key: (String, String?) -> Unit,
+    val restoreRoleDefault: ((String) -> Unit)? = null,
+    val restoreConcurrencyDefault: (() -> Unit)? = null,
 )
 
 @Composable
@@ -59,6 +61,10 @@ internal fun AgentSettingsContent(
 ) {
     val colors = LocalMederiColors.current
     LazyColumn(modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        item(key = "scope") {
+            Text(stringResource(if (actions.restoreRoleDefault == null) Res.string.settings_agents_defaults_notice
+                else Res.string.settings_agents_session_notice), style = WorkspaceStyle.Body, color = colors.textSecondary)
+        }
         item(key = "concurrency") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SettingsRow(stringResource(Res.string.settings_agents_concurrency_title),
@@ -68,6 +74,11 @@ internal fun AgentSettingsContent(
                         NumberStepper(it.maxConcurrentAgents, actions.concurrency, minValue = 1, maxValue = 16,
                             enabled = state.concurrencyEnabled)
                     }
+                }
+                actions.restoreConcurrencyDefault?.let { restore ->
+                    WorkspaceActionButton(stringResource(Res.string.settings_agents_restore_default), restore,
+                        enabled = state.concurrencyEnabled && state.global?.usesDefault == false,
+                        icon = FeatherIcons.CornerDownRight)
                 }
                 state.globalError?.let { message ->
                     ErrorBoard(stringResource(message.key, *message.args.toTypedArray()), showContinue = true,
@@ -138,34 +149,38 @@ internal fun AgentRoleSettings(
                 actions.model(item.role, it)
             }
         }
+        if (effectiveModel?.supportsThinking == true && effectiveModel.reasoningLevels.isNotEmpty()) {
+            SettingsRow(stringResource(Res.string.settings_agents_reasoning_label)) {
+                AgentChoiceMenu(item.reasoningLevel?.let { formatReasoningLevelLabel(it) }
+                    ?: stringResource(Res.string.settings_agents_inherit_reasoning_short),
+                    item.reasoningLevel, listOf(null to stringResource(Res.string.settings_agents_inherit_reasoning)) +
+                        effectiveModel.reasoningLevels.map { it to formatReasoningLevelLabel(it) }, enabled) {
+                    actions.reasoning(item.role, it)
+                }
+            }
+        }
+        if (keys.isNotEmpty() || item.apiKeyId != null) {
+            val label = when (item.apiKeyId) {
+                null -> stringResource(Res.string.settings_agents_apikey_inherit)
+                API_KEY_ROTATION_ID -> stringResource(Res.string.settings_agents_apikey_rotate)
+                else -> keys.find { it.id == item.apiKeyId }?.name ?: item.apiKeyId
+            }
+            SettingsRow(stringResource(Res.string.settings_agents_apikey_label)) {
+                AgentChoiceMenu(label, item.apiKeyId,
+                    listOf(null to stringResource(Res.string.settings_agents_apikey_inherit)) +
+                        (if (keys.size > 1) listOf(API_KEY_ROTATION_ID to stringResource(Res.string.settings_agents_apikey_rotate)) else emptyList()) +
+                        keys.map { it.id to it.name }, enabled, details = keys.associate { it.id to if (it.isDefault) "${it.maskedValue} · ${stringResource(Res.string.input_default_tag)}" else it.maskedValue }) {
+                    actions.key(item.role, it)
+                }
+            }
+        }
         if (!item.isInheriting) {
-            if (effectiveModel?.supportsThinking == true && effectiveModel.reasoningLevels.isNotEmpty()) {
-                SettingsRow(stringResource(Res.string.settings_agents_reasoning_label)) {
-                    AgentChoiceMenu(item.reasoningLevel?.let { formatReasoningLevelLabel(it) }
-                        ?: stringResource(Res.string.settings_agents_inherit_reasoning_short),
-                        item.reasoningLevel, listOf(null to stringResource(Res.string.settings_agents_inherit_reasoning)) +
-                            effectiveModel.reasoningLevels.map { it to formatReasoningLevelLabel(it) }, enabled) {
-                        actions.reasoning(item.role, it)
-                    }
-                }
-            }
-            if (keys.isNotEmpty() || item.apiKeyId != null) {
-                val label = when (item.apiKeyId) {
-                    null -> stringResource(Res.string.settings_agents_apikey_inherit)
-                    API_KEY_ROTATION_ID -> stringResource(Res.string.settings_agents_apikey_rotate)
-                    else -> keys.find { it.id == item.apiKeyId }?.name ?: item.apiKeyId
-                }
-                SettingsRow(stringResource(Res.string.settings_agents_apikey_label)) {
-                    AgentChoiceMenu(label, item.apiKeyId,
-                        listOf(null to stringResource(Res.string.settings_agents_apikey_inherit)) +
-                            (if (keys.size > 1) listOf(API_KEY_ROTATION_ID to stringResource(Res.string.settings_agents_apikey_rotate)) else emptyList()) +
-                            keys.map { it.id to it.name }, enabled, details = keys.associate { it.id to if (it.isDefault) "${it.maskedValue} · ${stringResource(Res.string.input_default_tag)}" else it.maskedValue }) {
-                        actions.key(item.role, it)
-                    }
-                }
-            }
             WorkspaceActionButton(stringResource(Res.string.settings_agents_reset), { actions.model(item.role, null) },
                 enabled = enabled, icon = FeatherIcons.CornerDownRight)
+        }
+        actions.restoreRoleDefault?.let { restore ->
+            WorkspaceActionButton(stringResource(Res.string.settings_agents_restore_default), { restore(item.role) },
+                enabled = enabled && !item.usesDefault, icon = FeatherIcons.CornerDownRight)
         }
         HorizontalDivider(color = colors.divider, modifier = Modifier.padding(top = 8.dp))
     }
@@ -212,5 +227,30 @@ private fun AgentChoiceMenu(
                 } }, { expanded = false; onSelect(id) }, selected = id == selected, twoLines = details.containsKey(id))
             }
         }
+    }
+}
+
+/** 会话专属设置实例固定捕获会话 ID，异步回读不会写入另一会话的编辑器。 */
+@Composable
+internal fun SessionAgentSettingsDialog(conversationId: String?, draft: DraftSubagentSettings, onDismiss: () -> Unit) {
+    val appState = LocalAppState.current
+    val vm: AgentSettingsViewModel = viewModel(key = "session-agents:${conversationId ?: draft.id}") {
+        AgentSettingsViewModel(appState.aiCore, conversationId, draft.takeIf { conversationId == null })
+    }
+    LaunchedEffect(vm) { vm.reloadConfigs(); vm.reloadGlobal() }
+    val models by appState.availableModels.collectAsState()
+    val providers by appState.providers.collectAsState()
+    val parentModel by appState.selectedModel.collectAsState()
+    MederiDialog(onDismiss, width = 700.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(Res.string.settings_agents_session_title), style = WorkspaceStyle.Title,
+                color = LocalMederiColors.current.textPrimary, modifier = Modifier.weight(1f))
+            WorkspaceIconButton(FeatherIcons.X, onDismiss, stringResource(Res.string.close))
+        }
+        AgentSettingsContent(vm.uiState, models, providers, parentModel,
+            AgentSettingsActions(vm::reloadConfigs, vm::reloadGlobal, vm::setConcurrency,
+                vm::selectModel, vm::selectReasoning, vm::selectKey,
+                vm::restoreRoleDefault, vm::restoreConcurrencyDefault),
+            modifier = Modifier.height(420.dp), isCompact = true)
     }
 }

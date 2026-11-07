@@ -104,12 +104,13 @@ class SpawnAgentTool(
         val (effectiveAiModel, effectiveReasoningLevel) = subagentConfigManager?.resolve(
             role = SubagentRole.EXECUTOR,
             fallbackModel = parentModel,
-            fallbackReasoning = parentReasoning
+            fallbackReasoning = parentReasoning,
+            sessionId = parentSessionId
         ) ?: (parentModel to parentReasoning)
 
         // apiKeyId：子代理独立配置指定了就覆盖父会话的 apiKeyId，否则继承父会话的
-        val subagentConfig = subagentConfigManager?.get(SubagentRole.EXECUTOR)
-        val effectiveApiKeyId = subagentConfig?.apiKeyId ?: apiKeyId
+        val subagentConfig = subagentConfigManager?.get(SubagentRole.EXECUTOR, parentSessionId)
+        val effectiveApiKeyId = subagentConfig?.apiKeyId ?: sessionNow?.apiKeyId ?: apiKeyId
 
         // 无 plan 路径（ad-hoc 执行）：task+briefing 直接派 executor，跳过 plan/spec/IN_PROGRESS。
         // 用于小改动、多文件编辑等自包含任务——不需要 plan 流程，只省上下文。
@@ -147,6 +148,10 @@ class SpawnAgentTool(
         // 从 PlanStore 取 generate_spec 存储的确切 spec（执行零漂移），并做存在性硬校验
         val plan = planStore?.load(args.planId)
             ?: return "Error: Plan not found: ${args.planId}"
+        if (plan.sessionId != parentSessionId || plan.status !in setOf(
+                xyz.mederi.plan.PlanStatus.APPROVED, xyz.mederi.plan.PlanStatus.IN_PROGRESS
+            ))
+            return "Error: Only this session's approved active plan can be dispatched."
         val st = plan.subtasks.getOrNull(args.subtaskIndex)
             ?: return "Error: Subtask index ${args.subtaskIndex} out of range (0..${plan.subtasks.size - 1})."
         if (st.status == xyz.mederi.plan.SubtaskStatus.COMPLETED)
@@ -161,6 +166,8 @@ class SpawnAgentTool(
         // 必须用 planStore.updatePlan（原子 RMW）：工具支持并行调度，两个 spawn_agent
         // 同消息并行时，裸 load→update 会互相覆盖对方的 IN_PROGRESS 标记。
         val startedPlan = planStore?.updatePlan(args.planId) { p ->
+            if (p.isTerminal || p.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL ||
+                p.subtasks.getOrNull(args.subtaskIndex)?.spec != st.spec) return@updatePlan null
             p.copy(
                 status = if (p.status == xyz.mederi.plan.PlanStatus.APPROVED)
                     xyz.mederi.plan.PlanStatus.IN_PROGRESS else p.status,
@@ -274,11 +281,12 @@ class SpawnResearcherTool(
         val (effectiveAiModel, effectiveReasoningLevel) = subagentConfigManager?.resolve(
             role = SubagentRole.RESEARCHER,
             fallbackModel = parentModel,
-            fallbackReasoning = parentReasoning
+            fallbackReasoning = parentReasoning,
+            sessionId = parentSessionId
         ) ?: (parentModel to parentReasoning)
         // apiKeyId：子代理独立配置指定了就覆盖父会话的 apiKeyId，否则继承父会话的
-        val subagentConfig = subagentConfigManager?.get(SubagentRole.RESEARCHER)
-        val effectiveApiKeyId = subagentConfig?.apiKeyId ?: apiKeyId
+        val subagentConfig = subagentConfigManager?.get(SubagentRole.RESEARCHER, parentSessionId)
+        val effectiveApiKeyId = subagentConfig?.apiKeyId ?: sessionNow?.apiKeyId ?: apiKeyId
         // 查活跃 plan：有 plan 时把 planId 传下去，researcher 完成时把报告落盘到 {planId}/research.md；
         // 无 plan（分诊阶段调研，plan 尚未建）时 planId=null，保持原有行为（全文回灌父上下文）。
         val activePlanId = planStore?.loadBySession(parentSessionId)?.id

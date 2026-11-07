@@ -21,9 +21,10 @@ import androidx.compose.ui.unit.sp
  * - 结构特征 (Structural Features)：H1/H2 底部实线分割线开关 (showHeadingDividers)、边框宽度；
  * - 盒模型几何 (Shapes)：代码块圆角、行内代码圆角胶囊。
  *
- * 包含两套开箱即用的标准预设：
+ * 包含三套开箱即用的预设：
  * - [RenderStyle.Chat]：对话消息场景（小行距、紧凑垂直间距、平缓字号、关闭分割线）；
- * - [RenderStyle.Github]：正规文档阅读场景（大呼吸感、GFM 大字号阶梯、开启 H1/H2 分割线）。
+ * - [RenderStyle.Github]：GFM 风格长文，开启 H1/H2 分割线；
+ * - [RenderStyle.Document]：阅读面板中的计划、报告与其他长文。
  */
 @Immutable
 data class RenderStyle(
@@ -147,6 +148,26 @@ data class RenderStyle(
             showHeadingDividers = true,
             inlineCodeShape = RoundedCornerShape(4.dp),
             codeBlockShape = RoundedCornerShape(8.dp),
+        )
+
+        /** 适用于窄阅读面板与长文的版式，字体由平台默认字体及其回退链提供。 */
+        val Document = Github.copy(
+            bodyStyle = TextStyle(fontFamily = FontFamily.Default, fontSize = 14.5.sp, lineHeight = 24.sp),
+            headingStyles = listOf(
+                TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp),
+                TextStyle(fontSize = 19.sp, fontWeight = FontWeight.SemiBold, lineHeight = 27.sp),
+                TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 23.sp),
+                TextStyle(fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp),
+                TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium, lineHeight = 21.sp),
+                TextStyle(fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp),
+            ),
+            inlineCodeStyle = SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+            blockSpacing = 12.dp,
+            listIndent = 20.dp,
+            tableCellPadding = 7.dp,
+            blockQuotePadding = 10.dp,
+            blockQuoteBorderWidth = 2.dp,
+            showHeadingDividers = false,
         )
     }
 }

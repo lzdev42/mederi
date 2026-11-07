@@ -66,6 +66,31 @@ class SubagentConcurrencyLimitTest {
     }
 
     @Test
+    fun `session provider enforces independent limits and observes changes`() = runBlocking {
+        val runner = FakeRunner().apply { hang = true }
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val limits = mutableMapOf("a" to 1, "b" to 2)
+        val manager = SubagentManager(runner, scope, sessionMaxConcurrentProvider = { limits.getValue(it) })
+        try {
+            spawnExecutor(manager, "a")
+            spawnExecutor(manager, "b")
+            spawnExecutor(manager, "b")
+            try {
+                spawnExecutor(manager, "a")
+                fail("session a must reject its second child")
+            } catch (e: SubagentLimitReachedException) { assertEquals(1, e.limit) }
+            limits["a"] = 2
+            spawnExecutor(manager, "a")
+            assertEquals(2, manager.agentsCount("a"))
+            assertEquals(2, manager.agentsCount("b"))
+        } finally {
+            manager.stopAllForSession("a")
+            manager.stopAllForSession("b")
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun `provider null means no limit`() = runBlocking {
         val runner = FakeRunner().apply { hang = true }
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())

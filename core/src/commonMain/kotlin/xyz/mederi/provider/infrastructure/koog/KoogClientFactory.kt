@@ -7,8 +7,10 @@ import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.http.MederiHttpClientFactory
 import xyz.mederi.provider.domain.model.Provider
+import xyz.mederi.provider.domain.model.ProviderAuthentication
 import xyz.mederi.provider.domain.model.ProviderType
 import xyz.mederi.provider.infrastructure.UrlNormalizer
+import xyz.mederi.provider.infrastructure.koog.google.MederiGoogleLLMClient
 import xyz.mederi.provider.infrastructure.koog.sanitize.MederiOpenAILLMClient
 
 /**
@@ -51,6 +53,7 @@ object KoogClientFactory {
      * @throws IllegalArgumentException 如果供应商类型不支持。
      */
     fun create(provider: Provider, apiKey: String): LLMClient {
+        validateChatGptEndpoint(provider)
         DebugLog.section("ClientFactory", "KoogClientFactory.create")
         DebugLog.data("ClientFactory", "provider", "${provider.id} (${provider.name}), type=${provider.type}")
         DebugLog.data("ClientFactory", "baseUrl", provider.baseUrl)
@@ -74,6 +77,7 @@ object KoogClientFactory {
      * 统一用 [MederiOpenAILLMClient] 消除此类条件遗漏，零副作用。
      */
     fun createOpenAIClient(provider: Provider, apiKey: String): LLMClient {
+        validateChatGptEndpoint(provider)
         val normalized = UrlNormalizer.normalize(provider.baseUrl)
         val prefix = normalized.pathPrefix
         val settings = OpenAIClientSettings(
@@ -91,6 +95,8 @@ object KoogClientFactory {
             settings = settings,
             httpClientFactory = MederiHttpClientFactory,
             chatCompletionsPath = "${prefix}chat/completions",
+            chatGptPlan = provider.authentication == xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH,
+            accessTokenProvider = provider.accessTokenProvider,
         )
     }
 
@@ -112,15 +118,23 @@ object KoogClientFactory {
      * @return GoogleLLMClient 实例。
      */
     fun createGoogleClient(provider: Provider, apiKey: String): GoogleLLMClient {
+        require(provider.authentication != ProviderAuthentication.CHATGPT_OAUTH) {
+            "ChatGPT authorization requires the official OpenAI Responses endpoint"
+        }
         val normalized = UrlNormalizer.normalize(provider.baseUrl)
         val settings = GoogleClientSettings(
             baseUrl = normalized.base,
             defaultPath = "${normalized.versionPath}/models"
         )
-        return GoogleLLMClient(
-            apiKey = apiKey,
-            settings = settings,
-            httpClientFactory = MederiHttpClientFactory
-        )
+        return MederiGoogleLLMClient(apiKey, settings)
+    }
+
+    /** 持久化数据也必须重新校验，不能依赖设置页禁止编辑来保护 OAuth bearer。 */
+    private fun validateChatGptEndpoint(provider: Provider) {
+        if (provider.authentication != ProviderAuthentication.CHATGPT_OAUTH) return
+        require(provider.type == ProviderType.OPENAI_RESPONSES &&
+            provider.baseUrl.removeSuffix("/") == "https://api.openai.com/v1") {
+            "ChatGPT authorization requires the official OpenAI Responses endpoint"
+        }
     }
 }

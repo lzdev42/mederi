@@ -8,6 +8,8 @@ import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
 import ai.koog.prompt.params.LLMParams
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.provider.domain.model.ProviderType
 import xyz.mederi.provider.domain.model.ReasoningLevel
@@ -203,12 +205,19 @@ object KoogParamsBuilder {
     ): GoogleParams {
         // 级别值缺失（NONE 缺省/未配置）→ thinkingConfig 置 null，与"不发参数"语义一致
         val levelValue = reasoningParameter?.resolve(level)
-        val thinkingConfig = if (levelValue != null) buildGoogleThinkingConfig(levelValue) else null
+        // Koog 当前的 GoogleThinkingLevel 只有 LOW/HIGH，原生适配器将扩展值放入 generationConfig。
+        val minimal = levelValue.equals("minimal", ignoreCase = true)
+        val thinkingConfig = levelValue?.takeUnless { minimal }?.let(::buildGoogleThinkingConfig)
+        val extensions = if (minimal) mapOf("thinkingConfig" to buildJsonObject {
+            put("thinkingLevel", "minimal")
+            put("includeThoughts", false)
+        }) else null
 
         return GoogleParams(
             temperature = temperature,
             maxTokens = maxTokens,
-            thinkingConfig = thinkingConfig
+            thinkingConfig = thinkingConfig,
+            additionalProperties = extensions,
         )
     }
 

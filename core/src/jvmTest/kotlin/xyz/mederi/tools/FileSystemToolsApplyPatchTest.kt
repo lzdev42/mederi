@@ -9,7 +9,6 @@ import xyz.mederi.tools.diff.FileChangeStatus
 import xyz.mederi.tools.diff.PatchChange
 import xyz.mederi.tools.diff.TurnDiffTracker
 import xyz.mederi.tools.patch.PatchParser
-import xyz.mederi.tools.sandbox.SandboxConfig
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -31,8 +30,9 @@ class FileSystemToolsApplyPatchTest {
     }
     @After fun cleanup() { projects.forEach { it.deleteRecursively() } }
     private fun patch(body: String) = "*** Begin Patch\n$body\n*** End Patch"
-    private fun apply(project: File, body: String, touched: ((String) -> Unit)? = null, tracker: TurnDiffTracker? = null): String = runBlocking {
-        FileSystemTools(listOf(project.path), tracker, onFileTouched = touched).ApplyPatchTool()
+    private fun apply(project: File, body: String, touched: ((String) -> Unit)? = null, tracker: TurnDiffTracker? = null,
+        extras: List<String> = emptyList()): String = runBlocking {
+        FileSystemTools(listOf(project.path), tracker, onFileTouched = touched, extraWritablePaths = extras).ApplyPatchTool()
             .execute(FileSystemTools.ApplyPatchArgs(patch(body)))
     }
 
@@ -247,17 +247,14 @@ class FileSystemToolsApplyPatchTest {
         val whitelist = project()
         val forbidden = project()
         File(whitelist, "existing.txt").writeText("whitelisted\n")
-        val previous = SandboxConfig.extraWritablePaths
-        try {
-            SandboxConfig.extraWritablePaths = listOf(whitelist.path)
-            assertTrue(apply(root, "*** Add File: ${File(whitelist, "new.txt").path}\n+allowed").startsWith("Success."))
-            assertEquals("allowed\n", File(whitelist, "new.txt").readText())
-            assertTrue(apply(root, "*** Add File: ${File(forbidden, "new.txt").path}\n+denied").startsWith("Error:"))
-            assertFalse(File(forbidden, "new.txt").exists())
-            assertTrue(apply(root, "*** Add File: existing.txt\n+project").startsWith("Success."))
-            assertEquals("project\n", File(root, "existing.txt").readText())
-            assertEquals("whitelisted\n", File(whitelist, "existing.txt").readText())
-        } finally { SandboxConfig.extraWritablePaths = previous }
+        val extras = listOf(whitelist.path)
+        assertTrue(apply(root, "*** Add File: ${File(whitelist, "new.txt").path}\n+allowed", extras = extras).startsWith("Success."))
+        assertEquals("allowed\n", File(whitelist, "new.txt").readText())
+        assertTrue(apply(root, "*** Add File: ${File(forbidden, "new.txt").path}\n+denied", extras = extras).startsWith("Error:"))
+        assertFalse(File(forbidden, "new.txt").exists())
+        assertTrue(apply(root, "*** Add File: existing.txt\n+project", extras = extras).startsWith("Success."))
+        assertEquals("project\n", File(root, "existing.txt").readText())
+        assertEquals("whitelisted\n", File(whitelist, "existing.txt").readText())
     }
 
     @Test fun `generated binary content is rejected during preflight`() {
@@ -269,16 +266,12 @@ class FileSystemToolsApplyPatchTest {
 
     @Test fun `blank and relative whitelist entries return explicit errors without widening scope`() {
         val root = project()
-        val previous = SandboxConfig.extraWritablePaths
-        try {
-            for (entry in listOf("", "   ", "relative-directory")) {
-                SandboxConfig.extraWritablePaths = listOf(entry)
-                val result = apply(root, "*** Add File: new.txt\n+new")
-                assertTrue(result.startsWith("Error:"), result)
-                assertTrue(result.contains("Invalid extra writable path"), result)
-                assertFalse(File(root, "new.txt").exists())
-            }
-        } finally { SandboxConfig.extraWritablePaths = previous }
+        for (entry in listOf("", "   ", "relative-directory")) {
+            val result = apply(root, "*** Add File: new.txt\n+new", extras = listOf(entry))
+            assertTrue(result.startsWith("Error:"), result)
+            assertTrue(result.contains("Sandbox writable roots must be nonblank absolute paths"), result)
+            assertFalse(File(root, "new.txt").exists())
+        }
     }
 
     @Test fun `same content Add and Update preserve file identity modification time and callbacks`() {

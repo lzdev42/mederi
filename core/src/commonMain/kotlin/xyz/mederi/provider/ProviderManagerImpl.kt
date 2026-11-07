@@ -4,6 +4,8 @@ import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.ModelOrigin
 import xyz.mederi.metadata.ModelMetadata
 import xyz.mederi.provider.domain.model.Provider
+import xyz.mederi.provider.domain.model.ProviderAuthentication
+import xyz.mederi.provider.oauth.ChatGptOAuthManager
 import xyz.mederi.provider.domain.model.ProviderApiKey
 import xyz.mederi.provider.domain.model.ProviderType
 import xyz.mederi.provider.domain.model.ReasoningLevel
@@ -33,7 +35,8 @@ private val lenientJson = Json { ignoreUnknownKeys = true }
  */
 class ProviderManagerImpl(
     private val providerStore: ProviderStore,
-    private val apiKeyStore: ApiKeyStore
+    private val apiKeyStore: ApiKeyStore,
+    private val chatGptAuth: ChatGptOAuthManager? = null,
 ) : ProviderManager {
 
     @Serializable
@@ -45,12 +48,30 @@ class ProviderManagerImpl(
     // ==================== Provider ====================
 
     override suspend fun list(): List<Provider> =
-        providerStore.list().map { it.copy(apiKeys = withRotationKey(apiKeyStore.listByProvider(it.id))) }
+        providerStore.list().map { attachCredentials(it) }
 
-    override suspend fun listWithoutKeys(): List<Provider> = providerStore.list()
+    override suspend fun listWithoutKeys(): List<Provider> = providerStore.list().map { attachCredentials(it, false) }
 
     override suspend fun get(id: String): Provider? =
-        providerStore.get(id)?.copy(apiKeys = withRotationKey(apiKeyStore.listByProvider(id)))
+        providerStore.get(id)?.let { attachCredentials(it) }
+
+    private suspend fun attachCredentials(provider: Provider, includeKeys: Boolean = true): Provider =
+        if (provider.authentication == ProviderAuthentication.CHATGPT_OAUTH) provider.copy(
+            apiKeys = emptyList(), accessTokenProvider = { requireNotNull(getDefaultKeyValue(provider.id)) },
+        ) else if (includeKeys) provider.copy(apiKeys = withRotationKey(apiKeyStore.listByProvider(provider.id)))
+        else provider
+
+    override suspend fun createChatGptProvider(): Provider {
+        check(chatGptAuth != null) { "ChatGPT authorization is not configured" }
+        val provider = Provider(
+            id = "prov_${UUID.randomUUID().toString().replace("-", "")}", name = "ChatGPT",
+            type = ProviderType.OPENAI_RESPONSES, baseUrl = "https://api.openai.com/v1",
+            reasoningParameter = ReasoningParameter.forType(ProviderType.OPENAI_RESPONSES),
+            authentication = ProviderAuthentication.CHATGPT_OAUTH,
+        )
+        saveProviderInternal(provider)
+        return require(provider.id)
+    }
 
     override suspend fun require(id: String): Provider =
         get(id) ?: throw NoSuchElementException("Provider not found: $id")
@@ -88,6 +109,9 @@ class ProviderManagerImpl(
         modelsDevKey: String?
     ): Provider {
         val existing = require(id)
+        require(existing.authentication != ProviderAuthentication.CHATGPT_OAUTH || baseUrl == null || baseUrl == existing.baseUrl) {
+            "The ChatGPT authorization endpoint cannot be changed"
+        }
         reasoningParameter?.let { validateReasoningParameter(it) }
         val updated = existing.copy(
             name = name ?: existing.name,
@@ -114,6 +138,10 @@ class ProviderManagerImpl(
     }
 
     override suspend fun delete(id: String) {
+        if (require(id).authentication == ProviderAuthentication.CHATGPT_OAUTH) {
+            // A failed remote revocation must remain visible; keep the provider for retry.
+            requireNotNull(chatGptAuth).delete(id)
+        }
         providerStore.delete(id)
         apiKeyStore.listByProvider(id).forEach { apiKeyStore.delete(id, it.id) }
     }
@@ -121,7 +149,8 @@ class ProviderManagerImpl(
     // ==================== API Key ====================
 
     override suspend fun listKeys(providerId: String): List<ProviderApiKey> =
-        withRotationKey(apiKeyStore.listByProvider(providerId))
+        if (require(providerId).authentication == ProviderAuthentication.CHATGPT_OAUTH) emptyList()
+        else withRotationKey(apiKeyStore.listByProvider(providerId))
 
     override suspend fun addKey(
         providerId: String,
@@ -129,26 +158,43 @@ class ProviderManagerImpl(
         value: String,
         isDefault: Boolean
     ): ProviderApiKey {
-        require(providerId) // 校验 Provider 存在
+        requireApiKeyProvider(providerId)
         return apiKeyStore.add(providerId, name, value, isDefault)
     }
 
     override suspend fun deleteKey(providerId: String, keyId: String) {
+        requireApiKeyProvider(providerId)
         if (keyId == API_KEY_ROTATION_ID) return
         apiKeyStore.delete(providerId, keyId)
     }
 
     override suspend fun setDefaultKey(providerId: String, keyId: String) {
+        requireApiKeyProvider(providerId)
         if (keyId == API_KEY_ROTATION_ID) return
         apiKeyStore.setDefault(providerId, keyId)
     }
 
-    override suspend fun getDefaultKeyValue(providerId: String): String? =
-        apiKeyStore.getDefaultValue(providerId)
+    override suspend fun getDefaultKeyValue(providerId: String): String? {
+        val provider = require(providerId)
+        return if (provider.authentication == ProviderAuthentication.CHATGPT_OAUTH) {
+            require(provider.type == ProviderType.OPENAI_RESPONSES &&
+                provider.baseUrl.trimEnd('/') == "https://api.openai.com/v1") {
+                "ChatGPT authorization requires the official OpenAI Responses endpoint"
+            }
+            requireNotNull(chatGptAuth).accessToken(providerId)
+        } else apiKeyStore.getDefaultValue(providerId)
+    }
 
     override suspend fun getKeyValue(providerId: String, keyId: String): String? {
+        requireApiKeyProvider(providerId)
         if (keyId == API_KEY_ROTATION_ID) return API_KEY_ROTATION_ID
         return apiKeyStore.getValue(providerId, keyId)
+    }
+
+    private suspend fun requireApiKeyProvider(providerId: String) {
+        require(require(providerId).authentication == ProviderAuthentication.API_KEY) {
+            "ChatGPT authorization does not use API keys"
+        }
     }
 
     // ==================== Model ====================
@@ -230,7 +276,8 @@ class ProviderManagerImpl(
         maxTokens: Int?,
         supportsImages: Boolean?,
         reasoningLevels: List<ReasoningLevel>?,
-        isEnabled: Boolean?
+        isEnabled: Boolean?,
+        optimizeForRequestCount: Boolean?,
     ): AIModel {
         val provider = providerStore.get(providerId)
             ?: throw NoSuchElementException("Provider not found: $providerId")
@@ -250,7 +297,8 @@ class ProviderManagerImpl(
                 else -> existing.supportsImagesOverride
             },
             reasoningLevels = reasoningLevels ?: existing.reasoningLevels,
-            isEnabled = isEnabled ?: existing.isEnabled
+            isEnabled = isEnabled ?: existing.isEnabled,
+            optimizeForRequestCount = optimizeForRequestCount ?: existing.optimizeForRequestCount,
         )
         saveProviderInternal(provider.copy(models = provider.models.map { if (it.id == modelId) updated else it }))
         return updated
@@ -275,7 +323,7 @@ class ProviderManagerImpl(
 
     override suspend fun fetchRemoteModels(providerId: String): List<RemoteModelInfo> {
         val provider = require(providerId)
-        val apiKey = apiKeyStore.getDefaultValue(providerId)
+        val apiKey = getDefaultKeyValue(providerId)
             ?: throw IllegalStateException("未配置 API Key，无法拉取模型列表")
 
         val normalized = xyz.mederi.provider.infrastructure.UrlNormalizer.normalize(provider.baseUrl)
@@ -304,7 +352,8 @@ class ProviderManagerImpl(
                     )
                 )
                 try {
-                    fetchOpenAIModels(httpClient, modelsPath)
+                    fetchOpenAIModels(httpClient, modelsPath,
+                        provider.authentication == xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH)
                 } finally {
                     httpClient.close()
                 }
@@ -315,7 +364,8 @@ class ProviderManagerImpl(
     /** OpenAI 风格拉取（OPENAI_CHAT / OPENAI_RESPONSES）：单页，无分页 */
     private suspend fun fetchOpenAIModels(
         httpClient: ai.koog.http.client.KoogHttpClient,
-        modelsPath: String
+        modelsPath: String,
+        chatGptPlan: Boolean = false,
     ): List<RemoteModelInfo> {
         DebugLog.event("ProviderMgr", "fetchRemoteModels: path=$modelsPath")
         val response = httpClient.get<String>(
@@ -323,7 +373,7 @@ class ProviderManagerImpl(
             responseType = String::class
         )
         DebugLog.data("ProviderMgr", "response (len=${response.length})", response)
-        return parseOpenAIModelsResponse(response)
+        return if (chatGptPlan) parseChatGptModelsResponse(response) else parseOpenAIModelsResponse(response)
     }
 
     /**
@@ -362,7 +412,7 @@ class ProviderManagerImpl(
      * 保存 Provider 时剥离 apiKeys（由 ApiKeyStore 独立管理）。
      */
     private suspend fun saveProviderInternal(provider: Provider) {
-        providerStore.save(provider.copy(apiKeys = emptyList()))
+        providerStore.save(provider.copy(apiKeys = emptyList(), accessTokenProvider = null))
     }
 
     /**

@@ -5,7 +5,6 @@ import xyz.mederi.tools.diff.FileChangeStatus
 import xyz.mederi.tools.diff.PatchChange
 import xyz.mederi.tools.patch.PatchApplier
 import xyz.mederi.tools.patch.PatchHunk
-import xyz.mederi.tools.sandbox.SandboxConfig
 import java.io.File
 import java.nio.CharBuffer
 import java.nio.ByteBuffer
@@ -27,7 +26,7 @@ import java.nio.file.attribute.PosixFilePermission
 internal class PatchFileTransaction(
     private val directories: List<String>,
     private val reportChanges: (List<PatchChange>) -> Unit,
-    extraWritablePaths: List<String> = SandboxConfig.extraWritablePaths,
+    extraWritablePaths: List<String> = emptyList(),
     /** 确定性故障注入，仅供内部测试；第二个参数表示正在回滚。 */
     private val beforeMutation: (Path, Boolean) -> Unit = { _, _ -> },
 ) {

@@ -1,0 +1,11 @@
+// Review regression assets are opt-in until promoted into core's regular test suite.
+allprojects { p ->
+    p.afterEvaluate {
+        if (p.path == ':core') {
+            def promoted = new File(p.rootDir, 'core/src/jvmTest/kotlin/xyz/mederi/workspace/WorkspaceReviewRegressionTest.kt')
+            if (!promoted.exists()) {
+                p.extensions.getByName('kotlin').sourceSets.getByName('jvmTest').kotlin.srcDir(new File(p.rootDir, 'scripts/worktree-review/src'))
+            }
+        }
+    }
+}

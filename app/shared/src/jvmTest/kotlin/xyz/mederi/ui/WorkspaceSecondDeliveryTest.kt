@@ -211,7 +211,7 @@ class WorkspaceSecondDeliveryTest {
         var retryLabel = ""
         setContent {
             AppTheme {
-                retryLabel = stringResource(Res.string.status_retrying_progress, "2", "5")
+                retryLabel = stringResource(Res.string.status_retrying_progress, "2")
                 StatusBar(status.value, statusHint = "2/5|provider rate limit")
             }
         }
@@ -219,9 +219,11 @@ class WorkspaceSecondDeliveryTest {
         runOnIdle { status.value = TurnStatus.Retrying }
         onNodeWithText(retryLabel).assertIsDisplayed()
         onNodeWithText("provider rate limit").assertIsDisplayed()
-        runOnIdle { status.value = TurnStatus.Generating }
-        onNodeWithText(retryLabel).assertDoesNotExist()
-        onNodeWithText("provider rate limit").assertDoesNotExist()
+        for (hiddenStatus in TurnStatus.entries.filter { it != TurnStatus.Retrying }) {
+            runOnIdle { status.value = hiddenStatus }
+            onNodeWithText(retryLabel).assertDoesNotExist()
+            onNodeWithText("provider rate limit").assertDoesNotExist()
+        }
     }
 
     @Test

@@ -60,6 +60,50 @@ class SubagentLifecycleEventTest {
         SubagentManager(runner, scope, bus)
 
     @Test
+    fun `standard failure event cannot be overridden by successful looking result`() = runBlocking {
+        val runner = FakeRunner().apply {
+            events = listOf(MederiEvent(type = EventType.MESSAGE_ERROR, sessionId = "child",
+                timestamp = java.time.Instant.now().toString(), payload = mapOf("error" to "reasoning interrupted")))
+        }
+        val bus = MutableSharedFlow<MederiEvent>(replay = 64)
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val manager = newManager(runner, bus, scope)
+            spawn(manager)
+            val failure = withTimeout(5_000) { bus.first { it.type == EventType.SUBAGENT_ERROR } }
+            assertEquals("reasoning interrupted", failure.payload["error"])
+            kotlin.test.assertFalse(bus.replayCache.any { it.type == EventType.SUBAGENT_COMPLETED })
+        } finally { scope.cancel() }
+    }
+
+    @Test
+    fun `runner failure carries exact diagnostic through terminal event and report`() = runBlocking {
+        val runner = FakeRunner().apply { mode = FakeRunner.Mode.THROW }
+        val bus = MutableSharedFlow<MederiEvent>(replay = 64)
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val manager = newManager(runner, bus, scope)
+            val id = spawn(manager)
+            val failure = withTimeout(5_000) { bus.first { it.type == EventType.SUBAGENT_ERROR } }
+            val record = kotlin.test.assertNotNull(xyz.mederi.debug.ErrorCollector.get(failure.payload.getValue("errorId")))
+            assertEquals(record.fullDiagnostic, failure.payload["fullDiagnostic"])
+            assertEquals(record.formatShortMessage(), failure.payload["error"])
+            val modelResult = kotlin.test.assertNotNull(failure.payload["result"])
+            assertEquals(subagentErrorReport(record.toPayload()), modelResult)
+            kotlin.test.assertFalse(modelResult.contains(record.id))
+            kotlin.test.assertFalse(modelResult.contains("Stack Trace:"))
+            kotlin.test.assertFalse(modelResult.contains(record.fullDiagnostic))
+            val report = kotlin.test.assertNotNull(manager.getReport(id)?.content)
+            assertTrue(report.startsWith("[subagent error]"))
+            assertTrue(report.contains(record.fullDiagnostic))
+            assertTrue(report.contains(record.id))
+            val progress = bus.replayCache.first { it.type == EventType.SUBAGENT_PROGRESS }
+            val child = kotlinx.serialization.json.Json.decodeFromString<MederiEvent>(progress.payload.getValue("eventJson"))
+            assertEquals(record.fullDiagnostic, child.payload["fullDiagnostic"])
+        } finally { scope.cancel() }
+    }
+
+    @Test
     fun `started event carries full metadata`() = runBlocking {
         val runner = FakeRunner()
         val bus = MutableSharedFlow<MederiEvent>(replay = 16)

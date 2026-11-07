@@ -2,6 +2,8 @@ package xyz.mederi.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,10 +27,8 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
-import xyz.mederi.ui.components.atoms.WorkspaceActionSurface
-import xyz.mederi.ui.components.atoms.WorkspaceActionTone
 
-/** 错误与恢复入口：中性底，语义色只用于边界与图标；详情/继续/关闭各保留原回调。 */
+/** 紧凑单行错误提示：摘要省略，详情/继续/关闭同一行，无卡片边框与大面积底色。 */
 @Composable
 fun ErrorBoard(
     errorMessage: String?,
@@ -41,25 +41,34 @@ fun ErrorBoard(
 ) {
     if (errorMessage == null) return
     val colors = LocalMederiColors.current
-    WorkspaceActionSurface(
-        modifier = modifier.fillMaxWidth()
-            .semantics { liveRegion = LiveRegionMode.Polite }
-            .then(if (onShowDetail != null) Modifier.clickable(role = Role.Button, onClick = onShowDetail) else Modifier),
-        tone = WorkspaceActionTone.Danger,
-    ) {
+    // 过程提示使用工作台 30dp 紧凑控件，不让 Material 默认 48dp 热区撑高整条。
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides WorkspaceStyle.ControlHeight) {
         Row(
+            modifier = modifier.fillMaxWidth()
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .then(if (onShowDetail != null) Modifier.clickable(role = Role.Button, onClick = onShowDetail) else Modifier)
+                .padding(horizontal = 8.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Icon(FeatherIcons.AlertCircle, null, tint = colors.accentDanger,
                 modifier = Modifier.size(WorkspaceStyle.IconSize))
             Text(
                 text = errorMessage,
-                color = colors.textPrimary,
-                style = WorkspaceStyle.Body,
-                maxLines = if (onShowDetail == null) Int.MAX_VALUE else 3,
+                color = colors.textSecondary,
+                style = WorkspaceStyle.Caption,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
+            )
+            if (onShowDetail != null) WorkspaceActionButton(
+                text = stringResource(Res.string.errorboard_detail_report),
+                onClick = onShowDetail,
+            )
+            if (showContinue && onContinue != null) WorkspaceActionButton(
+                text = continueLabel ?: stringResource(Res.string.errorboard_continue),
+                onClick = onContinue,
+                primary = true,
             )
             if (onDismiss != null) MederiMinimalIconButton(
                 icon = FeatherIcons.X,
@@ -67,23 +76,6 @@ fun ErrorBoard(
                 contentDescription = stringResource(Res.string.errorboard_close),
                 modifier = Modifier.size(WorkspaceStyle.IconTarget),
             )
-        }
-        if (onShowDetail != null || (showContinue && onContinue != null)) FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            if (onShowDetail != null) WorkspaceActionButton(
-                text = stringResource(Res.string.errorboard_detail_report),
-                onClick = onShowDetail,
-            )
-            if (showContinue && onContinue != null) {
-                WorkspaceActionButton(
-                    text = continueLabel ?: stringResource(Res.string.errorboard_continue),
-                    onClick = onContinue,
-                    primary = true,
-                )
-            }
         }
     }
 }

@@ -1,6 +1,7 @@
 package xyz.mederi.debug
 
 import ai.koog.http.client.KoogHttpClientException
+import ai.koog.prompt.streaming.IncompleteStreamException
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.ConnectException
@@ -69,7 +70,6 @@ object ErrorCollector {
     private const val MAX_HISTORY = 50
     private const val MAX_STACK_FRAMES = 30
     private const val MAX_CAUSE_DEPTH = 8
-    private const val MAX_ERROR_BODY_LEN = 500
     private const val MAX_STACK_TRACE_LEN = 2000
     private const val MAX_SERVER_MESSAGE_LEN = 300
 
@@ -114,7 +114,7 @@ object ErrorCollector {
             causeChain = causeChain,
             stackTrace = stackTrace,
             httpStatusCode = diag.httpStatusCode,
-            errorBody = diag.errorBody?.take(MAX_ERROR_BODY_LEN),
+            errorBody = diag.errorBody,
             serverMessage = extractServerMessage(diag.errorBody),
             networkErrorType = diag.networkErrorType,
             failureMode = diag.failureMode,
@@ -230,7 +230,11 @@ object ErrorCollector {
                 append("HTTP $httpStatusCode")
                 errorBody?.take(120)?.let { if (it.isNotBlank()) append(": $it") }
             }
-            FailureMode.PREMATURE_CLOSE -> if (networkErrorType == "SseIdleTimeout") "流式连接空闲超时：服务器长时间未输出后续数据" else "服务器关闭连接但未发送结束标记"
+            FailureMode.PREMATURE_CLOSE -> when (networkErrorType) {
+                "SseIdleTimeout" -> "流式连接空闲超时：服务器长时间未输出后续数据"
+                IncompleteStreamException::class.simpleName -> "流式响应结束时未收到结束帧"
+                else -> "服务器关闭连接但未发送结束标记"
+            }
             FailureMode.NETWORK_ERROR -> buildString {
                 append("网络错误")
                 networkErrorType?.let { append("($it)") }
@@ -247,7 +251,9 @@ object ErrorCollector {
 
         /** 责任方判定 */
         val responsibleParty: String get() = when (failureMode) {
-            FailureMode.HTTP_ERROR, FailureMode.PREMATURE_CLOSE -> "SERVER"
+            FailureMode.HTTP_ERROR -> "SERVER"
+            FailureMode.PREMATURE_CLOSE ->
+                if (networkErrorType == IncompleteStreamException::class.simpleName) "UNKNOWN" else "SERVER"
             FailureMode.NETWORK_ERROR -> "NETWORK"
             FailureMode.CANCELLED -> "CLIENT"
             FailureMode.UNKNOWN -> "UNKNOWN"
@@ -290,6 +296,8 @@ object ErrorCollector {
                 el["message"]?.let(::findErrorMessage)
                     ?: el["error"]?.let(::findErrorMessage)
                     ?: el["detail"]?.let(::findErrorMessage)
+                    ?: (el["promptFeedback"] as? JsonObject)?.get("blockReason")
+                        ?.let(::findErrorMessage)?.let { "Google blocked the prompt ($it)" }
             is JsonArray -> el.firstNotNullOfOrNull { findErrorMessage(it) }
         }
     }
@@ -315,6 +323,7 @@ object ErrorCollector {
         var networkException: Throwable? = null
         var networkType: String? = null
         var sseTimeoutException: Throwable? = null
+        var incompleteStream: IncompleteStreamException? = null
 
         var cur: Throwable? = throwable
         var depth = 0
@@ -327,8 +336,16 @@ object ErrorCollector {
                 sseTimeoutException = cur
             }
 
-            if (koogException == null && cur is KoogHttpClientException) {
-                koogException = cur
+            if (cur is IncompleteStreamException) incompleteStream = cur
+
+            // SSE/LLM 包装层可能只有 message，优先保留内层状态码或原始错误体。
+            if (cur is KoogHttpClientException) {
+                val previous = koogException
+                if (previous == null || (previous.statusCode == null && cur.statusCode != null) ||
+                    (previous.statusCode == cur.statusCode && previous.errorBody.isNullOrBlank() &&
+                        !cur.errorBody.isNullOrBlank())) {
+                    koogException = cur
+                }
             }
 
             if (networkException == null && isNetworkException(cur)) {
@@ -351,7 +368,7 @@ object ErrorCollector {
         }
 
         // 优先用 HTTP 状态码判定
-        if (koogException != null && koogException.statusCode != null) {
+        if (koogException != null && (koogException.statusCode != null || !koogException.errorBody.isNullOrBlank())) {
             return DiagnosticInfo(
                 failureMode = FailureMode.HTTP_ERROR,
                 httpStatusCode = koogException.statusCode,
@@ -359,6 +376,16 @@ object ErrorCollector {
                 networkErrorType = throwable::class.simpleName,
                 networkErrorMessage = throwable.message?.lineSequence()?.firstOrNull()?.take(120),
                 causeChain = chain
+            )
+        }
+
+        if (incompleteStream != null) {
+            return DiagnosticInfo(
+                failureMode = FailureMode.PREMATURE_CLOSE,
+                networkErrorType = IncompleteStreamException::class.simpleName,
+                networkErrorMessage = throwable.message?.lineSequence()?.lastOrNull { it.isNotBlank() }?.take(200)
+                    ?: incompleteStream.message,
+                causeChain = chain,
             )
         }
 
@@ -394,7 +421,8 @@ object ErrorCollector {
     internal fun isNetworkException(e: Throwable): Boolean {
         if (e is xyz.mederi.http.SseIdleTimeoutException || e::class.simpleName == "SseIdleTimeoutException" ||
             e is SocketException || e is SocketTimeoutException || e is ConnectException ||
-            e is UnknownHostException || e is SSLException || e is SSLHandshakeException
+            e is UnknownHostException || e is SSLException || e is SSLHandshakeException ||
+            e is java.io.EOFException || e is java.nio.channels.ClosedChannelException
         ) return true
         val className = e::class.simpleName ?: e.javaClass.simpleName
         if (className.contains("StreamReset") || className.contains("Http2") || className.contains("H2Stream")) return true
@@ -404,6 +432,8 @@ object ErrorCollector {
 
     internal fun networkExceptionType(e: Throwable): String = when {
         e is xyz.mederi.http.SseIdleTimeoutException || e::class.simpleName == "SseIdleTimeoutException" -> "SseIdleTimeout"
+        e is java.io.EOFException -> "连接提前结束(EOF)"
+        e is java.nio.channels.ClosedChannelException -> "网络通道已关闭"
         e is SocketTimeoutException -> "SocketTimeout"
         e is ConnectException -> "ConnectionRefused"
         e is UnknownHostException -> "DNS解析失败"
@@ -449,6 +479,7 @@ object ErrorCollector {
 
         if (searchCauseChain(throwable, listOf("invalid api key", "unauthorized", "forbidden", "authentication"))) return ErrorCategory.AUTH
         if (searchCauseChain(throwable, listOf("429", "rate limit", "ratelimit", "quota", "rpm", "tpm", "too many requests"))) return ErrorCategory.RATE_LIMIT
+        if (diag.failureMode == FailureMode.HTTP_ERROR) return ErrorCategory.API
         if (diag.failureMode == FailureMode.NETWORK_ERROR || diag.failureMode == FailureMode.PREMATURE_CLOSE) return ErrorCategory.NETWORK
         if (searchCauseChain(throwable, listOf("serialization", "deserialization", "json", "parse", "no creators", "missing field"))) return ErrorCategory.SERIALIZATION
         if (throwable is IllegalStateException) return ErrorCategory.STATE
@@ -477,12 +508,19 @@ object ErrorCollector {
     ): String = when (category) {
         ErrorCategory.AUTH -> "API Key 无效或已过期。请在设置页检查 ${context.providerName ?: "供应商"} 的 API Key。"
         ErrorCategory.RATE_LIMIT -> "供应商限流/配额用尽。请稍后重试，或切换到其他供应商/模型。"
-        ErrorCategory.NETWORK -> "网络连接异常（${diag.networkErrorType ?: "未知"}）。请检查网络/代理/VPN 后重试。"
+        ErrorCategory.NETWORK -> when (diag.networkErrorType) {
+            "SseIdleTimeout" ->
+                "Mederi 因 SSE 空闲超过等待阈值而停止本次请求，这不证明网络断开。自动续写未恢复时，可发送 Continue。"
+            IncompleteStreamException::class.simpleName ->
+                "Mederi 未收到流式响应的结束帧。自动续写未恢复时，可发送 Continue。"
+            else -> "网络连接异常（${diag.networkErrorType ?: "未知"}）。请检查网络/代理/VPN 后重试。"
+        }
         ErrorCategory.CONFIG -> "配置错误：${throwable.message ?: "未知"}。请检查模型/供应商设置。"
         ErrorCategory.API -> {
             val status = diag.httpStatusCode
             val body = diag.errorBody?.take(200)
-            "API 返回错误 HTTP $status${body?.let { ": $it" } ?: ""}。请检查模型参数或联系供应商。"
+            val response = status?.let { "API 返回错误 HTTP $it" } ?: "API 返回错误"
+            "$response${body?.let { ": $it" } ?: ""}。请检查模型参数或联系供应商。"
         }
         ErrorCategory.TOOL -> "工具执行失败（${context.toolName ?: "未知工具"}）。请检查工具参数或重试。"
         ErrorCategory.SERIALIZATION -> "数据序列化/反序列化错误。可能是模型输出格式异常，请重试或切换模型。"
@@ -571,9 +609,9 @@ object ErrorCollector {
             appendLine()
         }
 
-        if (diag.httpStatusCode != null) {
-            appendLine("HTTP Status: ${diag.httpStatusCode}")
-            diag.errorBody?.take(MAX_ERROR_BODY_LEN)?.let {
+        if (diag.failureMode == FailureMode.HTTP_ERROR) {
+            diag.httpStatusCode?.let { appendLine("Provider Error Status: $it") }
+            diag.errorBody?.let {
                 if (it.isNotBlank()) appendLine("Error Body: $it")
             }
             appendLine("Failure Mode: ${diag.failureMode}")
@@ -701,6 +739,12 @@ data class ErrorRecord(
         if (!serverMsg.isNullOrBlank()) {
             append("[$category] $serverMsg")
             httpStatusCode?.let { append(" (HTTP $it)") }
+            return@buildString
+        }
+        if (category == ErrorCategory.NETWORK && causeChain.size > 1) {
+            append("[$category] ")
+            networkErrorType?.let { append(it).append(": ") }
+            append(causeChain.last().take(200))
             return@buildString
         }
         val shortType = exceptionType.substringAfterLast('.')

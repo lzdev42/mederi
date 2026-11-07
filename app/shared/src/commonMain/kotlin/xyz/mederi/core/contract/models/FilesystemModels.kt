@@ -17,4 +17,7 @@ data class FileDiff(
     val after: String,
     val additions: Int,
     val deletions: Int,
+    val originWorkspaceId: String? = null,
+    val originCheckoutRoot: String? = null,
+    val readOnly: Boolean = true
 )

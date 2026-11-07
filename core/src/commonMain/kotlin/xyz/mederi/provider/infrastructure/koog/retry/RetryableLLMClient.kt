@@ -9,6 +9,8 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
@@ -30,8 +32,8 @@ import kotlin.random.Random
  * - 重试期间经 [statusBus] 发 [EventType.STATUS] 事件（session 作用域），UI 状态栏据此显示
  *   "重试中"；不触碰 session 状态机、不落库、不污染业务流——对 TurnExecutor/Koog agent
  *   完全透明，它们看到的只是一次变慢的请求
- * - 退避：随机 [minDelayMs]~[maxDelayMs]（默认 1~10 秒，避免免费通道全站同步重试）
- * - 次数耗尽后抛最后一次的原始异常，错误语义与不重试时完全一致
+ * - 服务端retry-after-ms/Retry-After/Google RetryInfo为下限，加0~1秒抖动；缺失/无效才随机0~30秒
+ * - 临时故障无限重试，直到成功或协程取消；每次请求独立计数，恢复首帧即清除重试提示
  *
  * 不变量：CancellationException 永不重试（用户中止必须即时生效）。
  *
@@ -39,18 +41,16 @@ import kotlin.random.Random
  * 首帧已发出后失败 = 流已被消费一半，重试会造成重复内容，只能上抛。
  *
  * @property delegate 被包装的真实客户端
- * @property maxRetries 最大重试次数（不含首次），默认 10
- * @property minDelayMs 随机退避下限，默认 1s
- * @property maxDelayMs 随机退避上限，默认 10s
+ * @property minDelayMs 随机退避下限，默认 0s
+ * @property maxDelayMs 随机退避上限，默认 30s
  * @property statusBus 状态事件总线；null = 静默重试
  * @property sessionIdProvider 当前 turn 的 session id 提供器（STATUS 事件路由用）
  * @property random 随机源（测试注入）
  */
 class RetryableLLMClient(
     private val delegate: LLMClient,
-    private val maxRetries: Int = 10,
-    private val minDelayMs: Long = 1_000,
-    private val maxDelayMs: Long = 10_000,
+    private val minDelayMs: Long = 0,
+    private val maxDelayMs: Long = 30_000,
     private val statusBus: MutableSharedFlow<MederiEvent>? = null,
     private val sessionIdProvider: () -> String? = { null },
     private val random: Random = Random.Default,
@@ -76,8 +76,8 @@ class RetryableLLMClient(
     /**
      * 按 attempt 号取 client：首次（attempt=0）用原始 delegate，重试时用 [retryDelegateProvider] 取下一个。
      */
-    private fun clientForAttempt(attempt: Int): LLMClient =
-        if (attempt == 0) delegate
+    private fun clientForAttempt(attempt: Long): LLMClient =
+        if (attempt == 0L) delegate
         else retryDelegateProvider?.invoke() ?: delegate
 
     override suspend fun execute(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant =
@@ -85,42 +85,43 @@ class RetryableLLMClient(
 
     override fun executeStreaming(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Flow<StreamFrame> =
         flow {
-            var lastError: Throwable? = null
-            for (attempt in 0..maxRetries) {
-                var emitted = false
-                try {
-                    clientForAttempt(attempt).executeStreaming(prompt, model, tools).collect { frame ->
-                        emitted = true
-                        emit(frame)
+            var attempt = 0L
+            var retryVisible = false
+            try {
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    var emitted = false
+                    try {
+                        clientForAttempt(attempt).executeStreaming(prompt, model, tools).collect { frame ->
+                            emitted = true
+                            if (retryVisible) {
+                                emitStatus("RETRY_FINISHED")
+                                retryVisible = false
+                            }
+                            emit(frame)
+                        }
+                        return@flow
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        // 本地空闲超时交给 turn 追加 Continue；首帧前也不能在这里重放旧请求。
+                        // 其他首帧后失败不可重发，避免重复内容。
+                        if (emitted || isSseIdleTimeout(e) || !isTransient(e)) throw e
+                        attempt++
+                        val delayMs = retryDelayMs(e)
+                        StreamTrace.record("Stream.Summary", mapOf(
+                            "event" to "stream-retry", "attempt" to attempt.toString(), "note" to firstLine(e),
+                        ))
+                        DebugLog.event("Retry", "executeStreaming retry $attempt in ${delayMs}ms: ${firstLine(e)}")
+                        retryVisible = true
+                        emitStatus("RETRYING", firstLine(e), attempt, delayMs)
+                        delay(delayMs)
                     }
-                    return@flow
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    // 已发出过帧：重试会重复内容，立即上抛（emitted 检查优先于一切）
-                    if (emitted || !isTransient(e)) throw e
-                    lastError = e
-                    if (attempt == maxRetries) break
-                    val delayMs = random.nextLong(minDelayMs, maxDelayMs + 1)
-                    // 断流重试留痕：StreamTrace 导出时能对上"流在哪里断、断了几次"
-                    StreamTrace.record(
-                        "Stream.Summary",
-                        mapOf(
-                            "event" to "stream-retry",
-                            "attempt" to "${attempt + 1}/${maxRetries + 1}",
-                            "note" to firstLine(e)
-                        )
-                    )
-                    DebugLog.event(
-                        "Retry",
-                        "executeStreaming transient failure (attempt ${attempt + 1}/${maxRetries + 1}), " +
-                            "retrying in ${delayMs}ms: ${firstLine(e)}"
-                    )
-                    emitStatus("RETRYING", firstLine(e), attempt + 1, maxRetries + 1, delayMs)
-                    delay(delayMs)
                 }
+            } finally {
+                // tryEmit 不挂起，取消也能清理；空流成功和不可重试错误同样收起提示。
+                if (retryVisible) emitStatus("RETRY_FINISHED")
             }
-            throw lastError ?: IllegalStateException("retry loop exited without result or error")
         }
 
     override suspend fun executeMultipleChoices(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): LLMChoice =
@@ -138,31 +139,31 @@ class RetryableLLMClient(
     // 重试内核（非流式路径）
     // ------------------------------------------------------------------
 
-    private suspend fun <T> retrying(op: String, block: suspend (attempt: Int) -> T): T {
-        var lastError: Throwable? = null
-        for (attempt in 0..maxRetries) {
-            try {
-                return block(attempt)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                if (!isTransient(e)) throw e
-                lastError = e
-                if (attempt == maxRetries) break
-                val delayMs = random.nextLong(minDelayMs, maxDelayMs + 1)
-                DebugLog.event(
-                    "Retry",
-                    "$op transient failure (attempt ${attempt + 1}/${maxRetries + 1}), " +
-                        "retrying in ${delayMs}ms: ${firstLine(e)}"
-                )
-                emitStatus("RETRYING", firstLine(e), attempt + 1, maxRetries + 1, delayMs)
-                delay(delayMs)
+    private suspend fun <T> retrying(op: String, block: suspend (attempt: Long) -> T): T {
+        var attempt = 0L
+        try {
+            while (true) {
+                // delay(0) 不保证挂起，仍须每轮主动检查停止信号。
+                currentCoroutineContext().ensureActive()
+                try {
+                    return block(attempt)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    if (!isTransient(e)) throw e
+                    attempt++
+                    val delayMs = retryDelayMs(e)
+                    DebugLog.event("Retry", "$op retry $attempt in ${delayMs}ms: ${firstLine(e)}")
+                    emitStatus("RETRYING", firstLine(e), attempt, delayMs)
+                    delay(delayMs)
+                }
             }
+        } finally {
+            if (attempt > 0) emitStatus("RETRY_FINISHED")
         }
-        throw lastError ?: IllegalStateException("retry loop exited without result or error")
     }
 
-    private fun emitStatus(code: String, message: String, attempt: Int, maxAttempts: Int, delayMs: Long = 0L) {
+    private fun emitStatus(code: String, message: String? = null, attempt: Long? = null, delayMs: Long? = null) {
         val bus = statusBus ?: return
         val sid = sessionIdProvider() ?: return
         bus.tryEmit(
@@ -172,10 +173,9 @@ class RetryableLLMClient(
                 payload = buildMap {
                     put("scope", "provider")
                     put("code", code)
-                    put("message", message)
-                    put("attempt", attempt.toString())
-                    put("maxAttempts", maxAttempts.toString())
-                    if (delayMs > 0) put("delayMs", delayMs.toString())
+                    message?.let { put("message", it) }
+                    attempt?.let { put("attempt", it.toString()) }
+                    delayMs?.let { put("delayMs", it.toString()) }
                 },
                 timestamp = Instant.now().toString()
             )
@@ -191,19 +191,15 @@ class RetryableLLMClient(
      * "quota_exceeded_error" 等标记；网关过载类带 502/503/overloaded。
      * 沿 cause 链向上找（Koog 会包成 LLMClientException，原始 429 文本在 cause 里）。
      */
-    private fun isTransient(e: Throwable): Boolean {
-        var cur: Throwable? = e
-        var depth = 0
-        while (cur != null && depth < 6) {
-            if (cur is xyz.mederi.http.SseIdleTimeoutException || cur::class.simpleName == "SseIdleTimeoutException") return true
-            if (cur is java.net.SocketTimeoutException) return true
-            if (ErrorCollector.isNetworkException(cur)) return true
-            val lower = ((cur.message ?: "") + " " + cur.javaClass.simpleName).lowercase()
-            if (TRANSIENT_MARKERS.any { lower.contains(it) }) return true
-            cur = cur.cause
-            depth++
-        }
-        return false
+    private fun isTransient(e: Throwable): Boolean = isTransientError(e)
+
+    private fun retryDelayMs(error: Throwable): Long {
+        val advice = ProviderRetryPolicy.inspect(error)
+        val serverDelay = advice.delayMs ?: return random.nextLong(minDelayMs, maxDelayMs + 1)
+        val jitter = random.nextLong(0, 1001)
+        val result = if (serverDelay > Long.MAX_VALUE - jitter) Long.MAX_VALUE else serverDelay + jitter
+        DebugLog.event("Retry", "server delay source=${advice.source}, minimum=${serverDelay}ms, jitter=${jitter}ms")
+        return result
     }
 
     /**
@@ -213,20 +209,32 @@ class RetryableLLMClient(
      */
     private fun firstLine(e: Throwable): String =
         ErrorCollector.extractServerMessage(e)
+            ?: ErrorCollector.extractDiagnostics(e).takeIf {
+                it.failureMode == ErrorCollector.FailureMode.NETWORK_ERROR ||
+                    it.failureMode == ErrorCollector.FailureMode.PREMATURE_CLOSE
+            }?.summary()
             ?: (e.message ?: e.javaClass.simpleName).lineSequence().firstOrNull()?.take(120)
                 ?: e.javaClass.simpleName
 
     companion object {
+        /** 本地停止等待策略，与供应商限流、网络断开等错误分别选择恢复方式。 */
+        internal fun isSseIdleTimeout(error: Throwable): Boolean =
+            generateSequence(error) { it.cause }.take(8).any { it is xyz.mederi.http.SseIdleTimeoutException }
+
         /**
          * 判断异常是否为环境态临时故障（限流/网关过载/网络中断）。
-         * 供 TurnExecutor 在重试耗尽后分类错误用途：限流/网络抖动型失败 session 保持 IDLE（环境态，
+         * 供 TurnExecutor 对首帧后等不可继续重试的错误分类用途：限流/网络抖动型失败 session 保持 IDLE（环境态，
          * 用户稍后重发即可），不把会话标成 ERROR。
          */
         fun isTransientError(e: Throwable): Boolean {
+            ProviderRetryPolicy.inspect(e).retryable?.let { return it }
             var cur: Throwable? = e
             var depth = 0
             while (cur != null && depth < 6) {
                 if (cur is xyz.mederi.http.SseIdleTimeoutException || cur::class.simpleName == "SseIdleTimeoutException") return true
+                // HTTP 读取可能以 EOF/Channel 关闭结束；Koog 外层只保留通用客户端文案。
+                // 沿 cause 识别具体传输异常，不能把所有无状态的客户端异常都当作可重试。
+                if (cur is java.io.EOFException || cur is java.nio.channels.ClosedChannelException) return true
                 if (cur is java.net.SocketTimeoutException) return true
                 if (ErrorCollector.isNetworkException(cur)) return true
                 val lower = ((cur.message ?: "") + " " + cur.javaClass.simpleName).lowercase()

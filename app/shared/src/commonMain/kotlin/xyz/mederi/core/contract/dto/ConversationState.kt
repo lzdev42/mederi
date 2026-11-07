@@ -22,6 +22,8 @@ data class ConversationState(
     val cost: CostSummary,
     val pendingQuestion: QuestionRequest? = null,
     val pendingPlanApproval: PlanApprovalRequest? = null,
+    /** 仅 Core 当前存活申请，可同时存在多个主/子代理申请。 */
+    val pendingExecutionApprovals: List<ExecutionApprovalRequest> = emptyList(),
     val planApprovals: List<PlanApprovalRequest> = emptyList(),
     val todos: List<TodoItem> = emptyList(),
     /** 当前会话的子代理列表（SUBAGENT_* 事件流聚合，或 Core listSubagentsForSession 初始水合）。 */
@@ -65,6 +67,8 @@ data class ConversationState(
      * turn 正常推进（MESSAGE_DELTA/新的完成事件无错误）时复位为 false。
      */
     val errorIsStreamInterrupted: Boolean = false,
+    val workspaceInfo: ConversationWorkspaceInfo? = null,
+    val activeWorkspaceOperation: WorkspaceOperation? = null,
 )
 
 /** 渐进迁移类型别名，确保历史引用向后兼容。 */

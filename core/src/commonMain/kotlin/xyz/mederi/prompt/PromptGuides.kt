@@ -16,28 +16,39 @@ object PromptGuides {
     /**
      * 执行沙箱使用教程。
      *
-     * 核心事实（CommandSandbox 实现对齐）：
-     * - 永远开：文件工具的写路径校验（纯 Kotlin）全平台硬约束；命令走 OS 级沙箱
-     * - 读全盘放行；写白名单 = 项目目录 + .mederi/ + 系统临时目录 + 构建缓存 + 全局白名单
-     * - macOS：Seatbelt，必然可用；Linux：bubblewrap（缺失则警告+安装命令，不代装）；
-     *   Windows：无命令沙箱，文件工具约束仍然生效
+     * 项目两档独立于计划审批；受限模式越界前申请本次用户批准。
+     * macOS Seatbelt / Linux bwrap+seccomp 默认禁止命令网络，后端失败即停。
+     * 完全访问或已批准 off 才解除沙盒；不默认放开家目录构建缓存。
      */
     val SANDBOX_USAGE: String = """
-# Command Sandbox (shell write isolation)
+# Execution permissions
 
-File-tool writes are path-checked in code on every platform. Shell commands run under
-an OS-level sandbox:
+Each project has two execution permission modes, independent of plan approval and AgentMode.
+Only the user can change the project mode; never edit configuration files to bypass it.
 
-- macOS: Seatbelt (sandbox-exec), always on. Writes outside the whitelist fail with
-  "Operation not permitted".
-- Linux: bubblewrap. Not installed → commands run unsandboxed with a "[sandbox]" warning
-  (install via `sudo apt/dnf/pacman install bubblewrap`).
-- Windows: no native command sandbox; the file-tool path check still applies fully.
+- NEEDS_APPROVAL (default): file writes within project/temp/explicit writable roots run
+  directly. Protected metadata/configuration paths and outside writes require approval
+  for this exact tool call. File tools request it automatically before changing anything.
+- Commands use macOS Seatbelt or Linux bubblewrap plus seccomp. Networking is disabled;
+  protected paths remain read-only. Missing or broken backends block execution, never
+  silently fall back to unsandboxed execution. Windows has no restricted backend yet.
+- FULL_ACCESS: commands and file writes do not ask for execution approval. Explicit
+  project path and command denials still apply. Plan approvals and ask_user remain independent.
 
-Write whitelist = project directory + `.mederi/` + system temp + build caches + global
-whitelist. A blocked write means the target is outside the project — ask the user to
-add it to the project or the global sandbox whitelist (Settings). Never retry the same
-blocked command.
+Project denied paths forbid both reading and writing, including in FULL_ACCESS or an
+approved sandbox="off" call; approval cannot override them. Command rules are static argv
+prefixes, with deny taking precedence. An allowed prefix skips elevation approval but
+does not relax sandbox="default". Pipes, redirection and expansions cannot match an allow
+rule; when deny rules exist, split complex shell syntax into individual static commands.
+
+For a command that needs networking, use bash(sandbox="network"). For a command that
+must write protected/outside paths or cannot work inside the sandbox, use
+bash(sandbox="off"). In NEEDS_APPROVAL these requests wait for one-time user approval;
+they do not change the project mode or whitelist. Rejection is not permission to try an
+equivalent bypass. verify_subtask accepts the same sandbox parameter for its own stored
+verification command. Never infer sandbox failure from a nonzero exit alone.
+Build caches outside the writable roots are not implicitly writable. Web search/fetch
+are independent read-only HTTP tools, not grants of network permission to commands.
 
 On macOS, use stop_process to stop mederi-started processes: sandboxed kill/pkill cannot
 send the required cross-process signals. Never stop processes not started by Mederi.
@@ -92,18 +103,25 @@ Keep one concern per diagram; split complex views and avoid deeply nested subgra
 
 Only use these tools for the software-development workflow described in Plan Loop.
 write_plan must succeed before dependent generate_spec calls; specs must be saved before execution.
-Never invent planId. Stop and fix failed calls before running their dependents. Independent spec
-writes may be batched, but write_plan must be alone and specs must not share a message with SPAWN.
+Never invent planId. Stop and fix failed calls before running their dependents. Prefer sending
+independent generate_spec calls together in one response. Group ready verify_subtask calls only
+when their stored commands can run concurrently without sharing build outputs or other mutable
+resources. Use the plan tools directly for these groups. Send write_plan alone and wait for specs
+to be saved before sending SPAWN. Let verify_subtask run its stored command instead of repeating
+that command as a separate preflight when the same evidence would suffice.
 
-Each subtask requires targetFiles, verification (one executable ASCII command), verificationExpected
-(user-readable expected behavior), and verificationExpectStdoutContains (at least one literal the
-command actually prints). Optional cwd/timeout and forbidden literals use the tool schema's fields.
-For behavior changes, verify the changed behavior, not just successful compilation or a generic
-BUILD SUCCESSFUL marker. A bare assert or grep -q prints nothing: make a successful check emit the
-literal you require, e.g. python3 -c 'assert 2 + 2 == 4; print("CHECK_PASS")' with ["CHECK_PASS"].
-This example illustrates output matching only; actual checks must exercise the requested behavior.
-Confirm paths and valid cases before writing checks; negative searches must not reject legitimate fallback code.
-The tool executes the contract; your evidence must describe the actual result, not a predicted one.
+Each subtask specifies targetFiles and a collector command. Give each acceptance case a unique ID,
+a business or calculation objective, initial state, concrete input, steps through a real entry point,
+the observation source, exact expected scalar and the defect it would detect. The collector must
+print one JSON object with actual scalar values keyed by case ID. Core compares the values to the
+approved expectations. Exit status, success markers and prose are not observations. List every
+collector script, assertion helper and fixture in acceptanceFiles so its content is pinned.
+For a fix, exercise the check against the old behavior and verify the target assertion can fail;
+setup errors are separate. Use a dedicated manual task only when automated observation is
+impractical. Set manual=true for its cases, omit its command and ask the operator to record
+observed values and evidence via the acceptance UI or API. For a new entry point, check the observation logic against known-good
+and known-bad samples first. The final overallAcceptance task depends on all implementation tasks
+and exercises their integration through the actual entry point.
 """.trimIndent()
 
     /** 计划概览：只记录已确认方案，按信息需要组织内容。 */
@@ -114,10 +132,24 @@ A plan records an agreed software change. Resolve decisions via ask_user before 
 leave openQuestions empty and include no unresolved defaults or User Review Required section.
 Use a flowing goal statement, a concrete approach (behavior, data flow, call chain, or algorithm),
 and independently verifiable subtasks. Explain genuine trade-offs and the agreed choice.
+The implementation approach is required: explain the verified current behavior and cause or
+requirement gap, the proposed behavior, how data/control flows through the affected components,
+and how the checks establish the requested outcome. A goal, file list, or a generic one-line
+"modify X to support Y" is insufficient. Scale detail to the actual change; do not pad simple facts.
 Use Mermaid to make architecture, flows, states, or alternatives clearer when useful.
 Fill only informative optional fields; avoid repeating the goal in background, summary, and outcome.
 The summary is the approval card's short takeaway; detailed file changes belong in changes.
 Verification describes how correctness will be established, with manual checks only where needed.
+
+Write for a narrow Markdown reader. Organize the overview around the decision the reader needs
+to make, using short paragraphs and headings only where they help scanning. Keep task IDs and case
+IDs visible. For each case, group the initial state and exact inputs, then the real action and
+where to observe the result. Keep the expected value and the defect this check detects close
+together. Use a short list for steps, inline code for short IDs and values, and fenced code for
+multiline data. Use tables only for compact comparisons with a few short columns. Reserve bold for
+key decisions, values, and outcomes. Put raw logs and long paths with their evidence. In delivery
+notes, put the expected value, observed value, judgment and evidence reference together for each
+case. Use plain status labels for failed, blocked or unverified checks.
 """.trimIndent()
 
     /** 计划详情：具体改动与必要证据，不重复概览。 */
@@ -129,6 +161,9 @@ files and deletions. Subtask planDetail conveys the approach the user approves; 
 instructions belong in the later spec. Optional appendices hold evidence, root-cause reasoning,
 and cross-subtask context that would otherwise obscure the overview. Prefer key excerpts or
 pseudocode over source dumps; omit empty, repetitive, or obvious material.
+For complex changes, preserve the current logic, decisive evidence, causal explanation, and
+cross-subtask assumptions in the relevant detail or appendix. Keep conclusions tied to sources;
+an appendix supplements the approach and must not hide unresolved decisions needed to execute it.
 """.trimIndent()
 
     /**
@@ -144,6 +179,9 @@ pseudocode over source dumps; omit empty, repetitive, or obvious material.
 Completion events report claims, not verified success. Check the result against the assigned goal
 and supporting evidence. Read ReportPath or affected artifacts when the summary is insufficient;
 missing evidence, unresolved blockers, or hidden SPEC_FEEDBACK mean work remains.
+For conclusions that determine a fix or the next task, inspect the cited source and relevant
+implementation or check result before accepting them. A confidence statement or completion status
+is not evidence. Use the full report when its abbreviated event omits the necessary reasoning.
 
 For plan executors, inspect actual sources before handling SPEC_FEEDBACK:
 - missing / ambiguous / vs-reality: investigate, resolve the gap, amend via generate_spec(reason=...),
@@ -165,6 +203,24 @@ actual files and the completed output of dependencies. Include:
 - Applicable build/compile command and cwd/target. If compilation is inapplicable, state why and
   specify an appropriate non-test check instead. Plan tests are run by the parent via verify_subtask.
 - Project constraints translated into concrete actions; allowed mechanical fixes and stop boundaries.
+
+## Mandatory pre-dispatch self-check
+
+You own the spec's correctness. Before saving it as ready for execution or dispatching a child,
+read it from the executor's perspective, without relying on this conversation. Check every item:
+1. Sources: referenced paths, location anchors, types, signatures, and current behavior were checked
+   against actual files. Mark assumptions explicitly; never turn an unverified diagnosis into a step.
+2. Preconditions: dependency outputs exist and were reviewed. Describe the actual resulting state,
+   not what an earlier subtask was expected to produce. Recheck affected assumptions after changes.
+3. Wiring and scope: include affected producers, consumers, call sites, and applicable interface or
+   platform counterparts; confirm the proposed steps address the cause and relevant other occurrences.
+4. Semantics: specify necessary branches, missing/error data handling, compatibility, and meaningful
+   edge cases. No material choice may depend on the child guessing the parent's intent.
+5. Checks and boundaries: supply the applicable build command and working directory (or justified
+   alternative), the parent's behavior verification, mechanical-fix allowance, and when to stop/report.
+   The checks must cover the original failure or requested outcome, not just compilation.
+If an item is unresolved, investigate or obtain the missing decision before dispatch. Do not send
+a knowingly incomplete or contradictory spec and rely on SPEC_FEEDBACK to repair it downstream.
 
 Resolve material choices before delegation; do not leave business semantics as "handle reasonably".
 Keep enough detail to implement without guessing, without transcribing whole files. Replacing an

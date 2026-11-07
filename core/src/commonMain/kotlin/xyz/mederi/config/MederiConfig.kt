@@ -117,6 +117,15 @@ class MederiConfig {
      */
     var userAgent: String = "Mederi/dev"
 
+    /**
+     * 工作区与操作存储。
+     *
+     * 如果指定了 [configDir]，Mederi 会自动创建 SqliteWorkspaceStore（data.db）。
+     * 如果手动传入此值，优先使用手动传入的。
+     * 如果都未指定 = 不持久化（InMemoryWorkspaceStore）。
+     */
+    var workspaceStore: xyz.mederi.store.WorkspaceStore? = null
+
     /** 自动压缩触发阈值百分比 provider（默认 70%）。MederiAiCore 注入 MutableStateFlow 读取 lambda。 */
     var compactionThresholdPercent: () -> Int = { 70 }
 

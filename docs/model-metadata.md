@@ -3,19 +3,16 @@
 > 本文档从 AGENTS.md 拆出，记录 AIModel 元数据所有权、ModelMerge 合并真理源、图片能力门禁链路。
 > 只在改动 provider/model 同步逻辑、模型元数据字段时读。推理机制的核心思想与档位真理源仍在 AGENTS.md §7。
 
-## AIModel 字段所有权（`ModelOrigin` 标记模型级权威）
+## AIModel 字段所有权与模型来源
 
-**AIModel 每个字段必须声明所有权**（`ModelOrigin` 标记模型级权威）：
+**AIModel 每个字段必须声明所有权**；`ModelOrigin` 表示来源，不作为编辑门禁：
 
-- **FETCHED 模型**（端点拉取 + models.dev 目录合并）：元数据权威 = 端点/目录，
-  唯一写入路径 = `ModelMerge.mergeFetched`（core/provider/ModelMerge.kt，表驱动、穷举测试锁定），
-  入口只有 `ProviderManager.applyRemoteMetadata`（refresh 传 endpoint、启动回填传 null）
-- **MANUAL 模型**（用户手动添加）：用户权威，同步（refresh/回填）**永不触碰**，UI 元数据可编辑
-- **用户覆盖层**：`supportsImagesOverride`（用户权威，同步永不触碰）——目录对长尾/私有模型经常
-  缺数据或标错（真实案例：models.dev agnes 条目只收录 3/13 个模型），用户在 UI 显式设置的
-  图片能力必须压过目录且在 refresh/回填中存活（真实事故：用户 UI 设的支持图片被目录 false 洗掉且只读改不回）
-- 用户可写字段只有 `isEnabled` 和图片覆盖（setModelEnabled / updateUserModel / setImageOverride）；
-  `updateUserModel` 对 FETCHED 模型传入其他元数据修改会抛错
+- **FETCHED 模型**：端点拉取及目录提供初始值，设置页允许用户补录或纠正名称、窗口、输出上限、图片/推理能力和推理档位；来源不构成编辑权限。
+- **MANUAL 模型**：用户手动添加，与 FETCHED 共用完整编辑和 `updateUserModel` 保存通道。
+- **用户覆盖层**：`supportsImagesOverride`（用户权威）——目录对长尾/私有模型可能缺数据或标错，显式图片设置压过目录，包含「自动设置」在内的合并均保留覆盖。
+- **请求策略**：`optimizeForRequestCount` 是用户设置，默认关闭，普通刷新和显式「自动设置」均保留。它选择按请求次数优化的工具提示词，目录价格和模型名不参与判定。
+- `updateUserModel` 对两种来源均接受现有可编辑字段，null 参数表示保留已有值；普通列表刷新不覆盖存量设置。
+- **显式自动设置**按 `ModelMerge.mergeFetched` 合并目录：上下文/输出上限仅补空；推理能力、非空推理档位和价格可更新；名称不改，图片覆盖保留。此操作需用户显式触发，不等同普通刷新。
 - 图片能力消费端门禁：附件按钮显隐 + `tryAttachImage` 粘贴附件（剔除放行：模型不支持图片时允许附加并给一次性轻提示，
   不掉"不支持图片输入"错误）+ `guardImageSupport` 发送守卫（send 与 rollbackMessage 共用，唯一实现）。
   **剔除放行语义**（2026-09）：模型不支持图片时不拒绝附加/发送，设置一次性轻提示 `imageStrippedNotice`（图片已剔除、

@@ -13,6 +13,16 @@ import xyz.mederi.domain.model.AgentMode
 class SystemPromptsTest {
 
     @Test
+    fun turnPromptsDoNotAdvertiseBrowserToolsOrCapabilities() {
+        val prompts = AgentMode.entries.map { SystemPrompts.build(it) } +
+            listOf(xyz.mederi.domain.model.SubagentRole.EXECUTOR, xyz.mederi.domain.model.SubagentRole.RESEARCHER)
+                .map { SystemPrompts.forSubagent(it) }
+        prompts.forEach { prompt ->
+            assertFalse(prompt.contains("browser", ignoreCase = true), "通用角色的提示词不宣传浏览器，能力由实际工具声明提供")
+        }
+    }
+
+    @Test
     fun build_doesNotContainDynamicSections() {
         val prompt = SystemPrompts.build(AgentMode.APPROVAL)
         assertFalse(prompt.contains("# Active Plan"), "build() 不应包含 Active Plan 段")

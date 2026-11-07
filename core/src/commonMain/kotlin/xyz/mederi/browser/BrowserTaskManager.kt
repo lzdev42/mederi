@@ -120,7 +120,7 @@ class BrowserTaskManager(
                 TaskStatusResult(
                     taskId = "none",
                     status = "ERROR",
-                    message = "没有可用的浏览器：请先在设置里配置 browserHome 并下载 Camoufox，或由 UI 注册内置 JCEF"
+                    message = "没有可用的浏览器：需先安装并注册浏览器后才能执行浏览器任务"
                 )
             )
         val taskId = "bt_${UUID.randomUUID().toString().take(8)}"

@@ -77,6 +77,7 @@ compose.desktop {
                 "java.security.jgss",
                 "java.sql",
                 "java.xml.crypto",
+                "jdk.httpserver",
                 "jcef",
                 "jdk.jfr",
                 "jdk.management",

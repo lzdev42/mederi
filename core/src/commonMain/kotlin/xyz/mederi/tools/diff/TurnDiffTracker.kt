@@ -17,8 +17,12 @@ import xyz.mederi.debug.DebugLog
  * @param projectDirectories 项目目录列表（绝对路径）。
  */
 class TurnDiffTracker(
-    private val sessionId: String,
-    private val projectDirectories: List<String>
+    val sessionId: String,
+    val projectDirectories: List<String>,
+    val workspaceId: String? = null,
+    val checkoutRoot: String? = null,
+    val projectRelativePath: String? = null,
+    val workspaceGeneration: Long? = null
 ) {
     private val baselineByPath = mutableMapOf<String, String>()
     private val currentByPath = mutableMapOf<String, String>()
@@ -144,7 +148,11 @@ class TurnDiffTracker(
             messageId = messageId,
             changes = changes,
             unifiedDiff = unifiedDiff,
-            createdAt = createdAt
+            createdAt = createdAt,
+            workspaceId = workspaceId,
+            checkoutRootAtCreation = checkoutRoot,
+            projectRelativePathAtCreation = projectRelativePath,
+            workspaceGeneration = workspaceGeneration
         )
     }
 
@@ -246,8 +254,8 @@ object ParentDiffRegistry {
         trackers.remove(sessionId)
     }
 
-    /** 子代理 turn 结束时调用：把其文件改动合并进父会话当前活跃 turn 的 tracker。 */
-    fun mergeInto(parentSessionId: String, changes: List<FileChange>) {
+    /** 子代理 turn 结束时调用：把其文件改动合并进父会话当前活跃 turn 的 tracker。跨工作区改动不予合并。 */
+    fun mergeInto(parentSessionId: String, changes: List<FileChange>, originWorkspaceId: String? = null) {
         val parent = trackers[parentSessionId]
         if (parent == null) {
             if (changes.isNotEmpty()) {
@@ -256,6 +264,13 @@ object ParentDiffRegistry {
                     "parent turn not active, drop ${changes.size} sub-agent file changes (parentSessionId=$parentSessionId)"
                 )
             }
+            return
+        }
+        if (originWorkspaceId != null && parent.workspaceId != null && originWorkspaceId != parent.workspaceId) {
+            DebugLog.event(
+                "ParentDiffRegistry",
+                "workspace mismatch ($originWorkspaceId != ${parent.workspaceId}), drop ${changes.size} sub-agent file changes"
+            )
             return
         }
         parent.mergeChanges(changes)

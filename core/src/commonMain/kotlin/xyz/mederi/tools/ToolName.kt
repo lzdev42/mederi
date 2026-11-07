@@ -11,6 +11,9 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 enum class ToolName(val value: String) {
+    @SerialName("batch")
+    BATCH("batch"),
+
     // 文件系统工具（FileSystemTools）
     @SerialName("read_file")
     READ_FILE("read_file"),

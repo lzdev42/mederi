@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.Flow
 internal class WorkspaceEffectState {
     var settingsVisible by mutableStateOf(false)
         private set
+    var projectSettingsProjectId by mutableStateOf<String?>(null)
+        private set
     var projectMenuExpanded by mutableStateOf(false)
         private set
     var compactionNotice by mutableStateOf<UiEffect.ShowCompactionNotice?>(null)
@@ -15,13 +17,15 @@ internal class WorkspaceEffectState {
 
     fun accept(effect: UiEffect) {
         when (effect) {
-            UiEffect.OpenSettings -> settingsVisible = true
+            UiEffect.OpenSettings -> { projectSettingsProjectId = null; settingsVisible = true }
+            is UiEffect.OpenProjectSettings -> { settingsVisible = false; projectSettingsProjectId = effect.projectId }
             UiEffect.OpenProjectMenu -> projectMenuExpanded = true
             is UiEffect.ShowCompactionNotice -> compactionNotice = effect
         }
     }
 
     fun dismissSettings() { settingsVisible = false }
+    fun dismissProjectSettings() { projectSettingsProjectId = null }
     fun updateProjectMenuExpanded(expanded: Boolean) { projectMenuExpanded = expanded }
     fun dismissCompactionNotice() { compactionNotice = null }
 }

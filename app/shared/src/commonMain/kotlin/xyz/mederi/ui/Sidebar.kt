@@ -51,6 +51,7 @@ import mederi.app.shared.generated.resources.sidebar_new_task
 import mederi.app.shared.generated.resources.sidebar_open_project_directory
 import mederi.app.shared.generated.resources.sidebar_plugin_market
 import mederi.app.shared.generated.resources.sidebar_project_menu
+import mederi.app.shared.generated.resources.project_settings_title
 import mederi.app.shared.generated.resources.language_system
 import mederi.app.shared.generated.resources.sidebar_language
 import mederi.app.shared.generated.resources.sidebar_pin
@@ -59,10 +60,13 @@ import mederi.app.shared.generated.resources.sidebar_rename_conversation
 import mederi.app.shared.generated.resources.sidebar_rename_project
 import mederi.app.shared.generated.resources.sidebar_settings
 import mederi.app.shared.generated.resources.sidebar_toggle_theme
+import mederi.app.shared.generated.resources.sidebar_pin_conversation
 import mederi.app.shared.generated.resources.sidebar_unpin
+import mederi.app.shared.generated.resources.sidebar_unpin_conversation
 import mederi.app.shared.generated.resources.sidebar_version
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.AppInfo
+import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.Project
@@ -123,6 +127,7 @@ fun Sidebar(
     onActiveInteractionChange: (Boolean) -> Unit = {},
     onRequestClose: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenProjectSettings: (String) -> Unit = {},
     onOpenProjectPicker: () -> Unit = {},
 ) {
     val appState = LocalAppState.current
@@ -344,7 +349,9 @@ fun Sidebar(
                     project = project,
                     viewModel = viewModel,
                     colors = colors,
-                    navigate = navigate
+                    navigate = navigate,
+                    onOpenProjectSettings = onOpenProjectSettings,
+                    isCompact = isCompact,
                 )
             }
         }
@@ -571,7 +578,9 @@ private fun ProjectTreeRow(
     project: Project,
     viewModel: SidebarViewModel,
     colors: MederiColors,
-    navigate: () -> Unit
+    navigate: () -> Unit,
+    onOpenProjectSettings: (String) -> Unit,
+    isCompact: Boolean,
 ) {
     val appState = LocalAppState.current
     val selectedProjectId by appState.selectedProjectId.collectAsState()
@@ -670,7 +679,7 @@ private fun ProjectTreeRow(
                 )
                 Box(
                     modifier = Modifier
-                        .size(20.dp)
+                        .size(if (isCompact) 44.dp else WorkspaceStyle.ControlHeight)
                         .clip(RoundedCornerShape(MederiRadius.Square))
                         .background(plusBg)
                         .hoverable(plusInteraction)
@@ -698,7 +707,7 @@ private fun ProjectTreeRow(
                 )
                 Box(
                     modifier = Modifier
-                        .size(20.dp)
+                        .size(if (isCompact) 44.dp else WorkspaceStyle.ControlHeight)
                         .clip(RoundedCornerShape(MederiRadius.Square))
                         .background(moreBg)
                         .hoverable(moreInteraction)
@@ -734,6 +743,15 @@ private fun ProjectTreeRow(
                             onClick = {
                                 isMenuExpanded = false
                                 isRenameOpen = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(Res.string.project_settings_title), fontSize = 12.sp, color = colors.textPrimary) },
+                            leadingIcon = { Icon(FeatherIcons.Settings, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)) },
+                            onClick = {
+                                isMenuExpanded = false
+                                onOpenProjectSettings(project.id)
+                                navigate()
                             }
                         )
                         HorizontalDivider(color = colors.divider)
@@ -928,6 +946,23 @@ private fun ConversationTreeRow(
                     onClick = {
                         isMenuExpanded = false
                         isRenameOpen = true
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(
+                        stringResource(if (conversation.pinned) Res.string.sidebar_unpin_conversation else Res.string.sidebar_pin_conversation),
+                        fontSize = 12.sp,
+                        color = colors.textPrimary
+                    ) },
+                    leadingIcon = { Icon(
+                        FeatherIcons.MapPin,
+                        null,
+                        tint = if (conversation.pinned) colors.accentPrimary else colors.textSecondary,
+                        modifier = Modifier.size(14.dp)
+                    ) },
+                    onClick = {
+                        isMenuExpanded = false
+                        viewModel.setPinned(conversation.id, !conversation.pinned)
                     }
                 )
                 HorizontalDivider(color = colors.divider)

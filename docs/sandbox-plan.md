@@ -1,146 +1,124 @@
-# 执行沙盒设计（Sandbox）
+# 执行沙盒与项目权限
 
-> 沙盒已全链路落地。本文档记录生效中的设计决策与实测结论（macOS 实测通过；Linux 待真机验证）。
+> 2026-11-01：本方案替代旧版“永远开/无逐操作批准/默认构建缓存可写”的决策。实现范围是 macOS/Linux 命令沙盒与全平台共享的权限契约/UI；Windows 原生命令后端另批实施。历史分析 `doc/执行沙盒与授权档位分析.md` 不是当前实现规格。
 
-## 0. 已拍板决策（不要重新讨论）
+## 1. 产品语义
 
-| # | 决策 |
-|---|---|
-| D1 | **沙盒永远开，无开关**。不感知的安全不需要配置。设置页只放"全局写白名单"编辑器 + 状态展示 |
-| D2 | **全局策略，项目级路径**。开关/白名单是应用级全局设置；写白名单路径按当前会话所属项目的 directories 动态生成 |
-| D3 | **Windows 不做命令沙箱**：裸跑 + 警告前缀。文件工具的纯 Kotlin 路径校验全平台兜底 |
-| D4 | **Linux 只检测不代装**：探测 bwrap；缺失/完整配置不可用 → 明确错误 + 阻止命令，不回退裸跑；下个 turn 重新检测 |
-| D5 | **macOS Seatbelt**（sandbox-exec，零依赖，本机实测通过） |
-| D6 | **shell 探测链**：macOS/Linux `bash → sh`；Windows `bash.exe(Git Bash) → cmd /c`；探测结果注入系统提示词 |
-| D7 | **无逐操作询问**。沙箱兜底，执行路径由主代理按 Triage Flow 分诊判断（见 `AGENTS.md §5.6`）。计划审批工作流（create_plan → 用户批准）**保留不动** |
-| D8 | 读全盘放行（含敏感文件；提示词已约束不外泄密钥）；写锁死白名单 |
-| D9 | 项目模型：`directories.first()` = 主目录（承载 .mederi/、shell cwd、相对路径解析首选），其余目录平等读写 |
-| D10 | 写白名单内置项：项目 directories ∪ `/tmp`+`$TMPDIR` ∪ 构建缓存（`~/.gradle ~/.m2 ~/.cache ~/.konan ~/Library/Caches ~/Library/Java`）∪ 设备文件（/dev/null 等）∪ 全局白名单（用户配置） |
+项目级仅两档，同一项目的会话及执行子代理使用同一真理源，desktop/server/遥控端共用 API；不同项目隔离：
 
-## 1. 生效中的不变量（代码强制）
+| 模式 | 文件工具 | 命令 |
+|---|---|---|
+| 需要批准（默认） | 允许范围内直接写；越界/保护路径在任何写入前申请本次批准 | 默认受限执行；显式申请联网或解除沙盒时等待用户批准 |
+| 完全访问 | 除项目黑名单外免路径审批 | 有路径黑名单仍套黑名单后端；免审批，保留超时/进程回收 |
 
-| 层 | 规则 | 实施层 | 生效 |
-|---|---|---|---|
-| read_file / list_directory | 全盘可读 | 纯 Kotlin（resolveForRead 无包含校验） | 全平台 |
-| write_file / edit_file（apply_patch 已注销，实现保留） | 只能写白名单路径；同文件并发写硬拒绝（FileWriteRegistry） | 纯 Kotlin（resolveForWrite containment 校验，WindowsPath 大小写不敏感天然兼容） | 全平台 |
-| bash | OS 级沙箱：写=白名单，读=全盘，网络/进程放行 | macOS Seatbelt / Linux bwrap / Windows NONE | 按平台降级 |
-| 进程回收 | 只允许回收 mederi 自己 spawn 的进程组（ProcessRegistry 注册表）；沙箱内命令无法写入注册表，查不到 pid 即拒绝 | ProcessRegistry（宿主侧）+ list_processes / stop_process | 全平台 |
-| 是否写文件/建计划 | Triage Flow 分诊判断（提示词强制，见 `AGENTS.md §5.6`），沙盒是唯一代码级安全网 | SystemPrompts | 全平台 |
+不做 AI 自动审查，不把执行模式放进 `AgentMode`。计划批准、`ask_user` 继续独立工作。模式设置只通过用户 API，不注册为模型工具。
 
-## 2. 架构
+一次批准只覆盖不可变的那条操作（完整命令、cwd 或整份补丁的目标路径）。不把这次批准写成长久规则；长期允许/拒绝命令由用户在项目设置中显式配置。被拒绝后不得换等价命令规避。
 
-```
-设置页白名单 → AppState(PreferencesStore "sandbox.extraPaths", JSON 数组)
-            → mederi.sandboxExtraPaths（可变属性，实时生效）
-SessionManagerImpl → TurnExecutor（每 turn 读取）
-            → ToolFactory → ShellTools(CommandSandbox 实例)
-CommandSandbox.wrap(command, allowedDirs, extraPaths) → ProcessBuilder argv
-ShellTools.runCommand → 启动即注册 → ProcessRegistry（全局单例，进程组）
-            → list_processes / stop_process（宿主侧 kill -- -pgid 整组回收，沙箱外）
-```
+设置变化只使该项目旧待批请求失效，不因切换完全访问而偷偷执行旧卡。已经启动的进程保留启动时边界；下一次调用读取新配置。设置页明确这一项目范围与生效时机。
 
-- CommandSandbox 每 turn 新建实例 → bwrap 探测每 turn 重跑（版本与完整配置各限 10 秒；用户装完无需重启）
-- 白名单合并发生在 CommandSandbox 内部（canonicalPath + macOS /tmp→/private/tmp 变体去重）
-- SBPL profile 文本按「目录集合 hash」缓存临时文件复用
+项目设置入口位于侧栏项目菜单“项目设置”；输入框提供“权限与计划”图标菜单，内部分别列出执行权限和计划批准。桌面端只显示一个图标及悬停状态提示，窄屏输入选项面板直接展开这两组内容；切换项目不复用旧项目配置。AppState 下 `ProjectPermissionStore` 仅作每项目 UI 投影，读写和事件回查都通过 AiCore，不写设备偏好。
 
-## 3. 系统环境注入（metaNote）
+项目规则有四组：额外可写路径、拒绝读写路径、允许命令前缀、拒绝命令前缀。路径黑名单比白名单、一次批准和完全访问优先；文件/Office 读取及目录列表、AGENTS.md 注入均过滤。命令规则仅匹配静态 argv 前缀（支持引号），不分析命令效果；拒绝优先，允许前缀只免该命令的提升审批，default 仍受沙盒约束。管道、重定向、变量/命令替换不自动允许；配置拒绝命令时无法安全解析的 shell 文本拒绝执行，提示拆成静态命令。程序自身脚本或等效命令的行为不由词法规则推断。
 
-每条用户消息末尾 `<<<NOT_FOR_UI>>>` 隐藏块注入 AI 需要知道的环境事实：
+完全访问或单次 off 仍需强制拒绝路径：macOS 用 allow-default + 显式 deny；Linux 用 bwrap 匿名不可访问挂载覆盖拒绝目标，不更改宿主文件权限/内容。Linux 对不存在拒绝目标失败即停；挂载按启动时路径快照，硬链接别名/外部重命名不等同于完整数据防泄漏系统。Windows 暂无强制后端，有路径黑名单时 off/FULL 也拒绝执行。
 
-```
-<<<NOT_FOR_UI>>>
-NOTE FOR AI (hidden from user in UI):
-Time: UTC ... / Local ... (tz, dow)
-OS: macOS 15.5 (arm64) / Windows 11 (amd64) / Ubuntu 24.04 (x86_64)
-Shell: bash 5.2 (sandboxed writes: <project dirs> + tmp + build caches)
-Sandbox: Seatbelt (macOS) / bubblewrap (Linux) / none (Windows)
-Process control: list_processes / stop_process manage mederi-spawned processes only
-Project dirs: /path/a (primary), /path/b
-Extra writable paths: ... (全局白名单，如有)
-Mederi workdir: <primary>/.mederi
-Java: 21.0.5  (进程运行时，构建相关任务有用)
+## 2. 架构与状态所有权
+
+```mermaid
+flowchart TD
+    UI[设置/执行批准卡] --> Contract[AiCore]
+    Remote[ServerAiCore REST] --> Server[Server 薄路由]
+    Server --> Contract
+    Contract --> Bridge[MederiAiCore]
+    Bridge --> API[SandboxApi 异常转换]
+    API --> Manager[SandboxManager 单一真理源]
+    Manager --> Store[SettingsStore sandbox.projects.{projectId}.settings]
+    Manager --> Events[现有 session eventBus]
+    Events --> Snapshot[ConversationStateReducer / 活体快照]
+    Snapshot --> UI
+    Tools[文件/前台/后台/验证工具] --> Permission[ExecutionPermissions]
+    Permission --> Manager
+    Permission --> Paths[SandboxPaths]
+    Permission --> Backend[CommandSandbox Seatbelt / bwrap+seccomp]
 ```
 
-## 4. SBPL profile 模板（macOS，已实测）
+- 每个 `Mederi` 实例一个 manager，不能用进程可变 singleton；不同实例可注入独立 store。
+- 持久化只存 `SandboxSettings(mode, extraWritablePaths, version, deniedPaths, allowedCommands, deniedCommands)`，默认是需要批准。配置损坏报错并阻止执行，不能变全开。
+- 写配置先校验，再将持久化、缓存、代次更新和待批失效作为同一个不可取消的提交段；写失败不放权。
+- 新项目默认需要批准；旧全局权限和设备偏好不向项目迁移或回退读取，避免隐式给全部项目授予完全访问。旧数据不删除。
+- 已移除 `SandboxConfig` 与 `SandboxHooks`、AppState 白名单副本。宿主配置通过 AiCore API 管理，遥控设备不拿自己的偏好冒充宿主。
+- 对外更新携带读取到的配置 version；manager 在同一临界段校验及递增，旧客户端表单不能覆盖较新的权限设置。
+- 事件先同步非阻塞发送，背压时由自动排空退出的FIFO发布任务发送，取消与批准不等待订阅者；close拒绝全部待批并释放发布任务。
+- DTO/事件结构统一 kotlinx.serialization；core JVM 与契约 KMP 通过显式映射分层。
 
-```
-(version 1)
-(deny default)
-(allow process-exec*)
-(allow process-fork)
-(allow mach-lookup)
-(allow system-socket)
-(allow sysctl-read)
-(allow sysctl-write)
-(allow ipc-posix*)
-(allow ipc-sysv*)
-(allow network*)
-(allow process-info*)
-(allow file-read*)
-(allow file-write*
-  (subpath "<dir>" ...)      ; 项目目录 + canonical 变体
-  (subpath "/tmp" "/private/tmp" "/private/var/folders" "$TMPDIR")
-  (subpath "<缓存目录>" ...)  ; D10 内置缓存 + 全局白名单
-  (literal "/dev/null" "/dev/stdin" "/dev/stdout" "/dev/stderr")
-)
-```
+## 3. 文件与保护路径
 
-实测结论（本机）：项目内写 OK；外部写 `Operation not permitted`；外部读 OK。
-`(allow sysctl-write)` 必须保留——`/usr/libexec/java_home`（gradlew 无 JAVA_HOME 时的 JDK 探测链）
-内部走 CFPreferences 需要它，缺失时报 "Unable to locate a Java Runtime"。
-沙箱内 `env -u JAVA_HOME ./gradlew :core:compileKotlinJvm` 全绿。
-macOS 沙箱内 gradle 首跑如遇遗漏路径（daemon socket、Xcode licenses 等）→ 实测后追加 profile 放行项，**追加项记录到本节**。
+需要批准模式的可写根 = 当前项目目录 + 实际系统临时目录 + 显式额外路径。家目录构建缓存不再默认放行，不给整个 `/private/var/folders` 写权限。
 
-**信号完全不可配（2026-09 实测，macOS 26.6.2）**：`(allow process-signal)` 一律报
-`unbound variable`——本版本 Seatbelt 没有 process-signal 操作（连父→子、同 profile 进程间
-互发信号都被 deny default 拦死，实测 `kill` 全部 "Operation not permitted"）。**profile 层面无法
-放开信号**，因此跨命令回收只能走宿主侧进程管理（见 §4.5）。该限制是本次新增进程管理机制的直接动因。
+`SandboxPaths` 先做 canonical 解析及合法性验证，再合并父子根。禁止把 `/`、`/proc`、`/dev`、`/sys` 及覆盖它们的路径作为普通可写根。允许的设备输出是 OS 后端内显式最小例外。
 
-## 4.5 进程管理与宿主侧回收（2026-09 落地，修 macOS 互杀不可能）
+保护路径在合并前收集，包含配置根的 `.git`、`.agents`、`.codex`、`.aws`，gitfile 指向的实际目录及 linked worktree 的共用目录，以及实际宿主配置目录。后者即使落在用户放行的 home 下也不自动可写；不会把项目自己的 `.mederi` 计划目录整体锁死。
 
-**问题**：macOS 沙箱内命令之间无法发信号 → bash 起的 dev server / 后台任务，
-后续命令 `kill` 必然失败，只能靠会话 teardown 回收。
+文件工具在批准前不能创建父目录；整份 apply_patch 先收集源、删除、移动目的等全部路径，再请求一次批准。批准后重新核对配置代次及 canonical 路径，落盘前加 `FileWriteRegistry`，同步工具在 mutation 前再次检查取消/代次。write/edit 禁止覆盖硬链接，不跟随叶子符号链接；apply_patch 保留既有逐组件符号链接拒绝、整体写锁、dry-run 与失败回滚。
 
-**机制**：每条命令套**进程组长包装**，使整条命令树共享一个 PGID（= 直接子进程 pid）：
-- macOS：`perl -e 'setpgrp(0,0) or die $!; exec @ARGV' -- <sandbox-exec ...>`（/usr/bin/perl 系统自带）
-- Linux：`setsid`（util-linux 默认带；缺失降级无进程组）
-- Windows：无进程组，退化单 pid + `taskkill /T`
+`FileWriteRegistry` 不覆盖 shell/MCP/外部进程；文件工具的宿主路径校验也不声称等价于隔离整个 JVM。外部进程竞争修改目录仍是需要单独关注的 TOCTOU 边界，不能从单测推断完全消除所有文件系统竞争。
 
-**回收**（宿主侧，沙箱外执行）：
-- `ShellTools.runCommand` 启动即写入 `ProcessRegistry`（进程组注册表，全局单例）
-- **超时**：整组 SIGKILL（修掉原实现只 destroyForcibly 杀直接子进程、孙进程变孤儿的洞）
-- `list_processes` / `stop_process`（新工具，主代理 + Executor 可用，Researcher 无）：按注册表
-  定向回收，`pid` 来自 list 输出
+## 4. 命令与网络
 
-**安全边界（硬）**：注册只发生在 runCommand 启动点；注册表查不到 pid 一律拒绝——
-AI 无法用 stop_process 杀任何非 mederi 启动的进程。沙箱内命令永远没有写注册表的通道。
+`bash` 与 `verify_subtask` 均接受 `sandbox`：
 
-## 5. bwrap argv 模板（Linux）
+| 参数 | 需要批准模式 | 完全访问模式 |
+|---|---|---|
+| default | 受限文件系统，禁止命令联网 | 保留显式路径黑名单 |
+| network | 先批准这条命令，保留文件边界，只打开网络 | 保留显式路径黑名单 |
+| off | 先批准这条命令，解除 OS 沙盒 | 保留显式路径黑名单 |
 
-```text
-setsid bwrap --unshare-pid --die-with-parent --cap-drop ALL --ro-bind / /
-  --bind <canonical-white-path> <canonical-white-path> ...
-  --dev /dev --proc /proc -- bash -c <command>
+权限判断位于 ShellTools 公共准备入口，前台、后台与存储的验证命令共用；没有权限上下文时不能通过 nullable sandbox 自动裸跑。授权等待不计入命令运行超时。后端不可用明确报错，不自行重试裸跑；非零退出不自动判为权限问题。
+
+macOS 使用 `sandbox-exec -p` 传可信内联 SBPL，消除可写策略缓存。默认没有 `allow network*`，回环/Unix socket 同样不默认放行；批准 network 后开放网络，文件限制保持。profile 字符串严格转义。保留 java_home 所需 sysctl 能力及 perl 进程组包装。
+
+Linux 使用 bwrap 只读根、可写 bind、保护路径 ro-bind、独立 PID/proc/dev。默认追加网络 namespace 与 seccomp：阻止 connect/sendto/sendmsg/sendmmsg/io_uring_setup，检查 syscall ABI（x86_64/aarch64，拒绝其他 ABI），防止通过宿主 Unix socket 代理绕过。BPF 由 Kotlin 生成，经匿名管道传入 fd3，不落可篡改缓存，不占用 payload stdin。批准 network 后移除网络限制，文件挂载保持。完整配置探测失败即停，不代装 bwrap。
+
+Windows 暂无受限后端：default/network 受限调用阻止；无显式路径黑名单且用户批准一次 off 或选择完全访问时才走裸执行。该行为不是 Windows 隔离能力已经实现。
+
+每条命令登记 `ProcessRegistry`；macOS perl / Linux setsid 使宿主能按已登记进程组回收。取消与超时收割所启动命令，不向未登记宿主进程发信号。后台任务由原 BackgroundTaskManager 管理。
+
+## 5. 授权生命周期
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: 越界申请注册并发事件
+    Pending --> Approved: 用户按原会话及 requestId 批准
+    Pending --> Denied: 用户拒绝
+    Pending --> Cancelled: 所属调用/执行者取消或退出
+    Pending --> SettingsChanged: 所属项目配置改变
+    Approved --> Executing: 代次/路径/取消状态再核验
+    Approved --> Cancelled: 核验前配置变更或调用取消
+    Executing --> [*]
+    Denied --> [*]
+    Cancelled --> [*]
+    SettingsChanged --> [*]
 ```
 
-- Linux 路径策略独立于 macOS：项目目录、全局白名单、`/tmp`/`$TMPDIR`/JVM 临时目录和 Linux 构建缓存。canonical 去重并合并父子挂载；缺失路径按目录精确创建，已有文件仍可单文件挂载；不扩大可写父目录。
-- `/dev` 由 bwrap 创建，不额外 bind `/dev/stdin`、`stdout`、`stderr`（magic links 可能指向 pipe/socket，导致真实执行配置失败）。根目录及 `/proc`、`/dev`、`/sys` 重叠白名单拒绝，不能覆盖隔离挂载。
-- 保留宿主临时目录读写，避免 tmpfs 隐藏跨命令产物和构建 daemon sockets。
-- 独立 PID namespace，`/proc` 不暴露宿主进程；网络保持可用。外部 `setsid` 与原宿主进程组回收机制配合。
-- `LinuxCommandSandbox` 每实例先验证版本，再用**同一完整挂载配置**跑 `/bin/true`；每次探测限 10 秒，持续排空输出且保留最多 8KiB。保留实际 bwrap 错误，不把任意故障一概归因于 AppArmor，也不建议全局关闭安全策略。
-- bwrap 缺失或配置失败时，前台返回失败，后台返回启动错误；不执行用户命令，不产生后台任务。下个 turn 可重试。
+并行申请存 map，不能“新请求替换旧请求”。子代理使用父会话的 manager，但保留自己的 executionSessionId；子代理结束仅清理它自己的请求。主 turn 阶段完成不能清掉仍在运行的子代理申请。新用户输入按统一发送入口解除挂起并取消旧执行，不新增 UI 待发队列。
 
-## 6. 风险与边界（诚实清单）
+事件是 `EXECUTION_APPROVAL_REQUESTED(request JSON)`、`EXECUTION_APPROVAL_RESOLVED(requestId,status)`；设置变更另发 `SANDBOX_SETTINGS_CHANGED`。活体待批列表进入 `ConversationState.pendingExecutionApprovals`。首次快照/重连从 manager 获取真实活体列表；进程重启后不存在待执行授权，历史不能恢复可点击批准。
 
-- **Linux 真机验证仍待完成**：当前开发宿主是 macOS，Docker daemon 未启动。JVM 确定性测试覆盖挂载构造、缺失路径、canonical 合并、错误保留及拒绝执行；Linux 集成测试实际验证写白名单、外部只读、标准流、缓存首次创建、PID namespace、退出码及临时文件跨命令保留。
-  Linux 上运行：`MEDERI_REQUIRE_LINUX_SANDBOX=1 ./gradlew :core:jvmTest --tests '*LinuxCommandSandboxTest'`。此标志要求 Linux 主机；Linux 上缺少可用 bwrap 直接失败，不能静默跳过。
-  发行版的 AppArmor/user namespace 限制仍需宿主按实际错误配置；程序不安装 bwrap，也不修改宿主安全策略。
-- **macOS 沙箱内信号不可用是平台限制，非 bug**：profile 无 process-signal 放行项（实测
-  unbound variable）。进程回收已由宿主侧注册表补齐（§4.5）。实测影响：JVM `Process.destroy()`/
-  `destroyForcibly()` 在沙箱内**静默失效**（不报错、子进程杀不掉）——Gradle 正常跑测试靠
-  socket 协议收工不受影响，但**中断/超时强杀回退会漏 worker JVM**（恰好能被 stop_process 整组回收）；
-  测试内自行 spawn 子进程再 destroy 的场景同样会漏。编译/测试主链路已验证可用。
-- Seatbelt deprecated：Chrome/Anthropic/OpenAI 全在用，短期内不会消失；如被移除则降级警告
-- Windows bash 裸跑：文件工具仍是硬边界；git/diff 是回滚网
-- 全局白名单存 PreferencesStore（明文路径，无敏感数据）
-- 读全盘含敏感文件：提示词约束 + 本地应用风险自担（D8 已拍板）
+WaitingUser 根据提问、计划、多个执行请求的并集投影；解除一个请求不能撤销其他等待。UI 卡单独展示，不折进工作过程，不复用计划批准卡。提交按原会话+请求隔离，失败可见且可重试。
+
+## 6. 独立 HTTP 调研工具
+
+web_search/web_fetch 使用只读 `WebHttpReader`（http(s) GET、有限重定向/总超时/字节上限），不再拼 curl 或经 runCommand。引号作为数据传递。该服务连接独立于命令网络规则，不意味 bash 获得网络权限；浏览器、MCP 和连接器也不能宣称被这个命令沙盒完整覆盖。
+
+## 7. 验证入口与未验证状态
+
+```bash
+./gradlew :core:jvmTest :app:shared:jvmTest
+MEDERI_REQUIRE_MACOS_SANDBOX=1 ./gradlew :core:jvmTest --tests 'xyz.mederi.tools.sandbox.CommandSandboxTest' --rerun-tasks
+MEDERI_REQUIRE_LINUX_SANDBOX=1 ./gradlew :core:jvmTest --tests 'xyz.mederi.tools.sandbox.LinuxCommandSandboxTest' --rerun-tasks
+```
+
+跨平台纯逻辑测试不替代原生隔离测试；required 模式在缺宿主/缺后端时必须失败，不能 skip 后声称验收完成。原生测试仅写仓库 temp 中自建 fixture，不碰用户数据或真实 .git。
+
+APP/server 的实机启动按 AGENTS.md 仅用 idea-mcp；缺工具时明确保留未验证项，不能 bash 启动产品。Windows 后端实现与真机验收留后续。

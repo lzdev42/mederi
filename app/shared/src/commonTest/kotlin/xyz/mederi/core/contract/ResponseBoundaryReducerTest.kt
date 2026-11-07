@@ -28,6 +28,66 @@ class ResponseBoundaryReducerTest {
     private fun ChatMessage.text() = blocks.filterIsInstance<ChatBlock.Text>().joinToString("") { it.text }
 
     @Test
+    fun missingInputNotificationIsRecoveredBeforeFirstDeltaWithoutImportingAheadOfStreamText() = runTest {
+        val input = ChatMessage("u", "s", ChatRole.User, listOf(ChatBlock.Text("ut", "request")),
+            0, 0, null, null, null, turnId = "turn")
+        val ahead = input.copy(id = "r1", role = ChatRole.Assistant,
+            blocks = listOf(ChatBlock.Text("rt", "first second")), isFinalAnswer = false)
+        for (firstType in listOf("response_started", "text", "reasoning")) {
+            var reads = 0
+            var current = ConversationStateReducer.applyWithRefresh(state(), delta("r1", firstType, "first")) {
+                reads++
+                MessagesPage(listOf(input, ahead), TokenUsage())
+            }.single()
+            assertEquals(listOf("u", "r1"), current.messages.map { it.id })
+            assertEquals(if (firstType == "text") "first" else "", current.messages.last().text())
+            current = ConversationStateReducer.applyWithRefresh(current, delta("r1", "text", " second")) {
+                error("Existing response must not reread history on every delta")
+            }.single()
+            assertEquals(1, reads)
+            assertEquals((if (firstType == "text") "first" else "") + " second", current.messages.last().text())
+        }
+    }
+
+    @Test
+    fun missedConsumedInterjectionIsInsertedAfterLiveResponseWithoutOverwritingItsContent() = runTest {
+        val original = ChatMessage("u", "s", ChatRole.User, listOf(ChatBlock.Text("ut", "request")),
+            0, 0, null, null, null, turnId = "turn")
+        val live = ConversationStateReducer.apply(state(listOf(original)), delta("r1", "text", "live content"))
+        val interjection = original.copy(id = "u2", blocks = listOf(ChatBlock.Text("it", "follow up")))
+        val ahead = original.copy(id = "r2", role = ChatRole.Assistant,
+            blocks = listOf(ChatBlock.Text("rt", "ahead content")))
+        val pending = original.copy(id = "u3", pendingSteering = true)
+        val refreshed = ConversationStateReducer.applyWithRefresh(live, delta("r2", "response_started")) {
+            MessagesPage(listOf(original, live.messages.last().copy(blocks = emptyList()), interjection, ahead, pending), TokenUsage())
+        }.single()
+        assertEquals(listOf("u", "r1", "u2", "r2"), refreshed.messages.map { it.id })
+        assertEquals("live content", refreshed.messages[1].text())
+        assertTrue(refreshed.messages.last().blocks.isEmpty())
+    }
+
+    @Test
+    fun firstResponseStillStreamsWhenInputRefreshFails() = runTest {
+        val result = ConversationStateReducer.applyWithRefresh(state(), delta("r1", "text", "first")) {
+            error("temporarily unavailable")
+        }.single()
+        assertEquals("first", result.messages.single().text())
+    }
+
+    @Test
+    fun toolFirstResponseAlsoRestoresMissingInput() = runTest {
+        val input = ChatMessage("u", "s", ChatRole.User, listOf(ChatBlock.Text("ut", "request")),
+            0, 0, null, null, null, turnId = "turn")
+        val event = CoreEvent(CoreEventType.TOOL_CALLED, "s", "r1",
+            mapOf("toolCallId" to "tool", "tool" to "bash", "args" to "{}", "turnId" to "turn"))
+        val result = ConversationStateReducer.applyWithRefresh(state(), event) {
+            MessagesPage(listOf(input), TokenUsage())
+        }.single()
+        assertEquals(listOf("u", "r1"), result.messages.map { it.id })
+        assertEquals("bash", result.messages.last().blocks.filterIsInstance<ChatBlock.ToolCall>().single().name)
+    }
+
+    @Test
     fun separateResponsesKeepTheirOwnTextAndOnlyCoreConfirmsDelivery() {
         var snapshot = state()
         snapshot = ConversationStateReducer.apply(snapshot, delta("r1", "response_started"))

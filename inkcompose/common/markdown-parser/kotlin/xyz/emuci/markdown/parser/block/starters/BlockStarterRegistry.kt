@@ -74,14 +74,18 @@ class BlockStarterRegistry {
     /**
      * 按优先级顺序尝试所有已注册的开启器。
      *
-     * @return 第一个成功开启的 [OpenBlock]，或 null
+     * @param accept 宿主按当前源文本/解析范围校验候选块；拒绝时还原游标并继续尝试其他语法。
+     * @return 第一个成功开启且通过校验的 [OpenBlock]，或 null
      */
-    fun tryStart(cursor: LineCursor, lineIdx: Int, tip: OpenBlock): OpenBlock? {
+    fun tryStart(
+        cursor: LineCursor, lineIdx: Int, tip: OpenBlock,
+        accept: (OpenBlock) -> Boolean = { true },
+    ): OpenBlock? {
         ensureSorted()
         for (starter in starters) {
             val snap = cursor.snapshot()
             val result = starter.tryStart(cursor, lineIdx, tip)
-            if (result != null) return result
+            if (result != null && accept(result)) return result
             cursor.restore(snap)
         }
         return null

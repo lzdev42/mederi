@@ -14,6 +14,25 @@ import xyz.mederi.provider.domain.model.RemoteModelInfo
 
 internal val remoteModelJson = Json { ignoreUnknownKeys = true }
 
+/** SIWC 的账号目录采用 models/slug，而非 API Key 的 data/id。不能混用两个协议。 */
+@Serializable
+private data class ChatGptModelList(val models: List<ChatGptModel>)
+
+@Serializable
+private data class ChatGptModel(
+    val slug: String,
+    @SerialName("display_name") val displayName: String,
+    val visibility: String,
+)
+
+internal fun parseChatGptModelsResponse(raw: String): List<RemoteModelInfo> =
+    remoteModelJson.decodeFromString<ChatGptModelList>(raw).models
+        .filter { it.visibility == "list" }
+        .map {
+            require(it.slug.isNotBlank() && it.displayName.isNotBlank()) { "Invalid ChatGPT model catalog entry" }
+            RemoteModelInfo(providerModelId = it.slug, name = it.displayName)
+        }
+
 // ==================== OpenAI 风格 ====================
 
 /** OpenAI 风格 /models 响应：{"data":[{"id":...}]} */

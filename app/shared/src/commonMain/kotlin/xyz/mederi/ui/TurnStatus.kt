@@ -5,7 +5,7 @@ import xyz.mederi.core.contract.models.*
 
 /**
  * AI 一轮对话的实时状态。从 ConversationSnapshot 派生，UI 层无需自行判断。
- * 显示文案唯一映射点 = StatusBar 的 turnStatusLabel()（枚举不持有表现层文案，i18n 约定）。
+ * StatusBar 仅渲染重试文案；枚举不持有表现层文案。
  */
 enum class TurnStatus {
     Idle,
@@ -21,23 +21,15 @@ enum class TurnStatus {
     Compacting,
     Aborted;
 
-    /**
-     * 该状态是否需要在状态栏（StatusBar）中展示。
-     * - 等待响应阶段（Sending, Preparing）：展示状态栏以消除用户焦虑；
-     * - 压缩进行中（Compacting）：状态栏持续显示，展示压缩耗时；
-     * - 收到推理/正文/工具等内容时（Thinking, Generating, CallingTool...）：卡片内已有对应内容在渲染，状态栏隐藏；
-     * - 仅在异常重试时（Retrying）：状态栏重新出现，展示重试轮次与真实错误信息。
-     */
+    /** 输入框上方只展示重试过程；正常工作状态由对话流承载。 */
     val shouldDisplayInStatusBar: Boolean
-        get() = when (this) {
-            Sending, Preparing, Retrying, Compacting -> true
-            Thinking, Generating, CallingTool, WaitingAnswer, Aborted, Idle -> false
-        }
+        get() = this == Retrying
 }
 
 /**
  * 重试状态的结构化信息，由 [parseRetryHint] 从 statusHint 字符串中解析。
- * [attempt]/[max] 表示当前是第几次/最多几次；[serverMsg] 是供应商返回的真实错误原因。
+ * [attempt] 是本次请求的重试次数；[max] 仅保留旧格式兼容，不再展示。
+ * [serverMsg] 是供应商返回的真实错误原因。
  */
 data class RetryHint(
     val attempt: String,

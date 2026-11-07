@@ -73,6 +73,27 @@ interface SessionStore {
     suspend fun updateActiveSkills(id: String, activeSkills: List<String>)
 
     /**
+     * 更新会话的工作区绑定。
+     */
+    suspend fun updateWorkspaceBinding(id: String, workspaceId: String?, associatedWorktreeId: String?)
+
+    /**
+     * 更新会话归档状态。
+     */
+    suspend fun setArchived(id: String, archivedAt: String?)
+
+    /**
+     * 更新会话固定状态。
+     */
+    suspend fun setPinned(id: String, pinned: Boolean)
+
+    /** 仅写子代理角色覆盖，保留会话其他字段。 */
+    suspend fun updateSubagentConfigs(id: String, configs: Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>)
+
+    /** null 恢复系统默认并发上限。 */
+    suspend fun updateSubagentMaxConcurrent(id: String, count: Int?)
+
+    /**
      * 删除会话。
      */
     suspend fun delete(id: String)

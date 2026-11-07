@@ -10,7 +10,7 @@ import xyz.emuci.markdown.parser.core.LineCursor
  * 仅在文档第一行生效。
  *
  * 无状态设计：不依赖 SourceText，关闭标记由 [BlockParser] 的 addLineToTip 检测。
- * 若文档结束时仍未遇到关闭标记，[BlockParser.finalizeBlock] 会将其降级为 ThematicBreak + Paragraph。
+ * [BlockParser] 确认解析范围内有闭合标记才接纳此块，否则从第一行按普通 Markdown 解析。
  */
 class FrontMatterStarter : BlockStarter {
     override val priority: Int = 10

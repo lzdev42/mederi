@@ -20,12 +20,21 @@ interface AiCore {
     /** 宿主配置/缓存基路径（如 "~/.mederi"）；纯 Web/无持久存储的客户端返回 null。 */
     val configDir: String? get() = null
 
+    /** 权限配置按项目保存于执行宿主；遥控端必须显式提供项目 ID。 */
+    suspend fun getSandboxSettings(projectId: String): Result<SandboxSettings> = Result.failure(UnsupportedOperationException("Sandbox settings unavailable"))
+    suspend fun updateSandboxSettings(projectId: String, settings: SandboxSettings): Result<SandboxSettings> = Result.failure(UnsupportedOperationException("Sandbox settings unavailable"))
+    suspend fun getSandboxStatus(projectId: String): Result<SandboxStatusInfo> = Result.failure(UnsupportedOperationException("Sandbox status unavailable"))
+    suspend fun resolveExecutionApproval(conversationId: String, requestId: String, approved: Boolean): Result<Unit> =
+        Result.failure(UnsupportedOperationException("Execution approvals unavailable"))
+
     suspend fun createProject(input: CreateProjectInput): Result<Project>
     suspend fun renameProject(projectId: String, name: String): Result<Unit>
     /** 删除项目。内部遍历其下所有会话统一走 [deleteConversation]（唯一封装入口），最后删项目记录。 */
     suspend fun deleteProject(projectId: String): Result<Unit>
 
     suspend fun createConversation(projectId: String, agent: AgentOption? = null): Result<Conversation>
+    suspend fun createConversation(input: CreateConversationInput): Result<Conversation> =
+        createConversation(input.projectId, input.agent)
     /**
      * 删除会话的**唯一**封装入口（硬性约定，UI 层与 deleteProject 级联都只准走这里）：
      * abortAndJoin 运行中 turn → 删 session/history/diff 表 → 删 .mederi 下 Mermaid png → 清本地缓存。
@@ -36,11 +45,24 @@ interface AiCore {
     /** 构建会话当前完整快照（不订阅事件流）。客户端建立快照流时的初始状态来源。 */
     suspend fun getSnapshot(conversationId: String): Result<ConversationSnapshot>
 
+    /** ChatGPT 授权登录仅由运行 core 的桌面宿主提供（loopback 回调在该机器，浏览器亦在该机器打开）；遥控端不支持，不渲染授权入口。 */
+    val supportsChatGptLogin: Boolean get() = false
+    suspend fun startChatGptLogin(providerId: String? = null): Result<ChatGptAuthState> =
+        Result.failure(UnsupportedOperationException("ChatGPT authorization unavailable"))
+    suspend fun getChatGptAuthState(providerId: String): Result<ChatGptAuthState> =
+        Result.failure(UnsupportedOperationException("ChatGPT authorization unavailable"))
+    suspend fun cancelChatGptLogin(providerId: String): Result<Unit> =
+        Result.failure(UnsupportedOperationException("ChatGPT authorization unavailable"))
+    suspend fun disconnectChatGpt(providerId: String): Result<Unit> =
+        Result.failure(UnsupportedOperationException("ChatGPT authorization unavailable"))
+    suspend fun readChatGptUsage(providerId: String): Result<ChatGptUsage> =
+        Result.failure(UnsupportedOperationException("ChatGPT usage unavailable"))
+
     suspend fun configureProvider(providerId: String, input: ProviderUpdateInput): Result<Unit>
     suspend fun addBuiltinProvider(name: String, apiKey: String): Result<ProviderConfig>
     suspend fun deleteProvider(providerId: String): Result<Unit>
     suspend fun addProviderModel(providerId: String, providerModelId: String, name: String, supportsThinking: Boolean = false, supportsImages: Boolean = false, contextWindow: Int? = null, maxTokens: Int? = null, reasoningLevels: List<String> = emptyList(), isEnabled: Boolean = true): Result<Unit>
-    suspend fun updateProviderModel(providerId: String, modelId: String, name: String? = null, supportsThinking: Boolean? = null, supportsImages: Boolean? = null, contextWindow: Int? = null, maxTokens: Int? = null, reasoningLevels: List<String>? = null, isEnabled: Boolean? = null): Result<Unit>
+    suspend fun updateProviderModel(providerId: String, modelId: String, name: String? = null, supportsThinking: Boolean? = null, supportsImages: Boolean? = null, contextWindow: Int? = null, maxTokens: Int? = null, reasoningLevels: List<String>? = null, isEnabled: Boolean? = null, optimizeForRequestCount: Boolean? = null): Result<Unit>
     suspend fun deleteProviderModel(providerId: String, modelId: String): Result<Unit>
     suspend fun setModelEnabled(providerId: String, modelId: String, enabled: Boolean): Result<Unit>
     suspend fun refreshProviderModels(providerId: String): Result<List<String>>
@@ -93,6 +115,13 @@ interface AiCore {
         planId: String,
         approved: Boolean
     ): Result<Unit>
+    /** 当前或归档计划的验收报告，按所属会话和计划定位。 */
+    suspend fun getPlanAcceptanceReport(conversationId: String, planId: String): Result<String>
+
+    suspend fun recordPlanManualAcceptance(
+        conversationId: String, planId: String, input: ManualPlanAcceptanceInput
+    ): Result<Unit>
+
     suspend fun compressHistory(conversationId: String): Result<Unit>
     /** 自动压缩触发阈值百分比（1-100，默认 70）。UI 拖拽设置，core TurnExecutor 压缩判定读取此值。 */
     val compactionThresholdPercent: StateFlow<Int>
@@ -156,6 +185,15 @@ interface AiCore {
     suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = Result.success(Unit)
     suspend fun getSubagentGlobalSettings(): Result<SubagentGlobalSettings> = Result.success(SubagentGlobalSettings())
     suspend fun updateSubagentGlobalSettings(input: UpdateSubagentGlobalSettingsInput): Result<Unit> = Result.success(Unit)
+    /** 会话覆盖优先于系统默认；null 输入删除覆盖，恢复实时继承系统默认值。 */
+    suspend fun listSessionSubagentConfigs(conversationId: String): Result<List<SubagentConfigItem>> =
+        Result.failure(UnsupportedOperationException("Session subagent settings are not supported"))
+    suspend fun updateSessionSubagentConfig(conversationId: String, role: String, input: UpdateSubagentConfigInput?): Result<Unit> =
+        Result.failure(UnsupportedOperationException("Session subagent settings are not supported"))
+    suspend fun getSessionSubagentGlobalSettings(conversationId: String): Result<SubagentGlobalSettings> =
+        Result.failure(UnsupportedOperationException("Session subagent settings are not supported"))
+    suspend fun updateSessionSubagentGlobalSettings(conversationId: String, input: UpdateSubagentGlobalSettingsInput?): Result<Unit> =
+        Result.failure(UnsupportedOperationException("Session subagent settings are not supported"))
     suspend fun getSubagentReport(agentId: String): Result<SubagentReportDto> =
         Result.failure(IllegalStateException("getSubagentReport not implemented for agent: $agentId"))
     suspend fun stopSubagent(agentId: String): Result<Unit> = Result.success(Unit)
@@ -195,4 +233,60 @@ interface AiCore {
      */
     suspend fun generateAgentsFile(projectId: String, modelId: String? = null): Result<String> =
         Result.failure(IllegalStateException("AGENTS.md 生成未启用"))
+
+    // ==========================================
+    // Worktree 工作区管理契约 (D05)
+    // ==========================================
+    suspend fun getRepositoryInfo(projectId: String): Result<RepositoryInfo> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun listWorkspaces(projectId: String): Result<List<WorkspaceInfo>> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun getConversationWorkspace(sessionId: String): Result<ConversationWorkspaceInfo> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun previewWorkspaceHandoff(sessionId: String, input: HandoffPreviewInput): Result<HandoffPreview> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun handoffWorkspace(sessionId: String, input: HandoffInput): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun restoreWorkspace(workspaceId: String, input: RestoreWorkspaceInput): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun archiveWorkspace(workspaceId: String, input: ArchiveWorkspaceInput): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun createWorkspaceBranch(workspaceId: String, input: CreateWorkspaceBranchInput): Result<WorkspaceInfo> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun getWorkspaceOperation(id: String): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun cancelWorkspaceOperation(id: String): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun listWorkspaceOperations(projectId: String): Result<List<WorkspaceOperation>> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun setConversationArchived(sessionId: String, archived: Boolean, requestId: String): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun setConversationPinned(sessionId: String, pinned: Boolean): Result<Conversation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun listArchivedConversations(projectId: String): Result<List<Conversation>> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun getWorktreeSettings(): Result<WorktreeSettings> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun updateWorktreeSettings(settings: WorktreeSettings): Result<WorktreeSettings> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun listProjectEnvironments(projectId: String, workspaceId: String? = null): Result<List<ProjectEnvironment>> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun saveProjectEnvironment(projectId: String, environment: ProjectEnvironment, expectedVersion: Long, workspaceId: String? = null): Result<ProjectEnvironment> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun runWorkspaceAction(workspaceId: String, input: WorkspaceActionInput): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun getWorkspaceOperationLog(id: String, afterOffset: Long = 0L, maxBytes: Int = 262144): Result<LogChunk> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun listWorkspaceFiles(workspaceId: String, path: String = "", area: WorkspaceFileArea = WorkspaceFileArea.PROJECT): Result<List<WorkspaceFileEntry>> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun readWorkspaceFile(workspaceId: String, path: String, offset: Long = 0L, maxBytes: Int = 262144, area: WorkspaceFileArea = WorkspaceFileArea.PROJECT): Result<WorkspaceFileContent> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun retryWorkspacePreparation(sessionId: String, failedOperationId: String, requestId: String): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun retryWorkspaceSetup(workspaceId: String, failedOperationId: String, expectedEnvironmentHash: String, requestId: String): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun previewWorkspaceRecovery(operationId: String, strategy: RecoveryStrategy, snapshotId: String? = null, keepWorkspaceId: String? = null): Result<RecoveryPreview> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
+    suspend fun recoverWorkspaceOperation(operationId: String, input: WorkspaceRecoveryInput): Result<WorkspaceOperation> =
+        Result.failure(UnsupportedOperationException("Workspace operations unavailable"))
 }

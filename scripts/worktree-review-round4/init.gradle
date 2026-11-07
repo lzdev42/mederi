@@ -1,0 +1,14 @@
+// All four independently reproduced classes must be promoted together.
+allprojects { p ->
+    p.afterEvaluate {
+        if (p.path == ':core') {
+            def classes = ['WorkspaceProductionThirdReviewTest', 'WorkspaceLifecycleThirdReviewTest', 'WorkspaceJournalThirdReviewTest', 'WorkspaceRollbackThirdReviewTest']
+            def promoted = classes.count { new File(p.rootDir, "core/src/jvmTest/kotlin/xyz/mederi/workspace/${it}.kt").exists() }
+            if (promoted == 0) {
+                p.extensions.getByName('kotlin').sourceSets.getByName('jvmTest').kotlin.srcDir(new File(p.rootDir, 'scripts/worktree-review-round4/src'))
+            } else if (promoted != classes.size()) {
+                throw new GradleException('Promote all four round-four regression classes together; partial promotion causes ambiguous test sources')
+            }
+        }
+    }
+}

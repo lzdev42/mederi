@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     draft_text      TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
+    workspace_id    TEXT,
+    associated_worktree_id TEXT,
+    archived_at     TEXT,
+    pinned          INTEGER NOT NULL DEFAULT 0,
+    subagent_configs TEXT NOT NULL DEFAULT '{}',
+    subagent_max_concurrent INTEGER,
     PRIMARY KEY (id)
 );
 
@@ -35,24 +41,24 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 
 -- 插入会话
 insertSession:
-INSERT INTO sessions (id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO sessions (id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at, workspace_id, associated_worktree_id, archived_at, pinned, subagent_configs, subagent_max_concurrent)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- 查询所有会话（按更新时间降序）
 listSessions:
-SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at, workspace_id, associated_worktree_id, archived_at, pinned, subagent_configs, subagent_max_concurrent
 FROM sessions
 ORDER BY updated_at DESC;
 
 -- 按 ID 查询会话
 getSession:
-SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at, workspace_id, associated_worktree_id, archived_at, pinned, subagent_configs, subagent_max_concurrent
 FROM sessions
 WHERE id = ?;
 
 -- 按项目查询会话
 listSessionsByProject:
-SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at
+SELECT id, project_id, title, status, agent_mode, ai_model, reasoning_level, api_key_id, env, todos, active_skills, draft_text, created_at, updated_at, workspace_id, associated_worktree_id, archived_at, pinned, subagent_configs, subagent_max_concurrent
 FROM sessions
 WHERE project_id = ?
 ORDER BY updated_at DESC;
@@ -66,6 +72,13 @@ WHERE id = ?;
 updateSessionActiveSkills:
 UPDATE sessions SET active_skills = ?
 WHERE id = ?;
+
+-- 会话级子代理覆盖：字段独立写入，不影响输入框与工作区状态
+updateSessionSubagentConfigs:
+UPDATE sessions SET subagent_configs = ? WHERE id = ?;
+
+updateSessionSubagentMaxConcurrent:
+UPDATE sessions SET subagent_max_concurrent = ? WHERE id = ?;
 
 -- 更新会话状态
 updateSessionStatus:
@@ -90,6 +103,21 @@ WHERE id = ?;
 -- 删除会话
 deleteSession:
 DELETE FROM sessions
+WHERE id = ?;
+
+-- 更新会话工作区绑定
+updateSessionWorkspaceBinding:
+UPDATE sessions SET workspace_id = ?, associated_worktree_id = ?, updated_at = ?
+WHERE id = ?;
+
+-- 更新会话归档时间
+updateSessionArchivedAt:
+UPDATE sessions SET archived_at = ?, updated_at = ?
+WHERE id = ?;
+
+-- 更新会话固定状态
+updateSessionPinned:
+UPDATE sessions SET pinned = ?, updated_at = ?
 WHERE id = ?;
 
 
@@ -179,12 +207,16 @@ WHERE session_id = ?;
 -- unified_diff 存储 git 风格的 unified diff 文本。
 
 CREATE TABLE IF NOT EXISTS diffs (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id      TEXT NOT NULL,
-    message_id      TEXT,
-    changes_json    TEXT NOT NULL,
-    unified_diff    TEXT NOT NULL,
-    created_at      TEXT NOT NULL
+    id                                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id                          TEXT NOT NULL,
+    message_id                          TEXT,
+    changes_json                        TEXT NOT NULL,
+    unified_diff                        TEXT NOT NULL,
+    created_at                          TEXT NOT NULL,
+    workspace_id                        TEXT,
+    checkout_root_at_creation           TEXT,
+    project_relative_path_at_creation   TEXT,
+    workspace_generation                INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_diffs_session_id ON diffs(session_id);
@@ -192,26 +224,26 @@ CREATE INDEX IF NOT EXISTS idx_diffs_message_id ON diffs(message_id);
 
 -- 保存一次 diff
 insertDiff:
-INSERT INTO diffs (session_id, message_id, changes_json, unified_diff, created_at)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO diffs (session_id, message_id, changes_json, unified_diff, created_at, workspace_id, checkout_root_at_creation, project_relative_path_at_creation, workspace_generation)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- 按 session 查询所有 diff（按创建时间升序）
 listDiffs:
-SELECT session_id, message_id, changes_json, unified_diff, created_at
+SELECT session_id, message_id, changes_json, unified_diff, created_at, workspace_id, checkout_root_at_creation, project_relative_path_at_creation, workspace_generation
 FROM diffs
 WHERE session_id = ?
 ORDER BY created_at ASC;
 
 -- 按 message_id 查询 diff
 getDiffByMessage:
-SELECT session_id, message_id, changes_json, unified_diff, created_at
+SELECT session_id, message_id, changes_json, unified_diff, created_at, workspace_id, checkout_root_at_creation, project_relative_path_at_creation, workspace_generation
 FROM diffs
 WHERE session_id = ? AND message_id = ?
 LIMIT 1;
 
 -- 查询 session 最近一次 diff
 getLatestDiff:
-SELECT session_id, message_id, changes_json, unified_diff, created_at
+SELECT session_id, message_id, changes_json, unified_diff, created_at, workspace_id, checkout_root_at_creation, project_relative_path_at_creation, workspace_generation
 FROM diffs
 WHERE session_id = ?
 ORDER BY created_at DESC
@@ -226,3 +258,77 @@ WHERE session_id = ?;
 updateMessagePayload:
 UPDATE message_history SET payload = ?, status = ?
 WHERE session_id = ? AND message_id = ?;
+
+
+-- ============================================================
+-- 工作区表与操作表
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS workspaces (
+    id                     TEXT NOT NULL PRIMARY KEY,
+    project_id             TEXT NOT NULL,
+    kind                   TEXT NOT NULL,
+    state                  TEXT NOT NULL,
+    associated_session_id  TEXT,
+    updated_at             TEXT NOT NULL,
+    payload                TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id);
+CREATE INDEX IF NOT EXISTS idx_workspaces_session ON workspaces(associated_session_id);
+
+insertWorkspace:
+INSERT OR REPLACE INTO workspaces (id, project_id, kind, state, associated_session_id, updated_at, payload)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+getWorkspace:
+SELECT id, project_id, kind, state, associated_session_id, updated_at, payload
+FROM workspaces
+WHERE id = ?;
+
+listWorkspacesByProject:
+SELECT id, project_id, kind, state, associated_session_id, updated_at, payload
+FROM workspaces
+WHERE project_id = ?
+ORDER BY updated_at DESC;
+
+deleteWorkspace:
+DELETE FROM workspaces
+WHERE id = ?;
+
+CREATE TABLE IF NOT EXISTS workspace_operations (
+    id               TEXT NOT NULL PRIMARY KEY,
+    idempotency_key  TEXT NOT NULL UNIQUE,
+    project_id       TEXT NOT NULL,
+    workspace_id     TEXT NOT NULL,
+    state            TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    payload          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_operations_project ON workspace_operations(project_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_operations_workspace ON workspace_operations(workspace_id);
+
+insertWorkspaceOperation:
+INSERT OR REPLACE INTO workspace_operations (id, idempotency_key, project_id, workspace_id, state, updated_at, payload)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+getWorkspaceOperation:
+SELECT id, idempotency_key, project_id, workspace_id, state, updated_at, payload
+FROM workspace_operations
+WHERE id = ?;
+
+getWorkspaceOperationByIdempotencyKey:
+SELECT id, idempotency_key, project_id, workspace_id, state, updated_at, payload
+FROM workspace_operations
+WHERE idempotency_key = ?;
+
+listWorkspaceOperationsByProject:
+SELECT id, idempotency_key, project_id, workspace_id, state, updated_at, payload
+FROM workspace_operations
+WHERE project_id = ?
+ORDER BY updated_at DESC;
+
+deleteWorkspaceOperation:
+DELETE FROM workspace_operations
+WHERE id = ?;

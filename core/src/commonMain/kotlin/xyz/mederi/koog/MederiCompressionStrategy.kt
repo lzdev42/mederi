@@ -6,6 +6,7 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.ResponseMetaInfo
 import java.time.Instant
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.toList
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
@@ -82,11 +83,16 @@ class MederiCompressionStrategy(
             // 旧消息太少不值得花一次 LLM（沿用旧行为：< 2 条不压）
             if (plan.olderBatches.sumOf { it.size } < 2) return
 
-            // 逐批压缩：每批把 prompt 换成该批 + 追加 SUMMARY_PROMPT，调 LLM 取文本
+            // 逐批压缩：每批把 prompt 换成该批 + 追加 SUMMARY_PROMPT，调 LLM 取文本。
+            // 流式调用（与主 turn 统一走 executeStreaming）：非流式 execute() 无 SSE 空闲超时
+            // 保护，慢模型上中间代理/网关（nginx/Cloudflare，默认 60-120s）会超时杀连接；
+            // 流式 SSE 只要还在吐数据就不超时。toolChoice = null 阻止模型调工具。
             val summaries = plan.olderBatches.map { batch ->
-                llmSession.prompt = llmSession.prompt.withMessages { _ -> batch }
+                llmSession.prompt = llmSession.prompt
+                    .withMessages { _ -> batch }
+                    .withUpdatedParams { toolChoice = null }
                 llmSession.appendPrompt { user(SUMMARY_PROMPT) }
-                llmSession.requestLLMWithoutTools().textContent()
+                llmSession.requestLLMStreaming().toList().toAssistantMessageSafe().textContent()
             }
 
             // 多批小结合并为一条（保证首行以 TLDR: 开头）

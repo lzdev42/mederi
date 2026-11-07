@@ -49,6 +49,10 @@ interface ProviderManager {
 
     suspend fun delete(id: String)
 
+    /** Create an independent ChatGPT subscription connection. */
+    suspend fun createChatGptProvider(): Provider =
+        throw UnsupportedOperationException("ChatGPT authorization is not available")
+
     // === API Key ===
 
     suspend fun listKeys(providerId: String): List<ProviderApiKey>
@@ -93,15 +97,13 @@ interface ProviderManager {
     suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean): AIModel
 
     /**
-     * FETCHED 模型元数据的唯一写入路径（用户意图 API 之外的全部模型写入都走这里）。
+     * 远端元数据合并落库入口；用户编辑走 [updateUserModel]。
      *
-     * - endpoint != null = refresh：端点 + 目录全量权威重同步
-     * - endpoint == null = 启动回填：只补空、绝不覆盖
-     *
-     * 合并规则唯一实现见 [ModelMerge]；本方法只做模型存在性/来源校验 + 无变化跳过落库。
+     * 显式自动设置使用 endpoint == null，仅对窗口/输出上限补空；
+     * 能力、档位和价格等字段按 [ModelMerge] 的统一规则处理。
+     * 普通刷新仅同步列表，不对存量模型调用本方法。
      *
      * @throws NoSuchElementException 模型不存在。
-     * @throws IllegalStateException 目标是 MANUAL 模型（用户权威，同步不许触碰）。
      */
     suspend fun applyRemoteMetadata(
         providerId: String,
@@ -113,13 +115,11 @@ interface ProviderManager {
     /**
      * 用户编辑模型（设置页对话框唯一通道）。
      *
-     * MANUAL 模型：用户权威，全部字段可改。
-     * FETCHED 模型：元数据是端点/目录权威，**只允许改 isEnabled 和图片能力**——
-     * 图片能力走用户覆盖（[AIModel.supportsImagesOverride]，用户权威，后续同步永不覆盖），
-     * 因为目录对长尾/私有模型经常缺数据或标错；其余元数据字段传入即抛错。
+     * 拉取与手动模型均可修改名称、能力、窗口/输出上限和推理档位。
+     * null 参数表示保留现值；FETCHED 图片能力同时写入用户覆盖，显式自动设置也保留。
+     * 普通刷新只同步模型列表，不覆盖存量设置；显式自动设置仍按 [ModelMerge] 合并目录数据。
      *
      * @throws NoSuchElementException 模型不存在。
-     * @throws IllegalStateException FETCHED 模型携带了 isEnabled/supportsImages 之外的修改。
      */
     suspend fun updateUserModel(
         providerId: String,
@@ -131,7 +131,8 @@ interface ProviderManager {
         maxTokens: Int? = null,
         supportsImages: Boolean? = null,
         reasoningLevels: List<ReasoningLevel>? = null,
-        isEnabled: Boolean? = null
+        isEnabled: Boolean? = null,
+        optimizeForRequestCount: Boolean? = null,
     ): AIModel
 
     suspend fun deleteModel(providerId: String, modelId: String)

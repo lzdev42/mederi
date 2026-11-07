@@ -35,6 +35,10 @@ data class Conversation(
     val directory: String? = null,
     /** 会话草稿文本（来自 session.draftText）；切换会话时回填输入框。 */
     val draftText: String? = null,
+    val workspaceId: String? = null,
+    val associatedWorktreeId: String? = null,
+    val archivedAt: String? = null,
+    val pinned: Boolean = false
 )
 
 enum class ChatRole { User, Assistant, System, Summary }
@@ -203,6 +207,9 @@ enum class CoreEventType {
      */
     LLM_REQUEST_COMPLETED,
     QUESTION_REQUESTED,
+    EXECUTION_APPROVAL_REQUESTED,
+    EXECUTION_APPROVAL_RESOLVED,
+    SANDBOX_SETTINGS_CHANGED,
     QUESTION_RESOLVED,
     PLAN_APPROVAL_REQUESTED,
     PLAN_APPROVAL_RESOLVED,
@@ -273,7 +280,15 @@ enum class CoreEventType {
      * 会话 skill 卸载（与 core EventType.SKILL_DEACTIVATED 同名对齐）。
      * payload: skillName / activeSkills（最新列表的 JSON）。
      */
-    SKILL_DEACTIVATED
+    SKILL_DEACTIVATED,
+
+    // ==========================================
+    // Worktree 工作区与会话元数据事件 (D05)
+    // ==========================================
+    WORKSPACE_CHANGED,
+    WORKSPACE_OPERATION_UPDATED,
+    CONVERSATION_ARCHIVE_CHANGED,
+    CONVERSATION_PIN_CHANGED
 }
 
 /**

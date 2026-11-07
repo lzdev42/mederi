@@ -36,6 +36,7 @@ class SpawnToolDynamicModelTest {
         val ran = kotlinx.coroutines.CompletableDeferred<Unit>()
         var lastModel: AIModel? = null
         var lastReasoning: ReasoningLevel? = null
+        var lastApiKey: String? = null
         override suspend fun run(
             task: String, briefing: String?, plan: String?, role: SubagentRole,
             directories: List<String>, aiModel: AIModel,
@@ -46,6 +47,7 @@ class SpawnToolDynamicModelTest {
         ): String {
             lastModel = aiModel
             lastReasoning = reasoningLevel
+            lastApiKey = apiKeyId
             ran.complete(Unit)
             return "ok"
         }
@@ -190,7 +192,7 @@ class SpawnToolDynamicModelTest {
         override suspend fun addModel(providerId: String, providerModelId: String, name: String, supportsReasoning: Boolean, reasoningLevel: ReasoningLevel, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean, reasoningLevels: List<ReasoningLevel>, isEnabled: Boolean, inputPricePerMillion: Double?, outputPricePerMillion: Double?): AIModel = throw NotImplementedError()
         override suspend fun addFetchedModel(providerId: String, merged: AIModel, isEnabled: Boolean): AIModel = throw NotImplementedError()
         override suspend fun applyRemoteMetadata(providerId: String, modelId: String, endpoint: xyz.mederi.provider.domain.model.RemoteModelInfo?, catalog: xyz.mederi.metadata.ModelMetadata?): AIModel = throw NotImplementedError()
-        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?): AIModel = throw NotImplementedError()
+        override suspend fun updateUserModel(providerId: String, modelId: String, name: String?, supportsReasoning: Boolean?, reasoningLevel: ReasoningLevel?, contextWindow: Int?, maxTokens: Int?, supportsImages: Boolean?, reasoningLevels: List<ReasoningLevel>?, isEnabled: Boolean?, optimizeForRequestCount: Boolean?): AIModel = throw NotImplementedError()
         override suspend fun deleteModel(providerId: String, modelId: String) {}
         override suspend fun listAllModels(): List<AIModel> = models.values.toList()
         override suspend fun fetchRemoteModels(providerId: String): List<xyz.mederi.provider.domain.model.RemoteModelInfo> = emptyList()
@@ -201,9 +203,11 @@ class SpawnToolDynamicModelTest {
         val runner = RecordingRunner()
         val (planStore, planId) = planStoreWithSpecdSubtask()
         val customModel = model("CUSTOM")
+        val sessions = sessionStoreWith(model("B"), ReasoningLevel.HIGH)
         val configManager = SubagentConfigManager(
             xyz.mederi.store.InMemorySettingsStore(),
-            FakeProviderManager(mapOf("CUSTOM" to customModel))
+            FakeProviderManager(mapOf("CUSTOM" to customModel)),
+            sessions
         )
         configManager.set(
             SubagentRole.EXECUTOR,
@@ -212,7 +216,7 @@ class SpawnToolDynamicModelTest {
 
         val tool = newSpawnTool(
             runner, turnModel = model("A"), turnReasoning = ReasoningLevel.NONE,
-            sessionStore = sessionStoreWith(model("B"), ReasoningLevel.HIGH),
+            sessionStore = sessions,
             planStore = planStore,
             subagentConfigManager = configManager
         )
@@ -225,12 +229,40 @@ class SpawnToolDynamicModelTest {
     }
 
     @Test
+    fun `both spawn roles pass session overrides to runner rather than system defaults`() = runBlocking {
+        val (plans, _) = planStoreWithSpecdSubtask()
+        for (role in listOf(SubagentRole.EXECUTOR, SubagentRole.RESEARCHER)) {
+            val runner = RecordingRunner()
+            val sessions = sessionStoreWith(model("PARENT"), ReasoningLevel.LOW)
+            val configs = SubagentConfigManager(xyz.mederi.store.InMemorySettingsStore(),
+                FakeProviderManager(mapOf("LOCAL" to model("LOCAL"))), sessions)
+            configs.set(role, xyz.mederi.domain.model.SubagentModelConfig("GLOBAL", ReasoningLevel.HIGH, "global-key"))
+            configs.set(role, xyz.mederi.domain.model.SubagentModelConfig("LOCAL", ReasoningLevel.MAX,
+                xyz.mederi.provider.API_KEY_ROTATION_ID), "sess_parent")
+            if (role == SubagentRole.EXECUTOR) {
+                newSpawnTool(runner, model("TURN"), ReasoningLevel.NONE, sessions, plans, configs)
+                    .execute(SpawnAgentArgs(task = "ad hoc task"))
+            } else {
+                SpawnResearcherTool(SubagentManager(runner, scope), emptyList(), model("TURN"),
+                    ReasoningLevel.NONE, "p1", "sess_parent", sessionStore = sessions,
+                    subagentConfigManager = configs).execute(SpawnResearcherArgs(task = "investigate"))
+            }
+            kotlinx.coroutines.withTimeout(5_000) { runner.ran.await() }
+            assertEquals("LOCAL", runner.lastModel?.id, role.name)
+            assertEquals(ReasoningLevel.MAX, runner.lastReasoning, role.name)
+            assertEquals(xyz.mederi.provider.API_KEY_ROTATION_ID, runner.lastApiKey, role.name)
+        }
+    }
+
+    @Test
     fun `spawn falls back to session model when configured model is not found`() = runBlocking {
         val runner = RecordingRunner()
         val (planStore, planId) = planStoreWithSpecdSubtask()
+        val sessions = sessionStoreWith(model("B"), ReasoningLevel.HIGH)
         val configManager = SubagentConfigManager(
             xyz.mederi.store.InMemorySettingsStore(),
-            FakeProviderManager(emptyMap())
+            FakeProviderManager(emptyMap()),
+            sessions
         )
         configManager.set(
             SubagentRole.EXECUTOR,
@@ -239,7 +271,7 @@ class SpawnToolDynamicModelTest {
 
         val tool = newSpawnTool(
             runner, turnModel = model("A"), turnReasoning = ReasoningLevel.NONE,
-            sessionStore = sessionStoreWith(model("B"), ReasoningLevel.HIGH),
+            sessionStore = sessions,
             planStore = planStore,
             subagentConfigManager = configManager
         )

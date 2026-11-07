@@ -1,6 +1,7 @@
 package xyz.mederi.ui.chat
 
 import xyz.mederi.core.contract.models.ToolCallUi
+import xyz.mederi.ui.expandBatchToolCall
 
 /**
  * 工具动作大类枚举（用于时序行图标与聚合展示）。
@@ -52,7 +53,7 @@ data class ToolActionGroup(
  * 将工具调用列表转换为单项动作组（严格保持时序不汇总，如实展示每个工具调用）。
  */
 fun groupToolCallsByAction(calls: List<ToolCallUi>): List<ToolActionGroup> {
-    return calls.map { call ->
+    return calls.flatMap { expandBatchToolCall(it) }.map { call ->
         ToolActionGroup(classifyToolAction(call.name), listOf(call))
     }
 }

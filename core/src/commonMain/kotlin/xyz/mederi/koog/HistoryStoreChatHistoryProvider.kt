@@ -154,8 +154,8 @@ class HistoryStoreChatHistoryProvider(
         if (incoming.isEmpty()) return
 
         historyStore.updateHistory(conversationId) { stored ->
-            val pending = stored.filter { it.pendingSteering }
-            val existing = stored.filterNot { it.pendingSteering }
+            val pending = stored.filter { it.pendingSteering || it.pendingWorkspaceInput != null }
+            val existing = stored.filterNot { it.pendingSteering || it.pendingWorkspaceInput != null }
 
             // ── 已有 id 过滤（AI 视图回显不覆盖已落库消息）：
             //    库是含全量字段（图片等）的真理源。includeImages=false 时 load 返回的
@@ -290,7 +290,7 @@ class HistoryStoreChatHistoryProvider(
          * 所有需要「发送给 AI 的内容」的地方（ChatMemory load、token 估算等）都应使用本函数。
          */
         suspend fun aiViewWindow(historyStore: HistoryStore, sessionId: String): List<Message> {
-            val all = historyStore.load(sessionId).filterNot { it.pendingSteering }
+            val all = historyStore.load(sessionId).filterNot { it.pendingSteering || it.pendingWorkspaceInput != null }
             val markerIndex = all.indexOfLast { it.role == MessageRole.SUMMARY }
             return if (markerIndex >= 0) all.drop(markerIndex) else all
         }

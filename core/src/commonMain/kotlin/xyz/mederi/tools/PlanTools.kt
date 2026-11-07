@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonTransformingSerializer
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
+import xyz.mederi.plan.AcceptanceCase
 import xyz.mederi.plan.Decision
 import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.Plan
@@ -170,7 +171,7 @@ class PlanTools(
         @LLMDescription("Design decisions resolved during planning this subtask.")
         val decisions: List<DecisionArg> = emptyList(),
         @LLMDescription("Verification: a single executable command (ASCII, assert-style). verify_subtask actually runs it; prose is rejected.")
-        val verification: String,
+        val verification: String = "",
         @LLMDescription("Optional working directory for the verification command (relative to project root). Default = project root.")
         val verificationCwd: String? = null,
         @LLMDescription("Optional timeout for the verification command, in seconds. Default = 30.")
@@ -201,6 +202,12 @@ class PlanTools(
         val parallelizable: Boolean = false,
         @LLMDescription("Optional. Subtask-level technical appendix for reviewers/controllers: current logic, code evidence, root cause, fix preview (pseudo-code or real code), business logic. High information density — no full source dumps, only key code lines + core contradiction + key pseudocode. Leave empty for simple subtasks (new files, mechanical changes). This is the argument version (why), distinct from spec (how).")
         val appendix: String? = null,
+        @LLMDescription("Structured acceptance cases. Collector outputs one JSON object with scalar actual values keyed by case ID. Include setup, concrete input, actual entry point, expected value, evidence source and defect detected.")
+        val acceptanceCases: List<AcceptanceCase> = emptyList(),
+        @LLMDescription("Existing project-relative collector, assertion and fixture files read by the verification command. Inline-only collectors can leave this empty.")
+        val acceptanceFiles: List<String> = emptyList(),
+        @LLMDescription("True for the final task validating the overall outcome through its actual entry point. It depends on every implementation task.")
+        val overallAcceptance: Boolean = false,
     )
 
     @KeepGeneratedSerializer
@@ -317,31 +324,33 @@ class PlanTools(
             "leave openQuestions empty. Create or update a PENDING_APPROVAL plan. Without planId: " +
             "creates a new plan (voids prior active plans in this session). With planId: updates the existing " +
             "plan in place — only provide fields you want to change, blank/empty fields keep their existing " +
-            "values. Only PENDING_APPROVAL plans can be updated. APPROVED/IN_PROGRESS plans: use converge_plan " +
-            "to append subtasks. VOIDED/COMPLETED plans cannot be modified. In Approval mode, the plan is " +
-            "saved to a file and the user is notified via event. In Autonomous mode, the plan is auto-approved."
+            "values. Only a legacy PENDING_APPROVAL draft can be edited in place. Structured drafts use a " +
+            "fresh ID for each revision. Replacing an approved active plan requires explicit user approval. " +
+            "Autonomous mode auto-approves initial plans."
     ) {
         override suspend fun execute(args: WritePlanArgs): String {
+            if (args.planId.isBlank()) validatePlan(args)?.let { return "Error: $it" }
+            val acceptanceError = validateAcceptance(args.subtasks)
+            if (acceptanceError != null) return "Error: $acceptanceError"
+            val pinnedFiles = try {
+                args.subtasks.map { st -> planStore.pinAcceptanceFiles(st.acceptanceFiles) }
+            } catch (failure: IllegalArgumentException) {
+                return "Error: ${failure.message}"
+            } catch (failure: java.io.IOException) {
+                return "Error: could not read acceptance files: ${failure.message}"
+            }
             // ===== UPDATE MODE =====
             if (args.planId.isNotBlank()) {
                 val existing = planStore.load(args.planId)
                     ?: return "Error: Plan not found: ${args.planId}"
-                if (existing.status != PlanStatus.PENDING_APPROVAL)
+                if (existing.sessionId != sessionId || existing.status != PlanStatus.PENDING_APPROVAL)
                     return "Error: Cannot update plan — status is ${existing.status}. " +
                         "Only PENDING_APPROVAL plans can be updated. " +
                         "APPROVED plans: use converge_plan to append subtasks. " +
                         "Spec corrections: use generate_spec with reason= (append-only)."
 
-                // 局部校验：只校验提供的字段
-                if (args.subtasks.isNotEmpty()) {
-                    // 校验新提供的子任务（verification/expected/stdoutContains 规则）
-                    args.subtasks.forEachIndexed { i, st ->
-                        if (st.verification.isBlank())
-                            return "Error: Subtask $i (${st.name}): verification is required."
-                        if (st.verificationExpected.isBlank())
-                            return "Error: Subtask $i (${st.name}): verificationExpected is required."
-                    }
-                }
+                if (existing.subtasks.any { it.acceptanceCases.isNotEmpty() } || args.subtasks.isNotEmpty())
+                    return "Error: submit a new draft with a new plan ID so the approval refers to the exact version."
                 if (args.changes.isNotEmpty()) {
                     for (c in args.changes) {
                         if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
@@ -374,37 +383,17 @@ class PlanTools(
                     successCriteria = args.successCriteria.takeIf { it.isNotEmpty() } ?: existing.successCriteria,
                     architecture = args.architecture ?: existing.architecture,
                     researchNotes = args.researchNotes.takeIf { it.isNotBlank() } ?: existing.researchNotes,
-                    appendix = args.appendix ?: existing.appendix,
-                    subtasks = args.subtasks.takeIf { it.isNotEmpty() }?.mapIndexed { i, st ->
-                        Subtask(
-                            index = i,
-                            name = st.name,
-                            planDetail = st.planDetail,
-                            targetFiles = st.targetFiles,
-                            decisions = st.decisions.map { Decision(it.question, it.choice, it.rationale, it.alternatives.joinToString("; ")) },
-                            verification = VerificationSpec(
-                                command = st.verification,
-                                cwd = st.verificationCwd,
-                                timeoutSeconds = st.verificationTimeoutSeconds,
-                                expected = st.verificationExpected,
-                                expectStdoutContains = st.verificationExpectStdoutContains,
-                                expectStdoutNotContains = st.verificationExpectStdoutNotContains,
-                            ),
-                            dependsOn = st.dependsOn,
-                            parallelizable = st.parallelizable,
-                            appendix = st.appendix
-                        )
-                    } ?: existing.subtasks
+                    appendix = args.appendix ?: existing.appendix
                 )
 
                 planStore.save(updated)
 
                 val planPath = planStore.getPlanAbsolutePath(updated.id)
                     ?: return "Error: plan was updated but plan.md could not be read."
-                val planContent = runCatching { java.io.File(planPath).readText() }.getOrDefault("")
+                val planContent = planStore.planMarkdown(updated)
                 val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), updated.subtasks)
 
-                return if (agentMode == AgentMode.APPROVAL) {
+                return if (updated.status == PlanStatus.PENDING_APPROVAL) {
                     val result = planApprovalRequester.request(
                         planId = updated.id,
                         planPath = planPath,
@@ -429,11 +418,11 @@ class PlanTools(
             }
 
             // ===== CREATE MODE（现有逻辑，原封不动）=====
-            val error = validatePlan(args)
-            if (error != null) return "Error: $error"
-
             // 三条硬规则之二：同一会话只有最新计划可执行——新 write_plan 作废全部非终态旧计划
             // （含执行中），作废旧计划移入 plans-voided/ 留痕。已完成的 COMPLETED 计划保留不受影响。
+            val previous = planStore.loadBySession(sessionId)
+            val replacesPlanId = previous?.takeIf { it.status != PlanStatus.PENDING_APPROVAL || it.replacesPlanId != null }?.id
+            val needsUserApproval = agentMode == AgentMode.APPROVAL || replacesPlanId != null
             val voidedIds = planStore.voidActivePlans(sessionId)
             if (voidedIds.isNotEmpty()) {
                 voidedIds.forEach { oldPlanId ->
@@ -496,12 +485,16 @@ class PlanTools(
                         ),
                         dependsOn = st.dependsOn,
                         parallelizable = st.parallelizable,
-                        appendix = st.appendix
+                        appendix = st.appendix,
+                        acceptanceCases = st.acceptanceCases,
+                        acceptanceFiles = pinnedFiles[i],
+                        overallAcceptance = st.overallAcceptance
                     )
                 },
-                status = if (agentMode == AgentMode.AUTONOMOUS) PlanStatus.APPROVED else PlanStatus.PENDING_APPROVAL,
+                status = if (needsUserApproval) PlanStatus.PENDING_APPROVAL else PlanStatus.APPROVED,
                 createdAt = timestamp,
-                agentMode = agentMode
+                agentMode = agentMode,
+                replacesPlanId = replacesPlanId
             )
 
             planStore.save(plan)
@@ -512,14 +505,14 @@ class PlanTools(
                     "of the project directories. Check that the project's main directory is writable, " +
                     "then retry write_plan."
 
-            val planContent = runCatching { java.io.File(planPath).readText() }.getOrDefault("")
+            val planContent = planStore.planMarkdown(plan)
             DebugLog.data(
                 "PlanTools",
                 "write_plan executed",
                 "planId=${plan.id}, title='${plan.title}', summary='${plan.summary}', contentLen=${planContent.length}"
             )
 
-            return if (agentMode == AgentMode.APPROVAL) {
+            return if (needsUserApproval) {
                 val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), plan.subtasks)
                 val result = planApprovalRequester.request(
                     planId = plan.id,
@@ -533,9 +526,13 @@ class PlanTools(
                 if (result.superseded) {
                     "Plan superseded by a newer plan request."
                 } else if (result.approved) {
-                    planStore.update(plan.copy(status = PlanStatus.APPROVED))
+                    val approvedPlan = planStore.updatePlan(plan.id) { current ->
+                        if (current != plan || current.subtasks.any { !planStore.acceptanceFilesMatch(it) }) null
+                        else current.copy(status = PlanStatus.APPROVED)
+                    }
+                    if (approvedPlan == null) return "Error: the draft or its verification files changed before approval. Submit a fresh draft."
                     notebook.append("## ${Instant.now()} — Plan approved: ${plan.title}")
-                    emitPlanProgress(plan.copy(status = PlanStatus.APPROVED), "approved")
+                    emitPlanProgress(approvedPlan, "approved")
                     "Plan approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
                 } else {
                     // 计划无"拒绝"态（只有批准/作废/被无视）。此分支是用户未批准也未作废时的
@@ -565,7 +562,12 @@ class PlanTools(
                     "planId" to plan.id,
                     "action" to action,
                     "subtasks" to subtasksJson
-                ),
+                ) + if (action == "created") mapOf(
+                    "title" to plan.title,
+                    "summary" to plan.summary,
+                    "planPath" to planStore.getPlanAbsolutePath(plan.id).orEmpty(),
+                    "planContent" to planStore.planMarkdown(plan)
+                ) else emptyMap(),
                 timestamp = Instant.now().toString()
             ))
         }
@@ -588,6 +590,8 @@ class PlanTools(
         override suspend fun execute(args: ConvergePlanArgs): String {
             val plan = planStore.load(args.planId)
                 ?: return "Error: Plan not found: ${args.planId}"
+            if (plan.sessionId != sessionId || plan.subtasks.any { it.acceptanceCases.isNotEmpty() })
+                return "Error: approved scope is fixed. Repair and retry with the same cases, or submit a replacement for approval."
             if (args.remediationSubtasks.isEmpty())
                 return "Error: Must provide at least one remediation subtask."
 
@@ -687,7 +691,7 @@ class PlanTools(
         override suspend fun execute(args: GenerateSpecArgs): String {
             val plan = planStore.load(args.planId)
                 ?: return "Error: Plan not found: ${args.planId}"
-            if (plan.status != PlanStatus.APPROVED && plan.status != PlanStatus.IN_PROGRESS)
+            if (plan.sessionId != sessionId || (plan.status != PlanStatus.APPROVED && plan.status != PlanStatus.IN_PROGRESS))
                 return "Error: Plan ${plan.id} is ${plan.status}. Specs can only be generated for an approved plan."
             val st = plan.subtasks.getOrNull(args.subtaskIndex)
                 ?: return "Error: Subtask index ${args.subtaskIndex} out of range (0..${plan.subtasks.size - 1})."
@@ -709,6 +713,10 @@ class PlanTools(
             // 用 updatePlan 原子写入：工具支持并行调度，同消息多次 generate_spec 时
             // 裸 load→copy→save 会互相覆盖（后写把前写的 spec 恢复成旧值）。
             val updated = planStore.updatePlan(args.planId) { p ->
+                val current = p.subtasks.getOrNull(args.subtaskIndex) ?: return@updatePlan null
+                if (p.sessionId != sessionId || p.isTerminal || p.status == PlanStatus.PENDING_APPROVAL ||
+                    current.status == SubtaskStatus.COMPLETED || (current.spec != st.spec && args.reason.isBlank()))
+                    return@updatePlan null
                 p.copy(
                     subtasks = p.subtasks.map { s ->
                         if (s.index == args.subtaskIndex) s.copy(
@@ -748,6 +756,22 @@ class PlanTools(
      * 计划校验（聚合报错）：一次列出全部问题，模型一轮补齐所有缺失项。
      * 逐条报错的台阶实测爬不完（弱模型 6+ 轮都到不了底），聚合后一轮收敛。
      */
+    private fun validateAcceptance(subtasks: List<SubtaskArg>): String? {
+        if (subtasks.isEmpty()) return null // Partial updates may keep the existing task list.
+        if (subtasks.any { it.acceptanceCases.isEmpty() || it.acceptanceCases.any { case -> !case.isValid() } })
+            return "Every task needs concrete acceptance cases with valid IDs, setup, input, steps, observation source, expected value and defect detected."
+        if (subtasks.any { task -> task.acceptanceCases.any { it.manual } &&
+                (task.acceptanceCases.any { !it.manual } || task.verification.isNotBlank() || task.acceptanceFiles.isNotEmpty()) })
+            return "Put manual cases in a dedicated task with no collector command or collector files."
+        val cases = subtasks.flatMap { it.acceptanceCases }
+        if (cases.map { it.id }.distinct().size != cases.size) return "Acceptance case IDs must be unique in the plan."
+        val overall = subtasks.withIndex().filter { it.value.overallAcceptance }
+        if (overall.size != 1 || overall.single().index != subtasks.lastIndex ||
+            overall.single().value.dependsOn.toSet() != (0 until subtasks.lastIndex).toSet())
+            return "The final task must be the only overall acceptance task and depend on every preceding task."
+        return null
+    }
+
     private fun validatePlan(args: WritePlanArgs): String? {
         val errors = mutableListOf<String>()
         if (args.subtasks.isEmpty())
@@ -778,7 +802,7 @@ class PlanTools(
                 errors.add("Change ${c.filePath}: a [NEW] file must justify why an existing file cannot be modified instead.")
         }
         args.subtasks.forEachIndexed { i, st ->
-            if (st.verification.isBlank())
+            if (st.verification.isBlank() && st.acceptanceCases.none { it.manual })
                 errors.add("Subtask $i (${st.name}): verification is required.")
             val hasCJK = st.verification.any { it.code in 0x4E00..0x9FFF }
             if (hasCJK)
@@ -786,17 +810,17 @@ class PlanTools(
                     "Subtask $i (${st.name}): verification 必须是单条可执行命令（ASCII），不能是散文描述。" +
                         "示例：`python3 -c 'assert 1+1==2'`。"
                 )
-            if (st.verificationExpected.isBlank())
+            if (st.verificationExpected.isBlank() && st.acceptanceCases.isEmpty())
                 errors.add(
                     "Subtask $i (${st.name}): verificationExpected is required — state in plain words what the " +
                         "command must output for this subtask to count as passed (e.g. '3 passed, 0 failed'). " +
                         "It is rendered on the approval card so the user can judge whether the verification " +
                         "method itself is right."
                 )
-            if (st.targetFiles.isEmpty())
+            if (st.targetFiles.isEmpty() && !st.overallAcceptance && st.acceptanceCases.none { it.manual })
                 errors.add("Subtask $i (${st.name}): targetFiles required (which files will be changed?).")
             // 规则 1：每个子任务的验证必须钉至少 1 个期望 stdout 字面量（裸 exit-code 验证抓不到"活没干成"）
-            checkLiteralRequired(st)?.let { errors.add("Subtask $i (${st.name}): $it") }
+            if (st.acceptanceCases.isEmpty()) checkLiteralRequired(st)?.let { errors.add("Subtask $i (${st.name}): $it") }
             for (dep in st.dependsOn) {
                 if (dep >= args.subtasks.size || dep < 0)
                     errors.add("Subtask $i (${st.name}): dependsOn $dep out of range (0..${args.subtasks.size - 1}).")
@@ -848,11 +872,8 @@ class PlanTools(
     inner class UpdateVerificationTool : SimpleTool<UpdateVerificationArgs>(
         argsType = typeToken<UpdateVerificationArgs>(),
         name = ToolName.UPDATE_VERIFY.value,
-        description = "Amend an existing subtask's verification CONTRACT (command/cwd/timeout/expected/machine-checked " +
-            "literals) atomically via PlanStore.updatePlan. Allowed for non-COMPLETED subtasks " +
-            "(PENDING/IN_PROGRESS/FAILED). Use when the verification method itself was written wrong and needs " +
-            "fixing before re-verify. Append-only: the FULL old contract is preserved in the audit trail " +
-            "(verificationChanges) — amendments never destroy history."
+        description = "Amend a legacy unapproved draft's verification contract. Approved plans and structured " +
+            "drafts require a replacement through write_plan. The full legacy contract history is retained."
     ) {
         override suspend fun execute(args: UpdateVerificationArgs): String {
             if (args.command.isBlank()) return "Error: command must not be blank."
@@ -863,7 +884,8 @@ class PlanTools(
             var downgradeRejected = false
             val updated = planStore.updatePlan(args.planId) { p ->
                 val st = p.subtasks.getOrNull(args.subtaskIndex) ?: return@updatePlan null
-                if (st.status == SubtaskStatus.COMPLETED) return@updatePlan null
+                if (p.sessionId != sessionId || p.status != PlanStatus.PENDING_APPROVAL ||
+                    st.acceptanceCases.isNotEmpty() || st.status == SubtaskStatus.COMPLETED) return@updatePlan null
                 oldSpec = st.verification
                 // null = 保留原值：避免"只想改命令"却把既有预期静默清空（数据零销毁原则）
                 val newSpec = VerificationSpec(
@@ -901,7 +923,7 @@ class PlanTools(
                     "changed task disposition (and state that in reason with a 'decision/disposition/restated/" +
                     "changed' keyword)."
             if (updated == null)
-                return "Error: Plan not found, or subtask ${args.subtaskIndex} missing/COMPLETED (cannot amend)."
+                return "Error: Plan not found, or subtask ${args.subtaskIndex} missing/COMPLETED or locked (submit a new plan revision for approval)."
             eventBus.emit(MederiEvent(
                 type = EventType.PLAN_PROGRESS,
                 sessionId = sessionId,

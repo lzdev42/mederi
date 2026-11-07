@@ -4,10 +4,11 @@ import kotlinx.serialization.Serializable
 import xyz.mederi.provider.domain.model.ReasoningLevel
 
 /**
- * 模型来源（元数据所有权标记，硬性规则）：
- * - [FETCHED]：由 /models 端点拉取 + 模型目录合并产生。元数据权威 = 端点/目录，
- *   唯一写入路径是 [xyz.mederi.provider.ModelMerge]（同步合并）；UI 元数据只读。
- * - [MANUAL]：用户手动添加。元数据权威 = 用户，同步（refresh/回填）永不触碰。
+ * 模型来源标记：
+ * - [FETCHED]：由 /models 端点拉取，初始元数据可由模型目录补齐。
+ * - [MANUAL]：用户手动添加。
+ * 两种来源均可通过设置页修改元数据；普通模型列表刷新保留存量设置。
+ * 用户显式执行「自动设置」时，按 [xyz.mederi.provider.ModelMerge] 合并目录信息。
  */
 @Serializable
 enum class ModelOrigin {
@@ -32,7 +33,7 @@ enum class ModelOrigin {
  * @param name 模型显示名称。
  * @param supportsReasoning 是否支持 reasoning。
  * @param reasoningLevel 推理级别，默认 NONE。
- * @param origin 元数据所有权（见 [ModelOrigin]）。默认 FETCHED 兼容存量数据。
+ * @param origin 模型来源（见 [ModelOrigin]）。默认 FETCHED 兼容存量数据。
  * @param isEnabled 是否在聊天模型选择器中显示（用户可开关，默认显示）。
  * @param inputPricePerMillion 输入参考价（美元/百万 token，来自 models.dev 目录）。
  *        是参考价不是真实账单价（不知道用户 plan），仅供预估成本参考。
@@ -59,5 +60,7 @@ data class AIModel(
     val origin: ModelOrigin = ModelOrigin.FETCHED,
     val isEnabled: Boolean = true,
     val inputPricePerMillion: Double? = null,
-    val outputPricePerMillion: Double? = null
+    val outputPricePerMillion: Double? = null,
+    /** 用户声明该模型按请求次数计算成本，选择更积极的批量读取策略。 */
+    val optimizeForRequestCount: Boolean = false,
 )

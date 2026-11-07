@@ -32,7 +32,7 @@ import kotlinx.serialization.json.JsonObject
  * ## Google 特例
  *
  * GoogleParams 的 thinkingConfig 是强类型参数，不支持根级合并，因此 GOOGLE 类型供应商的
- * [levels] 值仍为标量：数字字符串 → thinkingBudget，"low"/"high" → thinkingLevel。
+ * [levels] 值仍为标量：数字字符串 → thinkingBudget，"minimal"/"low"/"high" → thinkingLevel。
  *
  * @param levels 级别 → 请求体 JSON 片段。值为 null 或键缺失表示该级别不发参数。
  * @param parameterName 旧版标量值的挂载参数名，新配置留空。
@@ -129,8 +129,7 @@ data class ReasoningParameter(
 
         /**
          * Google Gemini 默认推理配置。
-         * Google 走标量解释（数字 → thinkingBudget，"low"/"high" → thinkingLevel），不支持 JSON 片段。
-         * Google 只支持 LOW/HIGH。
+         * 默认提供 LOW/HIGH 档。支持 minimal 的模型可显式配置该值关闭思考。
          */
         fun forGoogle(): ReasoningParameter = ReasoningParameter(
             parameterName = "thinkingConfig",

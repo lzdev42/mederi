@@ -61,7 +61,7 @@ internal fun PrimaryActionBtn(text: String, colors: MederiColors, enabled: Boole
     WorkspaceActionButton(text = text, onClick = onClick, enabled = enabled, primary = true, colors = colors)
 }
 
-/** 字段值始终归调用方；enabled供保存中和目录元数据只读场景复用。 */
+/** 字段值始终归调用方；enabled供保存中等暂不可编辑场景复用。 */
 @Composable
 internal fun LabeledTextField(
     label: String,

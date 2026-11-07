@@ -11,7 +11,10 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.dock_plan_approve
 import mederi.app.shared.generated.resources.overview_section_plan
 import mederi.app.shared.generated.resources.overview_todo_pending
+import mederi.app.shared.generated.resources.plan_acceptance_report_title
+import mederi.app.shared.generated.resources.plan_open_acceptance_report
 import mederi.app.shared.generated.resources.plan_read_full
+import mederi.app.shared.generated.resources.plan_manual_acceptance
 import mederi.app.shared.generated.resources.plan_status_completed
 import mederi.app.shared.generated.resources.plan_status_in_progress
 import mederi.app.shared.generated.resources.plan_status_pending
@@ -43,12 +46,22 @@ fun OverviewPlanRow(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var manualPlanId by remember(viewModel.conversationId) { mutableStateOf<String?>(null) }
+    viewModel.planOverviewList.firstOrNull { it.id == manualPlanId && it.status == PlanOverviewStatus.InProgress }?.let { plan ->
+        PlanManualAcceptanceDialog(
+            caseIds = plan.manualCaseIds,
+            onDismiss = { manualPlanId = null },
+            onSubmit = { viewModel.recordPlanManualAcceptance(plan.id, it) }
+        )
+    }
     OverviewPlanContent(
         plans = viewModel.planOverviewList,
         expanded = expanded,
         onToggle = onToggle,
         onApprove = { viewModel.approvePlan(it) },
         onOpenPlan = viewModel::openPlanItem,
+        onManualAcceptance = { manualPlanId = it.id },
+        onOpenAcceptanceReport = { plan, title -> viewModel.openPlanAcceptanceReport(plan.id, title) },
         onOpenSpec = { plan, step ->
             viewModel.openSpecInExtension(plan.id, plan.title, step.index, step.name, step.spec)
         },
@@ -63,9 +76,11 @@ internal fun OverviewPlanContent(
     onToggle: () -> Unit,
     onApprove: (String) -> Unit,
     onOpenPlan: (PlanOverviewItem) -> Unit,
+    onOpenAcceptanceReport: (PlanOverviewItem, String) -> Unit,
     onOpenSpec: (PlanOverviewItem, PlanSubtaskOverview) -> Unit,
     modifier: Modifier = Modifier,
     colors: MederiColors = LocalMederiColors.current,
+    onManualAcceptance: (PlanOverviewItem) -> Unit = {},
 ) {
     if (plans.isEmpty()) return
     OverviewAccordionRow(
@@ -83,8 +98,10 @@ internal fun OverviewPlanContent(
                         item = plan,
                         onApprove = { onApprove(plan.id) },
                         onOpenPlan = { onOpenPlan(plan) },
+                        onOpenAcceptanceReport = { title -> onOpenAcceptanceReport(plan, title) },
                         onOpenSpec = { onOpenSpec(plan, it) },
                         colors = colors,
+                        onManualAcceptance = { onManualAcceptance(plan) }
                     )
                 }
             }
@@ -102,6 +119,8 @@ internal fun OverviewPlanItemContent(
     onOpenSpec: (PlanSubtaskOverview) -> Unit,
     modifier: Modifier = Modifier,
     colors: MederiColors = LocalMederiColors.current,
+    onOpenAcceptanceReport: (String) -> Unit,
+    onManualAcceptance: () -> Unit = {},
 ) {
     var subtasksExpanded by remember(item.id) { mutableStateOf(false) }
     Column(
@@ -125,6 +144,22 @@ internal fun OverviewPlanItemContent(
         ) {
             WorkspaceActionButton(stringResource(Res.string.plan_read_full), onOpenPlan,
                 icon = FeatherIcons.FileText, colors = colors)
+            if (item.status != PlanOverviewStatus.PendingApproval) {
+                val title = stringResource(Res.string.plan_acceptance_report_title, item.title)
+                WorkspaceActionButton(
+                    text = stringResource(Res.string.plan_open_acceptance_report),
+                    onClick = { onOpenAcceptanceReport(title) },
+                    icon = FeatherIcons.FileText,
+                    colors = colors,
+                )
+            }
+            if (item.status == PlanOverviewStatus.InProgress && item.manualCaseIds.isNotEmpty()) {
+                WorkspaceActionButton(
+                    text = stringResource(Res.string.plan_manual_acceptance),
+                    onClick = onManualAcceptance,
+                    colors = colors,
+                )
+            }
             if (item.status == PlanOverviewStatus.PendingApproval) {
                 WorkspaceActionButton(
                     text = stringResource(Res.string.dock_plan_approve),

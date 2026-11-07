@@ -3,6 +3,9 @@ package xyz.mederi.tools
 import ai.koog.agents.core.tools.ToolBase
 import ai.koog.agents.core.tools.ToolRegistry
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import xyz.mederi.browser.BrowserInfoTool
 import xyz.mederi.browser.BrowserTaskService
 import xyz.mederi.browser.BrowserTaskStatusTool
@@ -33,6 +36,7 @@ object ToolFactory {
 
     // apply_patch 与其他文件写工具共用角色裁剪、沙盒路径边界和进程级写锁。
     val FS_TOOL_NAMES: List<ToolName> = listOf(
+        ToolName.BATCH,
         ToolName.READ_FILE,
         ToolName.WRITE_FILE,
         ToolName.EDIT_FILE,
@@ -68,6 +72,7 @@ object ToolFactory {
     val ALL_TOOL_NAMES: List<ToolName> = FS_TOOL_NAMES + AGENT_TOOL_NAMES + PLAN_TOOL_NAMES + VERIFY_TOOL_NAMES + SUBAGENT_TOOL_NAMES + BROWSER_TASK_TOOL_NAMES + OFFICE_TOOL_NAMES + PROCESS_TOOL_NAMES + WEB_TOOL_NAMES
 
     fun build(
+        executionPermissions: xyz.mederi.tools.sandbox.ExecutionPermissions? = null,
         toolNames: List<ToolName> = ALL_TOOL_NAMES,
         directories: List<String>,
         sessionId: String,
@@ -99,9 +104,11 @@ object ToolFactory {
         customTools: List<ToolBase<*, *>> = emptyList(),
         skills: SkillManager? = null,
         backgroundTaskManager: xyz.mederi.tools.background.BackgroundTaskManager? = null,
+        /** RF-07/R11: 工作区执行租约管理器，透传给 ShellTools 供后台命令持有进程生命周期租约。 */
+        leaseManager: xyz.mederi.workspace.WorkspaceLeaseManager? = null,
     ): ToolRegistry {
-        val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched)
-        val shellTools = ShellTools(directories, commandSandbox, backgroundTaskManager, sessionId)
+        val fsTools = FileSystemTools(directories, diffTracker, agentsDiscovery, onFileTouched, executionPermissions)
+        val shellTools = ShellTools(directories, commandSandbox, backgroundTaskManager, sessionId, executionPermissions, leaseManager = leaseManager)
         val agentTools = AgentTools(sessionId, historyStore, sessionStore, eventBus, modelContextWindow, newContextWindowFlag, questionRequester, skills)
 
         // 主代理：全量工具（Triage Flow——是否建计划由 AI 判断，无代码门禁）。子代理按角色裁剪：
@@ -220,8 +227,8 @@ object ToolFactory {
             )
         } else emptyMap()
 
-        // 浏览器任务工具：仅主代理（子代理不派发浏览器任务），4→1 单一入口（action 分流）
-        val browserTaskToolMap = if (!isSubagent && browserTaskService != null && aiModel != null && reasoningLevel != null && projectId != null) {
+        // 浏览器任务工具：仅主代理 + 有浏览器注册时才注册（无浏览器时 AI 完全不知道此功能）
+        val browserTaskToolMap = if (!isSubagent && browserTaskService != null && aiModel != null && reasoningLevel != null && projectId != null && browserTaskService.availableBrowsers().isNotEmpty()) {
             mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
                 ToolName.BROWSER to {
                     val svc = browserTaskService!!
@@ -244,7 +251,7 @@ object ToolFactory {
         } else emptyMap()
 
         // Office 文档工具（主代理 + EXECUTOR 可用，RESEARCHER 只读）
-        val officeTools = OfficeTools(directories)
+        val officeTools = OfficeTools(directories, executionPermissions)
         val officeToolMap = if (canWrite) {
             mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
                 ToolName.OFFICE_READ to { officeTools.OfficeReadTool() },
@@ -262,9 +269,32 @@ object ToolFactory {
         val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + browserTaskToolMap + officeToolMap + processToolMap + backgroundToolMap
         val requested = if (toolNames.isEmpty()) allAvailableMaps.keys.toList() else toolNames
 
+        // 批量入口只包装本角色、本次 toolNames 实际开放的成员，不能借此扩大权限。
+        val batchOperations = mutableMapOf<String, suspend (JsonObject) -> String>()
+        if (ToolName.READ_FILE in requested) {
+            batchOperations[ToolName.READ_FILE.value] = { parameters ->
+                fsTools.ReadFileTool().execute(Json.decodeFromJsonElement<FileSystemTools.ReadFileArgs>(parameters))
+            }
+        }
+        if (ToolName.LIST_DIRECTORY in requested) {
+            batchOperations[ToolName.LIST_DIRECTORY.value] = { parameters ->
+                fsTools.ListDirectoryTool().execute(Json.decodeFromJsonElement<FileSystemTools.ListDirectoryArgs>(parameters))
+            }
+        }
+        if (canExecute && ToolName.BASH in requested) {
+            batchOperations[ToolName.BASH.value] = { parameters ->
+                val args = Json.decodeFromJsonElement<ShellTools.BashArgs>(parameters)
+                require(!args.background) { "batch requires foreground commands; use bash separately for background work" }
+                shellTools.BashTool().execute(args)
+            }
+        }
+
         val built = ToolRegistry {
             requested.forEach { toolName ->
                 allAvailableMaps[toolName]?.let { tool(it()) }
+            }
+            if ((toolNames.isEmpty() || ToolName.BATCH in requested) && batchOperations.isNotEmpty()) {
+                tool(BatchTool(batchOperations))
             }
         }
 

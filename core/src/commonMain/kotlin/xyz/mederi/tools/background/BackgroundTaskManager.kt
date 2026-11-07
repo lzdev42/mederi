@@ -2,11 +2,16 @@ package xyz.mederi.tools.background
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
@@ -95,6 +100,7 @@ class BackgroundTaskManager(
      *
      * @param timeoutSeconds 超时秒数；超时未结束 = ERROR（exitCode=-1，output 带超时提示）。
      */
+    @OptIn(DelicateCoroutinesApi::class)
     fun trackCommand(
         sessionId: String,
         process: Process,
@@ -104,6 +110,7 @@ class BackgroundTaskManager(
     ): String {
         val taskId = "bg_${UUID.randomUUID().toString().take(8)}"
         val pid = process.pid()
+        val processGroup = ProcessRegistry.get(pid)?.takeIf { it.pgid != null }
         val entry = BackgroundTaskEntry(
             taskId = taskId,
             type = BackgroundTaskType.COMMAND,
@@ -114,30 +121,38 @@ class BackgroundTaskManager(
         )
         tasks[taskId] = entry
 
-        val job = scope.launch {
-            emitEvent(
-                sessionId,
-                EventType.BACKGROUND_TASK_STARTED,
-                mapOf(
-                    "taskId" to taskId,
-                    "taskType" to BackgroundTaskType.COMMAND.name.lowercase(),
-                    "status" to BackgroundTaskStatus.RUNNING.name.lowercase(),
-                    "command" to command,
-                    "pid" to pid.toString(),
-                    "startedAt" to entry.startedAt
-                )
-            )
+        // The Process already exists. Even a cancelled scope must enter the cleanup block.
+        val job = scope.launch(start = CoroutineStart.ATOMIC) {
             try {
+                ensureActive()
+                emitEvent(
+                    sessionId,
+                    EventType.BACKGROUND_TASK_STARTED,
+                    mapOf(
+                        "taskId" to taskId,
+                        "taskType" to BackgroundTaskType.COMMAND.name.lowercase(),
+                        "status" to BackgroundTaskStatus.RUNNING.name.lowercase(),
+                        "command" to command,
+                        "pid" to pid.toString(),
+                        "startedAt" to entry.startedAt
+                    )
+                )
                 val outputFuture = FutureTask {
                     process.inputStream.bufferedReader().use { it.readText() }
                 }
-                Thread(outputFuture).start()
+                Thread(outputFuture, "mederi-background-command-output").apply { isDaemon = true; start() }
 
-                val completed = process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds.toLong())
+                val shellExited = runInterruptible(Dispatchers.IO) {
+                    process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                }
+                // A shell can return while a redirected child still has write access to the checkout.
+                while (shellExited && System.nanoTime() < deadline && processGroup?.isAlive() == true) delay(50)
+                val completed = shellExited && processGroup?.isAlive() != true
 
                 if (!completed) {
                     // 超时整组回收：仅 destroyForcibly 只杀直接子进程，后台孙进程会变孤儿继续跑
-                    ProcessRegistry.killGroup(pid, pid, force = true)
+                    processGroup?.let { ProcessRegistry.killGroup(pid, it.pgid, force = true) }
                     process.destroyForcibly()
                     outputFuture.get(1, TimeUnit.SECONDS)
                     val partialOutput = outputFuture.get()
@@ -169,7 +184,16 @@ class BackgroundTaskManager(
                 entry.output = entry.output?.let { "$it\n[background task error] ${e.message ?: e.javaClass.simpleName}" }
                     ?: "[background task error] ${e.message ?: e.javaClass.simpleName}"
             } finally {
-                ProcessRegistry.remove(pid)
+                withContext(NonCancellable + Dispatchers.IO) {
+                    if (processGroup?.isAlive() == true) {
+                        ProcessRegistry.killGroup(pid, processGroup.pgid, force = true)
+                    }
+                    if (process.isAlive) {
+                        process.destroyForcibly()
+                        process.waitFor()
+                    }
+                    ProcessRegistry.remove(pid)
+                }
                 entry.completedAt = java.time.Instant.now().toString()
                 emitTerminalEvent(sessionId, entry)
                 // STOPPED 任务保留在 map 中（供 EnvironmentInfoProvider 下轮注入环境上下文，
@@ -237,11 +261,21 @@ class BackgroundTaskManager(
     }
 
     /**
+     * 在任务到达终态（COMPLETED/ERROR/STOPPED/协程取消）时执行挂钩。
+     * 供 ShellTools 后台命令释放 R11 执行租约：进程生命周期结束（含 stop/join 收割）才归还租约，
+     * 保证归档/配额等待期间不会误判「无活跃执行」而删除仍在被写入的 checkout。
+     */
+    fun attachTerminalHook(taskId: String, hook: () -> Unit): Boolean {
+        val entry = tasks[taskId] ?: return false
+        val job = entry.job ?: return false
+        job.invokeOnCompletion { hook() }
+        return true
+    }
+
+    /**
      * 主动停止任务，返回操作描述；taskId 不存在时返回 null。
      *
-     * 先置 STOPPED 再取消协程/杀进程：COMMAND 型协程阻塞在 waitFor（不可取消），
-     * 只有进程被杀后 waitFor 才返回——若后置状态，协程醒来可能把状态覆盖成
-     * COMPLETED/ERROR 再发射错误终态事件。先置状态保证终态事件 = STOPPED。
+     * 先置 STOPPED 再取消协程与杀进程，避免正在完成的任务覆盖停止状态。
      */
     fun stop(taskId: String): String? {
         val entry = tasks[taskId] ?: return null
@@ -256,8 +290,7 @@ class BackgroundTaskManager(
 
     /**
      * 级联停止一个会话的所有 RUNNING 后台任务（abort / rollback 级联收割，与
-     * SubagentManager.stopAllForSession 同用途）。COMMAND 型同时整组杀进程——
-     * 只 cancel 协程的话 waitFor 阻塞不会被打断，进程会跑到超时才算停。
+     * SubagentManager.stopAllForSession 同用途）。COMMAND 型同时向整个进程组发停止信号。
      * 已终态的任务不受影响；方法幂等。
      *
      * @return 实际停止的 RUNNING 任务数量

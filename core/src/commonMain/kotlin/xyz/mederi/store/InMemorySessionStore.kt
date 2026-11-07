@@ -86,6 +86,44 @@ class InMemorySessionStore : SessionStore {
         } ?: return
     }
 
+    override suspend fun updateWorkspaceBinding(id: String, workspaceId: String?, associatedWorktreeId: String?) {
+        sessions[id] = sessions[id]?.let { s ->
+            s.copy(
+                workspaceId = workspaceId,
+                associatedWorktreeId = associatedWorktreeId,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        } ?: return
+    }
+
+    override suspend fun setArchived(id: String, archivedAt: String?) {
+        sessions[id] = sessions[id]?.let { s ->
+            s.copy(
+                archivedAt = archivedAt,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        } ?: return
+    }
+
+    override suspend fun setPinned(id: String, pinned: Boolean) {
+        sessions[id] = sessions[id]?.let { s ->
+            s.copy(
+                pinned = pinned,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        } ?: return
+    }
+
+    override suspend fun updateSubagentConfigs(id: String, configs: Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>) {
+        sessions[id] = sessions[id]?.copy(subagentConfigs = configs)
+            ?: throw xyz.mederi.api.exception.MederiNotFoundException("Session not found: $id")
+    }
+
+    override suspend fun updateSubagentMaxConcurrent(id: String, count: Int?) {
+        sessions[id] = sessions[id]?.copy(subagentMaxConcurrent = count)
+            ?: throw xyz.mederi.api.exception.MederiNotFoundException("Session not found: $id")
+    }
+
     override suspend fun delete(id: String) {
         sessions.remove(id)
     }

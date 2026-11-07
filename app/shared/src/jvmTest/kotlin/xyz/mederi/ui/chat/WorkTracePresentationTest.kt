@@ -6,6 +6,58 @@ import xyz.mederi.core.contract.models.*
 
 class WorkTracePresentationTest {
     @Test
+    fun `delivery collapses work while child waiting keeps running and resumed work expands`() {
+        val child = SubagentState("child", "s", "EXECUTOR", "model", "model", null,
+            "inspect", null, "RUNNING", "2026-11-05T00:00:00Z")
+        val snapshot = xyz.mederi.core.contract.dto.ConversationState(
+            Conversation("s", "p", "test", ConversationStatus.Idle, 0, 0),
+            emptyList(), TokenUsage(), cost = CostSummary(), subagents = listOf(child))
+        val response = message("response", 1000).copy(isFinalAnswer = true,
+            blocks = listOf(ChatBlock.Reasoning("r", "inspect"), ChatBlock.Text("t", "waiting for child")))
+        val delivered = computeChatItems(listOf(response), false, snapshot)
+        val waiting = delivered.filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+        assertFalse(waiting.defaultExpanded)
+        assertTrue(waiting.isRunning)
+        assertEquals(1000L, waiting.startedAt)
+        assertEquals(WorkTraceActivity.WaitingSubagents(1), waiting.activity)
+        assertTrue(delivered.filterIsInstance<ChatListItem.TextMessage>().any { it.text == "waiting for child" })
+
+        val resumed = message("resumed", 1000).copy(isStreaming = true)
+        val active = computeChatItems(listOf(response, resumed), true, snapshot)
+            .filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+        assertTrue(active.defaultExpanded)
+        assertEquals(WorkTraceActivity.Thinking, active.activity)
+
+        val completed = computeChatItems(listOf(response.copy(workCompletedAt = 9000)), false, null)
+            .filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+        assertFalse(completed.defaultExpanded)
+        assertFalse(completed.isRunning)
+
+        val waitingWithoutDelivery = computeChatItems(listOf(message("pending", 1000)), false, snapshot)
+            .filterIsInstance<ChatListItem.WorkTraceBlock>().single()
+        assertFalse(waitingWithoutDelivery.defaultExpanded)
+    }
+
+    @Test
+    fun `waiting work exists before first assistant and does not reactivate old work`() {
+        val previous = message("old", 100, 500).copy(
+            isFinalAnswer = true, blocks = listOf(ChatBlock.Text("answer", "old answer")))
+        val input = message("input", 1000).copy(role = ChatRole.User,
+            blocks = listOf(ChatBlock.Text("request", "new request")))
+        for (sending in listOf(true, false)) {
+            val items = computeChatItems(listOf(previous, input), isWorking = !sending,
+                snapshot = null, isSending = sending, pendingStartedAt = 900)
+            val active = items.filterIsInstance<ChatListItem.WorkTraceBlock>().filter { it.isRunning }.single()
+            assertEquals(active, items.last())
+            assertEquals(WorkTraceActivity.WaitingResponse, active.activity)
+            assertTrue(active.items.isEmpty())
+            assertEquals(1000L, active.startedAt)
+        }
+        assertTrue(computeChatItems(listOf(input), false, null)
+            .none { it is ChatListItem.WorkTraceBlock && it.isRunning })
+    }
+
+    @Test
     fun `wall clock advances during tools and freezes at authoritative completion`() {
         assertEquals(3_000L, workTraceElapsedMs(1_000, null, true, 4_000))
         assertEquals(8_000L, workTraceElapsedMs(1_000, null, true, 9_000))

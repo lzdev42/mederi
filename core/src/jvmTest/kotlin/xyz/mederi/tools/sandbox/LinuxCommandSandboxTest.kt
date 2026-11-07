@@ -12,6 +12,11 @@ import xyz.mederi.api.exception.MederiStateException
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import java.net.StandardProtocolFamily
+import java.net.UnixDomainSocketAddress
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
+import java.nio.ByteBuffer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -35,6 +40,21 @@ class LinuxCommandSandboxTest {
         listOf(File(root, "tmp").path), probe)
 
     @Test
+    fun preparationDoesNotCreateWritableRootsInsideDeniedOrProtectedDirectories() = fixture { root ->
+        val denied = File(root, "denied").apply { mkdirs() }
+        val git = File(root, "project/.git").apply { mkdirs() }
+        val deniedChild = File(denied, "new-child")
+        val protectedChild = File(git, "new-child")
+        val runner = LinuxCommandSandbox(emptyList(), listOf(deniedChild.path, protectedChild.path),
+            tempDirs = emptyList(), deniedPaths = listOf(denied.path), probe = { success })
+        val argv = runner.wrap(listOf("true"))
+        assertFalse(deniedChild.exists(), "Preparing an extra writable root must not mutate a denied directory")
+        assertFalse(protectedChild.exists(), "Preparing an extra writable root must not mutate protected metadata")
+        assertFalse(argv.windowed(3).contains(listOf("--bind", deniedChild.path, deniedChild.path)))
+        assertFalse(argv.windowed(3).contains(listOf("--bind", protectedChild.path, protectedChild.path)))
+    }
+
+    @Test
     fun fullProbeAndExecutionUseIdenticalMountsWithoutDeviceMagicLinks() = fixture { root ->
         val calls = mutableListOf<List<String>>()
         val sandbox = sandbox(root, probe = { calls.add(it); success })
@@ -53,13 +73,15 @@ class LinuxCommandSandboxTest {
     }
 
     @Test
-    fun missingCachesAndExplicitRootsAreCreatedWithoutMakingParentsWritable() = fixture { root ->
+    fun explicitRootsAreCreatedWithoutGrantingHomeCachesOrParents() = fixture { root ->
         val extra = File(root, "extra/missing")
         val sandbox = sandbox(root, extra = listOf(extra.path))
         val argv = sandbox.wrap(listOf("true"))
         val mounts = argv.windowed(3).filter { it[0] == "--bind" }.map { it[1] }
-        assertTrue(File(root, "home/.gradle").isDirectory)
-        assertTrue(File(root, "home/.cache").isDirectory)
+        assertFalse(File(root, "home/.gradle").exists())
+        assertFalse(File(root, "home/.cache").exists())
+        assertTrue("--unshare-net" in argv)
+        assertTrue(argv.windowed(2).contains(listOf("--seccomp", "3")))
         assertTrue(extra.isDirectory)
         assertTrue(extra.path in mounts)
         assertFalse(root.path in mounts)
@@ -137,6 +159,42 @@ class LinuxCommandSandboxTest {
     }
 
     @Test
+    fun explicitDeniedPathsUseAnonymousReadOnlyMasksAndSurviveFullAccess() = fixture { root ->
+        val project = File(root, "project").apply { mkdirs() }
+        val directory = File(project, "private").apply { mkdirs() }
+        val file = File(project, "credentials").apply { writeText("original-secret") }
+        val permissions = Files.getPosixFilePermissions(file.toPath())
+        val sandbox = LinuxCommandSandbox(listOf(project.path), emptyList(), tempDirs = emptyList(),
+            probe = { success }, deniedPaths = listOf(directory.path, file.path))
+        val restricted = sandbox.wrap(listOf("true"))
+        val full = sandbox.wrap(listOf("true"), fullAccess = true)
+        for (argv in listOf(restricted, full)) {
+            assertTrue(argv.windowed(4).contains(listOf("--perms", "000", "--tmpfs", directory.path)))
+            assertTrue(argv.windowed(2).contains(listOf("--remount-ro", directory.path)))
+            assertTrue(argv.windowed(5).contains(listOf("--perms", "000", "--ro-bind-data", "MASK_FD", file.path)))
+            assertFalse("--file" in argv, "masking must never truncate the real host file")
+        }
+        assertTrue(full.windowed(3).contains(listOf("--bind", "/", "/")))
+        assertFalse("--unshare-net" in full)
+        assertFalse("--seccomp" in full)
+        assertEquals("original-secret", file.readText())
+        assertEquals(permissions, Files.getPosixFilePermissions(file.toPath()))
+    }
+
+    @Test
+    fun absentDeniedTargetBlocksWithoutCreatingOrIgnoringIt() = fixture { root ->
+        val project = File(root, "project").apply { mkdirs() }
+        val missing = File(project, "not-created/secret")
+        val sandbox = LinuxCommandSandbox(listOf(project.path), emptyList(), tempDirs = emptyList(),
+            probe = { success }, deniedPaths = listOf(missing.path))
+        for (full in listOf(false, true)) {
+            val error = assertFailsWith<MederiStateException> { sandbox.wrap(listOf("true"), fullAccess = full) }
+            assertTrue(error.message.orEmpty().contains("Linux denied path does not exist"), error.message)
+        }
+        assertFalse(missing.parentFile.exists())
+    }
+
+    @Test
     fun failedLinuxSandboxCannotLaunchForegroundOrBackgroundPayloads() = fixture { root ->
         val project = File(root, "project").apply { mkdirs() }
         val marker = File(project, "must-not-exist")
@@ -189,18 +247,57 @@ class LinuxCommandSandboxTest {
         assertEquals("readable", outside.readText())
         assertEquals(0 to "readable", run("cat '${outside.path}'"))
         assertEquals(0 to "stdin\nstderr\n", run("cat; printf 'stderr\\n' >&2", "stdin\n"))
-        assertEquals(0, run("printf cache > '${File(root, "home/.gradle/first").path}'").first)
-        assertEquals("cache", File(root, "home/.gradle/first").readText())
+        File(root, "home/.gradle").mkdirs()
+        assertTrue(run("printf cache > '${File(root, "home/.gradle/first").path}'").first != 0)
+        assertFalse(File(root, "home/.gradle/first").exists())
         assertEquals(37, run("exit 37").first)
         val (code, namespace) = run("readlink /proc/self/ns/pid")
         assertEquals(0, code)
         assertTrue(namespace.trim() != hostPidNamespace, "sandbox must not expose host PID namespace")
         assertEquals(0, run("printf persisted > '${File(root, "tmp/persisted").path}'").first)
         assertEquals(0 to "persisted", run("cat '${File(root, "tmp/persisted").path}'"))
+        // 仅网络命名空间不能阻止 pathname Unix socket；seccomp 必须阻止该宿主代理通路。
+        val socket = File(root, "s").toPath()
+        ServerSocketChannel.open(StandardProtocolFamily.UNIX).use { server ->
+            server.bind(UnixDomainSocketAddress.of(socket))
+            val javaExecutable = File(System.getProperty("java.home"), "bin/java").path
+            val classpath = listOf(
+                SandboxSocketProbe::class.java.protectionDomain.codeSource.location.toURI(),
+                Unit::class.java.protectionDomain.codeSource.location.toURI(),
+            ).joinToString(File.pathSeparator) { File(it).path }
+            val command = listOf(javaExecutable, "-cp", classpath, SandboxSocketProbe::class.java.name, socket.toString())
+            fun connect(networkAccess: Boolean): Pair<Int, String> {
+                val process = ProcessBuilder(sandbox.wrap(command, networkAccess)).redirectErrorStream(true).start()
+                process.outputStream.close()
+                val output = java.util.concurrent.FutureTask { process.inputStream.bufferedReader().use { it.readText() } }
+                Thread(output).apply { isDaemon = true; start() }
+                try {
+                    assertTrue(process.waitFor(15, TimeUnit.SECONDS), "Unix socket probe timed out")
+                    return process.exitValue() to output.get(2, TimeUnit.SECONDS)
+                } finally { if (process.isAlive) process.destroyForcibly() }
+            }
+            val denied = connect(false)
+            assertTrue(denied.first != 0, "restricted payload reached host Unix socket: ${denied.second}")
+            val accepted = java.util.concurrent.FutureTask {
+                server.accept().use { client ->
+                    val bytes = ByteBuffer.allocate(2)
+                    while (bytes.hasRemaining()) assertTrue(client.read(bytes) >= 0)
+                    String(bytes.array())
+                }
+            }
+            Thread(accepted).apply { isDaemon = true; start() }
+            val allowed = connect(true)
+            assertEquals(0, allowed.first, allowed.second)
+            assertEquals("OK", accepted.get(5, TimeUnit.SECONDS))
+        }
+        Files.deleteIfExists(socket)
         val ready = File(project, "child-ready")
-        val process = ProcessBuilder(sandbox.wrap(listOf("sh", "-c",
-            "sleep 60 & child=\$!; cat /proc/\$child/status > child-status; : > child-ready; wait")))
+        val commandSandbox = CommandSandbox(listOf(project.path), sandbox)
+        val wrapped = commandSandbox.wrap("sleep 60 & child=\$!; cat /proc/\$child/status > child-status; : > child-ready; wait")
+        assertTrue(wrapped.processGroupLeader)
+        val process = ProcessBuilder(wrapped.argv)
             .directory(project).redirectErrorStream(true).start()
+        ProcessRegistry.register(process.pid(), process.pid(), "sandbox child cleanup test", project.path)
         try {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
             while (!ready.exists() && process.isAlive && System.nanoTime() < deadline) Thread.sleep(20)
@@ -209,12 +306,70 @@ class LinuxCommandSandboxTest {
             val child = process.toHandle().descendants().use { stream ->
                 stream.filter { it.info().command().orElse("").endsWith("/sleep") }.findFirst().orElseThrow()
             }
-            process.destroyForcibly()
+            val stat = Files.readString(File("/proc/${process.pid()}/stat").toPath()).substringAfterLast(") ").split(' ')
+            assertEquals(process.pid(), stat[2].toLong(), "registered helper must lead its host process group")
+            assertTrue(ProcessRegistry.terminate(process.pid(), force = true) != null)
             assertTrue(process.waitFor(5, TimeUnit.SECONDS))
             val stopDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (child.isAlive && System.nanoTime() < stopDeadline) Thread.sleep(20)
             assertFalse(child.isAlive, "PID namespace payload survived bwrap termination")
-        } finally { if (process.isAlive) process.destroyForcibly() }
+        } finally {
+            if (process.isAlive) ProcessRegistry.terminate(process.pid(), force = true)
+            ProcessRegistry.remove(process.pid())
+        }
 
+    }
+
+    @Test
+    fun realLinuxDeniedPathsBlockReadWriteAndChmodInBothPermissionModes() = fixture { root ->
+        val requireLinux = System.getenv("MEDERI_REQUIRE_LINUX_SANDBOX") == "1"
+        val linux = System.getProperty("os.name").lowercase().contains("linux")
+        if (requireLinux) assertTrue(linux, "This verification requires a Linux host")
+        assumeTrue("real denied-path masking requires Linux", linux)
+        val project = File(root, "project").apply { mkdirs() }
+        val directory = File(project, "private").apply { mkdirs() }
+        val secret = File(directory, "secret").apply { writeText("private-secret") }
+        val file = File(project, "credentials").apply { writeText("file-secret") }
+        val outside = File(root, "outside").apply { writeText("outside") }
+        val permissions = Files.getPosixFilePermissions(file.toPath())
+        val sandbox = LinuxCommandSandbox(listOf(project.path), emptyList(), tempDirs = emptyList(),
+            deniedPaths = listOf(directory.path, file.path))
+        assertTrue(sandbox.status("sh").available, sandbox.status("sh").detail)
+        fun run(command: String, full: Boolean): Pair<Int, String> {
+            val process = ProcessBuilder(sandbox.wrap(listOf("sh", "-c", command), fullAccess = full))
+                .directory(project).redirectErrorStream(true).start()
+            process.outputStream.close()
+            val output = java.util.concurrent.FutureTask { process.inputStream.bufferedReader().use { it.readText() } }
+            Thread(output).apply { isDaemon = true; start() }
+            try {
+                assertTrue(process.waitFor(15, TimeUnit.SECONDS), "denied path probe timed out")
+                return process.exitValue() to output.get(2, TimeUnit.SECONDS)
+            } finally { if (process.isAlive) process.destroyForcibly() }
+        }
+        for (full in listOf(false, true)) {
+            for (command in listOf(
+                "cat '${file.path}'", "printf replacement > '${file.path}'", "chmod 600 '${file.path}'",
+                "cat '${secret.path}'", "printf added > '${File(directory, "new").path}'", "chmod 700 '${directory.path}'",
+            )) assertTrue(run(command, full).first != 0, "$command escaped deny mask (full=$full)")
+            assertEquals(0, run("printf public > public.txt", full).first)
+        }
+        assertTrue(run("printf full > '${outside.path}'", false).first != 0)
+        assertEquals(0, run("printf full > '${outside.path}'", true).first)
+        assertEquals("file-secret", file.readText())
+        assertEquals("private-secret", secret.readText())
+        assertEquals(permissions, Files.getPosixFilePermissions(file.toPath()))
+        assertFalse(File(directory, "new").exists())
+    }
+}
+
+/** 独立 JVM payload：验证真实 seccomp 是否阻止宿主 Unix socket，而不是只断言 argv。 */
+object SandboxSocketProbe {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        SocketChannel.open(StandardProtocolFamily.UNIX).use { channel ->
+            channel.connect(UnixDomainSocketAddress.of(args.single()))
+            val bytes = ByteBuffer.wrap("OK".toByteArray())
+            while (bytes.hasRemaining()) channel.write(bytes)
+        }
     }
 }

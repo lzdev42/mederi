@@ -15,7 +15,7 @@ import xyz.mederi.provider.domain.model.RemoteModelInfo
  *
  * | 类别             | 字段                                             | 规则 |
  * |------------------|--------------------------------------------------|------|
- * | 用户权威         | isEnabled、reasoningLevel、origin、id             | 恒保留，本函数不触碰 |
+ * | 用户权威         | isEnabled、reasoningLevel、origin、id、optimizeForRequestCount | 恒保留，本函数不触碰 |
  * | 用户覆盖         | supportsImagesOverride                            | 存在时永远压过目录/端点（目录对长尾模型经常缺数据或标错，用户显式设置必须赢） |
  * | 端点可说         | contextWindow、maxTokens                         | refresh = endpoint ?: catalog ?: keep；回填 = keep ?: catalog（只补空） |
  * | 端点可说·目录优先 | supportsReasoning                                | catalog ?: endpoint ?: keep（单一表达式，两路径恒一致） |

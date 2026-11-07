@@ -50,7 +50,9 @@ object SubagentTracker {
                     completedAt = existing?.completedAt,
                     blocks = existing?.blocks ?: emptyList(),
                     messages = existing?.messages ?: emptyList(),
-                    progressSequence = existing?.progressSequence ?: 0L
+                    progressSequence = existing?.progressSequence ?: 0L,
+                    errorMessage = existing?.errorMessage, errorId = existing?.errorId,
+                    errorDiagnostic = existing?.errorDiagnostic, statusHint = existing?.statusHint,
                 ))
             }
             CoreEventType.SUBAGENT_PROGRESS -> {
@@ -122,7 +124,7 @@ object SubagentTracker {
             CoreEventType.SUBAGENT_COMPLETED -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
                 states.updated(agentId) {
-                    it.copy(status = "COMPLETED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
+                    it.copy(status = "COMPLETED", currentActivity = null, statusHint = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
                         message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: parseEpoch(completedAt))
                     })
                 }
@@ -130,7 +132,11 @@ object SubagentTracker {
             CoreEventType.SUBAGENT_ERROR -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
                 states.updated(agentId) {
-                    it.copy(status = "ERROR", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
+                    it.copy(status = "ERROR", currentActivity = null, completedAt = completedAt,
+                        errorMessage = event.payload["error"] ?: it.errorMessage ?: event.payload["result"],
+                        errorId = event.payload["errorId"] ?: it.errorId,
+                        errorDiagnostic = event.payload["fullDiagnostic"] ?: it.errorDiagnostic,
+                        statusHint = null, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
                         message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: parseEpoch(completedAt))
                     })
                 }
@@ -138,7 +144,7 @@ object SubagentTracker {
             CoreEventType.SUBAGENT_STOPPED -> {
                 val completedAt = event.payload["completedAt"] ?: event.timestamp
                 states.updated(agentId) {
-                    it.copy(status = "STOPPED", currentActivity = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
+                    it.copy(status = "STOPPED", currentActivity = null, statusHint = null, completedAt = completedAt, blocks = it.blocks.mapLastToolCallCompleted(), messages = it.messages.map { message ->
                         message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: parseEpoch(completedAt))
                     })
                 }
@@ -188,6 +194,10 @@ object SubagentTracker {
                 currentActivity = content.currentActivity,
                 currentTool = content.currentTool,
                 outputText = content.outputText,
+                errorMessage = content.errorMessage ?: old.errorMessage,
+                errorId = content.errorId ?: old.errorId,
+                errorDiagnostic = content.errorDiagnostic ?: old.errorDiagnostic,
+                statusHint = content.statusHint,
                 status = lifecycle.status,
                 completedAt = lifecycle.completedAt,
             ))
@@ -199,7 +209,7 @@ object SubagentTracker {
     private fun settleTerminal(state: SubagentState): SubagentState {
         if (!isTerminal(state.status)) return state
         val endedAt = state.completedAt?.let(::parseEpoch)
-        return state.copy(currentActivity = null, currentTool = null, messages = state.messages.map { message ->
+        return state.copy(currentActivity = null, currentTool = null, statusHint = null, messages = state.messages.map { message ->
             message.copy(isStreaming = false, workCompletedAt = message.workCompletedAt ?: endedAt)
         })
     }
@@ -211,7 +221,9 @@ object SubagentTracker {
             conversation = Conversation(id = current.agentId, projectId = null, title = current.task,
                 status = if (current.status == "RUNNING") ConversationStatus.Working else ConversationStatus.Idle,
                 createdAt = startedAt, updatedAt = startedAt),
-            messages = current.messages, tokenUsage = TokenUsage(), cost = CostSummary())
+            messages = current.messages, tokenUsage = TokenUsage(), cost = CostSummary(),
+            errorMessage = current.errorMessage, errorId = current.errorId,
+            errorDiagnostic = current.errorDiagnostic, statusHint = current.statusHint)
         val next = ConversationStateReducer.apply(state, event)
         val activity = when (event.type) {
             CoreEventType.TOOL_CALLED -> "TOOL_CALL"
@@ -229,6 +241,8 @@ object SubagentTracker {
         val body = next.messages.filter { it.role == ChatRole.Assistant }.flatMap { it.blocks }
             .filterIsInstance<ChatBlock.Text>().joinToString("") { it.text }
         return current.copy(messages = next.messages, currentActivity = activity, currentTool = tool,
+            errorMessage = next.errorMessage, errorId = next.errorId,
+            errorDiagnostic = next.errorDiagnostic, statusHint = next.statusHint,
             outputText = body.takeIf { it.isNotEmpty() } ?: current.outputText)
     }
 

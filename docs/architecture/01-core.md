@@ -16,10 +16,10 @@
    - config.db 侧：`apiKeyStore` / `providerStore` / `projectStore` / `mcpServerStore` / `settingsStore`
    - data.db 侧：`historyStore` / `sessionStore` / `diffStore`
 5. `ModelCatalog()`（内存索引，需外部调 `start()`）。
-6. Manager 装配：`ProviderManagerImpl(providerStore, apiKeyStore)`；`ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)`；`McpServerManagerImpl(mcpServerStore, mcpConnector)`；`McpMarketManagerImpl(OfficialRegistrySource())`；`SkillManagerImpl(settingsStore, defaultSkillsRoot=paths.skillsDir)`（须先于 SessionManager 构造就绪——系统提示词注入依赖它）；`SubagentConfigManager(settingsStore, providerManager)`（见 §3.5）；`SessionManagerImpl(sessionStore, historyStore, projectManager, providerManager, diffStore, mcpConnector, skills=skillManager, subagentConfigManager)`；`McpConnector(mcpServerStore)`（引擎，manager 与 TurnExecutor 共享）。`Mederi.create` 同时创建并暴露 `browserSettingsManager`，并构造 `browserRuntimeProvider`（`browserSettingsManager.get().browserHome` → `browserRuntimeDirs`）经 `SessionManagerImpl → TurnExecutor → BrowserTaskManager` 注入；`MederiAiCore` 复用该实例不再自建。
-7. API 装配：`ProviderApiImpl(providerManager, modelCatalog)`、`ModelApiImpl(providerManager)`、`ProjectApiImpl(projectManager)`、`SessionApiImpl(sessionManager)`、`McpServerApiImpl(mcpServerManager)`、`McpMarketApiImpl(mcpMarketManager)`、`SkillApiImpl(skillManager)`、`SubagentConfigApiImpl(subagentConfigManager)`。
+6. Manager 装配：`ProviderManagerImpl(providerStore, apiKeyStore)`；`ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)`；`McpServerManagerImpl(mcpServerStore, mcpConnector)`；`McpMarketManagerImpl(OfficialRegistrySource())`；`SkillManagerImpl(settingsStore, defaultSkillsRoot=paths.skillsDir)`（须先于 SessionManager 构造就绪——系统提示词注入依赖它）；`SubagentConfigManager(settingsStore, providerManager, sessionStore)`（见 §3.5）；`SessionManagerImpl(sessionStore, historyStore, projectManager, providerManager, diffStore, mcpConnector, skills=skillManager, subagentConfigManager)`；`McpConnector(mcpServerStore)`（引擎，manager 与 TurnExecutor 共享）。`Mederi.create` 同时创建并暴露 `browserSettingsManager`，并构造 `browserRuntimeProvider`（`browserSettingsManager.get().browserHome` → `browserRuntimeDirs`）经 `SessionManagerImpl → TurnExecutor → BrowserTaskManager` 注入；`MederiAiCore` 复用该实例不再自建。
+7. API 装配：`ProviderApiImpl(providerManager, modelCatalog)`、`ModelApiImpl(providerManager)`、`ProjectApiImpl(projectManager)`、`SessionApiImpl(sessionManager)`、`SandboxApiImpl(sandboxManager)`、`McpServerApiImpl(mcpServerManager)`、`McpMarketApiImpl(mcpMarketManager)`、`SkillApiImpl(skillManager)`、`SubagentConfigApiImpl(subagentConfigManager)`、`WorkspaceApiImpl(workspaceManager)`。
 
-`Mederi` 公开成员：`historyStore: HistoryStore?`、`providers: ProviderApi`、`projects: ProjectApi`、`providerManager`、`projectManager`、`sessionManager`、`sessions: SessionApi`、`models: ModelApi`、`mcpMarket: McpMarketApi`、`mcpServers: McpServerApi`、`skills: SkillApi`、`subagentConfigs: SubagentConfigApi`、`modelCatalog: ModelCatalog`。
+`Mederi` 公开成员：`sandbox: SandboxApi`、`sandboxManager: SandboxManager`、`historyStore: HistoryStore?`、`providers: ProviderApi`、`projects: ProjectApi`、`providerManager`、`projectManager`、`sessionManager`、`sessions: SessionApi`、`models: ModelApi`、`mcpMarket: McpMarketApi`、`mcpServers: McpServerApi`、`skills: SkillApi`、`subagentConfigs: SubagentConfigApi`、`modelCatalog: ModelCatalog`、`workspaces: WorkspaceApi`、`workspaceManager: WorkspaceManager`。
 
 ### config 包
 
@@ -40,6 +40,8 @@ classDiagram
         +agentMode: AgentMode
         +aiModel: AIModel? +reasoningLevel: ReasoningLevel? +apiKeyId: String?
         +draftText: String?
+        +subagentConfigs: Map~SubagentRole, SubagentModelConfig~
+        +subagentMaxConcurrent: Int?
         +env: Map +todos: List~TodoItem~ +createdAt +updatedAt
     }
     class AIModel {
@@ -100,7 +102,7 @@ classDiagram
 | `AgentMode` | `APPROVAL, AUTONOMOUS` | 工具集完全一致，唯一区别=计划批准者 |
 | `SubagentRole` | `EXECUTOR, RESEARCHER, BROWSER_OPERATOR, BROWSER_BRAIN` | EXECUTOR=全工具（无 plan/spawn/verify/ask_user/todo）；RESEARCHER=只读 read_file/list_directory；**BROWSER_OPERATOR/BROWSER_BRAIN=浏览器操作配置专属角色（2026-09-23）**：仅用于设置页为其配独立模型/推理档（AgentConfigCard 图标 Globe），BrowserTaskManager 后台派发时按角色解析（operator/brain 各建 llmCaller）；实际执行走 BrowserTaskManager 后台，不经 turn 子代理路径（SystemPrompts.forSubagent/SubagentRunnerImpl 对这两角色抛 IllegalStateException） |
 | `AgentCapabilities` | `MAIN, EXECUTOR, RESEARCHER, BROWSER`（每值含 `inheritMcp` / `inheritSkills`） | **中心化继承策略唯一表**：MAIN(true,true) / EXECUTOR(true,true) / RESEARCHER(true,false) / **BROWSER(true,true)**（2026-09-23：浏览器操作角色，of() 映射 BROWSER_OPERATOR/BROWSER_BRAIN，实际不经 turn 执行）。`of(subagentRole?)` 映射；TurnExecutor 开 MCP 会话与注入 skills 提示词都只读此表。**新增子代理=SubagentRole 加值 + 本表加一行 + of 加一个分支** |
-| `ModelOrigin` | `FETCHED, MANUAL` | FETCHED=端点/目录权威（唯一写路径 ModelMerge）；MANUAL=用户权威 |
+| `ModelOrigin` | `FETCHED, MANUAL` | FETCHED=端点拉取；MANUAL=手动添加；两者均允许用户编辑 |
 | `TodoStatus` | `PENDING, IN_PROGRESS, COMPLETED, CANCELLED, FAILED`（wire 小写；FAILED 预留给 Plan 验证结果语义——verify_subtask 产生于 `Subtask.status`，不投影进 todos） | |
 | `PlanStatus` | `PENDING_APPROVAL, APPROVED, IN_PROGRESS, COMPLETED, VOIDED` | VOIDED = 作废（voidActivePlans，双文件移入 plans-voided/）；终态 = COMPLETED 或 VOIDED |
 | `SubtaskStatus` | `PENDING, IN_PROGRESS, COMPLETED, FAILED` | |
@@ -109,6 +111,7 @@ classDiagram
 | `ProjectContextType` | `GREENFIELD, BROWNFIELD` | |
 | `FileChangeStatus` | `ADDED, MODIFIED, DELETED` | diff 用 |
 | `ProviderType` | `OPENAI_CHAT, OPENAI_RESPONSES, GOOGLE` | |
+| `ProviderAuthentication` | `API_KEY, CHATGPT_OAUTH` | 认证方式与协议独立；旧 Provider payload 缺失时为 API_KEY |
 | `ReasoningLevel` | `NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX` | |
 | `ToolName` | `READ_FILE, WRITE_FILE, EDIT_FILE, LIST_DIRECTORY, APPLY_PATCH, BASH, WEB_SEARCH, WEB_FETCH, UPDATE_TODO, ASK_USER, GET_CONTEXT_REMAINING, NEW_CONTEXT, CREATE_PLAN, WRITE_PLAN, GENERATE_SPEC, WRITE_LOG, CONVERGE_PLAN, UPDATE_VERIFICATION, VERIFY_SUBTASK, SUBAGENT, SPAWN_AGENT, SPAWN_RESEARCHER, AGENT_STATUS, STOP_AGENT, BROWSER, RUN_BROWSER_TASK, BROWSER_TASK_STATUS, STOP_BROWSER_TASK, BROWSER_INFO, OFFICE_READ, OFFICE_WRITE, LIST_PROCESSES, STOP_PROCESS, SET_TIMER` | 内置工具名称字符串枚举（`@Serializable`，wire 对应小写蛇形字符串，含 `val value: String` 与伴生 `fromValue(value)`） |
 
@@ -120,7 +123,7 @@ classDiagram
   - `Reasoning(content: List<String>, summary?, encrypted?, id?)`
   - `const val UI_HIDDEN_MARKER = "<<<NOT_FOR_UI>>>"`（消息文本中该标记后 UI 不渲染、AI 可见——系统环境注入块）
 - **`Message`**：新增 `turnId: String?=null`（工作归属）、`isFinalAnswer: Boolean?=null`（Core 确认本轮正式回复，null 为旧历史）、`pendingSteering: Boolean=false`（接收即落库、尚未消费的用户输入）、`workStartedAt: Long?=null` / `workCompletedAt: Long?=null`（工作墙钟起终点，epoch ms）。见类图。诊断字段 totalTokens/inputTokens/outputTokens/cachedTokens/durationMs 等写入时抽取进 message_history 列。`turnDiffSummary: TurnDiffSummary?`（`…/tools/diff/TurnDiff.kt`：`files: List<FileDiffSummary>` + totalAdditions/totalDeletions）——一个 turn 的**最后一条 assistant 消息**携带本 turn 的文件变更摘要（runTurn 收尾经 historyStore.updateMessage 原子回写该消息，其余消息为 null；MESSAGE_COMPLETED payload 同步带出，见 §11）。
-- **`Provider`（`…/provider/domain/model/Provider.kt`）**：`id, name, type: ProviderType, baseUrl, reasoningParameter: ReasoningParameter?, models: List<AIModel>, responseSanitization: Boolean=false, modelsDevKey: String?, @Transient apiKeys: List<ProviderApiKey>`（apiKeys 读时合并、写时剥离）；派生 `defaultApiKey`、`supportsReasoning`。
+- **`Provider`（`…/provider/domain/model/Provider.kt`）**：`id, name, type: ProviderType, baseUrl, reasoningParameter: ReasoningParameter?, models: List<AIModel>, responseSanitization: Boolean=false, modelsDevKey: String?, @Transient apiKeys: List<ProviderApiKey>`（apiKeys 读时合并、写时剥离）；新增 `authentication: ProviderAuthentication=API_KEY`、`@Transient accessTokenProvider: (suspend () -> String)?=null`（OAuth 运行时按请求获取有效凭据，不持久化/不跨 AiCore）；派生 `defaultApiKey`、`supportsReasoning`。
 - **`ProviderApiKey`**：`id, name, @Contextual maskedValue, isDefault`；companion `mask()`（前3+"..."+后4，≤7 返回 "***"）。
 - **`ReasoningParameter`**：`levels: Map<ReasoningLevel, String?>, parameterName: String="", customRequestBody: Map<String,String>`。核心思想：**不对供应商参数做语义解释**，每档对应用户编写的请求体 JSON 片段，发送时根级合并。方法 `resolve(level)` / `supportsLevel` / `availableLevels` / `validate()`；companion `forOpenAIChat()/forOpenAIResponses()/forGoogle()/forType(type)`。
 - **`RemoteModelInfo`（`…/provider/domain/model/RemoteModelInfo.kt`）**：`providerModelId, name, contextWindow?, maxTokens?, supportsReasoning?, inputPricePerMillion?, outputPricePerMillion?, supportsImages?, reasoningLevels`（不落库的远端中间结构，可空=远端未提供）。
@@ -190,6 +193,23 @@ suspend fun rename(id, name): Project
 ### 3.3 ProviderManager（`…/provider/`）
 
 Provider 组：`list()`（读时合并 keys）/ `listWithoutKeys()` / `get/require` / `create(name,type,baseUrl,reasoningParameter?,responseSanitization,modelsDevKey?)` / `update` / `delete`（级联删 keys）。
+
+**ChatGPT OAuth（2026-11-05）**：`createChatGptProvider(): Provider` 创建独立供应商（协议 `OPENAI_RESPONSES`、认证 `CHATGPT_OAUTH`、固定 `https://api.openai.com/v1`）。`ProviderManagerImpl(providerStore,apiKeyStore,chatGptAuth: ChatGptOAuthManager?=null)` 的 get/list/listWithoutKeys 对 OAuth 附加请求级 `accessTokenProvider`；OAuth 不合并 API keys、不参与 key 轮询，拒绝 key 管理及端点修改。`getDefaultKeyValue` 仅在宿主返回有效 OAuth token；`ApiKeyResolver.resolve` 的 OAuth 分支先于普通 key 记忆链，不缓存 token。删除该供应商清理其授权生命周期及凭据。
+
+`Mederi.chatGptAuth: ChatGptOAuthManager` 由 `Mederi.create` 构建并注入 ProviderManager；有 configDir 时凭据在其 `auth/` 子目录，纯内存模式不写默认 home。
+
+| 类 / 文件（`core/src/commonMain/kotlin/xyz/mederi/provider/oauth/`） | 字段与方法 |
+| --- | --- |
+| `ChatGptOAuthManager.kt` | `start(providerId): ChatGptAuthState` / `state(providerId): ChatGptAuthState` / `cancel(providerId)` / `disconnect(providerId)` / `delete(providerId)` / `accessToken(providerId): String`（均 suspend）；`isConnected(providerId): Boolean`；`close()` |
+| `ChatGptOAuthModels.kt` | 公开状态 `ChatGptAuthState(providerId,status,authUrl?,email?,error?)`；内部凭据 `ChatGptCredential(clientId,subject,email?,accessToken?,refreshToken?,idToken?,expiresAt,scopes)`、稳定宿主 `ChatGptHost(hostId)`；OIDC/token/JWKS DTO 使用 kotlinx.serialization，不出宿主 |
+| `ChatGptCredentialStore.kt` | 账号凭据及稳定 host ID；同目录原子替换、Unix owner-only 权限、拒绝符号链接、文件锁串行 rotating refresh；无目录时内存保存 |
+| `ChatGptOAuthTransport.kt` | 内部 `ChatGptOAuthTransport.get(url)/postForm(url,fields)`；`OpenAiOAuthTransport` 使用有界非流式 HTTPS auth.openai.com 请求、禁重定向、统一 UA；错误不附 token 响应体 |
+| `ChatGptIdTokenVerifier.kt` | `verify(token,jwks,issuer,clientId,nonce,nowSeconds)`：RS256/JWKS 签名、issuer、audience、expiry、nonce 验证；通过后才使用身份 |
+
+本机 `127.0.0.1` 回调仅处理授权 code；新注册保存 issued client_id，后续复用。state/nonce/PKCE 每次新建。凭据从不加入公开 Provider payload 或 AiCore DTO。新 SIWC 与 Codex 内置登录认证不同，未确认官方直接读取订阅额度的 API；外部状态明确 unavailable，并提供官方 Usage 设置链接。
+
+模型与请求适配：`RemoteModelParsing.kt.parseChatGptModelsResponse(raw)` 只接受账号目录 `models[]`，筛 `visibility=list`，映射 `slug/display_name` 并保持远端顺序；普通 key 继续解析 `data[].id`。`ProviderManagerImpl.fetchOpenAIModels(...,chatGptPlan=false)` 按认证方式选择解析器，元数据落库仍走 ModelMerge。`KoogClientFactory` 对 OAuth 再次校验官方固定端点与 Responses 协议。`MederiOpenAILLMClient` 增加 `chatGptPlan=false`、`accessTokenProvider?`，OAuth 每次 flow 收集/重试读取有效 token 覆盖 Authorization；请求 `store=false/stream=true`，工具声明放 `mederi` namespace，历史工具调用保留 namespace/ID，普通 key 请求结构不变。OAuth 的非流式 `execute` 在内部聚合完整 SSE（正文、推理、工具及 usage），截断不能冒充完整响应。
+
 Key 组：`listKeys` / `addKey(providerId,name,value,isDefault)` / `deleteKey` / `setDefaultKey` / `getDefaultKeyValue(providerId): String?`（明文）/ `getKeyValue(providerId, keyId): String?`（按 id 取明文，keyId 不属于该 provider 返回 null，key 选择器/选定项取值用）。
 Model 组：
 
@@ -198,9 +218,9 @@ suspend fun listModels(providerId): List<AIModel>
 suspend fun addModel(providerId, ..., ): AIModel          // MANUAL 模型，用户权威
 suspend fun addFetchedModel(providerId, merged: AIModel, isEnabled): AIModel  // FETCHED 落库通道
 suspend fun applyRemoteMetadata(providerId, modelId, endpoint: RemoteModelInfo?, catalog: ModelMetadata?): AIModel
-        // FETCHED 元数据唯一写路径；endpoint!=null=refresh 全量权威，==null=目录回填只补空
-suspend fun updateUserModel(providerId, modelId, ...全可空): AIModel
-        // FETCHED 模型只许改 isEnabled/图片覆盖，传其他字段抛错
+        // 远端合并落库入口（普通列表刷新不修改存量）；显式自动设置 endpoint=null，窗口/输出上限补空，其余按 ModelMerge
+suspend fun updateUserModel(providerId, modelId, ...全可空, optimizeForRequestCount?=null): AIModel
+        // 两种来源均可编辑现有字段；null 保留现值，FETCHED 图片同时写用户覆盖
 suspend fun deleteModel(providerId, modelId)
 suspend fun getModel(modelId): AIModel?;  suspend fun listAllModels(): List<AIModel>   // 跨供应商
 suspend fun fetchRemoteModels(providerId): List<RemoteModelInfo>  // OPENAI_* Bearer / GOOGLE x-goog-api-key，Google 分页 pageSize=1000
@@ -235,12 +255,13 @@ suspend fun uninstall(name: String)                    // 删除根目录下对�
 | `SessionApi` | list / create(CreateSessionRequest) / get / rename / delete / abort / abortAndJoin / sendMessage(SendMessageRequest) / steerMessage(SendMessageRequest) / getSubagentReport(agentId)(→SubagentReportData?) / listSubagentsForSession(sessionId)(→List<BackgroundAgent>) / stopSubagent(agentId) / **listBackgroundTasksForSession(sessionId)(→List<BackgroundTaskEntry>)** / **stopBackgroundTask(taskId)(→String?)** / **stopBrowserTask(taskId)(→String?)** / rollbackToMessage / resolveQuestion / resolvePlanApproval / compressHistory / listMessages / getMessage / listRawMessages(→RawMessageDto) / getFileDiffs / events | RawMessageRecord→Dto 转换 |
 | `SessionApi`（续，输入框设置 + 会话控制） | updateAgentConfig(sessionId, agentMode?, aiModel?, reasoningLevel?, apiKeyId?)（COALESCE：null 不改） / **updateComposeState(sessionId, agentMode, aiModel?, reasoningLevel?, apiKeyId?, draftText)**（全量覆盖写含 draftText，非 COALESCE） / contextUsedTokens(sessionId) / stopSubagent(agentId) | 输入框设置统一保存；updateComposeState 为全量 SET 语义（null 写 null、清空） |
 | `ProjectApi` | list / create / get / delete / rename / addDirectory / removeDirectory | |
+| `SandboxApi`（`api/SandboxApi.kt`；实现 `api/impl/SandboxApiImpl.kt`） | `suspend getSettings(projectId): SandboxSettings` / `updateSettings(projectId, settings): SandboxSettings` / `getStatus(projectId): SandboxStatus` / `resolveExecutionApproval(conversationId, requestId, approved): Unit`；`fun pendingApprovals(conversationId): List<ExecutionApprovalRequest>` | 复用唯一 `SandboxManager`，不持缓存；所有方法通过 `mederiCall` 转换异常，取消透传；getStatus 在 Dispatchers.IO 用实际额外路径及 manager.protectedDirectories 探测后端 |
 | `ProviderApi` | list / create / get / update / delete / addKey / listKeys / deleteKey / setDefaultKey / listModels / addModel / updateModel / deleteModel / **refreshModels** / **autoSetupModels** | refresh 只新增远端新模型（DEFAULT_VISIBLE_MODEL_LIMIT=10 补足启用）不碰存量元数据；autoSetupModels=目录元数据进存量 FETCHED 模型唯一通道；type 字符串解析失败抛 Validation |
 | `ModelApi` | list / get（跨供应商聚合） | |
 | `McpServerApi` | install(mcpServersJson) / list / getJson / update / setEnabled / delete / **discover(name)** / verify / **verifyAll** / verifyConfig | 无 DTO 转换；list 返回带缓存 status 的 McpServerInfo |
 | `McpMarketApi` | search(query,cursor,pageSize) / detail(id) / installOptions(detail) / installConfig(detail,...) / installConfig(id,...) | |
 | `SkillApi` | list / getRootDirectory / setRootDirectory(path) / install(url) / uninstall(name) | UI 薄触发；下载/解压/删除全在 core（`SkillManagerImpl`） |
-| `SubagentConfigApi` | list / get(role) → SubagentRoleConfigDto / update(role, UpdateSubagentConfigRequest{modelId?, reasoningLevel?, apiKeyId?}) / getGlobalSettings() → SubagentGlobalSettingsDto{maxConcurrentAgents} / updateGlobalSettings(UpdateSubagentGlobalSettingsRequest{maxConcurrentAgents}) | 子代理角色独立模型/推理档/API Key 配置与全局设置（设置页 Agents 面板）；`SubagentRoleConfigDto{role, displayName, description, modelId?, modelName?, reasoningLevel?, apiKeyId?, isInheriting}`（解析后的模型名供 UI 展示）；`UpdateSubagentConfigRequest` 三字段均 null = 恢复继承（`apiKeyId`：null=继承父 / 具体 keyId=指定 / `API_KEY_ROTATION_ID`（`"__rotate__"`）=轮询，见 §9.1）；`SubagentGlobalSettingsDto` 与 `UpdateSubagentGlobalSettingsRequest` 携带单会话并发上限（>= 1）；`SubagentConfigManager`（`…/tools/subagent/SubagentConfigManager.kt`，见 §3.5）读 SettingsStore（key=`subagent.config.<role>`、`subagent.maxConcurrent`）+ ProviderManager 解析模型 |
+| `SubagentConfigApi` | list(sessionId?) / get(role,sessionId?) → SubagentRoleConfigDto / update(role, request,sessionId?) / getGlobalSettings(sessionId?) / updateGlobalSettings(request,sessionId?) / clear(role,sessionId) / clearGlobalSettings(sessionId) | 系统设置提供默认值；EXECUTOR/RESEARCHER 支持会话覆盖与恢复默认（§3.5）。角色 DTO 包含 role/displayName/description/modelId?/modelName?/reasoningLevel?/apiKeyId?/isInheriting/usesDefault；全局 DTO 包含 maxConcurrentAgents/usesDefault；usesDefault 表示会话无覆盖。browser 角色保留系统配置。 |
 
 SessionApi 同文件 DTO：`AgentConfig(agentMode, aiModel=null, reasoningLevel=null)`、`CreateSessionRequest(agentConfig, projectId, title="", env)`、`RenameSessionRequest(title)`、`SendMessageRequest(agentConfig, parts: List<MessagePart>, apiKeyId: String?=null, messageId: String?=null)`——`apiKeyId` 为本次消息携带的选定 key ID（null=未指定）；user/steer/rollback 轮显式携带并写入 `ApiKeyResolver` 进程级记忆，内部消息轮（计划批准执行/事件唤醒续轮）经 `apiKeyResolver.currentKeyId(providerId)` 从记忆取回；统一由 `ApiKeyResolver.resolve(providerId, apiKeyId)` 解析（显式归属通过→记忆→默认 key），消费端拿 `ResolvedApiKey.value`（详见本节 ApiKeyResolver 段）；`RawMessageRecord(seq, messageId?, role, payload, createdAt, modelId?, durationMs?, finishReason?, status?)`、`MessageSummary(seq, messageId?, role, content, createdAt)`（HistoryStore.kt 内）。
 
@@ -248,15 +269,19 @@ SessionApi 同文件 DTO：`AgentConfig(agentMode, aiModel=null, reasoningLevel=
 
 **`SubagentModelConfig`**（`…/model/SubagentModelConfig.kt`，package 实为 `xyz.mederi.domain.model`）：`modelId: String?`（null=继承父会话模型）、`reasoningLevel: ReasoningLevel?`（null=继承父档位）、`apiKeyId: String?`（子代理 API Key 策略：null=继承父会话选定 key；具体 keyId=指定 key；`API_KEY_ROTATION_ID`（`xyz.mederi.provider`，值 `"__rotate__"`）=轮询）、派生值 `isInheriting`（三者均 null）。
 
-**`SubagentConfigManager(settingsStore, providerManager)`**：
-- `get(role)` / `list()`（全角色 map；未配置或解析失败 = 默认配置即完全继承）
-- `set(role, config)`（`isInheriting` 时**删除** settings key——配置零残留；否则写序列化 JSON）/ `clear(role)`（恢复继承）
-- `resolve(role, fallbackModel, fallbackReasoning): (AIModel, ReasoningLevel)`——解析优先级：配置 modelId 且 ProviderManager 中能查到（模型被删自动回落 fallbackModel）> fallback；配置 reasoningLevel > fallbackReasoning。运行时以 ProviderManager 为唯一真理源。
-- `getMaxConcurrentSubagents(): Int` / `setMaxConcurrentSubagents(count: Int)`（要求 >= 1；未配置或值非法时返回默认值 2，见下述并发门禁）
-- 常量 `KEY_PREFIX = "subagent.config."`、`KEY_MAX_CONCURRENT = "subagent.maxConcurrent"`、`DEFAULT_MAX_CONCURRENT = 2`（settings 表 keys，见 §5）
+**`SubagentConfigManager(settingsStore, providerManager, sessionStore)`**：
+- `get(role, sessionId: String?=null)` / `list(sessionId: String?=null)`：无会话时读系统默认；有会话时仅 EXECUTOR/RESEARCHER 允许覆盖。角色无覆盖 entry 时动态读取系统默认，有 entry 时完整使用该配置（null 字段继承父会话，不再次合并系统默认）。浏览器角色始终使用系统设置，不参与会话覆盖。
+- `set(role, config, sessionId: String?=null)` / `clear(role, sessionId: String?=null)`：全局完全继承配置删除 settings key；会话 set 即使三字段为 null 仍保留 entry（显式继承父会话），clear 才删除 entry 恢复系统默认。会话读改写由 Mutex 串行，独立 Store 写入不覆盖 compose state。会话配置 browser 角色写入/清除抛 MederiValidationException；不存在会话抛 MederiNotFoundException。
+- `resolve(role, fallbackModel, fallbackReasoning, sessionId: String?=null): (AIModel, ReasoningLevel)`：会话覆盖 > 系统默认 > 父会话；选定模型通过 ProviderManager 查询，模型被删时回落父模型。
+- `getMaxConcurrentSubagents(sessionId: String?=null)` / `setMaxConcurrentSubagents(count, sessionId: String?=null)` / `clearMaxConcurrentSubagents(sessionId)`：会话可空值覆盖系统默认，clear 恢复默认；count 必须 >=1。无系统值时内置默认 2。
+- `usesDefault(role, sessionId)` / `usesDefaultConcurrency(sessionId)`：会话是否缺少对应覆盖，供 API 的 usesDefault 展示；与 isInheriting（是否继承父会话）分离。
+- `SubagentConfigApi.list/get/update/getGlobalSettings/updateGlobalSettings` 同步增加尾部可选 sessionId；新增 `clear(role, sessionId)` / `clearGlobalSettings(sessionId)`。角色/global DTO 增加 `usesDefault: Boolean=true`；所有 API 异常经 mederiCall 转为 MederiException。
+- 常量 `KEY_PREFIX = "subagent.config."`、`KEY_MAX_CONCURRENT = "subagent.maxConcurrent"`、`DEFAULT_MAX_CONCURRENT = 2`（settings 表 keys，见 §5）。会话只存覆盖，不把全局默认复制进会话。
+
+`Session` 新增 `subagentConfigs: Map<SubagentRole, SubagentModelConfig>=emptyMap()`、`subagentMaxConcurrent: Int?=null`；data.db v5 增量 ALTER 两列，保留已有会话/消息，旧会话不回填角色配置、自动继承当前系统默认。
 
 **SubagentManager 并发门禁（2026-09 代码级硬限制）**：
-- 构造参数注入 `maxConcurrentProvider: (suspend () -> Int)?`（TurnExecutor 装配时闭包读 `SubagentConfigManager.getMaxConcurrentSubagents()`，改配置即时生效）；
+- 构造参数 `maxConcurrentProvider: (suspend () -> Int)?` 保留兼容；TurnExecutor 注入 `sessionMaxConcurrentProvider: (suspend (String) -> Int)?`，每次 spawn 按 parentSessionId 读取会话生效上限，改配置即时生效；
 - `spawn()` 入口处通过 `spawnLock` 互斥原子检查：统计同父会话当前 `status == RUNNING` 的子代理数。达上限时抛出 `SubagentLimitReachedException(running, limit)`；
 - `SpawnAgentTool` 与 `SpawnResearcherTool` 捕获该异常，直接将 `modelGuidance` 作为工具 Error 返回给模型（指导模型停止派发并结束 turn，等后台运行完成自动唤醒后再派发剩余任务）；
 - **与子代理类型无关**（EXECUTOR 与 RESEARCHER 共享同一限额池）；
@@ -264,11 +289,40 @@ SessionApi 同文件 DTO：`AgentConfig(agentMode, aiModel=null, reasoningLevel=
 
 消费方：`SpawnAgentTool`/`SpawnResearcherTool` 的 spawn 模型解析（独立配置优先于父会话现值，未配置=继承）、`BrowserTaskManager` 按 BROWSER_OPERATOR/BROWSER_BRAIN 解析浏览器双角色模型（§7.3）。**apiKeyId 同策略（2026-10）**：spawn 时 `config.apiKeyId` 非 null 覆盖父会话 apiKeyId 透传 `subagentManager.spawn(apiKeyId=…)`（null=继承父；`API_KEY_ROTATION_ID` 哨兵原样透传，由下游 ApiKeyResolver/RotatingLLMClient 解释）。
 
+### 3.6 WorkspaceManager（`…/workspace/WorkspaceManager.kt`）
+
+负责 Git Worktree 与工作区全生命周期管理：
+- `createWorkspace(projectId, sourceRepoRoot, selection, sessionId)`：验证或分配工作区，建立 REQUESTED 状态及关联会话。
+- `acceptUserMessage(sessionId, messageId, parts, selection, sourceRepoRoot)`：Durable-first 接纳首条或后续用户消息，防止网络重试或断线丢失，确保消息在工作区未就绪时不丢失且仅接纳一次。
+- `prepareWorkspace(workspaceId, sourceRepoRoot, requestId, permissions)`：六阶段工作流（VALIDATE → QUIESCE/SNAPSHOT → CREATE_CHECKOUT → COPY_CONTENT → SETUP → COMMIT_BINDING），包含环境变量复制、包含规则应用、状态幂等去重与准备门禁。
+- `isModelExecutable(sessionId)`：工作区执行门禁，仅当工作区达到 READY 状态时放行，未就绪时硬阻断且绝不隐式降级。
+- 配套服务：`GitWorkspaceDriver`、`WorkspaceLeaseManager`、`WorkspaceSnapshotService`、`WorkspaceIncludeService`、`WorkspaceEnvironmentService`。
+- `ExecutionWorkspaceResolver(workspaceStore, projectStore, sessionStore, gitDriver)`：执行工作区不可变解析器，解析会话绑定的 managed 工作区 → `ExecutionWorkspace(projectId, workspaceId, checkoutRoot, workingDirectory, artifactDirectory, gitCommonDirectory, generation)`（不可变快照；managed 工作区非 READY/缺失时硬阻断，绝不隐式回退 Local）。供 `TurnExecutor`、子代理继承和门禁检查统一使用。
+
+**生产装配与执行接线（RF-02/RF-07，2026-11-02 整改）**：
+- `Mederi.create` 装配唯一 `ExecutionWorkspaceResolver`（`workspaceStore/projectStore/sessionStore/gitDriver`），经 `SessionManagerImpl`→`TurnExecutor` 注入；`llmClientFactory`（`(Provider, String) -> LLMClient`，默认 `KoogClientFactory::create`）同样经 `SessionManagerImpl`→`TurnExecutor`→`SubagentRunnerImpl` 透传——子代理 TurnExecutor 构造时自带独立 `workspaceResolver` + `inheritedWorkspace`（父会话解析结果）+ `leaseManager`，共享同一解析与租约协调。
+- `TurnExecutor.sendMessageInternal` 准备门禁：resolve 命中 `WORKSPACE_BUSY` 时，先按稳定 ID 将用户输入和 `Message.pendingWorkspaceInput: PendingWorkspaceInput?` 存入同一条历史记录，再由 `WorkspaceManager.prepareSessionWorkspace` 准备。待执行字段包含工作区 ID、Agent 模式、模型、推理档和选中的密钥 ID。历史回写保留待执行记录，模型历史在消费前排除该记录。准备失败保留消息和原发送配置。`WorkspaceApiImpl.retryWorkspacePreparation` 成功后通过 `SessionManager.resumeWorkspaceInput(id, workspaceId)` 在同一接纳锁内恢复原消息，启动 turn 时清除待执行字段。同一重试请求再次返回成功时不另启 turn。
+- 工作区 READY 后，从解析出的 `ExecutionWorkspace` 构建 `VerifiedWorkspaceRoot` 凭证（`buildVerifiedWorkspaceRoot`），经 `ExecutionPermissions.verifiedWorkspaceRootProvider` 注入 `ShellTools`/`CommandSandbox`。每个 grant 重新校验 checkout/generation，Handoff 后旧工作区授权失效。
+
+**第四轮工作区约束与补修**：
+- **权限纯内存投影（N01）**：`buildWorkspacePermissions` 彻底移除 `manager.updateSettings` 写回，黑名单重映射由 `VerifiedWorkspaceRoot` 配合 `SandboxPaths` 纯内存自动推导；`remapDeniedForRoot` 统一辅助 `enforceReadPolicy` 与 `listWorkspaceFiles`，原项目 `config.db` 黑名单与版本永不被污染。
+- **后台租约先于进程启动（N02）**：`ShellTools.startBackgroundCommand` 调整执行顺序，`acquireExecutionLease` 先于 `processBuilder.start()`，租约被拒（`WORKSPACE_BUSY`）时进程绝不启动；进程生命周期绑定租约释放，快速退出与收割均保证租约清零。
+- **管理所有权与 Permit（N02）**：`ManagementPermit` 由 `withManagementIntent` 创建，离开临界区后立即失效。内部 `POST_SETUP` 凭 permit 执行。取消请求先停止并等待登记的管理或脚本协程，再在相关目录的管理意图下重读日志并恢复。仍存在的归档目录在取消时保留。
+- **归档前像完整覆盖与安全原语（N03）**：`WorkspaceSnapshotService.computeFingerprint` 读取 HEAD、ref、index 摘要，并以 NOFOLLOW 遍历采集备份范围内的目录、文件摘要、执行位和符号链接目标。此范围含 ignored 与 `assume-unchanged` 条目，排除 Git 元数据及既定 D09 产物。发布 PREIMAGE 前，用已捕获条目与 index 副本计算相同指纹，与一次重新读取的工作区指纹比较，不一致则保留 checkout、拒绝发布。删除前在管理意图内再次核验，读取失败同样保留 checkout。旧格式指纹不能授权强制删除。`safeMaterializeFile`、`safeMaterializeSymlink`、`safeDeleteEntry` 统一处理 FILE/DIR/SYMLINK 转换，并检查父级链接。
+- **成功历史不重放与崩溃边界（N04）**：`scanAndRecoverPendingOperations` 删除遍历已成功 Handoff 的回放逻辑，最新绑定与 generation 不受旧历史干扰；Handoff 恢复要求完整阶段记录（`CLEAN_SOURCE` / `COMMIT_BINDING`）齐备才允许判定成功；`verifyRestoreCompleteness` 核验 detached HEAD、index、墓碑及原仓库 common-dir。
+- **审批归属与重试门禁（N04/N05）**：`WorkspaceActionInput.conversationId` 可显式携带发起会话，Manager 校验项目与绑定。旧调用方只在绑定唯一时推导会话，`ExecutionPermissions` 在需要审批且无会话时直接报错。准备重试验证失败的 CREATE 属于当前绑定，setup 仅在 `SUCCEEDED` 时放行 READY 门禁。
+- **设置持久化与分支管理意图（N06）**：挂起的 `getWorktreeSettings` / `updateWorktreeSettings` 通过同一互斥区读取、校验版本并提交 `workspace.settings`。拒绝文件系统根、源码和快照目录的重叠路径，配置写入失败向调用方报错。建分支在管理意图内核对 Git HEAD。
+- 执行租约（RF-07）：`WorkspaceLeaseManager.acquireExecutionLease(checkoutRoot)` 的生产调用方 = `TurnExecutor.runTurn`——整个 turn 持执行租约，`executionLease?.close()` 在 finally 释放（不早于工具/子代理/收尾清理）；`leaseManager` 参数经 `Mederi.kt`→`SessionManagerImpl`→`TurnExecutor`→`SubagentRunnerImpl` 串接。归档/配额经 `withManagementIntent` **实际等待**活跃执行租约归零后再快照（快照因此包含等待期间的 late writes；超时抛 `WORKSPACE_BUSY`）。
+- `archiveWorkspace`（RF-04 日志）：managed 工作区在第一个 git 副作用（快照/remove）前持久化 RUNNING 操作 + 完整 `ArchivePlan`（phase=SNAPSHOT）→ 捕获 PREIMAGE 快照后回填 `snapshotId`（phase=CLEAN_SOURCE）→ `git worktree remove --force` → remove 后、数据库提交 ARCHIVED 前先持久 COMPLETE 阶段日志 → 提交 `ARCHIVED`（generation+1）+ `SUCCEEDED` 收尾。
+- `executeHandoff`（RF-04 日志）：进入 `withManagementIntent` 后先持久 RUNNING + 完整 `HandoffPlan`（phase=SNAPSHOT），快照后回填 `sourceTransferSnapshotId/sourcePreimageSnapshotId/targetPreimageSnapshotId`（phase=SWITCH_TARGET），目标核验通过、CLEAN_SOURCE 完成后持久 phase=COMMIT_BINDING，最终 `SUCCEEDED`。
+- `restoreWorkspace`（RF-04/RF-06）：持久 RUNNING + `RestorePlan`（phase=CREATE_CHECKOUT）后调用 `WorkspaceSnapshotService.restoreToLinkedWorktree`（原仓库 common-dir 注册 detached worktree，非独立 `git init`），成功后 `READY`（generation+1）+ `SUCCEEDED`；无 `gitCommonDirectory` 记录抛 WORKSPACE_MISSING。
+- `recoverSingleOperation`（RF-04 恢复处理器）：**ARCHIVE**——checkout 已删 + snapshot → 幂等完成归档；checkout 仍在 + snapshot → 重试 remove；无 snapshot → 安全回滚 READY（零破坏性副作用）；其余 → RECOVERY_REQUIRED。**RESTORE**——目标为有效 git 仓库（`rev-parse --is-inside-work-tree` 成功）→ 完成恢复（READY+SUCCEEDED，幂等）；否则 → RECOVERY_REQUIRED。
+
 ## 5. Store 层（`…/store/`）
 
 | Store 接口 | 方法 | Sqlite 实现 → 表（库） |
 |---|---|---|
-| `SessionStore` | list / get / insert / update(id, status?, title?) / updateAgentConfig(id, agentMode?, aiModel?, reasoningLevel?, apiKeyId?)（COALESCE）/ updateComposeState(id, agentMode, aiModel?, reasoningLevel?, apiKeyId?, draftText)（全量覆盖 SET，null 写 null）/ updateTodos / delete | `SqliteSessionStore` → **sessions**（data.db） |
+| `SessionStore` | list / get / insert / update(id, status?, title?) / updateAgentConfig(id, agentMode?, aiModel?, reasoningLevel?, apiKeyId?)（COALESCE）/ updateComposeState(id, agentMode, aiModel?, reasoningLevel?, apiKeyId?, draftText)（全量覆盖 SET，null 写 null）/ updateTodos / updateSubagentConfigs(id, Map<SubagentRole,SubagentModelConfig>) / updateSubagentMaxConcurrent(id, Int?) / delete | `SqliteSessionStore` → **sessions**（data.db） |
 | `HistoryStore` | load(sessionId) / append / updateHistory(sessionId, transform) / updateMessage(sessionId, messageId, transform) / replace(sessionId, messages) / delete(sessionId) / rollbackTo(sessionId, seq) / listSummary / listRaw | `SqliteHistoryStore` → **message_history**（data.db） |
 | `ProjectStore` | list / get / save(upsert) / delete | `SqliteProjectStore` → **projects**（config.db） |
 | `ProviderStore` | list（不含 keys）/ get / save / delete | `SqliteProviderStore` → **providers**（config.db） |
@@ -291,17 +345,22 @@ mcp_servers(name PK, enabled, payload)                      -- McpServerConfig �
 settings(key PK, value)                                     -- 通用 key-value（skills.root 等零散配置项）
 ```
 
-**data.db**（`data/xyz/mederi/db/data/DataDatabase.sq`）：
+**data.db**（`data/xyz/mederi/db/data/DataDatabase.sq`，DATA_DB_VERSION = 5）：
 
 ```sql
 sessions(id PK, project_id IDX, title, status DEFAULT 'IDLE',
          agent_mode DEFAULT 'AUTONOMOUS',
-         ai_model(JSON), reasoning_level, api_key_id, env DEFAULT '{}', todos DEFAULT '[]',
-         draft_text, created_at, updated_at)                -- 按 updated_at DESC 排序；api_key_id 由 Mederi.kt 幂等 ALTER 给存量库补列（draft_text 为开发期列变更，随 CREATE TABLE 重建）
+         ai_model(JSON), reasoning_level, api_key_id, env DEFAULT '{}', todos DEFAULT '[]', active_skills DEFAULT '[]',
+         draft_text, created_at, updated_at,
+         workspace_id, associated_worktree_id, archived_at, pinned DEFAULT 0,
+         subagent_configs(JSON map DEFAULT '{}'), subagent_max_concurrent NULL)
 message_history(session_id+seq 复合PK, message_id, role, content,
          payload(消息 JSON 真相), created_at,
          model_id, duration_ms, finish_reason, status)      -- 诊断列直查；按 seq ASC
-diffs(id AUTOINCREMENT PK, session_id IDX, message_id IDX, changes_json, unified_diff, created_at)
+diffs(id AUTOINCREMENT PK, session_id IDX, message_id IDX, changes_json, unified_diff, created_at,
+      workspace_id, checkout_root_at_creation, project_relative_path_at_creation, workspace_generation)
+workspaces(id PK, project_id IDX, kind, state, associated_session_id IDX, updated_at, payload(完整 JSON))
+workspace_operations(id PK, idempotency_key UNIQUE, project_id IDX, workspace_id IDX, state, updated_at, payload(完整 JSON))
 ```
 
 ## 6. Koog 执行引擎（`…/koog/`，package 实为 `xyz.mederi.infrastructure.koog`）
@@ -436,13 +495,13 @@ classDiagram
   4. 解析 effectiveModel/effectiveReasoningLevel + activeApiKeyId（= `request.apiKeyId`）→ 回写 `sessionStore.updateAgentConfig`（含会话级 apiKeyId，null = 该供应商默认 key）
   5. **durable-first**：`buildUserMessage`（在最后 Text part 追加 `<<<NOT_FOR_UI>>>` + UTC/Local 时间 + CommandSandbox.environmentNote + 项目目录 + 白名单 + `.mederi` 路径）→ `historyStore.append`（用户消息先落库）
   6. 置 RUNNING → PlanApprovalRequester 入 map → `scope.launch { runTurn(...) }`
-- **runTurn**：`ParentDiffRegistry.register(sessionId, diffTracker)`（主 turn 注册 tracker，供子代理 turn 结束时把改动合并进来）→ `preflightCompressionIfNeeded`（`aiViewContextUsedTokens` > 70% 窗口先 compressOnce，与 UI 显示同源；失败不阻塞但原因回灌 streamWarning → MESSAGE_COMPLETED/MESSAGE_ERROR 的 warning 字段对用户可见）→ 建 QuestionRequester → 组装 `AgentsSubtreeDiscovery`（AgentsFileLoader.discoverSubtree + 会话级去重 registry `agentsDiscovered[sessionId]`，v1 内存态）→ `ToolFactory.build`（透传 agentsDiscovery 给 FileSystemTools 做 AGENTS.md 子树懒发现，见 §7.4）→ **llmClient 统一构建（2026-10 轮询）**：`apiKeyResolver.resolve(provider.id, apiKeyId)` 后检测 `resolvedKey.keyId == API_KEY_ROTATION_ID`（轮询哨兵）→ 全量 key 明文建 `RotatingLLMClient`（计数器 `RotatingLLMClient.getCounter(resolveRotationSessionId(sessionId))`——子代理 turn 传 `rotationSessionId` 时与父共享轮询序）再 `retryWrapped` 包 `RetryableLLMClient`；未命中 → 单 key client 包 `RetryableLLMClient`；`compressOnce` 同源检测（resolve 后命中哨兵同样 RotatingLLMClient+RetryableLLMClient，与 runTurn 共用同一计数器——压缩也轮换 key）→ `buildTurnAgent(llmClient=…)` → `agent.run(MEDERI_INPUT_PERSISTED, sessionId)`（哨兵输入：用户消息已落库，LLM 节点不再追加）→ newContextFlag 消费（insertMarker）→ 置 IDLE + MESSAGE_COMPLETED（断流时带 ErrorRecord payload：`error/errorId/fullDiagnostic/errorSeverity=WARNING` → 客户端 ErrorBoard 展示+可展开详细报告，另带 `warning` 人类提示文本；HTTP 状态码/网络异常/提前关闭+已收帧数字符数）→ diffTracker.captureSnapshot + diffStore.save（finally 里 `ParentDiffRegistry.unregister(sessionId)`；若构造时传入 `onTurnDiff` 回调，则把最终 TurnDiff 经回调上交——子代理 turn 用此机制把改动合并进父 turn 的 diffTracker，修复"turn 改动摘要不含子代理改动"）。错误分类：`RetryableLLMClient.isTransientError` 或 `record.severity == ErrorSeverity.RECOVERABLE`（含限流/网络中断/HTTP2流重置） → IDLE + MESSAGE_ERROR（环境态可恢复，不标 ERROR）；否则 ERROR + MESSAGE_ERROR。所有错误路径统一经 `ErrorCollector.collect` 生成 MESSAGE_ERROR 的 rich payload（见 §11 事件表）。
+- **runTurn**：`ParentDiffRegistry.register(sessionId, diffTracker)`（主 turn 注册 tracker，供子代理 turn 结束时把改动合并进来）→ `preflightCompressionIfNeeded`（`aiViewContextUsedTokens` > 70% 窗口先 compressOnce，与 UI 显示同源；失败不阻塞但原因回灌 streamWarning → MESSAGE_COMPLETED/MESSAGE_ERROR 的 warning 字段对用户可见）→ 建 QuestionRequester → 组装 `AgentsSubtreeDiscovery`（AgentsFileLoader.discoverSubtree + 会话级去重 registry `agentsDiscovered[sessionId]`，v1 内存态）→ `ToolFactory.build`（透传 agentsDiscovery 给 FileSystemTools 做 AGENTS.md 子树懒发现，见 §7.4）→ **llmClient 统一构建（2026-10 轮询）**：`apiKeyResolver.resolve(provider.id, apiKeyId)` 后检测 `resolvedKey.keyId == API_KEY_ROTATION_ID`（轮询哨兵）→ 全量 key 明文建 `RotatingLLMClient`（计数器 `RotatingLLMClient.getCounter(resolveRotationSessionId(sessionId))`——子代理 turn 传 `rotationSessionId` 时与父共享轮询序）再 `retryWrapped` 包 `RetryableLLMClient`；未命中 → 单 key client 包 `RetryableLLMClient`；`compressOnce` 同源检测（resolve 后命中哨兵同样 RotatingLLMClient+RetryableLLMClient，与 runTurn 共用同一计数器——压缩也轮换 key）→ `buildTurnAgent(llmClient=…)` → `agent.run(MEDERI_INPUT_PERSISTED, sessionId)`（哨兵输入：用户消息已落库，LLM 节点不再追加）→ newContextFlag 消费（insertMarker）→ 完整交付置 IDLE + MESSAGE_COMPLETED；断流先有限续写，耗尽或无完整交付发 MESSAGE_ERROR（带 ErrorRecord payload：`error/errorId/fullDiagnostic/errorSeverity=WARNING` → 客户端 ErrorBoard 展示+可展开详细报告，另带 `warning` 人类提示文本；HTTP 状态码/网络异常/提前关闭+已收帧数字符数）→ diffTracker.captureSnapshot + diffStore.save（finally 里 `ParentDiffRegistry.unregister(sessionId)`；若构造时传入 `onTurnDiff` 回调，则把最终 TurnDiff 经回调上交——子代理 turn 用此机制把改动合并进父 turn 的 diffTracker，修复"turn 改动摘要不含子代理改动"）。错误分类：`RetryableLLMClient.isTransientError` 或 `record.severity == ErrorSeverity.RECOVERABLE`（含限流/网络中断/HTTP2流重置） → IDLE + MESSAGE_ERROR（环境态可恢复，不标 ERROR）；否则 ERROR + MESSAGE_ERROR。所有错误路径统一经 `ErrorCollector.collect` 生成 MESSAGE_ERROR 的 rich payload（见 §11 事件表）。
 - **buildTurnAgent**：`llmClient`（runTurn 构建传入，见上；哨兵命中=RotatingLLMClient+RetryableLLMClient，否则单 key + RetryableLLMClient）→ `KoogModelBuilder.build` → `KoogParamsBuilder.build` → `prompt(sessionId, params){ system(...) }` → AIAgentConfig（maxAgentIterations=3000 + KotlinxSerializer ignoreUnknownKeys/coerceInputValues/explicitNulls=false）→ 安装 ChatMemory.Feature（HistoryStoreChatHistoryProvider + system 前置 PreProcessor 保缓存）与 EventHandler.Feature（onLLMStreamingFrameReceived→frameChannel，End 帧经 extractUsagePayload→LLM_REQUEST_COMPLETED；onLLMCallCompleted→非流式 execute 路径 extractUsagePayload→LLM_REQUEST_COMPLETED；onToolCallStarting/Completed/Failed→TOOL_CALLED/TOOL_RESULT + toolTimings）→ graphStrategy：有 contextWindow 时 `mederiSingleRunStrategyWithCompression(HistoryCompressionConfig(isHistoryTooBig = used>70%, MederiCompressionStrategy(contextWindow)), incrementalPersister, pollSteering)`，否则 `mederiSingleRunStrategy(incrementalPersister, pollSteering)`（pollSteering = 工具边界 Steering 注入钩子，传 `{ pollSteering(sessionId) }`，见下）。
 - **abort**：cancel job、cancelAll requester、置 IDLE、经 `ErrorCollector.collect(CancellationException)` 发 MESSAGE_ERROR（分类 CANCELLED / 严重级 WARNING）。**abortAndJoin**：cancelAndJoin 等旧 turn 死透（rollback 必须用，防收尾落库复活已删消息）；同时 `stopAllForSession` 级联收割子代理 + 清掉本会话的 `pendingEventMessages` / `pendingSteerings` 队列。
 - **统一输入与插话（2026-10）**：`sendMessage(sessionId, request)` 按会话串行接纳，`SendMessageRequest.messageId: String?=null` 稳定 ID 去重；运行中输入先以完整 parts 落库为 `pendingSteering=true`，安全边界消费后原子改为 false。`steerMessage` 仅兼容别名。`SteeringItem` 保留完整 parts/稳定消息 ID，不再只注入 Text。等待 question/plan 走中性解除挂起，输入调度归 Core；取消/异常不静默删除持久化输入。详见 04-flows §2.1。
 - **跨 turn 计划批准**（`resolvePlanApproval`）：同 turn 批准经内存 CompletableDeferred 唤醒挂起的 create_plan 协程（不落内部消息）；requester 已消亡（旧 turn 结束/进程重启）时只有"批准"有意义——校验计划仍 PENDING_APPROVAL 且会话匹配、非终态 → `updatePlan` 落盘 APPROVED + 发 PLAN_APPROVAL_RESOLVED → 经 `sendMessageInternal` 发一条以 `UI_HIDDEN_MARKER` 开头的**内部消息**（UI 不渲染、AI 可见的完整执行指令）启动新 turn，AI 读到 Active Plan=APPROVED 后自行走 execute 链（generate_spec → spawn → verify）；拒绝（approved=false）→ 直接返回 false，计划保持 PENDING_APPROVAL（由用户继续对话或下个 create_plan 作废）。
 - **`injectNeutralPlanToolResult`**：计划待批准时用户直接继续对话（sendMessageInternal 检测到 hasPendingPlanApproval）——abortAndJoin 旧 turn 前，主动给悬空的 create_plan 工具调用补写一条**中性 ToolResult** 落库（`PlanTools.USER_REPLIED_NEUTRAL` 语料：非批准/非拒绝/非作废）——下一轮 AI 视图无悬空 tool call，且语义中立，绝不会被误读成"拒绝"（abort 取消的 plan 协程其真实返回不落盘，此主动落库是中性结果的唯一权威写入）。
-- **launchStreamConsumer**：StreamFrame → MESSAGE_DELTA（text/reasoning/tool_call 帧；空名续片过滤；**End 无 finishReason 置断流警告——经 `ErrorCollector.collectWarning`（phase=streaming）生成 WARNING 级 ErrorRecord**（`服务器关闭连接但未发送结束标记（已收 N 帧/N 字符）`），**ErrorContext 含 providerId/providerName/modelId/modelName**（由 runTurn 传入），`failureMode=PREMATURE_CLOSE`（责任方=服务端/代理），`detail` 拼入 `StreamCloseDiagnostics.summary()`（流关闭模式/责任方判定/已收行数字节数/持续时间/最大间隔/最后 5 条原始 SSE 行/非 data: 错误信号行）——诊断来自 `MederiOpenAILLMClient.lastStreamDiagnostics`（onCompletion 写入），记录同时随 MESSAGE_COMPLETED 的 ErrorRecord payload 传给 UI 统一错误出口（ErrorBoard）；流消费异常经 `ErrorCollector.collect`（phase=streaming，含 provider/model 上下文）统一提取 HTTP 状态码/网络异常类型后置警告，警告文案 = `流式中断：<ErrorRecord.formatShortMessage()>（已收 N 帧/N 字符）`，ErrorCollector 内部完成日志+入历史）。
+- **launchStreamConsumer**：StreamFrame → MESSAGE_DELTA（text/reasoning/tool_call 帧；空名续片过滤；**End 无 finishReason 置断流警告——经 `ErrorCollector.collectWarning`（phase=streaming）生成 WARNING 级 ErrorRecord**（`服务器关闭连接但未发送结束标记（已收 N 帧/N 字符）`），**ErrorContext 含 providerId/providerName/modelId/modelName**（由 runTurn 传入），`failureMode=PREMATURE_CLOSE`（责任方=服务端/代理），`detail` 拼入 `StreamCloseDiagnostics.summary()`（流关闭模式/责任方判定/已收行数字节数/持续时间/最大间隔/最后 5 条原始 SSE 行/非 data: 错误信号行）——诊断来自 `MederiOpenAILLMClient.lastStreamDiagnostics`（onCompletion 写入），记录在恢复耗尽时随 MESSAGE_ERROR 的 ErrorRecord payload 传给 UI 统一错误出口（ErrorBoard）；流消费异常经 `ErrorCollector.collect`（phase=streaming，含 provider/model 上下文）统一提取 HTTP 状态码/网络异常类型后置警告，警告文案 = `流式中断：<ErrorRecord.formatShortMessage()>（已收 N 帧/N 字符）`，ErrorCollector 内部完成日志+入历史）。
 - 内部 `TrackingHistoryProvider`：包装 HistoryStoreChatHistoryProvider 记录 storeCalled 观测回写时机。
 
 ### 6.3 HistoryStoreChatHistoryProvider 核心设计
@@ -505,32 +564,32 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 
 | 文件 | 工具/类 | 要点 |
 |---|---|---|
-| `FileSystemTools.kt` | read_file(path, offset=0, max_lines=2000) / write_file / edit_file(original 唯一匹配，多处报错；replace_all 全量替换) / list_directory / apply_patch(patch: String，必填) | `resolveForRead` **全盘可读**（相对路径在项目目录解析）；`resolveForWrite` **必须在项目目录内**（containment 白名单，代码强制）；write/edit→diffTracker.recordWrite；**write/edit 落盘前经 `FileWriteRegistry` try-lock**（同文件并发写硬拒绝，见 §7.2 FileWriteRegistry 行）；**read_file 支持 offset（0-based 分页）**：返回区间 `[start, end)` 前闭后开，end 即续读的下一 offset，超界/空文件有明确返回；apply_patch 委托 `PatchFileTransaction`：解析 → 全路径预检/整体写锁 → 快照/dry-run → 写入（I/O 失败尽力回滚）→ A/M/D + diff/touched；源/移动目标一并校验与锁定，拒绝符号链接和 canonical 重复目标；UTF-8 严格解码，保留源行尾。详见 `docs/apply-patch.md`；**read/list 成功后触发 `AgentsSubtreeDiscovery` 回调**（构造参数，AGENTS.md 子树懒发现，见 §7.4） |
-| `ShellTools.kt` | bash(command, cwd="", timeout_seconds=120) → `CommandResult(output, exitCode)`；**web_search(query, max_chars=8000, timeout_seconds=30)**（inner class `WebSearchTool`，仅 RESEARCHER 子代理注册）→ Bing 搜索结果结构化（title/URL/snippet，提取失败兜底原始 HTML 截断）；**web_fetch(url, max_chars=8000, timeout_seconds=30)**（inner class `WebFetchTool`，仅 RESEARCHER 子代理注册）→ 页面清洗文本 | `runCommand`：sandbox.wrap 包装、**cwd 可指定**（空=项目主目录，底层 runCommand 本就支持、2026-09 工具层补暴露）、**Linux 沙盒准备失败返回 exitCode=-1 且不启动 payload**；后台同样返回启动错误，Windows 后台保留降级警告；**启动即注册 ProcessRegistry**（进程组回收）、超时 destroyForcibly **+ 整组 SIGKILL**、警告前缀。**web 工具拆分（2026-10）**：共享类级 `BROWSER_UA`（Chrome 120 桌面 UA）与私有 helper `curlGet(url, timeoutSeconds)`（`curl -sL --max-time N -A '<UA>' -- 'url'`，复用 `runCommand`——**沙箱包装/进程注册/超时处理全一致**），实体解码 `decodeHtmlEntities` / 截断 `truncate` 亦共享。`WebSearchTool`（web_search）= query URL 编码 → `https://www.bing.com/search?q=…&count=20` → 正则提取 `<li class="b_algo">` 块的 title（h2>a）/URL（cite）/snippet（p.b_lineclamp2）→ 格式化输出。`WebFetchTool`（web_fetch）= url 抓取 → `cleanHtml`（移除 script/style/svg/noscript/head 块、自闭合标签 link/meta/img/br/hr/source/input/col/area/base/param、剥离剩余标签、解码实体、压缩空白）。安全约束：web_search 拒绝空/含单引号 query；web_fetch 拒绝空、非 http(s)、含单引号 URL（防 shell 注入，拒绝 file://、ftp:// 等）；`--` 终止选项解析、不传 `-o`（不写文件）/`-d`/`-X`（不发送数据、不改方法）；结果截断到 maxChars（下限 100） |
+| `FileSystemTools.kt` | read_file(path, offset=0, max_lines=2000) / write_file / edit_file(original 唯一匹配，多处报错；replace_all 全量替换) / list_directory / apply_patch(patch: String，必填) | `resolveForRead` **除项目黑名单外全盘可读**（相对路径在项目目录解析）；`ExecutionPermissions` + `SandboxPaths` 统一canonical写边界；项目/实际临时目录/显式白名单自动放行，保护/越界路径先申请一次批准，完全访问免执行审批；无授权上下文只接受显式不可变白名单；write/edit硬链接拒绝、叶子NOFOLLOW写入→diffTracker.recordWrite；**write/edit 落盘前经 `FileWriteRegistry` try-lock**（同文件并发写硬拒绝，见 §7.2 FileWriteRegistry 行）；**read_file 支持 offset（0-based 分页）**：返回区间 `[start, end)` 前闭后开，end 即续读的下一 offset，超界/空文件有明确返回；apply_patch 委托 `PatchFileTransaction`：解析 → 全路径预检/整体写锁 → 快照/dry-run → 写入（I/O 失败尽力回滚）→ A/M/D + diff/touched；源/移动目标一并校验与锁定，拒绝符号链接和 canonical 重复目标；UTF-8 严格解码，保留源行尾。详见 `docs/apply-patch.md`；**read/list 成功后触发 `AgentsSubtreeDiscovery` 回调**（构造参数，AGENTS.md 子树懒发现，见 §7.4） |
+| `ShellTools.kt` | `bash(command,cwd="",timeout_seconds=120,background=false,sandbox="default")`；`runCommand(command,timeoutSeconds,cwd,sandboxMode="default",toolName="bash")`；web_search/web_fetch | `prepareCommand` 共用前台/后台/验证授权，运行时每次从同一manager捕获配置；default受限无网络、network本次批准且保留FS、off本次批准解除沙盒；FULL仅无显式黑名单时裸执行。无context不允许提升，nullable backend不再自动裸跑。cwd相对主目录解析；启动登记ProcessRegistry，取消/超时整组回收，输出持续排空并截取4MiB。web工具独立`httpGet`→`WebHttpReader`，不拼shell，保留Bing结果/HTML清洗与maxChars截断 |
 | `ProcessTools.kt` | list_processes(filter?) / stop_process(pid, force=false) | **宿主侧进程回收**（沙箱外）：list 惰性剔除已死组、输出 pid/命令/工作目录/启动时间；stop 只按 ProcessRegistry 定向 kill -- -pgid（TERM→轮询→force 时 SIGKILL），**查不到 pid 即拒绝**，只杀 mederi 自己启动的进程 |
 | `AgentTools.kt` | update_todo / ask_user（+未开放 get_context_remaining / new_context） | update_todo：校验 content 非空、禁 FAILED、至多 1 个 IN_PROGRESS；落库 sessions.todos + TODO_UPDATED（与 Plan 解耦，plan 期间也可记录 plan 之外事项）。ask_user → QuestionRequester.request 挂起，拒绝返回 "User declined..." |
 | `PlanTools.kt` | create_plan / generate_spec / write_log / converge_plan / update_verification | 含宽松反序列化器（LenientStringList/LenientSubtaskArg/LenientCreatePlanArgs/coerceObjectListField 容错模型错形 JSON）；create_plan：先 `voidActivePlans` 作废该会话全部非终态旧计划（逐一发 PLAN_PROGRESS(action=voided)）→ validatePlan 聚合校验（强制 approach/keyDecisions/changes/languageStack；不再强制 background/problemAnalysis/expectedOutcome/testMethod/inScope/successCriteria；businessLogic 不再必填，字段保留）→ PlanStore.save → APPROVAL 经 PlanApprovalRequester 挂起（subtasksJson 全量 Subtask JSON 随事件）（superseded/approved/rejected）→ notebook.append → emitPlanProgress（PLAN_PROGRESS：planId/action/subtasks，不携带 todos）；AUTONOMOUS 自动 APPROVED。generate_spec：**updatePlan 原子写** Subtask.spec（brief 不动）；覆盖既有 spec 必须给 reason——完整旧 spec 文本追加进 Subtask.specChanges（append-only 审计，零销毁）；发 PLAN_PROGRESS("spec-generated", subtasks)。converge_plan：append-only 追加补救子任务（同 SubtaskArg 结构，含验证契约 6 字段）；update_verification：对非 COMPLETED 子任务原子编辑**全契约**（command/cwd/timeoutSeconds/expected/expectStdoutContains/expectStdoutNotContains，null 字段=保留现值，reason 必填）+ 追加 VerificationChange（完整旧/新契约）到 Subtask.verificationChanges（审计留痕）；发 PLAN_PROGRESS("verification-updated", oldCommand/newCommand/reason）。**验证硬门禁（companion internal helper，2026-10）**：`checkLiteralRequired(st)` = 规则 1（每子任务 `verificationExpectStdoutContains` 必须 ≥1 字面量，validatePlan per-subtask 块调用，LLMDescription 已改 REQUIRED）；`checkParallelizableModuleOverlap(subtasks)` + `moduleOf(path)`（`substringBefore("/src/")` 缺省取第一级目录）= 规则 4（两 parallelizable 子任务共享 gradle 模块 → 验证编译竞争，validatePlan 末尾逐对 reject）；`isVerificationDowngrade(old, new)` + `reasonIndicatesDecisionChange(reason)` = 规则 3（update_verification 写前降级检测：新契约丢命令段 `./gradlew`/`assert`/` test ` 或字面量数量减少，且 reason 无 `decision|disposition|restated|changed`（大小写不敏感）关键词 → 拒写，append-only 审计与 updatePlan 原子性不受影响）。**Args 数据类**：`CreatePlanArgs`：`userReviewRequired`（停用） / `openQuestions`（兼容字段，新调用留空，实质决策先 ask_user） / `researchNotes` / `appendix`（可选：计划级技术上下文；传入 Plan.appendix）；`SubtaskArg`（create_plan 与 converge_plan 共用）：`name/planDetail/targetFiles/decisions/verification(命令)` + `appendix`（可选：子任务级技术附录，论证版 vs spec 执行版；传入 Subtask.appendix） + 验证契约 5 个扩展参数 `verificationCwd` / `verificationTimeoutSeconds` / `verificationExpected`（人类可读预期，必填，审批卡片可见）/ `verificationExpectStdoutContains`（**必填 ≥1 字面量**，规则 1 代码强制）/ `verificationExpectStdoutNotContains`（机器硬校验字面量，LenientStringList 容错）；`GenerateSpecArgs`：`spec` + `reason`（修正既有 spec 时必填） |
 | `VerifyTools.kt` | verify_subtask(planId, subtaskIndex, status: PASS/PARTIAL/FAIL, evidence, rootCause?: IMPLEMENTATION/PLAN, remediation?) | **机器硬校验（2026-09-24）**：子任务存了 verification 命令即**无条件执行**（shellTools.runCommand，timeoutSeconds 默认 30、cwd 可配）——exit 0 且 `expectStdoutContains` 全部命中、`expectStdoutNotContains` 全未命中 = 机器 PASS；exit 非零 / 必须字面量缺失 / 命中禁止字面量 = 机器 FAIL（声明 PASS 时**拒绝存储**，把真实输出摆到桌面要求重判）；超时 = inconclusive（不存 PASS 也不硬拒，暖缓存重验）。PARTIAL/FAIL 必须给 rootCause（判定顺序硬性：先核实现再核计划）——IMPLEMENTATION → `converge_plan` 追加补救；PLAN → append-only 修订（update_verification / generate_spec reason=，见 §8）。机器 PASS 而模型坚持未通过 → 记非 PASS + `machineMismatch=true`（异常态，返回文本强制主代理如实告知用户）。真实证据落盘：`commandOutput`（截断 4000 字符）/ `commandExitCode`（超时 null）与模型自述 evidence 分开存。同时读 Subtask.executorTouchedFiles vs targetFiles 报告 scope 越界（追加 evidence，非硬拒）；PASS→COMPLETED、PARTIAL/FAIL→FAILED；**updatePlan 原子写入**验证结果+状态；全部 COMPLETED → plan 置 COMPLETED + `writeWalkthrough` + `planStore.archive`；发 PLAN_PROGRESS("verified", subtasks/lastSubtaskIndex/lastSubtaskStatus/lastSubtaskRootCause) |
 | `subagent/SubagentTool.kt` | subagent(action: SPAWN/SPAWN_RESEARCHER/STATUS/STOP, task?, briefing?, planId?, subtaskIndex?, agentId?) → JSON | **6→1 单一入口（2026-09）**，action 分流：SPAWN=委托 `SpawnAgentTool`——**planId 可选**：带 planId+subtaskIndex = 计划路径（硬校验 spec 存在性→`updatePlan` 原子置计划与子任务 IN_PROGRESS→PLAN_PROGRESS("subtask-started", subtasks 投影)→派 executor 执行存储的 spec，返回 `{agentId,status,modelName}`）；**无 planId = ad-hoc 执行路径**（task+briefing 直接派 executor，无 spec 门禁、不要求 subtaskIndex，用于小改动/自包含任务）；模型/推理档位动态读 session（批准时用户可能切了模型），角色独立配置时 SubagentConfigManager 优先（§3.5）；SPAWN_RESEARCHER=委托 `SpawnResearcherTool`（只读，无计划门禁）；STATUS/STOP=委托 `SubagentManager.status/stop`（agentId 空返回 Error 文本；STOP 传 `operator = "MAIN_AGENT"` 标记为 `"已被主agent关闭"`，区别于用户手动关闭的 `"被用户关闭"`）。**返回值增强 + STATUS 轮询拦截（2026-10）**：构造函数接收 `parentSessionId`；SPAWN/SPAWN_RESEARCHER 成功（非 Error）时在 JSON 后追加 `\nSubagent dispatched. N subagent(s) running. End your turn... Do NOT call subagent(STATUS) to poll.`（N = `manager.runningCountForSession(parentSessionId)`，spawn 已注册故含刚派出的这个；Error 含并发上限拒绝原样透传不追加）；STATUS 先查 `manager.runningCountForSession(parentSessionId) > 0`——本会话仍有 RUNNING 子代理时返回合成引导文案 `"Subagents are still running. Do NOT poll — end your turn now. You will be automatically woken when all results are in."` 而非实际状态，全部终态后才返回真实 status（NOT_FOUND + AgentRecoveryInfo 逻辑不变）。无 WAIT——子代理完成经事件链自动唤醒父 turn（§13）。仅主代理注册（canSpawn） |
 | `subagent/SubagentManager.kt` | spawn / status / stop(agentId, operator?=null, reason=...) / stopAllForSession / rollbackSubagents(parentSessionId, keptAgentIds) / runningCountForSession(parentSessionId) / getReport | 子代理生命周期管理：spawn 把 `SubagentRunnerImpl.run` 包进后台协程返回 agentId；`agents: ConcurrentHashMap<agentId, BackgroundAgent>` 收敛全部状态（含 parentSessionId/aiModel/reasoningLevel/task/briefing/planId/executorSubtaskIndex/planStore/stopReason/isDiscarded 元数据）；stop = cancel job（`operator` 非空如 `"MAIN_AGENT"` 时默认 `reason="已被主agent关闭"`，未传 `operator` 时默认 `reason="被用户关闭"`，在协程捕获时写入 result，发 SUBAGENT_STOPPED 汇报给主 AI）；**rollbackSubagents(parentSessionId, keptAgentIds)** = 回退历史时静默丢弃在目标回滚点时尚未创立的子代理（标记 isDiscarded 并 cancel，发 SUBAGENT_DISCARDED 通知前端移除，**坚决不发** SUBAGENT_STOPPED，不进 pendingEventMessages，不告知 AI）；**stopAllForSession(parentSessionId)** = abort/abortAndJoin 级联收割本会话 RUNNING 子代理（幂等）；**runningCountForSession(parentSessionId)** = 查询父会话当前 RUNNING 子代理数（纯读 ConcurrentHashMap 无需加锁；STATUS 轮询拦截 / SPAWN 返回值 runningCount / TurnExecutor 事件冲刷延后判断共用）；`getReport(agentId)` = SubagentReportData{agentId, role, status, reportPath?, content}；agent 已不在内存表时 status/getReport 经 `retired` 恢复部分认知；**生命周期事件**（可选注入 eventBus）：spawn 发 SUBAGENT_STARTED → 终态发 SUBAGENT_COMPLETED/ERROR/STOPPED（驱动父 turn 自动唤醒）/ SUBAGENT_DISCARDED（无感丢弃） |
-| `subagent/SpawnAgentTool.kt / SubagentAsyncTools.kt` | spawn_agent/spawn_researcher/agent_status/stop_agent | 内部实现类（被 `subagent` 工具委托），不再单独对外注册；`SubagentAsyncTools` 的 AgentStatusTool/StopAgentTool 类保留未删除（工程内部引用，wait 类 2026-09-25 已删）。**SpawnAgentTool briefing 注入（2026-10 更新）**：plan 路径 `briefing = null`——不传调用方 `args.briefing`，也不传 `planDetail`（planDetail 可能含处理逻辑，与后续修订的 spec 产生两套要求）；spec 是唯一实现指令来源。ad-hoc 路径仍传调用方 `task`+`briefing`。调研结论/静态详情**不**注入——executor 需要时 `read_file .mederi/plans/{planId}/research.md` / `plan.md`（方案A，§8.1）；spec 作为 `plan` 参数单独传递（执行零漂移），不拼进 briefing。计划路径（planId+subtaskIndex）与 ad-hoc 路径（无 planId）的分流见本表 `subagent/SubagentTool.kt` 行。**apiKeyId 解析（2026-10）**：`effectiveApiKeyId = subagentConfig?.apiKeyId ?: apiKeyId`（`SubagentConfigManager.get(role)` 读角色独立配置）——非 null 覆盖父会话 apiKeyId 透传 `subagentManager.spawn(apiKeyId=…)`，null=继承父；`API_KEY_ROTATION_ID` 哨兵原样透传，由下游 ApiKeyResolver/RotatingLLMClient 解释 |
+| `subagent/SpawnAgentTool.kt / SubagentAsyncTools.kt` | spawn_agent/spawn_researcher/agent_status/stop_agent | 内部实现类（被 `subagent` 工具委托），不再单独对外注册；`SubagentAsyncTools` 的 AgentStatusTool/StopAgentTool 类保留未删除（工程内部引用，wait 类 2026-09-25 已删）。**SpawnAgentTool briefing 注入（2026-10 更新）**：plan 路径 `briefing = null`——不传调用方 `args.briefing`，也不传 `planDetail`（planDetail 可能含处理逻辑，与后续修订的 spec 产生两套要求）；spec 是唯一实现指令来源。ad-hoc 路径仍传调用方 `task`+`briefing`。调研结论/静态详情**不**注入——executor 需要时 `read_file .mederi/plans/{planId}/research.md` / `plan.md`（方案A，§8.1）；spec 作为 `plan` 参数单独传递（执行零漂移），不拼进 briefing。计划路径（planId+subtaskIndex）与 ad-hoc 路径（无 planId）的分流见本表 `subagent/SubagentTool.kt` 行。**apiKeyId 解析（2026-10）**：`effectiveApiKeyId = subagentConfig?.apiKeyId ?: apiKeyId`（`SubagentConfigManager.get(role, parentSessionId)` 读会话生效角色配置）——非 null 覆盖父会话 apiKeyId 透传 `subagentManager.spawn(apiKeyId=…)`，null=继承父；`API_KEY_ROTATION_ID` 哨兵原样透传，由下游 ApiKeyResolver/RotatingLLMClient 解释 |
 | `subagent/SubagentRunner(Impl).kt` | 接口 + 实现 | Impl 依赖 ProviderManager+ProjectManager+**mcpConnector+skills（由父 TurnExecutor 注入，仅透传；实际开关在 runTurn 的 AgentCapabilities 表）**；内存 InMemorySessionStore/HistoryStore + 独立 eventBus(replay=64) + 临时 Session(`sub_xxxxxxxx`, AUTONOMOUS) → 独立 TurnExecutor（**scope 继承调用方协程上下文**，取消可级联）→ 按角色拼 inputText（EXECUTOR: 经 `buildExecutorInput` 纯函数组装——plan 路径只传 spec+planDetail 定位、task/args.briefing 不进输入；ad-hoc 路径传 task+briefing；5 类 SPEC_FEEDBACK 回报机制；RESEARCHER: 只读调研）→ sendMessage(subagentRole=role) → 等 MESSAGE_COMPLETED/ERROR 终态 → 取最后 ASSISTANT 文本；**CancellationException 重新抛出**（标记 STOPPED）；异常转 "[subagent error] ..."。**轮询作用域（2026-10）**：子代理 TurnExecutor 构造传 `rotationSessionId = parentSessionId`——子代理轮与父轮共享同一个轮询计数器（多 key 轮询序连续） |
-| `sandbox/CommandSandbox.kt` | `CommandSandbox(projectDirs)` + `SandboxStatus`（internal Linux 注入构造仅供测试，不改 JVM 全局平台属性） | **永远开、无开关**；读全盘放行、写锁白名单（项目目录 + SandboxConfig.extraWritablePaths + 临时目录 + 构建缓存 ~/.gradle ~/.m2 ~/.cache ~/.konan ~/Library/Caches ~/Library/Java + /dev）；shell 探测链 bash→sh（Windows bash.exe→cmd）；`wrap(command)` → `WrappedCommand(argv, warning, processGroupLeader)`：macOS Seatbelt（sandbox-exec -f，SBPL profile 按白名单 hash 缓存）+ **进程组长包装**（macOS perl `setpgrp(0,0)`+exec / Linux setsid，使整条命令树共享 PGID=直接子进程 pid）/ Linux `LinuxCommandSandbox` 完整挂载烟测（只检测不代装，不可用时拒绝执行并保留原始错误）/ Windows 降级警告（无进程组）；companion `environmentNote()` 注入环境块（含 Process control 行） |
-| `sandbox/LinuxCommandSandbox.kt` | `internal LinuxCommandSandbox(projectDirs, extraPaths, home, tempDirs, probe)`；`status(shell): SandboxStatus` / `wrap(command: List<String>): List<String>`；`ProbeResult(exitCode: Int?, output: String)` | Linux 独立路径策略：canonical 去重及父子目录合并；缺失白名单目录在宿主精确创建，保留已有文件白名单；拒绝根目录及 /proc、/dev、/sys 覆盖。根只读 + 白名单原路径 bind + bwrap 自建 /dev + 独立 PID namespace 的 /proc；不 bind /dev/std*，不以 tmpfs 隐藏宿主临时文件。版本/完整挂载探测各限 10 秒、持续排空并截取 8KiB 输出；完整配置失败抛 MederiStateException，禁止无沙盒回退。每实例缓存准备结果，下一 turn 重试。 |
+| `sandbox/CommandSandbox.kt` | `CommandSandbox(projectDirs,extraWritablePaths=[],protectedDirectories=[],deniedPaths=[])` + `SandboxStatus`；internal Linux/平台注入构造供测试 | 仅负责执行 OS 边界，不决定用户授权。`wrap(command, networkAccess=false, unsandboxed=false)` → `WrappedCommand(argv, warning, processGroupLeader)`；macOS Seatbelt 通过 `-p` 直接传可信 SBPL，无可写临时策略缓存，路径字符串转义/控制字符校验；完整 profile 探测失败阻止命令；默认网络关闭，单次联网只扩网络；显式 unsandboxed 仅无黑名单时跳过后端，保留进程组。macOS perl / Linux setsid 保证宿主直接子进程为组长，缺 setsid 阻止执行；Windows 受限后端暂不可用，禁止默默裸跑。`environmentNote` 注入后端能力事实 |
+| `sandbox/LinuxCommandSandbox.kt` | `internal LinuxCommandSandbox(projectDirs, extraPaths, home(仅兼容), tempDirs, probe, protectedDirectories=[],deniedPaths=[])`；`status(shell)` / `wrap(command: List<String>, networkAccess=false, fullAccess=false)` | 共享 `SandboxPaths`：根只读、批准根原路径 bind、保护路径后置只读 bind；移除家目录缓存默认白名单；bwrap 自建 `/dev`、独立 PID namespace `/proc`。默认 `--unshare-net` + seccomp：禁止 connect/sendto/sendmsg/sendmmsg/io_uring_setup，防 pathname Unix socket 通往宿主代理；x86_64/aarch64 ABI 白名单并拒绝 x32。BPF 由纯 Kotlin 生成，经固定 sh positional argv + 匿名 pipe/fd3 交给 `--seccomp 3`，不落可篡改文件且保留 payload stdin。联网授权保留文件系统挂载，去掉网络 namespace/filter。版本/完整实际配置探测各限 10 秒并截取 8KiB 输出，按网络策略分别缓存；失败不执行 payload、不裸跑。原生 Linux 验收覆盖宿主 Unix socket 和注册进程组回收；非 Linux 宿主跳过原生用例，`MEDERI_REQUIRE_LINUX_SANDBOX=1` 不允许跳过 |
+| `sandbox/SandboxPaths.kt` | `SandboxPaths(projectDirs, extraWritablePaths, tempDirs=defaultTempDirs(), protectedDirectories=[],deniedPaths=[])`；`deniedCanonicalPaths: List<Path>` / `allowsRead(path): Boolean` / `writableRoots: List<Path>` / `protectedPaths: List<Path>` / `allowsWrite(path): Boolean` | 文件工具与 OS 后端共用纯路径策略，不创建宿主目录。canonical 路径级 containment，普通文件白名单不扩大到父目录；默认仅实际 `/tmp`、TMPDIR/TEMP、JVM temp，不再放开整棵 `/private/var/folders`。合并根前收集每个项目/额外根现有 `.git/.agents/.codex/.aws`，解析 gitfile 与 worktree commondir，保护实际运行时配置目录；不泛锁项目 `.mederi` 计划产物。拒绝根目录及覆盖 `/proc`、`/dev`、`/sys` 的白名单 |
 | `sandbox/ProcessRegistry.kt` | object（全局单例） | **进程组注册表**：`register(pid, pgid, command, workDir)` 只在 runCommand 启动点写入；`list()` 惰性剔除已死组；`killGroup(pid, pgid, force)` 宿主侧 kill -- -pgid / Windows taskkill /T；`isAlive` = kill -0 组探测。安全边界：只杀 mederi spawn 的进程，沙箱内命令无法写注册表 |
-| `PatchFileTransaction.kt` | `internal PatchFileTransaction(directories, reportChanges, extraWritablePaths=SandboxConfig.extraWritablePaths, beforeMutation)`；`apply(hunks): String` | 多文件预检/快照/锁定、逐文件替换、尽力回滚与残余变化追踪；beforeMutation 供内部确定性故障测试；跨文件不具备崩溃原子性 |
+| `PatchFileTransaction.kt` | `internal PatchFileTransaction(directories, reportChanges, extraWritablePaths=[], beforeMutation)`；`apply(hunks): String` | 多文件预检/快照/锁定、逐文件替换、尽力回滚与残余变化追踪；beforeMutation 供内部确定性故障测试；跨文件不具备崩溃原子性 |
 | `patch/PatchParser.kt` | `parse(patch): List<PatchHunk>`；`PatchHunk.AddFile/DeleteFile/UpdateFile`；`UpdateChunk(changeContext?, oldLines, newLines, isEndOfFile, contextLineIndices: List<Pair<Int,Int>> = emptyList())` | 固定 Codex `23934d31` 语法；显式记录上下文在 old/new 中的索引，禁止通过相同文本推断上下文；解析错误携行号 |
 | `patch/PatchApplier.kt` | `seekSequence / computeReplacements / applyReplacements / deriveNewContents` | 四级匹配，EOF 不回退游标；内部 SourceFile/SourceLine 保留每行 LF/CRLF/CR 和混合行尾、模糊命中上下文原文；新增/替换行采用首个源行尾（空文件 LF），删空输出空串 |
 | `patch/ApplyPatchProtocol.kt` | `Arguments(patch)`；工具说明、固定上游 `LARK_GRAMMAR`；`encodeArguments / decodeArguments`；`StreamingArguments.open/append/close/completeArguments(finalInput: String? = null)` | 模型可见格式单一来源；OpenAI Responses custom 原始补丁 ↔ Koog JSON DTO 桥；其他供应商 function 参数同一执行器 |
 | `FileWriteRegistry.kt` | object（进程级单例） | **同文件并发写注册表**（2026-09）：`tryAcquire(paths): File?` 在 synchronized 块内整体检查+登记（任一冲突则一个都不登记，返回冲突文件）；`release(paths)` 幂等释放；新增内部 `tryAcquireLease(paths): Acquisition`（`Acquired(lease)` / `Conflict(file)`），`Lease.close()` 按获取时 canonical 键释放且只关闭一次，apply_patch 用租约避免祖先路径变化后释放错键。键 = canonical absolute path；语义 = try-lock + 拒绝（不排队）——占用中的文件直接返回 Error，AI 下轮自行重排。write_file/edit_file/apply_patch 落盘全程持锁（try/finally，异常必释放）；跨 turn/跨子代理/跨 session 生效（实例级锁防不住并行子代理）。bash 与 MCP 工具是外部进程，不在管辖内 |
-| `sandbox/SandboxConfig.kt` | object | `@Volatile extraWritablePaths` 进程级全局白名单（UI 写穿、下个 turn 生效） |
 | `diff/TurnDiffTracker.kt` | trackPatch / recordWrite / recordDelete / captureSnapshot / buildDiff / **mergeChanges** | MAX_FILE_SIZE=512KB + skipDirs(.git/.gradle/build/node_modules…)；captureSnapshot 刷新已追踪文件磁盘内容兜底；**全部公开方法加 @Synchronized**；`mergeChanges(changes)` 合并外部 FileChange 列表进 tracker（子代理 turn 改动合并入口） |
 | `diff/TurnDiffTracker.kt`（含 `ParentDiffRegistry`） | `ParentDiffRegistry`（object，进程级注册表）：register(sessionId, tracker) / unregister(sessionId) / mergeInto(parentSessionId, changes)；主 turn runTurn 开头 register、finally 里 unregister；子代理 turn 结束时经此把文件改动合并进父 turn 的 diffTracker，修复"turn 改动摘要不含子代理改动"的 bug |
 | `diff/DiffRenderer.kt` | unifiedDiff / countChanges | 行级 LCS（MAX_LCS_CELLS=5,000,000 超限 fallback replace-all），contextRadius=3 |
 | `diff/`模型 | `TurnDiff(sessionId, messageId?, changes: List<FileChange>, unifiedDiff, createdAt)`；`FileChange(path, status, before?, after?)`；`PatchChange(path, status, before?, after?)` | |
 | `patch/PatchParser.kt` | parse(patch): List<PatchHunk> | Codex 风格补丁状态机（`*** Begin Patch / Add File / Delete File / Update File / Move to / @@ / End of File / End Patch`），heredoc 剥离兜底；`PatchHunk = AddFile / DeleteFile / UpdateFile(path, movePath?, chunks)`；`UpdateChunk(changeContext?, oldLines, newLines, isEndOfFile)`；异常 `PatchParseException{InvalidPatch; InvalidHunk}` |
 | `patch/PatchApplier.kt` | seekSequence / computeReplacements / applyReplacements / deriveNewContents | seekSequence 四级放宽匹配（精确→trimEnd→trim→Unicode 标点归一化）；Replacement 游标只增不减；applyReplacements 倒序应用 |
-| `office/OfficeTools.kt` | office_read(path) / office_write(path, content) | Office 文档读写（ToolFactory `OFFICE_TOOL_NAMES`，主代理 + EXECUTOR 可用、RESEARCHER 只读裁剪下不注册）：`office_read` = .docx/.xlsx/.pptx → markdown 文本（`OfficeConverter.toMarkdown`，AI 可读可改）；`office_write` = markdown → .docx/.xlsx（docx：#/##/### 标题、列表、\| 表格；xlsx：## SheetName + \| 行；**整文件覆盖**）。路径校验与 FileSystemTools 同逻辑（`OfficeTools` 内私有 `resolveForRead/resolveForWrite`）：读全盘放行（相对路径在允许目录解析），**写必须在项目目录内**（containment）；转换核心 = `office/OfficeConverter.kt`（isSupported/toMarkdown/writeDocx/writeXlsx） |
+| `office/OfficeTools.kt` | `OfficeTools(allowedDirectories,executionPermissions?)`；office_read(path) / office_write(path,content) | 读全盘；写与FileSystemTools共用canonical权限策略，越界先批准再创建父目录；FileWriteRegistry锁、批准后代次/路径复核、硬链接拒绝，取消透传；转换仍委托OfficeConverter，不承担权限配置 |
 
 ## 7.3 浏览器自动化模块（`…/browser/`，2026-09-14 新增）
 
@@ -590,7 +649,7 @@ ALL_TOOL_NAMES     = FS + AGENT + PLAN + VERIFY + SUBAGENT + BROWSER_TASK + OFFI
 | 组件 | 位置 | 职责 |
 |---|---|---|
 | `AgentsFileLoader` | `…/project/AgentsFileLoader.kt` | ①指令链（向上 + 向下）：**向上**——项目目录探测 `.git` 得 git 根（无 .git 则项目目录自身），读取链上（git 根→项目目录，含两端）全部 AGENTS.md；**向下**——再扫项目目录的**直接子目录（一层）**里的 AGENTS.md（AGENTS.md 不保证在项目根/git 根，可能在下一级子目录如 `mederi/AGENTS.md`、或平级多目录如 `A/{B,C}/AGENTS.md`），跳过隐藏目录（`.git/.gradle/.idea/.mederi` 等，按 `.` 前缀）与生成/依赖目录（`build/node_modules/dist/out/coverage`，常量 `GENERATED_DIR_NAMES`）——防第三方依赖海量 AGENTS.md 爆上下文；更深子树交给懒发现。整体浅→深排列（深层细化覆盖浅层）；②子树发现：从工具访问路径向上到项目目录（不含）最近优先；③读取带大小上限（默认 64KB，超限截断；对标 Codex `project_doc_max_bytes` 但按**每文件**计，不做链共享预算）。读取失败静默跳过（增强项非硬依赖）。`AgentsFile(path, relativePath, content)` |
-| `AgentsSubtreeDiscovery` | `…/tools/FileSystemTools.kt` 顶层 fun interface | 懒发现回调：`onAccessed(accessedPath) → AgentsFile?`（只返回"本次新发现"的）。TurnExecutor 组合 loader + 会话级去重 registry 提供 |
+| `AgentsSubtreeDiscovery` | `…/tools/FileSystemTools.kt` 顶层 fun interface | 懒发现回调：`suspend onAccessed(accessedPath) → AgentsFile?`（只返回"本次新发现"的）。TurnExecutor 组合 loader + 当前项目读取策略 + 会话级去重 registry 提供；先过滤黑名单再登记去重，拒绝过的内容不会因后续解除黑名单而永久漏注入 |
 | 注入 | `SystemPrompts.withProjectRules(prompt, files)` + TurnExecutor.sendMessageInternal | 每轮 turn 读指令链 → 系统提示词追加 `# Project Instructions (AGENTS.md)` 段（每文件带 relativePath 标题）；仅主代理注入；子代理由主代理将适用规则写入 task/briefing/spec；读取失败不阻塞 turn |
 | 懒发现 | ReadFileTool/ListDirectoryTool.execute 成功后 | `appendDiscoveredAgents`：新发现的 AGENTS.md 以 `--- AGENTS.md (relativePath) ---` 块追加到工具返回文本末尾；会话级 registry 去重（v1 内存态，重启后首次访问会重复注入一次，可接受） |
 | `AgentsFileGenerator` | `…/koog/AgentsFileGenerator.kt` | **生成服务**（API 形态，暂无命令/UI 入口）：mini agent 模式（对照 compressOnce）——read_file/list_directory 限定项目目录扫仓库 + `mederiSingleRunStrategy`（maxAgentIterations=100），最终回复即完整 markdown（`stripCodeFence` 防御剥围栏）→ 代码写盘项目根 AGENTS.md；已存在则原地改进（现有内容喂模型）。模型解析：显式 modelId → 项目最近会话的 aiModel，都没有 failure。经 AiCore 契约 `generateAgentsFile(projectId, modelId?)` 暴露（见 02-app-shared.md） |
@@ -721,8 +780,29 @@ classDiagram
         % SSE 自计空闲超时: SSE_IDLE_TIMEOUT=10min 无任何行(含 keep-alive)才判死连接
     }
     class RetryableLLMClient {
-        +maxRetries=10, minDelayMs=1s, maxDelayMs=10s
-        % STATUS 事件(scope=provider, code=RETRYING)推 UI
+        +minDelayMs=0s, maxDelayMs=30s
+        % 临时故障无限重试；ProviderRetryPolicy先判可重试性及服务端等待
+        % 无指令每次独立随机0~30s；有指令遵守下限+0~1s抖动，无指数递增
+        % STATUS(scope=provider, RETRYING/RETRY_FINISHED)推UI；首帧恢复/退出清提示
+        % 每次请求局部Long计数，从1开始；零等待每轮ensureActive，停止立即取消
+    }
+    class ProviderRetryPolicy {
+        <<object>>
+        +inspect(error: Throwable, nowMillis: Long) ProviderRetryAdvice
+        % 毫秒头 → 秒/HTTP-date头 → Google RetryInfo → 随机兜底
+        % 余额/消费限额与明确PerDay配额先停；x-should-retry=false先停
+        % 不使用任何reset头；不按供应商名称复制解析器
+    }
+    class ProviderRetryAdvice {
+        +retryable: Boolean?
+        +delayMs: Long?
+        +source: String?
+    }
+    class ProviderHttpException {
+        +statusCode: Int
+        +responseHeaders: Map~String,String~
+        +responseBody: String?
+        % cause保留KoogHttpClientException，沿本次异常链传递，不用全局last-response
     }
     class RotatingLLMClient {
         % LLMClient 装饰器 — 轮询模式: 每次 execute/executeStreaming 换下一个 key 的底层 client
@@ -736,8 +816,8 @@ classDiagram
         %   重试时重新取下一个 key(轮换+重试叠加)
     }
     class LlmRetryConfig {
-        <<object>> @Volatile maxRetries/minDelayMs/maxDelayMs
-        % server 可用环境变量 MEDERI_LLM_RETRY_* 配置
+        <<object>> @Volatile minDelayMs/maxDelayMs
+        % server 可用 MEDERI_LLM_RETRY_MIN_MS/MAX_MS 配置等待边界；不再支持次数上限
     }
     class OneShotCompletion {
         <<object>>
@@ -792,6 +872,10 @@ classDiagram
     KoogClientFactory --> MederiHttpClientFactory
     KoogClientFactory --> MederiOpenAILLMClient
     KoogClientFactory --> UrlNormalizer
+    RetryableLLMClient --> ProviderRetryPolicy
+    ProviderRetryPolicy --> ProviderRetryAdvice
+    ProviderRetryPolicy --> ProviderHttpException
+    MederiHttpClientFactory --> ProviderHttpException : 失败响应元数据
     RetryableLLMClient --> LlmRetryConfig
     RetryableLLMClient --> RotatingLLMClient : delegate(轮询模式)
     RotatingLLMClient --> KoogClientFactory : 底层 client 懒创建
@@ -819,6 +903,13 @@ classDiagram
 **apply_patch wire 协议（2026-10）**：`MederiOpenAILLMClient` 在官方 `https://api.openai.com` Responses 请求里把 `apply_patch` 声明为 `type=custom` + 固定 Codex Lark grammar，其他工具仍 function；兼容端点与 Chat Completions 保持普通 function `{patch:string}`。`SanitizedResponsesOutputItem.input` / `SanitizedResponsesStreamEvent.input` 承接 custom 输入，`SanitizedResponsesAPIResponse.status` 检查非流式完整性；非流式整 DTO 编码，流式 custom input delta 经 serializer 编码桥逐片发 Koog 工具参数，按 output index 独立聚合 custom/function 参数，正文或另一工具交错不会提前截断；UTF-16 高代理半字暂存至下一片，确保逐帧 UTF-8 安全；done 时收尾/检查一致性。后续请求从 Koog 统一 JSON 参数恢复 `custom_tool_call.input`，工具结果写 `custom_tool_call_output`；普通工具结果写 `function_call_output`，不丢弃工具反馈；assistant 历史正文用 `output_text`。调用 ID 保持一致。详见 `docs/apply-patch.md`。
 
 **出站 HTTP 唯一工厂**（`…/http/MederiHttpClientFactory.kt`）：`MederiHttpClientFactory`（object，实现 `KoogHttpClient.Factory`）是所有 Koog 链路出站请求（LLM 对话 / models.dev 目录 / MCP registry / 模型列表拉取）的唯一创建入口，`create()` 统一注入 `User-Agent` 身份头（`Mederi/<version> (<os> <os-version>; <arch>)`，值来自 `MederiConfig.userAgent`，由装配层注入）。**硬性规则：禁止在其他位置直接 `HttpClientFactoryResolver.resolve()`**——KoogClientFactory（LLM 三客户端）、ProviderManagerImpl.fetchRemoteModels、ModelCatalog.fetch、OfficialRegistrySource.withClient 均已切换。**超时策略（2026-09）**：Koog/Ktor 默认 requestTimeout=15min / socketTimeout=15min 是"从发请求/首帧起算的总时限"，超长推理（30min+）会被切断（本质在约束 AI 处理时长）。本工厂将两者置 0（禁用），连接"死亡"判定完全交由 `MederiOpenAILLMClient` 自计：SSE 只要还在收到任何一行（含 keep-alive 注释行）就不超时，连续 `SSE_IDLE_TIMEOUT`（10 分钟）无数据才抛超时。
+
+**传输异常识别（2026-11）**：`RetryableLLMClient.isTransientError` 在既有网络类型/词标之外，沿 Koog/LLMClientException 的 cause 链识别 `EOFException` 与 `ClosedChannelException`（含异步关闭子类）；首帧前读取提前结束/通道关闭按临时传输失败退避重试，主/子代理共用。明确的 HTTP 鉴权/参数/余额拒绝仍优先，不能因内层 IO 异常被覆盖。首帧后仍原样抛出并保留已消费输出，不重放请求或整项子任务。
+
+**服务端重试提示（2026-11）**：`…/http/ProviderHttpException.kt` 保留本次 HTTP 状态、白名单响应头（`retry-after-ms/retry-after/x-should-retry/date`，另外保留但不解释 `x-ms-retry-after-ms`）与响应体，cause 链保留 Koog HTTP 异常供 ErrorCollector 使用。`MederiHttpClientFactory` 的 Ktor 失败响应钩子在 Koog 丢弃 headers 前抛出该异常，覆盖 get/post/lines/sse（Chat/Responses/Google 共用）；失败体在钩子中读 `rawContent`（局部 opt-in Ktor InternalAPI，避免 `bodyAsText` 再入 SSE 变换器丢失错误体）；成功 SSE 不提前读取。底层显式使用 `KtorKoogHttpClient.Factory(baseClient=HttpClient { … })`，保留上游默认引擎选择、UA、timeout 与序列化行为。
+
+`…/provider/infrastructure/koog/retry/ProviderRetryPolicy.kt`：内部 `ProviderRetryPolicy.inspect(Throwable, nowMillis=System.currentTimeMillis()) → ProviderRetryAdvice(retryable:Boolean?,delayMs:Long?,source:String?)`。私有 `@Serializable` DTO `ErrorEnvelope(error?)` / `ProviderError(code/type/status/details:JsonElement?)` / `ProviderErrorDetail(@type,retryDelay?,violations)` / `QuotaViolation(quotaId?)` 分层解码（详情逐项失败隔离，避免畸形详情丢失永久错误码或其他有效RetryInfo），不抓取自由文案。依次取有效 `retry-after-ms` 毫秒、`Retry-After` 秒（兼容小数）或 三种 RFC HTTP 日期（IMF-fixdate/RFC850/asctime）、Google `google.rpc.RetryInfo.retryDelay` Protobuf duration（最多9位小数、亚毫秒向上取整）。负数、非数值、溢出、错误JSON安全降级；HTTP日期可用响应Date消除本机时钟偏移；多条RetryInfo取最大下限。服务端下限不以30/60秒截短，加0～1000ms抖动；没有合法提示才使用配置随机区间。所有reset头与未经证实的私有同义字段不作等待依据。已知余额/消费限额码、结构化QuotaFailure的PerDay标志（产品长期配额策略）、明确鉴权/参数失败、`x-should-retry=false` 先拒绝；未知429保留重试。`insufficient_quota` 在兼容服务可表示 TPM/RPM 限流，不单独作为停重试依据（无论出现在 error.code 还是 error.type）；仍优先处理明确余额码及显式服务端拒绝。402仅带有效明确重试头或显式许可才恢复。调研证据与边界见 `docs/retry-delay-research.md`。
+
 
 **硬性规则**：
 - 推理机制不对供应商参数做语义解释：用户填什么发什么，机制不纠错；内置供应商参数按官方文档预填且 UI 不可编辑，仅自定义供应商可配。
@@ -922,7 +1013,7 @@ domain 模型（market）：`McpSearchResult/McpServerSummary/McpServerDetail/Mc
 |---|---|
 | `SESSION_CREATED` / `SESSION_UPDATED` | 无 / 状态变化 |
 | `MESSAGE_DELTA` | `type`(text/reasoning/tool_call)、`content`；tool_call 另有 `name`、`state`(running/completed) |
-| `MESSAGE_COMPLETED` | 正常交付携 `finalMessageId`，取消/异常/截断不确认交付；等待子代理可确认本轮阶段回复，但没有 workCompletedAt；本 turn 有 diffTracker 时携带 `turnDiffSummary`（TurnDiffSummary JSON = 本 turn 文件变更摘要，同时经 historyStore.replace 写进最后一条 assistant 消息的 Message.turnDiffSummary 字段）+ `diffMessageId`（摘要挂靠的 assistant 消息 id）；**断流时携带 ErrorRecord payload**（`error`=formatShortMessage、`errorId`、`fullDiagnostic`、`errorCategory`=NETWORK、`errorSeverity`=WARNING、`failureMode`=PREMATURE_CLOSE、`providerName`/`modelName`，另带 `warning` 人类提示文本）。两类来源——① End 帧无 finishReason（`collectWarning`，无异常）：`流式连接提前中断：服务器关闭连接但未发送结束标记（已接收 N 帧 / N 字符）`② 流消费异常（`collect`）：`流式中断：<ErrorRecord.formatShortMessage()>（已接收 N 帧 / N 字符）`。客户端 MESSAGE_COMPLETED 分支把 `error/errorId/fullDiagnostic` 写入快照 errorMessage/errorId/errorDiagnostic（severity=WARNING 不进 Error 状态，会话保持 Idle），`failureMode==PREMATURE_CLOSE` 时置 `errorIsStreamInterrupted=true` → ErrorBoard 显示"继续"按钮（重发 Continue 走正常 send 流程，历史里的半截回复让模型自然续写）→ ErrorBoard 展示 |
+| `MESSAGE_COMPLETED` | 正常交付携 `finalMessageId`，取消/异常/截断不确认交付；等待子代理可确认本轮阶段回复，但没有 workCompletedAt；本 turn 有 diffTracker 时携带 `turnDiffSummary`（TurnDiffSummary JSON = 本 turn 文件变更摘要，同时经 historyStore.replace 写进最后一条 assistant 消息的 Message.turnDiffSummary 字段）+ `diffMessageId`（摘要挂靠的 assistant 消息 id）；**旧兼容事件的断流诊断可携带 ErrorRecord payload**（`error`=formatShortMessage、`errorId`、`fullDiagnostic`、`errorCategory`=NETWORK、`errorSeverity`=WARNING、`failureMode`=PREMATURE_CLOSE、`providerName`/`modelName`，另带 `warning` 人类提示文本）。两类来源——① End 帧无 finishReason（`collectWarning`，无异常）：`流式连接提前中断：服务器关闭连接但未发送结束标记（已接收 N 帧 / N 字符）`② 流消费异常（`collect`）：`流式中断：<ErrorRecord.formatShortMessage()>（已接收 N 帧 / N 字符）`。当前 TurnExecutor 对断流先有限续写，耗尽或未形成完整交付时发 MESSAGE_ERROR（见 04-flows「推理中断恢复与失败终态」）；客户端兼容旧 MESSAGE_COMPLETED 分支把 `error/errorId/fullDiagnostic` 写入快照 errorMessage/errorId/errorDiagnostic（severity=WARNING 不进 Error 状态，会话保持 Idle），`failureMode==PREMATURE_CLOSE` 时置 `errorIsStreamInterrupted=true` → ErrorBoard 显示"继续"按钮（重发 Continue 走正常 send 流程，历史里的半截回复让模型自然续写）→ ErrorBoard 展示 |
 | `MESSAGE_ERROR` | rich payload（由 `ErrorRecord.toPayload()` 生成）：`error`(简报。**有 `serverMessage` 时 = `[分类] 供应商真实报错(HTTP xxx)`**（如 `[RATE_LIMIT] Insufficient Balance (HTTP 429)`，从 errorBody JSON 提取）；否则 `[分类] 异常类型: 消息(HTTP xxx)`，向后兼容)、`errorId`、`errorCategory`、`errorSeverity`、`errorType`(完整类名)、`errorPhase`、`httpStatus`、`errorBody`、`serverMessage`(errorBody 解析出的真实报错)、`networkErrorType`、`providerName`、`modelName`、`toolName`、`recoverySuggestion`、`fullDiagnostic`(完整分层诊断报告)、`causeChain` |
 | `TOOL_CALLED` | `tool`、`toolCallId`、`args` |
 | `TOOL_RESULT` | `tool`、`toolCallId`、`output`、`isError` |
@@ -963,14 +1054,18 @@ flowchart TD
     ROLE --> RESEARCH["Researcher: 来源事实 + 推导 + 证据报告"]
 ```
 
-- `build(agentMode)` 固定拼接配置声明、COMMON、工作流适用范围与模式说明；不按 coding / Office / 浏览器等工作类型切换提示词。编码原则固定挂载但明确条件适用。`dynamicSuffix(activePlan, activeTodo)` 单独提供动态状态，始终在 skills/项目规则之后，保持连续静态前缀。
+- `build(agentMode)` 固定拼接配置声明、COMMON、工作流适用范围与模式说明；不接受 `hasBrowser`，主代理与 turn 子代理通用提示词不包含浏览器说明或可用性声明。能力来自实际注册的工具及其 schema；专用 Operator/Brain 提示词仍由各自模块提供。编码原则固定挂载但明确条件适用。`dynamicSuffix(activePlan, activeTodo)` 单独提供动态状态，始终在 skills/项目规则之后，保持连续静态前缀。
 - COMMON = 简短宿主事实（无泛化角色扮演）+ GeneralPrompts + 意图理解/冲突处理/输入核验 + 沟通风格 + 条件编码原则 + 工具指南 + 计划/Spec/报告核验/研究委派指南 + 工作目录/沙箱 + 讨论与执行/可选委派/软件 Plan Loop + 交付与 Markdown/Mermaid 渲染规则。篇幅不再沿用旧版 3.8k/1.3k token 估值；字符数不等于实际模型 tokenizer token 数。
+- 主代理沟通规则：每次收到用户消息（含执行中插话），在下一次工具调用前先输出面向用户的正文。能回答就先答，需要调查就说清待确认事项和第一步。上次告知用户的步骤完成、得出结论或受阻时，先反馈结果，再进入下一步。一个步骤可包含多次工具调用。这条规则由主代理提示词承载。
+- `GeneralPrompts.EVIDENCE_AND_CAUSAL_REASONING` 在通用原则后挂载，主代理、EXECUTOR、RESEARCHER 均完整复用一次：以可靠证据建立因果解释，必要时通过可复现实验检验假设；方案解释如何消除产生问题的机制，验证原始失败及相关行为。不规定读取/搜索次数、替代解释数量或调查工作量，不把推测写成事实，不新增运行时代码门禁。委派成本只用于选择由谁调查，不省略必要证据。
 - 通用协作：只读调查可先行；执行前讨论具体方案，实质决策用 ask_user 选择题确认，已确认的不重复问。讨论和计划鼓励在有助理解时使用 Mermaid。正式计划不包含开放问题或未确认默认；`WritePlanArgs.openQuestions` 为旧数据兼容保留，新调用留空（提示词/工具描述约定，无新增代码门禁）。
 - Plan Loop 仅用于以软件为交付物的复杂开发；研究、浏览器操作、Office/文档工作无论复杂度均走讨论确认 → 执行 → 实际结果验收，可用 todo。临时脚本不触发软件 Plan；混合任务只对独立软件开发部分使用 Plan。
 - 委派可选：综合上下文增长及后续价值、并行收益、交接/重复读取/等待/核验成本。简短查询通常主线完成；大量一次性收集/交叉核对优先考虑委派；持续讨论和决策保留主线。任务类型、文件数、进入 Plan 均不强制 spawn。`generate_spec` 成功结果及工具描述也允许直接执行。
 - `forSubagentExecutor()` 独立提示词：计划路径遵守存储 spec、范围与五类 SPEC_FEEDBACK，执行适用 build/compile 检查（不适用时 spec 说明原因并给替代非测试检查），计划测试交父代理；ad-hoc 路径按 task+briefing 执行任意交付并做适当检查，不套必编译/禁测试约束。两条路径均不自行计划、派发或询问终端用户。
 - `forSubagentResearcher()` = 只读配置 + 研究任务边界 + GeneralPrompts + 研究工具 + RESEARCH_DISCIPLINE + OUTPUT_FORMAT + MERMAID_GUIDELINES。事实有已读来源；允许专业推理但区分事实/推导/假设，证据可纠正父代理前提。按时效相关性检查日期，报告提供结论、推理、出处和必要原文，避免全量摘抄。
 - `PromptGuides` 保留工具依赖顺序、机器验收契约、计划概览/附录、软件 Spec、委派核验、研究 briefing、沙箱与渲染事实。移除过时 JSON 计划范例，输出字面量示例明确需要实际打印且不能代替行为断言。工具 schema 为参数真理源。
+- `PLAN_OVERVIEW_GUIDE` 的实现方案说明已核实现状、原因/需求缺口、目标行为、数据/控制流与验收依据，不能以目标、文件列表或空泛一句话代替；复杂依据按 `PLAN_APPENDIX_GUIDE` 放详情/附录。`SPEC_WRITING_GUIDE` 派发前自检真实路径/签名、前序实际结果、调用点与跨端对应、边界语义、构建/行为验证及停止边界。父代理负责 spec 正确性，不把未核实判断作为事实下发；执行器核对引用源码，发现事实冲突或无法解决原问题则上报，不能照错执行或擅改 spec。主代理核对影响修复的子代理结论的关键来源；研究员报告未找到/未证实与搜索局限，保留关键原文证据。
+- 主代理/研究员的 `read_file` 指南与 `FileSystemTools` 一致：offset 从 1 开始，默认 1；max_lines=0 为不限制行数，返回行号仅供引用，分页按工具给出的 next offset 继续。
 - `withSkillsAndActive(basePrompt, available, active)`：每个清单项独立成行，清单和激活正文以空行分段；load_skill 激活后下一 turn 的系统段挂全文，不读进历史。Skill 在当前角色权限、用户约定范围内细化通用工具指南，不能覆盖这些边界。主代理与 EXECUTOR 继承 skills；Researcher 不继承（由 AgentCapabilities 控制）。
 - `withProjectRules(basePrompt, files)` 按浅→深追加 AGENTS.md，由 TurnExecutor 仅对主代理调用。静态规则与环境信息不逐条复制进用户历史；EnvironmentInfoProvider 每轮刷新时间、shell/沙箱、项目路径和停止任务。
 - 子代理派发后下一响应必须是无工具的阶段回复，说明等待什么且不冒称整体完成；终态事件自动聚合唤醒，不轮询。完成时正式交付自足，与过程记录区分。
@@ -985,7 +1080,7 @@ flowchart TD
 ## 14. debug 包（`…/debug/`）
 
 - `DebugLog`（object）：`Level{DEBUG,INFO,ERROR}`；`@Volatile enabled`（JVM 属性 `mederi.debug`，缺省 true）、`minLevel`、`layers: Set<String>?`；inline 展开零开销关闭、调用点位置 `(类.方法 文件:行号)`。
-- `ErrorCollector`（object）：**全项目错误唯一收集点**。`collect(throwable, ErrorContext(phase/sessionId/providerId/providerName/modelId/modelName/toolName))` → `ErrorRecord`（id/timestamp/category[NETWORK,API,AUTH,RATE_LIMIT,TOOL,CONFIG,SERIALIZATION,STATE,CANCELLED,INTERNAL]/severity[FATAL,RECOVERABLE,WARNING]/exceptionType/exceptionMessage/causeChain/stackTrace/httpStatusCode/errorBody/serverMessage/networkErrorType/failureMode/fullDiagnostic/上下文/recoverySuggestion）。内部自动完成：诊断提取（HTTP 状态码来自 `KoogHttpClientException`、网络类型超时/重置/TLS/DNS，原 `SseDiagnostics` 逻辑已吸收）+ 分类 + 严重级别 + 恢复建议 + `DebugLog.error` 全量日志 + 写入内存 ring 历史（MAX_HISTORY=50）。**`extractServerMessage(errorBody/throwable)`**：宽容解析错误体 JSON（`error.message`/`message`/`detail`，支持 OpenAI/Anthropic/Gemini/FastAPI 形状，非 JSON 回退首行文本），提取供应商真实报错；`collect()` 存入 `serverMessage`，`formatShortMessage()` 优先展示（429 时区分欠费 vs 限流，不再只有干瘪异常名）。查询：`recent()` / `recentForSession(sessionId)` / `get(errorId)`。事件载体 `ErrorRecord.toPayload()` = MESSAGE_ERROR rich payload（含 `failureMode`/`serverMessage`）。**`collectWarning(message, detail?, ErrorContext)`**：无异常上下文（断流静默失败）生成 WARNING 级 ErrorRecord（category=NETWORK、exceptionType=StreamInterrupted、**failureMode=PREMATURE_CLOSE**、`detail` 拼入 fullDiagnostic），随 MESSAGE_COMPLETED 走统一错误出口。
+- `ErrorCollector`（object）：**全项目错误唯一收集点**。`collect(throwable, ErrorContext(phase/sessionId/providerId/providerName/modelId/modelName/toolName))` → `ErrorRecord`（id/timestamp/category[NETWORK,API,AUTH,RATE_LIMIT,TOOL,CONFIG,SERIALIZATION,STATE,CANCELLED,INTERNAL]/severity[FATAL,RECOVERABLE,WARNING]/exceptionType/exceptionMessage/causeChain/stackTrace/httpStatusCode/errorBody/serverMessage/networkErrorType/failureMode/fullDiagnostic/上下文/recoverySuggestion）。内部自动完成：诊断提取（HTTP 状态码优先来自异常链中携带状态码的 `KoogHttpClientException`，避免外层无状态 SSE 包装遮蔽、网络类型超时/重置/TLS/DNS，原 `SseDiagnostics` 逻辑已吸收）+ 分类 + 严重级别 + 恢复建议 + `DebugLog.error` 全量日志 + 写入内存 ring 历史（MAX_HISTORY=50）。**`extractServerMessage(errorBody/throwable)`**：宽容解析错误体 JSON（`error.message`/`message`/`detail`，支持 OpenAI/Anthropic/Gemini/FastAPI 形状，非 JSON 回退首行文本），提取供应商真实报错；`collect()` 存入 `serverMessage`，`formatShortMessage()` 优先展示（429 时区分欠费 vs 限流，不再只有干瘪异常名）。查询：`recent()` / `recentForSession(sessionId)` / `get(errorId)`。事件载体 `ErrorRecord.toPayload()` = MESSAGE_ERROR rich payload（含 `failureMode`/`serverMessage`）。**`collectWarning(message, detail?, ErrorContext)`**：无异常上下文（断流静默失败）生成 WARNING 级 ErrorRecord（category=NETWORK、exceptionType=StreamInterrupted、**failureMode=PREMATURE_CLOSE**、`detail` 拼入 fullDiagnostic），随 MESSAGE_COMPLETED 走统一错误出口。
 - `StreamCloseDiagnostics`（debug）：SSE 流关闭的结构化诊断。`MederiOpenAILLMClient.executeStreaming/executeStreamingResponsesAPI` 的 `onCompletion` 块写入 `lastStreamDiagnostics` 字段（mode=done/premature-close/exception、lines/bytes/durationMs/maxGapMs/ttfbMs/lastRawLines[最后 5 条原始 SSE 行、data: 过滤前]、errorSseLines[非 data: 疑似错误行]、errorType/errorMessage）；`TurnExecutor` 断流时经 `diagnosticsProvider`（穿 clientRef→RetryableLLMClient.delegate()→MederiOpenAILLMClient.lastStreamDiagnostics）读取并拼入 `collectWarning` 的 detail。**核心判读：premature-close 无异常 = 服务端/代理关闭连接（客户端网络问题会抛异常）→ 责任方 SERVER/PROXY**。
 - `ProcessStatsMonitor`（object，JVM）：`snapshot(): ProcessStats`——CPU（OperatingSystemMXBean）/堆/RSS（Linux /proc/self/statm、macOS `ps -o rss=`、Windows null 不造假值）；无后台线程，调用方 ≥500ms 轮询。
 - `StreamTimingLog`：流式速率统计（ttfb/duration/maxGap/avgGap + 每秒 progress）；每次 flow 收集须新建实例。
@@ -1030,3 +1125,121 @@ flowchart LR
 `finalMessageId/isFinalAnswer` 表示本次主 turn 完整正式回复，与整项工作的 `workCompletedAt` 分离。派发子代理后可交付简短阶段回复；pending 子代理/终态事件仍保留同一 work ID、无结束时间，唤醒后可产生后续完整回复。先前已确认的阶段回复不撤销。提示词要求阶段说明自足、明确等待事项，不冒称全任务完成。
 
 `SubagentRunner.run` 的 onProgress 改为 `suspend (MederiEvent) -> Unit`，`MederiEvent/EventType` 可序列化。SubagentProgressBatch 120ms 仅合并同类同响应文本；边界、工具参数/结果不可混型，单消费者保证终态前冲刷尾帧。`BackgroundAgent` 新增 `completedAt: String?`、`progressEvents: MutableList<MederiEvent>`；在同一同步区追加事件并生成信封序号，供 MederiAiCore 重放。不再通过“下一个工具开始”猜测上一个工具成功。
+
+
+### 2026-11：执行权限 API 边界
+
+`Mederi.sandbox: SandboxApi` 由 `SandboxApiImpl(sandboxManager)` 装配，与 runtime 使用同一个 manager；桥只做 DTO 映射并转调此 API。旧全局权限及设备偏好不迁移为项目权限，旧数据保持原样。`SandboxApiTest` 验证 IO 故障转为 MederiInternalException、领域异常不重复包装、取消透传以及 API/runtime 同源。共用 `mederiCall` 对 CancellationException 直接重抛，不把协程取消当成内部业务失败。
+
+### 7.2.1 宿主权限模型与执行授权（2026-11-01）
+
+文件路径：`core/src/commonMain/kotlin/xyz/mederi/tools/sandbox/SandboxManager.kt`、`ExecutionPermissions.kt`；对外薄API见 `api/SandboxApi.kt` / `api/impl/SandboxApiImpl.kt`。
+
+- `ExecutionPermissionMode { NEEDS_APPROVAL, FULL_ACCESS }`；`SandboxSettings(mode=NEEDS_APPROVAL,extraWritablePaths=[],version=0,deniedPaths=[],allowedCommands=[],deniedCommands=[])` 为持久化完整配置，SettingsStore key=`sandbox.projects.{projectId}.settings`。
+- `ExecutionApprovalRequest(id,conversationId,executionSessionId,toolName,command?,paths=[],cwd?,access,reason?)`：不可变单次申请；`access=outside/network/unsandboxed`。
+- `SandboxManager(settingsStore,eventBus,protectedDirectories=[],projectManager?)`：`getSettings(projectId)` / `updateSettings(projectId,settings,expectedVersion?)`；`pendingApprovals(conversationId)` / `requestApproval(projectId,request,expectedGeneration?)` / `resolve(conversationId,id,approved)` / `cancelExecution(executionSessionId)` / `cancelConversation(conversationId)`。manager由Mederi单实例装配，各项目配置代次/待批表受同一互斥保护，await不持锁；存储失败不放权，取消不能切断已开始的配置提交。
+- `ExecutionPermissions(manager,directories,conversationId,executionSessionId=conversationId,projectId)`：`resolvePath(raw)` / `authorizeWrite(tool,paths)` / `authorizeCommand(command,cwd,sandbox,tool="bash")` / `readPolicy()` / `checkRead(path)` / `checkGrant(grant)` / `validateGrant(grant)`；Grant持配置代次及精确canonical目标，落盘/启动前重新核验。FULL仍校验显式路径黑名单。
+- DI：Mederi 创建 sessionEvents 与 manager → SessionManagerImpl → TurnExecutor → ToolFactory → 文件/Office/Shell工具；SubagentRunnerImpl复用manager，申请归父conversationId，自己的executionSessionId用于清理。主turn阶段完成不取消子代理待批请求。
+- 三事件：`EXECUTION_APPROVAL_REQUESTED` payload.request=DTO JSON；`EXECUTION_APPROVAL_RESOLVED` payload.requestId/status（APPROVED/DENIED/CANCELLED/SETTINGS_CHANGED）；`SANDBOX_SETTINGS_CHANGED` payload.projectId/ settings=JSON，sessionId为空，按projectId失效UI投影。待批仅内存，重启/取消后历史不能重新授权。
+- `VerifySubtaskArgs.sandbox="default"` 仅选择本次存储验证命令的授权方式，不更改VerificationSpec及其append-only审计；无法执行不能静默略过机器验收。
+- `http/WebHttpReader.kt`：`suspend get(url,timeoutSeconds,userAgent):String`，http(s) GET、最多5次重定向、总时长及2MiB响应上限，独立于命令网络，不携带本机凭据。
+
+`SandboxApi.updateSettings` 将输入 version 传给 manager 进行原子版本校验；保存后递增并返回版本，防旧客户端表单覆盖新权限。事件通知先同步tryEmit，存在背压时由单发布任务按FIFO排空，状态锁不等待订阅者；`SandboxManager.close()`拒绝待批并取消发布任务。
+
+apply_patch每次实际mutation前核对目标属于授权前捕获的canonical目标集合，避免等待批准期间多项目相对路径查找改变而把批准用于另一文件。
+
+
+### 项目权限规则补充（2026-11-01）
+
+`tools/sandbox/CommandRules.kt`：internal `validate(patterns)` / `allowsEscalation(command, settings): Boolean` / `arguments(command): List<String>?`。静态 argv 前缀匹配、拒绝优先；允许仅免提升请求的批准，不改变 default 后端边界。有拒绝规则时复杂 shell 拒绝，否则复杂 shell 不能匹配自动允许。词法规则不判断任意程序的等效行为。
+
+每项目以 `settingsKey(projectId)` 持久化，配置版本和运行时代次按项目独立；A 更新不取消 B 请求/授权。生产 manager 注入 ProjectManager 验证真实项目。旧全局权限不迁移。项目路径黑名单读写均拒绝，优先于 FULL/单次批准；FileSystemTools read/list、Office read、AGENTS 自动注入过滤，ShellTools 传 deniedPaths 给 OS 后端。FULL/off 有黑名单时采用黑名单后端，Windows 不支持则失败即停；Linux 缺失拒绝目标失败即停。
+
+### 7.3 工作区子系统 Workspace Subsystem（2026-11-02）
+
+对应 Worktree Spec（WT-2026-11-02.1）。支持基于 Git worktree 与独立 checkout 的多工作区并发隔离、快照保护与权限收敛。
+
+- **领域模型与持久化**（`core/src/commonMain/kotlin/xyz/mederi/workspace/WorkspaceModels.kt`）：
+  - 核心实体：`WorkspaceInfo`（工作区元数据，含 `workspaceRoot`、`projectRelativePath`、`gitCommonDirectory`、`branch`、`baseCommit` 等）、`WorkspaceBinding`（`workspaceId`、`sessionId`、`generation`、`active`）、`WorkspaceOperationRecord`（审计操作流水）、`SnapshotManifest`（快照清单）、`SnapshotEntry`、`SnapshotIndexBlob`。
+  - 数据表迁移（DataDatabase v4）：`workspaces`、`workspace_bindings`、`workspace_operations`，`sessions` 表扩充 `workspaceId`、`originWorkspaceId`、`workspaceArchiveStatus`、`workspacePinned`，`turn_diff_summaries` 扩充 `workspaceId`。
+- **Store 契约与实现**（`core/src/commonMain/kotlin/xyz/mederi/store/WorkspaceStore.kt`）：
+  - `WorkspaceStore` 提供 `getWorkspace` / `saveWorkspace` / `getActiveBinding` / `commitBinding`（原子 CAS + 审计落盘） / `listOperations` 等。
+  - 实现：`InMemoryWorkspaceStore`（并发互斥与 CAS 检查）与 `SqliteWorkspaceStore`（事务原子提交与外键级联保护）。
+- **Git 驱动与仓库锁**（`core/src/commonMain/kotlin/xyz/mederi/workspace/GitWorkspaceDriver.kt`）：
+  - `GitWorkspaceDriver`：纯参数化执行 Git，强制 `-c core.hooksPath=/dev/null` 与禁用 fsmonitor，安全隔离仓库 hook；NUL (`\0`) 解析 porcelain v2 与 ls-files。
+  - `WorkspaceLeaseManager`：按 `gitCommonDirectory` 进行跨项目/工作区协调，支持共享执行租约（多读/非独占）与独占管理意图（管理操作独占，**实际等待活跃执行租约归零**——`withManagementIntent` 轮询 `getExecutionCounter` 归零后进入临界、超时抛 `WORKSPACE_BUSY`），避免并发 Git 索引或工作树竞争损坏。执行租约生产调用方 = `TurnExecutor.runTurn`（RF-07，整个 turn 持租约、finally 释放），归档/配额快照因此包含等待期间的 late writes。
+  - 超时管理与进程组清理：基于 `ProcessRegistry` 按进程组安全收割。
+- **快照与恢复**（`core/src/commonMain/kotlin/xyz/mederi/workspace/WorkspaceSnapshotService.kt`）：
+  - `captureSnapshot`：生成 `head.bundle`、暂存区 `index.bin`、blob 原始数据与清单 `manifest.json`，支持 `TRANSFER` 与 `PREIMAGE` 模式。
+  - `restoreToCleanCheckout`：在干净目录初始化仓库、解包 bundle、还原 stage0 blob、暂存区 index 与工作区未提交/忽略文件及符号链接（仅限自包含快照验证/明确导出，不用于正式受管恢复）。
+  - `restoreToLinkedWorktree(snapshotId, targetCheckoutRoot, gitCommonDir)`（RF-06）：正式受管恢复路径——在**原仓库 common-dir** 以 `git worktree add --detach <target> <headOid>` 注册 detached linked worktree（原仓库缺少快照提交对象时，从 bundle 补齐对象），再调 `materializeSnapshotIntoCheckout` 物化快照；原 common-dir 缺失抛 WORKSPACE_MISSING，注册失败转 RECOVERY_REQUIRED。`WorkspaceManager.restoreWorkspace` 和 `executeRecovery(RESTORE_TO_NEW_MANAGED)` 均使用该方法并核验恢复结果。
+  - `materializeSnapshotIntoCheckout(snapshotDir, manifest, targetRoot)`（RF-06）：快照物化共享方法——`hash-object -w --stdin` 写暂存区 blobs、物化条目（文件/目录/软链接/墓碑）、原子恢复 index.bin；目标须已是 git 仓库（linked worktree 或独立 init），不改变仓库注册/元数据。
+  - `rollbackCheckout`：仅回滚当前 journal 所拥有的 postimage 路径——第一遍全量核对受影响路径当前 exists/type/hash 与 journal postimage，任一未知变化（用户/IDE 事后改动）→ RECOVERY_REQUIRED 零覆盖；第二遍仅处理本操作路径（操作新建且后像仍匹配 → 删除；preimage 存在 → 恢复原内容）。保留外部与用户新产生文件。
+  - 安全防御：校验路径 traversal、拒绝 `.git` 目录注入，并保持符号链接目标不被穿透跟踪。**NOFOLLOW 枚举（RF-03）**：`walkNoFollow` 树遍历把符号链接作为叶子记录 link 文本、不递归 target；`validateManifest` 拒绝重复路径/父文件/父符号链接与子路径冲突/类型不一致；物化前逐组件 `noSymlinkAncestor` 祖先检查，任一祖先是符号链接则拒绝写盘（不写穿链接目标）。
+- **工作区权限策略与沙盒隔离**（`core/src/commonMain/kotlin/xyz/mederi/workspace/VerifiedWorkspaceRoot.kt`、`SandboxPaths.kt`、`ExecutionPermissions.kt`）：
+  - `VerifiedWorkspaceRoot`：内部不可序列化凭证，仅能由 Manager/Driver 核验后构造；持有 `checkoutRoot`、`workingDirectory`、`artifactDirectory`、`verifiedArtifactWritablePaths`（精确限制为 `plans/`、`plans-done/`、`plans-voided/`、`research/`、`notebook.md`，不扩大到原项目整体）、`generation` 与 `gitCommonDirectory`；严格拒绝符号链接替换与身份篡改。
+  - `SandboxPaths`：当装配 `VerifiedWorkspaceRoot` 时，有效写根收敛为当前工作区 `workingDirectory` + 精确产物根 + 临时目录 + 额外白名单；原项目黑名单动态重映射至工作区相对路径，不改写底层 `SettingsStore`；宿主 `controlRoot` 覆盖 `worktrees` 时对当前 `checkoutRoot` 提供精确例外，兄弟工作区、数据库、快照及 `.git` 依然保护。
+  - `ExecutionPermissions.Grant`：同时绑定项目权限代次与工作区代次/ID；在等待审批后、文件落盘前、命令执行前双重校验，Handoff 后旧工作区授权即刻失效。
+  - OS 沙盒：macOS Seatbelt 采用 `require-all(subpath controlRoot, require-not(subpath verifiedCheckoutRoot))` 精确放行工作区；Linux bubblewrap 遵循 controlRoot 只读在前、verified workingDirectory 与 artifact 产物可写在后、保护目录 ro-bind 再后、显式黑名单遮罩最后的挂载堆叠顺序；黑名单内的额外根不得在准备阶段 mkdir。
+- **包含规则与指令覆盖**（`core/src/commonMain/kotlin/xyz/mederi/workspace/WorkspaceIncludeService.kt`、`xyz/mederi/project/AgentsFileLoader.kt`）：
+  - `WorkspaceIncludeService`：依据 `.worktreeinclude` 规则，利用 Git 两次只读枚举求交集（`ls-files --others --ignored --exclude-standard` ∩ `ls-files --others --ignored --exclude-from=<include>`），严格保证仅复制被 `.gitignore` 忽略且命中 include 规则的文件；普通未跟踪文件绝不因 include 被复制；忽略的 `AGENTS.override.md` 与选定环境配置文件作为显式独立候选；复制时严格检查符号链接祖先与目标存在性（不覆盖现有目标）。
+  - `AgentsFileLoader`：每一级目录支持 `AGENTS.override.md` 优先于同目录 `AGENTS.md`（只加载其中一个）；指令链与懒发现均遵循黑名单先过滤再去重的确定性原则。
+- **环境脚本与操作日志**（`core/src/commonMain/kotlin/xyz/mederi/workspace/WorkspaceEnvironmentService.kt`）：
+  - SETUP/ACTION 操作记录的 `sessionId` 取实际审批会话。写入首条非终态记录前登记操作自己的子协程，`stopOperationExecution(operationId)` 取消并等待其审批与脚本清理结束。取消后持久化 `CANCELLED`，同一会话的其他审批不受影响。
+  - `WorkspaceEnvironmentService`：管理工作区环境配置（`.mederi/environments/<id>.json`，允许 Git 跟踪，支持 CAS 版本递增）；支持多平台脚本覆盖（平台显式 `""` 空字符串表示该平台不执行且不回退 `default`，`null` 回退 `default`）；执行 setup/action 请求按 `(kind, requestId)` 与 `requestHash` 幂等去重；在需要审批时阻断模型执行门禁（保持 `PREPARING`）；配置指纹变更时立即使待批与执行失效；基于 `ProcessRegistry` 注册并收割进程组。
+  - `WorkspaceOperationLogBuffer`：8MiB 循环滚动 UTF-8 操作日志缓冲，分块读取时在 UTF-8 字符边界智能对齐，绝不拆断多字节码点，准确维护 `nextOffset`、`eof` 与 `truncated`。
+
+### 子代理完整错误诊断（2026-11-04）
+
+`tools/subagent/SubagentErrorReport.kt` 的 internal `subagentErrorReport(payload: Map<String,String>): String` 保留协议前缀 `[subagent error]`，返回一行问题摘要（最多 300 字符）并附完整 `errorBody`（标记为不可信供应商数据）；不将 errorId、完整堆栈或 fullDiagnostic 写进给模型的返回汇报。`subagentDiagnosticReport(payload): String` 单独格式化面向人的完整诊断。`SubagentRunnerImpl` 的正常 MESSAGE_ERROR 分支使用该格式；未被 TurnExecutor 转换的异常也经 ErrorCollector 收集，并转发标准 MESSAGE_ERROR。取消仍原样上抛。
+
+`SubagentManager` 的 runner 异常分支同样收集完整 ErrorRecord、将标准 MESSAGE_ERROR 记录进 progressEvents 并发出 SUBAGENT_PROGRESS；SUBAGENT_ERROR 同时携带原始诊断字段。`BackgroundAgent.result` / `AgentRecoveryInfo.result` 保存模型摘要及可用的原始供应商错误体；`getReport` 从 progressEvents 的 MESSAGE_ERROR 返回面向人的完整诊断，`AgentRecoveryInfo.diagnosticReport: String?=null` 保留人用报告供归档回落，不进入 STATUS 的 result。快照重放也读取同一组进度事件。父 TurnExecutor 的 formatSubagentEventMessage 对 ERROR 再次从结构化 payload 组装摘要及原始 errorBody，即使旧调用方把诊断混入 result，也不会将它持久化为模型对话或发给 LLM。ErrorCollector 对 EOFException / ClosedChannelException 标记 NETWORK，网络简报在多层包装时显示底层 cause，完整诊断仍保留包装链、堆栈和上下文；重试提示复用底层网络诊断摘要。
+
+### 推理中断恢复与失败判定（2026-11-05）
+
+- `TurnExecutor.hasEmittedTokens` 同时识别非空 Text、Reasoning.content/summary；主/子 turn 的 PREMATURE_CLOSE、NETWORK_ERROR 与静默缺 finishReason 的流关闭共用最多一次 Continue 恢复。首帧前请求级重试由 RetryableLLMClient 负责，但本地 SseIdleTimeoutException 委托 turn 追加 Continue，即使无输出也允许一次恢复；不直接重放已消费流。
+- `MederiAgentStrategies.toAssistantMessageSafe` 为未完成的推理 delta 补建 ReasoningComplete，仅用于保留已收输出；私有 `collectAssistantPreservingPartial` 在流抛错时持久化已生成正文/推理后重抛原异常，不保留可执行的中断工具调用。三个流式请求节点共用此入口。
+- `runTurn` 没有完整交付候选时发 MESSAGE_ERROR 并返回 null；length/incomplete/空响应不伪装 MESSAGE_COMPLETED。静默断流诊断经 TurnContinuationSignal 原样传递；恢复耗尽仍为错误终态。
+- `SubagentRunnerImpl` 兼容旧完成事件中的原始错误诊断；`SubagentManager` 同时检查 progressEvents 中 MESSAGE_ERROR 与返回摘要失败前缀，任一失败均为 ERROR / SUBAGENT_ERROR。
+
+### 批量读取与架构地图提示词（2026-11-05）
+
+`SystemPrompts.READING_AND_ARCHITECTURE_GUIDANCE` 共用在主代理 COMMON、EXECUTOR、RESEARCHER 各一次：正确性前提下优先减少模型请求，接受少量直接相关内容的额外读取；已知独立读取/搜索集中发出，仅真正的信息依赖串行。优先现有架构地图定位源码，不重复读取上下文中的未变证据。无约定时地图入口默认 `docs/architecture/README.md`，按当前调查范围增量创建，不强制全仓扫描。写代理在交付前维护受影响模块/路径/职责/调用流；研究员只返回缺失或过期条目与建议，执行器不得越过 spec 范围，父代理协调公共地图写入。本机制为产品提示词约定，不是运行时代码门禁，不生成或改写项目 AGENTS.md。
+
+### 供应商错误原文保真（2026-11-05）
+
+`sanitize/SanitizedModels.kt` 新增内部 `@Serializable` DTO：`SanitizedChatErrorEnvelope(error: JsonObject?, choices: List<SanitizedChatErrorChoice>)`、`SanitizedChatErrorChoice(error: JsonObject?, finishReason: String?)`、`SanitizedResponsesErrorEnvelope(type: String?, status: String?, error: JsonObject?, response: SanitizedResponsesErrorEnvelope?)`。错误对象使用 JsonObject 保留供应商未知扩展字段。
+
+`MederiOpenAILLMClient.checkChatResponseError(rawResponse: String): Unit` 在非流式 Chat 及每个 SSE data 解码成功 DTO 前检查顶层/choice.error、finish_reason=error；`checkResponsesResponseError(rawResponse: String): Unit` 同样覆盖 Responses 非流式失败、response.failed、独立 error 事件。私有 `throwProviderResponseError(rawResponse: String, error: JsonObject?): Nothing` 抛出带 `KoogHttpClientException` cause 的 LLMClientException，原文放 errorBody，数字错误码仅在真实 400..599 时保留，不伪造未知状态。
+
+ErrorCollector 对含错误体但无数字状态的供应商异常也保留 errorBody 并归 API（可识别鉴权/限流仍优先），完整错误体不再截到 500 字符，fullDiagnostic 与 MESSAGE_ERROR payload 均可取原文。子代理汇报及父模型事件保留原始 errorBody，堆栈留在人用报告。首帧前瞬态错误可进入既有请求重试；已输出后的重放限制保持原策略，不承诺所有供应商错误自动重试。
+
+### 单轮批量工具（2026-11-05）
+
+`tools/ToolName.kt` 新增 `BATCH("batch")`。`BatchTool(operations: Map<String, suspend (JsonObject) -> String>)` 为内部 SimpleTool；`Args(calls: List<Call>)`、`Call(tool: String, parameters: Parameters)`、`Result(index: Int, tool: String, output: String?=null, error: String?=null)` 均为 @Serializable DTO；`Parameters(path?, offset?, max_lines?, command?, cwd?, timeout_seconds?, background?, compilation?, sandbox?)` 为受支持成员参数超集，避免 JsonElement 在工具 schema 生成时的递归多态问题；`execute(args): String` 返回结构化 JSON 结果列表。每项独立 async(Dispatchers.IO) 并行执行，awaitAll 按输入顺序收齐；普通异常单项返回，取消原样传播，不丢失其他结果，不截断未执行项目或另设并发闸门。
+
+ToolFactory 将 BATCH 加入 FS_TOOL_NAMES，按本角色和本次 toolNames 构建只包含 read_file/list_directory/bash 的成员映射；工具选择为空时保留“全部当前可用”语义。研究员批量入口不包含 bash，工具列表裁剪同样限制批量能力。成员直接调用已有工具 execute，继续经过相同路径黑名单、AGENTS 懒发现、沙盒/逐操作审批、进程管理和编译协调，不新增执行授权入口。bash background=true 在 batch 内拒绝，后台任务继续独立派发。批量工具本身是一次顶层 TOOL_CALLED/TOOL_RESULT，子项参数在调用入参、结果在索引化 JSON 中保留，无额外模型请求；本版不为子项生成独立顶层工具事件。
+
+三个 turn 角色先列齐当前已知操作。有两项及以上受支持的独立操作时优先一次 batch，收齐后再推理；其他独立操作用同一响应中的原生工具调用。相邻小范围合读，批次部分失败只补缺失项。只依赖前一步退出码的已知前台命令可经一次 bash 串接，需根据结果决策的步骤仍分轮。主代理使用原生计划工具集中提交已就绪的独立 generate_spec 和互不争用资源的 verify_subtask。write_plan 单发，spec 保存后才可派工。执行器不引入固定延迟或供应商请求限流。
+
+`AIModel.optimizeForRequestCount: Boolean = false` 存在供应商模型的 JSON payload 中，用户通过 `UpdateModelRequest.optimizeForRequestCount: Boolean?` 修改，省略时保留原值，模型同步保留用户设置。TurnExecutor 解析本轮目录模型后将该字段传入 `SystemPrompts.build(agentMode, optimizeForRequestCount)` 或 `SystemPrompts.forSubagent(role, optimizeForRequestCount)`。开启时替换批量读取策略，明确按请求计成本、输入与输出 token 无计费成本，优先同轮整文件读取所有已知的可能相关材料。两档共用工具、架构地图和项目边界。
+
+### Google 原生生成适配（2026-11-06）
+
+`provider/infrastructure/koog/google/MederiGoogleLLMClient.kt` 复用 Koog 的请求模型及 `MederiHttpClientFactory`。KoogParamsBuilder 将显式 `minimal` 交给适配器放入 `generationConfig.thinkingConfig`，流式和非流式请求一致。Google SSE 工具调用的原始 thoughtSignature 按调用匹配为 Koog 的加密推理标记，消息合并保留标记边界，下一轮由 Koog 将签名与对应工具调用一起回送。Google 的 promptFeedback 拦截及流内 error 保留原始响应体。缺结束帧保留可用的分块计数、responseId 与原异常，归为可恢复断流，责任方未知。
+
+### 本地 SSE 等待超时的 Continue 恢复（2026-11-05）
+
+`RetryableLLMClient.isSseIdleTimeout(error: Throwable): Boolean`（internal companion）沿 cause 链最多 8 层识别本地 SseIdleTimeoutException。executeStreaming 不在请求层重放这种超时，即使首帧前发生也上抛给 turn；其他限流/传输故障沿用既有策略。TurnExecutor 收到 TurnContinuationSignal 后，本地空闲超时不再要求 hasEmittedTokens，按既有最多一次恢复预算追加英文 `Continue` 并从已持久化历史重建执行；正文/推理及已完成工具结果继续保留，不重新派发子代理、不回放已完成工具。恢复再次失败仍保留原始错误并通知用户。ErrorCollector 的 SSE 空闲超时建议明确是本地停止等待，不把它断言为网络断开。90 秒阈值未改。
+
+### 正常停止但无交付正文的续写（2026-11-05）
+
+`TurnExecutor.kt` 新增 internal `Message.needsEmptyResponseContinuation(): Boolean`：finishReason 为 stop/completed/end_turn 且没有非空 Text、没有 ToolCall 时为真。此类“生成正常停止但无正文”与 length/error/过滤/待执行工具分别处理：runTurn 抛私有 `TurnContinuationSignal(errorPayload, cause, continueWithoutOutput=false)`（原 PrematureCloseSignal 更名），空交付分支设置 continueWithoutOutput=true，允许无任何输出时也追加英文 Continue。与本地空闲超时、其他断流恢复共用既有一次预算，主/子代理一致；再次失败仍 MESSAGE_ERROR，不确认交付。response_completion 诊断记录 finishReason、textChars、reasoningChars、toolCalls，并区分“供应商已停止生成，但没有有效正文”。这些是本地接收/持久化后的统计，不将其当作原始 wire 数据，也不推断供应商动机。
+
+### 结构化验收与证据
+
+- `plan/AcceptanceEvidence.kt` 定义 `AcceptanceCase`、`AcceptanceRun`、`AcceptanceObservation` 与 `AcceptanceVerdict`。任务用例有稳定 ID、目的、前置状态、具体输入、真实入口步骤、取证位置、期望值和可发现问题。最终整体验收任务依赖所有前序任务。
+- `write_plan` 将用例和取证命令纳入批准版本，对声明的脚本、断言文件和 fixture 记录 SHA-256。新版计划使用新 ID，替换活跃的已批准计划时即使 AUTONOMOUS 也等用户批准。结构化计划的既有验收契约不能通过 `update_verify` 改写，修实现后可直接重试。
+- `verify_subtask` 运行批准的取证命令，前后校验声明文件的摘要。命令提供以用例 ID 为键的单个 JSON 对象，由 Core 逐条比较实际标量和预期值，追加 `AcceptanceRun`。无观察、环境失败和观察不符均不能完成子任务。整体用例在前序任务通过后运行。旧计划保留原工具兼容，验收报告把缺少结构化观测的任务列为证据不足。
+- `PlanStore` 为结构化计划优先读取宿主受保护目录的计划快照（持久配置启用时），工作区 Markdown/JSON 供查看。独立 `acceptance-report.md` 由 Core 从状态和运行记录生成，`SessionApi.getPlanAcceptanceReport(sessionId, planId)` 可按会话读取活跃或归档计划的当前报告。运行输出有长度上限，保留历次运行。
+- 人工用例以 `AcceptanceCase.manual` 标识，单独成任务。仅通过会话 API 提交实测值、证据与签认人；模型验收工具拒绝代签。Core 比较观测值并保留签认历史。自动记录保存计划声明的实现文件指纹；验证期间这些文件发生变化时应重验。

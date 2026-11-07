@@ -23,7 +23,6 @@ import mederi.app.shared.generated.resources.compaction_completed_notice
 import mederi.app.shared.generated.resources.file_open_failed
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
-import xyz.mederi.ui.TurnStatus
 import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.components.atoms.StatusStrip
 
@@ -48,8 +47,8 @@ fun WorkspaceFloatingOverlay(
     val browserAutomationState = viewModel.browserAutomationState
     val colors = LocalMederiColors.current
 
-    // 压缩进行中：用 isCompacting 覆盖派生状态，状态栏显示"压缩中"而非 Prepare 等通用态
-    val status = if (viewModel.isCompacting) TurnStatus.Compacting else turnStatus
+    // 包括压缩请求在内，仅真实重试时显示。
+    val status = turnStatus
     val showStatusBar = status.shouldDisplayInStatusBar
 
     if (!showStatusBar && !showCompactionNotice && !showFileOpenError &&
@@ -98,7 +97,7 @@ fun WorkspaceFloatingOverlay(
             }
         }
 
-        // 3. 主轮次轻量状态行；其显隐条件与计时来源保持不变。
+        // 3. 重试状态行。
         AnimatedVisibility(
             visible = showStatusBar,
             enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.disclosureSpec()) + expandVertically(LocalWorkspaceMotion.current.disclosureSpec()),
@@ -110,7 +109,6 @@ fun WorkspaceFloatingOverlay(
             ) {
                 StatusBar(
                     status = status,
-                    startedAtMillis = viewModel.turnStartedAt,
                     statusHint = viewModel.statusHint,
                 )
             }

@@ -42,6 +42,12 @@ import kotlin.time.Duration.Companion.seconds
 import xyz.mederi.AppInfo
 import xyz.mederi.currentTimeMillis
 import xyz.mederi.core.contract.AiCore
+import xyz.mederi.core.contract.PendingInteractionTracker
+import xyz.mederi.core.contract.SandboxStatusInfo
+import xyz.mederi.core.contract.models.ExecutionPermissionMode
+import xyz.mederi.core.contract.models.SandboxSettings
+import xyz.mederi.core.contract.models.ResolveExecutionApprovalInput
+import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.contract.ConversationStateReducer
 import xyz.mederi.core.contract.SnapshotReducer
 import xyz.mederi.core.contract.dto.ApiError
@@ -257,7 +263,26 @@ class ServerAiCore(
     // ------------------------------------------------------------------
 
     private suspend fun refreshProjects() {
-        _projects.value = httpGet("/v1/projects")
+        _projects.value = httpGet<List<Project>>("/v1/projects").map { project ->
+            project.copy(conversations = project.conversations.map { conversation ->
+                if (pendingInteractions.isWaiting(conversation.id)) conversation.copy(status = ConversationStatus.WaitingUser) else conversation
+            })
+        }
+    }
+
+    private val pendingInteractions = PendingInteractionTracker()
+
+    override suspend fun getSandboxSettings(projectId: String): Result<SandboxSettings> = runCatching { httpGet("/v1/projects/${projectId.encodeURLParameter()}/sandbox/settings") }
+
+    override suspend fun updateSandboxSettings(projectId: String, settings: SandboxSettings): Result<SandboxSettings> = runCatching {
+        httpSend("/v1/projects/${projectId.encodeURLParameter()}/sandbox/settings", requestBody = settings)
+    }
+
+    override suspend fun getSandboxStatus(projectId: String): Result<SandboxStatusInfo> = runCatching { httpGet("/v1/projects/${projectId.encodeURLParameter()}/sandbox/status") }
+
+    override suspend fun resolveExecutionApproval(conversationId: String, requestId: String, approved: Boolean): Result<Unit> = runCatching {
+        httpCall("/v1/sessions/${conversationId.encodeURLParameter()}/execution-approvals/${requestId.encodeURLParameter()}",
+            HttpMethod.Post, ResolveExecutionApprovalInput(approved))
     }
 
     /** 镜像 MederiAiCore.refreshProvidersAndAgents 语义：provider 变更影响 models + projects 两处派生状态 */
@@ -300,6 +325,7 @@ class ServerAiCore(
     private fun startSessionStatusSync() {
         scope.launch {
             events().collect { event ->
+                pendingInteractions.accept(event)
                 // 子代理运行中跟踪：STARTED 记入集合并置 Working；终态移出集合，
                 // 集合清空且主 turn 不活跃时才回 Idle（主 turn 运行中由 SESSION_UPDATED/MESSAGE_COMPLETED 驱动状态）。
                 when (event.type) {
@@ -358,9 +384,15 @@ class ServerAiCore(
                     CoreEventType.QUESTION_RESOLVED -> ConversationStatus.Working
                     CoreEventType.PLAN_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
                     CoreEventType.PLAN_APPROVAL_RESOLVED -> ConversationStatus.Working
+                    CoreEventType.EXECUTION_APPROVAL_REQUESTED -> ConversationStatus.WaitingUser
+                    CoreEventType.EXECUTION_APPROVAL_RESOLVED ->
+                        if (mainTurnActive[event.sessionId] == true || runningSubagentIds[event.sessionId]?.isNotEmpty() == true)
+                            ConversationStatus.Working else ConversationStatus.Idle
                     else -> null
                 }
-                if (newStatus != null) {
+                if (pendingInteractions.isWaiting(event.sessionId)) {
+                    updateConversationStatus(event.sessionId, ConversationStatus.WaitingUser)
+                } else if (newStatus != null) {
                     updateConversationStatus(event.sessionId, newStatus)
                 }
                 // 终端事件：从远端重读全量会话数据（updatedAt/status/title 均为 server DB 真理源），
@@ -420,14 +452,17 @@ class ServerAiCore(
     // Conversation / Session
     // ------------------------------------------------------------------
 
-    override suspend fun createConversation(projectId: String, agent: AgentOption?): Result<Conversation> = runCatching {
+    override suspend fun createConversation(input: CreateConversationInput): Result<Conversation> = runCatching {
         val conversation = httpSend<Conversation>(
             "/v1/sessions",
-            requestBody = CreateConversationInput(projectId, agent)
+            requestBody = input
         )
         refreshProjects()
         conversation
     }
+
+    override suspend fun createConversation(projectId: String, agent: AgentOption?): Result<Conversation> =
+        createConversation(CreateConversationInput(projectId, agent))
 
     override suspend fun deleteConversation(conversationId: String): Result<Unit> = runCatching {
         xyz.emuci.inkcompose.MermaidCacheConfig.clearSessionCache(conversationId)
@@ -522,7 +557,8 @@ class ServerAiCore(
         contextWindow: Int?,
         maxTokens: Int?,
         reasoningLevels: List<String>?,
-        isEnabled: Boolean?
+        isEnabled: Boolean?,
+        optimizeForRequestCount: Boolean?,
     ): Result<Unit> = runCatching {
         httpCall(
             "/v1/providers/$providerId/models/$modelId",
@@ -534,7 +570,8 @@ class ServerAiCore(
                 contextWindow = contextWindow,
                 maxTokens = maxTokens,
                 reasoningLevels = reasoningLevels,
-                isEnabled = isEnabled
+                isEnabled = isEnabled,
+                optimizeForRequestCount = optimizeForRequestCount,
             )
         )
         refreshProvidersAndModels()
@@ -627,6 +664,19 @@ class ServerAiCore(
                 approved = approved
             )
         )
+    }
+
+    override suspend fun recordPlanManualAcceptance(
+        conversationId: String, planId: String, input: xyz.mederi.core.contract.models.ManualPlanAcceptanceInput
+    ): Result<Unit> = runCatching {
+        httpCall(
+            "/v1/sessions/${conversationId.encodeURLParameter()}/plans/${planId.encodeURLParameter()}/manual-acceptance",
+            requestBody = input
+        )
+    }
+
+    override suspend fun getPlanAcceptanceReport(conversationId: String, planId: String): Result<String> = runCatching {
+        httpGet("/v1/sessions/${conversationId.encodeURLParameter()}/plans/${planId.encodeURLParameter()}/acceptance-report")
     }
 
     override suspend fun compressHistory(conversationId: String): Result<Unit> = runCatching {
@@ -818,6 +868,30 @@ class ServerAiCore(
         )
     }
 
+    override suspend fun listSessionSubagentConfigs(conversationId: String): Result<List<SubagentConfigItem>> = runCatching {
+        httpGet("/v1/sessions/${conversationId.encodeURLParameter()}/subagent-configs")
+    }
+
+    override suspend fun updateSessionSubagentConfig(
+        conversationId: String, role: String, input: UpdateSubagentConfigInput?
+    ): Result<Unit> = runCatching {
+        val path = "/v1/sessions/${conversationId.encodeURLParameter()}/subagent-configs/${role.encodeURLParameter()}"
+        if (input == null) httpCall(path, method = HttpMethod.Delete)
+        else httpCall(path, method = HttpMethod.Put, requestBody = input)
+    }
+
+    override suspend fun getSessionSubagentGlobalSettings(conversationId: String): Result<SubagentGlobalSettings> = runCatching {
+        httpGet("/v1/sessions/${conversationId.encodeURLParameter()}/subagent-configs/global")
+    }
+
+    override suspend fun updateSessionSubagentGlobalSettings(
+        conversationId: String, input: UpdateSubagentGlobalSettingsInput?
+    ): Result<Unit> = runCatching {
+        val path = "/v1/sessions/${conversationId.encodeURLParameter()}/subagent-configs/global"
+        if (input == null) httpCall(path, method = HttpMethod.Delete)
+        else httpCall(path, method = HttpMethod.Put, requestBody = input)
+    }
+
     override suspend fun getSubagentReport(agentId: String): Result<SubagentReportDto> = runCatching {
         httpGet<SubagentReportDto>("/v1/subagents/${agentId.encodeURLParameter()}/report")
     }
@@ -836,5 +910,136 @@ class ServerAiCore(
 
     override suspend fun stopBrowserTask(taskId: String): Result<Unit> = runCatching {
         httpCall("/v1/browser-tasks/${taskId.encodeURLParameter()}/stop")
+    }
+
+    // ==========================================
+    // Worktree 工作区管理契约 (D05)
+    // ==========================================
+    override suspend fun getRepositoryInfo(projectId: String): Result<RepositoryInfo> = runCatching {
+        httpGet<RepositoryInfo>("/v1/projects/${projectId.encodeURLParameter()}/repository")
+    }
+
+    override suspend fun listWorkspaces(projectId: String): Result<List<WorkspaceInfo>> = runCatching {
+        httpGet<List<WorkspaceInfo>>("/v1/projects/${projectId.encodeURLParameter()}/workspaces")
+    }
+
+    override suspend fun getConversationWorkspace(sessionId: String): Result<ConversationWorkspaceInfo> = runCatching {
+        httpGet<ConversationWorkspaceInfo>("/v1/sessions/${sessionId.encodeURLParameter()}/workspace")
+    }
+
+    override suspend fun previewWorkspaceHandoff(sessionId: String, input: HandoffPreviewInput): Result<HandoffPreview> = runCatching {
+        httpSend<HandoffPreview>("/v1/sessions/${sessionId.encodeURLParameter()}/workspace/handoff/preview", requestBody = input)
+    }
+
+    override suspend fun handoffWorkspace(sessionId: String, input: HandoffInput): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>("/v1/sessions/${sessionId.encodeURLParameter()}/workspace/handoff", requestBody = input)
+    }
+
+    override suspend fun restoreWorkspace(workspaceId: String, input: RestoreWorkspaceInput): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>("/v1/workspaces/${workspaceId.encodeURLParameter()}/restore", requestBody = input)
+    }
+
+    override suspend fun archiveWorkspace(workspaceId: String, input: ArchiveWorkspaceInput): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>("/v1/workspaces/${workspaceId.encodeURLParameter()}/archive", requestBody = input)
+    }
+
+    override suspend fun createWorkspaceBranch(workspaceId: String, input: CreateWorkspaceBranchInput): Result<WorkspaceInfo> = runCatching {
+        httpSend<WorkspaceInfo>("/v1/workspaces/${workspaceId.encodeURLParameter()}/branch", requestBody = input)
+    }
+
+    override suspend fun getWorkspaceOperation(id: String): Result<WorkspaceOperation> = runCatching {
+        httpGet<WorkspaceOperation>("/v1/workspace-operations/${id.encodeURLParameter()}")
+    }
+
+    override suspend fun cancelWorkspaceOperation(id: String): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>("/v1/workspace-operations/${id.encodeURLParameter()}/cancel")
+    }
+
+    override suspend fun listWorkspaceOperations(projectId: String): Result<List<WorkspaceOperation>> = runCatching {
+        httpGet<List<WorkspaceOperation>>("/v1/projects/${projectId.encodeURLParameter()}/workspace-operations")
+    }
+
+    override suspend fun setConversationArchived(sessionId: String, archived: Boolean, requestId: String): Result<WorkspaceOperation> = runCatching {
+        val op = httpSend<WorkspaceOperation>(
+            "/v1/sessions/${sessionId.encodeURLParameter()}/archive",
+            requestBody = SetConversationArchivedInput(archived, requestId)
+        )
+        refreshProjects()
+        op
+    }
+
+    override suspend fun setConversationPinned(sessionId: String, pinned: Boolean): Result<Conversation> = runCatching {
+        val conv = httpSend<Conversation>(
+            "/v1/sessions/${sessionId.encodeURLParameter()}/pin",
+            requestBody = SetConversationPinnedInput(pinned)
+        )
+        refreshProjects()
+        conv
+    }
+
+    override suspend fun listArchivedConversations(projectId: String): Result<List<Conversation>> = runCatching {
+        httpGet<List<Conversation>>("/v1/projects/${projectId.encodeURLParameter()}/archived-sessions")
+    }
+
+    override suspend fun getWorktreeSettings(): Result<WorktreeSettings> = runCatching {
+        httpGet<WorktreeSettings>("/v1/worktree-settings")
+    }
+
+    override suspend fun updateWorktreeSettings(settings: WorktreeSettings): Result<WorktreeSettings> = runCatching {
+        httpSend<WorktreeSettings>("/v1/worktree-settings", requestBody = settings)
+    }
+
+    override suspend fun listProjectEnvironments(projectId: String, workspaceId: String?): Result<List<ProjectEnvironment>> = runCatching {
+        val query = if (workspaceId != null) "?workspaceId=${workspaceId.encodeURLParameter()}" else ""
+        httpGet<List<ProjectEnvironment>>("/v1/projects/${projectId.encodeURLParameter()}/environments$query")
+    }
+
+    override suspend fun saveProjectEnvironment(projectId: String, environment: ProjectEnvironment, expectedVersion: Long, workspaceId: String?): Result<ProjectEnvironment> = runCatching {
+        val query = if (workspaceId != null) "?workspaceId=${workspaceId.encodeURLParameter()}" else ""
+        httpSend<ProjectEnvironment>(
+            "/v1/projects/${projectId.encodeURLParameter()}/environments$query",
+            requestBody = SaveProjectEnvironmentInput(environment, expectedVersion)
+        )
+    }
+
+    override suspend fun runWorkspaceAction(workspaceId: String, input: WorkspaceActionInput): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>("/v1/workspaces/${workspaceId.encodeURLParameter()}/actions", requestBody = input)
+    }
+
+    override suspend fun getWorkspaceOperationLog(id: String, afterOffset: Long, maxBytes: Int): Result<LogChunk> = runCatching {
+        httpGet<LogChunk>("/v1/workspace-operations/${id.encodeURLParameter()}/log?afterOffset=$afterOffset&maxBytes=$maxBytes")
+    }
+
+    override suspend fun listWorkspaceFiles(workspaceId: String, path: String, area: WorkspaceFileArea): Result<List<WorkspaceFileEntry>> = runCatching {
+        httpGet<List<WorkspaceFileEntry>>("/v1/workspaces/${workspaceId.encodeURLParameter()}/files?path=${path.encodeURLParameter()}&area=${area.name}")
+    }
+
+    override suspend fun readWorkspaceFile(workspaceId: String, path: String, offset: Long, maxBytes: Int, area: WorkspaceFileArea): Result<WorkspaceFileContent> = runCatching {
+        httpGet<WorkspaceFileContent>("/v1/workspaces/${workspaceId.encodeURLParameter()}/file?path=${path.encodeURLParameter()}&offset=$offset&maxBytes=$maxBytes&area=${area.name}")
+    }
+
+    override suspend fun retryWorkspacePreparation(sessionId: String, failedOperationId: String, requestId: String): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>(
+            "/v1/sessions/${sessionId.encodeURLParameter()}/workspace/retry",
+            requestBody = RetryWorkspacePreparationInput(failedOperationId, requestId)
+        )
+    }
+
+    override suspend fun retryWorkspaceSetup(workspaceId: String, failedOperationId: String, expectedEnvironmentHash: String, requestId: String): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>(
+            "/v1/workspaces/${workspaceId.encodeURLParameter()}/setup/retry",
+            requestBody = RetryWorkspaceSetupInput(failedOperationId, expectedEnvironmentHash, requestId)
+        )
+    }
+
+    override suspend fun previewWorkspaceRecovery(operationId: String, strategy: RecoveryStrategy, snapshotId: String?, keepWorkspaceId: String?): Result<RecoveryPreview> = runCatching {
+        httpSend<RecoveryPreview>(
+            "/v1/workspace-operations/${operationId.encodeURLParameter()}/recovery/preview",
+            requestBody = PreviewWorkspaceRecoveryInput(strategy, snapshotId, keepWorkspaceId)
+        )
+    }
+
+    override suspend fun recoverWorkspaceOperation(operationId: String, input: WorkspaceRecoveryInput): Result<WorkspaceOperation> = runCatching {
+        httpSend<WorkspaceOperation>("/v1/workspace-operations/${operationId.encodeURLParameter()}/recovery", requestBody = input)
     }
 }

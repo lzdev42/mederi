@@ -11,6 +11,17 @@ import kotlin.test.assertNull
 class ErrorCollectorServerMessageTest {
 
     @Test
+    fun wrappedNetworkFailureSummaryIncludesRootCauseAndKeepsCompleteDiagnostic() {
+        for (cause in listOf(java.io.EOFException("stream closed before response"), java.nio.channels.ClosedChannelException())) {
+            val record = ErrorCollector.collect(IllegalStateException("Error from client: MederiOpenAILLMClient", cause))
+            assertEquals(ErrorCategory.NETWORK, record.category)
+            kotlin.test.assertTrue(record.formatShortMessage().contains(cause.javaClass.simpleName))
+            kotlin.test.assertTrue(record.fullDiagnostic.contains("MederiOpenAILLMClient"))
+            kotlin.test.assertTrue(record.fullDiagnostic.contains(cause.javaClass.simpleName))
+        }
+    }
+
+    @Test
     fun extractServerMessage_fromOpenAIShape() {
         val body = """{"error":{"message":"Insufficient Balance","type":"insufficient_quota","code":429}}"""
         assertEquals("Insufficient Balance", ErrorCollector.extractServerMessage(body))

@@ -2,7 +2,8 @@ package xyz.mederi.prompt
 
 import xyz.mederi.tools.background.BackgroundTaskManager
 import xyz.mederi.tools.sandbox.CommandSandbox
-import xyz.mederi.tools.sandbox.SandboxConfig
+import xyz.mederi.tools.sandbox.SandboxSettings
+import xyz.mederi.tools.sandbox.ExecutionPermissionMode
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -23,7 +24,9 @@ object EnvironmentInfoProvider {
     fun build(
         commandSandbox: CommandSandbox?,
         directories: List<String>,
-        stoppedBackgroundTasks: List<BackgroundTaskManager.BackgroundTaskEntry> = emptyList()
+        stoppedBackgroundTasks: List<BackgroundTaskManager.BackgroundTaskEntry> = emptyList(),
+        sandboxSettings: SandboxSettings? = null,
+        artifactDirectory: String? = null
     ): String {
         val now = Instant.now()
         val tz = ZoneId.systemDefault()
@@ -36,15 +39,29 @@ object EnvironmentInfoProvider {
         val localDow = zoned.dayOfWeek
             .getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
 
+        val mederiWorkdir = artifactDirectory ?: File(directories.first(), ".mederi").absolutePath
+
         return buildString {
             append("\n\n# Runtime Environment\n")
             appendLine("UTC: $utc ($utcDow)")
             appendLine("Local: $local (${tz.id}, $localDow)")
-            append(CommandSandbox.environmentNote(commandSandbox))
+            if (sandboxSettings?.mode == ExecutionPermissionMode.FULL_ACCESS) {
+                append(CommandSandbox.environmentNote(null))
+                appendLine("Shell: ${commandSandbox?.shell ?: "unknown"}")
+                appendLine("Execution permissions: FULL_ACCESS — commands and file writes do not require execution approval.")
+            } else {
+                append(CommandSandbox.environmentNote(commandSandbox))
+                appendLine("Execution permissions: NEEDS_APPROVAL — writes outside allowed roots and elevated commands require one-time user approval.")
+            }
             appendLine("Project dir: ${directories.first()}")
-            SandboxConfig.extraWritablePaths.takeIf { it.isNotEmpty() }
+            sandboxSettings?.extraWritablePaths?.takeIf { it.isNotEmpty() }
                 ?.let { appendLine("Extra writable paths: ${it.joinToString(", ")}") }
-            appendLine("Mederi workdir: ${File(directories.first(), ".mederi").absolutePath}")
+            sandboxSettings?.let { settings ->
+                if (settings.deniedPaths.isNotEmpty()) appendLine("Project denied paths (read/write, including FULL_ACCESS): ${settings.deniedPaths.joinToString(", ")}")
+                if (settings.allowedCommands.isNotEmpty()) appendLine("Allowed static command prefixes: ${settings.allowedCommands.joinToString("; ")}")
+                if (settings.deniedCommands.isNotEmpty()) appendLine("Denied static command prefixes: ${settings.deniedCommands.joinToString("; ")}")
+            }
+            appendLine("Mederi workdir: $mederiWorkdir")
             // 用户停止的后台任务（consumeStoppedForSession 取出即消费，下轮不再显示）
             if (stoppedBackgroundTasks.isNotEmpty()) {
                 appendLine("Recently stopped background tasks:")

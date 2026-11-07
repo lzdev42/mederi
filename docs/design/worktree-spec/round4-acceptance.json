@@ -1,0 +1,87 @@
+{
+  "specVersion": "WT-REPAIR-2026-11-03.2",
+  "baseSpecVersion": "WT-2026-11-02.1",
+  "previousRepairVersion": "WT-REPAIR-2026-11-02.1",
+  "suites": [
+    {
+      "module": "core",
+      "className": "xyz.mederi.workspace.WorkspaceProductionThirdReviewTest",
+      "tests": [
+        "managedActionMustNotRewritePersistedProjectBlacklist",
+        "rejectedBackgroundLeaseMustPreventProcessStart"
+      ]
+    },
+    {
+      "module": "core",
+      "className": "xyz.mederi.workspace.WorkspaceLifecycleThirdReviewTest",
+      "tests": [
+        "startupMustNotReplayOlderSucceededHandoffOverLatestBinding",
+        "archiveRecoveryMustPreserveIgnoredChangesAfterSnapshot",
+        "environmentActionMustNotBypassAnotherManagementIntent"
+      ]
+    },
+    {
+      "module": "core",
+      "className": "xyz.mederi.workspace.WorkspaceJournalThirdReviewTest",
+      "tests": [
+        "materializeCrashMustNotMarkUnrolledTargetReady"
+      ]
+    },
+    {
+      "module": "core",
+      "className": "xyz.mederi.workspace.WorkspaceRollbackThirdReviewTest",
+      "tests": [
+        "rollbackMustNotWriteThroughMatchingPostimageSymlink"
+      ]
+    },
+    {
+      "module": "core",
+      "className": "xyz.mederi.workspace.WorkspaceProductionSecondReviewTest",
+      "tests": [
+        "productionActionMustEnforceProjectDeniedPaths",
+        "managedFileApiMustRemapProjectBlacklist"
+      ]
+    },
+    {
+      "module": "core",
+      "className": "xyz.mederi.workspace.WorkspaceLifecycleSecondReviewTest",
+      "tests": [
+        "linkedRestoreMustNotWriteThroughHeadLeafSymlink",
+        "archiveRecoveryMustPreserveChangesAfterSnapshot",
+        "interruptedRestoreMustNotDeclareIncompleteCheckoutReady"
+      ]
+    },
+    {
+      "module": "core",
+      "className": "xyz.mederi.workspace.WorkspaceInvariantIntegrationTest",
+      "tests": [
+        "projectPolicyProjectionPreservesSettingsAcrossLocalAndTwoWorktrees",
+        "artifactAndSourceBlacklistRemainEffectiveAfterHandoff",
+        "setupActionAndHandoffShareReachableApprovalOwnership",
+        "failedWaitingOrCancelledSetupNeverOpensExecutionGate",
+        "realSubagentAndVerifyUseLiveWorkspaceCredentialUnderControlRoot",
+        "realStoreGenerationChangeInvalidatesPendingToolGrant",
+        "backgroundLeaseCoversFastExitFailureAndTurnCompletion",
+        "managementPermitIsOwnedAndCannotBeInferredFromBusy",
+        "archivePreimageComparisonIncludesIgnoredLinksModesAndReadFailures",
+        "safeMaterializationHandlesAllFileTypeTransitions",
+        "everyMutationBoundaryRecoversWithSqliteReopen",
+        "latestCommittedBindingSurvivesRepeatedHandoffsAndStartup",
+        "restoreCompletenessIncludesIndexTombstonesLinksModesAndIdentity",
+        "bindingTransactionFailureLeavesAllRecordsUnchanged",
+        "preparationRetryConsumesAcceptedMessageExactlyOnce"
+      ]
+    },
+    {
+      "module": "shared",
+      "className": "xyz.mederi.ui.workspace.WorkspaceProductionRoutesTest",
+      "tests": [
+        "realBridgeHydratesWorkspaceAndOperationForSnapshotAndEvents",
+        "localAndManagedHandoffAreDrivenFromRealWorkspaceState",
+        "recoveryRequiredRemainsActionableAfterRemoteReconnect",
+        "dialogRequestsAreInvalidatedOnSwitchDismissAndReplacement",
+        "phoneCanConfigureEnvironmentRunActionSetRetentionAndCreateBranch"
+      ]
+    }
+  ]
+}

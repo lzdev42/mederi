@@ -23,7 +23,19 @@ data class PlanSubtaskItem(
     val name: String,
     val status: String = "PENDING",
     val spec: String? = null,
-    val planDetail: String = ""
+    val planDetail: String = "",
+    val acceptanceCases: List<PlanAcceptanceCaseSummary> = emptyList()
+)
+
+@Serializable
+data class PlanAcceptanceCaseSummary(val id: String, val manual: Boolean = false)
+
+@Serializable
+data class ManualPlanAcceptanceInput(
+    val caseId: String,
+    val observed: String,
+    val evidence: String,
+    val confirmedBy: String
 )
 
 /**

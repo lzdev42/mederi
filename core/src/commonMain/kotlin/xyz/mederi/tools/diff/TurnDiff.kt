@@ -42,7 +42,11 @@ data class TurnDiff(
     val messageId: String?,
     val changes: List<FileChange>,
     val unifiedDiff: String,
-    val createdAt: String
+    val createdAt: String,
+    val workspaceId: String? = null,
+    val checkoutRootAtCreation: String? = null,
+    val projectRelativePathAtCreation: String? = null,
+    val workspaceGeneration: Long? = null
 )
 
 /**

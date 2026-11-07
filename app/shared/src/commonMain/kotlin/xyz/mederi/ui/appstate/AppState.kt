@@ -21,7 +21,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import xyz.mederi.core.bridge.BuiltinAgents
 import xyz.mederi.core.contract.AiCore
-import xyz.mederi.core.contract.SandboxHooks
 import xyz.mederi.core.contract.TerminalManager
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.core.contract.preferences.PreferencesStore
@@ -132,6 +131,9 @@ class AppState(
     /** Camoufox 浏览器设置状态唯一真理源：设置页 BROWSER Tab 等共享 */
     val browserSettingsStore: BrowserSettingsStore = BrowserSettingsStore(aiCore, scope)
 
+    /** 项目执行权限的共享表现投影：输入区与项目设置不可各存配置副本。 */
+    internal val projectPermissionStore = ProjectPermissionStore(aiCore, scope)
+
 
 
     // ───── A. 引擎侧 alias(直接 forward;零缓存) ─────
@@ -205,9 +207,6 @@ class AppState(
     private val _selectedAgentId = MutableStateFlow<String?>(null)
     val selectedAgentId: StateFlow<String?> = _selectedAgentId.asStateFlow()
 
-    /** 沙盒全局白名单（项目外额外可写路径）；写穿到 SandboxConfig，实时生效 */
-    private val _sandboxExtraPaths = MutableStateFlow<List<String>>(emptyList())
-    val sandboxExtraPaths: StateFlow<List<String>> = _sandboxExtraPaths.asStateFlow()
 
     private val _modelReasoningLevels = MutableStateFlow<Map<String, String>>(emptyMap())
     val modelReasoningLevels: StateFlow<Map<String, String>> = _modelReasoningLevels.asStateFlow()
@@ -519,25 +518,6 @@ class AppState(
         selectAgent(targetAgent?.id)
     }
 
-    /**
-     * 增删沙盒全局白名单路径（项目外额外可写）。
-     * 同步写偏好（"sandbox.extraPaths" JSON 数组）并写穿 mederi.sandboxExtraPaths 实时生效。
-     */
-    fun setSandboxExtraPaths(paths: List<String>) {
-        _sandboxExtraPaths.value = paths
-        persist("sandbox.extraPaths", paths) { json.encodeToString(it) }
-        writeThroughSandboxExtraPaths(paths)
-    }
-
-    /**
-     * 把白名单写进进程级 SandboxConfig（下个 turn 的命令沙箱即生效，无需重启）。
-     * AiCore 契约不含沙盒配置（本机进程偏好，同 remote.port）——
-     * 仅实现 SandboxHooks 的端（嵌入式 core）支持写穿；ServerAiCore/Mock 等 no-op。
-     */
-    private fun writeThroughSandboxExtraPaths(paths: List<String>) {
-        (aiCore as? SandboxHooks)?.setSandboxExtraPaths(paths)
-    }
-
     // ───── D. 启动 hydration ─────
 
     suspend fun hydrate() {
@@ -555,13 +535,6 @@ class AppState(
         _tunnelDomain.value = preferences.getString("tunnel.domain") ?: ""
 
         _compactionThresholdPercent.value = preferences.getString("app.compaction.threshold")?.toIntOrNull() ?: 70
-
-        preferences.getString("sandbox.extraPaths")?.let { jsonStr ->
-            runCatching { json.decodeFromString<List<String>>(jsonStr) }.getOrNull()
-        }?.let { paths ->
-            _sandboxExtraPaths.value = paths
-            writeThroughSandboxExtraPaths(paths)
-        }
 
         _selectedProjectId.value = preferences.getString("workspace.lastProjectId")
         _selectedConversationId.value = preferences.getString("workspace.lastConversationId")

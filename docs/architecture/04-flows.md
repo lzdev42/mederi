@@ -2,6 +2,53 @@
 
 > 本篇描述运行时行为。类与文件的位置见 01-core.md / 02-app-shared.md。
 
+## ChatGPT 授权供应商生命周期（2026-11-05）
+
+```mermaid
+sequenceDiagram
+    participant UI as 供应商设置(commonMain)
+    participant AC as AiCore(进程内/REST)
+    participant PM as ProviderManager
+    participant AUTH as ChatGptOAuthManager(core)
+    participant B as 宿主系统浏览器
+    participant OAI as OpenAI OAuth/Responses
+    UI->>UI: 添加供应商目录选择ChatGPT(详情仅展示该连接)
+    UI->>AC: startChatGptLogin(providerId?)
+    opt 新连接
+        AC->>PM: createChatGptProvider()
+        PM-->>AC: 独立OPENAI_RESPONSES + CHATGPT_OAUTH供应商
+    end
+    AC->>AUTH: start(providerId)
+    AUTH->>AUTH: 持久host ID + state/nonce/PKCE + loopback listener
+    AUTH-->>UI: PENDING + authUrl(无token)
+    UI->>B: 收到URL即打开浏览器，再导航到新供应商详情
+    Note over UI,B: macOS走系统open；失败显式反馈，可重试/复制；遥控端提示宿主浏览器
+    B->>OAI: authorize + 用户授权
+    OAI->>AUTH: 127.0.0.1/auth/callback(code,state,issued client_id)
+    AUTH->>OAI: authorization_code换token + OIDC发现/JWKS
+    AUTH->>AUTH: 校验state/签名/issuer/audience/expiry/nonce/scope
+    AUTH->>AUTH: 原子保存保护凭据；终止listener
+    Note over AC,AUTH: AiCore宿主后台观察授权终态，离开设置页不停止同步
+    AC->>AUTH: 观察到CONNECTED
+    AC->>PM: 同步账号实际模型目录(每供应商mutex去重)
+    PM->>OAI: GET /v1/models (OAuth Bearer)
+    UI->>AC: getChatGptAuthState(providerId)
+    AC-->>UI: CONNECTED + 独立模型同步结果
+    Note over UI,AC: 额度窗口只展示真实来源；新SIWC无已确认直读接口时返回unavailable + Usage链接
+    UI->>AC: 选择该供应商模型发送消息
+    AC->>PM: 读取供应商及运行时凭据回调
+    PM->>AUTH: accessToken(providerId)
+    AUTH->>AUTH: 每账号mutex + 文件锁重读，必要时串行refresh并原子替换
+    AUTH-->>PM: 有效token(不跨AiCore)
+    PM->>OAI: Responses store=false/stream=true；namespace工具
+    OAI-->>UI: 既有Koog事件/交付链路
+    UI->>AC: disconnectChatGpt(providerId)
+    AC->>AUTH: 取消待登录、撤销refresh token、清本地tokens
+    AUTH-->>UI: SIGNED_OUT(撤销未确认时明确报错)
+```
+
+取消、超时、重新登录使用待授权实例身份检查，旧回调不能覆盖新连接或恢复已经取消的授权。退出保留账号与 issued client_id/host ID 映射，后续重新授权复用注册。授权凭据、普通 API keys 分开保存；不会修改其他供应商，也不安装/启动 Codex CLI。
+
 ## 1. 发送消息全链路（sendMessage 端到端时序图）
 
 ```mermaid
@@ -122,6 +169,20 @@ flowchart LR
 - **不再有全局偏好模板**：`workspace.lastModelId` / `workspace.lastModelProviderId` / `workspace.lastAgentId` / `workspace.apiKey.$provider` / `workspace.reasoningLevel.$modelId` 不再 persist/hydrate——`selectModel` / `selectAgent` / `selectApiKey` / `setModelReasoningLevel` 只改内存镜像；启动 `hydrate()` 仅保留首启 first-available 兜底（模型/Agent 列表就绪后限时 3s 填首个可用项）。导航偏好 `workspace.lastProjectId` / `workspace.lastConversationId` 保留（选中态恢复）。
 - **不动项**：`effectiveThinkingLevel` 推导链（ReasoningMenu.resolve）不变——`modelReasoningLevels` 兼任"当前会话档位载体"，切换会话时按会话重填；`send`/`rollbackMessage`/`approvePlan` 仍读 appState 全局选择（此时全局已是会话镜像）；`applySnapshot` 的 `!selectionHydrated` 守卫不变（防持久化后快照再发重入 hydrate）。
 
+### 首响应前的输入顺序对齐（2026-11-05）
+
+桌面 `MederiEventAggregator` 与遥控 `ServerAiCore` 首次读取快照后才订阅事件，期间可能错过 `SESSION_UPDATED`。`ConversationStateReducer.applyWithRefresh` 收到尚不存在的响应 ID（MESSAGE_DELTA / TOOL_CALLED / TOOL_RESULT）时，先回查持久化输入，再发布响应状态：只补真实、已消费的用户输入，按落库消息邻接关系定位；不按时间排序，不导入可能领先事件队列的落库响应正文，也不覆盖既有流式块。已有响应后续帧不重复查询；查询失败保留现有事件处理。工作完成后的全量对齐仍保留。
+
+```mermaid
+flowchart TD
+    E[响应或工具事件] --> Q{响应ID已存在?}
+    Q -->|是| A[按ID应用增量]
+    Q -->|否| R[回查持久化消息]
+    R --> U[只补缺失的已消费用户输入 按持久化邻接定位]
+    U --> A
+    A --> S[发布快照 用户气泡先于新响应 不产生重复等待占位]
+```
+
 ## 2. Turn 执行流程图（含错误分类）
 
 ```mermaid
@@ -165,6 +226,10 @@ flowchart TD
     C --> D[按稳定ID持久化 / 重试去重]
     D --> STATE{当前执行状态}
     STATE -->|空闲| START[启动工作]
+    STATE -->|工作区待准备| PREP[持久化原消息和待执行配置 / 开始准备]
+    PREP -->|READY| START
+    PREP -->|失败| RETRY[保留消息 / 等待重试准备操作]
+    RETRY -->|重试成功| START
     STATE -->|执行或压缩中| PENDING[完整输入待消费 / pendingSteering]
     STATE -->|等待提问或审批| RESUME[中性结束挂起 / 处理新输入]
     PENDING --> SAFE[工具边界或文本输出后安全点注入]
@@ -182,6 +247,8 @@ flowchart TD
 每次模型响应使用稳定消息 ID，`MESSAGE_DELTA` 的 `response_started/response_completed` 与内容增量经同一有序流传输，并携带 `turnId`。实时占位与落库消息保持同一 ID；不再把整个工具循环拼进一个占位消息。
 
 插话在接收时即落库，消费前从 AI 视图排除；当前响应和工具结果原子插入未消费输入之前，保留历史的因果顺序。注入时使用完整 parts（含图片），消费后更新标记。若输入先到、提问/审批后挂起，Core 在挂起事件上自动处理已有输入，不让其悬空。接收确认 `SESSION_UPDATED{inputAccepted=true}` 回查不会清除挂起或未落库响应。UI 仅按 ID 移除对应乐观消息。
+
+待准备工作区的首次发送先发出接收确认事件，随后执行准备。失败保留同一条历史记录和待执行配置，操作状态报告准备错误。桌面与服务端的重试均经 `WorkspaceApiImpl.retryWorkspacePreparation`，成功后在原会话接纳锁内恢复同一条消息。模型开始消费时清除待执行配置，重复重试不会再次调用模型。
 
 过程进入折叠块；Core 正常收尾确认本轮完整回复，含派发子代理后等待的阶段回复。阶段回复与成功派发通知在折叠块外保留；UI 仅在 `subagent` 的 SPAWN/SPAWN_RESEARCHER 工具 Completed 且结果非 `Error:` 时生成固定通知（已启动子 Agent / 概览查看详情 / 可继续与主 AI 对话，不影响子 Agent），不依赖模型输出文字；未完成、失败及 STATUS/STOP 保留在工具过程内。通知是历史派发记录，实时状态由概览展示；只有整项工作结束才写 workCompletedAt。UI 以用户消息切分显示段，同一 turnId 不跨插话气泡合并后续推理。取消、异常和截断不确认最终交付；收尾未消费输入不能静默清掉。历史重开使用持久化标记，不依赖 UI 猜测。
 
@@ -208,7 +275,8 @@ flowchart TD
     SW -- "SUBAGENT_*" --> SA["增量维护 state.subagents (生命周期/动态/流式输出/耗时统计)"]
     SW -- "BROWSER_TASK_*" --> BA["维护 state.browserAutomation (STARTED 记录 taskId 并设置 activeDockPanel=BROWSER; 终态一律关闭面板(isPanelOpen=false、activeDockPanel=null)并清空 taskId; STEP/终态复位 liveReasoning/liveText)"]
      SW -- "BROWSER_TASK_REASONING_DELTA" --> BRD["聚合 liveReasoning/liveText (kind=reasoning|text; 2026-10 decide 流式)"]
-    SW -- "STATUS RETRYING" --> ST["statusHint='attempt/max|serverMsg|retryAt'(serverMsg=供应商真实报错; retryAt=delayMs+当前时间)<br/>UI StatusBar 重试态第二行渲染"]
+    SW -- "STATUS RETRY_FINISHED" --> RC["首帧恢复/请求退出清statusHint，收起状态条<br/>下一次请求重试从1计数"]
+    SW -- "STATUS RETRYING" --> ST["statusHint='attempt/?|serverMsg|retryAt'(serverMsg=供应商真实报错; retryAt=delayMs+当前时间)<br/>UI 仅重试显示第X次/倒计时/原因，无次数上限"]
     SW -- "SESSION_UPDATED" --> SU["status=Working, 清旧 errorMessage<br/>+ refreshPage 即时回查 listMessagesPage(新 turn 用户消息立即可见)"]
     SW -- "SESSION_UPDATED(inputAccepted=true)" --> SIG["输入接收/消费确认回查<br/>保留挂起交互与未落库实时响应"]
     D & C2 & ER & TO & PE & TD & SA & BA & ST & SU --> UI["WorkspaceViewModel.conversationState<br/>→ chatItems(derivedStateOf 展平渲染)"]
@@ -222,35 +290,37 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    U["用户请求"] --> R["只读调查，理解目标与证据"]
+    U["用户请求"] --> R["核实目标与事实，用证据解释原因或需求缺口<br/>必要时实验检验假设，方案与验证对应产生问题的机制"]
     R --> Q{"需要执行修改或操作?"}
     Q -- "否" --> ANSWER["交付分析/回答"]
     Q -- "是" --> DISCUSS["讨论具体方案与验收；ask_user 确认实质决策<br/>已有确认不重复问；Mermaid 按需辅助"]
     DISCUSS --> KIND{"复杂且软件本身是交付物?"}
     KIND -- "否" --> GENERAL["执行已确认方案，可用 Todo<br/>研究/浏览器/Office 再复杂也不进现有 Plan<br/>临时脚本不改变此边界"]
-    GENERAL --> CHECK["按文档/表格/浏览器等实际结果检查并交付"]
+    GENERAL --> CHECK["验证原始失败或预期结果及相关行为并交付"]
     KIND -- "是" --> PLAN["write_plan：已确认方案，无开放问题"]
     PLAN --> APPROVAL["APPROVAL 用户批准 / AUTONOMOUS 自动批准"]
-    APPROVAL --> SPEC["generate_spec：实际代码、约束、适用构建检查"]
+    APPROVAL --> SPEC["generate_spec：实际代码、约束、适用构建检查<br/>派发前自检路径/签名、前序结果、调用点、边界与行为验收"]
     SPEC --> CHOOSE{"按总效率/成本/上下文后续价值选择"}
     CHOOSE -- "直接" --> DIRECT["主代理执行"]
     CHOOSE -- "可选委派" --> SPAWN["独立 specs 先保存，再并行 SPAWN<br/>下一响应为无工具阶段交付，等待自动唤醒"]
-    SPAWN --> SUB["Executor 计划路径按存储 spec 执行<br/>报告落盘，摘要+路径回传"]
+    SPAWN --> SUB["Executor 核对引用源码，按存储 spec 执行<br/>事实冲突或无法解决原问题则上报，禁止照错执行<br/>报告落盘，摘要+路径回传"]
     SUB --> WAKE["终态 eventBus 事件，全部完成后批量唤醒"]
     DIRECT --> VER["verify_subtask 无条件执行验证契约"]
     WAKE --> VER
     VER --> RESULT{"先核实现，再核计划"}
-    RESULT -- "IMPLEMENTATION" --> REMEDY["converge_plan 追加补救"]
-    RESULT -- "PLAN" --> AMEND["append-only 修订 spec/验证契约"]
+    RESULT -- "IMPLEMENTATION" --> REMEDY["修实现并按批准用例重试"]
+    RESULT -- "PLAN" --> AMEND["提交新版计划并重新批准"]
     REMEDY --> SPEC
-    AMEND --> SPEC
+    AMEND --> PLAN
     RESULT -- "内部不可满足" --> ASK["ask_user 决定冲突意图"]
     ASK --> AMEND
     RESULT -- "PASS" --> NEXT{"全部子任务通过?"}
     NEXT -- "否" --> SPEC
-    NEXT -- "是" --> ARCH["Walkthrough + 归档 + 自足交付"]
+    NEXT -- "是" --> ARCH["验收证据报告 + 归档 + 自足交付"]
 
 ```
+
+证据与因果推理是三个 turn 角色共享的提示词引导，同样适用于无 Plan 路径；不规定调查次数/工作量阈值或固定替代解释数量。Spec 派发前自检由父代理完成，基于真实来源和前序实际交付，不把猜测下发成事实。这些提示词不新增审批或执行门禁。主代理静态提示词不按浏览器可用性分支，能力由工具注册声明。
 
 **并行执行（2026-09，2026-09-14 异步化，2026-09 并发上限硬门禁）**：工具执行节点 `nodeExecuteTools(parallel=true)`——同一条消息的多个工具调用并行执行；**子代理单会话并发受限**（设置页可配，默认 2，见下述并发门禁），同父会话内 EXECUTOR 与 RESEARCHER 同池计数，达到上限时 spawn 工具返回指导文案让模型结束 turn 等待唤醒；浏览器任务不经 SubagentManager，天然排除在外。约束：`write_plan` 单独发；`write_plan` 支持 update 路径：planId 非空时更新已有 PENDING_APPROVAL 计划（不新建，空字段保留原值）；**禁止同消息混发 generate_spec 与 subagent(SPAWN)**（并行无序，spawn 可能读到未写入的 spec）；同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝（write_file/edit_file try-lock，占用即 Error，AI 下轮重试），不得重复执行同一命令仍靠 AI 自律。plan 状态写入一律走 `PlanStore.updatePlan`（原子读改写），防止并行 subagent(SPAWN)/generate_spec/verify 互相覆盖。**子代理异步化（2026-09-14）+ 主动上报（2026-09-25）**：子代理统一为单一 `subagent` 工具 action 分流（SPAWN/SPAWN_RESEARCHER/STATUS/STOP，原 6 个独立工具封装合并；`agent_status`/`stop_agent` 工具类保留但不向 AI 注册）。`subagent(SPAWN)` 支持 planId 可选：有 planId 走计划流程（spec 硬校验+IN_PROGRESS），无 planId 走 ad-hoc 路径（task+briefing 直接派 executor，跳过 spec/IN_PROGRESS）。派工异步（立即返回 agentId，后台协程跑子代理），父代理 turn 不再被阻塞，可继续对话；子代理终态经主 eventBus 发 `SUBAGENT_COMPLETED/ERROR/STOPPED` 事件（NonCancellable emit），父 TurnExecutor 订阅后 `handleSubagentTerminalEvent` 合成 `<event_message>` 入 `pendingEventMessages` 队列，父 turn 空闲时 `dispatchPendingEventMessages` 批量合并成一条内部消息自动唤起新 turn（同会话多个完成合并成一次 turn；竞态（父会话正忙）时放回队列等 turn 收尾 finally 冲刷；abortAndJoin 清空该会话队列）。agent 丢失/归档（不在内存表）时 `subagent(STATUS)` 返回 NOT_FOUND + `AgentRecoveryInfo`（retired 记录：末次状态/result/报告路径/touchedFiles 部分认知），父代理据此判断已改动文件（与 targetFiles 比对查越界）再决定重跑或接受部分成果。`wait_agent` 枚举值已删，父代理不再阻塞拉取。**轮询拦截 + 返回值增强 + 冲刷延后（2026-10）**：`subagent(STATUS)` 先查 `SubagentManager.runningCountForSession(parentSessionId)`——本会话仍有 RUNNING 子代理时返回合成引导文案（"Subagents are still running. Do NOT poll — end your turn now..."）而非实际状态，杜绝父代理 STATUS 轮询；`SPAWN/SPAWN_RESEARCHER` 成功返回在 JSON 后追加 `\nSubagent dispatched. N subagent(s) running. End your turn... Do NOT call subagent(STATUS) to poll.`（N = 派工后的 runningCount，含刚派出的这个；Error 原样透传）；`dispatchPendingEventMessages` 冲刷前查 runningCount>0 则延后派发（不加定时器/轮询——最后一个子代理终态事件触发再次冲刷，此时 runningCount=0 才真正唤醒），使同会话多个并发子代理完成只唤醒父代理一次、父代理拿到的是一次性聚合结果。**diff 合并子代理改动（2026-09-23）**：主 turn runTurn 开头 `ParentDiffRegistry.register`，子代理 turn 结束时把文件改动经 `onTurnDiff` 回调 + `ParentDiffRegistry.mergeInto` 合并进父 turn 的 `TurnDiffTracker`（`mergeChanges`），finally 里 `unregister`——修复"turn 改动摘要不含子代理改动"的 bug。子代理自身 diff 仍独立落库（其临时 InMemory store），合并只影响父 turn 的 TurnDiff 聚合。**walkthrough 自动生成（2026-09-23）**：计划全部子任务 COMPLETED 时，`PlanStore.writeWalkthrough(plan)` 自动装配 walkthrough 文档写至 `plans/{planId}/walkthrough.md`（archive 时随整个计划目录移到 `plans-done/{planId}/walkthrough.md`，内容由 `buildWalkthrough` 聚合 plan/subtask/spec/verification/changes；`verify_subtask` 全 PASS 文案亦指向该路径）。
 
@@ -364,7 +434,7 @@ flowchart TD
     U -.-> V["MainScreen effects.collect → 本地 compactionNotice 状态 → 模态<br/>文案 composeResources: compaction_skipped_title +<br/>compaction_skipped_low_tokens / _too_few(values/ 与 values-en/ 双份)"]
     D --> D1["STATUS{scope=compaction, code=RUNNING} + 加入 compactingSessions 互斥保护<br/>(onCompactionStart / compressOnce 登记; 拦截新消息/事件唤醒/AutoContinue, 引导消息入队暂存)"]
     D1 --> E["压缩源 = llmSession.prompt.messages<br/>CompressionPlanner(自动模式): 保留段≤窗口×0.3 / 旧消息按窗口×0.5 分批 / 单条超窗口×0.9 head-trim<br/>CompressionPlanner(手动模式 keepLastMessages): 保留段 = 最后 3 条消息原文, 其余全部旧消息压成 TLDR"]
-    E --> F["逐批 requestLLMWithoutTools 生成小结 → combineBatchSummaries 合并为单条 TLDR:(五节)"]
+    E --> F["逐批 requestLLMStreaming(toolChoice=null) 生成小结 → combineBatchSummaries 合并为单条 TLDR:(五节)<br/>(流式——与主 turn 统一走 executeStreaming，复用 SSE 空闲超时；非流式无超时保护，慢模型上被代理/网关超时杀连接)"]
     F --> G["新历史 = system + TLDR:... + recent<br/>(head-trim 仅影响 AI 视图, HistoryStore 全量不删)"]
     G --> H1["STATUS{scope=compaction, code=IDLE} + 移出 compactingSessions 互斥保护<br/>(try-finally 兜底: 正常/异常/早退一律发, 并触发冲刷积压的事件消息)"]
     H1 --> H["ChatMemory 回写 store → HistoryStoreChatHistoryProvider.reconcile<br/>检测首条 TLDR 未落库 → TLDR 之后的保留段与库尾指纹对齐(用 id 过滤前的全量 incoming)<br/>→ SUMMARY 插在保留段起点(压缩点)之前, 不删任何已有消息"]
@@ -483,6 +553,8 @@ sequenceDiagram
     participant EB as 主 eventBus
 
     M->>M: subagent(action=SPAWN, planId?, subtaskIndex?)
+    Note over M,SM: EXECUTOR/RESEARCHER 派发时按父会话读取角色覆盖与并发上限；无覆盖动态继承系统默认，配置中的 null 字段继承父会话。
+    Note over M: 浏览器角色沿用系统配置，不参与会话覆盖。
     alt planId 非空（计划流程）
         M->>PS: load(planId) 硬校验 subtaskIndex/spec<br/>(subtaskIndex 越界/spec 缺失/已 COMPLETED 均返回拒绝文本)
         M->>PS: updatePlan 原子置 subtask IN_PROGRESS
@@ -982,11 +1054,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Hook[SandboxHooks宿主能力] --> VM[SandboxSettingsViewModel.reload]
-    VM -->|Default读取状态或失败| Sandbox[SandboxSettingsContent]
-    Pref[AppState白名单流] --> Sandbox
-    Sandbox -->|精确路径列表| Write[AppState.setSandboxExtraPaths]
-    Write --> Store[原设备偏好持久化与Hooks写穿]
+    API[AiCore 项目权限API] --> Projection[AppState.ProjectPermissionStore 每项目投影]
+    Projection --> VM[SandboxSettingsViewModel.bindProject]
+    Projection --> Composer[输入框权限与计划图标菜单]
+    VM -->|真实设置及后端能力| Sandbox[SandboxSettingsContent 两档及四组规则]
+    Composer -->|切换档位| Write
+    Sandbox -->|用户选择，提交后回显| Write[AiCore.updateSandboxSettings]
+    Write --> Store[SandboxApi → SandboxManager → SettingsStore]
     Remote[AppState遥控/隧道流 + 宿主地址] --> Content[RemoteSettingsContent]
     Content -->|密码草稿随原开关提交| Toggle[AppState.setRemoteControl]
     Content -->|Token/domain原值即时提交| Setter[AppState原setter]
@@ -994,7 +1068,7 @@ flowchart TD
     Content -->|页面隐藏/切换| None[仅释放表现，无服务动作]
 ```
 
-无hooks不展示可编辑白名单，也不把设备路径当成远端路径；未知/错误不假设可用。遥控缺LAN地址只说明，不构造假LAN；隧道没有URL但已运行时仍允许原停止动作。密码显隐不保存/重启，密码编辑仍需关闭再开启生效；Token与域名仍按原立即保存。内嵌server端口回退/密码门、cloudflared命令、服务/隧道互相依赖与真实启停规则均未改变。全部验证使用fake callbacks/hooks，不启动网络服务。
+沙盒设置已迁移AiCore，遥控端读写执行宿主，读取失败不伪造设置或乐观放权；RemoteControlHooks仍是遥控宿主能力。遥控缺LAN地址只说明，不构造假LAN；隧道没有URL但已运行时仍允许原停止动作。密码显隐不保存/重启，密码编辑仍需关闭再开启生效；Token与域名仍按原立即保存。内嵌server端口回退/密码门、cloudflared命令、服务/隧道互相依赖与真实启停规则均未改变。设置View验证使用fake AiCore/callbacks，不启动产品server。
 
 
 ### R03a：一次性效果路由（2026-10-30）
@@ -1143,17 +1217,305 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Shell[ShellTools 前台或后台命令] --> Wrap[CommandSandbox.wrap]
+    Shell[ShellTools 前台/后台/验证命令] --> Permission[ExecutionPermissions 按当前模式授权]
+    Permission -->|default 或批准network| Wrap[CommandSandbox.wrap]
+    Permission -->|完全访问或批准off| Plain[有黑名单仍强制后端 否则裸跑 + 进程组包装]
     Wrap --> Version[LinuxCommandSandbox: bwrap 版本探测]
     Version --> Roots[canonical 白名单校验及精确创建缺失目录]
-    Roots --> Probe[只读根 + 白名单 bind + 自建 dev + PID 隔离 proc 完整烟测]
+    Roots --> Probe[只读根/可写bind/保护ro-bind/dev/proc + 默认net namespace及seccomp完整烟测]
     Version -->|失败/超时| Error[保留原始错误；命令不执行]
     Roots -->|非法路径或创建失败| Error
     Probe -->|失败/超时| Error
-    Probe -->|通过；每 turn 缓存配置| Exec[setsid + 同一挂载配置 + shell 命令]
+    Probe -->|通过；本次后端实例缓存配置| Exec[setsid + 同一挂载配置 + shell 命令]
     Exec --> Registry[ProcessRegistry 登记与原有回收链]
     Error --> Foreground[前台返回 exitCode=-1]
     Error --> Background[后台返回启动错误；不创建任务]
 ```
 
-版本探测与完整烟测各限 10 秒。Linux 不再降级裸跑，不把失败统一归因于 AppArmor；安装或修正宿主配置后，下个 turn 重新探测。macOS/Windows 的命令路径保持原行为，Windows 后台启动结果补齐原有降级警告。
+版本探测与完整烟测各限 10 秒。Linux 不再降级裸跑，不把失败统一归因于 AppArmor；安装或修正宿主配置后，下个 turn 重新探测。macOS使用可信内联Seatbelt profile，默认无命令网络；Windows受限后端未实现，失败即停，仅显式off批准/完全访问可无沙盒运行。
+
+
+### 宿主权限与并发批准（2026-11-01）
+
+```mermaid
+sequenceDiagram
+    participant UI as 设置或对话UI
+    participant Core as AiCore / SandboxApi
+    participant M as SandboxManager
+    participant T as 文件/命令/验证工具
+    participant OS as OS沙盒
+    UI->>Core: updateSandboxSettings(projectId, 两档/四组规则/version)
+    Core->>M: 校验→SettingsStore持久化→内存与代次提交
+    M-->>UI: 设置变更事件；旧待批SETTINGS_CHANGED
+    T->>M: 当前配置+代次 / 必要时注册独立requestId
+    M-->>UI: EXECUTION_APPROVAL_REQUESTED（子代理归父会话）
+    Note over M,T: 多请求独立等待，状态锁不跨await
+    UI->>Core: resolveExecutionApproval(原conversationId,requestId,approved)
+    Core->>M: 校验归属/活体/代次，仅处理此ID
+    M-->>UI: EXECUTION_APPROVAL_RESOLVED
+    M-->>T: 唤醒原调用
+    T->>T: 核对代次、canonical目标与取消状态
+    T->>OS: 按已授权边界执行
+    Note over M,UI: 快照取活体表；重启不从历史恢复授权
+```
+
+主turn finally仅cancelExecution自身；abort/rollback清理本会话子代理与全部待批，新用户输入仍走统一sendMessage接纳入口。后台子代理仍有待批时，主turn阶段交付/其它delta/解除另一交互都不能撤销WaitingUser或折叠审批卡。文件批准前不mkdir；补丁整体收齐源/移动目标再申请；network仅打开该命令网络，off/FULL解除默认文件沙盒，但显式项目黑名单仍禁止读写。
+
+
+### 项目权限控制与窄屏输入栏（2026-11-01）
+
+项目侧栏三点菜单或执行权限下拉 → OpenProjectSettings(projectId) → 窗口路由 ProjectSettingsPanel → SandboxSettingsViewModel.bindProject → ProjectPermissionStore.state(projectId)。输入栏用当前对话所属项目（新对话用选中项目；已有对话归属尚未加载时不回退到其它项目），共享同一投影；无需依赖打开设置页才能加载。模式/四组规则提交经 AiCore 带 version 保存，成功才回显；SANDBOX_SETTINGS_CHANGED 按 payload.projectId 回查，不会使其它项目配置或草稿失效。
+
+桌面输入栏 FlowRow 只放“权限与计划”图标，tooltip及可访问名称包含当前两项状态；点击菜单将项目执行权限和“计划：自动/手动批准”分组列出，发送按钮独立。手机输入选项 sheet 直接展开同样两组内容，避免嵌套菜单。项目设置在窄屏占满可用区域，规则编辑器随可用宽度回流，不放到狭窄侧栏中。
+
+执行工具先读取所属项目快照 → 路径/命令显式拒绝则失败 → default受限执行或匹配允许前缀免提升审批 → 其余network/off/越界写注册一次申请。设置变化仅取消该项目申请、递增该项目代次；启动/落盘前复核。不同项目保持独立。
+
+
+### Worktree 创建、Handoff 与崩溃恢复流程（2026-11-02）
+
+```mermaid
+sequenceDiagram
+    participant UI as 会话UI / Presenter
+    participant Core as MederiAiCore / WorkspaceApi
+    participant WM as WorkspaceManager
+    participant Git as GitWorkspaceDriver
+    participant DB as WorkspaceStore / DataDatabase
+    participant Turn as TurnExecutor
+
+    Note over UI,WM: 1. Durable-first 首次消息接纳
+    UI->>Core: createConversation(input with WorkspaceDraftSelection)
+    Core->>DB: 持久化 Session (REQUESTED) + 第一条用户消息
+    DB-->>UI: 消息成功落盘（防止断线丢失用户意图）
+    Core->>WM: prepareWorkspace(workspaceId, ...)
+    WM->>Git: 校验baseCommit / 锁定仓库
+    WM->>Git: 创建独立工作树检出 (CREATE_CHECKOUT)
+    WM->>WM: 复制环境与包含文件 (COPY_CONTENT)
+    WM->>WM: 执行环境 setup (SETUP，若需审批则等待审批门禁)
+    WM->>DB: 原子 CAS 提交绑定 (COMMIT_BINDING)
+    WM-->>Core: 工作区 READY
+    Core->>Turn: 启动主模型执行 Turn
+
+    Note over UI,WM: 2. 双向 Handoff 事务流程
+    UI->>Core: previewHandoff(sessionId, targetKind, targetBranch)
+    Core->>WM: 生成 HandoffPreview（含改动量、冲突、受影响会话，60s 过期）
+    WM-->>UI: HandoffPreview
+    UI->>Core: executeHandoff(previewToken, stopAffectedSessions)
+    WM->>WM: 校验 previewToken 与 dirty 目标（脏目标硬拒绝）
+    WM->>Git: 转移分支检出所有权与暂存/未跟踪状态
+    WM->>DB: 原子提交新会话工作区绑定与操作记录
+    WM-->>UI: 成功切换工作区
+
+    Note over UI,WM: 3. 崩溃恢复与取消
+    Core->>WM: 初始化扫描未决操作
+    alt 目标工作区与后像一致
+        WM->>DB: 幂等提交绑定并清理操作
+    else 存在未知外部变动或损坏
+        WM->>UI: 报告 RECOVERY_REQUIRED
+        UI->>Core: executeRecovery(KEEP_VERIFIED_CURRENT 或 RESTORE_TO_NEW_MANAGED)
+    end
+```
+
+**执行租约与操作日志（RF-04/RF-06/RF-07，2026-11-02 整改）**：
+- **Turn 执行租约（RF-07）**：`TurnExecutor.runTurn` 对解析出的执行工作区 checkout 调用 `WorkspaceLeaseManager.acquireExecutionLease`，为**整个 turn 时长**持有执行租约，`finally` 中释放（不早于工具/子代理/收尾清理）；子代理 TurnExecutor 继承同一 `leaseManager`。归档/配额经 `withManagementIntent` 先设置管理意图并**等待 active 执行租约归零**后再快照——快照包含等待期间的 late writes；等待超时抛 `WORKSPACE_BUSY`（turn 正确启动失败，不静默降级）。
+- **Archive 流程（持久 RUNNING 日志，任意点崩溃可恢复）**：持久化 RUNNING + `ArchivePlan`（phase=SNAPSHOT）→ `captureSnapshot`（PREIMAGE 含 ignored）→ 回填 `snapshotId`（phase=CLEAN_SOURCE）→ `git worktree remove --force` → remove 后、数据库提交 ARCHIVED 前先持久 COMPLETE 阶段日志 → 提交 `ARCHIVED`（generation+1）+ `SUCCEEDED`。崩溃恢复（`recoverSingleOperation` ARCHIVE 处理器）：checkout 已删 + snapshot → 幂等完成；checkout 仍在 + snapshot → 重试 remove；无 snapshot → 安全回滚 READY；未知态 → RECOVERY_REQUIRED。
+- **Handoff 流程（持久 RUNNING 日志）**：`withManagementIntent`（QUIESCE）→ 持久化 RUNNING + 完整 `HandoffPlan`（phase=SNAPSHOT）→ 捕获源转移/源 preimage/目标 preimage 快照 → 回填三个 `snapshotId`（phase=SWITCH_TARGET）→ 物化转移快照到目标 → 核验目标后像（verifyTargetMatchesTransfer + 源清源核验）→ CLEAN_SOURCE（先持久 phase=COMMIT_BINDING 再提交绑定）→ `SUCCEEDED`。恢复：目标与 `acceptedTargetSnapshot` 完全匹配且源 clean → 幂等 COMMIT_BINDING；CLEAN_SOURCE 前中断且无外部篡改 → 双端 `rollbackCheckout` 回滚 preimage；未知外部变化 → RECOVERY_REQUIRED（保留双方快照）。
+- **Restore 流程（持久 RUNNING 日志）**：持久化 RUNNING + `RestorePlan`（phase=CREATE_CHECKOUT）→ `restoreToLinkedWorktree`：在原仓库 common-dir 以 `git worktree add --detach <target> <headOid>` 注册 detached linked worktree（非 `git init` 独立仓库），再 `materializeSnapshotIntoCheckout` 物化文件/index/符号链接 → 核验原 common-dir、HEAD、暂存区和快照条目后提交 `READY`（generation+1）与 `SUCCEEDED`。重启恢复复用同一核验，失败则标记 RECOVERY_REQUIRED。用户选择从快照恢复到新副本时，在配置的受管根下注册新副本，核验后以 CAS 提交会话绑定，保留两边原目录。
+
+工作区执行约束：
+- 零隐式回退：Managed 准备失败绝不静默回退到 Local 执行。
+- 稳定产物根：`.mederi/plans` 与 Notebook 等产物根独立于工作副本路径，跨工作区与 Handoff 保持稳定。
+- 子代理继承：子代理会话完全继承父会话的工作区根与执行世代。
+- 权限只读投影（第四轮 N01）：沙盒重映射使用纯内存投影（VerifiedWorkspaceRoot + SandboxPaths），绝不持久化污染项目 config.db 黑名单配置。
+- 租约严格先于进程启动（第四轮 N02）：后台命令启动前必须 acquireExecutionLease，租约被拒绝时进程绝不启动。受租约保护的前台命令及环境脚本在返回前收割进程组。需要跨 turn 运行的命令使用显式后台任务。shell 先退出时，后台任务等待其进程组结束或超时收割，再归还租约。
+- 显式管理所有权（第四轮 N02）：管理操作独占持有不可伪造的内部 ManagementPermit，常规 action 遇管理意图硬拒绝为 BUSY。
+- 取消管理操作或环境脚本时，先停止并等待运行协程收尾，再重读持久日志。在管理意图内决定完成既有提交、取消或隔离；已完成终态不被旧取消请求覆盖。
+- 环境动作携带当前发起会话。缺少会话且需要提升权限时返回失败，审批不会挂到虚构会话上。
+- 归档先比较从已捕获内容计算的 PREIMAGE 指纹与当前磁盘状态，发布快照后、移除副本前再比较。采集期间或之后的未知修改都会阻止移除。
+- 完整恢复与防写穿（第四轮 N03/N04）：归档快照前像完整覆盖 ignored/symlink/mode；安全物化统一原语防 symlink 写穿并支持类型互换；恢复扫描不重放旧成功历史，崩溃后根据写入日志判定 RECOVERY_REQUIRED，严格核验 index、墓碑与工作树注册完整性。
+- 窄屏与代次安全（第四轮 N06）：320dp/280dp 触达 $\ge 44\text{dp}$，所有工作区对话框请求受代次守卫保护，失效请求绝不写入状态。
+
+
+### LLM 临时故障重试（2026-11）
+
+`TurnExecutor.retryWrapped` 统一包装主 turn、子代理与压缩请求（子代理并非无重试）：先经 `ProviderRetryPolicy.inspect` 分类（余额/消费限额、明确日配额与服务端false等停止），可重试且尚未输出首帧时无限重试。等待优先级为 `retry-after-ms` → `Retry-After` 数字秒/HTTP-date → Google `RetryInfo.retryDelay`，采用服务端下限加 0～1 秒抖动；无有效指令才每次独立均匀随机 0～30 秒（无指数退避，server 可覆盖兜底等待边界）。每次请求局部 Long 计数，从 1 开始；`STATUS{scope=provider,code=RETRYING,attempt,message,delayMs}` 不含次数总额。恢复首帧（非流式为请求返回）或异常/取消退出发 `RETRY_FINISHED`，同一跨平台 reducer 清 statusHint、收起输入框上方重试条；下次请求重新计数。停止按钮原链路取消 turn Job（含子代理级联取消），可取消 delay；零延迟循环每轮显式 ensureActive。首帧后失败、鉴权/参数等确定性错误仍直接上抛，避免重复输出与无效请求。 具体网络根因包含 cause 链中的 EOFException/ClosedChannelException，首帧前允许重试；显式HTTP永久拒绝优先于这些IO根因。首帧后不重放原请求；TurnExecutor 对 PREMATURE_CLOSE / NETWORK_ERROR（含静默缺结束标记）在已有正文或推理时最多追加一次 Continue，从保留的历史继续。恢复耗尽、长度截断及空交付均发 MESSAGE_ERROR，不能发成功完成事件。
+
+```mermaid
+flowchart TD
+    H[Chat/Responses/Google HTTP失败] --> M[唯一HTTP工厂保留白名单headers/body到异常cause链]
+    M --> P[统一ProviderRetryPolicy解析结构化失败]
+    P -->|明确不可恢复/长期配额/x-should-retry=false| E[原异常上抛，错误面板反馈]
+    P -->|可重试且未输出首帧| A{有效retry-after-ms?}
+    A -->|是| W[服务端下限 + 0~1s抖动]
+    A -->|否| B{有效Retry-After秒/日期?}
+    B -->|是| W
+    B -->|否| C{有效Google RetryInfo?}
+    C -->|是| W
+    C -->|否| R[独立随机0~30s]
+    W --> S[STATUS RETRYING含实际delayMs]
+    R --> S
+    S --> D[可取消delay后重发；仍失败重新解析本次指令]
+    D -->|恢复首帧/结束| F[RETRY_FINISHED清条，下一请求从1计数]
+    D -->|失败| P
+```
+
+### 新会话子代理设置与首发保存（2026-11-04）
+
+```mermaid
+flowchart TD
+    A[点击常驻子代理设置齿轮] --> B{已有会话ID?}
+    B -->|是| C[读写会话配置 即时保存]
+    B -->|否| D[读系统默认 合并内存草稿覆盖]
+    D --> E[修改或恢复默认 只改草稿 不创建会话]
+    E --> F[首次发送]
+    F --> G[按现有流程创建会话 获得ID]
+    G --> H[写入首发时捕获的子代理覆盖]
+    H --> I[发送主消息 清理已移交草稿设置]
+```
+
+### 子代理错误保真传递（2026-11-04）
+
+```mermaid
+flowchart TD
+    A[TurnExecutor失败] --> B[ErrorCollector ErrorRecord]
+    B --> C[MESSAGE_ERROR error/errorId/fullDiagnostic]
+    C --> D[Runner仅返回一行失败原因给父模型]
+    C --> E[Manager记录并转发标准子事件]
+    F[Runner外部异常] --> G[Manager统一收集ErrorRecord]
+    G --> E
+    E --> H[SubagentTracker 聚合/快照重放保留诊断]
+    H --> I[子代理ErrorBoard 详细报告]
+    I --> J[共用ErrorDetailDialog 完整日志与Bug反馈]
+    E --> K[getReport供人读取完整诊断]
+```
+
+子代理失败的模型通道只携带简短错误类别/原因，`formatSubagentEventMessage` 不注入 errorId/fullDiagnostic/堆栈；UI 事件、快照和人的 getReport 接口保留完整诊断，通过“查看详情”展示。历史对话中的旧诊断不在此流程中自动修改。
+
+
+### 工作过程显示投影（2026-11-04）
+
+`computeChatItems` 的过程/交付归组及 Core 交付确认保持原有流程；`WorkTraceCard` 执行中默认展开显示步骤；最新响应经 Core 确认交付或无活跃步骤而等待子代理时，`computeChatItems` 将 `WorkTraceBlock.defaultExpanded` 置 false，组件重置手动选择并自动收起，运行状态、墙钟及等待摘要继续保留。用户仍可重新展开查看，主代理恢复新响应的推理/工具时重新默认展开。普通生成中的中间正文不触发交付折叠。过程正文走与交付一致的 Markdown 渲染。各推理与工具行独立默认收起；推理折叠头显示最新推理单行预览，新内容驱动末尾滚动（减弱动效时直接定位），展开可读全文。失败信息仅保留在具体工具行/详情，不提升为工作过程汇总失败状态。
+
+
+### 首响应前即时反馈（2026-11-04）
+
+发送建立本会话乐观输入 → 现有 `TurnStatus.Sending` → `computeChatItems` 在用户气泡后直接显示空步骤等待行；Core Working 已确认而尚无 assistant 时也显示。assistant 到达后由实际过程接续，不重复占位；发送失败按 ID 清除乐观输入后撤掉等待行。此投影不写入历史、不伪造 Core Working、不参与接纳或调度。等待期间使用输入提交时间，Core 提供工作起点后使用 Core 起点；空步骤栏保留加载图标，无空展开区。
+
+
+### 主动取消反馈（2026-11-04）
+
+Core 保留 MESSAGE_ERROR/CANCELLED 事件与内部审计诊断 → 公共 reducer 结束流式与计时、会话回 Idle → 清错误展示字段；不将取消投影为故障、断流继续或最终答案。JVM 最近错误快照同样过滤取消的展示字段，遥端重连/切回会话不再出现取消报告。真实故障仍通过单行 ErrorBoard 提示，详情和恢复入口在同一行。
+
+### 推理中断恢复与失败终态（2026-11-05）
+
+```mermaid
+flowchart TD
+    A[主/子 turn 推理或正文输出] --> B{网络中断或缺结束标记?}
+    B -->|是| C{已有输出且本 turn 未续写?}
+    C -->|是| D[保留历史并追加 Continue，最多一次]
+    D --> A
+    C -->|否| E[MESSAGE_ERROR 保留原始诊断]
+    B -->|否| F{有完整正文交付?}
+    F -->|是| G[MESSAGE_COMPLETED + finalMessageId]
+    F -->|否：length/incomplete/空回复| E
+    E --> H[子 Runner 返回失败摘要]
+    H --> I[Manager 根据 MESSAGE_ERROR 或失败协议标记 ERROR]
+    I --> J[SUBAGENT_ERROR，UI 显示失败]
+```
+
+图节点对纯推理 delta 安全重建；流抛错时先持久化已生成正文/推理再抛原异常，确保续写历史包含中断内容，不执行中断的工具调用。
+
+Runner 兼容旧 MESSAGE_COMPLETED 中已有的 error/errorId/fullDiagnostic，不用通用“无完整响应”错误覆盖原始诊断；Manager 不仅依赖返回字符串前缀，还读取标准 MESSAGE_ERROR，禁止失败事件被普通返回文本误判为成功。
+
+### 原始供应商错误的主/子代理传播（2026-11-05）
+
+```mermaid
+flowchart LR
+    W["HTTP 成功响应 / SSE data"] --> P["错误信封预检：Chat / Responses"]
+    P -->|供应商错误| E["LLMClientException + KoogHttpClientException
+保留原始 errorBody 与可用错误码"]
+    E --> R["既有首帧前重试判断"]
+    R -->|不可重试或已输出| C["ErrorCollector
+完整错误体 + 分类 + 人用诊断"]
+    C --> M["MESSAGE_ERROR"]
+    M --> S["子代理进度 / SUBAGENT_ERROR"]
+    S --> F["父事件：摘要 + 原始供应商错误体"]
+    M --> U["客户端完整诊断报告"]
+```
+
+错误帧不再作为正常 End(error) 留到 response_completion 生成抽象 STATE 错误。无供应商错误详情时保留原始失败响应并明确缺失，不推测原因。该改动不改变已消费流的重放及有限续写边界。读取/地图策略由三个 turn 角色共用系统提示词引导，按既有项目地图定位、批量读取，并在代码变更交付前增量维护相关条目；只读研究员向父代理报告待更新条目，不写盘。
+
+### 批量读取减少模型往返（2026-11-05）
+
+```mermaid
+sequenceDiagram
+    participant L as LLM
+    participant B as batch
+    participant T as 原有文件/命令工具
+    L->>B: 一次调用，多个独立 calls
+    par 独立成员
+        B->>T: read_file / list_directory
+    and 独立成员
+        B->>T: foreground bash（原沙盒/审批）
+    end
+    T-->>B: 每项输出或错误
+    B-->>L: 全部结果按输入顺序一次返回
+    Note over L: 收齐后再发起下一轮推理
+```
+
+工具可用性取本角色及请求工具列表交集。主/子代理先列齐当前步骤的已知操作，多个受支持的独立操作集中用一次 batch，其他独立工具可在同一响应并发。子项失败仅补缺失结果，取消传播至整批。固定顺序且只检查退出码的前台命令可由一次 bash 执行，依赖结果内容的决策仍分轮。正式计划中，已就绪的独立 spec 和无资源冲突的验证分别合并到同一响应，保留单发 write_plan、先保存 spec 后派工的边界。请求执行不加入人工延迟。
+
+本轮模型在构建静态提示词前从供应商目录解析。模型启用「按请求次数计费」时，静态提示词改用按次成本说明和更宽的批读范围，整批读取后再筛选证据。未开启的模型使用常规批读。主代理、执行器和研究员根据各自本轮模型选择策略，动态环境段不承担上下文预算注入。
+
+### 本地空闲超时自动续写（2026-11-05）
+
+```mermaid
+flowchart TD
+    IDLE["连续 90 秒无 SSE 行"] --> STOP["本地超时取消当前请求 / 清理流"]
+    STOP --> ESCAPE["RetryableLLMClient 不重放原请求"]
+    ESCAPE --> TURN["TurnExecutor 捕获本地超时信号"]
+    TURN --> BUDGET{还有自动恢复预算?}
+    BUDGET -->|是，即使尚无正文或推理| CONT["同会话持久化英文 Continue"]
+    CONT --> RESUME["从历史继续，保留已完成工具结果"]
+    BUDGET -->|否| ERROR["MESSAGE_ERROR / 子代理错误，保留原始诊断"]
+```
+
+与已有断流/网络恢复共享一次预算；本地等待超时不再卡在首帧前请求级重试，也不因无输出直接失败。用户取消仍原样传播，不触发 Continue；非本地超时的重试与续写条件保持既有行为。
+
+Google 原生 SSE 正常结束却没有 End 时，适配器补充观察到的分块数和可用的响应 ID。ErrorCollector 将缺帧归为可恢复断流，TurnExecutor 即使未收到首帧也可消耗同一个一次性 Continue 预算。若 Google 已返回 promptFeedback 拦截或流内 error，直接保留原始错误体并按供应商错误处理。
+
+### stop 但没有有效正文的恢复（2026-11-05）
+
+```mermaid
+flowchart TD
+    E["模型响应结束"] --> R{"正常结束标记 stop/completed/end_turn?"}
+    R -->|否| OTHER["既有截断/错误/断流处理"]
+    R -->|是| B{"存在非空正文且无工具调用?"}
+    B -->|是| DONE["正常确认交付"]
+    B -->|否| T{"无有效正文且无工具调用?"}
+    T -->|否| FAIL["不把待执行工具伪装成交付"]
+    T -->|是| DIAG["记录正文/推理长度、工具数量、结束原因"]
+    DIAG --> BUDGET{"统一的一次恢复预算尚可用?"}
+    BUDGET -->|是| CONT["同会话追加英文 Continue，保留历史继续"]
+    BUDGET -->|否| ERROR["保留具体诊断，汇报失败"]
+```
+
+不将 stop 等同于任务成功；纯推理、空响应可自动索取正文一次。恢复不依赖“供应商故意截断”的假设，不对 length、content_filter 或已提供有效正文的正常回复盲目续写。
+
+### batch 的显示展开（2026-11-05）
+
+Core 历史与事件仍保留一次 batch 调用及聚合 JSON 结果；客户端 commonMain 的 computeChatItems → expandBatchToolCall 将 calls 与索引化 results 对账，生成多个普通 ToolCallUi → ToolCallsBlock 按成员展示原工具行。父 batch 参数未完整到达时暂不显示外壳，运行时按父阶段显示成员；完成结果按成员映射成功/失败，保留独立输出。子代理详情复用同一条投影与渲染链。该显示展开不会触发任何工具或模型请求。
+
+### 结构化验收闭环
+
+```mermaid
+flowchart LR
+    Draft["计划草案<br/>任务用例、整体用例、固定取证文件"] --> Approval["批准计划版本"]
+    Approval --> Spec["生成 Spec 并执行"]
+    Spec --> Verify["取证命令与 Core 逐项比较"]
+    Verify --> Log["追加运行与观测记录"]
+    Log --> Report["独立验收证据报告"]
+    Log -- "实现偏差" --> Spec
+    Log -- "方案或验收契约需要改变" --> Draft
+```
+
+任务完成以批准用例的逐条实测为依据，整体用例等待前序任务完成。失败后可按原契约重试，替换已批准版本须经用户重新批准。报告可在进行中读取，输出按任务、用例及运行记录关联。Desktop 与 Server 共用 Core 逻辑。

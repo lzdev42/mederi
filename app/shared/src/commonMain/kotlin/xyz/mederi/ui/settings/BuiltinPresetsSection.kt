@@ -88,21 +88,31 @@ internal fun ProviderCatalogContent(
     items: List<ProviderPresetItem>, query: String, onQueryChange: (String) -> Unit,
     onSelect: (String) -> Unit, onCustom: () -> Unit, onBack: () -> Unit,
     listState: LazyListState, modifier: Modifier = Modifier, enabled: Boolean = true,
+    onChatGpt: (() -> Unit)? = null, startingChatGpt: Boolean = false,
 ) {
     val colors = LocalMederiColors.current
+    val chatGptName = stringResource(Res.string.chatgpt_provider_name)
+    val chatGptDescription = stringResource(Res.string.chatgpt_catalog_description)
+    val showChatGpt = onChatGpt != null && "$chatGptName OpenAI $chatGptDescription".contains(query.trim(), ignoreCase = true)
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         WorkspaceActionButton(stringResource(Res.string.provider_catalog_back), onBack, enabled = enabled, icon = FeatherIcons.ArrowLeft)
         ProviderSearchField(query, stringResource(Res.string.provider_catalog_search), onQueryChange, enabled)
         WorkspaceActionButton(stringResource(Res.string.provider_custom_entry), onCustom, enabled = enabled, icon = FeatherIcons.Plus)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(Res.string.provider_catalog_title), style = WorkspaceStyle.Title, color = colors.textPrimary)
-            Text(stringResource(Res.string.provider_catalog_count, items.size), style = WorkspaceStyle.Caption, color = colors.textSecondary)
+            Text(stringResource(Res.string.provider_catalog_count, items.size + if (showChatGpt) 1 else 0), style = WorkspaceStyle.Caption, color = colors.textSecondary)
         }
-        if (items.isEmpty()) WorkspacePanelEmptyState(FeatherIcons.Search, stringResource(Res.string.provider_search_empty),
+        if (items.isEmpty() && !showChatGpt) WorkspacePanelEmptyState(FeatherIcons.Search, stringResource(Res.string.provider_search_empty),
             modifier = Modifier.weight(1f), action = {
                 if (query.isNotEmpty()) WorkspaceActionButton(stringResource(Res.string.provider_search_clear), { onQueryChange("") })
             })
         else LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (showChatGpt) item(key = "chatgpt:oauth") {
+                ProviderChoiceRow(chatGptName, chatGptDescription,
+                    stringResource(if (startingChatGpt) Res.string.chatgpt_starting else Res.string.chatgpt_catalog_action),
+                    null, { onChatGpt?.invoke() }, enabled = enabled && !startingChatGpt,
+                    baseUrl = "https://chatgpt.com")
+            }
             items(items, key = { it.name }) { item ->
                 ProviderChoiceRow(item.name, null,
                     stringResource(if (item.configuredIds.isEmpty()) Res.string.provider_catalog_select else Res.string.provider_catalog_manage),

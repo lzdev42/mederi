@@ -139,4 +139,24 @@ class AgentSettingsDeliveryTest {
             }
         }
     }
+    @Test
+    fun inheritedParentModelStillOffersIndependentReasoningAndKeyAndSessionReset() = runComposeUiTest {
+        val events = mutableListOf<String>()
+        var keyLabel = ""; var reasoningLabel = ""; var restore = ""
+        setContent { AppTheme {
+            keyLabel = stringResource(Res.string.settings_agents_apikey_inherit)
+            reasoningLabel = stringResource(Res.string.settings_agents_inherit_reasoning_short)
+            restore = stringResource(Res.string.settings_agents_restore_default)
+            Box(Modifier.width(600.dp)) {
+                AgentRoleSettings(role(true).copy(usesDefault = false), listOf(fast), listOf(provider()), fast,
+                    true, false, actions(events).copy(restoreRoleDefault = { events += "default:$it" }))
+            }
+        } }
+        onNodeWithText(reasoningLabel).assertIsDisplayed()
+        onNodeWithText(keyLabel).performClick()
+        onNodeWithText("sk-••22").performClick()
+        onNodeWithText(restore).performClick()
+        runOnIdle { assertEquals(listOf("key:RESEARCHER:key-2", "default:RESEARCHER"), events) }
+    }
+
 }

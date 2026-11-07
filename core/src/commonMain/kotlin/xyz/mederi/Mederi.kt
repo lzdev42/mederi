@@ -6,6 +6,7 @@ import xyz.mederi.api.ModelApi
 import xyz.mederi.api.ProjectApi
 import xyz.mederi.api.ProviderApi
 import xyz.mederi.api.SessionApi
+import xyz.mederi.api.SandboxApi
 import xyz.mederi.api.SkillApi
 import xyz.mederi.api.SubagentConfigApi
 import xyz.mederi.api.impl.McpMarketApiImpl
@@ -14,6 +15,7 @@ import xyz.mederi.api.impl.ModelApiImpl
 import xyz.mederi.api.impl.ProjectApiImpl
 import xyz.mederi.api.impl.ProviderApiImpl
 import xyz.mederi.api.impl.SessionApiImpl
+import xyz.mederi.api.impl.SandboxApiImpl
 import xyz.mederi.api.impl.SkillApiImpl
 import xyz.mederi.api.impl.SubagentConfigApiImpl
 import xyz.mederi.tools.subagent.SubagentConfigManager
@@ -87,13 +89,20 @@ class Mederi private constructor(
     private val paths: MederiPaths?,
     val historyStore: HistoryStore?,
     val settingsStore: SettingsStore,
+    val sandboxManager: xyz.mederi.tools.sandbox.SandboxManager,
+    val sandbox: SandboxApi,
     /** 浏览器设置管理器（唯一真理源；Mederi 创建并持有，装配层复用同一实例，避免双缓存）。 */
     val browserSettingsManager: xyz.mederi.browser.BrowserSettingsManager,
     private val apiKeyStore: ApiKeyStore?,
-    private val sessionStore: SessionStore?,
+    val sessionStore: SessionStore?,
+    val workspaceStore: xyz.mederi.store.WorkspaceStore,
+    val workspaceManager: xyz.mederi.workspace.WorkspaceManager,
+    val workspaces: xyz.mederi.api.WorkspaceApi,
     val providers: ProviderApi,
     val projects: ProjectApi,
     val providerManager: ProviderManager,
+    /** Host-owned ChatGPT OAuth lifecycle; credentials never enter provider DTOs. */
+    val chatGptAuth: xyz.mederi.provider.oauth.ChatGptOAuthManager,
     val projectManager: ProjectManager,
     val sessionManager: SessionManager,
     val sessions: SessionApi,
@@ -238,12 +247,19 @@ class Mederi private constructor(
                 ?: dataDriver?.let { SqliteDiffStore(it) }
                 ?: InMemoryDiffStore()
 
+            val workspaceStore = config.workspaceStore
+                ?: dataDriver?.let { xyz.mederi.store.sqlite.SqliteWorkspaceStore(it) }
+                ?: xyz.mederi.store.InMemoryWorkspaceStore(sessionStore)
+
             // === 元数据目录（内存，UI 启动后调用 modelCatalog.start() 开始刷新） ===
             val modelCatalog = xyz.mederi.metadata.ModelCatalog()
 
             // === Manager 层装配 ===
             val mcpConnector = McpConnector(mcpServerStore)
-            val providerManager = ProviderManagerImpl(providerStore, apiKeyStore)
+            val chatGptAuth = xyz.mederi.provider.oauth.ChatGptOAuthManager(
+                paths?.root?.let { java.io.File(it, "auth/chatgpt") }
+            )
+            val providerManager = ProviderManagerImpl(providerStore, apiKeyStore, chatGptAuth)
             val projectManager = ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)
             val mcpServerManager = McpServerManagerImpl(mcpServerStore, mcpConnector)
             val mcpMarketManager = McpMarketManagerImpl(OfficialRegistrySource())
@@ -254,9 +270,32 @@ class Mederi private constructor(
                 defaultSkillsRoot = paths?.skillsDir?.absolutePath
                     ?: java.io.File(System.getProperty("user.home"), ".mederi/skills").absolutePath
             )
+
+            // 同一宿主的所有会话/子代理共用配置与授权表，事件沿现有 session 总线外显。
+            val sessionEvents = kotlinx.coroutines.flow.MutableSharedFlow<xyz.mederi.domain.model.MederiEvent>(
+                extraBufferCapacity = 256,
+                onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+            )
+            val sandboxManager = xyz.mederi.tools.sandbox.SandboxManager(settingsStore, sessionEvents,
+                protectedDirectories = listOfNotNull(paths?.root?.canonicalPath), projectManager = projectManager)
+            val worktreesRoot = paths?.dataDir?.resolve("worktrees")?.absolutePath
+                ?: java.io.File(System.getProperty("java.io.tmpdir"), "mederi-worktrees").absolutePath
+            // 文件 API 必须能查询当前有效项目黑名单并过滤拒绝条目，故装配层把同一 SandboxManager 注入 WorkspaceManager。
+            val workspaceManager = xyz.mederi.workspace.WorkspaceManager(
+                workspaceStore = workspaceStore,
+                sessionStore = sessionStore,
+                historyStore = historyStore,
+                worktreesRoot = worktreesRoot,
+                projectStore = projectStore,
+                settingsStore = settingsStore,
+                sandboxManager = sandboxManager,
+                // T09：工作区状态/操作提交点经同一 session 事件总线外显，供 UI 实时投影与快照水合。
+                eventBus = sessionEvents,
+            )
             val subagentConfigManager = SubagentConfigManager(
                 settingsStore = settingsStore,
-                providerManager = providerManager
+                providerManager = providerManager,
+                sessionStore = sessionStore
             )
             // 浏览器设置管理器：唯一真理源（BrowserSettingsApi 与浏览器任务运行目录解析共用此实例，避免双缓存）
             val browserSettingsManager = xyz.mederi.browser.BrowserSettingsManager(settingsStore)
@@ -266,6 +305,14 @@ class Mederi private constructor(
                 xyz.mederi.browser.browserRuntimeDirs(browserSettingsManager.get().browserHome)
             }
             val sessionManager = SessionManagerImpl(
+                // RF-02：workspaceResolver 在本构造前创建，注入 TurnExecutor 解析 managed 工作区。
+                workspaceResolver = xyz.mederi.workspace.ExecutionWorkspaceResolver(
+                    workspaceStore = workspaceStore,
+                    projectStore = projectStore,
+                    sessionStore = sessionStore,
+                ),
+                eventBus = sessionEvents,
+                sandboxManager = sandboxManager,
                 sessionStore = sessionStore,
                 historyStore = historyStore,
                 projectManager = projectManager,
@@ -275,7 +322,11 @@ class Mederi private constructor(
                 skills = skillManager,
                 subagentConfigManager = subagentConfigManager,
                 compactionThresholdPercent = config.compactionThresholdPercent,  // 新增
-                browserRuntimeProvider = browserRuntimeProvider
+                browserRuntimeProvider = browserRuntimeProvider,
+                // RF-02：首次 send 准备门禁——把会话绑定的 REQUESTED managed 工作区准备到 READY。
+                workspacePreparer = workspaceManager::prepareSessionWorkspace,
+                // RF-07：turn 执行持工作区租约，归档/配额等待活跃执行结束后才快照。
+                leaseManager = workspaceManager.leaseManager,
             )
 
             // === API 层装配 ===
@@ -283,21 +334,29 @@ class Mederi private constructor(
             val modelApi = ModelApiImpl(providerManager)
             val projectApi = ProjectApiImpl(projectManager)
             val sessionApi = SessionApiImpl(sessionManager)
+            val sandboxApi = SandboxApiImpl(sandboxManager)
             val mcpServerApi = McpServerApiImpl(mcpServerManager)
             val mcpMarketApi = McpMarketApiImpl(mcpMarketManager)
             val skillApi = SkillApiImpl(skillManager)
             val subagentConfigApi = SubagentConfigApiImpl(subagentConfigManager, providerManager)
+            val workspaceApi = xyz.mederi.api.impl.WorkspaceApiImpl(workspaceManager, projectManager, sessionManager::resumeWorkspaceInput)
 
             return Mederi(
                 paths = paths,
                 historyStore = historyStore,
                 settingsStore = settingsStore,
+                sandboxManager = sandboxManager,
+                sandbox = sandboxApi,
                 browserSettingsManager = browserSettingsManager,
                 apiKeyStore = apiKeyStore,
                 sessionStore = sessionStore,
+                workspaceStore = workspaceStore,
+                workspaceManager = workspaceManager,
+                workspaces = workspaceApi,
                 providers = providerApi,
                 projects = projectApi,
                 providerManager = providerManager,
+                chatGptAuth = chatGptAuth,
                 projectManager = projectManager,
                 sessionManager = sessionManager,
                 sessions = sessionApi,
@@ -327,7 +386,7 @@ class Mederi private constructor(
          *
          * 新增 schema 变更时：① 改 .sq（全新库用）② 这里加一条迁移脚本 ③ 递增 [DATA_DB_VERSION]。
          */
-        private fun migrateDataDb(driver: app.cash.sqldelight.db.SqlDriver) {
+        internal fun migrateDataDb(driver: app.cash.sqldelight.db.SqlDriver) {
             val currentVersion = driver.executeQuery(
                 null,
                 "PRAGMA user_version",
@@ -341,28 +400,71 @@ class Mederi private constructor(
 
             if (currentVersion >= DATA_DB_VERSION) return
 
-            // 迁移脚本：版本号 → SQL 列表。每条幂等（列已存在/表不存在时 SQLite 抛错，runCatching 吞掉）。
+            // 迁移脚本：版本号 → SQL 列表。新列仅吞“列已存在”，新表 CREATE IF NOT EXISTS。
             val migrations = linkedMapOf(
                 1 to listOf("ALTER TABLE sessions ADD COLUMN api_key_id TEXT"),
                 2 to listOf("ALTER TABLE sessions ADD COLUMN draft_text TEXT"),
                 3 to listOf("ALTER TABLE sessions ADD COLUMN active_skills TEXT NOT NULL DEFAULT '[]'"),
+                4 to listOf(
+                    "ALTER TABLE sessions ADD COLUMN workspace_id TEXT",
+                    "ALTER TABLE sessions ADD COLUMN associated_worktree_id TEXT",
+                    "ALTER TABLE sessions ADD COLUMN archived_at TEXT",
+                    "ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+                    "ALTER TABLE diffs ADD COLUMN workspace_id TEXT",
+                    "ALTER TABLE diffs ADD COLUMN checkout_root_at_creation TEXT",
+                    "ALTER TABLE diffs ADD COLUMN project_relative_path_at_creation TEXT",
+                    "ALTER TABLE diffs ADD COLUMN workspace_generation INTEGER",
+                    "CREATE TABLE IF NOT EXISTS workspaces (id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, associated_session_id TEXT, updated_at TEXT NOT NULL, payload TEXT NOT NULL)",
+                    "CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_workspaces_session ON workspaces(associated_session_id)",
+                    "CREATE TABLE IF NOT EXISTS workspace_operations (id TEXT NOT NULL PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL, workspace_id TEXT NOT NULL, state TEXT NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)",
+                    "CREATE INDEX IF NOT EXISTS idx_workspace_operations_project ON workspace_operations(project_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_workspace_operations_workspace ON workspace_operations(workspace_id)"
+                ),
+                5 to listOf(
+                    "ALTER TABLE sessions ADD COLUMN subagent_configs TEXT NOT NULL DEFAULT '{}'",
+                    "ALTER TABLE sessions ADD COLUMN subagent_max_concurrent INTEGER"
+                )
             )
 
             for (v in (currentVersion + 1)..DATA_DB_VERSION) {
                 migrations[v]?.forEach { sql ->
-                    runCatching { driver.execute(null, sql, 0) }
-                        .onFailure { e ->
-                            xyz.mederi.debug.DebugLog.info("Mederi", "data.db 迁移 v$v 跳过: ${e.message}")
+                    try {
+                        driver.execute(null, sql, 0)
+                    } catch (e: Exception) {
+                        val msg = e.message.orEmpty().lowercase()
+                        if (msg.contains("duplicate column name") || msg.contains("already exists")) {
+                            xyz.mederi.debug.DebugLog.info("Mederi", "data.db 迁移 v$v 已存在跳过: ${e.message}")
+                        } else {
+                            throw e
                         }
+                    }
                 }
+                if (v == 4) {
+                    verifyV4Schema(driver)
+                }
+                driver.execute(null, "PRAGMA user_version = $v", 0)
             }
 
-            driver.execute(null, "PRAGMA user_version = $DATA_DB_VERSION", 0)
             xyz.mederi.debug.DebugLog.event("Mederi", "data.db 迁移完成: v$currentVersion → v$DATA_DB_VERSION")
         }
 
+        private fun verifyV4Schema(driver: app.cash.sqldelight.db.SqlDriver) {
+            val checkTable = { table: String ->
+                driver.executeQuery(
+                    null,
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='$table'",
+                    { cursor -> app.cash.sqldelight.db.QueryResult.Value(cursor.next().value) },
+                    0
+                ).value
+            }
+            if (!checkTable("workspaces") || !checkTable("workspace_operations")) {
+                throw IllegalStateException("Migration to v4 failed: missing tables")
+            }
+        }
+
         /** 当前 data.db schema 版本（每次改 .sq schema 递增 + 加迁移脚本）。 */
-        private const val DATA_DB_VERSION = 3
+        internal const val DATA_DB_VERSION = 5
 
         /** 创建 SQLite driver（WAL + 外键约束），建表。 */
         private fun createDriver(dbPath: String): app.cash.sqldelight.db.SqlDriver {

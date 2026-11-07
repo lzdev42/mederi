@@ -19,6 +19,9 @@ sealed interface UiEffect {
     /** 打开设置对话框（一次性导航命令） */
     data object OpenSettings : UiEffect
 
+    /** 打开明确项目的权限设置，不改变当前聊天所属项目。 */
+    data class OpenProjectSettings(val projectId: String) : UiEffect
+
     /** 打开项目选择菜单（一次性命令，由窗口Route落为受控菜单状态，无递增计数器） */
     data object OpenProjectMenu : UiEffect
 

@@ -52,6 +52,7 @@ class SessionManagerImpl(
         extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     ),
+    private val sandboxManager: xyz.mederi.tools.sandbox.SandboxManager = xyz.mederi.tools.sandbox.SandboxManager(eventBus = eventBus),
     private val mcpConnector: McpConnector? = null,
     private val skills: SkillManager? = null,
     private val subagentConfigManager: xyz.mederi.tools.subagent.SubagentConfigManager? = null,
@@ -60,9 +61,21 @@ class SessionManagerImpl(
      * 浏览器任务运行目录解析（browserHome 懒解析，透传给 [TurnExecutor] → BrowserTaskManager）。
      */
     private val browserRuntimeProvider: (suspend () -> xyz.mederi.browser.BrowserRuntimeDirs?)? = null,
+    /**
+     * 执行期工作区解析器（生产装配注入）。非 null 时，TurnExecutor 解析会话绑定的工作区并以其实际
+     * checkoutRoot/workingDirectory 执行，而非回退 `project.directory`。RF-02：managed 会话不再执行在原项目。
+     */
+    private val workspaceResolver: xyz.mederi.workspace.ExecutionWorkspaceResolver? = null,
+    /** RF-02：会话级工作区准备回调（WorkspaceManager::prepareSessionWorkspace）。首次 send 命中非 READY 的 REQUESTED 工作区时先准备。 */
+    private val workspacePreparer: (suspend (String) -> Boolean)? = null,
+    /** LLM 传输实现可注入；运行时调度与测试共用同一真实 Koog 工具循环（RF-02 集成测试注入确定性 fake LLM）。 */
+    private val llmClientFactory: (xyz.mederi.provider.domain.model.Provider, String) -> ai.koog.prompt.executor.clients.LLMClient = xyz.mederi.provider.infrastructure.koog.KoogClientFactory::create,
+    /** RF-07：工作区执行租约（生产装配注入 WorkspaceManager.leaseManager；null = 不参与租约协调）。 */
+    private val leaseManager: xyz.mederi.workspace.WorkspaceLeaseManager? = null,
 ) : SessionManager {
 
     private val turnExecutor = TurnExecutor(
+        sandboxManager = sandboxManager,
         sessionStore = sessionStore,
         historyStore = historyStore,
         eventBus = eventBus,
@@ -73,7 +86,11 @@ class SessionManagerImpl(
         skills = skills,
         subagentConfigManager = subagentConfigManager,
         compactionThresholdPercent = compactionThresholdPercent,  // 新增
-        browserRuntimeProvider = browserRuntimeProvider
+        browserRuntimeProvider = browserRuntimeProvider,
+        workspaceResolver = workspaceResolver,
+        workspacePreparer = workspacePreparer,
+        llmClientFactory = llmClientFactory,
+        leaseManager = leaseManager,
     )
 
     override suspend fun list(): List<Session> = sessionStore.list()
@@ -187,6 +204,10 @@ class SessionManagerImpl(
         turnExecutor.sendMessage(id, request)
     }
 
+    override suspend fun resumeWorkspaceInput(id: String, workspaceId: String) {
+        turnExecutor.resumeWorkspaceInput(id, workspaceId)
+    }
+
     override suspend fun steerMessage(id: String, request: SendMessageRequest) {
         DebugLog.event("SessionMgr", "steerMessage: sessionId=$id, agentMode=${request.agentConfig.agentMode}, parts=${request.parts.size}")
         turnExecutor.steerMessage(id, request)
@@ -270,12 +291,23 @@ class SessionManagerImpl(
         turnExecutor.resolveQuestion(id, questionId, answers)
     }
 
+    override suspend fun recordPlanManualAcceptance(
+        sessionId: String, planId: String, caseId: String, observed: String, evidence: String, confirmedBy: String
+    ) =
+        turnExecutor.recordPlanManualAcceptance(sessionId, planId, caseId, observed, evidence, confirmedBy)
+
+    override suspend fun getPlanAcceptanceReport(id: String, planId: String): String =
+        turnExecutor.getPlanAcceptanceReport(id, planId)
+
     override suspend fun resolvePlanApproval(
         id: String,
         planId: String,
         approved: Boolean
     ) {
-        turnExecutor.resolvePlanApproval(id, planId, approved)
+        val resolved = turnExecutor.resolvePlanApproval(id, planId, approved)
+        if (approved && !resolved) throw xyz.mederi.api.exception.MederiStateException(
+            "This draft is no longer pending or its approved collector files changed."
+        )
     }
 
     override suspend fun compressHistory(id: String) {

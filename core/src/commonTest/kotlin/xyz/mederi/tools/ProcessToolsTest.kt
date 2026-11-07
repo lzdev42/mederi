@@ -3,29 +3,36 @@ package xyz.mederi.tools
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.tools.sandbox.CommandSandbox
 import xyz.mederi.tools.sandbox.ProcessRegistry
+import xyz.mederi.tools.sandbox.ExecutionPermissions
+import xyz.mederi.tools.sandbox.ExecutionPermissionMode
+import xyz.mederi.tools.sandbox.SandboxManager
+import xyz.mederi.tools.sandbox.SandboxSettings
 import java.io.File
 import java.net.ServerSocket
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * 进程管理端到端测试（macOS Seatbelt 实测链路）：
- * bash 沙箱内后台起 dev server → list_processes 可见 → stop_process 沙箱外整组回收。
- *
- * 这正是本次要修的真实场景：沙箱内命令互杀必失败（Operation not permitted），
- * 只有宿主侧 stop_process 能回收。测试跳过非 macOS 平台。
+ * 进程管理端到端测试：明确选择完全访问后起 dev server，验证注册和整组回收。
+ * 默认沙盒的网络边界由 CommandSandboxTest 独立验证，不为进程测试放宽默认权限。
  */
 class ProcessToolsTest {
 
     @Test
     fun backgroundServerCanBeListedAndStopped() {
         if (!isMac()) return
-        val projectDir = File(System.getProperty("java.io.tmpdir"), "mdri-proctest-${System.nanoTime()}").apply { mkdirs() }
+        val repository = generateSequence(File(System.getProperty("user.dir")).absoluteFile) { it.parentFile }
+            .first { File(it, "settings.gradle.kts").isFile }
+        val scratch = File(repository, "temp/process-tools-tests").apply { mkdirs() }
+        val projectDir = java.nio.file.Files.createTempDirectory(scratch.toPath(), "case-").toFile().canonicalFile
         val port = findFreePort()
         try {
             ProcessRegistry.clear()
             val sandbox = CommandSandbox(listOf(projectDir.absolutePath))
-            val shellTools = ShellTools(listOf(projectDir.absolutePath), sandbox)
+            val manager = SandboxManager()
+            runBlocking { manager.updateSettings("project", SandboxSettings(mode = ExecutionPermissionMode.FULL_ACCESS)) }
+            val permissions = ExecutionPermissions(manager, listOf(projectDir.path), "process-tools-test", projectId = "project")
+            val shellTools = ShellTools(listOf(projectDir.absolutePath), sandbox, executionPermissions = permissions)
 
             // 沙箱内后台起 server：command 立即返回，python 后台进程留在进程组里
             val start = runBlocking {
@@ -47,6 +54,10 @@ class ProcessToolsTest {
             assertTrue(waitUntil(100) { !portOpen(port) }, "port $port still open after stop_process")
             assertTrue(ProcessRegistry.list().none { it.pid == pid }, "stopped process still in registry")
         } finally {
+            ProcessRegistry.list().filter { it.workDir == projectDir.path }.forEach {
+                ProcessRegistry.terminate(it.pid, force = true)
+                ProcessRegistry.remove(it.pid)
+            }
             projectDir.deleteRecursively()
         }
     }

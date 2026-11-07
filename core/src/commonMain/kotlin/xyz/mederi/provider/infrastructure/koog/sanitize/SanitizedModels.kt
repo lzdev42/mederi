@@ -5,6 +5,7 @@ import ai.koog.prompt.executor.clients.openai.base.models.OpenAIToolCall
 import ai.koog.prompt.executor.clients.openai.base.models.OpenAIUsage
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Sanitized OpenAI 响应数据模型。
@@ -174,4 +175,26 @@ data class SanitizedResponsesUsage(
     @SerialName("prompt_tokens") val promptTokens: Int? = null,
     @SerialName("output_tokens") val outputTokens: Int? = null,
     @SerialName("completion_tokens") val completionTokens: Int? = null
+)
+
+/** 错误帧独立于成功响应解码：HTTP 200 也可能包含供应商错误，保留未知错误字段。 */
+@Serializable
+internal data class SanitizedChatErrorEnvelope(
+    val error: JsonObject? = null,
+    val choices: List<SanitizedChatErrorChoice> = emptyList(),
+)
+
+@Serializable
+internal data class SanitizedChatErrorChoice(
+    val error: JsonObject? = null,
+    val finishReason: String? = null,
+)
+
+/** Responses 错误既可能在 response.error 内，也可能是独立 error 事件。 */
+@Serializable
+internal data class SanitizedResponsesErrorEnvelope(
+    val type: String? = null,
+    val status: String? = null,
+    val error: JsonObject? = null,
+    val response: SanitizedResponsesErrorEnvelope? = null,
 )

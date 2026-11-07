@@ -35,18 +35,18 @@ class RegisteredBrowser(
 )
 
 /**
- * 浏览器注册中心：UI 注册 JCEF，core 注册 Camoufox，AI 通过 run_browser_task(browser=name) 选择。
+ * 浏览器注册中心：各宿主注册其可用的浏览器，AI 通过 browser(browser=name) 选择。
  *
- * - [register] 幂等：同名覆盖（UI 重连时更新 JCEF 实例）。
- * - [resolve] null → 用 [default]（默认名优先，否则内置 JCEF 优先，最后才退回第一个注册的）。
- * - 注册发生在启动装配阶段（MederiAiCore 注册 camoufox；desktop UI 注册 jcef），
+ * - [register] 幂等：同名覆盖（宿主重连时更新实例）。
+ * - [resolve] null → 用 [default]（默认名优先，否则退回第一个注册的）。
+ * - 注册发生在启动装配阶段（各宿主注册其浏览器实例），
  *   注册后立即生效——BrowserTaskManager 持有本注册中心引用，无需重启。
- * - 默认策略（2026-09 起）：UI 宿主注册 JCEF 后默认即用内置可见浏览器（用户可观察），
- *   与注册顺序无关；headless server 没有 JCEF 时才以 camoufox 为默认。
+ * - 默认策略：defaultName 指定的浏览器优先；否则第一个注册的。
+ *   无浏览器注册时 resolve 返回 null，浏览器任务会失败。
  */
 object BrowserRegistry {
 
-    /** 默认浏览器名（UI 可设置，最高优先级）；null = 内置 JCEF 优先，再退回第一个注册的。 */
+    /** 默认浏览器名（UI 可设置，最高优先级）；null = 第一个注册的。 */
     @Volatile
     var defaultName: String? = null
 
@@ -79,8 +79,8 @@ object BrowserRegistry {
         name?.let { browsers[it] } ?: default()
 
     /**
-     * 默认浏览器：defaultName 指定的；否则第一个注册的（camoufox，JCEF 自动化后端已退役）。
-     * JCEF 渲染后端（KBrowser）仍保留供 inkcompose Mermaid/PDF/HTML，不注册为自动化后端。
+     * 默认浏览器：defaultName 指定的；否则第一个注册的。
+     * 无浏览器注册时返回 null。
      */
     fun default(): RegisteredBrowser? =
         defaultName?.let { browsers[it] }

@@ -1,0 +1,69 @@
+{
+  "specVersion": "WT-2026-11-02.1",
+  "sourceFingerprint": "",
+  "desktopAppVersion": "",
+  "codexAppVersion": "",
+  "mobileClient": "",
+  "verifiedAt": "",
+  "unresolvedDifferences": [
+    "PENDING:尚未进行真实对照"
+  ],
+  "scenarios": [
+    {
+      "id": "desktop-create",
+      "status": "PENDING",
+      "requirement": "桌面真实首次发送在Worktree中写文件，原Local不变，初始化/批准顺序正确",
+      "observed": "",
+      "artifacts": []
+    },
+    {
+      "id": "mobile-host-files",
+      "status": "PENDING",
+      "requirement": "320dp遥控创建并读取宿主工作副本文件，和桌面workspaceId/HEAD一致",
+      "observed": "",
+      "artifacts": []
+    },
+    {
+      "id": "handoff-roundtrip",
+      "status": "PENDING",
+      "requirement": "真实双向Handoff含暂存、二进制、未跟踪文件；关联副本复用；旧终端身份清楚",
+      "observed": "",
+      "artifacts": []
+    },
+    {
+      "id": "dirty-target-and-recovery",
+      "status": "PENDING",
+      "requirement": "脏目标拒绝，注入中断后可预览并恢复到新副本，未知改动保留",
+      "observed": "",
+      "artifacts": []
+    },
+    {
+      "id": "archive-pin-retention",
+      "status": "PENDING",
+      "requirement": "会话固定保护，归档后列表/快照恢复，限额与真实磁盘状态一致",
+      "observed": "",
+      "artifacts": []
+    },
+    {
+      "id": "environment-actions",
+      "status": "PENDING",
+      "requirement": "环境setup/平台覆盖/动作日志，重复请求不重复执行，批准/取消/失败可操作",
+      "observed": "",
+      "artifacts": []
+    },
+    {
+      "id": "reconnect-and-narrow",
+      "status": "PENDING",
+      "requirement": "断线/重连恢复操作、准备中输入不重复；280dp大字体主要操作可触达",
+      "observed": "",
+      "artifacts": []
+    },
+    {
+      "id": "codex-parity",
+      "status": "PENDING",
+      "requirement": "逐项核对README公开基线及官方页面；记录实际差异，未解决差异不能PASS",
+      "observed": "",
+      "artifacts": []
+    }
+  ]
+}

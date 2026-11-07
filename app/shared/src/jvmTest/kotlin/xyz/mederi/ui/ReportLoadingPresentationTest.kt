@@ -30,6 +30,20 @@ class ReportLoadingPresentationTest {
         }; p.close()
     }
 
+    @Test fun planReportUsesBoundCoreSourceWithoutAFilePath() = runTest {
+        val presenter = ReportLoadPresenter(backgroundScope, StandardTestDispatcher(testScheduler))
+        val request = ReportRequest(ReportKey("session", "plan-acceptance:plan"), null, "", "plan")
+        var report = "V-01: no evidence"
+        presenter.select(request, Any(), { Result.success(report) })
+        runCurrent()
+        assertEquals(ReportLoadState.Content(report), presenter.state(request.key))
+        report = "V-01: observed 1, expected 1"
+        presenter.retry(request.key)
+        runCurrent()
+        assertEquals(ReportLoadState.Content(report), presenter.state(request.key))
+        presenter.close()
+    }
+
     @Test fun failureAndThrownIoAreExplicitRetryCanRecoverAndCancellationIsNotError() = runTest {
         val p = ReportLoadPresenter(backgroundScope, StandardTestDispatcher(testScheduler))
         val r = request(); var mode = 0

@@ -20,11 +20,11 @@ private const val BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) 
  * Shell 命令执行工具集。
  *
  * 命令在项目主目录（第一个目录）下执行，经 [CommandSandbox] 包装：
- * - macOS Seatbelt / Linux bubblewrap：写仅限白名单（项目目录/临时/构建缓存），读全盘
- * - Linux bwrap 不可用：返回原始错误并阻止命令；Windows：裸跑 + 警告前缀
+ * - macOS Seatbelt / Linux bubblewrap+seccomp：受限模式白名单可写、默认禁止命令联网，读全盘
+ * - 受限后端不可用：返回原始错误并阻止命令；完全访问或已批准off才裸跑
  * - shell 探测链：bash → sh（Windows: bash.exe → cmd /c）
  *
- * 无权限弹窗（已拆除）：沙箱 + diff 追踪 + git 是安全网，不再逐操作询问。
+ * 宿主权限由 ExecutionPermissions 判断；前后台命令与验证共用一次性授权入口。
  *
  * @param allowedDirectories 项目目录列表（绝对路径），命令的工作目录为第一个目录。
  * @param sandbox 命令沙箱（每 turn 由 ToolFactory 新建）。
@@ -34,6 +34,12 @@ class ShellTools(
     private val sandbox: CommandSandbox? = null,
     private val backgroundTaskManager: BackgroundTaskManager? = null,
     private val sessionId: String = "",
+    private val executionPermissions: xyz.mederi.tools.sandbox.ExecutionPermissions? = null,
+    private val webReader: suspend (String, Int) -> String = { url, timeout ->
+        xyz.mederi.http.WebHttpReader.get(url, timeout, BROWSER_UA)
+    },
+    /** RF-07/R11: 工作区执行租约管理器——后台命令在 turn 结束后仍会写盘，必须持有进程生命周期租约。 */
+    private val leaseManager: xyz.mederi.workspace.WorkspaceLeaseManager? = null,
 ) {
 
     /**
@@ -52,53 +58,93 @@ class ShellTools(
      *
      * @param cwd 命令工作目录（绝对路径）；null 或空白时回退到项目主目录（allowedDirectories.first()）。
      */
-    suspend fun runCommand(command: String, timeoutSeconds: Int = 120, cwd: String? = null): CommandResult {
+    private data class PreparedCommand(
+        val wrapped: CommandSandbox.WrappedCommand,
+        val workDir: File,
+        val grant: xyz.mederi.tools.sandbox.ExecutionPermissions.Grant?,
+    )
+
+    private suspend fun prepareCommand(command: String, cwd: String?, sandboxMode: String, tool: String): PreparedCommand {
+        val rawDir = cwd?.takeIf { it.isNotBlank() }?.let(::File)
+        val project = File(allowedDirectories.first())
+        val workDir = (if (rawDir == null) project else if (rawDir.isAbsolute) rawDir else File(project, rawDir.path)).canonicalFile
+        require(workDir.isDirectory) { "Working directory does not exist: $workDir" }
+        require(sandboxMode in listOf("default", "network", "off")) { "sandbox must be default, network, or off" }
+        val grant = executionPermissions?.authorizeCommand(command, workDir.path, sandboxMode, tool)
+        // 缺少授权上下文不能构成裸跑后门；仅显式FULL或已批准off能解除OS沙盒。
+        if (executionPermissions == null && sandboxMode != "default") {
+            throw xyz.mederi.api.exception.MederiStateException("An execution approval channel is required for elevated commands.")
+        }
+        // R02: 把经校验的工作区凭证传到实际启动后端——精确产物根和映射拒绝规则沿同一凭证应用。
+        val wsRoot = executionPermissions?.verifiedWorkspaceRootProvider?.invoke()
+        val runner = grant?.let { CommandSandbox(allowedDirectories, it.settings.extraWritablePaths,
+            executionPermissions!!.manager.protectedDirectories, it.settings.deniedPaths, wsRoot) }
+            ?: sandbox ?: CommandSandbox(allowedDirectories, emptyList())
+        val full = grant?.settings?.mode == xyz.mederi.tools.sandbox.ExecutionPermissionMode.FULL_ACCESS
+        val wrapped = runner.wrap(command, networkAccess = sandboxMode == "network", unsandboxed = full || sandboxMode == "off")
+        grant?.let { executionPermissions!!.checkGrant(it) }
+        return PreparedCommand(wrapped, workDir, grant)
+    }
+
+    suspend fun runCommand(
+        command: String, timeoutSeconds: Int = 120, cwd: String? = null,
+        sandboxMode: String = "default", toolName: String = "bash",
+        reapDescendantsOnCompletion: Boolean = leaseManager != null,
+    ): CommandResult {
         if (command.isBlank()) return CommandResult("Error: command is empty", -1)
-
-            val wrapped = try {
-                sandbox?.wrap(command)
-                    ?: CommandSandbox.WrappedCommand(listOf("sh", "-c", command), null, false)
-            } catch (e: xyz.mederi.api.exception.MederiStateException) {
-                return CommandResult("[sandbox] ${e.message}", -1)
-            }
-            val workDir = cwd?.takeIf { it.isNotBlank() }?.let { File(it) } ?: File(allowedDirectories.first())
-            val builder = ProcessBuilder(wrapped.argv)
-            builder.directory(workDir)
-            builder.redirectErrorStream(true)
-
-            val process = builder.start()
-
-            // 启动即登记：posix 下直接子进程是进程组长（pid==pgid），
-            // 宿主侧据此整组回收（stop_process / 超时清理），安全边界见 ProcessRegistry。
-            ProcessRegistry.register(
-                pid = process.pid(),
-                pgid = if (wrapped.processGroupLeader) process.pid() else null,
-                command = command,
-                workDir = workDir.absolutePath
-            )
-
-            val outputFuture = java.util.concurrent.FutureTask {
-                process.inputStream.bufferedReader().use { it.readText() }
-            }
-            Thread(outputFuture).start()
-
-            val completed = process.waitFor(timeoutSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
-
-            if (!completed) {
-                // 超时整组回收：仅 destroyForcibly 只杀直接子进程，后台孙进程会变孤儿继续跑
-                if (wrapped.processGroupLeader) {
-                    ProcessRegistry.killGroup(process.pid(), process.pid(), force = true)
+        require(timeoutSeconds > 0) { "timeout_seconds must be positive" }
+        val prepared = try { prepareCommand(command, cwd, sandboxMode, toolName) }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (failure: Exception) { return CommandResult("[sandbox] ${failure.message}", -1) }
+        val wrapped = prepared.wrapped
+        prepared.grant?.let { executionPermissions!!.checkGrant(it) }
+        val process = ProcessBuilder(wrapped.argv).directory(prepared.workDir).redirectErrorStream(true).start()
+        ProcessRegistry.register(process.pid(), if (wrapped.processGroupLeader) process.pid() else null, command, prepared.workDir.path)
+        val output = java.util.concurrent.FutureTask {
+            process.inputStream.bufferedReader().use { reader ->
+                val captured = StringBuilder()
+                val buffer = CharArray(4096)
+                while (true) {
+                    val count = reader.read(buffer)
+                    if (count < 0) break
+                    if (captured.length < 4 * 1024 * 1024) captured.append(buffer, 0, minOf(count, 4 * 1024 * 1024 - captured.length))
                 }
-                process.destroyForcibly()
-                outputFuture.get(1, java.util.concurrent.TimeUnit.SECONDS)
-                val partialOutput = outputFuture.get()
-                return CommandResult("Command timed out after ${timeoutSeconds}s\n$partialOutput", -1, timedOut = true)
+                captured.toString()
             }
-
-            val output = outputFuture.get(1, java.util.concurrent.TimeUnit.SECONDS)
-            val exitCode = process.exitValue()
-            val prefixed = if (wrapped.warning != null) wrapped.warning + output else output
-            return CommandResult(prefixed, exitCode)
+        }
+        Thread(output, "mederi-command-output").apply { isDaemon = true; start() }
+        var keepRegisteredGroup = false
+        try {
+            val completed = kotlinx.coroutines.runInterruptible(kotlinx.coroutines.Dispatchers.IO) {
+                process.waitFor(timeoutSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
+            }
+            if (!completed) {
+                if (wrapped.processGroupLeader) ProcessRegistry.killGroup(process.pid(), process.pid(), true)
+                process.destroyForcibly()
+            }
+            val text = kotlinx.coroutines.runInterruptible(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { output.get(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault("[output collection did not finish]")
+            }
+            val hint = if (completed && process.exitValue() != 0) {
+                "\nIf sandbox permissions are the cause, request sandbox=network for networking, or sandbox=off for this exact unsandboxed command. User approval is required."
+            } else ""
+            keepRegisteredGroup = completed && wrapped.processGroupLeader && !reapDescendantsOnCompletion
+            return CommandResult((wrapped.warning ?: "") + text + hint, if (completed) process.exitValue() else -1, !completed)
+        } finally {
+            // 取消同样收割命令树，不能留下继续写盘的后台孤儿。
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO) {
+                if (!keepRegisteredGroup && wrapped.processGroupLeader && ProcessRegistry.isAlive(process.pid(), process.pid())) {
+                    ProcessRegistry.killGroup(process.pid(), process.pid(), true)
+                }
+                if (process.isAlive) {
+                    process.destroyForcibly()
+                    process.waitFor()
+                }
+                if (!keepRegisteredGroup) ProcessRegistry.remove(process.pid())
+                process.inputStream.close()
+                output.cancel(true)
+            }
+        }
     }
 
     /**
@@ -106,37 +152,78 @@ class ShellTools(
      * 进程交给 [BackgroundTaskManager] 的后台协程跟踪（waitFor + 输出读取 + 终态事件），
      * 立即返回 task ID，AI 可继续与用户对话。
      */
-    private fun startBackgroundCommand(command: String, timeoutSeconds: Int, cwd: String?): String {
+    private suspend fun startBackgroundCommand(command: String, timeoutSeconds: Int, cwd: String?, sandboxMode: String): String {
         if (command.isBlank()) return "Error: command is empty"
 
         return runCatching {
-            val wrapped = sandbox?.wrap(command)
-                ?: xyz.mederi.tools.sandbox.CommandSandbox.WrappedCommand(
-                    listOf(sandbox?.shell ?: "sh", "-c", command), null, false
+            require(timeoutSeconds > 0) { "timeout_seconds must be positive" }
+            val prepared = prepareCommand(command, cwd, sandboxMode, "bash")
+            val wrapped = prepared.wrapped
+            val workDir = prepared.workDir
+            prepared.grant?.let { executionPermissions!!.checkGrant(it) }
+
+            // R11: 后台命令在父 turn 结束后仍可能写盘——为进程生命周期持有执行租约，
+            // 归档/配额的 withManagementIntent 因此会等待后台进程真正退出后才快照/强删 checkout。
+            // 租约根取经校验的工作区 checkoutRoot（无权限上下文时回退到项目主目录）。
+            // 若工作区正处独占管理意图（如归档启动），acquire 抛 WORKSPACE_BUSY——此时不应启动
+            // 会写该目录的后台命令，错误原样上抛（runCatching 转成错误串，process 未启动）。
+            val leaseRoot = executionPermissions?.verifiedWorkspaceRootProvider?.invoke()?.checkoutRoot?.toString()
+                ?: allowedDirectories.firstOrNull()
+            val lease = leaseManager?.let { lm ->
+                leaseRoot?.let { root -> lm.acquireExecutionLease(root) }
+            }
+
+            var process: Process? = null
+            var leaseReleased = false
+            try {
+                val builder = ProcessBuilder(wrapped.argv)
+                builder.directory(workDir)
+                builder.redirectErrorStream(true)
+
+                process = builder.start()
+                ProcessRegistry.register(
+                    pid = process.pid(),
+                    pgid = if (wrapped.processGroupLeader) process.pid() else null,
+                    command = command,
+                    workDir = workDir.absolutePath
                 )
-            val workDir = cwd?.takeIf { it.isNotBlank() }?.let { java.io.File(it) } ?: java.io.File(allowedDirectories.first())
-            val builder = ProcessBuilder(wrapped.argv)
-            builder.directory(workDir)
-            builder.redirectErrorStream(true)
 
-            val process = builder.start()
-            xyz.mederi.tools.sandbox.ProcessRegistry.register(
-                pid = process.pid(),
-                pgid = if (wrapped.processGroupLeader) process.pid() else null,
-                command = command,
-                workDir = workDir.absolutePath
-            )
-
-            val taskId = backgroundTaskManager!!.trackCommand(
-                sessionId = sessionId,
-                process = process,
-                command = command,
-                workDir = workDir.absolutePath,
-                timeoutSeconds = timeoutSeconds
-            )
-            (wrapped.warning ?: "") +
-                "Background task started: $taskId\nCommand: $command\nYou will be notified with the output when it completes. You can continue working with the user."
+                val taskId = backgroundTaskManager!!.trackCommand(
+                    sessionId = sessionId,
+                    process = process,
+                    command = command,
+                    workDir = workDir.absolutePath,
+                    timeoutSeconds = timeoutSeconds
+                )
+                if (lease != null) {
+                    val hookOk = backgroundTaskManager.attachTerminalHook(taskId) { lease.close() }
+                    if (hookOk) {
+                        leaseReleased = true
+                    } else {
+                        // attach 失败是异常态（entry 应刚由 trackCommand 创建）；
+                        // 立即释放 lease，接受进程可能仍在写的极短窗口。
+                        lease.close()
+                        leaseReleased = true
+                    }
+                }
+                (wrapped.warning ?: "") +
+                    "Background task started: $taskId\nCommand: $command\nYou will be notified with the output when it completes. You can continue working with the user."
+            } catch (e: Exception) {
+                // start 之后 track/register 失败：收割已启动进程，lease 由 finally 释放。
+                process?.let { p ->
+                    p.destroyForcibly()
+                    runCatching { ProcessRegistry.remove(p.pid()) }
+                }
+                throw e
+            } finally {
+                // lease 在 attachTerminalHook 成功时由 hook 释放（leaseReleased=true）；
+                // 其他路径（start 前失败 / start 后失败 / attach 失败已立即 close）在此统一释放。
+                if (lease != null && !leaseReleased) {
+                    lease.close()
+                }
+            }
         }.getOrElse { e ->
+            if (e is kotlinx.coroutines.CancellationException) throw e
             "Error starting background command: ${e.message}"
         }
     }
@@ -151,37 +238,41 @@ class ShellTools(
         @kotlinx.serialization.SerialName("timeout_seconds")
         val timeoutSeconds: Int = 120,
         @LLMDescription("Set true for long-running commands (compilation, tests, servers). The command runs in the background; you get notified with the output when it completes and can continue working meanwhile. Default false blocks until the command finishes.")
-        val background: Boolean = false
+        val background: Boolean = false,
+        @LLMDescription("Set true for build/compile commands (./gradlew, mvn, make, cargo build, etc.). The tool holds a per-project lock so concurrent compile commands from parallel subagents queue and wait instead of colliding (one compile at a time per project). Waiting does not count against timeout_seconds. Only effective when background=false. Default false.")
+        val compilation: Boolean = false,
+        @LLMDescription("default: restricted filesystem and no command networking. network: request networking for this command, keeping filesystem restrictions. off: request unsandboxed execution for this exact command. Elevated requests require user approval unless Full Access is selected.")
+        val sandbox: String = "default",
     )
 
     inner class BashTool : SimpleTool<BashArgs>(
         argsType = typeToken<BashArgs>(),
         name = ToolName.BASH.value,
-        description = "Execute a shell command in the given working directory (empty cwd = project root) and return its stdout and stderr. Writes are sandboxed: project directories, temp dirs, and build caches only. Set background=true for long-running commands (compilation, tests, servers) — runs in background, you get notified with output when done, and can continue working meanwhile. Default background=false blocks until the command finishes."
+        description = "Execute a shell command in the given working directory (empty cwd = project root) and return its stdout and stderr. In Needs Approval mode, writes are restricted to project/temp/explicit writable roots and command networking is disabled. Use sandbox=network or sandbox=off to request a one-time permission grant. Set background=true for long-running commands (compilation, tests, servers) — runs in background, you get notified with output when done, and can continue working meanwhile. Set compilation=true for build/compile commands — concurrent compiles from parallel subagents queue per-project (one at a time) instead of colliding; waiting does not count against timeout_seconds. Default background=false blocks until the command finishes."
     ) {
         override suspend fun execute(args: BashArgs): String {
             if (args.background && backgroundTaskManager != null) {
-                return startBackgroundCommand(args.command, args.timeoutSeconds, args.cwd.takeIf { it.isNotBlank() })
+                return startBackgroundCommand(args.command, args.timeoutSeconds, args.cwd.takeIf { it.isNotBlank() }, args.sandbox)
             }
-            val result = runCommand(args.command, args.timeoutSeconds, args.cwd.takeIf { it.isNotBlank() })
-            val exitPrefix = if (result.exitCode != 0) "[exit code: ${result.exitCode}]\n" else ""
-            return exitPrefix + result.output
+            val run: suspend () -> String = {
+                val result = runCommand(args.command, args.timeoutSeconds, args.cwd.takeIf { it.isNotBlank() }, args.sandbox)
+                val exitPrefix = if (result.exitCode != 0) "[exit code: ${result.exitCode}]\n" else ""
+                exitPrefix + result.output
+            }
+            return if (args.compilation) {
+                val projectKey = File(allowedDirectories.first()).canonicalFile.absolutePath
+                CompilationCoordinator.acquire(projectKey).use { run() }
+            } else run()
         }
     }
 
     // ===== web 工具共享基础 =====
 
-    /**
-     * curl HTTP GET 抓取：-s 静默、-L 跟随重定向、--max-time 超时、-A 浏览器 UA、-- 终止选项解析。
-     *
-     * 复用 [ShellTools.runCommand]：沙箱包装、进程注册、超时处理全一致。
-     * 调用方（web_search / web_fetch）负责先校验协议白名单 + 拒绝单引号（防 shell 注入——
-     * 单引号是 shell 引用的唯一危险字符）。
-     */
-    private suspend fun curlGet(url: String, timeoutSeconds: Int): CommandResult {
-        val command = "curl -sL --max-time $timeoutSeconds -A '$BROWSER_UA' -- '$url'"
-        return runCommand(command, timeoutSeconds + 5)
-    }
+    /** 调研专用只读 HTTP：不经过 shell；超时、重定向及响应字节上限由 WebHttpReader 执行。 */
+    private suspend fun httpGet(url: String, timeoutSeconds: Int): CommandResult = try {
+        CommandResult(webReader(url, timeoutSeconds), 0)
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (failure: Exception) { CommandResult("Web request failed: ${failure.message}", -1) }
 
     /** 按 maxChars 截断，超长时追加省略提示（不丢信息：提示写明省略了多少字符）。 */
     private fun truncate(raw: String, maxChars: Int): String =
@@ -235,16 +326,15 @@ class ShellTools(
     /**
      * 只读 Bing 搜索工具（仅注册给 RESEARCHER 子代理）。
      *
-     * 底层经 curl HTTP GET 拉取 Bing 搜索结果页，正则结构化提取每条结果的
+     * 底层经 HTTP GET 拉取 Bing 搜索结果页，正则结构化提取每条结果的
      * title / URL / snippet——提取是尽力而为：提取失败（0 条结果）时兜底返回原始 HTML 截断，不丢信息。
      * 只读、无写、无通用 shell。
      * 安全约束：
      * - query 不得为空
      * - query 不得包含单引号（防 shell 注入——单引号内 shell 不展开元字符）
-     * - curl 命令用 -- 终止选项解析，URL 以单引号包裹，URL 编码后的 query 不含单引号
      * - 不传 -o（不写文件）、不传 -d/-X（不发数据、不改方法）
      *
-     * 复用 [ShellTools.curlGet] / [ShellTools.runCommand]：沙箱包装、进程注册、超时处理全一致。
+     * 复用 [ShellTools.httpGet]；独立于命令网络授权，不启动子进程。
      */
     inner class WebSearchTool : SimpleTool<WebSearchArgs>(
         argsType = typeToken<WebSearchArgs>(),
@@ -257,14 +347,12 @@ class ShellTools(
             val query = args.query.trim()
             if (query.isEmpty()) return "Error: query must not be empty."
 
-            // 安全：拒绝含单引号的 query（单引号是 shell 引用的唯一危险字符）
-            if (query.contains("'")) return "Error: query must not contain single quotes."
 
             // URL 编码 query 后拼 Bing 搜索 URL（q 参数 + count=20）
             val encoded = URLEncoder.encode(query, "UTF-8")
             val bingUrl = "https://www.bing.com/search?q=$encoded&count=20"
 
-            val result = curlGet(bingUrl, args.timeoutSeconds)
+            val result = httpGet(bingUrl, args.timeoutSeconds)
             if (result.exitCode != 0) return "[exit code: ${result.exitCode}]\n${result.output}"
             if (result.output.isBlank()) {
                 return "Error: Bing returned empty response. The search may have failed or Bing is unreachable."
@@ -290,7 +378,7 @@ class ShellTools(
 
     @Serializable
     data class WebFetchArgs(
-        @LLMDescription("URL to fetch via curl HTTP GET (http or https only). The tool fetches page content and cleans HTML (strips scripts, styles, tags) to return readable text.")
+        @LLMDescription("URL to fetch via HTTP GET (http or https only). The tool fetches page content and cleans HTML (strips scripts, styles, tags) to return readable text.")
         val url: String = "",
         @LLMDescription("Maximum characters to return; default 8000. Truncates response to fit context.")
         @kotlinx.serialization.SerialName("max_chars")
@@ -303,20 +391,19 @@ class ShellTools(
     /**
      * 只读 URL 抓取工具（仅注册给 RESEARCHER 子代理）。
      *
-     * 底层经 curl HTTP GET 拉取页面，清洗 HTML（移除 script/style/svg/noscript/head 块与自闭合标签、
+     * 底层经 HTTP GET 拉取页面，清洗 HTML（移除 script/style/svg/noscript/head 块与自闭合标签、
      * 剥离剩余标签、解码实体、压缩空白）后返回可读文本。只读、无写、无通用 shell。
      * 安全约束：
      * - URL 必须为 http/https 协议（拒绝 file://、ftp://、data: 等）
      * - URL 不得包含单引号（防 shell 注入——单引号内 shell 不展开元字符）
-     * - curl 命令用 -- 终止选项解析，URL 以单引号包裹
      * - 不传 -o（不写文件）、不传 -d/-X（不发数据、不改方法）
      *
-     * 复用 [ShellTools.curlGet] / [ShellTools.runCommand]：沙箱包装、进程注册、超时处理全一致。
+     * 复用 [ShellTools.httpGet]；独立于命令网络授权，不启动子进程。
      */
     inner class WebFetchTool : SimpleTool<WebFetchArgs>(
         argsType = typeToken<WebFetchArgs>(),
         name = ToolName.WEB_FETCH.value,
-        description = "Fetch a URL via curl HTTP GET and return cleaned text content. Strips scripts, styles, SVG, " +
+        description = "Fetch a URL via HTTP GET and return cleaned text content. Strips scripts, styles, SVG, " +
             "and HTML tags to return readable text. Read-only: no POST/PUT/DELETE, no file writes."
     ) {
         override suspend fun execute(args: WebFetchArgs): String {
@@ -329,9 +416,8 @@ class ShellTools(
             }
 
             // 安全：拒绝含单引号的 URL（单引号是 shell 引用的唯一危险字符）
-            if (url.contains("'")) return "Error: url must not contain single quotes."
 
-            val result = curlGet(url, args.timeoutSeconds)
+            val result = httpGet(url, args.timeoutSeconds)
             if (result.exitCode != 0) return "[exit code: ${result.exitCode}]\n${result.output}"
             if (result.output.isBlank()) return "Error: empty response from server."
 

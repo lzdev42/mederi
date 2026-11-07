@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -70,6 +72,8 @@ import xyz.mederi.theme.LocalMederiColors
  * @param leading 前置区自定义内容（可选）。非 null 时取代默认 [icon] 渲染，用于表达
  *   「运行中」等非静态图标状态（如旋转进度条）
  * @param summary 可选当前活动单行摘要，占剩余宽度并将箭头置于最右侧
+ * @param summaryContent 可选自定义摘要，优先于 summary（推理流式单行预览）
+ * @param labelRunning 当前标题是否显示运行中扫光（遵循可见性与减弱动效）
  * @param content 展开内容（左侧自带导轨线容器）
  */
 @Composable
@@ -84,6 +88,8 @@ fun ProcessRow(
     clickable: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
     summary: String? = null,
+    summaryContent: (@Composable () -> Unit)? = null,
+    labelRunning: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalMederiColors.current
@@ -135,15 +141,15 @@ fun ProcessRow(
                 )
             }
 
-            Text(
+            ProcessLabel(
                 text = label,
                 color = labelColor,
-                style = WorkspaceStyle.Title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = if (summary == null) Modifier.weight(1f, fill = false) else Modifier
+                running = labelRunning,
+                modifier = if (summary == null && summaryContent == null) Modifier.weight(1f, fill = false) else Modifier.widthIn(max = 200.dp)
             )
-            if (summary != null) {
+            if (summaryContent != null) {
+                Box(Modifier.weight(1f)) { summaryContent() }
+            } else if (summary != null) {
                 Crossfade(targetState = summary, animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
                     modifier = Modifier.weight(1f), label = "processActivity") { activity ->
                     Text(text = activity, color = colors.textMuted, style = WorkspaceStyle.Caption,

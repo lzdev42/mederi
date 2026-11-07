@@ -20,6 +20,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -57,6 +58,7 @@ import mederi.app.shared.generated.resources.err_rollback_failed
 import mederi.app.shared.generated.resources.err_select_model_first
 import mederi.app.shared.generated.resources.err_select_project_or_conversation
 import mederi.app.shared.generated.resources.err_send_failed
+import mederi.app.shared.generated.resources.err_execution_approval_failed
 
 import xyz.mederi.isDesktopPlatform
 import xyz.emuci.inkcompose.MermaidCacheConfig
@@ -298,6 +300,614 @@ class WorkspaceViewModel(
     /** 项目列表与选中项目（窄访问器，供文件树等派生 UI 使用；与 TerminalViewModel 同款转发） */
     val projects: StateFlow<List<Project>> = appState.projects
     val selectedProjectId: StateFlow<String?> = appState.selectedProjectId
+    internal val projectPermissionStore get() = appState.projectPermissionStore
+
+    val workspacePresenter = WorkspacePresenter()
+
+    var repositoryInfo by mutableStateOf<RepositoryInfo?>(null)
+        private set
+
+    var projectEnvironments by mutableStateOf<List<ProjectEnvironment>>(emptyList())
+        private set
+
+    fun refreshWorkspaceContext(projectId: String?) {
+        if (projectId == null) {
+            repositoryInfo = null
+            projectEnvironments = emptyList()
+            return
+        }
+        viewModelScope.launch {
+            repositoryInfo = appState.aiCore.getRepositoryInfo(projectId).getOrNull()
+            projectEnvironments = appState.aiCore.listProjectEnvironments(projectId).getOrDefault(emptyList())
+        }
+    }
+
+    fun retryWorkspaceOperation(operation: WorkspaceOperation) {
+        val convId = conversationId ?: operation.sessionId ?: return
+        viewModelScope.launch {
+            appState.aiCore.retryWorkspacePreparation(
+                sessionId = convId,
+                failedOperationId = operation.id,
+                requestId = "retry_${xyz.mederi.currentTimeMillis()}"
+            )
+        }
+    }
+
+    fun cancelWorkspaceOperation(operation: WorkspaceOperation) {
+        viewModelScope.launch {
+            appState.aiCore.cancelWorkspaceOperation(operation.id)
+        }
+    }
+
+    // ==========================================
+    // 工作区面板对话框（Handoff / 管理 / 归档列表 / 恢复）
+    // 唯一状态源 [dialogState]，Workspace.kt Route collectAsState 后按分支挂载对应面板。
+    // 所有动作都走真实 AiCore 工作区契约：预览 token、requestId 幂等、结果回显均以 core 为准。
+    // ==========================================
+    sealed interface WorkspaceDialogState {
+        data object None : WorkspaceDialogState
+
+        data class Handoff(
+            /** 预览成功才有值；预览失败时对话框以错误态打开，保持可重试。 */
+            val preview: HandoffPreview?,
+            /** R13：与源类型不同的目标类型（core 拒绝源目标同类型），预览与执行使用同一目标。 */
+            val targetKind: WorkspaceKind,
+            val stopAffected: Boolean,
+            val loading: Boolean,
+            val errorMessage: String? = null
+        ) : WorkspaceDialogState
+
+        data class Management(
+            val workspaces: List<WorkspaceInfo>,
+            val errorMessage: String? = null
+        ) : WorkspaceDialogState
+
+        data class ArchiveList(
+            val archived: List<Conversation>,
+            val errorMessage: String? = null
+        ) : WorkspaceDialogState
+
+        data class Recovery(
+            /** 预览成功才有值；预览失败时对话框以错误态打开，保持可重试。 */
+            val preview: RecoveryPreview?,
+            val operationId: String,
+            val loading: Boolean,
+            val errorMessage: String? = null
+        ) : WorkspaceDialogState
+
+        data class WorktreeSettings(
+            val rootPath: String,
+            val max: Int,
+            val autoCleanup: Boolean,
+            val version: Long = 1L,
+            val errorMessage: String? = null
+        ) : WorkspaceDialogState
+
+        data class CreateBranch(
+            val errorMessage: String? = null
+        ) : WorkspaceDialogState
+    }
+
+    private val _dialogState = MutableStateFlow<WorkspaceDialogState>(WorkspaceDialogState.None)
+    val dialogState: StateFlow<WorkspaceDialogState> = _dialogState
+
+    /**
+     * 当前对话框归属的会话（R15）：异步完成回写 [dialogState] 前必须仍等于当前会话，
+     * 防止 A 会话的预览/提交响应在用户切到 B 会话后污染 B 的面板。
+     * [attach] 切会话与 [dismissDialog] 关闭面板时清空。
+     */
+    private var dialogOwnerSessionId: String? = null
+
+    /**
+     * 面板请求代次（T12）：仅靠 [dialogOwnerSessionId] 无法防御**同会话**内的串写——
+     * 同一会话先开 recovery 预览、期间 dismiss 后又开 handoff（owner 不变），
+     * 旧 recovery 响应回来时 owner 校验仍会通过，把 A 面板的数据写进 B 面板。
+     * 每次面板请求递增 [dialogRequestGeneration] 并捕获 [DialogRequest]，
+     * 异步完成点除 owner 外还校验代次：旧代次响应（迟到预览 / 迟到错误）一律丢弃。
+     */
+    private var dialogRequestGeneration: Long = 0L
+
+    /** 面板请求票据：归属会话 + 面板类型 + 请求代次（kind = "handoff"/"management"/"archive"/"recovery"）。 */
+    private data class DialogRequest(
+        val ownerSessionId: String,
+        val projectId: String,
+        val kind: String,
+        val generation: Long
+    )
+
+    /** 当前有效面板请求（null = 无在途请求：切会话 / dismiss / 提交成功后清空）。 */
+    private var activeDialogRequest: DialogRequest? = null
+
+    /** 异步完成点守卫：票据仍是当前请求且代次未过期、归属会话未变时，旧响应才允许回写 [dialogState]。 */
+    private fun isCurrentDialogRequest(req: DialogRequest): Boolean =
+        activeDialogRequest === req &&
+            req.generation == dialogRequestGeneration &&
+            req.ownerSessionId == conversationId
+
+    /** 对话框可展示的错误文案（用户可见格式由 UI 层按资源 key 套用）。 */
+    private fun dialogErrorMessage(error: Throwable): String =
+        error.message?.takeIf { it.isNotBlank() } ?: error::class.simpleName ?: "unknown error"
+
+    /** 面板操作所属项目：已绑定会话用会话项目；未绑定用当前选中项目。 */
+    private fun workspaceProjectId(): String? =
+        conversationId?.let { id -> snapshot?.conversation?.projectId } ?: appState.selectedProjectId.value
+
+    /** 生成带前缀的唯一 requestId（core 工作区操作幂等键的组成部分）。 */
+    private fun newWorkspaceRequestId(prefix: String): String = "$prefix-${kotlin.uuid.Uuid.random()}"
+
+    /** 关闭所有工作区面板对话框。 */
+    fun dismissDialog() {
+        dialogOwnerSessionId = null
+        activeDialogRequest = null
+        _dialogState.value = WorkspaceDialogState.None
+    }
+
+    /**
+     * 打开 Handoff 迁移面板（WorkspaceSelector「迁移工作区」菜单项入口）：
+     * 先向 core 请求预览（真实 preview token / 源目标 / 受影响会话 / 冲突），
+     * 成功后把 [WorkspaceDialogState.Handoff] 写入 [dialogState] 供 UI 挂载 HandoffPanelContent。
+     */
+    fun openHandoffDialog() {
+        val sessionId = conversationId ?: return
+        // R13：目标必须与源类型不同（真实 Manager 拒绝源目标同类型）。
+        // 源 Local → 目标 MANAGED_WORKTREE；源 MANAGED_WORKTREE（或未知）→ 目标 Local。
+        val sourceKind = snapshot?.workspaceInfo?.active?.workspace?.kind
+        val targetKind = if (sourceKind == WorkspaceKind.LOCAL) {
+            WorkspaceKind.MANAGED_WORKTREE
+        } else {
+            WorkspaceKind.LOCAL
+        }
+        val req = DialogRequest(sessionId, workspaceProjectId().orEmpty(), "handoff", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        dialogOwnerSessionId = sessionId
+        viewModelScope.launch {
+            appState.aiCore.previewWorkspaceHandoff(
+                sessionId,
+                HandoffPreviewInput(targetKind = targetKind)
+            ).onSuccess { preview ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = WorkspaceDialogState.Handoff(
+                        preview = preview,
+                        targetKind = targetKind,
+                        stopAffected = false,
+                        loading = false,
+                        errorMessage = null
+                    )
+                }
+            }.onFailure { error ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = WorkspaceDialogState.Handoff(
+                        preview = null,
+                        targetKind = targetKind,
+                        stopAffected = false,
+                        loading = false,
+                        errorMessage = dialogErrorMessage(error)
+                    )
+                }
+            }
+        }
+    }
+
+    /** 切换「停止受影响任务」勾选（Handoff 面板复选框）。 */
+    fun toggleStopAffected() {
+        val state = _dialogState.value as? WorkspaceDialogState.Handoff ?: return
+        _dialogState.value = state.copy(stopAffected = !state.stopAffected)
+    }
+
+    /** 面板复选框回调直接落值（供 HandoffPanelContent 的 (Boolean)->Unit 签名使用，与 [toggleStopAffected] 同源）。 */
+    fun setStopAffectedTasks(enabled: Boolean) {
+        val state = _dialogState.value as? WorkspaceDialogState.Handoff ?: return
+        _dialogState.value = state.copy(stopAffected = enabled)
+    }
+
+    /**
+     * 提交 Handoff：携带预览返回的**同一个** preview token 与唯一 requestId 调用 core；
+     * 幂等由 core 按 requestId 去重。成功后关闭对话框；失败保留对话框（loading 复位）。
+     */
+    fun executeHandoff() {
+        val state = _dialogState.value as? WorkspaceDialogState.Handoff ?: return
+        val sessionId = conversationId ?: return
+        val preview = state.preview ?: return
+        if (state.loading) return
+        val req = DialogRequest(sessionId, workspaceProjectId().orEmpty(), "handoff", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        dialogOwnerSessionId = sessionId
+        _dialogState.value = state.copy(loading = true, errorMessage = null)
+        viewModelScope.launch {
+            appState.aiCore.handoffWorkspace(
+                sessionId,
+                HandoffInput(
+                    targetKind = state.targetKind,
+                    previewToken = preview.token,
+                    requestId = newWorkspaceRequestId("handoff"),
+                    stopAffectedSessions = state.stopAffected,
+                    taskBranchName = preview.taskBranch
+                )
+            ).onSuccess {
+                if (isCurrentDialogRequest(req)) {
+                    dialogOwnerSessionId = null
+                    activeDialogRequest = null
+                    _dialogState.value = WorkspaceDialogState.None
+                }
+            }.onFailure { error ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = state.copy(loading = false, errorMessage = dialogErrorMessage(error))
+                }
+            }
+        }
+    }
+
+    /** 打开工作副本管理面板：listWorkspaces 结果写入 [dialogState]。 */
+    fun openManagement() {
+        val projectId = workspaceProjectId() ?: return
+        val owner = conversationId
+        val req = DialogRequest(owner.orEmpty(), projectId, "management", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        dialogOwnerSessionId = owner
+        viewModelScope.launch {
+            appState.aiCore.listWorkspaces(projectId).onSuccess { workspaces ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = WorkspaceDialogState.Management(workspaces)
+                }
+            }.onFailure { error ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = WorkspaceDialogState.Management(emptyList(), dialogErrorMessage(error))
+                }
+            }
+        }
+    }
+
+    /** 归档指定工作区（requestId 幂等）；成功后刷新当前面板列表回显 core 快照。 */
+    fun archiveWorkspace(workspaceId: String) {
+        viewModelScope.launch {
+            appState.aiCore.archiveWorkspace(
+                workspaceId,
+                ArchiveWorkspaceInput(requestId = newWorkspaceRequestId("archive"))
+            ).onSuccess {
+                when {
+                    _dialogState.value is WorkspaceDialogState.Management -> openManagement()
+                    _dialogState.value is WorkspaceDialogState.ArchiveList -> refreshArchiveList()
+                }
+            }.onFailure { error ->
+                val req = activeDialogRequest
+                if (req != null && isCurrentDialogRequest(req)) {
+                    val current = _dialogState.value
+                    _dialogState.value = when (current) {
+                        is WorkspaceDialogState.Management -> current.copy(errorMessage = dialogErrorMessage(error))
+                        is WorkspaceDialogState.ArchiveList -> current.copy(errorMessage = dialogErrorMessage(error))
+                        else -> current
+                    }
+                }
+            }
+        }
+    }
+
+    /** 打开已归档会话列表。 */
+    fun openArchiveList() {
+        val projectId = workspaceProjectId() ?: return
+        val owner = conversationId
+        val req = DialogRequest(owner.orEmpty(), projectId, "archive", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        dialogOwnerSessionId = owner
+        viewModelScope.launch {
+            appState.aiCore.listArchivedConversations(projectId).onSuccess { archived ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = WorkspaceDialogState.ArchiveList(archived)
+                }
+            }.onFailure { error ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = WorkspaceDialogState.ArchiveList(emptyList(), dialogErrorMessage(error))
+                }
+            }
+        }
+    }
+
+    /** 归档列表面板「恢复」：取消会话归档并刷新列表。 */
+    fun restoreArchivedConversation(conversation: Conversation) {
+        viewModelScope.launch {
+            appState.aiCore.setConversationArchived(
+                conversation.id,
+                archived = false,
+                requestId = newWorkspaceRequestId("restore")
+            ).onSuccess {
+                refreshArchiveList()
+            }
+        }
+    }
+
+    private fun refreshArchiveList() {
+        val projectId = workspaceProjectId() ?: return
+        val owner = conversationId
+        val req = DialogRequest(owner.orEmpty(), projectId, "archive", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        dialogOwnerSessionId = owner
+        viewModelScope.launch {
+            appState.aiCore.listArchivedConversations(projectId).onSuccess { archived ->
+                if (isCurrentDialogRequest(req) && _dialogState.value is WorkspaceDialogState.ArchiveList) {
+                    _dialogState.value = WorkspaceDialogState.ArchiveList(archived)
+                }
+            }.onFailure { error ->
+                if (isCurrentDialogRequest(req) && _dialogState.value is WorkspaceDialogState.ArchiveList) {
+                    _dialogState.value = (_dialogState.value as WorkspaceDialogState.ArchiveList)
+                        .copy(errorMessage = dialogErrorMessage(error))
+                }
+            }
+        }
+    }
+
+    /** 固定 / 取消固定会话（会话列表 pin 入口）。 */
+    fun setPinned(sessionId: String, pinned: Boolean) {
+        viewModelScope.launch {
+            appState.aiCore.setConversationPinned(sessionId, pinned)
+        }
+    }
+
+    /** 打开恢复策略面板：对指定 operation 请求恢复预览（token / operationVersion / 可用快照）。 */
+    fun previewRecovery(
+        operationId: String,
+        strategy: RecoveryStrategy = RecoveryStrategy.RESTORE_TO_NEW_MANAGED
+    ) {
+        val owner = conversationId ?: return
+        val req = DialogRequest(owner, workspaceProjectId().orEmpty(), "recovery", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        dialogOwnerSessionId = owner
+        viewModelScope.launch {
+            appState.aiCore.previewWorkspaceRecovery(operationId, strategy)
+                .onSuccess { preview ->
+                    if (isCurrentDialogRequest(req)) {
+                        _dialogState.value = WorkspaceDialogState.Recovery(
+                            preview = preview,
+                            operationId = operationId,
+                            loading = false,
+                            errorMessage = null
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (isCurrentDialogRequest(req)) {
+                        _dialogState.value = WorkspaceDialogState.Recovery(
+                            preview = null,
+                            operationId = operationId,
+                            loading = false,
+                            errorMessage = dialogErrorMessage(error)
+                        )
+                    }
+                }
+        }
+    }
+
+    /** 按选定策略提交恢复（携带预览 token / operationVersion / requestId）。 */
+    fun executeRecovery(strategy: RecoveryStrategy) {
+        val state = _dialogState.value as? WorkspaceDialogState.Recovery ?: return
+        val preview = state.preview ?: return
+        if (state.loading) return
+        val sessionId = conversationId ?: return
+        val req = DialogRequest(sessionId, workspaceProjectId().orEmpty(), "recovery", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        dialogOwnerSessionId = sessionId
+        _dialogState.value = state.copy(loading = true, errorMessage = null)
+        viewModelScope.launch {
+            appState.aiCore.recoverWorkspaceOperation(
+                state.operationId,
+                WorkspaceRecoveryInput(
+                    strategy = strategy,
+                    snapshotId = preview.eligibleSnapshots.firstOrNull()?.snapshotId,
+                    keepWorkspaceId = if (strategy == RecoveryStrategy.KEEP_VERIFIED_CURRENT) {
+                        preview.sourceWorkspace?.workspace?.id
+                    } else {
+                        null
+                    },
+                    expectedOperationVersion = preview.operationVersion,
+                    previewToken = preview.token,
+                    requestId = newWorkspaceRequestId("recover")
+                )
+            ).onSuccess {
+                if (isCurrentDialogRequest(req)) {
+                    dialogOwnerSessionId = null
+                    activeDialogRequest = null
+                    _dialogState.value = WorkspaceDialogState.None
+                }
+            }.onFailure { error ->
+                if (isCurrentDialogRequest(req)) {
+                    _dialogState.value = state.copy(loading = false, errorMessage = dialogErrorMessage(error))
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // S13 环境编辑 / 宿主设置 / 建分支
+    // ==========================================
+
+    sealed interface EnvironmentEditorState {
+        data object None : EnvironmentEditorState
+        data class Editing(
+            val environmentId: String?,
+            val name: String,
+            val setupScript: String,
+            val actions: List<EnvActionRow>,
+            val version: Long,
+            val originalEnvironment: ProjectEnvironment? = null
+        ) : EnvironmentEditorState
+        data class Error(val message: String) : EnvironmentEditorState
+    }
+
+    data class EnvActionRow(val id: String, val name: String, val script: String)
+
+    private val _environmentEditorState = MutableStateFlow<EnvironmentEditorState>(EnvironmentEditorState.None)
+    val environmentEditorState: StateFlow<EnvironmentEditorState> = _environmentEditorState
+
+    fun openEnvironmentEditor() {
+        val workspaceId = snapshot?.workspaceInfo?.active?.workspace?.id ?: return
+        val projectId = workspaceProjectId() ?: return
+        val currentConvId = conversationId ?: return
+        val req = DialogRequest(currentConvId, projectId, "environment", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        viewModelScope.launch {
+            val envs = appState.aiCore.listProjectEnvironments(projectId, workspaceId).getOrDefault(emptyList())
+            val targetEnvId = snapshot?.workspaceInfo?.active?.workspace?.pendingSelection?.environmentId
+            val env = if (targetEnvId != null) envs.find { it.id == targetEnvId } ?: envs.firstOrNull() else envs.firstOrNull()
+            if (!isCurrentDialogRequest(req)) return@launch
+            _environmentEditorState.value = if (env != null) {
+                EnvironmentEditorState.Editing(
+                    environmentId = env.id,
+                    name = env.name,
+                    setupScript = env.setup?.default.orEmpty(),
+                    actions = env.actions.map { EnvActionRow(it.id, it.name, it.script.default.orEmpty()) },
+                    version = env.version,
+                    originalEnvironment = env
+                )
+            } else {
+                EnvironmentEditorState.Editing(
+                    environmentId = null,
+                    name = "",
+                    setupScript = "",
+                    actions = emptyList(),
+                    version = 0L,
+                    originalEnvironment = null
+                )
+            }
+        }
+    }
+
+    fun saveEnvironment(name: String, setupScript: String, actions: List<EnvActionRow>, expectedVersion: Long) {
+        val state = _environmentEditorState.value as? EnvironmentEditorState.Editing ?: return
+        val workspaceId = snapshot?.workspaceInfo?.active?.workspace?.id ?: return
+        val projectId = workspaceProjectId() ?: return
+        val currentConvId = conversationId ?: return
+        val req = DialogRequest(currentConvId, projectId, "environment", ++dialogRequestGeneration)
+        activeDialogRequest = req
+        viewModelScope.launch {
+            val envId = state.environmentId ?: "env_${kotlin.uuid.Uuid.random()}"
+            val orig = state.originalEnvironment
+            val updatedSetup = if (setupScript.isNotBlank()) {
+                orig?.setup?.copy(default = setupScript) ?: PlatformScript(default = setupScript)
+            } else null
+
+            val updatedActions = actions.map { row ->
+                val origAction = orig?.actions?.find { it.id == row.id }
+                if (origAction != null) {
+                    origAction.copy(name = row.name, script = origAction.script.copy(default = row.script))
+                } else {
+                    EnvironmentAction(id = row.id, name = row.name, script = PlatformScript(default = row.script))
+                }
+            }
+
+            val env = orig?.copy(
+                id = envId,
+                name = name,
+                version = expectedVersion,
+                setup = updatedSetup,
+                actions = updatedActions
+            ) ?: ProjectEnvironment(
+                id = envId,
+                name = name,
+                version = expectedVersion,
+                setup = updatedSetup,
+                actions = updatedActions
+            )
+
+            appState.aiCore.saveProjectEnvironment(projectId, env, expectedVersion, workspaceId)
+                .onSuccess { saved ->
+                    if (!isCurrentDialogRequest(req)) return@launch
+                    _environmentEditorState.value = EnvironmentEditorState.Editing(
+                        environmentId = saved.id,
+                        name = saved.name,
+                        setupScript = saved.setup?.default.orEmpty(),
+                        actions = saved.actions.map { EnvActionRow(it.id, it.name, it.script.default.orEmpty()) },
+                        version = saved.version,
+                        originalEnvironment = saved
+                    )
+                }
+                .onFailure { e ->
+                    if (!isCurrentDialogRequest(req)) return@launch
+                    _environmentEditorState.value = EnvironmentEditorState.Error(e.message ?: "Save failed")
+                }
+        }
+    }
+
+    fun runEnvironmentAction(environmentId: String, actionId: String, version: Long) {
+        val currentConvId = conversationId ?: return
+        val workspaceId = snapshot?.takeIf { it.conversation.id == currentConvId }
+            ?.workspaceInfo?.active?.workspace?.id ?: return
+        val request = WorkspaceActionInput(
+            environmentId = environmentId,
+            actionId = actionId,
+            environmentVersion = version,
+            requestId = newWorkspaceRequestId("action"),
+            conversationId = currentConvId
+        )
+        val dialogRequest = activeDialogRequest
+        viewModelScope.launch {
+            appState.aiCore.runWorkspaceAction(workspaceId, request).onFailure { e ->
+                if (dialogRequest != null && isCurrentDialogRequest(dialogRequest)) {
+                    _environmentEditorState.value = EnvironmentEditorState.Error(e.message ?: "Action failed")
+                }
+                DebugLog.error("WorkspaceVM", "runEnvironmentAction failed: ${e.message}", e)
+            }
+        }
+    }
+
+    fun updateWorktreeSettings(rootPath: String, max: Int, autoCleanup: Boolean) {
+        val curVersion = (_dialogState.value as? WorkspaceDialogState.WorktreeSettings)?.version ?: 1L
+        viewModelScope.launch {
+            appState.aiCore.updateWorktreeSettings(
+                WorktreeSettings(rootPath = rootPath, maxManagedWorktrees = max, automaticCleanup = autoCleanup, version = curVersion)
+            ).onSuccess {
+                _dialogState.value = WorkspaceDialogState.None
+            }.onFailure { e ->
+                val current = _dialogState.value as? WorkspaceDialogState.WorktreeSettings
+                if (current != null) {
+                    _dialogState.value = current.copy(errorMessage = e.message)
+                }
+            }
+        }
+    }
+
+    fun createWorkspaceBranch(name: String, expectedGeneration: Long) {
+        val active = snapshot?.workspaceInfo?.active ?: return
+        val ws = active.workspace
+        val headOid = active.headOid ?: return
+        viewModelScope.launch {
+            appState.aiCore.createWorkspaceBranch(
+                ws.id,
+                CreateWorkspaceBranchInput(name = name, expectedHead = headOid, expectedGeneration = expectedGeneration)
+            ).onSuccess {
+                _dialogState.value = WorkspaceDialogState.None
+            }.onFailure { e ->
+                _dialogState.value = WorkspaceDialogState.CreateBranch(errorMessage = e.message)
+            }
+        }
+    }
+
+    fun openWorktreeSettings() {
+        val owner = conversationId
+        viewModelScope.launch {
+            val settings = appState.aiCore.getWorktreeSettings().getOrNull()
+            if (owner == conversationId) {
+                _dialogState.value = WorkspaceDialogState.WorktreeSettings(
+                    rootPath = settings?.rootPath.orEmpty(),
+                    max = settings?.maxManagedWorktrees ?: 15,
+                    autoCleanup = settings?.automaticCleanup ?: true,
+                    version = settings?.version ?: 1L
+                )
+            }
+        }
+    }
+
+    fun openCreateBranchDialog() {
+        _dialogState.value = WorkspaceDialogState.CreateBranch()
+    }
+
+    fun dismissEnvironmentEditor() {
+        activeDialogRequest = null
+        _environmentEditorState.value = EnvironmentEditorState.None
+    }
+
+    /** 当前输入所属项目；已有会话以自己的项目为准，不能读另一个项目的权限。 */
+    internal val executionProjectId: String?
+        get() = resolvePermissionProjectId(conversationId, conversationState?.conversation,
+            appState.projects.value, appState.selectedProjectId.value)
 
     init {
         // UI 层能力（仅桌面端）：动态监听当前选中项目，将 Mermaid 磁盘缓存目录重定向到 core 暴露的项目工作目录。
@@ -322,6 +932,12 @@ class WorkspaceViewModel(
         }
         // 程序关闭时同步保存当前会话 compose state（AppState.flushAll 先跑全部 flush 回调再落偏好）
         appState.registerFlushCallback { flushComposeState() }
+
+        viewModelScope.launch {
+            appState.selectedProjectId.collect { pid ->
+                refreshWorkspaceContext(pid)
+            }
+        }
     }
 
 
@@ -420,6 +1036,33 @@ class WorkspaceViewModel(
      * 所以审批卡片只在 APPROVAL 模式的会话里渲染。
      */
     val pendingPlanApproval: PlanApprovalRequest? get() = snapshot?.pendingPlanApproval
+
+    /** 提交状态按原会话和请求标识隔离，切换会话不会把旧结果写进当前会话。 */
+    private data class ExecutionApprovalSubmission(val submitting: Boolean, val error: UiMessage? = null)
+    private val executionApprovalSubmissions = mutableStateMapOf<Pair<String, String>, ExecutionApprovalSubmission>()
+
+    fun isExecutionApprovalSubmitting(request: ExecutionApprovalRequest): Boolean =
+        executionApprovalSubmissions[request.conversationId to request.id]?.submitting == true
+
+    fun executionApprovalError(request: ExecutionApprovalRequest): UiMessage? =
+        executionApprovalSubmissions[request.conversationId to request.id]?.error
+
+    fun resolveExecutionApproval(request: ExecutionApprovalRequest, approved: Boolean) {
+        val key = request.conversationId to request.id
+        if (executionApprovalSubmissions[key]?.submitting == true) return
+        executionApprovalSubmissions[key] = ExecutionApprovalSubmission(submitting = true)
+        viewModelScope.launch {
+            try {
+                appState.aiCore.resolveExecutionApproval(request.conversationId, request.id, approved).getOrThrow()
+                // API 成功已表示请求被消费；等待 core 事件或快照移除卡片，不开放重复批准。
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                executionApprovalSubmissions[key] = ExecutionApprovalSubmission(submitting = false,
+                    error = UiMessage(Res.string.err_execution_approval_failed, listOf(failure.message.orEmpty())))
+            }
+        }
+    }
 
     /**
      * 回复计划审批；审批卡片按钮的 onClick 调这个。
@@ -629,13 +1272,34 @@ class WorkspaceViewModel(
         openDocument(DocumentTarget.Report("report:$sessionId:${item.key}", title, request))
     }
 
+    suspend fun recordPlanManualAcceptance(
+        planId: String,
+        input: xyz.mederi.core.contract.models.ManualPlanAcceptanceInput
+    ): Result<Unit> {
+        val sessionId = conversationId?.takeIf { planOverviewList.any { plan -> plan.id == planId } }
+            ?: return Result.failure(IllegalStateException("Plan is no longer in the selected session."))
+        return appState.aiCore.recordPlanManualAcceptance(sessionId, planId, input)
+    }
+
+    fun openPlanAcceptanceReport(planId: String, title: String) {
+        val sessionId = conversationId ?: return
+        val key = ReportKey(sessionId, "plan-acceptance:$planId")
+        val request = ReportRequest(key, path = null, summary = "", planId = planId)
+        openReportInExtension("report:$sessionId:${key.eventId}", title, request, force = true)
+    }
+
     private fun openReportInExtension(id: String, title: String, request: ReportRequest, force: Boolean = false) {
         beginReaderAction(cancelReport = false)
         val provider = appState.fileTreeProvider
-        val read: (suspend () -> Result<String?>)? = provider?.let { source ->
-            { request.path?.takeIf { it.isNotBlank() }?.let { source.readTextResult(it) } ?: Result.success(null) }
+        val core = appState.aiCore
+        val planId = request.planId
+        val path = request.path?.takeIf { it.isNotBlank() }
+        val read: (suspend () -> Result<String?>)? = when {
+            planId != null -> { { core.getPlanAcceptanceReport(request.key.sessionId, planId) } }
+            provider != null && path != null -> { { provider.readTextResult(path) } }
+            else -> null
         }
-        reportLoader.select(request, provider, read, force)
+        reportLoader.select(request, if (planId != null) core else provider, read, force)
         val updated = ArtifactItem.Report(id, title, request)
         updateReader { it.open(updated) }
         openDockPanel(RightDockPanel.ARTIFACTS)
@@ -877,17 +1541,9 @@ class WorkspaceViewModel(
         }
     }
 
-    /**
-     * 计划全文打开路由（平台分流）：桌面端（有本地文件树 provider 且 planPath 在盘上）
-     * 走 [openFile]（md → INTERNAL_TEXT → ARTIFACTS 阅读器）；遥控端/wasm 文件在 server 机器上，
-     * 盲走 openFile 只会弹无用的「打开所在目录」，故保留 [openPlanFile] 走内存 planContent 兜底。
-     */
+    /** 优先阅读 Core 投影的审批内容。旧快照没有内容时才按文件路径读取。 */
     fun openPlanItem(item: PlanOverviewItem) {
-        if (item.planPath.isNotBlank() && appState.fileTreeProvider != null) {
-            openDocument(DocumentTarget.Path(item.planPath))
-        } else {
-            openPlanFile(item)
-        }
+        openPlanFile(item)
     }
 
     /** 用户确认：执行打开 / 揭示，并清态。 */
@@ -1038,6 +1694,9 @@ class WorkspaceViewModel(
                             spec = it.spec,
                             planDetail = it.planDetail
                         )
+                    },
+                    manualCaseIds = req.subtasks.flatMap { task ->
+                        task.acceptanceCases.filter { it.manual }.map { it.id }
                     }
                 )
             }
@@ -1066,6 +1725,10 @@ class WorkspaceViewModel(
     /** 打开设置对话框（一次性导航命令，UI 收集后置 isSettingsVisible = true） */
     fun openSettings() {
         _effects.trySend(UiEffect.OpenSettings)
+    }
+
+    fun openProjectSettings(projectId: String) {
+        _effects.trySend(UiEffect.OpenProjectSettings(projectId))
     }
 
     /** 打开项目选择菜单（一次性命令，Route消费后置项目菜单展开，叶子只接收受控状态） */
@@ -1159,6 +1822,10 @@ class WorkspaceViewModel(
     /** 未绑定会话（conversationId == null）时的草稿文本，切走再切回新会话时恢复 */
     private var unattachedDraft: String = ""
 
+    /** 尚无会话 ID 的子代理设置只留在草稿中，首次发送创建会话后再落库。 */
+    var draftSubagentSettings by mutableStateOf(xyz.mederi.ui.settings.DraftSubagentSettings())
+        private set
+
     // 这里只合并创建会话的在途传输，不缓存/调度业务消息；消息仍立即交给 Core。
     private data class ConversationCreation(
         val projectId: String,
@@ -1166,6 +1833,7 @@ class WorkspaceViewModel(
         val result: Deferred<Result<Conversation>>,
     )
     private var conversationCreation: ConversationCreation? = null
+
     private var inputContextVersion = 0L
     private var inputProjectId: String? = appState.selectedProjectId.value
     private var creationDraftTarget: String? = null
@@ -1664,7 +2332,13 @@ class WorkspaceViewModel(
      * 此处保留同名成员薄转发，供既有调用点——chatItems 派生缓存与测试——使用）。
      */
     internal fun computeChatItems(msgs: List<ChatMessage>): List<ChatListItem> =
-        computeChatItems(msgs, isWorking = isWorking, snapshot = snapshot)
+        computeChatItems(
+            msgs,
+            isWorking = isWorking,
+            snapshot = snapshot,
+            isSending = turnStatus == TurnStatus.Sending,
+            pendingStartedAt = conversationId?.let { sessionCache.pendingUserMessages[it]?.firstOrNull()?.createdAt },
+        )
 
     /** 工具目标探测（实现已抽至 core/ui/chat/ToolTargetResolver.kt 顶层 probeToolTarget，此处薄转发）。 */
     internal fun probeToolTarget(name: String, input: Map<String, String>): String? =
@@ -1755,6 +2429,11 @@ class WorkspaceViewModel(
             beginReaderAction()
             inputContextVersion++
             if (creationDraftTarget != id) creationDraftTarget = null
+            // R15：切会话立即失效旧对话框归属并关闭面板，防止旧会话的异步预览/提交响应写入新会话。
+            dialogOwnerSessionId = null
+            // T12：切会话同时作废在途面板请求（代次不再匹配），旧会话的迟到响应一律丢弃。
+            activeDialogRequest = null
+            _dialogState.value = WorkspaceDialogState.None
         }
         draftDebounceJob?.cancel()
         resetQuestionState()
@@ -1834,6 +2513,9 @@ class WorkspaceViewModel(
      * 将新快照写入缓存，若该会话是当前渲染会话则同步到 UI 状态（attach/后台观察流共用）。
      */
     private fun applySnapshot(id: String, snap: ConversationState) {
+        val liveExecutionRequests = snap.pendingExecutionApprovals.mapTo(mutableSetOf()) { it.id }
+        executionApprovalSubmissions.keys.filter { it.first == id && it.second !in liveExecutionRequests }
+            .forEach { executionApprovalSubmissions.remove(it) }
         DebugLog.debug("UI", "snapshot received: status=${snap.conversation.status}, messages=${snap.messages.size}, subagents=${snap.subagents.size}")
         if (conversationId != id && snap.conversation.status == ConversationStatus.Error) {
             DebugLog.event(
@@ -1951,6 +2633,8 @@ class WorkspaceViewModel(
     }
 
     fun selectProject(id: String?) {
+        workspacePresenter.resetDraft()
+        refreshWorkspaceContext(id)
         appState.selectProject(id)
     }
 
@@ -2027,6 +2711,8 @@ class WorkspaceViewModel(
         }
         val originalContextVersion = inputContextVersion
         val originalSettings = buildComposeStateInput().copy(draftText = "")
+        val originalDraftSubagents = draftSubagentSettings
+        val draftSubagents = originalDraftSubagents.snapshot()
         val originalInput = UnacceptedInput(trimmed, pastedAttachments, imageAttachments)
 
         // 乐观更新：立刻在 UI 显示用户消息（按会话归档，切会话不丢）
@@ -2095,11 +2781,18 @@ class WorkspaceViewModel(
             val pid = projectId ?: return
             conversationCreation?.takeIf { it.projectId == pid && it.contextVersion == originalContextVersion }
                 ?: ConversationCreation(pid, originalContextVersion, viewModelScope.async(start = CoroutineStart.LAZY) {
-                    val created = appState.aiCore.createConversation(pid, agent)
+                    val input = xyz.mederi.core.contract.dto.CreateConversationInput(
+                        projectId = pid,
+                        agent = agent,
+                        workspaceSelection = workspacePresenter.draftSelection
+                    )
+                    val created = appState.aiCore.createConversation(input)
                     if (created.isSuccess) {
                         val conv = created.getOrThrow()
                         val configured = appState.aiCore.updateConversationSettings(conv.id, originalSettings)
                         if (configured.isFailure) return@async Result.failure(configured.exceptionOrNull()!!)
+                        val subagentsConfigured = draftSubagents.persist(appState.aiCore, conv.id)
+                        if (subagentsConfigured.isFailure) return@async Result.failure(subagentsConfigured.exceptionOrNull()!!)
                     }
                     created
                 }).also { conversationCreation = it }
@@ -2129,6 +2822,9 @@ class WorkspaceViewModel(
                     return@launch
                 }
                 val conv = created.getOrThrow()
+                if (draftSubagentSettings === originalDraftSubagents) {
+                    draftSubagentSettings = xyz.mederi.ui.settings.DraftSubagentSettings()
+                }
                 sessionCache.removePendingUserMessage(pendingKey, messageId)
                 sessionCache.addPendingUserMessage(conv.id, optMsg.copy(conversationId = conv.id))
                 if (conversationId == null && inputContextVersion == originalContextVersion &&

@@ -28,6 +28,8 @@ class SseIdleTimeoutTest {
         assertEquals("PREMATURE_CLOSE", record.toPayload()["failureMode"])
         assertEquals("SseIdleTimeout", record.toPayload()["networkErrorType"])
         assertTrue(record.fullDiagnostic.contains("SseIdleTimeout"))
+        assertTrue(record.recoverySuggestion.orEmpty().contains("Mederi 因 SSE 空闲"))
+        assertTrue(record.recoverySuggestion.orEmpty().contains("Continue"))
     }
 
     @Test

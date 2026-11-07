@@ -29,8 +29,8 @@ class ReportReaderDeliveryTest {
     private val request = ReportRequest(ReportKey("session-a", "event-a"), "/report/fixture.md", "  Summary fixture  \n\nOriginal final line\n")
     private val title = "Report reader fixture"
     @Composable
-    private fun Host(content: @Composable () -> Unit) {
-        Box(Modifier.width(760.dp).height(680.dp).background(LocalMederiColors.current.surfaceWorkspace)
+    private fun Host(narrow: Boolean = false, content: @Composable () -> Unit) {
+        Box(Modifier.width(if (narrow) 390.dp else 760.dp).height(680.dp).background(LocalMederiColors.current.surfaceWorkspace)
             .testTag("reportReaderPreview")) { content() }
     }
 
@@ -144,20 +144,59 @@ class ReportReaderDeliveryTest {
     @Test
     fun renderActualReportContentInBothThemes() = runComposeUiTest {
         val mode = mutableStateOf(AppThemeMode.DARK)
-        val full = "# Report fixture\n\nThis is the full report loaded from its original source.\n\n- First result\n- Second result\n"
+        val narrow = mutableStateOf(false)
+        val title = "验收报告预览"
+        val full = """
+            # 验收证据报告 · 消息去重
+
+            计划版本 `plan_42` · 桌面与 Server 共享同一个写入入口。
+
+            ## 任务 1 · 重复提交只入库一次
+
+            复现时同一条消息出现了两条记录。修复后，用原输入重新跑了一次。
+
+            ### V-05 · 相同 ID 的持久化记录数
+
+            - **预期值**　`1` 条
+            - **实测值**　`1` 条
+            - **判定**　**PASS** · 查询结果等于批准的预期值。
+            - **证据**　第 2 次运行 [^run-v05]
+
+            - **前置状态与输入**　空库，连续提交两次 `messageId=m-001`。
+            - **观察位置**　按会话 ID 和消息 ID 查询持久化记录。
+
+            ### 取证与运行记录
+
+            第 1 次运行查到 `2` 条记录。修复写入逻辑后，使用同一用例重试。
+
+            [^run-v05]: 第 2 次运行 · 退出码 0
+
+                ```json
+                {"V-05": 1}
+                ```
+        """.trimIndent()
         setContent { AppTheme(mode.value, reducedMotion = true) {
-            Host { ReportReaderContent(ReportLoadState.Content(full), request, title, {}, LocalMederiColors.current) }
+            Host(narrow.value) { ReportReaderContent(ReportLoadState.Content(full), request, title, {}, LocalMederiColors.current) }
         } }
         onNodeWithText(title).assertIsDisplayed()
+        waitUntilAtLeastOneExists(hasText("相同 ID 的持久化记录数", substring = true))
         System.getenv("MEDERI_UI_PREVIEW_DIR")?.let { directory ->
             File(directory).mkdirs()
             ImageIO.write(onNodeWithTag("reportReaderPreview").captureToImage().toAwtImage(), "png", File(directory, "report-reader-dark.png"))
         }
+        onNodeWithText("相同 ID 的持久化记录数", substring = true).assertExists()
+        onNodeWithText("查询结果等于批准的预期值", substring = true).assertExists()
         runOnIdle { mode.value = AppThemeMode.LIGHT }
         onNodeWithText(title).assertIsDisplayed()
+        waitUntilAtLeastOneExists(hasText("相同 ID 的持久化记录数", substring = true))
         System.getenv("MEDERI_UI_PREVIEW_DIR")?.let { directory ->
             File(directory).mkdirs()
             ImageIO.write(onNodeWithTag("reportReaderPreview").captureToImage().toAwtImage(), "png", File(directory, "report-reader-light.png"))
+        }
+        runOnIdle { narrow.value = true }
+        onNodeWithText("相同 ID 的持久化记录数", substring = true).assertExists()
+        System.getenv("MEDERI_UI_PREVIEW_DIR")?.let { directory ->
+            ImageIO.write(onNodeWithTag("reportReaderPreview").captureToImage().toAwtImage(), "png", File(directory, "report-reader-narrow.png"))
         }
     }
 }

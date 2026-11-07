@@ -5,6 +5,19 @@ Windows 使用 Git Bash（不是 WSL；WSL 会构建 Linux 包）。构建依赖
 Linux/Windows 必须配置 `JAVA_HOME`；macOS 也可自动发现 `~/Library/Java/JavaVirtualMachines/jbrsdk_jcef*`。
 首次构建还需要 Gradle、Kotlin/Wasm 工具链及项目依赖可下载。
 
+## GitHub Actions 测试打包
+
+任意分支 push 后，`Test Release Packaging` 调用 `build_release.sh --skip-sign` 构建 macOS arm64、macOS x64、
+Linux x64 和 Windows x64。也可在 Actions 手动触发。每组的 Desktop 和两种 Server 包仅上传到该次运行的
+Artifacts，保留 7 天。macOS 的 `.app` 先封装成 tar.gz，保留可执行权限和符号链接。
+
+两组 macOS 构建都使用 ARM64 的 `macos-26` runner。x64 组用 Rosetta 运行
+`arch -x86_64 /bin/bash ./build_release.sh --skip-sign`，并使用 x64 版 JBR 25 SDK with JCEF。
+workflow 会校验 Desktop 启动器及 Desktop、Server 完整版内置 JVM 的架构，再上传产物。
+JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自动提供的 token，无需手工配置。
+
+## 本地打包
+
 ```bash
 ./build_release.sh
 ./build_release.sh --no-clean --skip-sign --output ./release

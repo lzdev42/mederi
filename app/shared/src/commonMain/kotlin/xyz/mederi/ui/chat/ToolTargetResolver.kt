@@ -65,7 +65,7 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
             val display = toDisplayPath(firstFileValue, baseDir)
             val pathDisplay = if (display == "." || display.isBlank()) "directory" else display
             if (lowerName.contains("read") || lowerName.contains("view")) {
-                val lineSuffix = extractReadLineRangeSuffix(input)
+                val lineSuffix = extractReadLineRangeSuffix(input, oneBasedOffset = lowerName == "read_file")
                 if (lineSuffix != null) "$pathDisplay$lineSuffix" else pathDisplay
             } else {
                 pathDisplay
@@ -89,7 +89,7 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
     }
 }
 
-private fun extractReadLineRangeSuffix(input: Map<String, String>): String? {
+private fun extractReadLineRangeSuffix(input: Map<String, String>, oneBasedOffset: Boolean): String? {
     // 1. 显式 1-based 行号键（部分工具 / MCP）
     val startLine = (input["startLine"] ?: input["start_line"] ?: input["StartLine"])?.toIntOrNull()
     val endLine = (input["endLine"] ?: input["end_line"] ?: input["EndLine"])?.toIntOrNull()
@@ -97,16 +97,16 @@ private fun extractReadLineRangeSuffix(input: Map<String, String>): String? {
         return if (endLine != null && endLine >= startLine) "#L$startLine-$endLine" else "#L$startLine"
     }
 
-    // 2. read_file 标准参数：offset（0-based）与 max_lines（行数）
+    // 2. read_file 的 offset 已是 1-based；其他兼容工具沿用原先的 0-based 展示约定。
     val offset = input["offset"]?.toIntOrNull()
     val maxLines = (input["max_lines"] ?: input["maxLines"] ?: input["limit"])?.toIntOrNull()
 
     // 只有指定了 offset > 0 或限制了行数（< 2000 默认大值）才显示行号后缀；全量读文件不加后缀
     if (offset != null || (maxLines != null && maxLines in 1..1999)) {
-        val off = (offset ?: 0).coerceAtLeast(0)
-        val start1Based = off + 1
+        val start1Based = if (oneBasedOffset) (offset ?: 1).coerceAtLeast(1)
+            else (offset ?: 0).coerceAtLeast(0) + 1
         return if (maxLines != null && maxLines > 0) {
-            val end1Based = off + maxLines
+            val end1Based = start1Based + maxLines - 1
             "#L$start1Based-$end1Based"
         } else {
             "#L$start1Based+"

@@ -3,9 +3,9 @@ package xyz.mederi.core.contract.models
 import kotlinx.serialization.Serializable
 
 /**
- * 模型来源（元数据所有权标记，与 core 的 ModelOrigin 枚举一一对应）：
- * - FETCHED：/models 端点拉取 + 模型目录合并产生。元数据权威 = 端点/目录，UI 元数据只读。
- * - MANUAL：用户手动添加。元数据权威 = 用户，UI 元数据可编辑。
+ * 模型来源（与 core 的 ModelOrigin 枚举一一对应，不限制设置页编辑）：
+ * - FETCHED：/models 端点拉取，初始元数据可由模型目录补齐。
+ * - MANUAL：用户手动添加；两种来源均可编辑现有元数据。
  */
 enum class ModelOrigin {
     FETCHED,
@@ -17,7 +17,7 @@ enum class ModelOrigin {
  *
  * @param id core 内部生成的模型配置唯一 ID（查询配置用）。
  * @param providerModelId 发送网络请求时使用的供应商模型 ID。
- * @param origin 元数据所有权（见 [ModelOrigin]），决定设置页编辑对话框元数据是否只读。
+ * @param origin 模型来源（见 [ModelOrigin]）；两种来源均可在设置页编辑。
  * @param contextWindow 模型上下文窗口大小（token 数），null 表示未知。
  * @param maxTokens 最大输出 token 数，null 表示未设置（用模型默认）。
  * @param reasoningLevels 该模型支持的推理级别列表（从供应商 ReasoningParameter 算），
@@ -43,6 +43,7 @@ data class ModelOption(
     val outputPricePerMillion: Double? = null,
     /** 是否在聊天模型选择器中显示（用户可开关） */
     val isEnabled: Boolean = true,
+    val optimizeForRequestCount: Boolean = false,
 )
 
 /**

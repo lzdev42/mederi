@@ -42,7 +42,12 @@ data class SubagentState(
     /** 与主对话相同的响应消息；原始事件由同一个 ConversationStateReducer 聚合。 */
     val messages: List<ChatMessage> = emptyList(),
     /** 已聚合的有序进度事件数，用于快照水合后丢弃SSE重放帧。 */
-    val progressSequence: Long = 0L
+    val progressSequence: Long = 0L,
+    /** 与主对话相同的 Core 错误简报、诊断 ID 和完整 Bug 反馈内容。 */
+    val errorMessage: String? = null,
+    val errorId: String? = null,
+    val errorDiagnostic: String? = null,
+    val statusHint: String? = null,
 )
 
 /**
@@ -106,7 +111,9 @@ data class SubagentConfigItem(
      * "__rotate__"=轮询（core `API_KEY_ROTATION_ID` 常量）。
      */
     val apiKeyId: String? = null,
-    val isInheriting: Boolean = true
+    val isInheriting: Boolean = true,
+    /** 会话未保存该角色覆盖，当前配置来自系统默认值。 */
+    val usesDefault: Boolean = true
 )
 
 /**
@@ -131,7 +138,8 @@ data class UpdateSubagentConfigInput(
  */
 @Serializable
 data class SubagentGlobalSettings(
-    val maxConcurrentAgents: Int = 2
+    val maxConcurrentAgents: Int = 2,
+    val usesDefault: Boolean = true
 )
 
 /**

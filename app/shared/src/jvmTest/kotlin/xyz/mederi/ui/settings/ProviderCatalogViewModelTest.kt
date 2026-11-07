@@ -115,4 +115,32 @@ class ProviderCatalogViewModelTest {
             assertNull(vm.uiState.errorMessage)
         } finally { store.clear(); scope.cancel(); results.close() }
     }
+    @Test
+    fun fetchedModelEditsSubmitAllMetadataToCoreWithExactIds() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val store = ViewModelStore()
+        val calls = Channel<List<Any?>>(Channel.UNLIMITED)
+        try {
+            val backend = MockAiCore().also { it.initialize() }
+            val api = object : AiCore by backend {
+                override suspend fun updateProviderModel(
+                    providerId: String, modelId: String, name: String?, supportsThinking: Boolean?,
+                    supportsImages: Boolean?, contextWindow: Int?, maxTokens: Int?,
+                    reasoningLevels: List<String>?, isEnabled: Boolean?, optimizeForRequestCount: Boolean?
+                ): Result<Unit> {
+                    calls.send(listOf(providerId, modelId, name, supportsThinking, supportsImages,
+                        contextWindow, maxTokens, reasoningLevels, isEnabled, optimizeForRequestCount))
+                    return Result.success(Unit)
+                }
+            }
+            val vm = ProviderSettingsViewModel(AppState(api, InMemoryPreferencesStore(), scope))
+            store.put("fixture", vm)
+            vm.updateModelConfig("fetched-provider", "fetched-model", "  Local name  ",
+                supportsImages = true, supportsThinking = true, contextWindow = 262144,
+                maxTokens = 32768, reasoningLevels = listOf("HIGH"), optimizeForRequestCount = true)
+            assertEquals(listOf("fetched-provider", "fetched-model", "Local name", true, true,
+                262144, 32768, listOf("HIGH"), null, true), withTimeout(5000) { calls.receive() })
+        } finally { store.clear(); scope.cancel(); calls.close() }
+    }
+
 }

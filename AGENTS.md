@@ -164,13 +164,15 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 
 ## 5.5 执行沙盒与审批模式
 
-**安全模型 = 分诊判断 + 沙箱**（无逐操作询问）：主代理按 §5.6 分诊流程自主判断执行路径，
-沙盒（路径/命令强制）兜底。不变量 = 文件工具只能写项目目录、bash 走 OS 级写沙箱（macOS Seatbelt / Linux bwrap 检测 / Windows 降级警告）、读全盘放行。全局白名单在设置页配置。
+**安全模型 = 分诊判断 + 项目权限策略 + 沙箱**：主代理按 §5.6 判断执行路径；项目级两档为「需要批准」（默认）与「完全访问」，不做 AI 自动审查。配置由 core `SandboxManager` 经 `SettingsStore`（`sandbox.projects.{projectId}.settings`）管理，UI/desktop/server 统一走 AiCore API，不能保存第二份权限偏好。
 
 **不变量（代码强制，全平台）**：
-- 文件工具（write_file/edit_file/apply_patch）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
+- 需要批准模式：文件写入只自动放行项目 directories + 系统实际临时目录 + 显式白名单，保护元数据/宿主运行时配置目录仍只读；越界写由宿主在落盘前申请这一条操作的批准。项目 `.mederi/` 中计划产物保持可写，除显式项目黑名单外可读全盘。
+- 项目配置包含额外可写路径、禁止读写路径、允许/拒绝命令前缀；拒绝路径与拒绝命令优先于完全访问及单次批准。旧全局配置不自动迁移；各项目配置版本、待批失效互相隔离。命令规则为确定性静态 argv 前缀，不用模型判定；有拒绝规则时复杂 shell 失败即停。
 - **同文件并发写硬拒绝**（`FileWriteRegistry` try-lock，跨 turn/跨子代理/跨 session 生效）
-- bash：macOS Seatbelt / Linux bwrap（只检测不代装；完整配置不可用时阻止命令，不回退裸跑）/ Windows 降级警告
+- bash：macOS Seatbelt / Linux bwrap + seccomp，默认禁止命令网络；前台、后台、验证命令走同一执行授权入口。`sandbox=network` 仅申请这条命令联网，`sandbox=off` 申请这条命令解除沙盒；后端不可用时受限命令失败即停，不回退裸跑。Windows 后端尚未实现，受限命令同样阻止。
+- 完全访问模式：文件与命令免执行审批，但显式项目黑名单始终生效；计划审批与 `ask_user` 仍独立。模式切换不追溯已启动命令，待批请求失效，不自动批准；权限设置不得暴露成模型工具。
+- 执行批准仅覆盖该次不可变操作，不写白名单、不跨调用复用；并行请求按 ID 独立保存，子代理申请归父会话。取消/退出/重启后失效，不能从历史工具调用恢复可执行授权。
 - 进程回收：`list_processes`/`stop_process` 宿主侧按 `ProcessRegistry` 整组回收；**只杀 mederi 自己启动的进程**
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行
 - `subagent`(action=SPAWN) planId/subtaskIndex 可选：携带时硬校验 spec 存在性；不带 planId 走 ad-hoc 执行路径
@@ -200,7 +202,7 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 **并行调度硬性约束**：
 - `create_plan` 必须单独发一条消息，不得与任何工具同消息批量
 - **禁止同消息混发 `generate_spec` 与 `subagent`(SPAWN)**——先为所有独立子任务生成 spec，再同消息一起 subagent(SPAWN)
-- 并行批量时杜绝竞争：同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝；不重复执行同一命令靠 AI 自律
+- 并行批量时杜绝竞争：同文件并发写已由 `FileWriteRegistry` 代码级硬拒绝；编译命令经 `CompilationCoordinator` 工具级互斥（bash `compilation=true` 时同项目排队等待，AI 不参与协调）；其他命令仍靠 AI 自律
 
 ## 5.6 分诊流程 Triage Flow
 
@@ -214,7 +216,10 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 │    读不够深（跨多文件/链路长/根因未知）→ subagent(SPAWN_RESEARCHER) → 完整报告 → 据此回答
 ├─【小改动】已知根因/简单逻辑/几行代码 → 主代理直接 apply_patch/edit_file/write_file
 │    （不建 plan、不 spawn；可用 apply_patch / edit_file / write_file）
-└─【复杂改动】多文件/逻辑变化/需用户决策 → Plan Loop：
+├─【大任务，用户已给详细方案】用户描述即已确认方案，不重复 write_plan 审批：
+│    → update_todo 拆条目 → 逐个 ad-hoc subagent(SPAWN)（给足 briefing，见下「briefing 调查纪律」）
+│    → 每个子代理完成后 review 再继续下一条
+└─【复杂改动】方案未定 / 需工程分解 → Plan Loop：
      （理解不足先 subagent(SPAWN_RESEARCHER)）→ create_plan → 批准 → generate_spec
      → 执行路径选择（见下「执行路径选择」）：
         ├─【直接执行】主代理已读透目标代码 + 少量工具调用 + 无并行收益
@@ -229,7 +234,11 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
       → 全部 PASS → 归档
 ```
 
-小改动 vs 复杂改动的判断由 AI 自主做出；拿不准时**先调研再决定**。
+任务量大小、以及大任务走不走 plan，由 AI 自主判断——大任务但用户已在对话里给了详细方案时，不必再 write_plan 重复审批（用户描述即方案）；方案未定、需要工程分解时才走 Plan Loop。拿不准时**先调研再决定**。
+
+### briefing 调查纪律（硬性）
+
+派发任何子代理前，主代理必须自己先调查相关代码/文件，掌握现状（文件路径、签名、调用链、相关类型、改动边界）。子代理不继承父对话，拿到 briefing 就该知道怎么回事——不应重复主代理已做的探索（那等于把主代理的活又干一遍，白费时间和 tokens）。写 self-contained briefing，基于你实际读到的内容，不是把用户原话转发；写不出 self-contained briefing 就是调查不够，继续查。子代理上下文不足时可精准补查具体文件/段落，但不应广泛重新探索。
 
 ### 执行路径选择（硬性判据）
 
@@ -280,7 +289,7 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 
 | 存储 | 内容 | 特性 |
 |---|---|---|
-| `config.db` | providers、api_keys、projects、mcp_servers | 极小、低频写、事务一致（provider 行 + key 行同库）；一个文件 = 全部配置，可单独备份迁移 |
+| `config.db` | providers、api_keys、projects、mcp_servers、settings（宿主权限等） | 极小、低频写、事务一致（provider 行 + key 行同库）；一个文件 = 全部配置，可单独备份迁移 |
 | `data/data.db` | sessions、message_history、diffs | 高频 append、体积随使用增长 |
 | `preferences.json` | theme、上次打开等 UI 偏好（app:shared 层管理） | **设备级语义**——不进库：桌面端与遥控端连同一 server 时，主题不该跟着 server 走 |
 

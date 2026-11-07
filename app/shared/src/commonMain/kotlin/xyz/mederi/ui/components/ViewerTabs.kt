@@ -39,13 +39,14 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.InkImage
 import xyz.emuci.inkcompose.MarkdownView
 import xyz.emuci.inkcompose.RenderStyle
+import xyz.emuci.syntax.theme.CodeTheme
+import xyz.emuci.syntax.theme.LocalCodeTheme
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiRadius
 import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.rememberMederiMarkdownTheme
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
-import xyz.mederi.ui.ChatLayout
 import xyz.mederi.util.DocumentExporter
 import xyz.mederi.util.ExportStatus
 import xyz.mederi.util.rememberClipboardCopy
@@ -210,23 +211,40 @@ internal fun TextReaderTabContent(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = MederiSpacing.MD, vertical = MederiSpacing.XS))
         }
 
-        // 正文阅读器区域：使用 inkcompose.MarkdownView 统一高质量渲染，支持流式渲染状态
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.surfaceWorkspace)
-                .padding(MederiSpacing.LG),
-            contentAlignment = Alignment.TopCenter
+        val style = RenderStyle.Document
+        val markdownTheme = rememberMederiMarkdownTheme(style).let { theme ->
+            remember(theme, colors) {
+                theme.copy(
+                    linkColor = colors.accentText,
+                    blockQuoteBorderColor = colors.accentBorder,
+                    codeBlockBackground = colors.surfaceHover,
+                    tableHeaderBackground = colors.surfaceHover,
+                )
+            }
+        }
+        val syntaxTheme = LocalCodeTheme.current
+        val documentCodeTheme = remember(syntaxTheme, markdownTheme.codeBlockBackground) {
+            object : CodeTheme by syntaxTheme {
+                override val background = markdownTheme.codeBlockBackground
+            }
+        }
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize().background(colors.surfaceWorkspace),
+            contentAlignment = Alignment.TopCenter,
         ) {
+            val inset = if (maxWidth < 480.dp) MederiSpacing.MD else MederiSpacing.XL
             MarkdownView(
                 content = content,
                 modifier = Modifier
                     .fillMaxHeight()
-                    .widthIn(max = ChatLayout.contentMaxWidth)
+                    .padding(horizontal = inset, vertical = MederiSpacing.LG)
+                    .widthIn(max = 680.dp)
                     .fillMaxWidth(),
                 enableScrollOverride = true,
                 isStreaming = isStreaming,
-                markdownTheme = rememberMederiMarkdownTheme(style = RenderStyle.Github)
+                style = style,
+                markdownTheme = markdownTheme,
+                codeTheme = documentCodeTheme,
             )
         }
     }

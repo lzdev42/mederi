@@ -35,7 +35,6 @@ import mederi.app.shared.generated.resources.model_batch_update_failed
 import mederi.app.shared.generated.resources.model_config_updated
 import mederi.app.shared.generated.resources.model_delete_failed
 import mederi.app.shared.generated.resources.model_deleted
-import mederi.app.shared.generated.resources.model_metadata_locked
 import mederi.app.shared.generated.resources.model_setting_failed
 import mederi.app.shared.generated.resources.model_update_failed
 import mederi.app.shared.generated.resources.models_sync_none
@@ -89,7 +88,7 @@ sealed class ModelsSyncStatus {
  * @param isEnabled 是否启用（勾选在主聊天输入框的模型列表中显示）
  * @param supportsThinking 是否支持思考/Reasoning
  * @param supportsImages 是否支持图片（Image）多模态
- * @param origin 元数据所有权：FETCHED = 目录/端点权威（元数据只读）；MANUAL = 用户权威（可编辑）
+ * @param origin 模型来源：FETCHED = 从端点拉取；MANUAL = 手动添加。两者均可编辑。
  * @param isFree 是否为免费模型（core 未建模，恒为 false）
  * @param contextWindow 上下文窗口大小（tokens），null 表示未知
  * @param maxTokens 最大输出大小（tokens），null 表示未设置
@@ -110,7 +109,8 @@ data class ModelItemUiState(
     val contextWindow: Int? = null,
     val maxTokens: Int? = null,
     val reasoningLevels: List<String> = emptyList(),
-    val isRichMetadata: Boolean = false
+    val isRichMetadata: Boolean = false,
+    val optimizeForRequestCount: Boolean = false,
 )
 
 /**
@@ -141,7 +141,8 @@ data class ProviderItemUiState(
     val reasoningLevels: Map<String, String?> = emptyMap(),
     val responseSanitization: Boolean = false,
     val models: List<ModelItemUiState> = emptyList(),
-    val syncStatus: ModelsSyncStatus = ModelsSyncStatus.Idle
+    val syncStatus: ModelsSyncStatus = ModelsSyncStatus.Idle,
+    val isChatGptOAuth: Boolean = false
 ) {
     /** 掩码后的 API Key，仅用于列表展示 */
     val maskedApiKey: String
@@ -379,7 +380,8 @@ class ProviderSettingsViewModel(
             reasoningLevels = config.reasoningLevels,
             responseSanitization = config.responseSanitization,
             models = config.models.map { toModelItemUiState(it) },
-            syncStatus = syncStatus
+            syncStatus = syncStatus,
+            isChatGptOAuth = config.isChatGptOAuth
         )
     }
 
@@ -410,7 +412,8 @@ class ProviderSettingsViewModel(
             contextWindow = model.contextWindow,
             maxTokens = model.maxTokens,
             reasoningLevels = model.reasoningLevels,
-            isRichMetadata = false
+            isRichMetadata = false,
+            optimizeForRequestCount = model.optimizeForRequestCount,
         )
     }
 
@@ -818,7 +821,8 @@ class ProviderSettingsViewModel(
         supportsThinking: Boolean,
         contextWindow: Int?,
         maxTokens: Int?,
-        reasoningLevels: List<String>
+        reasoningLevels: List<String>,
+        optimizeForRequestCount: Boolean,
     ) {
         viewModelScope.launch {
             val result = appState.aiCore.updateProviderModel(
@@ -829,7 +833,8 @@ class ProviderSettingsViewModel(
                 supportsImages = supportsImages,
                 contextWindow = contextWindow,
                 maxTokens = maxTokens,
-                reasoningLevels = if (supportsThinking) reasoningLevels else emptyList()
+                reasoningLevels = if (supportsThinking) reasoningLevels else emptyList(),
+                optimizeForRequestCount = optimizeForRequestCount,
             )
             result.fold(
                 onSuccess = {

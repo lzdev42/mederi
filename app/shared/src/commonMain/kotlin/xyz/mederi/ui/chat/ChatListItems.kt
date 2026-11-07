@@ -42,7 +42,7 @@ sealed interface ChatListItem {
 
     /**
      * 多步任务的工作过程聚合栏（Work 栏）。
-     * 将轮次内的所有推理、自说自话过渡语与工具调用折叠聚合为单行汇总条，默认折叠突出最终正文。
+     * 将轮次内的推理、过渡正文与工具调用按时序聚合；执行时展开，交付或等待子代理时收起。
      */
     data class WorkTraceBlock(
         override val key: String,
@@ -55,6 +55,8 @@ sealed interface ChatListItem {
         val startedAt: Long? = null,
         val completedAt: Long? = null,
         val activity: WorkTraceActivity? = null,
+        /** 当前阶段的默认展开态；阶段切换后重置手动选择，仍允许用户重新展开查看。 */
+        val defaultExpanded: Boolean = true,
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
 
@@ -104,6 +106,13 @@ sealed interface ChatListItem {
         override val isTurnStart: Boolean = false,
     ) : ChatListItem
 
+    /** 执行越界授权独立于计划批准，每个待批请求各有稳定身份。 */
+    data class ExecutionApproval(
+        override val key: String,
+        val request: ExecutionApprovalRequest,
+        override val isTurnStart: Boolean = false,
+    ) : ChatListItem
+
     /** 问答卡片（ask_user 挂起时内联进 AI 消息流，取代该 ask 工具的 ToolCalls 行；回答后工具行回归） */
     data class QuestionCard(
         override val key: String,
@@ -133,6 +142,13 @@ sealed interface ChatListItem {
         override val isTurnStart: Boolean = false,
         val messageId: String = "",
         val createdAt: Long = 0L,
+    ) : ChatListItem
+
+    /** 工作区操作状态条（准备/复制/等批准/初始化/恢复，可重试/取消） */
+    data class WorkspaceOperationBar(
+        override val key: String,
+        val operation: WorkspaceOperation,
+        override val isTurnStart: Boolean = false,
     ) : ChatListItem
 }
 
@@ -180,7 +196,8 @@ data class PlanOverviewItem(
     val planPath: String,
     val planContent: String?,
     val status: PlanOverviewStatus,
-    val subtasks: List<PlanSubtaskOverview>
+    val subtasks: List<PlanSubtaskOverview>,
+    val manualCaseIds: List<String> = emptyList(),
 )
 
 sealed interface ArtifactItem {

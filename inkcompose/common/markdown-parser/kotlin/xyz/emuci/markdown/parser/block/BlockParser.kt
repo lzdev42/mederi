@@ -47,6 +47,24 @@ class BlockParser(
     private val document = Document()
     private val openBlocks = mutableListOf<OpenBlock>()
     private var currentLine = 0
+    private var parseEndLine = source.lineCount
+
+    // 只有当前解析范围内有闭合符时才把文档开头视为元数据。
+    // 未闭合的 ---/+++ 直接走普通 Markdown，避免先吞完整篇正文再在 EOF 丢弃。
+    private val frontMatterClosingLine: Int? by lazy {
+        val marker = source.lineContent(0).trim()
+        if (marker != "---" && marker != "+++") null
+        else (1 until source.lineCount).firstOrNull { source.lineContent(it).trim() == marker }
+    }
+
+    private fun tryStartBlock(cursor: LineCursor, lineIdx: Int, tip: OpenBlock): OpenBlock? {
+        val allowFrontMatter = lineIdx != 0 || frontMatterClosingLine?.let { it < parseEndLine } == true
+        return if (registry != null) {
+            registry.tryStart(cursor, lineIdx, tip) { allowFrontMatter || it.node !is FrontMatter }
+        } else {
+            starters.tryStartBlock(cursor, lineIdx, tip, allowFrontMatter = allowFrontMatter)
+        }
+    }
 
     private val starters = BlockStarters(source)
 
@@ -61,6 +79,7 @@ class BlockParser(
      * 解析整个源文本并返回文档 AST。
      */
     fun parse(): Document {
+        parseEndLine = source.lineCount
         openBlocks.clear()
         openBlocks.add(OpenBlock(document, contentStartLine = 0))
         document.clearChildren()
@@ -102,6 +121,7 @@ class BlockParser(
      * 由增量解析器用于重新解析脏区域。
      */
     fun parseLines(startLine: Int, endLine: Int): List<Node> {
+        parseEndLine = endLine
         openBlocks.clear()
         val tempDoc = Document()
         openBlocks.add(OpenBlock(tempDoc, contentStartLine = startLine))
@@ -185,11 +205,7 @@ class BlockParser(
             val tip = openBlocks.lastOrNull()
             if (tip != null && tip.node is ListBlock) {
                 val snap = cursor.snapshot()
-                val newBlock = if (registry != null) {
-                    registry.tryStart(cursor, lineIdx, tip)
-                } else {
-                    starters.tryStartBlock(cursor, lineIdx, tip)
-                }
+                val newBlock = tryStartBlock(cursor, lineIdx, tip)
                 cursor.restore(snap)
                 val startsNewItem = newBlock != null && newBlock.node is ListItem
                 if (!startsNewItem) {
@@ -236,11 +252,7 @@ class BlockParser(
             // 按优先级顺序尝试各种块开启
             // 优先使用注册制（如果有），否则使用旧的 BlockStarters
             val preStartSnap = cursor.snapshot()
-            val newBlock = if (registry != null) {
-                registry.tryStart(cursor, lineIdx, lastMatched)
-            } else {
-                starters.tryStartBlock(cursor, lineIdx, lastMatched)
-            }
+            val newBlock = tryStartBlock(cursor, lineIdx, lastMatched)
             if (newBlock != null) {
                 val canInterrupt = if (registry != null) {
                     registry.canInterruptParagraph(newBlock)
@@ -1030,28 +1042,7 @@ class BlockParser(
                 node.lineRange = LineRange(ob.contentStartLine, ob.lastLineIndex + 1)
             }
             is FrontMatter -> {
-                // 检查是否已被正确关闭（addLineToTip 会在遇到闭合标记时 finalizeBlock）
-                val closingMarker = if (node.format == "yaml") "---" else "+++"
-                val lastContentLine = if (ob.lastLineIndex < source.lineCount) {
-                    source.lineContent(ob.lastLineIndex).trim()
-                } else ""
-                val wasClosed = lastContentLine == closingMarker && ob.lastLineIndex > ob.contentStartLine
-
-                if (!wasClosed) {
-                    // 未关闭的 FrontMatter：降级为 ThematicBreak（如果格式为 yaml 即 ---）
-                    val parent = node.parent as? ContainerNode ?: return
-                    if (node.format == "yaml") {
-                        val tb = ThematicBreak(char = '-')
-                        tb.lineRange = LineRange(ob.contentStartLine, ob.contentStartLine + 1)
-                        parent.replaceChild(node, tb)
-                    } else {
-                        // TOML 格式 +++ 不是合法的 ThematicBreak，直接移除
-                        parent.removeChild(node)
-                    }
-                    // 剩余内容行会在后续作为独立块被重新处理（因为 FrontMatter 被移除后解析器会继续）
-                    return
-                }
-
+                // tryStartBlock 已确认闭合符在解析范围内；未闭合输入从一开始按普通 Markdown 处理。
                 if (node.literal.isEmpty()) {
                     // 跳过开头标记行
                     node.literal = ob.contentLines.drop(1).joinToString("\n")

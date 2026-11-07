@@ -31,8 +31,8 @@ data class RunBrowserTaskArgs(
     @LLMDescription(
         "Browser to use (optional):\n" +
             "- LEAVE EMPTY by default: uses the user's preferred default browser configured in settings.\n" +
-            "- ONLY specify a browser name if the user explicitly requested a specific browser engine in their prompt (e.g. 'use camoufox' or 'use jcef').\n" +
-            "- Do NOT automatically pick camoufox just because the target site is third-party."
+            "- ONLY specify a browser name if the user explicitly requested a specific browser engine by name in their prompt.\n" +
+            "- Do NOT automatically pick a specific browser just because the target site is third-party."
     )
     val browser: String = "",
     @LLMDescription("Optional recipe name or rules configuration to mount onto the task for guiding execution and judgment.")
@@ -108,7 +108,7 @@ class RunBrowserTaskTool(
             val available = service.availableBrowsers()
             val default = service.defaultBrowser()
             val browserHint = if (available.isEmpty()) {
-                "暂无可用浏览器（设置 browserHome 下载 Camoufox，或由 UI 注册内置 JCEF）"
+                "暂无已注册浏览器（需先安装并注册浏览器后才能执行浏览器任务）"
             } else {
                 "Available browsers: ${available.joinToString(", ")} (default: ${default ?: "first registered"})"
             }
@@ -119,7 +119,7 @@ class RunBrowserTaskTool(
                 "stop_browser_task(taskId). Task details are viewable in the browser panel. " +
                 browserHint + ". IMPORTANT: Always leave 'browser' empty to use the user's default browser " +
                 "preference, unless the user explicitly requested a specific browser engine by name in their prompt. " +
-                "Do not pick camoufox arbitrarily. " +
+                "Do not pick a specific browser arbitrarily. " +
                 "IMPORTANT: Give ONLY the goal and desired outcome in 'task'. Do NOT prescribe how — " +
                 "no search engine, no navigation/click sequence, no low-level steps; the sub-agent autonomously " +
                 "plans and executes the entire task itself."
@@ -181,7 +181,7 @@ data class BrowserInfoArgs(
 
 /**
  * 浏览器运行状态查询（只读、无副作用）——与任务操作区分。
- * 返回当前所有浏览器的运行状态：JCEF / Camoufox 是否在用、开了几个 tab/实例、
+ * 返回当前所有浏览器的运行状态：各已注册浏览器是否在用、开了几个 tab/实例、
  * 各在哪个页面、是否由当前会话启动。
  */
 class BrowserInfoTool(
@@ -191,7 +191,7 @@ class BrowserInfoTool(
     argsType = typeToken<BrowserInfoArgs>(),
     name = ToolName.BROWSER_INFO.value,
     description = "Reads the current browser runtime status (no side effects, does NOT dispatch a task). " +
-        "Returns per registered browser (jcef built-in visible / camoufox headless — BOTH may be open at " +
+        "Returns per registered browser (multiple may be open at " +
         "once): inUse, count of open tabs/instances, each one's current page URL + title, and whether it " +
         "was started by the CURRENT session. Distinct from browser_task_status, which queries a specific " +
         "dispatched task."
@@ -228,7 +228,7 @@ data class BrowserArgs(
     @LLMDescription("RUN: task instruction for the browser sub-agent (natural language, " +
         "outcome-oriented: which site, what result).")
     val task: String = "",
-    @LLMDescription("RUN: browser to use. LEAVE EMPTY by default to use the user's preferred default browser configured in settings. ONLY specify a browser name if the user explicitly requested a specific browser engine in their prompt (e.g. 'use camoufox' or 'use jcef').")
+    @LLMDescription("RUN: browser to use. LEAVE EMPTY by default to use the user's preferred default browser configured in settings. ONLY specify a browser name if the user explicitly requested a specific browser engine by name in their prompt.")
     val browser: String = "",
     @LLMDescription("RUN: optional recipe name or rules configuration to mount onto the browser task.")
     val recipe: String = "",
@@ -241,7 +241,7 @@ data class BrowserArgs(
  *
  * 原四个工具（run_browser_task / browser_task_status / stop_browser_task / browser_info）
  * 封装为一个 `browser`，用 [BrowserTaskAction] 分流，全部委托原工具类（保留各自校验与返回格式）。
- * 架构：页面操作由专用 BrowserOperator 子代理执行（jcef 可见 / camoufox 无头反检测，经
+ * 架构：页面操作由专用 BrowserOperator 子代理执行（经
  * BrowserRegistry 抽象，RUN 的 browser 参数选择）与 BrowserBrain（大脑）协同工作——主代理只做编排：下命令、看状态、
  * 关任务、看运行时。无 WAIT：浏览器任务为长耗时操作，主代理不阻塞等待。
  *
@@ -276,7 +276,7 @@ class BrowserTool(
             val available = service.availableBrowsers()
             val default = service.defaultBrowser()
             val browserHint = if (available.isEmpty()) {
-                "No browsers available (set browserHome to download Camoufox, or let the UI register the built-in JCEF)."
+                "No browsers registered (a browser must be installed and registered before browser tasks can run)."
             } else {
                 "Registered browsers: ${available.joinToString(", ")} (default: ${default ?: "first registered"})."
             }

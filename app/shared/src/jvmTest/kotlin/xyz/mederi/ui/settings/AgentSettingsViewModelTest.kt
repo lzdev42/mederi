@@ -161,4 +161,56 @@ class AgentSettingsViewModelTest {
         } finally { store.clear() }
     }
 
+    @Test
+    fun sessionOverridesAndRestoresStayScopedWhileOtherSessionReadIsPending() = runBlocking {
+        val delayed = Channel<Result<List<SubagentConfigItem>>>(Channel.UNLIMITED)
+        val writes = CopyOnWriteArrayList<Triple<String, String, UpdateSubagentConfigInput?>>()
+        val concurrencyWrites = CopyOnWriteArrayList<Pair<String, UpdateSubagentGlobalSettingsInput?>>()
+        var snapshot = item.copy(usesDefault = true)
+        var global = SubagentGlobalSettings(3, usesDefault = true)
+        val api = object : AiCore by MockAiCore() {
+            override suspend fun listSubagentConfigs(): Result<List<SubagentConfigItem>> = error("Must read session scope")
+            override suspend fun updateSubagentConfig(role: String, input: UpdateSubagentConfigInput): Result<Unit> = error("Must write session scope")
+            override suspend fun listSessionSubagentConfigs(conversationId: String): Result<List<SubagentConfigItem>> =
+                if (conversationId == "slow") delayed.receive() else Result.success(listOf(snapshot))
+            override suspend fun getSessionSubagentGlobalSettings(conversationId: String) = Result.success(global)
+            override suspend fun updateSessionSubagentConfig(conversationId: String, role: String, input: UpdateSubagentConfigInput?): Result<Unit> {
+                writes += Triple(conversationId, role, input)
+                snapshot = if (input == null) item.copy(usesDefault = true) else item.copy(
+                    modelId = input.modelId, reasoningLevel = input.reasoningLevel, apiKeyId = input.apiKeyId, usesDefault = false)
+                return Result.success(Unit)
+            }
+            override suspend fun updateSessionSubagentGlobalSettings(conversationId: String, input: UpdateSubagentGlobalSettingsInput?): Result<Unit> {
+                concurrencyWrites += conversationId to input
+                global = SubagentGlobalSettings(input?.maxConcurrentAgents ?: 3, usesDefault = input == null)
+                return Result.success(Unit)
+            }
+        }
+        val store = ViewModelStore()
+        val slow = AgentSettingsViewModel(api, "slow").also { store.put("slow", it) }
+        val current = AgentSettingsViewModel(api, "current").also { store.put("current", it) }
+        try {
+            until { current.uiState.rolesEnabled && current.uiState.concurrencyEnabled }
+            current.selectKey(item.role, "session-key")
+            until { writes.size == 1 && current.uiState.rolesEnabled }
+            assertEquals(Triple("current", item.role, UpdateSubagentConfigInput("old", "HIGH", "session-key")), writes.single())
+            assertFalse(current.uiState.configs.single().usesDefault)
+            current.restoreRoleDefault(item.role)
+            until { writes.size == 2 && current.uiState.rolesEnabled }
+            assertEquals(Triple("current", item.role, null), writes.last())
+            assertTrue(current.uiState.configs.single().usesDefault)
+            current.setConcurrency(5)
+            until { concurrencyWrites.size == 1 && current.uiState.concurrencyEnabled }
+            assertEquals(5, current.uiState.global?.maxConcurrentAgents)
+            current.restoreConcurrencyDefault()
+            until { concurrencyWrites.size == 2 && current.uiState.concurrencyEnabled }
+            assertEquals("current" to null, concurrencyWrites.last())
+            assertTrue(current.uiState.global?.usesDefault == true)
+            delayed.send(Result.success(listOf(item.copy(modelId = "slow-model"))))
+            until { slow.uiState.rolesEnabled }
+            assertEquals("slow-model", slow.uiState.configs.single().modelId)
+            assertEquals("old", current.uiState.configs.single().modelId)
+        } finally { store.clear(); delayed.close() }
+    }
+
 }

@@ -26,6 +26,8 @@ fun computeChatItems(
     msgs: List<ChatMessage>,
     isWorking: Boolean,
     snapshot: ConversationSnapshot?,
+    isSending: Boolean = false,
+    pendingStartedAt: Long? = null,
 ): List<ChatListItem> {
     val result = mutableListOf<ChatListItem>()
 
@@ -313,14 +315,15 @@ fun computeChatItems(
                                 questionCardEmitted = true
                             }
                         } else {
-                            rawChronologicalItems.add(
+                            val displayCalls = expandBatchToolCall(toolUi, snapshot)
+                            if (displayCalls.isNotEmpty()) rawChronologicalItems.add(
                                 ChatListItem.ToolCalls(
                                     key = "${msg.id}_${block.id}",
-                                    toolCalls = listOf(toolUi),
+                                    toolCalls = displayCalls,
                                     isStreaming = msg.isStreaming,
                                     isTurnStart = false,
-                                    toolSummary = buildToolSummary(listOf(toolUi)),
-                                    hasFailedTool = toolUi.isFailed,
+                                    toolSummary = buildToolSummary(displayCalls),
+                                    hasFailedTool = displayCalls.any { it.isFailed },
                                     isRunning = isStreaming && toolUi.state is ToolCallState.Running,
                                 )
                             )
@@ -375,7 +378,7 @@ fun computeChatItems(
         val deliverableItems = mutableListOf<ChatListItem>()
         for (item in rawChronologicalItems) {
             when (item) {
-                is ChatListItem.PlanApproval, is ChatListItem.QuestionCard,
+                is ChatListItem.PlanApproval, is ChatListItem.QuestionCard, is ChatListItem.ExecutionApproval,
                 is ChatListItem.SubagentCalls -> deliverableItems.add(item)
                 is ChatListItem.TextMessage, is ChatListItem.DocumentCard -> {
                     if (itemMessageIds[item.key] in finalMessageIds) deliverableItems.add(item)
@@ -385,6 +388,11 @@ fun computeChatItems(
             }
         }
         if (workItems.isNotEmpty() || isActiveAssistant) {
+            val activity = if (isActiveAssistant) deriveWorkTraceActivity(workItems,
+                snapshot?.subagents?.count { it.status == "RUNNING" } ?: 0) else null
+            // 阶段交付并不代表整项工作结束：等待子代理时保留运行与计时，但自动收起旧过程。
+            // 只检查最新响应，后续主代理恢复推理/工具调用时应重新展开。
+            val latestResponseDelivered = turnMessages.lastOrNull()?.id in finalMessageIds
             result.add(
                 ChatListItem.WorkTraceBlock(
                     key = "${turnMessages.firstOrNull()?.id ?: "active"}_worktrace",
@@ -407,8 +415,8 @@ fun computeChatItems(
                         turnMessages.mapNotNull { it.workStartedAt }.minOrNull() else null,
                     completedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] || it.turnId == null && turnMessages == lastAssistantTurn })
                         turnMessages.mapNotNull { it.workCompletedAt }.maxOrNull() else null,
-                    activity = if (isActiveAssistant) deriveWorkTraceActivity(workItems,
-                        snapshot?.subagents?.count { it.status == "RUNNING" } ?: 0) else null,
+                    activity = activity,
+                    defaultExpanded = !latestResponseDelivered && activity !is WorkTraceActivity.WaitingSubagents,
                     isTurnStart = true,
                 )
             )
@@ -487,6 +495,27 @@ fun computeChatItems(
         }
     }
 
+    // 请求已提交/工作已开始但 assistant 消息尚未创建时，同样需要可见的等待行。
+    // 只检查最后一个用户气泡之后，不能把上一段的过程误当成本次输入的反馈。
+    val lastUserIndex = result.indexOfLast { it is ChatListItem.TextMessage && it.isUser }
+    val hasTailWork = result.drop(lastUserIndex + 1)
+        .any { it is ChatListItem.WorkTraceBlock && it.isRunning }
+    if ((isWorking || isSending) && !hasTailWork) {
+        val lastInput = msgs.lastOrNull { it.role == ChatRole.User }
+        result.add(ChatListItem.WorkTraceBlock(
+            key = "${lastInput?.id ?: snapshot?.conversation?.id ?: "active"}_waiting_worktrace",
+            items = emptyList(),
+            totalToolsCount = 0,
+            hasFailedTool = false,
+            isRunning = true,
+            turnId = lastInput?.turnId,
+            startedAt = lastInput?.workStartedAt ?: pendingStartedAt,
+            activity = deriveWorkTraceActivity(emptyList(),
+                snapshot?.subagents?.count { it.status == "RUNNING" } ?: 0),
+            isTurnStart = true,
+        ))
+    }
+
     snapshot?.pendingQuestion?.let { question ->
         if (result.none { it is ChatListItem.QuestionCard && it.request.id == question.id }) {
             result.add(ChatListItem.QuestionCard(key = "question_${question.id}", request = question, isTurnStart = true))
@@ -503,6 +532,31 @@ fun computeChatItems(
         )
     }
 
+    // 存活执行请求来自 core 快照，永不从工具历史推断，也不折叠进过程栏。
+    snapshot?.pendingExecutionApprovals.orEmpty().distinctBy { it.id }.forEach { request ->
+        if (request.conversationId == snapshot?.conversation?.id) {
+            result.add(ChatListItem.ExecutionApproval(
+                key = "execution_approval_${request.conversationId}_${request.id}",
+                request = request,
+                isTurnStart = true,
+            ))
+        }
+    }
+
+    // 活跃工作区操作状态条（准备/复制/等批准/初始化/恢复/失败重试）
+    val activeOp = snapshot?.activeWorkspaceOperation ?: snapshot?.workspaceInfo?.operation
+    if (activeOp != null && activeOp.state != xyz.mederi.core.contract.models.WorkspaceOperationState.SUCCEEDED) {
+        val convId = snapshot?.conversation?.id
+        if (convId != null && (activeOp.sessionId == null || activeOp.sessionId == convId)) {
+            result.add(
+                ChatListItem.WorkspaceOperationBar(
+                    key = "op_${activeOp.id}",
+                    operation = activeOp,
+                    isTurnStart = true
+                )
+            )
+        }
+    }
     return result
 }
 
@@ -652,8 +706,10 @@ internal fun ChatListItem.withTurnStart(isStart: Boolean): ChatListItem = when (
     is ChatListItem.DocumentCard -> copy(isTurnStart = isStart)
     is ChatListItem.Footer -> copy(isTurnStart = isStart)
     is ChatListItem.PlanApproval -> copy(isTurnStart = isStart)
+    is ChatListItem.ExecutionApproval -> copy(isTurnStart = isStart)
     is ChatListItem.QuestionCard -> copy(isTurnStart = isStart)
     is ChatListItem.TurnDiffCard -> copy(isTurnStart = isStart)
     is ChatListItem.EventMessageCard -> copy(isTurnStart = isStart)
+    is ChatListItem.WorkspaceOperationBar -> copy(isTurnStart = isStart)
 }
 

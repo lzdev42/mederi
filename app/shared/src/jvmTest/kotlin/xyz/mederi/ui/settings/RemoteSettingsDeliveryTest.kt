@@ -201,9 +201,12 @@ class RemoteSettingsDeliveryTest {
             SettingsWorkspaceContent(page.value, {}, {}, Modifier.width(960.dp).height(800.dp)
                 .background(LocalMederiColors.current.surfaceWorkspace).testTag("remotePreview")) { _, _ ->
                 if (page.value == SettingsTab.REMOTE) RemoteSettingsContent(state(), actions(mutableListOf()))
-                else SandboxSettingsContent(SandboxSettingsUiState(true, status = SandboxStatusInfo("fixture sandbox", true, "sh",
-                    "Fixture: writes are restricted to configured locations.")),
-                    listOf("/workspace/shared libraries", "/workspace/shared-assets/long-directory-name"), {}, {}, Modifier.padding(12.dp))
+                else SandboxSettingsContent(SandboxSettingsUiState(projectId = "project-1",
+                    settings = xyz.mederi.core.contract.models.SandboxSettings(extraWritablePaths =
+                        listOf("/workspace/shared libraries", "/workspace/shared-assets/long-directory-name")),
+                    status = SandboxStatusInfo("fixture sandbox", true, "sh",
+                        "Fixture: writes are restricted to configured locations.")),
+                    {}, {}, {}, Modifier.padding(12.dp))
             }
         } }
         for (sample in listOf(SettingsTab.REMOTE, SettingsTab.SANDBOX)) for (theme in listOf(AppThemeMode.DARK, AppThemeMode.LIGHT)) {

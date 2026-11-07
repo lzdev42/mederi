@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.CustomModelEntry
 import xyz.mederi.core.contract.models.ProtocolType
+import xyz.mederi.core.contract.models.WorkspaceSelection
 
 /**
  * 推理参数配置（UI 层表达，与 core ReasoningParameter 对应）。
@@ -48,6 +49,7 @@ data class CreateCustomProviderInput(
 data class CreateConversationInput(
     val projectId: String,
     val agent: AgentOption? = null,
+    val workspaceSelection: WorkspaceSelection = WorkspaceSelection(),
 )
 
 /** renameConversation：PATCH /v1/sessions/{id} */
@@ -85,6 +87,7 @@ data class UpdateModelInput(
     val maxTokens: Int? = null,
     val reasoningLevels: List<String>? = null,
     val isEnabled: Boolean? = null,
+    val optimizeForRequestCount: Boolean? = null,
 )
 
 /** setModelEnabled：POST /v1/providers/{id}/models/{modelId}/enabled */

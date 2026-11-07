@@ -47,7 +47,9 @@ class SubagentManager(
     private val scope: CoroutineScope,
     private val eventBus: MutableSharedFlow<MederiEvent>? = null,
     /** 单会话并发上限提供者（每次 spawn 现读设置存储，改设置即时生效）；null = 不限制。 */
-    private val maxConcurrentProvider: (suspend () -> Int)? = null
+    private val maxConcurrentProvider: (suspend () -> Int)? = null,
+    /** 按父会话动态读取覆盖；保留无参提供者兼容已有独立使用者。 */
+    private val sessionMaxConcurrentProvider: (suspend (String) -> Int)? = null
 ) {
 
     enum class SubagentStatus { RUNNING, COMPLETED, ERROR, STOPPED }
@@ -109,7 +111,9 @@ class SubagentManager(
         val touchedFiles: List<String>,
         val subtaskIndex: Int?,
         val atMs: Long,
-        val parentSessionId: String? = null
+        val parentSessionId: String? = null,
+        /** 仅供人的报告读取使用，不进入 STATUS/model-facing result。 */
+        val diagnosticReport: String? = null
     )
 
     private val retired = ConcurrentHashMap<String, AgentRecoveryInfo>()
@@ -182,7 +186,8 @@ class SubagentManager(
         val limit = if (role == SubagentRole.BROWSER_OPERATOR || role == SubagentRole.BROWSER_BRAIN) {
             Int.MAX_VALUE
         } else {
-            maxConcurrentProvider?.invoke()?.coerceAtLeast(1) ?: Int.MAX_VALUE
+            (sessionMaxConcurrentProvider?.invoke(parentSessionId) ?: maxConcurrentProvider?.invoke())
+                ?.coerceAtLeast(1) ?: Int.MAX_VALUE
         }
         synchronized(spawnLock) {
             val running = agents.values.count {
@@ -205,6 +210,15 @@ class SubagentManager(
                 "task" to task,
                 "startedAt" to bg.startedAt
             ) + (briefing?.takeIf { it.isNotBlank() }?.let { mapOf("briefing" to it) } ?: emptyMap()))
+            suspend fun forwardProgress(event: MederiEvent) {
+                val sequence = synchronized(bg.progressEvents) {
+                    bg.progressEvents.add(event)
+                    bg.progressEvents.size.toLong()
+                }
+                emitEvent(parentSessionId, EventType.SUBAGENT_PROGRESS, mapOf(
+                    "agentId" to agentId, "role" to role.name,
+                    "sequence" to sequence.toString(), "eventJson" to Json.encodeToString(event)))
+            }
             try {
                 val result = subagentRunner.run(
                     task = task,
@@ -221,26 +235,18 @@ class SubagentManager(
                     executorSubtaskIndex = executorSubtaskIndex,
                     planStore = planStore,
                     agentId = agentId,
-                    onProgress = { event ->
-                        val sequence = synchronized(bg.progressEvents) {
-                            bg.progressEvents.add(event)
-                            bg.progressEvents.size.toLong()
-                        }
-                        emitEvent(parentSessionId, EventType.SUBAGENT_PROGRESS, mapOf(
-                            "agentId" to agentId,
-                            "role" to role.name,
-                            "sequence" to sequence.toString(),
-                            "eventJson" to Json.encodeToString(event)
-                        ))
-                    }
+                    onProgress = { event -> forwardProgress(event) }
                 )
                 bg.result = result
-                bg.status = if (result.startsWith("[subagent error]")) {
+                val failed = synchronized(bg.progressEvents) {
+                    bg.progressEvents.any { it.type == EventType.MESSAGE_ERROR }
+                }
+                bg.status = if (failed || result.startsWith("[subagent error]")) {
                     SubagentStatus.ERROR
                 } else {
                     SubagentStatus.COMPLETED
                 }
-                bg.progress = "completed"
+                bg.progress = if (bg.status == SubagentStatus.ERROR) "error" else "completed"
             } catch (e: CancellationException) {
                 if (bg.isDiscarded) {
                     bg.status = SubagentStatus.STOPPED
@@ -257,9 +263,13 @@ class SubagentManager(
                 bg.progress = "stopped"
                 throw e
             } catch (e: Throwable) {
-                bg.result = "[subagent error] ${e.message ?: e.javaClass.simpleName}"
+                val record = xyz.mederi.debug.ErrorCollector.collect(e, xyz.mederi.debug.ErrorContext(
+                    phase = "subagent", sessionId = agentId, modelId = aiModel.id, modelName = aiModel.name))
+                bg.result = subagentErrorReport(record.toPayload())
                 bg.status = SubagentStatus.ERROR
                 bg.progress = "error"
+                forwardProgress(MederiEvent(type = EventType.MESSAGE_ERROR, sessionId = agentId,
+                    payload = record.toPayload(), timestamp = record.timestamp))
             } finally {
                 if (bg.isDiscarded) {
                     emitEvent(
@@ -279,6 +289,11 @@ class SubagentManager(
                     bg.completedAt = completedAt
 
                     val payload = buildMap {
+                        if (bg.status == SubagentStatus.ERROR) {
+                            synchronized(bg.progressEvents) {
+                                bg.progressEvents.lastOrNull { it.type == EventType.MESSAGE_ERROR }?.payload
+                            }?.let { putAll(it) }
+                        }
                         put("agentId", agentId)
                         put("role", role.name)
                         put("status", bg.status.name)
@@ -312,7 +327,8 @@ class SubagentManager(
                         touchedFiles = touched,
                         subtaskIndex = bg.executorSubtaskIndex,
                         atMs = System.currentTimeMillis(),
-                        parentSessionId = parentSessionId
+                        parentSessionId = parentSessionId,
+                        diagnosticReport = if (bg.status == SubagentStatus.ERROR) diagnosticReport(bg) else null
                     )
                 }
             }
@@ -485,6 +501,13 @@ class SubagentManager(
         return discarded
     }
 
+    private fun diagnosticReport(bg: BackgroundAgent): String? {
+        val payload = synchronized(bg.progressEvents) {
+            bg.progressEvents.lastOrNull { it.type == EventType.MESSAGE_ERROR }?.payload
+        }
+        return payload?.let(::subagentDiagnosticReport) ?: bg.result
+    }
+
     /**
      * 获取指定子 Agent 的任务汇报详情（供 Server / UI 读取）。
      * 若已落盘则读取磁盘文件内容；若未落盘则返回内存中的完整 result。
@@ -493,7 +516,7 @@ class SubagentManager(
         val bg = agents[agentId]
         if (bg != null) {
             val path = bg.reportPath
-            val content = path?.let { p ->
+            val content = if (bg.status == SubagentStatus.ERROR) diagnosticReport(bg) else path?.let { p ->
                 runCatching { java.io.File(p).takeIf { it.exists() }?.readText() }.getOrNull()
             } ?: bg.result
             return SubagentReportData(
@@ -506,7 +529,7 @@ class SubagentManager(
         }
         val rec = retired[agentId] ?: return null
         val path = rec.reportPath
-        val content = path?.let { p ->
+        val content = if (rec.status == SubagentStatus.ERROR.name) rec.diagnosticReport ?: rec.result else path?.let { p ->
             runCatching { java.io.File(p).takeIf { it.exists() }?.readText() }.getOrNull()
         } ?: rec.result
         return SubagentReportData(

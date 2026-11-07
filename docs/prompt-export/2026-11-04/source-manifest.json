@@ -1,0 +1,192 @@
+[
+  {
+    "path": "app/shared/src/jvmMain/kotlin/xyz/mederi/core/autotitle/SessionTitleService.kt",
+    "bytes": 9843,
+    "sha256": "a630203025db725603fc801667845311b1b9fa3aae4a434aa97f72ac56cda58b"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserBrainPrompt.kt",
+    "bytes": 4664,
+    "sha256": "57eb7aeedffc0709db70fcd09d0466764127eed5104d218d015f0f239c0bdeb6"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserConstants.kt",
+    "bytes": 1877,
+    "sha256": "9823b453be446ae135c3c76f90570cc0f78e7e0e2f8249da620757586c59bb84"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserOperator.kt",
+    "bytes": 13331,
+    "sha256": "d58884bcfeeb1f4948f30bfda91e4fd11810722ae3c3c107bd801dfa3c4d6322"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserOperatorInternalTools.kt",
+    "bytes": 8253,
+    "sha256": "39e104ad960e3e3eaad475fcb6cea320a50ebd7ff182112d6d0059fa369d861f"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserOperatorTools.kt",
+    "bytes": 5501,
+    "sha256": "853443688eb25084d20297565cac93faab0088e310e4819344d8bc0c6d02e08d"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserPrompt.kt",
+    "bytes": 4551,
+    "sha256": "df459ad5fcc492ab1100711197cc0e680aea677244f811e62372cae70d9816ec"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserRecipe.kt",
+    "bytes": 882,
+    "sha256": "c2df938317ebd58d39588259d74b6dd444ef1e717208d9d121c102ff60a4d9f3"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserTaskManager.kt",
+    "bytes": 27300,
+    "sha256": "af71f86186db5dd8eeea2358097a32c9aba546b00576b552483134635e4a9e23"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/browser/BrowserTaskTools.kt",
+    "bytes": 14395,
+    "sha256": "f7613e01560848a955ffd24a1937ac3003e5e2486057e9108bfa2ea8b09fcd5e"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/koog/AgentsFileGenerator.kt",
+    "bytes": 7795,
+    "sha256": "b5831a8e7c9e8fed54d1196fa110592009a5f612906632bd69468f3b958f5670"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/koog/MederiAgentStrategies.kt",
+    "bytes": 21295,
+    "sha256": "021110fe4c635e20008bfb5be4d372d74c271e92e533d408e0af8eb2333df135"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/koog/MederiCompressionStrategy.kt",
+    "bytes": 8215,
+    "sha256": "317a9526225809e29a97b608a4f51fdcb5bbff907aff1808b9715c8a3ee49c5f"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/koog/TurnExecutor.kt",
+    "bytes": 132488,
+    "sha256": "de43cdbca71a8bf4a55befa85faca379e265e1d07c98bec4cd2428eee074bae1"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/model/AgentCapabilities.kt",
+    "bytes": 1564,
+    "sha256": "78b26ad5e1bcad2b215b578b6416386eb5aca288277fb669486b18863ba87e60"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/office/OfficeTools.kt",
+    "bytes": 6393,
+    "sha256": "eb2a40fc165e942672624750b73a985f6d20e2b1eecef4d2833af3277ee648ae"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/plan/PlanStore.kt",
+    "bytes": 25860,
+    "sha256": "0ff41a3150e33b3363d444c1b913ece6a1a5301f397b1e44b868cc764e1a55a7"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/project/AgentsFileLoader.kt",
+    "bytes": 7371,
+    "sha256": "1c0f7382b60ef01a1a2a17cdd316849c965a49bbd637c1e55a4148a4e35c7407"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/prompt/CodingPrompts.kt",
+    "bytes": 899,
+    "sha256": "17c9417c466bda125ff201773fa59896d4060307076f432ca5f83bfc67174975"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/prompt/EnvironmentInfoProvider.kt",
+    "bytes": 3940,
+    "sha256": "9d0668b969e5f4b5c6684fe5073416610a82063a71692eaa8d32dae36d14af00"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/prompt/GeneralPrompts.kt",
+    "bytes": 797,
+    "sha256": "b5b0f4b1d8ca65af4e24c407d85f3594d412f0b9b780328f5769e24c5055a0e7"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/prompt/PromptGuides.kt",
+    "bytes": 11459,
+    "sha256": "823be913f3a538208e5ef7942f2cfffd933d8269405a484adba4f6a71aee473b"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/prompt/SteeringPrompt.kt",
+    "bytes": 1563,
+    "sha256": "c86c0afafe4a8d7e49ff015577c298af5b0f781317433a878f790a3b59c97dda"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/prompt/SystemPrompts.kt",
+    "bytes": 35279,
+    "sha256": "6d06168f33a642d009de7d5a3beb9c775efc11741eddd24b48ec541f5804e76a"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/AgentTools.kt",
+    "bytes": 14716,
+    "sha256": "295045362786d47296bd87a9a7fe7de81cee67b7234f7d46b27d64ee2cddcb76"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/FileSystemTools.kt",
+    "bytes": 26267,
+    "sha256": "39edf6fff06c04d3961a331380d4b482352a3b94ec44b029b304695dd38cb344"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/PlanTools.kt",
+    "bytes": 60705,
+    "sha256": "89a9a615dbcc1b96c0351c2d0d5963e6014e397ee7323729a71e79f5ba26194d"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/ProcessTools.kt",
+    "bytes": 4197,
+    "sha256": "3834724cc2199e543142e74e991f28c32a74846e9cd11559fd31617f0fcbc04f"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/ShellTools.kt",
+    "bytes": 26335,
+    "sha256": "458ce7c793c10492f73136d66362e19adcfa0739e7ae9e00ceef23a3682cde7f"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/ToolFactory.kt",
+    "bytes": 14951,
+    "sha256": "d6d83ce517653a8d56bd6f0a021980fa159e88b3eab5c6bd923aa2a7780597f8"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/VerifyTools.kt",
+    "bytes": 21998,
+    "sha256": "153c8bb4c598914d99ceb313f68256af318a04d3d2beaaf39d9b81208dc66431"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/background/BackgroundTaskTools.kt",
+    "bytes": 1609,
+    "sha256": "2aea848300e9dc477e4679c707fb80601da41d1f91b630c58c34d71040fa356f"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/patch/ApplyPatchProtocol.kt",
+    "bytes": 6834,
+    "sha256": "1b9c778bec06f7ca322b58be1e83a8ba539e77ff72133a071bdf4ea80720def0"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/sandbox/CommandSandbox.kt",
+    "bytes": 11092,
+    "sha256": "12fc8fbfaf8a9aa9901171da3ba680310b84eb3960c9aa0c42858692e2ddc77a"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/subagent/SpawnAgentTool.kt",
+    "bytes": 16554,
+    "sha256": "fb16fba3e72a98506a6ec4e7e05cba7969e478b5e49ef67d9cdc46b218aeb6ea"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/subagent/SubagentAsyncTools.kt",
+    "bytes": 2437,
+    "sha256": "3228c064a515515c323b528ba46681ac84e215eb6d6cfc31508a0f468332176f"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/subagent/SubagentRunnerImpl.kt",
+    "bytes": 16607,
+    "sha256": "f89af93f0c878fc9507e0821bf22c25a634ef6b1c1fadde2328ebda88a13f550"
+  },
+  {
+    "path": "core/src/commonMain/kotlin/xyz/mederi/tools/subagent/SubagentTool.kt",
+    "bytes": 6451,
+    "sha256": "19a64b244839fb36d1ec85d1097edd4e9a113c9b02e53c0d9732507909b8c348"
+  }
+]

@@ -29,6 +29,7 @@ class WorkspaceFeedbackIntegrationTest {
         }
         override suspend fun sendMessage(conversationId: String, input: ChatPromptInput) = send(conversationId)
         override suspend fun createConversation(projectId: String, agent: AgentOption?) = create?.invoke() ?: backend.createConversation(projectId, agent)
+        override suspend fun createConversation(input: CreateConversationInput) = create?.invoke() ?: backend.createConversation(input)
         override suspend fun rollbackToMessage(conversationId: String, messageId: String) = rollback()
     }
     private fun exercise(block: suspend TestScope.(WorkspaceViewModel, AppState, Fake) -> Unit) = runTest {
@@ -39,6 +40,48 @@ class WorkspaceFeedbackIntegrationTest {
         try { runCurrent(); app.selectModel(app.availableModels.value.first()); app.selectConversation("a"); runCurrent(); block(vm, app, core) }
         finally { store.clear(); Dispatchers.resetMain() }
     }
+    @Test fun sendShowsWaitingImmediatelyBeforeCoreOrFirstTokenAndSurvivesConversationSwitch() = exercise { vm, app, core ->
+        val gate = CompletableDeferred<Result<Unit>>()
+        core.send = { gate.await() }
+        vm.send("inspect now")
+        // 不推进协程：点击发送本身就必须建立反馈，无需等网络或首个 delta。
+        val localInput = vm.messages.last()
+        val immediate = vm.chatItems.last() as ChatListItem.WorkTraceBlock
+        assertTrue(immediate.isRunning)
+        assertEquals(WorkTraceActivity.WaitingResponse, immediate.activity)
+        assertEquals(localInput.createdAt, immediate.startedAt)
+        assertEquals(ConversationStatus.Idle, vm.snapshot?.conversation?.status,
+            "本地反馈不能伪造 Core 执行状态")
+        runCurrent()
+        app.selectConversation("b"); runCurrent()
+        assertTrue(vm.chatItems.none { it is ChatListItem.WorkTraceBlock && it.isRunning })
+        app.selectConversation("a"); runCurrent()
+        assertTrue((vm.chatItems.last() as ChatListItem.WorkTraceBlock).isRunning)
+        val accepted = localInput.copy(turnId = "turn", workStartedAt = 1000)
+        val working = snapshot("a").let { it.copy(
+            conversation = it.conversation.copy(status = ConversationStatus.Working),
+            messages = listOf(accepted),
+        ) }
+        core.flows.getValue("a").emit(working); runCurrent()
+        assertEquals(1000L, (vm.chatItems.last() as ChatListItem.WorkTraceBlock).startedAt)
+        val response = accepted.copy(id = "response", role = ChatRole.Assistant,
+            blocks = emptyList(), isStreaming = true)
+        core.flows.getValue("a").emit(working.copy(messages = listOf(accepted, response))); runCurrent()
+        assertEquals(1, vm.chatItems.filterIsInstance<ChatListItem.WorkTraceBlock>().count { it.isRunning })
+        gate.complete(Result.success(Unit)); runCurrent()
+        core.flows.getValue("a").emit(snapshot("a").copy(messages = listOf(accepted))); runCurrent()
+        assertTrue(vm.chatItems.none { it is ChatListItem.WorkTraceBlock && it.isRunning })
+    }
+
+    @Test fun rejectedSendRemovesImmediateWaitingFeedback() = exercise { vm, _, core ->
+        core.send = { Result.failure(IllegalStateException("not accepted")) }
+        vm.send("inspect now")
+        assertTrue((vm.chatItems.last() as ChatListItem.WorkTraceBlock).isRunning)
+        runCurrent()
+        assertTrue(vm.chatItems.none { it is ChatListItem.WorkTraceBlock && it.isRunning })
+        assertNotNull(vm.error)
+    }
+
     @Test fun coreDismissalSurvivesSnapshotsAndSwitchesWhileNewIdentityReappears() = exercise { vm, app, core ->
         core.flows.getValue("a").emit(snapshot("a", "first")); runCurrent(); vm.showErrorDetail(); assertTrue(vm.isErrorDetailOpen)
         vm.clearError(); core.flows.getValue("a").emit(snapshot("a", "first").copy(requestCount = 3)); runCurrent(); assertNull(vm.error)

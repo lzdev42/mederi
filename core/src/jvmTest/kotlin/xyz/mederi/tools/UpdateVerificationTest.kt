@@ -50,7 +50,8 @@ class UpdateVerificationTest {
 
     private fun makePlan(
         subtaskStatus: SubtaskStatus = SubtaskStatus.FAILED,
-        command: String = "old cmd"
+        command: String = "old cmd",
+        planStatus: PlanStatus = PlanStatus.PENDING_APPROVAL
     ): Plan {
         val plan = Plan(
             id = "plan_${UUID.randomUUID().toString().take(8)}",
@@ -58,7 +59,7 @@ class UpdateVerificationTest {
             summary = "test",
             sessionId = "sess_test",
             background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
-            status = PlanStatus.IN_PROGRESS,
+            status = planStatus,
             createdAt = "2026-09-08T00:00:00Z",
             agentMode = AgentMode.AUTONOMOUS,
             subtasks = listOf(
@@ -125,6 +126,16 @@ class UpdateVerificationTest {
         ))
         assertTrue(result.startsWith("Error"), "Expected error: $result")
         assertTrue(result.contains("COMPLETED"), "Expected 'COMPLETED' in error: $result")
+    }
+
+    @Test
+    fun `approved legacy contract cannot be amended in place`() = runBlocking {
+        val plan = makePlan(planStatus = PlanStatus.APPROVED)
+        val result = tool().execute(PlanTools.UpdateVerificationArgs(
+            planId = plan.id, subtaskIndex = 0, command = "new cmd", reason = "replace command"
+        ))
+        assertTrue(result.startsWith("Error"))
+        assertEquals(plan.subtasks.single().verification, planStore.load(plan.id)?.subtasks?.single()?.verification)
     }
 
     @Test

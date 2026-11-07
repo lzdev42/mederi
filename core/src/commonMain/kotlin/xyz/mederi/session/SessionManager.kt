@@ -44,6 +44,7 @@ interface SessionManager {
     suspend fun abortAndJoin(id: String)
 
     suspend fun sendMessage(id: String, request: SendMessageRequest)
+    suspend fun resumeWorkspaceInput(id: String, workspaceId: String)
     suspend fun steerMessage(id: String, request: SendMessageRequest)
     suspend fun rollbackToMessage(id: String, messageId: String)
     /**
@@ -72,6 +73,12 @@ interface SessionManager {
     )
 
     suspend fun resolveQuestion(id: String, questionId: String, answers: List<List<String>>)
+    suspend fun recordPlanManualAcceptance(
+        sessionId: String, planId: String, caseId: String, observed: String, evidence: String, confirmedBy: String
+    )
+
+    suspend fun getPlanAcceptanceReport(id: String, planId: String): String
+
     suspend fun resolvePlanApproval(
         id: String,
         planId: String,

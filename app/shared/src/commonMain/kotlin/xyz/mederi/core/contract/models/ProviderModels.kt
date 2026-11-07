@@ -78,4 +78,5 @@ data class ProviderConfig(
     /** 推理参数配置（v6）：级别名（NONE/LOW/MEDIUM/HIGH/MAX）→ 请求体 JSON 片段/null，空 map 表示未配置 */
     val reasoningLevels: Map<String, String?> = emptyMap(),
     val responseSanitization: Boolean = false,
+    val isChatGptOAuth: Boolean = false,
 )

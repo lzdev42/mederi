@@ -51,5 +51,12 @@ data class Session(
     val activeSkills: List<String> = emptyList(),
     val draftText: String? = null,
     val createdAt: String,
-    val updatedAt: String
+    val updatedAt: String,
+    val workspaceId: String? = null,
+    val associatedWorktreeId: String? = null,
+    val archivedAt: String? = null,
+    val pinned: Boolean = false,
+    /** 未覆盖的角色动态使用系统默认；空配置表示显式继承父会话。 */
+    val subagentConfigs: Map<SubagentRole, SubagentModelConfig> = emptyMap(),
+    val subagentMaxConcurrent: Int? = null
 )

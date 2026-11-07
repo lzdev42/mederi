@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.input_image_attachment
 import mederi.app.shared.generated.resources.input_image_n
@@ -33,6 +32,8 @@ import xyz.mederi.ui.components.AssistantMessageFooter
 import xyz.mederi.ui.components.DocumentArtifactCard
 import xyz.mederi.ui.components.EventMessageCard
 import xyz.mederi.ui.components.PlanApprovalCard
+import xyz.mederi.ui.components.WorkspaceOperationStatusBar
+import xyz.mederi.ui.components.ExecutionApprovalCard
 import xyz.mederi.ui.components.QuestionCard
 import xyz.mederi.ui.components.ReasoningBlock
 import xyz.mederi.ui.components.SubagentCallsBlock
@@ -108,6 +109,27 @@ fun ChatListContent(
                         )
                     }
 
+                    is ChatListItem.ExecutionApproval -> {
+                        val error = viewModel.executionApprovalError(item.request)
+                        ExecutionApprovalCard(
+                            request = item.request,
+                            submitting = viewModel.isExecutionApprovalSubmitting(item.request),
+                            error = error?.let { org.jetbrains.compose.resources.stringResource(it.key, *it.args.toTypedArray()) },
+                            onResolve = { viewModel.resolveExecutionApproval(item.request, it) },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = ChatLayout.thoughtBottomSpacing),
+                        )
+                    }
+
+                    is ChatListItem.WorkspaceOperationBar -> {
+                        WorkspaceOperationStatusBar(
+                            operation = item.operation,
+                            onRetry = { viewModel.retryWorkspaceOperation(item.operation) },
+                            onCancel = { viewModel.cancelWorkspaceOperation(item.operation) },
+                            onRecover = { viewModel.previewRecovery(item.operation.id) },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = ChatLayout.thoughtBottomSpacing),
+                        )
+                    }
+
                     is ChatListItem.QuestionCard -> {
                         QuestionCard(
                             question = item.request,
@@ -164,8 +186,8 @@ fun ChatListContent(
                                             isStreaming = stepItem.isStreaming,
                                             durationMs = stepItem.durationMs,
                                             isReasoningActive = stepItem.isReasoningActive,
-                                            // WorkTraceCard 已整体限高 + 滚动 + 展开按钮，子项不再重复限制
-                                            enforceMaxHeight = false,
+                                            // 推理详情独立限高，默认收起；展开状态锚定步骤 ID。
+                                            contentKey = stepItem.key,
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
                                         )
                                     }
@@ -191,11 +213,15 @@ fun ChatListContent(
                                     }
                                     is ChatListItem.TextMessage -> {
                                         if (stepItem.text.isNotBlank()) {
-                                            Text(
-                                                text = stepItem.text.trim(),
-                                                color = colors.textMuted,
-                                                fontSize = 12.sp,
-                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
+                                            MederiMarkdown(
+                                                content = stepItem.text,
+                                                style = RenderStyle.Chat.copy(bodyStyle = WorkspaceStyle.MessageBody),
+                                                sessionKey = stepItem.conversationId,
+                                                isStreaming = stepItem.isStreaming,
+                                                selectionMenuActions = selectionMenuActions,
+                                                enableScrollOverride = false,
+                                                onLinkClick = { url -> viewModel.openLink(url) },
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                             )
                                         }
                                         if (stepItem.images.isNotEmpty()) {
@@ -232,9 +258,11 @@ fun ChatListContent(
                                     is ChatListItem.EventMessageCard -> {}
                                     is ChatListItem.Footer -> {}
                                     is ChatListItem.PlanApproval -> {}
+                                    is ChatListItem.ExecutionApproval -> {}
                                     is ChatListItem.QuestionCard -> {}
                                     is ChatListItem.TurnDiffCard -> {}
                                     is ChatListItem.WorkTraceBlock -> {}
+                                    is ChatListItem.WorkspaceOperationBar -> {}
                                 }
                             }
                         )

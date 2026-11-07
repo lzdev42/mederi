@@ -19,6 +19,7 @@ import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.ui.ChatLayout
 import xyz.mederi.ui.ChatListContent
 import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.TurnStatus
 import xyz.mederi.ui.components.atoms.ConfirmDialog
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.ui.components.atoms.WorkspacePanelHeader
@@ -58,6 +59,11 @@ internal fun SubagentPanelContent(
     val colors = LocalMederiColors.current
     val isRunning = subagent.status.equals("RUNNING", ignoreCase = true)
     var showStopConfirm by remember(subagent.agentId) { mutableStateOf(false) }
+    var showErrorDetail by remember(subagent.agentId, subagent.errorId, subagent.errorDiagnostic) { mutableStateOf(false) }
+    if (showErrorDetail && subagent.errorDiagnostic != null) {
+        ErrorDetailDialog(errorSummary = subagent.errorMessage.orEmpty(),
+            errorDiagnostic = subagent.errorDiagnostic, onDismiss = { showErrorDetail = false })
+    }
     LaunchedEffect(isRunning) { if (!isRunning) showStopConfirm = false }
     if (showStopConfirm && isRunning) {
         ConfirmDialog(
@@ -108,6 +114,11 @@ internal fun SubagentPanelContent(
                 text = stringResource(Res.string.subagentui_stop_task), icon = FeatherIcons.Square,
                 onClick = { showStopConfirm = true }, contentColor = colors.dangerText,
             )
+        }
+        StatusBar(if (isRunning && subagent.statusHint != null) TurnStatus.Retrying else TurnStatus.Idle,
+            statusHint = subagent.statusHint)
+        subagent.errorMessage?.let { error ->
+            ErrorBoard(error, onShowDetail = subagent.errorDiagnostic?.let { { showErrorDetail = true } })
         }
         HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
         Box(Modifier.fillMaxWidth().weight(1f)) { content() }

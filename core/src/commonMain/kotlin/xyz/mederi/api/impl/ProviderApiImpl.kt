@@ -154,7 +154,8 @@ class ProviderApiImpl(
             maxTokens = request.maxTokens,
             supportsImages = request.supportsImages,
             reasoningLevels = request.reasoningLevels,
-            isEnabled = request.isEnabled
+            isEnabled = request.isEnabled,
+            optimizeForRequestCount = request.optimizeForRequestCount,
         )
     }
 

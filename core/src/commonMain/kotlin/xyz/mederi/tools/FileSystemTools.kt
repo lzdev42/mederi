@@ -5,6 +5,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.validate
 import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
+import kotlinx.coroutines.ensureActive
 import xyz.mederi.tools.diff.TurnDiffTracker
 import xyz.mederi.tools.patch.PatchParseException
 import xyz.mederi.tools.patch.PatchParser
@@ -29,7 +30,7 @@ import kotlin.io.path.writeText
  * 由 TurnExecutor 组合 AgentsFileLoader + 会话级 registry 提供。
  */
 fun interface AgentsSubtreeDiscovery {
-    fun onAccessed(accessedPath: String): xyz.mederi.project.AgentsFileLoader.AgentsFile?
+    suspend fun onAccessed(accessedPath: String): xyz.mederi.project.AgentsFileLoader.AgentsFile?
 }
 
 /**
@@ -50,7 +51,9 @@ class FileSystemTools(
      * 文件写入回调：write/edit/apply_patch 成功写入后上报路径。
      * 执行器子代理经 SubagentRunnerImpl 挂回调收集 touched files（flush 到 Subtask.executorTouchedFiles）。
      */
-    private val onFileTouched: ((String) -> Unit)? = null
+    private val onFileTouched: ((String) -> Unit)? = null,
+    private val executionPermissions: xyz.mederi.tools.sandbox.ExecutionPermissions? = null,
+    private val extraWritablePaths: List<String> = emptyList(),
 ) {
 
     // ==================== 参数定义 ====================
@@ -68,7 +71,7 @@ class FileSystemTools(
 
     @Serializable
     data class WriteFileArgs(
-        @LLMDescription("File path, relative to the project root (e.g. src/Main.kt). Absolute paths only inside the project directory.")
+        @LLMDescription("File path, relative to the project root (e.g. src/Main.kt). Absolute paths are accepted; outside or protected writes request one-time user approval in Needs Approval mode.")
         val path: String = "",
         @LLMDescription("Full content to write to the file.")
         val content: String = ""
@@ -76,7 +79,7 @@ class FileSystemTools(
 
     @Serializable
     data class EditFileArgs(
-        @LLMDescription("File path, relative to the project root (e.g. src/Main.kt). Absolute paths only inside the project directory.")
+        @LLMDescription("File path, relative to the project root (e.g. src/Main.kt). Absolute paths are accepted; outside or protected writes request one-time user approval in Needs Approval mode.")
         val path: String = "",
         @LLMDescription("Exact original text to replace. Must match the file exactly and be UNIQUE in it — multiple matches are rejected; provide more surrounding context.")
         val original: String = "",
@@ -147,16 +150,17 @@ class FileSystemTools(
         description = "Write content to a file, creating it (and parent directories) if absent, overwriting it if present."
     ) {
         override suspend fun execute(args: WriteFileArgs): String {
-            val file = resolveForWrite(args.path, mustExist = false, mustBeFile = true)
+            val (file, grant) = resolveForWrite(args.path, mustExist = false, mustBeFile = true, tool = "write_file")
             val conflict = FileWriteRegistry.tryAcquire(listOf(file))
             if (conflict != null) {
                 return "Error: ${displayPath(file)} is currently being modified by another concurrent tool call. " +
                     "Retry after the other edit completes, or send this write in a separate message."
             }
             try {
+                grant?.let { executionPermissions!!.checkGrant(it) }
                 file.parentFile?.mkdirs()
                 val oldContent = file.takeIf { it.exists() }?.readText()
-                file.writeText(args.content)
+                safeWriteText(file, args.content)
                 diffTracker?.recordWrite(displayPath(file), oldContent, args.content)
                 onFileTouched?.invoke(displayPath(file))
                 return "Written ${args.content.length} chars to ${displayPath(file)}"
@@ -173,13 +177,14 @@ class FileSystemTools(
     ) {
         override suspend fun execute(args: EditFileArgs): String {
             validate(args.original.isNotEmpty()) { "original must not be empty" }
-            val file = resolveForWrite(args.path, mustExist = true, mustBeFile = true)
+            val (file, grant) = resolveForWrite(args.path, mustExist = true, mustBeFile = true, tool = "edit_file")
             val conflict = FileWriteRegistry.tryAcquire(listOf(file))
             if (conflict != null) {
                 return "Error: ${displayPath(file)} is currently being modified by another concurrent tool call. " +
                     "Retry after the other edit completes, or send this edit in a separate message."
             }
             try {
+                grant?.let { executionPermissions!!.checkGrant(it) }
                 // no-op 拦截（照抄 opencode：oldString == newString 直接拒绝，不写入）
                 if (args.original == args.replacement) {
                     return "Error: original and replacement are identical — no changes to apply."
@@ -232,7 +237,7 @@ class FileSystemTools(
                     updated.replace(start, end, newString)
                 }
 
-                file.writeText(updated.toString())
+                safeWriteText(file, updated.toString())
                 diffTracker?.recordWrite(displayPath(file), content, updated.toString())
                 onFileTouched?.invoke(displayPath(file))
                 val replaced = if (args.replaceAll) replacements else 1
@@ -328,7 +333,9 @@ class FileSystemTools(
         override suspend fun execute(args: ListDirectoryArgs): String {
             val dirPath = if (args.path.isBlank()) allowedDirectories.first() else args.path
             val dir = resolveForRead(dirPath, mustExist = true, mustBeFile = false)
-            val entries = dir.listFiles()?.sortedBy { it.name } ?: return "Directory is empty or inaccessible"
+            val readPolicy = executionPermissions?.readPolicy()
+            val entries = dir.listFiles()?.filter { readPolicy?.allowsRead(it.canonicalFile.toPath()) != false }
+                ?.sortedBy { it.name } ?: return "Directory is empty or inaccessible"
             if (entries.isEmpty()) return "Directory is empty"
             val listing = entries.joinToString("\n") { entry ->
                 val prefix = if (entry.isDirectory) "[DIR]  " else "[FILE] "
@@ -350,11 +357,33 @@ class FileSystemTools(
             } catch (e: PatchParseException) {
                 return "Error: apply_patch verification failed: ${e.message}. No files were modified."
             }
-            return PatchFileTransaction(allowedDirectories, reportChanges = { changes ->
-                diffTracker?.trackPatch(changes)
-                // 上报绝对路径，move 的源与目标都在 changes 中；不能只记录目标。
-                changes.forEach { onFileTouched?.invoke(it.path) }
-            }).apply(hunks)
+            return try {
+                val targetPaths = hunks.flatMap { hunk -> listOfNotNull(hunk.path, (hunk as? xyz.mederi.tools.patch.PatchHunk.UpdateFile)?.movePath) }
+                    .map { raw -> executionPermissions?.resolvePath(raw) ?: resolvePath(raw).toFile().canonicalFile.toPath() }
+                val grant = executionPermissions?.authorizeWrite("apply_patch", targetPaths)
+                if (grant == null) {
+                    val policy = xyz.mederi.tools.sandbox.SandboxPaths(allowedDirectories, extraWritablePaths)
+                    require(targetPaths.all(policy::allowsWrite)) { "Patch writes outside sandbox require execution approval." }
+                }
+                val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+                grant?.let { executionPermissions!!.checkGrant(it) }
+                PatchFileTransaction(allowedDirectories, reportChanges = { changes ->
+                    diffTracker?.trackPatch(changes)
+                    // 上报绝对路径，move 的源与目标都在 changes 中；不能只记录目标。
+                    changes.forEach { onFileTouched?.invoke(it.path) }
+                }, extraWritablePaths = targetPaths.mapNotNull { path ->
+                    generateSequence(path.parent) { it.parent }.firstOrNull { java.nio.file.Files.isDirectory(it) }?.toString()
+                }.distinct(), beforeMutation = { path, rollback ->
+                    if (!rollback) {
+                        job?.ensureActive()
+                        require(path.toFile().canonicalFile.toPath() in targetPaths) {
+                            "Patch target changed after authorization: $path"
+                        }
+                        grant?.let { executionPermissions!!.validateGrant(it) }
+                    }
+                }).apply(hunks)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure: Exception) { "Error: apply_patch verification failed: ${failure.message}. No files were modified." }
         }
     }
 
@@ -365,13 +394,14 @@ class FileSystemTools(
      * 有本会话未注入过的 AGENTS.md，将其内容追加到工具返回文本末尾。
      * 访问对象自身就是 AGENTS.md 时跳过（内容已在返回文本里，追加即重复）。
      */
-    private fun appendDiscoveredAgents(result: String, accessed: File): String {
+    private suspend fun appendDiscoveredAgents(result: String, accessed: File): String {
         if (accessed.isFile && accessed.name.equals(xyz.mederi.project.AgentsFileLoader.FILE_NAME, ignoreCase = true)) {
             return result
         }
         val discovered = agentsDiscovery?.onAccessed(
             accessed.toPath().absolute().normalize().toString()
         ) ?: return result
+        if (executionPermissions?.readPolicy()?.allowsRead(File(discovered.path).canonicalFile.toPath()) == false) return result
         return result + "\n\n--- AGENTS.md (${discovered.relativePath}) ---\n${discovered.content}"
     }
 
@@ -385,8 +415,9 @@ class FileSystemTools(
      * @return 解析后的 File。
      * @throws IllegalArgumentException 存在性/类型校验失败。
      */
-    private fun resolveForRead(rawPath: String, mustExist: Boolean, mustBeFile: Boolean): File {
+    private suspend fun resolveForRead(rawPath: String, mustExist: Boolean, mustBeFile: Boolean): File {
         val absolute = resolvePath(rawPath).absolute()
+        executionPermissions?.checkRead(absolute.toFile().canonicalFile.toPath())
         return validateFile(absolute.toFile(), rawPath, mustExist, mustBeFile)
     }
 
@@ -395,24 +426,30 @@ class FileSystemTools(
      *
      * @throws IllegalArgumentException 路径不在允许目录内或校验失败。
      */
-    private fun resolveForWrite(rawPath: String, mustExist: Boolean, mustBeFile: Boolean): File {
+    private suspend fun resolveForWrite(rawPath: String, mustExist: Boolean, mustBeFile: Boolean, tool: String): Pair<File, xyz.mederi.tools.sandbox.ExecutionPermissions.Grant?> {
         val resolved = resolvePath(rawPath)
-        val absolute = resolved.absolute()
-
-        // 校验：绝对路径必须在某个允许目录内
-        val inside = allowedDirectories.any { dir ->
-            val dirPath = Path(dir).absolute().normalize()
-            absolute.normalize().startsWith(dirPath)
-        }
-        if (!inside) {
+        val absolute = resolved.toFile().canonicalFile.toPath()
+        val grant = executionPermissions?.authorizeWrite(tool, listOf(absolute))
+        if (grant == null && !xyz.mederi.tools.sandbox.SandboxPaths(allowedDirectories,
+                extraWritablePaths).allowsWrite(absolute)) {
             throw IllegalArgumentException(
-                "Path '$rawPath' is outside project directories: $allowedDirectories. " +
-                    "Writes are restricted to project directories (code-enforced). " +
-                    "Ask the user to add the directory to the project or the sandbox whitelist if this write is legitimate."
+                "Path '$rawPath' is outside the writable sandbox or is protected. " +
+                    "This tool assembly has no execution approval channel; configure an explicit writable root or supply ExecutionPermissions."
             )
         }
 
-        return validateFile(absolute.toFile(), rawPath, mustExist, mustBeFile)
+        return validateFile(absolute.toFile(), rawPath, mustExist, mustBeFile) to grant
+    }
+
+    /** 禁止通过硬链接修改白名单之外的同一 inode；落盘时不跟随叶子符号链接。 */
+    private fun safeWriteText(file: File, content: String) {
+        val path = file.toPath()
+        if (java.nio.file.Files.exists(path)) {
+            val links = runCatching { java.nio.file.Files.getAttribute(path, "unix:nlink") as Number }.getOrNull()
+            require(links == null || links.toInt() <= 1) { "Refusing to overwrite a hard-linked file: $file" }
+        }
+        java.nio.file.Files.writeString(path, content, java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING, java.nio.file.LinkOption.NOFOLLOW_LINKS)
     }
 
     /** 存在性/类型校验（读写的公共尾部）。 */

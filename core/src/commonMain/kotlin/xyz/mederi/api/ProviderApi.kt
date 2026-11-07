@@ -105,7 +105,8 @@ data class UpdateModelRequest(
     val maxTokens: Int? = null,
     val supportsImages: Boolean? = null,
     val reasoningLevels: List<ReasoningLevel>? = null,
-    val isEnabled: Boolean? = null
+    val isEnabled: Boolean? = null,
+    val optimizeForRequestCount: Boolean? = null,
 )
 
 /**

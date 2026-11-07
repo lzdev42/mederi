@@ -43,15 +43,17 @@ fun FloatingOverviewWindow(
     maxHeight: Dp,
     maxWidth: Dp,
     modifier: Modifier = Modifier,
+    inStack: Boolean = false,
 ) {
     if (!state.visible) return
     OverviewWindowSurface(
         onClose = { state.visible = false },
-        modifier = modifier.padding(top = 48.dp, end = 16.dp)
-            .widthIn(max = (maxWidth - 16.dp).coerceAtLeast(0.dp))
-            .width(292.dp)
-            .heightIn(max = (maxHeight - 64.dp).coerceAtLeast(0.dp))
-            .zIndex(10f),
+        modifier = if (inStack) modifier.fillMaxWidth().heightIn(max = maxHeight) else
+            modifier.padding(top = 48.dp, end = 16.dp)
+                .widthIn(max = (maxWidth - 16.dp).coerceAtLeast(0.dp))
+                .width(292.dp)
+                .heightIn(max = (maxHeight - 64.dp).coerceAtLeast(0.dp))
+                .zIndex(10f),
     ) {
         OverviewRunningTaskRow(
             viewModel = viewModel,
@@ -72,11 +74,6 @@ fun FloatingOverviewWindow(
             viewModel = viewModel,
             expanded = state.expandedRowIndex == 3,
             onToggle = { state.expandedRowIndex = if (state.expandedRowIndex == 3) null else 3 },
-        )
-        OverviewSubAgentRow(
-            viewModel = viewModel,
-            expanded = state.expandedRowIndex == 4,
-            onToggle = { state.expandedRowIndex = if (state.expandedRowIndex == 4) null else 4 },
         )
         OverviewMcpRow(
             viewModel = viewModel,

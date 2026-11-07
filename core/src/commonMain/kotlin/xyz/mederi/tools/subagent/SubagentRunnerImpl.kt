@@ -46,11 +46,17 @@ import java.util.UUID
  * 所有异常都在内部 catch 并转换为错误信息字符串返回，不会抛到父 Agent。
  */
 class SubagentRunnerImpl(
+    private val sandboxManager: xyz.mederi.tools.sandbox.SandboxManager = xyz.mederi.tools.sandbox.SandboxManager(),
     private val providerManager: ProviderManager,
     private val projectManager: ProjectManager,
     private val mcpConnector: McpConnector? = null,
     private val skills: SkillManager? = null,
     private val compactionThresholdPercent: () -> Int = { 70 },
+    private val workspaceResolver: xyz.mederi.workspace.ExecutionWorkspaceResolver? = null,
+    /** RF-02：子代理继承父级 LLM 传输工厂（集成测试注入确定性 fake LLM）。 */
+    private val llmClientFactory: (xyz.mederi.provider.domain.model.Provider, String) -> ai.koog.prompt.executor.clients.LLMClient = xyz.mederi.provider.infrastructure.koog.KoogClientFactory::create,
+    /** RF-07：工作区执行租约（父级注入）。子代理 turn 同样持租约，归档等待窗口覆盖活跃子代理。 */
+    private val leaseManager: xyz.mederi.workspace.WorkspaceLeaseManager? = null,
 ) : SubagentRunner {
     override suspend fun run(
         task: String,
@@ -78,6 +84,7 @@ class SubagentRunnerImpl(
         // 文件写入缓冲：子代理的文件工具经 onFileTouched 回调 append，turn 结束 finally 时 flush 到 PlanStore。
         val touchedFiles = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
+        val execWs = runCatching { workspaceResolver?.resolve(parentSessionId) }.getOrNull()
         val session = Session(
             id = sessionId,
             projectId = projectId,
@@ -86,6 +93,7 @@ class SubagentRunnerImpl(
             agentMode = AgentMode.AUTONOMOUS,
             aiModel = aiModel,
             reasoningLevel = reasoningLevel,
+            workspaceId = execWs?.workspaceId,
             env = emptyMap(),
             createdAt = now,
             updatedAt = now
@@ -94,6 +102,8 @@ class SubagentRunnerImpl(
 
         val executionJob = SupervisorJob(coroutineContext[Job])
         val turnExecutor = TurnExecutor(
+            sandboxManager = sandboxManager,
+            approvalConversationId = parentSessionId,
             sessionStore = sessionStore,
             historyStore = historyStore,
             eventBus = eventBus,
@@ -111,9 +121,14 @@ class SubagentRunnerImpl(
             // 修复"turn 结束改动摘要不含子代理改动"（子代理 diffStore 为 null，这是唯一出口）。
             // 父 turn 已结束时 mergeInto 按注册表缺失丢弃并记日志（见 ParentDiffRegistry）。
             onTurnDiff = { diff ->
-                xyz.mederi.tools.diff.ParentDiffRegistry.mergeInto(parentSessionId, diff.changes)
+                xyz.mederi.tools.diff.ParentDiffRegistry.mergeInto(parentSessionId, diff.changes, originWorkspaceId = diff.workspaceId)
             },
-            compactionThresholdPercent = compactionThresholdPercent  // 新增
+            compactionThresholdPercent = compactionThresholdPercent,
+            workspaceResolver = workspaceResolver,
+            inheritedWorkspace = execWs,
+            llmClientFactory = llmClientFactory,
+            // RF-07：子代理 turn 持执行租约，归档/配额等待含子代理执行。
+            leaseManager = leaseManager,
         )
 
         val inputText = when (role) {
@@ -179,9 +194,21 @@ class SubagentRunnerImpl(
             // 阻塞等待子 Agent turn 结束
             val terminalEvent = terminal.await()
 
-            if (terminalEvent.type == EventType.MESSAGE_ERROR || terminalEvent.payload["finalMessageId"].isNullOrBlank()) {
-                val error = terminalEvent.payload["error"] ?: "Subagent finished without a complete final response."
-                return "[subagent error] $error"
+            if (terminalEvent.type == EventType.MESSAGE_ERROR) return subagentErrorReport(terminalEvent.payload)
+            if (terminalEvent.payload["finalMessageId"].isNullOrBlank()) {
+                // 兼容旧完成事件：已有诊断必须保真传递，不能覆盖为无上下文的通用错误。
+                if (!terminalEvent.payload["error"].isNullOrBlank()) {
+                    onProgress?.invoke(terminalEvent.copy(type = EventType.MESSAGE_ERROR))
+                    return subagentErrorReport(terminalEvent.payload)
+                }
+                // 没有完整交付也必须进入统一诊断出口，不能只返回一句无上下文的失败字符串。
+                val record = xyz.mederi.debug.ErrorCollector.collect(
+                    IllegalStateException("Subagent finished without a complete final response."),
+                    xyz.mederi.debug.ErrorContext(phase = "subagent_completion", sessionId = sessionId,
+                        modelId = aiModel.id, modelName = aiModel.name))
+                onProgress?.invoke(MederiEvent(type = EventType.MESSAGE_ERROR, sessionId = sessionId,
+                    payload = record.toPayload(), timestamp = record.timestamp))
+                return subagentErrorReport(record.toPayload())
             }
 
             val messages = historyStore.load(sessionId)
@@ -197,7 +224,11 @@ class SubagentRunnerImpl(
             // 协程规范：取消必须重新抛出，不得吞掉（外部 SubagentManager 据此标记 STOPPED）
             throw e
         } catch (e: Throwable) {
-            "[subagent error] ${e.message ?: e.javaClass.simpleName}"
+            val record = xyz.mederi.debug.ErrorCollector.collect(e, xyz.mederi.debug.ErrorContext(
+                phase = "subagent", sessionId = sessionId, modelId = aiModel.id, modelName = aiModel.name))
+            onProgress?.invoke(MederiEvent(type = EventType.MESSAGE_ERROR, sessionId = sessionId,
+                payload = record.toPayload(), timestamp = record.timestamp))
+            subagentErrorReport(record.toPayload())
         } finally {
             // 聚合器仅由订阅协程操作，避免finally与collect并发冲刷造成乱序/重复。
             withContext(NonCancellable) {

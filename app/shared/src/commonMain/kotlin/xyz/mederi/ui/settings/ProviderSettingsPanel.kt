@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -21,6 +22,7 @@ import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.appstate.LocalAppState
+import xyz.mederi.util.openUrl
 import xyz.mederi.theme.*
 import xyz.mederi.ui.components.ErrorBoard
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
@@ -33,12 +35,21 @@ fun ProviderSettingsPanel() {
     val vm: ProviderSettingsViewModel = viewModel { ProviderSettingsViewModel(appState) }
     val colors = LocalMederiColors.current
     val state = vm.uiState
+    val authVm: ChatGptAuthorizationViewModel = viewModel { ChatGptAuthorizationViewModel(appState.aiCore) }
     ProviderSettingsContent(state, vm.builtinPresets,
         vm::updateProviderQuery, vm::updatePresetQuery, vm::openProviderCatalog,
         vm::returnToProviderManagement, vm::startCreateCustomProvider,
         vm::selectProvider, vm::selectProviderPreset, vm::clearMessages,
+        onChatGpt = if (appState.aiCore.supportsChatGptLogin) { { authVm.start(null, vm::selectProvider, ::openUrl) } } else null,
+        startingChatGpt = authVm.busy,
+        authorizationError = authVm.error,
         detail = { provider, compact ->
-            ProviderDetailWorkspace(provider, vm, colors, compact, onDelete = vm::returnToProviderManagement)
+            key(provider.id) {
+                ProviderDetailWorkspace(provider, vm, colors, compact, onDelete = vm::returnToProviderManagement,
+                    authorization = if (provider.isChatGptOAuth && appState.aiCore.supportsChatGptLogin) {
+                        { ChatGptAuthorizationPanel(authVm, provider, ::openUrl) }
+                    } else null)
+            }
         }, custom = { compact ->
             CreateCustomProviderForm(vm, colors, compact, onCancel = vm::openProviderCatalog)
         }, preset = { name ->
@@ -56,6 +67,8 @@ internal fun ProviderSettingsContent(
     detail: @Composable (ProviderItemUiState, Boolean) -> Unit,
     custom: @Composable (Boolean) -> Unit,
     preset: @Composable (String) -> Unit,
+    onChatGpt: (() -> Unit)? = null, startingChatGpt: Boolean = false,
+    authorizationError: String? = null,
 ) {
     val colors = LocalMederiColors.current
     val configuredList = rememberLazyListState()
@@ -71,10 +84,13 @@ internal fun ProviderSettingsContent(
                 ErrorBoard(stringResource(error.key, *error.args.toTypedArray()), onDismiss = onDismissError,
                     modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()))
             }
+            if (state.page == ProviderPage.Catalog && authorizationError != null) {
+                ErrorBoard(stringResource(Res.string.chatgpt_error, authorizationError))
+            }
             when (val page = state.page) {
                 ProviderPage.Catalog -> ProviderCatalogContent(providerPresetItems(presets, state.providers, state.presetQuery),
                     state.presetQuery, onPresetQuery, onSelectPreset, onCustom, onManage,
-                    catalogList, Modifier.weight(1f), enabled)
+                    catalogList, Modifier.weight(1f), enabled, onChatGpt, startingChatGpt)
                 is ProviderPage.Preset -> Box(Modifier.weight(1f)) { preset(page.name) }
                 ProviderPage.Custom -> Column(Modifier.weight(1f)) {
                     WorkspaceActionButton(stringResource(Res.string.provider_preset_back), onOpenCatalog, enabled = enabled, icon = FeatherIcons.ArrowLeft)

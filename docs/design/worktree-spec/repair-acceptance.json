@@ -1,0 +1,43 @@
+{
+  "specVersion": "WT-REPAIR-2026-11-02.1",
+  "baseSpecVersion": "WT-2026-11-02.1",
+  "suites": [
+    {
+      "className": "xyz.mederi.workspace.WorkspaceReviewRegressionTest",
+      "module": "core",
+      "tests": [
+        "fileReadMustRejectSiblingDirectoryWithSamePrefix",
+        "fileListingMustRejectSiblingDirectoryWithSamePrefix",
+        "fileReadMustRespectPersistedProjectBlacklist",
+        "environmentActionMustNotWriteDeniedOutsideFile",
+        "restoringPreimageMustNotWriteThroughDirectorySymlink",
+        "rollbackMustKeepExternalPostimageChange"
+      ]
+    },
+    {
+      "className": "xyz.mederi.workspace.WorkspaceRepairIntegrationTest",
+      "module": "core",
+      "tests": [
+        "managedFirstSendPreparesBeforeModelAndLeavesLocalUntouched",
+        "subagentAndVerifyUsePreparedWorkspaceAndStableArtifactRoots",
+        "staleWorkspaceGrantFailsThroughActualToolFactory",
+        "handoffJournalSurvivesEveryRealMutationBoundary",
+        "archiveWaitsForRealExecutionAndIncludesLateWrites",
+        "archiveRestoreRemainsRegisteredAndCanBeArchivedAgain",
+        "sourceEditAfterSnapshotIsNotDiscardedAtCleanup",
+        "archiveRecoveryHandlesRemoveBeforeDatabaseCommit"
+      ]
+    },
+    {
+      "className": "xyz.mederi.ui.workspace.WorkspaceRepairUiIntegrationTest",
+      "module": "shared",
+      "tests": [
+        "realHandoffEntryRequestsPreviewAndSubmitsExactToken",
+        "realRoutesExposeArchivePinManagementAndRecovery",
+        "realSelectorFlowsThroughConversationCreationAndFirstSend",
+        "phoneRoutesCompleteBusyConflictCancelRetryAndRecovery",
+        "reconnectDoesNotDuplicateWorkspaceOperations"
+      ]
+    }
+  ]
+}

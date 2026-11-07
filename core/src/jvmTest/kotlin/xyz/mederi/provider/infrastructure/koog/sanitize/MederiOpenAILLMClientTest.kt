@@ -27,6 +27,82 @@ import kotlin.test.assertNull
  */
 class MederiOpenAILLMClientTest {
 
+    @Test
+    fun `stream error preserves original payload classification and retry eligibility`() {
+        val raw = """{"id":"gen-failed","error":{"code":429,"message":"Rate limit exceeded","metadata":{"provider_name":"upstream","raw":"${"detail".repeat(200)}"}},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}"""
+        val error = kotlin.test.assertFails { makeClient().checkChatResponseError(raw) }
+        val record = xyz.mederi.debug.ErrorCollector.collect(error)
+        assertEquals(xyz.mederi.debug.ErrorCategory.RATE_LIMIT, record.category)
+        assertEquals(429, record.httpStatusCode)
+        assertEquals(raw, record.errorBody)
+        kotlin.test.assertTrue(record.fullDiagnostic.contains(raw))
+        kotlin.test.assertTrue(record.toPayload()["errorBody"] == raw)
+        kotlin.test.assertTrue(xyz.mederi.provider.infrastructure.koog.retry.RetryableLLMClient.isTransientError(error))
+        val report = xyz.mederi.tools.subagent.subagentErrorReport(record.toPayload())
+        kotlin.test.assertTrue(report.contains(raw))
+    }
+
+    @Test
+    fun `responses failures retain raw nested and standalone errors`() {
+        for (raw in listOf(
+            """{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"Upstream unavailable","metadata":{"trace":"original"}}}}""",
+            """{"type":"error","code":"invalid_request","message":"Original standalone message"}""",
+            """{"status":"failed","error":{"code":"server_error","message":"Non-streaming original error"}}"""
+        )) {
+            val error = kotlin.test.assertFails { makeClient().checkResponsesResponseError(raw) }
+            val record = xyz.mederi.debug.ErrorCollector.collect(error)
+            assertEquals(raw, record.errorBody)
+            kotlin.test.assertTrue(record.fullDiagnostic.contains(raw))
+            kotlin.test.assertTrue(xyz.mederi.tools.subagent.subagentErrorReport(record.toPayload()).contains(raw))
+        }
+    }
+
+    @Test
+    fun `error only frame without numeric code keeps original reason`() {
+        val raw = """{"error":{"code":"provider_failed","message":"Upstream disconnected","metadata":{"trace_id":"trace-original"}}}"""
+        val error = kotlin.test.assertFails { makeClient().checkChatResponseError(raw) }
+        val record = xyz.mederi.debug.ErrorCollector.collect(error)
+        assertEquals(xyz.mederi.debug.ErrorCategory.API, record.category)
+        assertNull(record.httpStatusCode)
+        assertEquals(raw, record.errorBody)
+        assertEquals("Upstream disconnected", record.serverMessage)
+        kotlin.test.assertTrue(record.fullDiagnostic.contains(raw))
+    }
+
+    @Test
+    fun `choice error and missing error details both preserve response`() {
+        for (raw in listOf(
+            """{"choices":[{"finish_reason":"error","error":{"code":502,"message":"Upstream failed"}}]}""",
+            """{"id":"gen-no-detail","choices":[{"finish_reason":"error"}]}"""
+        )) {
+            val error = kotlin.test.assertFails { makeClient().checkChatResponseError(raw) }
+            assertEquals(raw, xyz.mederi.debug.ErrorCollector.extractDiagnostics(error).errorBody)
+        }
+    }
+
+    @Test
+    fun `provider error after partial text does not emit successful end`() = runBlocking {
+        val client = makeClient()
+        val frames = mutableListOf<StreamFrame>()
+        val partialDelivered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val error = kotlin.test.assertFails {
+            client.processStreamingFlow(kotlinx.coroutines.flow.flow {
+                emit(SanitizedStreamResponse(
+                    choices = listOf(SanitizedStreamChoice(SanitizedStreamDelta(content = "partial"), index = 0)),
+                    created = 0, id = "gen-partial", model = "test", objectType = "chat.completion.chunk"))
+                // 等待真实交付一帧后再模拟断流，避免纯内存生产者抢先失败取消缓冲帧。
+                kotlinx.coroutines.withTimeout(5_000) { partialDelivered.await() }
+                client.checkChatResponseError("""{"error":{"code":502,"message":"Provider disconnected"},"choices":[{"finish_reason":"error"}]}""")
+            }).collect {
+                frames.add(it)
+                if (it is StreamFrame.TextDelta) partialDelivered.complete(Unit)
+            }
+        }
+        kotlin.test.assertTrue(frames.any { it is StreamFrame.TextDelta })
+        kotlin.test.assertTrue(frames.none { it is StreamFrame.End })
+        assertEquals(502, xyz.mederi.debug.ErrorCollector.extractDiagnostics(error).httpStatusCode)
+    }
+
     /** 不会被实际调用（processStreamingFlow 不走 HTTP）；构造期需要一个非 null 的 KoogHttpClient */
     private val fakeHttpClient = object : KoogHttpClient {
         override val clientName: String = "fake"

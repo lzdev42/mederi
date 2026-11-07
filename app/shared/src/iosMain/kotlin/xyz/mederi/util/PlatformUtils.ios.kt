@@ -1,8 +1,6 @@
 package xyz.mederi.util
 
-actual fun openUrl(url: String) {
-    // iOS: would use UIApplication.shared.open; stub for now
-}
+actual fun openUrl(url: String): Boolean = false // 遥控端由调用方 URI handler 打开浏览器。
 
 actual fun openFile(path: String): Boolean {
     // iOS: 本地文件打开需要 UIDocumentInteractionController；暂无场景，stub

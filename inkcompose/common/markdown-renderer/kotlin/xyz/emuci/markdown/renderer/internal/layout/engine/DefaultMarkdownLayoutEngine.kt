@@ -443,7 +443,7 @@ private fun layoutBlockInternal(
                 width = width,
                 insets = insets,
                 environment = environment,
-                showDivider = block.level <= 2,
+                showDivider = environment.markdownTheme.showHeadingDividers && block.level <= 2,
             )
         }
 

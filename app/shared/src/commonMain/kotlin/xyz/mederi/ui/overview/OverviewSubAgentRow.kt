@@ -37,6 +37,9 @@ import compose.icons.feathericons.Minus
 import compose.icons.feathericons.Square
 import compose.icons.feathericons.Activity
 import compose.icons.feathericons.Users
+import compose.icons.feathericons.Settings
+import mederi.app.shared.generated.resources.settings_agents_session_title
+import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.subagent_card_title
 import mederi.app.shared.generated.resources.subagent_running_count
@@ -69,6 +72,7 @@ fun OverviewSubAgentRow(
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     val colors = LocalMederiColors.current
     val subagents = viewModel.subagents
@@ -105,6 +109,10 @@ fun OverviewSubAgentRow(
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                 )
+            }
+            onOpenSettings?.let { open ->
+                MederiMinimalIconButton(FeatherIcons.Settings, open,
+                    contentDescription = stringResource(Res.string.settings_agents_session_title))
             }
         },
         expanded = expanded,

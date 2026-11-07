@@ -6,13 +6,12 @@
 
 ## 1. 执行沙盒实现细节
 
-**安全模型 = 分诊判断 + 沙箱**（无逐操作询问）：主代理按分诊流程自主判断执行路径，
-沙盒（路径/命令强制）兜底。不变量 = 文件工具只能写项目目录、bash 走 OS 级写沙箱（macOS Seatbelt / Linux bwrap 检测 / Windows 降级警告）、读全盘放行。全局白名单在设置页配置。
+**安全模型 = 分诊判断 + 项目权限策略 + 沙箱**。项目级「需要批准/完全访问」由 `SandboxManager` 经 `SettingsStore` 管理；配置、状态和批准走 AiCore 四处契约。具体机制与验收见 `docs/sandbox-plan.md`，不做 AI 自动审查。
 
 **不变量（代码强制，全平台）**：
-- 文件工具（write_file/edit_file/apply_patch）只能写项目 directories + `.mederi/` + 全局白名单；读全盘放行
+- 需要批准模式：文件工具共用 `SandboxPaths` 与 `ExecutionPermissions`，项目/实际临时目录/显式白名单自动可写，保护目录及越界写在落盘前申请本次批准；除显式项目黑名单外可读全盘。完全访问仍遵守黑名单，免执行审批；计划批准不改变权限模式。
 - **同文件并发写硬拒绝（2026-09）**：write_file/edit_file/apply_patch 落盘前经进程级 `FileWriteRegistry`（`tools/FileWriteRegistry.kt`）try-lock——文件已被其他并发工具调用占用则直接返回 Error，写完（含异常）finally 释放；键 = canonical path，跨 turn/跨子代理/跨 session 生效。bash 与 MCP 工具是外部进程，不在注册表管辖内（提示词约束兜底）
-- bash：macOS Seatbelt（sandbox-exec）/ Linux bwrap（只检测不代装；完整挂载探测失败保留原始错误并阻止命令，不退回裸跑）/ Windows 降级警告；shell 探测链 bash→sh（Windows bash.exe→cmd）
+- bash：macOS Seatbelt（可信内联 profile）/ Linux bwrap + seccomp（默认阻止命令联网及宿主 socket 连接）；前台/后台/验证共用授权入口。`network` 保留文件边界，`off` 及完全访问解除默认写限制，但保留显式路径黑名单封套。后端失败阻止受限执行，Windows 未实现受限后端。shell 探测链 bash→sh（Windows bash.exe→cmd）。
 - **进程回收**：每条命令是独立进程组，bash 启动即登记 `ProcessRegistry`；`list_processes`/`stop_process` 宿主侧（沙箱外）按注册表整组回收——macOS 沙箱内信号不可用（profile 无 process-signal，实测 unbound），只能靠宿主侧。**只杀 mederi 自己启动的进程**，注册表查不到 pid 即拒绝，沙箱内命令无法写注册表
 - AgentMode 两模式工具集完全一致，**唯一区别 = 计划批准者**：APPROVAL 等用户批准，AUTONOMOUS 自动批准立即执行
 - `subagent`(action=SPAWN) planId/subtaskIndex 可选：携带 planId+subtaskIndex 时硬校验 spec 存在性（spec 不存在即拒）；不带 planId 走 ad-hoc 执行路径（task+briefing 直接派 executor，无 spec 门禁）
@@ -101,7 +100,7 @@
 
 ### 安全网
 
-1. **沙盒（代码强制）**：文件工具只能写项目目录 + `.mederi/` + 全局白名单；命令走 OS 级写沙箱
+1. **项目权限与沙盒（代码强制）**：需要批准模式按共享路径策略自动放行范围内操作、越界批准一次，命令默认隔离文件写与网络；完全访问免执行审批，显式项目拒绝规则仍生效。计划审批不改变权限。
 2. **分诊与协作**：只读调查 → 讨论确认 → 执行验收；仅复杂软件开发走 Plan Loop，其他交付可用 Todo。子代理按效率、成本与上下文后续价值选择，不由复杂度强制触发。
 3. plan 从"写文件通行证"降级为"复杂工作的审批流程"——用户批准点保留（APPROVAL 模式），不再锁所有写
 

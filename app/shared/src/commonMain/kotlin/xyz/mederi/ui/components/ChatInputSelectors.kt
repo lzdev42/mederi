@@ -37,8 +37,11 @@ import compose.icons.feathericons.Sliders
 import compose.icons.feathericons.X
 import mederi.app.shared.generated.resources.Res
 import xyz.mederi.core.contract.models.ModelOption
+import xyz.mederi.core.contract.models.AgentMode
 import xyz.mederi.core.contract.models.ProviderConfig
 import mederi.app.shared.generated.resources.auto_approve_title
+import mederi.app.shared.generated.resources.mode_auto_approve
+import mederi.app.shared.generated.resources.mode_manual_approve
 import mederi.app.shared.generated.resources.auto_approve_tooltip_main
 import mederi.app.shared.generated.resources.auto_approve_tooltip_note
 import mederi.app.shared.generated.resources.cap_image
@@ -51,6 +54,7 @@ import mederi.app.shared.generated.resources.input_no_project
 import mederi.app.shared.generated.resources.input_open_project
 import mederi.app.shared.generated.resources.input_provider_default
 import mederi.app.shared.generated.resources.input_reasoning_level
+import mederi.app.shared.generated.resources.chatgpt_plan_label
 import mederi.app.shared.generated.resources.input_select_model
 import mederi.app.shared.generated.resources.input_select_project
 import mederi.app.shared.generated.resources.input_selected
@@ -245,7 +249,9 @@ internal fun ModelSelectorMenu(viewModel: WorkspaceViewModel, compact: Boolean) 
     Box {
         ChipSelectorPill(
             icon = FeatherIcons.Cpu,
-            label = selectedModel?.name ?: stringResource(Res.string.input_select_model),
+            label = if (providers.any { it.id == selectedModel?.provider && it.isChatGptOAuth })
+                "${selectedModel?.name} · ${stringResource(Res.string.chatgpt_plan_label)}"
+                else selectedModel?.name ?: stringResource(Res.string.input_select_model),
             // 封顶胶囊宽度：超长模型名省略作溢出兜底，不无限撑宽、不挤压 send/thinking 控件
             maxWidth = 260.dp,
             onClick = { expanded = true }
@@ -623,36 +629,7 @@ internal fun MobileModelBottomSheet(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // 1. 自动审批开关
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = stringResource(Res.string.auto_approve_title),
-                                color = colors.textPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            HelpCircleTooltip(
-                                mainText = stringResource(Res.string.auto_approve_tooltip_main),
-                                noteText = stringResource(Res.string.auto_approve_tooltip_note),
-                                touchTargetSize = 24.dp,
-                                iconSize = 14.dp
-                            )
-                        }
-                        AutoApproveSwitch(
-                            viewModel = viewModel,
-                            scale = 0.8f,
-                            switchWidth = 36.dp,
-                            switchHeight = 22.dp
-                        )
-                    }
+                    PermissionPlanSelector(viewModel, inline = true)
 
                     // 2. 推理等级选择（条件显示：仅当前模型支持推理且生效档位已推导出时展示）
                     val sheetModel = selectedModel

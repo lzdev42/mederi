@@ -62,7 +62,8 @@ internal fun LayoutEnvironment.measureLeafBlockContentHeight(
             0,
             markdownTheme.headingStyles.lastIndex
         )]
-        measureInlineBlock(block.inline, style, widthPx) + if (block.level <= 2) 8f else 0f
+        val dividerHeight = if (markdownTheme.showHeadingDividers && block.level <= 2) 8f else 0f
+        measureInlineBlock(block.inline, style, widthPx) + dividerHeight
     }
 
     is TableBlockModel -> measureTableBlockContentHeight(block, widthPx)

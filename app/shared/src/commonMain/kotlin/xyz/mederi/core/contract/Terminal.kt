@@ -3,7 +3,7 @@ package xyz.mederi.core.contract
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * 终端会话契约（同 RemoteControlHooks/SandboxHooks 模式——平台能力注入，不进 AiCore 主契约）。
+ * 终端会话契约（同 RemoteControlHooks 模式——平台能力注入，不进 AiCore 主契约）。
  *
  * 仅本机进程实现（desktop / server 的 jvmMain PtyTerminalHub）；
  * wasmJs/移动端是遥控端，UI 用 `as?` 安全转型，null = 该端无本地终端（后续接远程 WS 客户端）。

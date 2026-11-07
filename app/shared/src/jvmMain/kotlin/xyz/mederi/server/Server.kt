@@ -43,6 +43,7 @@ import xyz.mederi.core.contract.models.SetDefaultBrowserInput
 import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
+import xyz.mederi.core.contract.models.*
 import io.ktor.server.sse.ServerSSESession
 import io.ktor.server.sse.SSE
 import io.ktor.server.sse.heartbeat
@@ -57,6 +58,7 @@ import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.api.exception.MederiStateException
 import xyz.mederi.api.exception.MederiValidationException
 import xyz.mederi.core.bridge.MederiAiCore
+import xyz.mederi.core.contract.AiCore
 import xyz.mederi.core.contract.dto.AddApiKeyInput
 import xyz.mederi.core.contract.dto.AddModelInput
 import xyz.mederi.core.contract.dto.ApiError
@@ -172,7 +174,7 @@ private val ContentTypeWasm = ContentType("application", "wasm")
  * desktop 内嵌（[Server]）与独立 server 入口共用同一套配置。
  */
 fun Application.serverModule(
-    aiCore: MederiAiCore,
+    aiCore: AiCore,
     ready: ReadyInfo,
     password: String? = null,
     webappDir: String? = null,
@@ -313,7 +315,7 @@ fun Application.serverModule(
 }
 
 /** 全部 `/v1` 业务路由（鉴权包裹与否由 [serverModule] 决定）。 */
-fun Route.v1Routes(aiCore: MederiAiCore) {
+fun Route.v1Routes(aiCore: AiCore) {
     get("/v1/presets") { call.respondData(aiCore.builtinPresets) }
     get("/v1/agents") { call.respondData(aiCore.availableAgents.value) }
     get("/v1/models") { call.respondData(aiCore.availableModels.value) }
@@ -362,7 +364,7 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
 
     post("/v1/sessions") {
         val input = call.receive<CreateConversationInput>()
-        call.respondResult(aiCore.createConversation(input.projectId, input.agent))
+        call.respondResult(aiCore.createConversation(input))
     }
     delete("/v1/sessions/{id}") {
         call.respondResult(aiCore.deleteConversation(call.parameters["id"]!!))
@@ -406,6 +408,30 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     post("/v1/sessions/{id}/questions/{questionId}") {
         val input = call.receive<ResolveQuestionInput>()
         call.respondResult(aiCore.resolveQuestion(call.parameters["id"]!!, call.parameters["questionId"]!!, input.answers))
+    }
+    post("/v1/sessions/{id}/execution-approvals/{requestId}") {
+        val input = call.receive<xyz.mederi.core.contract.models.ResolveExecutionApprovalInput>()
+        call.respondResult(aiCore.resolveExecutionApproval(call.parameters["id"]!!, call.parameters["requestId"]!!, input.approved))
+    }
+    get("/v1/projects/{projectId}/sandbox/settings") {
+        call.respondResult(aiCore.getSandboxSettings(call.parameters["projectId"]!!))
+    }
+    post("/v1/projects/{projectId}/sandbox/settings") {
+        val settings = call.receive<xyz.mederi.core.contract.models.SandboxSettings>()
+        call.respondResult(aiCore.updateSandboxSettings(call.parameters["projectId"]!!, settings))
+    }
+    get("/v1/projects/{projectId}/sandbox/status") {
+        call.respondResult(aiCore.getSandboxStatus(call.parameters["projectId"]!!))
+    }
+    get("/v1/sessions/{id}/plans/{planId}/acceptance-report") {
+        aiCore.getPlanAcceptanceReport(call.parameters["id"]!!, call.parameters["planId"]!!).fold(
+            onSuccess = { call.respondText(it, ContentType.parse("text/markdown")) },
+            onFailure = { call.respondError(it) },
+        )
+    }
+    post("/v1/sessions/{id}/plans/{planId}/manual-acceptance") {
+        val input = call.receive<xyz.mederi.core.contract.models.ManualPlanAcceptanceInput>()
+        call.respondResult(aiCore.recordPlanManualAcceptance(call.parameters["id"]!!, call.parameters["planId"]!!, input))
     }
     post("/v1/sessions/{id}/plans/{planId}/approve") {
         val input = call.receive<ResolvePlanApprovalInput>()
@@ -497,7 +523,8 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
                 contextWindow = input.contextWindow,
                 maxTokens = input.maxTokens,
                 reasoningLevels = input.reasoningLevels,
-                isEnabled = input.isEnabled
+                isEnabled = input.isEnabled,
+                optimizeForRequestCount = input.optimizeForRequestCount,
             )
         )
     }
@@ -644,6 +671,33 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     // 子代理任务汇报
     // ------------------------------------------------------------------
 
+    get("/v1/sessions/{id}/subagent-configs") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.listSessionSubagentConfigs(id))
+    }
+    get("/v1/sessions/{id}/subagent-configs/global") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.getSessionSubagentGlobalSettings(id))
+    }
+    put("/v1/sessions/{id}/subagent-configs/global") {
+        val id = call.parameters["id"] ?: return@put call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.updateSessionSubagentGlobalSettings(id, call.receive<UpdateSubagentGlobalSettingsInput>()))
+    }
+    delete("/v1/sessions/{id}/subagent-configs/global") {
+        val id = call.parameters["id"] ?: return@delete call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.updateSessionSubagentGlobalSettings(id, null))
+    }
+    put("/v1/sessions/{id}/subagent-configs/{role}") {
+        val id = call.parameters["id"] ?: return@put call.respond(HttpStatusCode.BadRequest)
+        val role = call.parameters["role"] ?: return@put call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.updateSessionSubagentConfig(id, role, call.receive<UpdateSubagentConfigInput>()))
+    }
+    delete("/v1/sessions/{id}/subagent-configs/{role}") {
+        val id = call.parameters["id"] ?: return@delete call.respond(HttpStatusCode.BadRequest)
+        val role = call.parameters["role"] ?: return@delete call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.updateSessionSubagentConfig(id, role, null))
+    }
+
     get("/v1/subagents/{agentId}/report") {
         val agentId = call.parameters["agentId"] ?: return@get call.respond(HttpStatusCode.BadRequest)
         call.respondResult(aiCore.getSubagentReport(agentId))
@@ -671,6 +725,137 @@ fun Route.v1Routes(aiCore: MederiAiCore) {
     post("/v1/browser-tasks/{taskId}/stop") {
         val taskId = call.parameters["taskId"] ?: return@post call.respond(HttpStatusCode.BadRequest)
         call.respondResult(aiCore.stopBrowserTask(taskId))
+    }
+
+    // ------------------------------------------------------------------
+    // Workspace Management
+    // ------------------------------------------------------------------
+
+    get("/v1/projects/{id}/repository") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.getRepositoryInfo(id))
+    }
+    get("/v1/projects/{id}/workspaces") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.listWorkspaces(id))
+    }
+    get("/v1/sessions/{id}/workspace") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.getConversationWorkspace(id))
+    }
+    post("/v1/sessions/{id}/workspace/handoff/preview") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<HandoffPreviewInput>()
+        call.respondResult(aiCore.previewWorkspaceHandoff(id, input))
+    }
+    post("/v1/sessions/{id}/workspace/handoff") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<HandoffInput>()
+        call.respondResult(aiCore.handoffWorkspace(id, input))
+    }
+    post("/v1/workspaces/{id}/restore") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<RestoreWorkspaceInput>()
+        call.respondResult(aiCore.restoreWorkspace(id, input))
+    }
+    post("/v1/workspaces/{id}/archive") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<ArchiveWorkspaceInput>()
+        call.respondResult(aiCore.archiveWorkspace(id, input))
+    }
+    post("/v1/workspaces/{id}/branch") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<CreateWorkspaceBranchInput>()
+        call.respondResult(aiCore.createWorkspaceBranch(id, input))
+    }
+    get("/v1/workspace-operations/{id}") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.getWorkspaceOperation(id))
+    }
+    post("/v1/workspace-operations/{id}/cancel") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.cancelWorkspaceOperation(id))
+    }
+    get("/v1/projects/{id}/workspace-operations") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.listWorkspaceOperations(id))
+    }
+    post("/v1/sessions/{id}/archive") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<SetConversationArchivedInput>()
+        call.respondResult(aiCore.setConversationArchived(id, input.archived, input.requestId))
+    }
+    post("/v1/sessions/{id}/pin") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<SetConversationPinnedInput>()
+        call.respondResult(aiCore.setConversationPinned(id, input.pinned))
+    }
+    get("/v1/projects/{id}/archived-sessions") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        call.respondResult(aiCore.listArchivedConversations(id))
+    }
+    get("/v1/worktree-settings") {
+        call.respondResult(aiCore.getWorktreeSettings())
+    }
+    post("/v1/worktree-settings") {
+        val input = call.receive<WorktreeSettings>()
+        call.respondResult(aiCore.updateWorktreeSettings(input))
+    }
+    get("/v1/projects/{id}/environments") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        val workspaceId = call.request.queryParameters["workspaceId"]
+        call.respondResult(aiCore.listProjectEnvironments(id, workspaceId))
+    }
+    post("/v1/projects/{id}/environments") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val workspaceId = call.request.queryParameters["workspaceId"]
+        val input = call.receive<SaveProjectEnvironmentInput>()
+        call.respondResult(aiCore.saveProjectEnvironment(id, input.environment, input.expectedVersion, workspaceId))
+    }
+    post("/v1/workspaces/{id}/actions") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<WorkspaceActionInput>()
+        call.respondResult(aiCore.runWorkspaceAction(id, input))
+    }
+    get("/v1/workspace-operations/{id}/log") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        val afterOffset = call.request.queryParameters["afterOffset"]?.toLongOrNull() ?: 0L
+        val maxBytes = call.request.queryParameters["maxBytes"]?.toIntOrNull() ?: 262144
+        call.respondResult(aiCore.getWorkspaceOperationLog(id, afterOffset, maxBytes))
+    }
+    get("/v1/workspaces/{id}/files") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        val path = call.request.queryParameters["path"] ?: ""
+        val area = call.request.queryParameters["area"]?.let { runCatching { WorkspaceFileArea.valueOf(it) }.getOrNull() } ?: WorkspaceFileArea.PROJECT
+        call.respondResult(aiCore.listWorkspaceFiles(id, path, area))
+    }
+    get("/v1/workspaces/{id}/file") {
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+        val path = call.request.queryParameters["path"] ?: ""
+        val offset = call.request.queryParameters["offset"]?.toLongOrNull() ?: 0L
+        val maxBytes = call.request.queryParameters["maxBytes"]?.toIntOrNull() ?: 262144
+        val area = call.request.queryParameters["area"]?.let { runCatching { WorkspaceFileArea.valueOf(it) }.getOrNull() } ?: WorkspaceFileArea.PROJECT
+        call.respondResult(aiCore.readWorkspaceFile(id, path, offset, maxBytes, area))
+    }
+    post("/v1/sessions/{id}/workspace/retry") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<RetryWorkspacePreparationInput>()
+        call.respondResult(aiCore.retryWorkspacePreparation(id, input.failedOperationId, input.requestId))
+    }
+    post("/v1/workspaces/{id}/setup/retry") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<RetryWorkspaceSetupInput>()
+        call.respondResult(aiCore.retryWorkspaceSetup(id, input.failedOperationId, input.expectedEnvironmentHash, input.requestId))
+    }
+    post("/v1/workspace-operations/{id}/recovery/preview") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<PreviewWorkspaceRecoveryInput>()
+        call.respondResult(aiCore.previewWorkspaceRecovery(id, input.strategy, input.snapshotId, input.keepWorkspaceId))
+    }
+    post("/v1/workspace-operations/{id}/recovery") {
+        val id = call.parameters["id"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+        val input = call.receive<WorkspaceRecoveryInput>()
+        call.respondResult(aiCore.recoverWorkspaceOperation(id, input))
     }
 }
 
@@ -702,6 +887,19 @@ suspend fun ApplicationCall.respondError(e: Throwable) {
         is MederiNotFoundException -> HttpStatusCode.NotFound to (e.message ?: "not found")
         is MederiValidationException -> HttpStatusCode.BadRequest to (e.message ?: "bad request")
         is MederiStateException -> HttpStatusCode.Conflict to (e.message ?: "conflict")
+        is xyz.mederi.api.exception.MederiWorkspaceException -> {
+            val code = when (e.code) {
+                xyz.mederi.workspace.WorkspaceErrorCode.PATH_DENIED -> HttpStatusCode.Forbidden
+                xyz.mederi.workspace.WorkspaceErrorCode.WORKSPACE_MISSING, xyz.mederi.workspace.WorkspaceErrorCode.NOT_GIT_REPOSITORY -> HttpStatusCode.NotFound
+                xyz.mederi.workspace.WorkspaceErrorCode.STALE_GENERATION,
+                xyz.mederi.workspace.WorkspaceErrorCode.STALE_OPERATION,
+                xyz.mederi.workspace.WorkspaceErrorCode.STALE_PREVIEW,
+                xyz.mederi.workspace.WorkspaceErrorCode.ENVIRONMENT_CHANGED -> HttpStatusCode.Conflict
+                xyz.mederi.workspace.WorkspaceErrorCode.WORKSPACE_BUSY, xyz.mederi.workspace.WorkspaceErrorCode.BRANCH_IN_USE -> HttpStatusCode.Conflict
+                else -> HttpStatusCode.BadRequest
+            }
+            code to (e.message ?: "workspace error")
+        }
         is MederiException -> HttpStatusCode.BadRequest to (e.message ?: "mederi error")
         else -> HttpStatusCode.InternalServerError to (e.message ?: "internal error")
     }

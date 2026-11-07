@@ -195,6 +195,9 @@ class IncrementalEngine(
             return _document
         }
 
+        // 文档开头的元数据定界符会影响整个文档；编辑可能添加/移除远处闭合符。
+        if (startsWithFrontMatterMarker(oldSource) || startsWithFrontMatterMarker(newSource)) return doFullParse()
+
         // 计算脏区域
         val oldChildren = _document.children.toList()
         val dirtyRange = dirtyTracker.computeDirtyRange(edit, oldSource, newSource, oldChildren)
@@ -296,9 +299,13 @@ class IncrementalEngine(
     /**
      * append-only 增量解析（流式场景）。
      */
+    private fun startsWithFrontMatterMarker(source: SourceText): Boolean =
+        source.lineCount > 0 && source.lineContent(0).trim().let { it == "---" || it == "+++" }
+
     private fun doIncrementalAppend(): Document {
         val text = fullText.toString()
         val newSource = SourceText.of(text)
+        val previousSource = _sourceText
         _sourceText = newSource
 
         if (newSource.lineCount == 0) {
@@ -319,7 +326,14 @@ class IncrementalEngine(
         } else {
             stableEndLine
         }
-        val reparseStart = if (lastStableBlock != null && isSelfDelimitedBlock(lastStableBlock)) {
+        // 未闭合元数据此前作为普通 Markdown 展示；闭合符到达后必须从第一行重新判定。
+        val frontMatterClosedNow = startsWithFrontMatterMarker(newSource) && oldChildren.firstOrNull() !is FrontMatter &&
+            ((previousSource.lineCount - 1).coerceAtLeast(1) until newSource.lineCount).any {
+                newSource.lineContent(it).trim() == newSource.lineContent(0).trim()
+            }
+        val reparseStart = if (frontMatterClosedNow) {
+            0
+        } else if (lastStableBlock != null && isSelfDelimitedBlock(lastStableBlock)) {
             safeStableEndLine.coerceAtMost(newSource.lineCount)
         } else {
             dirtyTracker.computeAppendDirtyRange(safeStableEndLine, newSource).startLine

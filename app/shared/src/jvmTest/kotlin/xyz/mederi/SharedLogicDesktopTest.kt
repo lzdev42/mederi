@@ -2094,9 +2094,9 @@ class SharedLogicDesktopTest {
             )
             val vm = xyz.mederi.ui.WorkspaceViewModel(appState)
 
-            // 1. 指定 0-based offset=1140, max_lines=120 -> 换算 1-based 为 #L1141-1260
+            // 1. read_file 使用 1-based offset=1140, max_lines=120 -> #L1140-1259
             val t1 = vm.probeToolTarget("read_file", mapOf("path" to "TurnExecutor.kt", "offset" to "1140", "max_lines" to "120"))
-            assertEquals("TurnExecutor.kt#L1141-1260", t1)
+            assertEquals("TurnExecutor.kt#L1140-1259", t1)
 
             // 2. 指定 offset=0, max_lines=50 -> #L1-50
             val t2 = vm.probeToolTarget("read_file", mapOf("path" to "TurnExecutor.kt", "offset" to "0", "max_lines" to "50"))

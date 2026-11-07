@@ -1,6 +1,7 @@
 package xyz.mederi.domain.model
 
 import kotlinx.serialization.Serializable
+import xyz.mederi.provider.domain.model.ReasoningLevel
 
 /**
  * 消息角色。
@@ -143,7 +144,19 @@ data class Message(
     val pendingSteering: Boolean = false,
     /** 同一工作周期的权威墙钟端点（epoch ms），与单次 LLM durationMs 区分。 */
     val workStartedAt: Long? = null,
-    val workCompletedAt: Long? = null
+    val workCompletedAt: Long? = null,
+    /** 已接收的首次输入，等待该工作区准备成功后才能进入模型上下文。 */
+    val pendingWorkspaceInput: PendingWorkspaceInput? = null,
+)
+
+/** 与用户消息同一条历史记录持久化。密钥只保存选择的 ID。 */
+@Serializable
+data class PendingWorkspaceInput(
+    val workspaceId: String,
+    val agentMode: AgentMode,
+    val aiModel: AIModel?,
+    val reasoningLevel: ReasoningLevel?,
+    val apiKeyId: String?,
 )
 
 /**

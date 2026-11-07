@@ -103,7 +103,12 @@ class PlanValidationTest {
                         targetFiles = listOf("check.sh"),
                         verification = "grep -q foo file.txt && echo PASS",
                         verificationExpected = "命令 exit 0，输出 PASS",
-                        verificationExpectStdoutContains = listOf("PASS")
+                        verificationExpectStdoutContains = listOf("PASS"),
+                        overallAcceptance = true,
+                        acceptanceCases = listOf(xyz.mederi.plan.AcceptanceCase(
+                            "V-01", "Check output", "file.txt exists", "line foo", "Run the script",
+                            "Collector stdout", "foo", "Missing line"
+                        ))
                     )
                 )
             )
@@ -147,7 +152,12 @@ class PlanValidationTest {
                         verificationCwd = "sub/dir",
                         verificationTimeoutSeconds = 120,
                         verificationExpected = "命令 exit 0，输出 PASS",
-                        verificationExpectStdoutContains = listOf("PASS")
+                        verificationExpectStdoutContains = listOf("PASS"),
+                        overallAcceptance = true,
+                        acceptanceCases = listOf(xyz.mederi.plan.AcceptanceCase(
+                            "V-01", "Check output", "file.txt exists", "line foo", "Run the script",
+                            "Collector stdout", "foo", "Missing line"
+                        ))
                     )
                 )
             )

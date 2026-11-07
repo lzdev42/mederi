@@ -14,7 +14,7 @@
 | C04 | UserMessageFooter | 时间/回滚/复制；复制反馈自行delay；子代理合成用户消息不能显示回滚 | MessageActionBar，R06 |
 | C05 | ChatListContent 助手正文、图片；`atoms/MederiMarkdown.kt` | InkCompose承载选择、复制、代码、表格、公式、图表/竖排；内容主题与UI主题边界需明确 | MessageContent，R06 |
 | C06 | AssistantMessageFooter | 模型/审批/推理/时间/耗时常显；mono与两个复制文字入口密集 | MessageActionBar + Details，R06 |
-| C07 | `WorkTraceCard.kt` | 共享ProcessRow是好基础；默认折叠，320dp内部滚动与“展开全部”，存在嵌套展开/滚动 | Activity，R07 |
+| C07 | `WorkTraceCard.kt` | 共享ProcessRow是好基础；默认展开，正文统一Markdown；推理/工具独立收起，推理头实时单行预览（2026-11-04） | Activity，R07 |
 | C08 | `ReasoningBlock.kt` | 共享ProcessRow；200dp独立限高；局部文字呼吸，无活动也可能创建transition | ActivityDetail，R04b/R07 |
 | C09 | `ToolCallsBlock.kt` | 动作聚合/输入参数/输出/报告/ASK结果；运行中可查看输入，不能退回不可展开占位 | ActivityDetail + CodeOutput，R07 |
 | C10 | ToolCallsBlock SubagentCallsBlock | 已有成功派发细rail/Check/两行固定说明，折叠外展示；Builder与View重复判成功谓词 | Notice，R07；保留已有异步说明 |

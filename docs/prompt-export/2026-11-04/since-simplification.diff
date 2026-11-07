@@ -1,0 +1,250 @@
+diff --git a/core/src/commonMain/kotlin/xyz/mederi/prompt/EnvironmentInfoProvider.kt b/core/src/commonMain/kotlin/xyz/mederi/prompt/EnvironmentInfoProvider.kt
+index c058917..d553573 100644
+--- a/core/src/commonMain/kotlin/xyz/mederi/prompt/EnvironmentInfoProvider.kt
++++ b/core/src/commonMain/kotlin/xyz/mederi/prompt/EnvironmentInfoProvider.kt
+@@ -2,7 +2,8 @@ package xyz.mederi.prompt
+ 
+ import xyz.mederi.tools.background.BackgroundTaskManager
+ import xyz.mederi.tools.sandbox.CommandSandbox
+-import xyz.mederi.tools.sandbox.SandboxConfig
++import xyz.mederi.tools.sandbox.SandboxSettings
++import xyz.mederi.tools.sandbox.ExecutionPermissionMode
+ import java.io.File
+ import java.time.Instant
+ import java.time.ZoneId
+@@ -23,7 +24,9 @@ object EnvironmentInfoProvider {
+     fun build(
+         commandSandbox: CommandSandbox?,
+         directories: List<String>,
+-        stoppedBackgroundTasks: List<BackgroundTaskManager.BackgroundTaskEntry> = emptyList()
++        stoppedBackgroundTasks: List<BackgroundTaskManager.BackgroundTaskEntry> = emptyList(),
++        sandboxSettings: SandboxSettings? = null,
++        artifactDirectory: String? = null
+     ): String {
+         val now = Instant.now()
+         val tz = ZoneId.systemDefault()
+@@ -36,15 +39,29 @@ object EnvironmentInfoProvider {
+         val localDow = zoned.dayOfWeek
+             .getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
+ 
++        val mederiWorkdir = artifactDirectory ?: File(directories.first(), ".mederi").absolutePath
++
+         return buildString {
+             append("\n\n# Runtime Environment\n")
+             appendLine("UTC: $utc ($utcDow)")
+             appendLine("Local: $local (${tz.id}, $localDow)")
+-            append(CommandSandbox.environmentNote(commandSandbox))
++            if (sandboxSettings?.mode == ExecutionPermissionMode.FULL_ACCESS) {
++                append(CommandSandbox.environmentNote(null))
++                appendLine("Shell: ${commandSandbox?.shell ?: "unknown"}")
++                appendLine("Execution permissions: FULL_ACCESS — commands and file writes do not require execution approval.")
++            } else {
++                append(CommandSandbox.environmentNote(commandSandbox))
++                appendLine("Execution permissions: NEEDS_APPROVAL — writes outside allowed roots and elevated commands require one-time user approval.")
++            }
+             appendLine("Project dir: ${directories.first()}")
+-            SandboxConfig.extraWritablePaths.takeIf { it.isNotEmpty() }
++            sandboxSettings?.extraWritablePaths?.takeIf { it.isNotEmpty() }
+                 ?.let { appendLine("Extra writable paths: ${it.joinToString(", ")}") }
+-            appendLine("Mederi workdir: ${File(directories.first(), ".mederi").absolutePath}")
++            sandboxSettings?.let { settings ->
++                if (settings.deniedPaths.isNotEmpty()) appendLine("Project denied paths (read/write, including FULL_ACCESS): ${settings.deniedPaths.joinToString(", ")}")
++                if (settings.allowedCommands.isNotEmpty()) appendLine("Allowed static command prefixes: ${settings.allowedCommands.joinToString("; ")}")
++                if (settings.deniedCommands.isNotEmpty()) appendLine("Denied static command prefixes: ${settings.deniedCommands.joinToString("; ")}")
++            }
++            appendLine("Mederi workdir: $mederiWorkdir")
+             // 用户停止的后台任务（consumeStoppedForSession 取出即消费，下轮不再显示）
+             if (stoppedBackgroundTasks.isNotEmpty()) {
+                 appendLine("Recently stopped background tasks:")
+diff --git a/core/src/commonMain/kotlin/xyz/mederi/prompt/PromptGuides.kt b/core/src/commonMain/kotlin/xyz/mederi/prompt/PromptGuides.kt
+index ea0b06e..152e3d1 100644
+--- a/core/src/commonMain/kotlin/xyz/mederi/prompt/PromptGuides.kt
++++ b/core/src/commonMain/kotlin/xyz/mederi/prompt/PromptGuides.kt
+@@ -16,28 +16,39 @@ object PromptGuides {
+     /**
+      * 执行沙箱使用教程。
+      *
+-     * 核心事实（CommandSandbox 实现对齐）：
+-     * - 永远开：文件工具的写路径校验（纯 Kotlin）全平台硬约束；命令走 OS 级沙箱
+-     * - 读全盘放行；写白名单 = 项目目录 + .mederi/ + 系统临时目录 + 构建缓存 + 全局白名单
+-     * - macOS：Seatbelt，必然可用；Linux：bubblewrap（缺失则警告+安装命令，不代装）；
+-     *   Windows：无命令沙箱，文件工具约束仍然生效
++     * 项目两档独立于计划审批；受限模式越界前申请本次用户批准。
++     * macOS Seatbelt / Linux bwrap+seccomp 默认禁止命令网络，后端失败即停。
++     * 完全访问或已批准 off 才解除沙盒；不默认放开家目录构建缓存。
+      */
+     val SANDBOX_USAGE: String = """
+-# Command Sandbox (shell write isolation)
+-
+-File-tool writes are path-checked in code on every platform. Shell commands run under
+-an OS-level sandbox:
+-
+-- macOS: Seatbelt (sandbox-exec), always on. Writes outside the whitelist fail with
+-  "Operation not permitted".
+-- Linux: bubblewrap. Not installed → commands run unsandboxed with a "[sandbox]" warning
+-  (install via `sudo apt/dnf/pacman install bubblewrap`).
+-- Windows: no native command sandbox; the file-tool path check still applies fully.
+-
+-Write whitelist = project directory + `.mederi/` + system temp + build caches + global
+-whitelist. A blocked write means the target is outside the project — ask the user to
+-add it to the project or the global sandbox whitelist (Settings). Never retry the same
+-blocked command.
++# Execution permissions
++
++Each project has two execution permission modes, independent of plan approval and AgentMode.
++Only the user can change the project mode; never edit configuration files to bypass it.
++
++- NEEDS_APPROVAL (default): file writes within project/temp/explicit writable roots run
++  directly. Protected metadata/configuration paths and outside writes require approval
++  for this exact tool call. File tools request it automatically before changing anything.
++- Commands use macOS Seatbelt or Linux bubblewrap plus seccomp. Networking is disabled;
++  protected paths remain read-only. Missing or broken backends block execution, never
++  silently fall back to unsandboxed execution. Windows has no restricted backend yet.
++- FULL_ACCESS: commands and file writes do not ask for execution approval. Explicit
++  project path and command denials still apply. Plan approvals and ask_user remain independent.
++
++Project denied paths forbid both reading and writing, including in FULL_ACCESS or an
++approved sandbox="off" call; approval cannot override them. Command rules are static argv
++prefixes, with deny taking precedence. An allowed prefix skips elevation approval but
++does not relax sandbox="default". Pipes, redirection and expansions cannot match an allow
++rule; when deny rules exist, split complex shell syntax into individual static commands.
++
++For a command that needs networking, use bash(sandbox="network"). For a command that
++must write protected/outside paths or cannot work inside the sandbox, use
++bash(sandbox="off"). In NEEDS_APPROVAL these requests wait for one-time user approval;
++they do not change the project mode or whitelist. Rejection is not permission to try an
++equivalent bypass. verify_subtask accepts the same sandbox parameter for its own stored
++verification command. Never infer sandbox failure from a nonzero exit alone.
++Build caches outside the writable roots are not implicitly writable. Web search/fetch
++are independent read-only HTTP tools, not grants of network permission to commands.
+ 
+ On macOS, use stop_process to stop mederi-started processes: sandboxed kill/pkill cannot
+ send the required cross-process signals. Never stop processes not started by Mederi.
+diff --git a/core/src/commonMain/kotlin/xyz/mederi/prompt/SystemPrompts.kt b/core/src/commonMain/kotlin/xyz/mederi/prompt/SystemPrompts.kt
+index bf90758..da82dfd 100644
+--- a/core/src/commonMain/kotlin/xyz/mederi/prompt/SystemPrompts.kt
++++ b/core/src/commonMain/kotlin/xyz/mederi/prompt/SystemPrompts.kt
+@@ -104,6 +104,8 @@ $FILE_EDITING_GUIDELINES
+   replace_all=true replaces all matches. write_file creates or overwrites the whole file.
+ - bash: commands run under the sandbox below. Use background=true for long-running commands;
+   completion notifications include output. Track/stop your processes with list_processes/stop_process.
++  For build/compile commands set compilation=true — concurrent compiles from parallel subagents queue
++  per-project (one at a time) instead of colliding; waiting does not count against timeout_seconds.
+   set_timer schedules reminders or later checks.
+ - ask_user: use concrete choices with a short rationale for each, at most 3 questions per call.
+   Investigate factual questions yourself; ask the user about decisions. See Discussion & Execution.
+@@ -129,10 +131,6 @@ $FILE_EDITING_GUIDELINES
+   These calls return immediately. Dispatch independent agents together, then your NEXT response
+   must be a text-only stage reply (ZERO tool calls) describing what result you await. Completion
+   events wake you automatically; do not poll STATUS. Use STATUS/STOP for suspected stalls or cancellation.
+-- browser RUN: dispatches browser operation to the dedicated browser worker. Give the goal,
+-  constraints already agreed with the user, and desired result; let it choose navigation details.
+-  STATUS/STOP manage tasks; INFO lists runtime browsers and tabs. jcef is visible;
+-  camoufox is headless. Browser task dispatch is separate from optional general subagent delegation.
+ - office_read reads docx/xlsx/pptx to Markdown. office_write writes docx/xlsx from Markdown:
+   headings/lists/tables for docx, ## SheetName and tables for xlsx. Read existing files before overwriting.
+ - web_search finds pages; web_fetch reads a page's cleaned text. Prefer configured MCP search/fetch
+@@ -142,6 +140,14 @@ $FILE_EDITING_GUIDELINES
+   writes, or duplicate commands. write_plan must be alone; never mix generate_spec and SPAWN.
+ """
+ 
++    /** 浏览器工具提示词段（仅当有浏览器注册时注入）。 */
++    private const val BROWSER_TOOL_GUIDELINE = """
++- browser RUN: dispatches browser operation to the dedicated browser worker. Give the goal,
++  constraints already agreed with the user, and desired result; let it choose navigation details.
++  STATUS/STOP manage tasks; INFO lists runtime browsers and tabs. Browser task dispatch is
++  separate from optional general subagent delegation.
++"""
++
+     private const val WORKING_DIRECTORY = """
+ # Working Directory
+ 
+@@ -171,12 +177,32 @@ part may use Plan Loop; do not pull the entire request into it.
+ 
+ # Delegation
+ 
+-Subagents are optional. Weigh total time and cost: context growth and its later value, parallelism,
+-briefing, repeated reads, waiting, and reviewing results. Keep short lookups and work whose context
+-you already understand inline when that is cheaper. Prefer delegating broad collection or cross-checking
+-when it produces lots of intermediate material but you mainly need findings, evidence, and artifacts.
+-Keep user discussion, trade-off decisions, and understanding needed throughout the task in the main thread.
+-If research expands, consider delegating the remaining independent investigation rather than continuing
++Subagents are optional. Trust your own judgment of task size and how much of the approach is already
++agreed — there are no hard thresholds or code gates; the sandbox is the backstop. Pick the execution
++path per task:
++- Small work you already understand: edit directly (apply_patch / edit_file / write_file + bash).
++- Larger work where the user has already supplied a detailed approach in the conversation: do NOT
++  re-run write_plan to re-approve it — the user's description is the agreed plan. Break it into todo
++  items with update_todo and dispatch each as an ad-hoc subagent(SPAWN) with enough context (goal,
++  constraints, relevant files, expected result, completion check) to complete the work without
++  re-deriving it. This keeps heavy file reads and multi-step tool runs off the main thread. Review
++  each returned result before continuing to the next item.
++- Larger work needing formal engineering decomposition with independently verifiable subtasks and no
++  agreed approach yet: use the Plan Loop to agree the approach first.
++
++Before dispatching any subagent, investigate the relevant code and files yourself first. A subagent
++does not inherit this conversation and should not need to re-investigate what you already explored —
++it works mostly from your briefing, reading a specific file only when a detail is missing. Write a
++self-contained briefing from what you actually read — concrete file paths,
++current signatures and call sites, relevant types, and the exact change boundary — not a task
++description forwarded from the user. If you cannot yet write that, investigate more before dispatching.
++
++Weigh total time and cost: context growth and its later value, parallelism, briefing, repeated reads,
++waiting, and reviewing results. Keep short lookups and work whose context you already understand
++inline when that is cheaper. Prefer delegating broad collection or cross-checking when it produces
++lots of intermediate material but you mainly need findings, evidence, and artifacts. Keep user
++discussion, trade-off decisions, and understanding needed throughout the task in the main thread. If
++research expands, consider delegating the remaining independent investigation rather than continuing
+ to accumulate low-value material. Neither task type, file count, nor having a plan requires delegation.
+ Give enough context to act correctly; do not make a child guess the user's intent. Independent work
+ may run in parallel; serialize overlapping writes and dependencies. Review returned evidence before
+@@ -295,6 +321,9 @@ difference is who approves the saved plan; both modes follow Discussion & Execut
+ Complete the parent's assigned work, report results and evidence, then terminate. Do not create
+ plans, spawn agents, or ask the end user questions. Follow the supplied scope and project rules;
+ you do not inherit the parent's conversation or AGENTS.md. Never expose credentials.
++The parent has already investigated the relevant code; your briefing or spec should give enough
++context to act. Work from it directly — do not re-derive the parent's investigation. If a specific
++detail is missing, read the precise file or section needed; do not broadly re-explore or guess.
+ For code changes, use the smallest necessary diff, match existing style, and fix causes without
+ hiding failures or inventing missing data.
+ 
+@@ -309,8 +338,8 @@ Stop and report when blocked:
+ - SPEC_FEEDBACK(unsatisfiable): requirements cannot both hold.
+ - SPEC_FEEDBACK(compile-blocked): a compile fix requires changing semantics or expanding scope.
+ Include the blocked step, actual evidence, missing decision, files already changed, and checks run.
+-Do NOT explore the codebase broadly: read referenced sections and additional files only as needed
+-for a correct edit. Run the spec's applicable build/compile check; do NOT discover or select a build command
++Run the spec's applicable build/compile check with compilation=true (concurrent compiles queue
++per-project so parallel executors do not collide); do NOT discover or select a build command
+ when one is required but missing. Plan test verification belongs to the parent via verify_subtask;
+ do not run tests in this path.
+ 
+@@ -405,8 +434,9 @@ quoted evidence to check important claims. Avoid source dumps and unrelated reco
+     private const val TODO_SECTION_TEMPLATE = """
+ # Current Todo
+ {todo}
+-This list is your lightweight tracker for work that does NOT go through the Plan Loop. Keep it
+-current via update_todo (one call replaces the whole list).
++This list tracks work that does NOT go through the Plan Loop — including multi-step ad-hoc execution
++you broke into items and dispatched to subagents. Keep it current via update_todo (one call replaces
++the whole list).
+ """
+ 
+     // ============================ 拼接 ============================
+@@ -524,12 +554,15 @@ current via update_todo (one call replaces the whole list).
+      * 动态段（活跃计划 / 当前 todo）由 [dynamicSuffix] 提供，
+      * 调用方在 withSkillsAndActive/withProjectRules 之后追加，保证静态前缀连续（OpenAI prefix cache 不变量）。
+      */
+-    fun build(agentMode: AgentMode): String {
++    fun build(agentMode: AgentMode, hasBrowser: Boolean = false): String {
+         val workSection = AGENT_MODE_SECTION.trimIndent()
+         val modeSection = workflowSection(agentMode)
+         return buildString {
+             append(configSection(agentMode)).append("\n\n")
+             append(COMMON).append("\n\n")
++            if (hasBrowser) {
++                append(BROWSER_TOOL_GUIDELINE.trimIndent()).append("\n\n")
++            }
+             append(workSection).append("\n\n")
+             append(modeSection)
+         }

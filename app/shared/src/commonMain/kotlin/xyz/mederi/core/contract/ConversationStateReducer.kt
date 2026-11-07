@@ -17,6 +17,7 @@ import xyz.mederi.core.contract.models.ChatRole
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
+import xyz.mederi.core.contract.models.ExecutionApprovalRequest
 import xyz.mederi.core.contract.models.LastRequestUsage
 import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.core.contract.models.PlanApprovalRequest
@@ -62,6 +63,20 @@ object ConversationStateReducer {
         event: CoreEvent,
         refreshPage: suspend () -> MessagesPage?,
     ): List<ConversationState> = when (event.type) {
+        CoreEventType.MESSAGE_DELTA, CoreEventType.TOOL_CALLED, CoreEventType.TOOL_RESULT -> {
+            // 初始快照读取与事件订阅之间可能错过 SESSION_UPDATED。新响应首次出现前
+            // 回查 durable-first 输入，避免流式响应先于仍在 UI 中的乐观用户气泡外显。
+            // 只补用户输入，不导入落库响应正文：回查可能领先于事件队列，导入正文再叠加
+            // delta 会重复输出；也不能用快照覆盖已收到的实时响应。
+            val isNewResponse = !event.messageId.isNullOrBlank() &&
+                snapshot.messages.none { it.id == event.messageId }
+            val page = if (isNewResponse) runCatching { refreshPage() }.getOrNull() else null
+            val aligned = if (page != null) snapshot.copy(
+                messages = restoreInputOrder(snapshot.messages, page.messages)
+            ) else snapshot
+            listOf(apply(aligned, event))
+        }
+
         CoreEventType.MESSAGE_COMPLETED -> {
             // 1. 先发出完成状态（按钮立即变化），保留流式累积的内容，标记 streaming 结束
             val idle = apply(snapshot, event)
@@ -115,7 +130,10 @@ object ConversationStateReducer {
     /**
      * 应用单个事件到状态（不含落库回查）。
      */
-    fun apply(snapshot: ConversationState, event: CoreEvent): ConversationState = when (event.type) {
+    fun apply(snapshot: ConversationState, event: CoreEvent): ConversationState =
+        reduce(snapshot, event).withPendingInteractionStatus()
+
+    private fun reduce(snapshot: ConversationState, event: CoreEvent): ConversationState = when (event.type) {
         CoreEventType.SESSION_CREATED -> snapshot
 
         CoreEventType.SESSION_UPDATED -> if (event.payload["inputAccepted"] == "true") {
@@ -154,6 +172,8 @@ object ConversationStateReducer {
             val turnId = event.payload["turnId"]
 
             val completed = snapshot.copy(
+                pendingQuestion = null,
+                pendingPlanApproval = null,
                 conversation = snapshot.conversation.copy(status = ConversationStatus.Idle),
                 messages = snapshot.messages.map { msg ->
                     val isTarget = if (diffMessageId != null) msg.id == diffMessageId else msg.isStreaming
@@ -186,23 +206,27 @@ object ConversationStateReducer {
         CoreEventType.MESSAGE_ERROR -> {
             // 读 payload["finalStatus"]（TurnExecutor.emit() 注入的权威会话终态）：
             // ERROR→红点，IDLE（transient 可恢复）→蓝点；payload 缺失时保守回退 Error。
+            // 主动取消是正常停止，结束流式/计时即可，不投影为错误或诊断入口。
+            val cancelled = event.payload["errorCategory"] == "CANCELLED"
             val fs = event.payload["finalStatus"]
-            val status = when (fs) {
+            val status = if (cancelled) ConversationStatus.Idle else when (fs) {
                 "IDLE" -> ConversationStatus.Idle
                 else -> ConversationStatus.Error
             }
             snapshot.copy(
                 conversation = snapshot.conversation.copy(status = status),
+                pendingQuestion = null,
+                pendingPlanApproval = null,
                 messages = snapshot.messages.map { msg ->
                     val belongsToWork = event.payload["turnId"] != null && msg.turnId == event.payload["turnId"]
                     msg.copy(isStreaming = false,
                         workStartedAt = if (belongsToWork) event.payload["workStartedAt"]?.toLongOrNull() ?: msg.workStartedAt else msg.workStartedAt,
                         workCompletedAt = if (belongsToWork) event.payload["workCompletedAt"]?.toLongOrNull() ?: msg.workCompletedAt else msg.workCompletedAt)
                 },
-                errorMessage = event.payload["error"],
-                errorId = event.payload["errorId"],
-                errorDiagnostic = event.payload["fullDiagnostic"],
-                errorIsStreamInterrupted = event.payload["failureMode"] == "PREMATURE_CLOSE",
+                errorMessage = if (cancelled) null else event.payload["error"],
+                errorId = if (cancelled) null else event.payload["errorId"],
+                errorDiagnostic = if (cancelled) null else event.payload["fullDiagnostic"],
+                errorIsStreamInterrupted = !cancelled && event.payload["failureMode"] == "PREMATURE_CLOSE",
                 statusHint = null
             )
         }
@@ -223,6 +247,8 @@ object ConversationStateReducer {
                         if (retryAt != null) append("|$retryAt")
                     }
                 )
+            } else if (event.payload["scope"] == "provider" && event.payload["code"] == "RETRY_FINISHED") {
+                snapshot.copy(statusHint = null)
             } else snapshot
         }
 
@@ -266,6 +292,25 @@ object ConversationStateReducer {
                 )
             )
         }
+
+        CoreEventType.EXECUTION_APPROVAL_REQUESTED -> {
+            val request = event.payload["request"]?.let { raw ->
+                runCatching { questionWireJson.decodeFromString<ExecutionApprovalRequest>(raw) }.getOrNull()
+            }
+            if (request == null || request.conversationId != snapshot.conversation.id) snapshot else snapshot.copy(
+                pendingExecutionApprovals = snapshot.pendingExecutionApprovals.filterNot { it.id == request.id } + request
+            )
+        }
+
+        CoreEventType.EXECUTION_APPROVAL_RESOLVED -> {
+            val requestId = event.payload["requestId"]
+            if (snapshot.pendingExecutionApprovals.none { it.id == requestId }) snapshot else snapshot.copy(
+                conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
+                pendingExecutionApprovals = snapshot.pendingExecutionApprovals.filterNot { it.id == requestId }
+            )
+        }
+
+        CoreEventType.SANDBOX_SETTINGS_CHANGED -> snapshot
 
         CoreEventType.QUESTION_RESOLVED -> {
             val lastMsg = snapshot.messages.lastOrNull()
@@ -332,18 +377,31 @@ object ConversationStateReducer {
                 val newStatus = when (action) {
                     "voided" -> "VOIDED"
                     "completed" -> "COMPLETED"
-                    "approved" -> "APPROVED"
+                    "approved", "created" -> "APPROVED"
                     "subtask-started" -> "IN_PROGRESS"
                     else -> null
                 }
-                snapshot.planApprovals.map { p ->
-                    if (p.id == planId) {
-                        p.copy(
-                            status = newStatus ?: p.status,
-                            subtasks = newSubtasks ?: p.subtasks
-                        )
-                    } else p
-                }
+                val existing = snapshot.planApprovals.find { it.id == planId }
+                if (existing != null) {
+                    snapshot.planApprovals.map { plan ->
+                        if (plan.id == planId) plan.copy(
+                            status = newStatus ?: plan.status,
+                            subtasks = newSubtasks ?: plan.subtasks
+                        ) else plan
+                    }
+                } else if (action == "created") {
+                    snapshot.planApprovals + PlanApprovalRequest(
+                        id = planId,
+                        conversationId = snapshot.conversation.id,
+                        planPath = event.payload["planPath"].orEmpty(),
+                        title = event.payload["title"].orEmpty(),
+                        summary = event.payload["summary"].orEmpty(),
+                        subtaskCount = newSubtasks?.size ?: 0,
+                        planContent = event.payload["planContent"],
+                        status = "APPROVED",
+                        subtasks = newSubtasks.orEmpty()
+                    )
+                } else snapshot.planApprovals
             } else snapshot.planApprovals
 
             snapshot.copy(planApprovals = updatedApprovals)
@@ -474,6 +532,87 @@ object ConversationStateReducer {
         // 快照不直接处理。
         CoreEventType.SKILL_ACTIVATED,
         CoreEventType.SKILL_DEACTIVATED -> snapshot
+
+        // ------------------------------------------------------------------
+        // 工作区与会话元数据事件
+        // ------------------------------------------------------------------
+
+        CoreEventType.WORKSPACE_CHANGED -> {
+            val eventProjectId = event.payload["projectId"]
+            val eventSessionId = event.payload["sessionId"]
+            // 归属未知或跨项目事件绝不借用/更新
+            if (eventProjectId == null || eventProjectId != snapshot.conversation.projectId) {
+                return snapshot
+            }
+            if (eventSessionId != null && eventSessionId != snapshot.conversation.id) {
+                return snapshot
+            }
+            val wsInfoJson = event.payload["workspaceInfo"]
+            val newWsInfo = wsInfoJson?.let { jsonStr ->
+                runCatching {
+                    todoWireJson.decodeFromString(xyz.mederi.core.contract.models.ConversationWorkspaceInfo.serializer(), jsonStr)
+                }.getOrNull() ?: runCatching {
+                    val active = todoWireJson.decodeFromString(xyz.mederi.core.contract.models.WorkspaceInfo.serializer(), jsonStr)
+                    xyz.mederi.core.contract.models.ConversationWorkspaceInfo(active = active)
+                }.getOrNull()
+            }
+            val updatedConv = event.payload["workspaceId"]?.let {
+                snapshot.conversation.copy(workspaceId = it)
+            } ?: snapshot.conversation
+            snapshot.copy(
+                conversation = updatedConv,
+                workspaceInfo = newWsInfo ?: snapshot.workspaceInfo
+            )
+        }
+
+        CoreEventType.WORKSPACE_OPERATION_UPDATED -> {
+            val eventProjectId = event.payload["projectId"]
+            val eventSessionId = event.payload["sessionId"]
+            // 归属未知或跨项目事件绝不借用/更新
+            if (eventProjectId == null || eventProjectId != snapshot.conversation.projectId) {
+                return snapshot
+            }
+            if (eventSessionId != null && eventSessionId != snapshot.conversation.id) {
+                return snapshot
+            }
+            val opJson = event.payload["operation"] ?: return snapshot
+            val op = runCatching {
+                todoWireJson.decodeFromString(xyz.mederi.core.contract.models.WorkspaceOperation.serializer(), opJson)
+            }.getOrNull() ?: return snapshot
+
+            // 忽略更老版本
+            val curOp = snapshot.activeWorkspaceOperation
+            if (curOp?.id == op.id && op.version < curOp.version) {
+                return snapshot
+            }
+
+            snapshot.copy(activeWorkspaceOperation = op)
+        }
+
+        CoreEventType.CONVERSATION_ARCHIVE_CHANGED -> {
+            val eventSessionId = event.payload["sessionId"]
+            if (eventSessionId != null && eventSessionId != snapshot.conversation.id) {
+                return snapshot
+            }
+            val archivedAt = event.payload["archivedAt"]
+            snapshot.copy(
+                conversation = snapshot.conversation.copy(
+                    archivedAt = archivedAt,
+                    pinned = if (archivedAt != null) false else snapshot.conversation.pinned
+                )
+            )
+        }
+
+        CoreEventType.CONVERSATION_PIN_CHANGED -> {
+            val eventSessionId = event.payload["sessionId"]
+            if (eventSessionId != null && eventSessionId != snapshot.conversation.id) {
+                return snapshot
+            }
+            val pinned = event.payload["pinned"]?.toBooleanStrictOrNull() ?: false
+            snapshot.copy(
+                conversation = snapshot.conversation.copy(pinned = pinned)
+            )
+        }
     }
 
     // ------------------------------------------------------------------
@@ -718,6 +857,28 @@ object ConversationStateReducer {
             val previousId = live.take(index).lastOrNull { previous -> merged.any { it.id == previous.id } }?.id
             val previousIndex = merged.indexOfLast { it.id == previousId }
             merged.add(if (previousIndex >= 0) previousIndex + 1 else merged.size, msg)
+        }
+        return merged
+    }
+
+    /** 只补已消费的真实输入，按持久化的相邻消息定位，不按时间戳重排流式响应或插话。 */
+    private fun restoreInputOrder(live: List<ChatMessage>, persisted: List<ChatMessage>): List<ChatMessage> {
+        val merged = live.toMutableList()
+        val knownIds = live.mapTo(mutableSetOf()) { it.id }
+        for ((index, input) in persisted.withIndex()) {
+            if (input.role != ChatRole.User || input.pendingSteering ||
+                input.blocks.none { it is ChatBlock.Text || it is ChatBlock.File } ||
+                input.id in knownIds) continue
+            val previousId = persisted.subList(0, index).lastOrNull { it.id in knownIds }?.id
+            val previousIndex = merged.indexOfLast { it.id == previousId }
+            val nextId = persisted.subList(index + 1, persisted.size).firstOrNull { it.id in knownIds }?.id
+            val nextIndex = merged.indexOfFirst { it.id == nextId }
+            merged.add(when {
+                previousIndex >= 0 -> previousIndex + 1
+                nextIndex >= 0 -> nextIndex
+                else -> merged.size
+            }, input)
+            knownIds.add(input.id)
         }
         return merged
     }

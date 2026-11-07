@@ -328,11 +328,11 @@ class ModelMergeTest {
     // ==================== 用户权威字段恒保留 ====================
 
     @Test
-    fun `用户字段 - isEnabled 与 reasoningLevel 与 origin 与 id 恒不被合并触碰`() {
+    fun `用户字段恒不被合并触碰`() {
         val existing = model(
             isEnabled = false,
             reasoningLevel = ReasoningLevel.HIGH
-        )
+        ).copy(optimizeForRequestCount = true)
         val merged = ModelMerge.mergeFetched(
             existing,
             endpoint = endpoint(),
@@ -343,6 +343,7 @@ class ModelMergeTest {
         assertEquals(ModelOrigin.FETCHED, merged.origin)
         assertEquals("mdl_1", merged.id)
         assertEquals("gpt-x", merged.providerModelId)
+        assertEquals(true, merged.optimizeForRequestCount)
     }
 
     // ==================== createFetched（新增路径与既有路径同一张表） ====================
@@ -363,6 +364,7 @@ class ModelMergeTest {
         assertEquals(1.25, created.inputPricePerMillion)
         assertEquals(ModelOrigin.FETCHED, created.origin)
         assertEquals(true, created.isEnabled)
+        assertEquals(false, created.optimizeForRequestCount)
         assertEquals(ReasoningLevel.NONE, created.reasoningLevel)
     }
 

@@ -88,6 +88,14 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
         sessionManager.resolveQuestion(sessionId, questionId, answers)
     }
 
+    override suspend fun recordPlanManualAcceptance(
+        sessionId: String, planId: String, caseId: String, observed: String, evidence: String, confirmedBy: String
+    ) =
+        mederiCall { sessionManager.recordPlanManualAcceptance(sessionId, planId, caseId, observed, evidence, confirmedBy) }
+
+    override suspend fun getPlanAcceptanceReport(sessionId: String, planId: String): String =
+        mederiCall { sessionManager.getPlanAcceptanceReport(sessionId, planId) }
+
     override suspend fun resolvePlanApproval(
         sessionId: String,
         planId: String,

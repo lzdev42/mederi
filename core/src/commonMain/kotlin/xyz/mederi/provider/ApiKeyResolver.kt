@@ -80,6 +80,12 @@ class ApiKeyResolver(
      * @throws IllegalStateException 供应商无任何可用 key。
      */
     suspend fun resolve(providerId: String, requestedKeyId: String? = null): ResolvedApiKey {
+        if (providerManager.require(providerId).authentication ==
+            xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH) {
+            currentKeyByProvider.remove(providerId)
+            return ResolvedApiKey(providerId, null, "ChatGPT OAuth",
+                requireNotNull(providerManager.getDefaultKeyValue(providerId)) { "ChatGPT is not connected" })
+        }
         // ① 显式请求的 keyId：归属校验通过则用它，并写入记忆
         if (requestedKeyId != null) {
             val value = providerManager.getKeyValue(providerId, requestedKeyId)

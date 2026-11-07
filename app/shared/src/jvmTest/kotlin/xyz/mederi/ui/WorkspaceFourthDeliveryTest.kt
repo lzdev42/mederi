@@ -50,6 +50,22 @@ class WorkspaceFourthDeliveryTest {
     )
 
     @Test
+    fun subagentErrorOpensSameFullDiagnosticDialogAsMainConversation() = runComposeUiTest {
+        val diagnostic = "NETWORK failure\nCaused by: java.io.EOFException: server closed connection\nexact diagnostic tail"
+        var detail = ""
+        setContent {
+            AppTheme {
+                detail = stringResource(Res.string.errorboard_detail_report)
+                SubagentPanelContent(agent(status = "ERROR").copy(errorMessage = "[NETWORK] EOFException",
+                    errorId = "err-sub", errorDiagnostic = diagnostic), {}, {}, Modifier.width(480.dp).height(500.dp)) {}
+            }
+        }
+        onNodeWithText("[NETWORK] EOFException").assertIsDisplayed()
+        onNodeWithText(detail).performClick()
+        onNodeWithText(diagnostic).assertIsDisplayed()
+    }
+
+    @Test
     fun longIdentityAtNarrowWidthAndLargeFontKeepsCloseReachableWithoutStopping() = runComposeUiTest {
         var dismisses = 0
         val stopped = mutableListOf<String>()

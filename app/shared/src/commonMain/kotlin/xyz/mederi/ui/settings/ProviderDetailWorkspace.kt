@@ -21,7 +21,6 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
-import xyz.mederi.core.contract.models.ModelOrigin
 import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.theme.*
 import xyz.mederi.ui.components.ErrorBoard
@@ -35,6 +34,7 @@ import xyz.mederi.ui.components.atoms.WorkspaceNavigationTab
 internal fun ProviderDetailWorkspace(
     provider: ProviderItemUiState, viewModel: ProviderSettingsViewModel, colors: MederiColors,
     isCompact: Boolean = false, onDelete: () -> Unit = {},
+    authorization: (@Composable () -> Unit)? = null,
 ) {
     var showEditCredentialsDialog by remember(provider.id) { mutableStateOf(false) }
     var showManageKeysDialog by remember(provider.id) { mutableStateOf(false) }
@@ -62,7 +62,7 @@ internal fun ProviderDetailWorkspace(
             toggleModel = { viewModel.toggleModelEnabled(provider.id, it.id) },
             editModel = { editingModel = it }, deleteModel = { viewModel.deleteModel(provider.id, it.id) },
             deleteProvider = { showDeleteConfirm = true },
-        ), successMessage = feedbackText, isCompact = isCompact, colors = colors)
+        ), successMessage = feedbackText, isCompact = isCompact, colors = colors, authorization = authorization)
 
     // 弹窗部分
     if (showManageKeysDialog) {
@@ -112,10 +112,7 @@ internal fun ProviderDetailWorkspace(
             model = model,
             colors = colors,
             onDismiss = { editingModel = null },
-            onSave = { newName, newImages, newThinking, newCw, newMt, newLevels ->
-                if (model.origin == ModelOrigin.FETCHED) {
-                    viewModel.setImageOverride(provider.id, model.id, newImages)
-                } else {
+            onSave = { newName, newImages, newThinking, newCw, newMt, newLevels, requestCountOptimization ->
                 viewModel.updateModelConfig(
                     providerId = provider.id,
                     modelId = model.id,
@@ -124,9 +121,9 @@ internal fun ProviderDetailWorkspace(
                     supportsThinking = newThinking,
                     contextWindow = newCw,
                     maxTokens = newMt,
-                    reasoningLevels = newLevels
+                    reasoningLevels = newLevels,
+                    optimizeForRequestCount = requestCountOptimization,
                 )
-                }
                 editingModel = null
             }
         )
@@ -185,6 +182,7 @@ internal fun ProviderDetailContent(
     filter: CapabilityFilter, actions: ProviderDetailActions,
     modifier: Modifier = Modifier, successMessage: String? = null, isCompact: Boolean = false,
     colors: MederiColors = LocalMederiColors.current,
+    authorization: (@Composable () -> Unit)? = null,
 ) {
     val listState = remember(provider.id) { LazyListState() }
     LazyColumn(modifier.fillMaxSize(), state = listState, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -201,7 +199,8 @@ internal fun ProviderDetailContent(
                     color = colors.accentText, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
             }
         }
-        item(key = "header:credentials") {
+        if (provider.isChatGptOAuth && authorization != null) item(key = "header:authorization") { authorization() }
+        if (!provider.isChatGptOAuth) item(key = "header:credentials") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 CredentialFieldItem(stringResource(Res.string.provider_base_url_label),
                     provider.baseUrl.ifBlank { stringResource(Res.string.settings_panel_not_set) }, colors)

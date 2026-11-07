@@ -62,6 +62,12 @@ interface SessionApi {
      * @param planId 计划 ID。
      * @param approved true=批准。
      */
+    suspend fun recordPlanManualAcceptance(
+        sessionId: String, planId: String, caseId: String, observed: String, evidence: String, confirmedBy: String
+    )
+
+    suspend fun getPlanAcceptanceReport(sessionId: String, planId: String): String
+
     suspend fun resolvePlanApproval(
         sessionId: String,
         planId: String,
@@ -141,7 +147,8 @@ data class CreateSessionRequest(
     val agentConfig: AgentConfig,
     val projectId: String,
     val title: String = "",
-    val env: Map<String, String> = emptyMap()
+    val env: Map<String, String> = emptyMap(),
+    val workspaceSelection: xyz.mederi.workspace.WorkspaceSelection? = null
 )
 
 /**

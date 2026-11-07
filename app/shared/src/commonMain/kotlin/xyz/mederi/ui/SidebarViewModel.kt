@@ -147,6 +147,14 @@ class SidebarViewModel(
         appState.aiCore.renameConversation(conversationId, title)
     }
 
+    /** 固定 / 取消固定会话（会话行菜单入口，真实 AiCore 契约；失败在侧边栏错误区回显）。 */
+    fun setPinned(sessionId: String, pinned: Boolean) {
+        viewModelScope.launch {
+            appState.aiCore.setConversationPinned(sessionId, pinned)
+                .onFailure { uiState = uiState.copy(error = it.message) }
+        }
+    }
+
     fun toggleProjectExpanded(projectId: String) {
         val cur = uiState.expandedProjectIds
         uiState = uiState.copy(

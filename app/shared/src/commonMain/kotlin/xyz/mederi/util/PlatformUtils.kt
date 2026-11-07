@@ -1,6 +1,7 @@
 package xyz.mederi.util
 
-expect fun openUrl(url: String)
+/** 用系统浏览器打开网页；失败返回 false，调用方可显示错误和可复制的地址。 */
+expect fun openUrl(url: String): Boolean
 
 /**
  * 用系统默认应用打开本地文件（如 .md 计划文件）。

@@ -5,42 +5,38 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.settings_sandbox_load_failed
-import xyz.mederi.core.contract.SandboxHooks
-import xyz.mederi.core.contract.SandboxStatusInfo
-import xyz.mederi.ui.UiMessage
+import xyz.mederi.core.contract.models.ExecutionPermissionMode
+import xyz.mederi.ui.appstate.ProjectPermissionState
+import xyz.mederi.ui.appstate.ProjectPermissionStore
 
-/** 仅查询宿主状态；白名单继续由AppState流负责，不在VM保存副本。 */
-internal data class SandboxSettingsUiState(
-    val supported: Boolean,
-    val loading: Boolean = false,
-    val status: SandboxStatusInfo? = null,
-    val error: UiMessage? = null,
-)
+internal typealias SandboxSettingsUiState = ProjectPermissionState
 
-internal class SandboxSettingsViewModel(private val hooks: SandboxHooks?) : ViewModel() {
-    var uiState by mutableStateOf(SandboxSettingsUiState(supported = hooks != null))
+/** 只绑定页面目标，不保存另一份可写配置；输入栏与此页均使用 AppState 的同一个 store。 */
+internal class SandboxSettingsViewModel(private val store: ProjectPermissionStore) : ViewModel() {
+    var uiState by mutableStateOf(SandboxSettingsUiState())
         private set
+    private var observation: Job? = null
 
-    fun reload() {
-        val source = hooks ?: return
-        if (uiState.loading) return
-        uiState = uiState.copy(loading = true, status = null, error = null)
-        viewModelScope.launch {
-            try {
-                val status = withContext(Dispatchers.Default) { source.sandboxStatus() }
-                uiState = uiState.copy(loading = false, status = status)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                uiState = uiState.copy(loading = false, status = null,
-                    error = UiMessage(Res.string.settings_sandbox_load_failed, listOf(failure.message.orEmpty())))
+    fun bindProject(projectId: String?) {
+        if (uiState.projectId == projectId) return
+        observation?.cancel()
+        uiState = projectId?.let { store.state(it).value } ?: SandboxSettingsUiState()
+        if (projectId != null) {
+            store.ensureLoaded(projectId)
+            observation = viewModelScope.launch {
+                store.state(projectId).collect { state ->
+                    if (uiState.projectId == projectId) uiState = state
+                }
             }
         }
     }
+    fun reload() { uiState.projectId?.let(store::reload) }
+    fun selectMode(mode: ExecutionPermissionMode) { uiState.projectId?.let { store.selectMode(it, mode) } }
+    fun setExtraPaths(paths: List<String>) { uiState.projectId?.let { store.setExtraPaths(it, paths) } }
+    fun setDeniedPaths(paths: List<String>) { uiState.projectId?.let { store.setDeniedPaths(it, paths) } }
+    fun setAllowedCommands(commands: List<String>) { uiState.projectId?.let { store.setAllowedCommands(it, commands) } }
+    fun setDeniedCommands(commands: List<String>) { uiState.projectId?.let { store.setDeniedCommands(it, commands) } }
 }

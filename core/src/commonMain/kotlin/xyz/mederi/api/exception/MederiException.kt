@@ -48,6 +48,18 @@ class MederiInternalException(
 ) : MederiException(message, cause)
 
 /**
+ * 工作区操作异常，携带结构化 [xyz.mederi.workspace.WorkspaceErrorCode]。
+ */
+class MederiWorkspaceException(
+    val code: xyz.mederi.workspace.WorkspaceErrorCode,
+    message: String,
+    val retryable: Boolean = false,
+    val operationId: String? = null,
+    val diagnostic: String? = null,
+    cause: Throwable? = null
+) : MederiException(message, cause)
+
+/**
  * 把底层异常转换为 Mederi 统一异常。
  *
  * 映射关系：
@@ -61,6 +73,9 @@ class MederiInternalException(
 internal inline fun <T> mederiCall(block: () -> T): T {
     return try {
         block()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // 协程取消是生命周期控制流，不能包装为业务故障后被上层当作可恢复错误继续执行。
+        throw e
     } catch (e: MederiException) {
         throw e
     } catch (e: NoSuchElementException) {

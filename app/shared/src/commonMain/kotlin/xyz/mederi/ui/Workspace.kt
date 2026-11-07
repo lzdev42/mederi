@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import xyz.mederi.util.PlatformClipboard
@@ -83,10 +84,18 @@ import xyz.mederi.ui.components.SubagentConversationPanel
 import xyz.mederi.ui.components.QuestionCard
 import xyz.mederi.ui.components.PlanApprovalCard
 import xyz.mederi.ui.components.ChatInputCard
+import xyz.mederi.ui.components.HandoffPanelContent
+import xyz.mederi.ui.components.WorkspaceArchivedListContent
+import xyz.mederi.ui.components.WorkspaceDialogErrorContent
+import xyz.mederi.ui.components.WorkspaceManagementPanelContent
+import xyz.mederi.ui.components.WorkspaceRecoveryPanelContent
+import xyz.mederi.ui.components.EnvironmentEditorPanelContent
+import xyz.mederi.ui.components.WorktreeSettingsPanelContent
+import xyz.mederi.ui.components.CreateBranchPanelContent
 import xyz.mederi.ui.components.StatusBar
 import xyz.mederi.ui.components.WorkspaceFloatingOverlay
 import xyz.mederi.ui.overview.OverviewWindowState
-import xyz.mederi.ui.overview.FloatingOverviewWindow
+import xyz.mederi.ui.overview.WorkspaceAgentOverviewStack
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.zIndex
@@ -110,6 +119,11 @@ import mederi.app.shared.generated.resources.file_open_confirm_reveal
 import mederi.app.shared.generated.resources.file_open_confirm_directory
 import mederi.app.shared.generated.resources.file_open_confirm_with_app
 import mederi.app.shared.generated.resources.file_open_open
+import mederi.app.shared.generated.resources.handoff_dialog_title
+import mederi.app.shared.generated.resources.workspace_dialog_retry
+import mederi.app.shared.generated.resources.workspace_recovery_title
+import mederi.app.shared.generated.resources.handoff_executing
+import mederi.app.shared.generated.resources.workspace_dialog_error
 
 import compose.icons.feathericons.Menu
 import androidx.compose.ui.text.style.TextOverflow
@@ -428,7 +442,7 @@ fun Workspace(
                 }
 
                 // 浮动概览窗 overlay（固定内容区右上角，非模态）
-                FloatingOverviewWindow(
+                WorkspaceAgentOverviewStack(
                     viewModel = viewModel,
                     rawVm = rawMessagesViewModel,
                     state = overviewState,
@@ -580,6 +594,135 @@ fun Workspace(
                 cancelLabel = stringResource(Res.string.cancel),
                 onConfirm = { viewModel.confirmPendingFileOpen() },
                 onDismiss = { viewModel.cancelPendingFileOpen() },
+            )
+        }
+
+        // ── 工作区面板对话框（Handoff / 管理 / 归档列表 / 恢复，RF-08）──
+        // 唯一状态源 = viewModel.dialogState；各面板均为可滚动内容，动作直连真实 VM → AiCore。
+        WorkspaceDialogs(viewModel)
+    }
+}
+
+/**
+ * 工作区面板对话框区（Handoff / 管理 / 归档列表 / 恢复 / 宿主设置 / 建分支 / 环境编辑）。
+ * 从 Workspace 路由提取：唯一状态源 = viewModel.dialogState / environmentEditorState，
+ * 动作直连真实 VM → AiCore。路由与集成测试共用同一接线（单一事实源）。
+ */
+@Composable
+fun WorkspaceDialogs(viewModel: WorkspaceViewModel) {
+    val dialogState by viewModel.dialogState.collectAsState()
+    when (val dialog = dialogState) {
+        WorkspaceViewModel.WorkspaceDialogState.None -> Unit
+
+        is WorkspaceViewModel.WorkspaceDialogState.Handoff -> {
+            Dialog(onDismissRequest = viewModel::dismissDialog) {
+                val preview = dialog.preview
+                if (preview != null) {
+                    HandoffPanelContent(
+                        preview = preview,
+                        stopAffectedTasks = dialog.stopAffected,
+                        loading = dialog.loading,
+                        errorMessage = dialog.errorMessage,
+                        onToggleStopAffectedTasks = viewModel::setStopAffectedTasks,
+                        onExecuteHandoff = viewModel::executeHandoff,
+                        onRefreshPreview = viewModel::openHandoffDialog,
+                        onDismiss = viewModel::dismissDialog
+                    )
+                } else {
+                    WorkspaceDialogErrorContent(
+                        title = stringResource(Res.string.handoff_dialog_title),
+                        errorMessage = dialog.errorMessage.orEmpty(),
+                        retryLabel = stringResource(Res.string.workspace_dialog_retry),
+                        onRetry = viewModel::openHandoffDialog,
+                        onDismiss = viewModel::dismissDialog
+                    )
+                }
+            }
+        }
+
+        is WorkspaceViewModel.WorkspaceDialogState.Management -> {
+            Dialog(onDismissRequest = viewModel::dismissDialog) {
+                WorkspaceManagementPanelContent(
+                    worktrees = dialog.workspaces,
+                    errorMessage = dialog.errorMessage,
+                    onEnterSession = viewModel::selectConversation,
+                    onArchiveWorkspace = viewModel::archiveWorkspace,
+                    onDismiss = viewModel::dismissDialog
+                )
+            }
+        }
+
+        is WorkspaceViewModel.WorkspaceDialogState.ArchiveList -> {
+            Dialog(onDismissRequest = viewModel::dismissDialog) {
+                WorkspaceArchivedListContent(
+                    archivedConversations = dialog.archived,
+                    errorMessage = dialog.errorMessage,
+                    onRestore = viewModel::restoreArchivedConversation,
+                    onDismiss = viewModel::dismissDialog
+                )
+            }
+        }
+
+        is WorkspaceViewModel.WorkspaceDialogState.Recovery -> {
+            Dialog(onDismissRequest = viewModel::dismissDialog) {
+                val preview = dialog.preview
+                if (preview != null) {
+                    WorkspaceRecoveryPanelContent(
+                        sourcePath = preview.sourceWorkspace?.workspace?.checkoutRoot.orEmpty().ifBlank { "(unknown)" },
+                        targetPath = preview.targetWorkspace?.workspace?.checkoutRoot.orEmpty().ifBlank { "(new managed)" },
+                        loading = dialog.loading,
+                        errorMessage = dialog.errorMessage,
+                        onKeepCurrent = { viewModel.executeRecovery(RecoveryStrategy.KEEP_VERIFIED_CURRENT) },
+                        onRestoreToNew = { viewModel.executeRecovery(RecoveryStrategy.RESTORE_TO_NEW_MANAGED) }
+                    )
+                } else {
+                    WorkspaceDialogErrorContent(
+                        title = stringResource(Res.string.workspace_recovery_title),
+                        errorMessage = dialog.errorMessage.orEmpty(),
+                        retryLabel = stringResource(Res.string.workspace_dialog_retry),
+                        onRetry = { viewModel.previewRecovery(dialog.operationId) },
+                        onDismiss = viewModel::dismissDialog
+                    )
+                }
+            }
+        }
+
+        is WorkspaceViewModel.WorkspaceDialogState.WorktreeSettings -> {
+            Dialog(onDismissRequest = viewModel::dismissDialog) {
+                WorktreeSettingsPanelContent(
+                    rootPath = dialog.rootPath,
+                    max = dialog.max,
+                    autoCleanup = dialog.autoCleanup,
+                    errorMessage = dialog.errorMessage,
+                    onSave = viewModel::updateWorktreeSettings,
+                    onDismiss = viewModel::dismissDialog
+                )
+            }
+        }
+
+        is WorkspaceViewModel.WorkspaceDialogState.CreateBranch -> {
+            Dialog(onDismissRequest = viewModel::dismissDialog) {
+                CreateBranchPanelContent(
+                    errorMessage = dialog.errorMessage,
+                    onCreate = { name ->
+                        val generation = viewModel.snapshot?.workspaceInfo?.active?.workspace?.generation ?: 0L
+                        viewModel.createWorkspaceBranch(name, generation)
+                    },
+                    onDismiss = viewModel::dismissDialog
+                )
+            }
+        }
+    }
+
+    // ── 环境编辑面板（独立于 dialogState，由 environmentEditorState 驱动）──
+    val environmentEditorState by viewModel.environmentEditorState.collectAsState()
+    if (environmentEditorState != WorkspaceViewModel.EnvironmentEditorState.None) {
+        Dialog(onDismissRequest = viewModel::dismissEnvironmentEditor) {
+            EnvironmentEditorPanelContent(
+                state = environmentEditorState,
+                onSave = viewModel::saveEnvironment,
+                onRunAction = viewModel::runEnvironmentAction,
+                onDismiss = viewModel::dismissEnvironmentEditor
             )
         }
     }

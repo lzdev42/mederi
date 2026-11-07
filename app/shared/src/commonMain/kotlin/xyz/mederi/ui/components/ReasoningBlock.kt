@@ -1,8 +1,12 @@
 package xyz.mederi.ui.components
 
-import xyz.mederi.ui.components.atoms.WorkspaceLoadingIndicator
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
+import xyz.mederi.theme.LocalWorkspaceMotion
+import xyz.mederi.ui.chat.reasoningPreview
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
@@ -40,7 +44,7 @@ private val ReasoningMaxContentHeight = 200.dp
  * 顶层独立显示（enforceMaxHeight=true）时：展开内容高度自适应（wrap content），
  * 未点展开按钮时最高高度上限为 [ReasoningMaxContentHeight]，内容溢出时在视口内滚动 + 流式即时吸底；
  * 底部「展开/收起」按钮在溢出或摊开时出现，点击可解除限高，由外层消息视口展示完整内容。
- * 位于 WorkTraceCard 内（enforceMaxHeight=false）时保持无限高——卡整体已限高滚动，子项不再重复限制。
+ * 工作过程内同样默认折叠，折叠头单行展示供应商推理最新片段；完整文本不裁剪、不丢弃。
  */
 @Composable
 fun ReasoningBlock(
@@ -88,6 +92,17 @@ fun ReasoningBlock(
     val hasOverflow = shouldScroll && contentScroll.maxValue > 0
     val showHeightToggle = shouldShowHeightToggle(enforceMaxHeight, isUnbounded, hasOverflow)
 
+    // 摘要只截取显示窗口；详情始终保留完整供应商推理。
+    val preview = remember(text) { reasoningPreview(text) }
+    val previewScroll = rememberScrollState()
+    val reducedMotion = LocalWorkspaceMotion.current.reducedMotion
+    LaunchedEffect(preview, previewScroll.maxValue, isExpanded, isReasoningActive, reducedMotion) {
+        if (!isExpanded) {
+            if (reducedMotion || !isReasoningActive) previewScroll.scrollTo(previewScroll.maxValue)
+            else previewScroll.animateScrollTo(previewScroll.maxValue)
+        }
+    }
+
     // 思考行折叠头（整行可点，展开后轻量导轨线 + 推理正文视口）
     // 说明：文案为空（刚开始流式、尚无正文）时不进入展开态——与原实现一致，
     // 避免点开后出现一个空视口 + 导轨线残影。
@@ -100,13 +115,20 @@ fun ReasoningBlock(
         label = label,
         clickable = text.isNotBlank(),
         labelColor = colors.textSecondary,
-        leading = if (isReasoningActive) {
-            { WorkspaceLoadingIndicator(
-                color = colors.accentPrimary,
-                strokeWidth = 1.5.dp,
-                modifier = Modifier.size(WorkspaceStyle.IconSize),
-            ) }
+        summaryContent = if (!isExpanded && preview.isNotBlank()) {
+            {
+                Text(
+                    text = preview,
+                    color = colors.textMuted,
+                    style = WorkspaceStyle.Caption,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(previewScroll, enabled = false),
+                )
+            }
         } else null,
+        labelRunning = isReasoningActive,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),

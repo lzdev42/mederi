@@ -25,6 +25,9 @@ enum class EventType {
     QUESTION_RESOLVED,
     PLAN_APPROVAL_REQUESTED,
     PLAN_APPROVAL_RESOLVED,
+    EXECUTION_APPROVAL_REQUESTED,
+    EXECUTION_APPROVAL_RESOLVED,
+    SANDBOX_SETTINGS_CHANGED,
     PLAN_PROGRESS,
 
     /**
@@ -111,7 +114,15 @@ enum class EventType {
      * 会话 skill 卸载（unload_skill 工具 / SessionApi 维护）。
      * payload: skillName, activeSkills（最新列表的 JSON 数组字符串）。
      */
-    SKILL_DEACTIVATED
+    SKILL_DEACTIVATED,
+
+    // ==========================================
+    // Worktree 工作区与会话元数据事件 (D05)
+    // ==========================================
+    WORKSPACE_CHANGED,
+    WORKSPACE_OPERATION_UPDATED,
+    CONVERSATION_ARCHIVE_CHANGED,
+    CONVERSATION_PIN_CHANGED
 }
 
 /**

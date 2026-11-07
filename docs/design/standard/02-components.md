@@ -128,7 +128,7 @@ interface AiCore {
 
 **配套契约接口**（与 AiCore 并列的平台能力注入）：
 - `Terminal.kt`：`TerminalManager(getOrCreate/find/all)` + `TerminalSession(key/title/isRunning/exitCode/output()/write/resize/kill)` —— 仅本机 jvmMain 实现（PtyTerminalHub），遥控端 null。
-- `SandboxHooks.kt`：`setSandboxExtraPaths(paths)` + `sandboxStatus(): SandboxStatusInfo?` —— 仅 MederiAiCore 实现；`SandboxStatusInfo(backend, available, shell, detail)`。
+- 执行权限通过 AiCore 的项目级 `getSandboxSettings/updateSandboxSettings/getSandboxStatus(projectId)` 与 `resolveExecutionApproval` 契约访问；`SandboxStatusInfo(backend, available, shell, detail)` 为状态 DTO，无桌面专属写穿 hooks。
 - `AiCoreProvider.kt`：`object AiCoreProvider { fun default(): AiCore }`（委托顶层 `internal expect fun defaultAiCore(): AiCore`）。
 - `UiBrowserHost.kt`：`UiBrowserHost`（`BrowserContent(sessionId: String, modifier: Modifier)`、`loadHtml(sessionId: String, html: String)`、`closeSession(sessionId: String)`、`shutdown()`）—— 桌面宿主（JcefBrowserHost）注入，提供基于 sessionId 隔离的多 Tab 浏览器视图与后台常驻能力；会话删除/项目删除时级联调用 `closeSession` 释放底层 CEF 页面。
 
@@ -223,7 +223,7 @@ interface AiCore {
 ```mermaid
 flowchart TB
     subgraph impls["AiCore 的三个实现"]
-        MAC["MederiAiCore (jvmMain)<br/>Mederi.local(configDir) 进程内直调<br/>+ SandboxHooks"]
+        MAC["MederiAiCore (jvmMain)<br/>Mederi.local(configDir) 进程内直调"]
         SAC["ServerAiCore (commonMain)<br/>Ktor Client REST + SSE<br/>Bearer 鉴权 + 断线重连(4次/2s)"]
         MOCK["MockAiCore (commonMain)<br/>内存 + MockScenarios 剧本"]
     end
@@ -244,7 +244,7 @@ flowchart TB
 
 ### 4.1 MederiAiCore（`…/jvm/core/bridge/MederiAiCore.kt`）
 
-`class MederiAiCore(configDir: String, dispatcher = Dispatchers.Default) : AiCore, SandboxHooks`。
+`class MederiAiCore(configDir: String, dispatcher = Dispatchers.Default) : AiCore`。
 
 **initialize() 流程（顺序）**：
 1. `mederi = Mederi.create { configDir; userAgent = AppInfo.userAgent }`（出站 HTTP User-Agent 唯一注入点：所有 Koog 链路请求带 Mederi 身份头）→ **KBrowser 初始化**：`_kBrowser = KBrowserRuntime.ensureInitialized()`（core jvmMain KBrowser 单例，`useOsr=true`；幂等线程安全 + try-catch 覆盖 Throwable，JCEF 不可用/初始化失败 → **null 降级**；headless 无 Xvfb 时即 null）→ **浏览器设置装配（Camoufox 注册已移出 create{} 内联块，紧随其后在 initialize 内完成）**：`browserSettingsManager = BrowserSettingsManager(mederi.settingsStore)`（SettingsStore key `browser.camoufox.settings`，JSON blob）→ `BrowserSettingsApiImpl(browserSettingsManager, installerProvider = { BrowserHome.of(current().browserHome)?.let { CamoufoxInstaller(it) } })` → `get()` 预热缓存 → `BrowserRegistry.register("camoufox", kind=CAMOUFOX, factory={...})`——**工厂读 `browserSettingsManager.current()`**：binary = browserHome 已下载版本 > `settings.binaryPath`（都不存在 → 引导错误"请在设置页 BROWSER 配置…"）、**profileDir = `settings.resolveProfileDir()`（core `CamoufoxSettingsMapping`：browserHome 非空 → `{browserHome}/profiles`；binaryPath 模式 → `{二进制父目录}/profiles` 跟随二进制同级；都空 → error"未配置浏览器路径：请先设置 browserHome 或 binaryPath"。已删除系统临时目录兜底——永不落临时目录）**、`config = settings.toCamoufoxConfig()`、`proxyPrefs = settings.proxy?.toFirefoxPrefs() ?: emptyMap()`。保存路径校验：`BrowserSettingsManager.validate()` 允许空路径草稿保存（草稿/开关独立即时持久化）；UI 设置面板全面转向「修改即保存」（Switch 即时、文本防抖 500ms），彻底移除底部保存大按钮。**JCEF 条件注册**：`_kBrowser` 非空时 `BrowserRegistry.register("jcef", kind=JCEF, factory={ JcefBrowserControl() })`（**主力引擎**；desktop 与 headless server 同源，不经契约），**Camoufox 降级为可选 backup**。**默认浏览器偏好装配**：`browserSettingsManager.getDefaultBrowser()` 读持久化值（SettingsStore key `browser.default`），非 blank 即设 `BrowserRegistry.defaultName`（null 保持现有 JCEF 优先策略），启动即时生效。AI 经 `browser(action=RUN, browser=...)` 选择（默认浏览器 = `BrowserRegistry.defaultName` 指定；未设置时优先内置 JCEF——desktop 注册后默认即 jcef；jcef 不可用时默认 camoufox，未安装/未配置时选它得到引导错误）
@@ -349,7 +349,7 @@ flowchart TB
 | selectedProjectId / selectedConversationId | `workspace.lastProjectId` / `workspace.lastConversationId` | 选中态 |
 | selectedModel | —（内存，2026-10 起不再持久化） | 当前活跃会话设置的模型**内存镜像**；带自愈：列表重建后重指向同款新实例；新/空会话默认由 `WorkspaceViewModel.applyRecentConversationDefaults` 从最近会话推导 |
 | selectedAgentId | —（内存） | 当前活跃会话设置的 Agent 内存镜像；同 selectedModel（applyRecentConversationDefaults 推导） |
-| sandboxExtraPaths | `sandbox.extraPaths`(JSON 数组) | 写穿 SandboxHooks |
+| projectPermissionStore | core 项目权限 API（不进设备偏好） | 设置页与输入栏共享项目投影 |
 | modelReasoningLevels: Map\<modelId, level\> | —（内存） | **当前会话档位载体**（ReasoningMenu.resolve 的第一优先输入）；切换会话时按会话快照重填，不再跨重启持久化 |
 | selectedApiKeyIds: Map\<providerId, apiKeyId\> | —（内存） | **当前会话供应商 API Key 记忆**（缺省=用默认 key；会话发送经 `getApiKeyId(provider.id)` 注入 ChatPromptInput.apiKeyId）；由会话快照 applyConversationSettings 设置，不再跨重启持久化 |
 | language: AppLanguage | `app.language` | i18n 语言设置（SYSTEM/ZH/ZH_TW/EN/JA/KO/FR/DE/ES/PT_BR/ID/MNC，缺省 SYSTEM；`setLanguage` 写穿持久化） |
@@ -363,7 +363,7 @@ i18n 资源（2026-10 定稿）：`composeResources` 下共 10 个 `values*/stri
 - `mcpStore: McpStore`：管理 `mcpServers: StateFlow<List<McpServerItem>>`，提供 `refresh()`、`toggleEnabled(name, enabled)`、`install(json)`、`update(name, json)`、`delete(name)`、`verify(name)`、`getJson(name)`。
 - `browserSettingsStore: BrowserSettingsStore`（`ui/appstate/BrowserSettingsStore.kt`，AppState 构造即建，挂 aiCore 契约 9 方法）：管理 `settings: StateFlow<CamoufoxSettings>`、`status: StateFlow<BrowserStatus?>`、`installedVersions: StateFlow<List<String>>`、`availableBrowsers: StateFlow<List<BrowserOption>>`（已注册浏览器列表，默认浏览器开关数据源）、`defaultBrowser: StateFlow<String?>`（默认浏览器 name，null=未设置），提供 `refresh()`（设置+状态+版本+浏览器列表+默认浏览器并发拉取）、`save(settings)`（整体替换）、`install(versionTag?)`、`checkUpdate()`、`setDefaultBrowser(name)`（写穿 contract 后**乐观更新** `defaultBrowser` flow，失败落 `errorMessage`，不阻塞 UI）——设置页 BROWSER tab 数据源。
 
-方法：`persist(key, value)`（异步写、pendingWriteCount 计数）、`flushPreferences()`（退出前同步等待归零，2s 兜底）、`applyConversationSettings(model, agent, apiKeyId, thinkingLevel, hasSessionModel)`（真理源翻转 2026-10：会话已绑定模型时按快照覆盖四项设置，否则补位——供其余调用方兜底，ViewModel 新/空会话默认改走 `applyRecentConversationDefaults`；只改内存不写偏好，详见 04-flows.md §1.1）、`setRemoteControl/startRemoteControl/stopRemoteControl`、`setTunnelToken/setTunnelDomain`（持久化 `tunnel.token`/`tunnel.domain`）、`startTunnel/stopTunnel`、`handleProjectDeleted/handleConversationDeleted`（唯一允许偏好与引擎状态对齐的地方）、`hydrate()`（启动恢复：导航偏好/主题/语言/remote/sandbox 等；模型/Agent 仅 first-available 兜底——列表就绪后限时 3s 填首个可用项，四项设置模板已移除）。
+方法：`persist(key, value)`（异步写、pendingWriteCount 计数）、`flushPreferences()`（退出前同步等待归零，2s 兜底）、`applyConversationSettings(model, agent, apiKeyId, thinkingLevel, hasSessionModel)`（真理源翻转 2026-10：会话已绑定模型时按快照覆盖四项设置，否则补位——供其余调用方兜底，ViewModel 新/空会话默认改走 `applyRecentConversationDefaults`；只改内存不写偏好，详见 04-flows.md §1.1）、`setRemoteControl/startRemoteControl/stopRemoteControl`、`setTunnelToken/setTunnelDomain`（持久化 `tunnel.token`/`tunnel.domain`）、`startTunnel/stopTunnel`、`handleProjectDeleted/handleConversationDeleted`（唯一允许偏好与引擎状态对齐的地方）、`hydrate()`（启动恢复：导航偏好/主题/语言/remote 等；项目权限从 core API 查询；模型/Agent 仅 first-available 兜底——列表就绪后限时 3s 填首个可用项，四项设置模板已移除）。
 
 
 ### 7.2 ViewModel 类图
@@ -634,7 +634,7 @@ flowchart TD
 ### 工作过程反馈与子代理流保真（2026-10-28）
 
 - `ui/chat/WorkTracePresentation.kt`：`WorkTraceActivity` = Tool(call) / Thinking / Generating / WaitingSubagents(count) / WaitingResponse；`deriveWorkTraceActivity(items, runningSubagents=0)` 只读结构化状态生成活动，不摘录推理、不额外调用模型；`workTraceElapsedMs(startedAt, completedAt, isRunning, now): Long?` 缺真实锚点返回 null。
-- `ChatListItem.WorkTraceBlock` 删除 `totalDurationMs`，新增 `startedAt: Long?=null`、`completedAt: Long?=null`、`activity: WorkTraceActivity?=null`。`WorkTraceCard` 默认折叠，运行时显示轻量 spinner + 单行摘要，每秒用单调时钟推进真实墙钟；完成读 Core 终点冻结。跨插话的累计耗时只显示在最后一段。不能把 LLM duration 总和当工作耗时，也不能把整次请求耗时标为单段推理耗时。
+- `ChatListItem.WorkTraceBlock` 删除 `totalDurationMs`，新增 `startedAt: Long?=null`、`completedAt: Long?=null`、`activity: WorkTraceActivity?=null`。`WorkTraceCard` 默认展开，运行时显示轻量 spinner + 单行摘要，每秒用单调时钟推进真实墙钟；完成读 Core 终点冻结。跨插话的累计耗时只显示在最后一段。不能把 LLM duration 总和当工作耗时，也不能把整次请求耗时标为单段推理耗时。
 - 工具活动文案复用 `toolRunningLabel(ToolActionGroup)`；中英文等待响应/子任务资源成对维护。展开偏好由用户控制，状态变化不抢夺用户操作。
 - `SubagentState` 新增 `messages: List<ChatMessage>=emptyList()` 与 `progressSequence: Long=0`。`SubagentTracker` 解码 `eventJson` 后交给主对话同一个 `ConversationStateReducer`，按响应/工具 ID 保存推理、正文、参数、结果、完成和错误；`SubagentChatItems` 直接投影这些标准消息。旧 blocks 仅用于旧快照兼容。
 - `SubagentTracker.replay(subagent, events)` 重放宿主缓存；`reconcileSnapshots(snapshot, previous)` 以快照成员集合为准（空集合有效），同 ID 取较新序号并保留已知终态，防止刷新回退或恢复已丢弃任务。进程内与 SSE 共用该契约；重复序号忽略，STARTED 不清空已重放内容。`MederiAiCore` 切换/重连快照同时重放 BackgroundAgent.progressEvents。
@@ -666,6 +666,12 @@ FETCHED只读展示补充：名称、上下文、输出上限使用同一ModelIn
 
 ### 宿主设置组件（S5）
 
+执行权限设置使用 `SandboxSettingsPanel(projectId?)` Route + `SandboxSettingsViewModel(ProjectPermissionStore)` 项目绑定适配 + 纯 `SandboxSettingsContent`。`AppState.projectPermissionStore` 按项目持有同一份 core 表现投影，设置页、独立项目设置和输入栏共享，页面不另存权限配置。每个项目包含「需要批准／完全访问」两档、可写目录白名单、禁止读写路径黑名单及允许/拒绝命令参数前缀，黑名单优先，完全访问仍受明确拒绝规则约束。设置页标明项目名称，从侧边栏项目菜单可直接打开目标项目设置，不改变当前聊天项目。读取成功前不显示假选中，保存完成前不回显扩大权限；路径/命令草稿按项目和规则类型归属，刷新不覆盖，只有 core 确认已提交条目加入后才清空，失败保留输入。
+
+输入工具条使用单一 `PermissionPlanSelector` 盾牌图标，复用 `WorkspaceIconButton`、tooltip 与菜单原子；图标可访问名称和 tooltip 包含当前执行档位及计划自动/手动状态，不在工具条平铺长文字。展开后用 `PermissionPlanSettingsContent` 分别展示「项目执行权限」与「计划批准」两组，明确作用范围与独立性；手机设置 sheet 直接展示同一两组内容，不嵌套第二层菜单。模型名称保留可读文字，其它输入控件不随此次改动盲目图标化。
+
+`ExecutionApprovalCard` 属于共同 Decision 家族，复用 `WorkspaceActionSurface`、`WorkspaceActionButton` 与既有排版/间距 token。展示准确命令、路径、工作目录和申请范围，只提供「批准这一次／拒绝」；不复用计划卡，不附带永久授权开关。卡片列表唯一来源是 `ConversationState.pendingExecutionApprovals`，`ChatListItem.ExecutionApproval` 仅为只读投影，不由工具历史或 VM 的提交状态生成第二份待批列表。提交中同时禁用两按钮；失败留在原卡中并允许重试。
+
 沙盒状态/白名单、遥控服务/密码/隧道使用SettingsSection/SettingsRow与已有共享字段/动作/错误/加载，不重建彩色图标托盘/边框卡片。SettingsCopyableValue为系统信息和遥控地址同一实际View，值可换行/选择，复制精确完整值；SettingsSecretField为密码/Token共同显隐字段，显隐按钮可访问，不触发保存。MederiMiniSwitch视觉28×16与外层热区分开，桌面至少30、其它平台44dp，统一Role.Switch/checked/disabled/键盘与MotionPolicy。
 
 无能力不显示假操作；缺地址不造值，运行但无URL仍有明确状态和停止入口。页面隐藏不停止服务，凭据与路径的保存规则遵从已有状态源。Browser专属旧SettingsInputField等消费者等待另一AI删除，本批不越界清除其依赖。
@@ -686,3 +692,14 @@ diff面板使用同族等待、ErrorBoard和实际刷新动作；首次读取、
 ### 主对话错误反馈归属（R02a/b第三步）
 
 Core运行错误与本地操作失败共用ErrorBoard/ErrorDetailDialog，但不得混合元数据。本地失败没有上一条Core错误的诊断/ID或断流“继续”能力；详情绑定具体可见错误，换错误/会话即关闭，不自动重开。关闭同一快照错误必须在重复快照和切回会话后保持；新的错误身份可以重新提醒。异步反馈按原会话/项目Draft和本地操作序号发布，新操作/关闭后的旧失败不得顶替当前反馈。回滚结果不得覆盖换会话后的编辑区或后来输入。这里是表现规则，不修改Core错误事实或任务执行。
+
+
+### 工作过程显示补充（2026-11-04）
+
+过程整体默认展开、手动选择优先；正文使用与正式回复一致的 Markdown 字体、颜色与排版。推理和每条工具调用默认独立折叠。推理标题旁保留单行最新内容窗口，展开可看完整推理；工具显示真实命令/目标摘要，详情按需展开。过程汇总不因历史工具错误变红或提示失败，具体工具失败仍红色可查。
+运行中推理/工具标题由 `ProcessLabel` 在文字内显示单色窄带左→右扫光，替代行头 spinner；离屏、完成、失败和减弱动效时静态。
+
+
+### 错误反馈密度补充（2026-11-04）
+
+ErrorBoard 使用无边框/无底板的紧凑单行，摘要为 Caption、单行省略，详情/继续/关闭同一行；不复用审批卡的 WorkspaceActionSurface。长文本通过详情阅读，不占多行大卡。主动取消是正常停止，不展示异常名、错误红框或详细报告入口；真实故障及断流恢复能力保留。

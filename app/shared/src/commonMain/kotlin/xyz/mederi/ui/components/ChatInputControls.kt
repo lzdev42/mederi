@@ -36,6 +36,8 @@ import mederi.app.shared.generated.resources.auto_approve_tooltip_main
 import mederi.app.shared.generated.resources.auto_approve_tooltip_note
 import mederi.app.shared.generated.resources.input_send
 import mederi.app.shared.generated.resources.input_stop
+import mederi.app.shared.generated.resources.mode_auto_approve
+import mederi.app.shared.generated.resources.mode_manual_approve
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.WorkspaceViewModel
@@ -43,86 +45,6 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiRadius
 import xyz.mederi.ui.components.atoms.MederiSendRoundButton
-
-/** 自动审批开关与说明气泡。选中态订阅 AppState 派生流（唯一真理源）。 */
-@Composable
-internal fun AgentModeSelector(viewModel: WorkspaceViewModel) {
-    val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
-    val isAutoApprove = selectedAgentMode == AgentMode.AUTONOMOUS
-    val colors = LocalMederiColors.current
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier
-            .heightIn(min = WorkspaceStyle.ControlHeight)
-            .inputControlSurface(onClick = {
-                viewModel.selectAgentMode(if (isAutoApprove) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
-            })
-            .padding(horizontal = 6.dp)
-    ) {
-        Text(
-            text = stringResource(Res.string.auto_approve_title),
-            color = colors.textSecondary,
-            style = WorkspaceStyle.Body
-        )
-        HelpCircleTooltip(
-            mainText = stringResource(Res.string.auto_approve_tooltip_main),
-            noteText = stringResource(Res.string.auto_approve_tooltip_note),
-            touchTargetSize = 20.dp,
-            iconSize = 13.dp
-        )
-        AutoApproveSwitch(
-            viewModel = viewModel,
-            scale = 0.65f,
-            switchWidth = 30.dp,
-            switchHeight = 20.dp
-        )
-    }
-}
-
-/**
- * 自动审批开关（桌面输入条与移动端设置抽屉共用）。
- * 真实 mini-switch：28x16 track（r10）+ 12x12 thumb + 2dp inset；
- * ON: accentPrimary track + onAccentPrimary thumb；OFF: divider track + textPrimary thumb；
- * thumb 位移 animateDpAsState(120ms) 平滑过渡（对齐原型 .mini-switch）。
- * 唯一真理源 = viewModel.selectedAgentMode，写入走 selectAgentMode。
- * scale/switchWidth/switchHeight 为历史 Material3 Switch 缩放包装遗留参数（桌面 0.65 / 移动抽屉 0.8），
- * 当前实现固定真实尺寸，参数不再生效（保留签名兼容移动端调用点）。
- */
-@Composable
-internal fun AutoApproveSwitch(
-    viewModel: WorkspaceViewModel,
-    scale: Float,
-    switchWidth: Dp,
-    switchHeight: Dp,
-) {
-    val selectedAgentMode by viewModel.selectedAgentMode.collectAsState()
-    val colors = LocalMederiColors.current
-    val checked = selectedAgentMode == AgentMode.AUTONOMOUS
-    val thumbOffset by animateDpAsState(
-        targetValue = if (checked) 14.dp else 2.dp,
-        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
-        label = "autoApproveThumb",
-    )
-    Box(
-        modifier = Modifier
-            .size(width = 28.dp, height = 16.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (checked) colors.accentPrimary else colors.divider)
-            .clickable {
-                viewModel.selectAgentMode(if (checked) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
-            }
-    ) {
-        Box(
-            modifier = Modifier
-                .size(12.dp)
-                .offset(x = thumbOffset, y = 2.dp)
-                .clip(CircleShape)
-                .background(if (checked) colors.onAccentPrimary else colors.textPrimary)
-        )
-    }
-}
 
 /** 发送 / 停止按钮。输入存在时统一发送，工作中无输入时可中止。样式收敛为 MederiSendRoundButton（反色 send，KDoc 已注明）。 */
 @Composable

@@ -33,41 +33,57 @@ class SqliteDiffStore(
             message_id = diff.messageId,
             changes_json = json.encodeToString(fileChangeSerializer, diff.changes),
             unified_diff = diff.unifiedDiff,
-            created_at = diff.createdAt
+            created_at = diff.createdAt,
+            workspace_id = diff.workspaceId,
+            checkout_root_at_creation = diff.checkoutRootAtCreation,
+            project_relative_path_at_creation = diff.projectRelativePathAtCreation,
+            workspace_generation = diff.workspaceGeneration
         )
     }
 
     override suspend fun list(sessionId: String): List<TurnDiff> = withContext(Dispatchers.IO) {
-        queries.listDiffs(sessionId) { session_id, message_id, changes_json, unified_diff, created_at ->
+        queries.listDiffs(sessionId) { session_id, message_id, changes_json, unified_diff, created_at, workspace_id, checkout_root, project_rel_path, workspace_gen ->
             TurnDiff(
                 sessionId = session_id,
                 messageId = message_id,
                 changes = json.decodeFromString(fileChangeSerializer, changes_json),
                 unifiedDiff = unified_diff,
-                createdAt = created_at
+                createdAt = created_at,
+                workspaceId = workspace_id,
+                checkoutRootAtCreation = checkout_root,
+                projectRelativePathAtCreation = project_rel_path,
+                workspaceGeneration = workspace_gen
             )
         }.executeAsList()
     }
 
     override suspend fun get(sessionId: String, messageId: String?): TurnDiff? = withContext(Dispatchers.IO) {
         if (messageId == null) {
-            queries.getLatestDiff(sessionId) { session_id, message_id, changes_json, unified_diff, created_at ->
+            queries.getLatestDiff(sessionId) { session_id, message_id, changes_json, unified_diff, created_at, workspace_id, checkout_root, project_rel_path, workspace_gen ->
                 TurnDiff(
                     sessionId = session_id,
                     messageId = message_id,
                     changes = json.decodeFromString(fileChangeSerializer, changes_json),
                     unifiedDiff = unified_diff,
-                    createdAt = created_at
+                    createdAt = created_at,
+                    workspaceId = workspace_id,
+                    checkoutRootAtCreation = checkout_root,
+                    projectRelativePathAtCreation = project_rel_path,
+                    workspaceGeneration = workspace_gen
                 )
             }.executeAsOneOrNull()
         } else {
-            queries.getDiffByMessage(sessionId, messageId) { session_id, message_id, changes_json, unified_diff, created_at ->
+            queries.getDiffByMessage(sessionId, messageId) { session_id, message_id, changes_json, unified_diff, created_at, workspace_id, checkout_root, project_rel_path, workspace_gen ->
                 TurnDiff(
                     sessionId = session_id,
                     messageId = message_id,
                     changes = json.decodeFromString(fileChangeSerializer, changes_json),
                     unifiedDiff = unified_diff,
-                    createdAt = created_at
+                    createdAt = created_at,
+                    workspaceId = workspace_id,
+                    checkoutRootAtCreation = checkout_root,
+                    projectRelativePathAtCreation = project_rel_path,
+                    workspaceGeneration = workspace_gen
                 )
             }.executeAsOneOrNull()
         }

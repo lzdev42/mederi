@@ -55,6 +55,7 @@ import xyz.mederi.ui.components.atoms.MederiDialog
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.ui.components.InitLoadingOverlay
 import xyz.mederi.ui.settings.SettingsDialog
+import xyz.mederi.ui.settings.ProjectSettingsPanel
 import xyz.mederi.util.pickDirectory
 
 @Composable
@@ -67,7 +68,7 @@ fun MainScreen() {
     val workspaceViewModel: WorkspaceViewModel = viewModel { WorkspaceViewModel(appState) }
 
     val effectState = rememberWorkspaceEffectState(workspaceViewModel.effects)
-    val isSettingsVisible = effectState.settingsVisible
+    val isSettingsVisible = effectState.settingsVisible || effectState.projectSettingsProjectId != null
     val compactionNotice = effectState.compactionNotice
 
     // 设置页打开时收回浏览器面板：JCEF 是原生重量级窗口（heavyweight），
@@ -176,6 +177,7 @@ fun MainScreen() {
                             workspaceViewModel.openSettings()
                             isMobileDrawerOpen = false
                         },
+                        onOpenProjectSettings = workspaceViewModel::openProjectSettings,
                         onOpenProjectPicker = openProjectPicker
                     )
                 }
@@ -239,6 +241,7 @@ fun MainScreen() {
                         onTogglePin = { appState.setLeftSidebarPinned(false) },
                         onRequestClose = { appState.setLeftSidebarPinned(false) },
                         onOpenSettings = { workspaceViewModel.openSettings() },
+                        onOpenProjectSettings = workspaceViewModel::openProjectSettings,
                         onOpenProjectPicker = openProjectPicker
                     )
                     SidebarResizeHandle(
@@ -335,6 +338,7 @@ fun MainScreen() {
                                     workspaceViewModel.openSettings()
                                     closeDrawer()
                                 },
+                                onOpenProjectSettings = { projectId -> workspaceViewModel.openProjectSettings(projectId); closeDrawer() },
                                 onOpenProjectPicker = { openProjectPicker(); closeDrawer() }
                             )
                             SidebarResizeHandle(
@@ -355,9 +359,13 @@ fun MainScreen() {
         )
 
         SettingsDialog(
-            isVisible = isSettingsVisible,
+            isVisible = effectState.settingsVisible,
             onClose = { effectState.dismissSettings() }
         )
+
+        effectState.projectSettingsProjectId?.let { projectId ->
+            ProjectSettingsPanel(projectId, effectState::dismissProjectSettings)
+        }
 
         // 手动压缩被跳过的一次性提示（"确定" 单按钮关闭）
         compactionNotice?.let { notice ->

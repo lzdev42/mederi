@@ -51,7 +51,13 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 activeSkills = parseActiveSkills(row.active_skills),
                 draftText = row.draft_text,
                 createdAt = row.created_at,
-                updatedAt = row.updated_at
+                updatedAt = row.updated_at,
+                workspaceId = row.workspace_id,
+                associatedWorktreeId = row.associated_worktree_id,
+                archivedAt = row.archived_at,
+                pinned = row.pinned != 0L,
+                subagentConfigs = parseSubagentConfigs(row.subagent_configs),
+                subagentMaxConcurrent = row.subagent_max_concurrent?.toInt()
             )
         }
     }
@@ -72,7 +78,13 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
                 activeSkills = parseActiveSkills(row.active_skills),
                 draftText = row.draft_text,
                 createdAt = row.created_at,
-                updatedAt = row.updated_at
+                updatedAt = row.updated_at,
+                workspaceId = row.workspace_id,
+                associatedWorktreeId = row.associated_worktree_id,
+                archivedAt = row.archived_at,
+                pinned = row.pinned != 0L,
+                subagentConfigs = parseSubagentConfigs(row.subagent_configs),
+                subagentMaxConcurrent = row.subagent_max_concurrent?.toInt()
             )
         }
     }
@@ -92,7 +104,13 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
             active_skills = session.activeSkills.encodeActiveSkills(),
             draft_text = session.draftText,
             created_at = session.createdAt,
-            updated_at = session.updatedAt
+            updated_at = session.updatedAt,
+            workspace_id = session.workspaceId,
+            associated_worktree_id = session.associatedWorktreeId,
+            archived_at = session.archivedAt,
+            pinned = if (session.pinned) 1L else 0L,
+            subagent_configs = json.encodeToString(session.subagentConfigs),
+            subagent_max_concurrent = session.subagentMaxConcurrent?.toLong()
         )
     }
 
@@ -150,6 +168,29 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
     override suspend fun updateActiveSkills(id: String, activeSkills: List<String>): Unit = withContext(Dispatchers.IO) {
         queries.updateSessionActiveSkills(activeSkills.encodeActiveSkills(), id)
     }
+
+    override suspend fun updateWorkspaceBinding(id: String, workspaceId: String?, associatedWorktreeId: String?): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionWorkspaceBinding(workspaceId, associatedWorktreeId, Instant.now().toString(), id)
+    }
+
+    override suspend fun setArchived(id: String, archivedAt: String?): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionArchivedAt(archivedAt, Instant.now().toString(), id)
+    }
+
+    override suspend fun setPinned(id: String, pinned: Boolean): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionPinned(if (pinned) 1L else 0L, Instant.now().toString(), id)
+    }
+
+    override suspend fun updateSubagentConfigs(id: String, configs: Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionSubagentConfigs(json.encodeToString(configs), id)
+    }
+
+    override suspend fun updateSubagentMaxConcurrent(id: String, count: Int?): Unit = withContext(Dispatchers.IO) {
+        queries.updateSessionSubagentMaxConcurrent(count?.toLong(), id)
+    }
+
+    private fun parseSubagentConfigs(raw: String): Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig> =
+        runCatching { json.decodeFromString<Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>>(raw) }.getOrDefault(emptyMap())
 
     override suspend fun delete(id: String): Unit = withContext(Dispatchers.IO) {
         queries.deleteSession(id)

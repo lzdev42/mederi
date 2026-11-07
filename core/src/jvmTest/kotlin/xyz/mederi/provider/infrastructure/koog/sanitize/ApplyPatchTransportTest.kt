@@ -2,6 +2,7 @@ package xyz.mederi.provider.infrastructure.koog.sanitize
 
 import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt
+import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
@@ -240,7 +241,12 @@ class ApplyPatchTransportTest {
                     put("input", patch)
                 }) })
             }.toString()
-            assertFailsWith<IllegalArgumentException> { client().execute(prompt(), model, listOf(tool)) }
+            if (status == "failed") {
+                val error = assertFailsWith<LLMClientException> { client().execute(prompt(), model, listOf(tool)) }
+                assertIs<ai.koog.http.client.KoogHttpClientException>(error.cause)
+            } else {
+                assertFailsWith<IllegalArgumentException> { client().execute(prompt(), model, listOf(tool)) }
+            }
         }
     }
 

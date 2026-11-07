@@ -113,6 +113,7 @@ kotlin {
             implementation(libs.compose.uiTest)
             // KBrowser.newPage 内部用 Dispatchers.Main（kotlinx-coroutines-swing 提供）
             implementation(libs.kotlinx.coroutinesSwing)
+            implementation(libs.ktor.serverTestHost)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

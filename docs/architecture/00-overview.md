@@ -18,6 +18,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │       ├── skills/ + skills/domain/     ← 技能发现/解析（SkillManager/SkillDiscovery/SkillFrontmatterParser + 领域模型）
 │       ├── http/                        ← HTTP 客户端工厂（MederiHttpClientFactory/SseIdleTimeoutException）
 │       ├── plan/                        ← 计划系统（Plan/PlanStore/Notebook/审批）
+│       ├── workspace/                   ← 工作区管理（Git Worktree驱动、快照恢复、VerifiedWorkspaceRoot、包含规则、双向Handoff、崩溃恢复、环境脚本）
 │       ├── mcp/{servers,engine,market}/ ← MCP 配置管理 + 内核引擎（McpConnector）+ MCP 市场
 │       ├── provider/                    ← Provider 领域模型 + Koog client 适配
 │       ├── metadata/                    ← models.dev 模型目录（ModelCatalog）
@@ -32,7 +33,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │   │   │   ├── core/bridge/             ← ServerAiCore（REST/SSE 遥控端实现）+ BuiltinAgents
 │   │   │   ├── core/mock/               ← MockAiCore（UI 开发/预览）
 │   │   │   ├── ui/                 ← AppState + 4 个 ViewModel（commonMain）
-│   │   │   ├── ui/                      ← Compose UI（MainScreen/Workspace/Sidebar/components/settings）
+│   │   │   ├── ui/                      ← Compose UI（MainScreen/Workspace/Sidebar/components/settings/workspace）
 │   │   │   ├── App.kt MederiApp.kt      ← 全平台唯一 App 入口组合链
 │   │   │   └── theme/ util/             ← 主题；平台工具 expect/actual
 │   │   ├── jvmMain/.../core/
@@ -141,8 +142,8 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    A["API 层<br/>ProviderApi / ProjectApi / SessionApi / ModelApi / McpServerApi / McpMarketApi / SkillApi / SubagentConfigApi<br/>职责 = DTO 转换 + mederiCall 异常包装（只抛 MederiException）"]
-    M["Manager 层（唯一真理源）<br/>ProviderManager / ProjectManager / SessionManager / McpServerManager / McpMarketManager / SkillManager / SubagentConfigManager"]
+    A["API 层<br/>ProviderApi / ProjectApi / SessionApi / ModelApi / McpServerApi / McpMarketApi / SkillApi / SubagentConfigApi / SandboxApi<br/>职责 = DTO 转换 + mederiCall 异常包装（只抛 MederiException）"]
+    M["Manager 层（唯一真理源）<br/>ProviderManager / ProjectManager / SessionManager / McpServerManager / McpMarketManager / SkillManager / SubagentConfigManager / SandboxManager"]
     S["Store 层（纯持久化，可注入）<br/>ProviderStore / ApiKeyStore / ProjectStore / SessionStore / HistoryStore / DiffStore / McpServersStore / SettingsStore"]
     T["Koog 执行引擎（被 SessionManager 创建）<br/>TurnExecutor → ToolFactory / Strategies / ChatHistoryProvider / Compression"]
     P["Plan/Notebook（项目 .mederi/ 目录，不走 DB）"]
@@ -164,10 +165,11 @@ flowchart TD
 
 | 库 | 内容 | 特性 | store |
 |---|---|---|---|
-| `~/.mederi/config.db` | providers、api_keys、projects、mcp_servers、settings（skill 根目录等） | 极小、低频写、事务一致 | Sqlite*Store(configDriver) |
+| `~/.mederi/config.db` | providers、api_keys、projects、mcp_servers、settings（skill 根目录、sandbox.projects.{projectId}.settings 项目权限等） | 极小、低频写、事务一致 | Sqlite*Store(configDriver) |
 | `~/.mederi/data/data.db` | sessions、message_history、diffs | 高频 append、随使用增长 | Sqlite*Store(dataDriver) |
 | `~/.mederi/skills/` | skill 包（每个 skill 一个子目录，含 SKILL.md） | Koog discoverSkills 自动发现根 | SkillManagerImpl |
-| `~/.mederi/preferences.json` | UI 偏好（theme、遥控端口、选中态、推理档位记忆、沙盒白名单） | **设备级语义**，app:shared 层管理，不进库 | PreferencesStore |
+| `config.db/settings[sandbox.projects.{projectId}.settings]` | 每项目需要批准/完全访问、额外可写根、拒绝路径及命令规则 | SandboxManager 唯一真理，desktop/server/遥控同源；旧全局权限及设备偏好不迁移 | SettingsStore |
+| `~/.mederi/preferences.json` | UI 偏好（theme、遥控端口、选中态、推理档位记忆） | **设备级语义**，app:shared 层管理，不进库 | PreferencesStore |
 | `<项目>/.mederi/` | plans/{planId}/（plan.json/plan.md/research.md/reports/NN-executor.md/walkthrough.md，一计划一目录）、plans-done/、plans-voided/、.mederi/research/（无活跃 plan 时 researcher 独立报告）、notebook.md | 计划系统文件（机器+人读双份） | PlanStore / Notebook |
 
 ## 6. 硬性规则速查索引（细节见 AGENTS.md）
@@ -181,7 +183,7 @@ flowchart TD
 | 能力传导到引擎 | supportsImages/supportsReasoning → `KoogModelBuilder.buildCapabilities` 加 LLMCapability | 设置全通但引擎拒绝图片 |
 | durable-first | 用户消息先落库再置 RUNNING | 回查/自动改名拿到旧状态 |
 | 上下文挂载互斥 | todo-list 与 plan 解耦——todo-list 只由 update_todo 驱动（session.todos），plan 子任务展示由 planApprovals 投影表驱动，两者互不干涉 | 两份进度真理源 |
-| 文件写白名单 | write_file/edit_file 只能写项目目录 + `.mederi/` + 全局白名单；读全盘放行 | 沙盒逃逸 |
+| 文件写白名单 | 需要批准模式按 SandboxPaths 自动放行范围，越界写申请本次批准；完全访问显式解除沙盒，读全盘 | 沙盒逃逸 |
 | 不兜底原则 | 数据层面没有就是没有；程序层面报错不崩 | 默认值掩盖问题 |
 | 禁手拼 JSON | 结构化数据一律 @Serializable + kotlinx.serialization | 解析脆弱 |
 | 删库审批 | 删任何用户数据文件前必须经用户批准 | — |

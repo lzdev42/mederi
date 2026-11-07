@@ -1,6 +1,7 @@
 package xyz.mederi.provider.infrastructure.koog.sanitize
 
 import ai.koog.http.client.KoogHttpClient
+import ai.koog.http.client.KoogHttpClientException
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
@@ -33,6 +34,9 @@ import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.timeout
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -56,6 +60,8 @@ class MederiOpenAILLMClient(
     httpClientFactory: KoogHttpClient.Factory,
     private val chatCompletionsPath: String,
     clock: KoogClock = KoogClock.System,
+    private val chatGptPlan: Boolean = false,
+    private val accessTokenProvider: (suspend () -> String)? = null,
 ) : OpenAILLMClient(
     apiKey = apiKey,
     settings = settings,
@@ -124,6 +130,11 @@ class MederiOpenAILLMClient(
         DebugLog.data("SSE", "messages", prompt.messages.size)
         DebugLog.data("SSE", "tools", tools.size)
 
+        if (chatGptPlan) {
+            // SIWC 不接受非流式 HTTP。压缩/改名等 execute 调用仍走同一 SSE 协议，
+            // 只在内部收集完整帧，不把 delta 当作正式完整响应。
+            return collectChatGptResponse(executeStreamingResponsesAPI(prompt, model, tools))
+        }
         if (!model.supports(LLMCapability.OpenAIEndpoint.Completions)) {
             DebugLog.event("SSE", "routing to Responses API (model lacks Completions capability)")
             return executeResponsesAPI(prompt, model, tools)
@@ -160,6 +171,7 @@ class MederiOpenAILLMClient(
         }
         DebugLog.data("SSE", "response length", rawResponse.length)
 
+        checkChatResponseError(rawResponse)
         val response = sanitizeJson.decodeFromString<SanitizedChatCompletionResponse>(rawResponse)
         require(response.choices.isNotEmpty()) { "Empty choices in response" }
 
@@ -208,7 +220,7 @@ class MederiOpenAILLMClient(
         // Responses API：Ktor SSE 插件在部分端点挂起（父类 executeStreaming 用 httpClient.sse()，
         // incoming.collect 不关闭），且父类 Responses 响应模型 text 字段非空会反序列化失败。
         // 统一走自建 SSE 解析（httpClient.lines()），真流式逐事件发帧，绝不等待全量响应。
-        if (!model.supports(LLMCapability.OpenAIEndpoint.Completions)) {
+        if (chatGptPlan || !model.supports(LLMCapability.OpenAIEndpoint.Completions)) {
             DebugLog.event("SSE", "routing to Responses API (model lacks Completions capability)")
             return executeStreamingResponsesAPI(prompt, model, tools)
         }
@@ -321,7 +333,10 @@ class MederiOpenAILLMClient(
                                 errorMessage = error?.message?.lineSequence()?.firstOrNull()?.take(120)
                             )
                         }
-                        .map { data -> sanitizeJson.decodeFromString<SanitizedStreamResponse>(data) }
+                        .map { data ->
+                            checkChatResponseError(data)
+                            sanitizeJson.decodeFromString<SanitizedStreamResponse>(data)
+                        }
                         .let { processStreamingFlow(it) }
                         .requireEndFrame()
                 )
@@ -371,6 +386,7 @@ class MederiOpenAILLMClient(
         }
         DebugLog.data("SSE", "response length", rawResponse.length)
 
+        checkResponsesResponseError(rawResponse)
         val response = sanitizeJson.decodeFromString<SanitizedResponsesAPIResponse>(rawResponse)
         if (response.output.any { it.type == "custom_tool_call" }) {
             require(response.status == null || response.status == "completed") { "Incomplete apply_patch response: ${response.status}" }
@@ -426,6 +442,26 @@ class MederiOpenAILLMClient(
         )
     }
 
+    private suspend fun collectChatGptResponse(stream: Flow<StreamFrame>): Message.Assistant {
+        val parts = mutableListOf<MessagePart.ResponsePart>()
+        var completed: StreamFrame.End? = null
+        stream.requireEndFrame().collect { frame ->
+            when (frame) {
+                is StreamFrame.TextComplete -> parts.add(MessagePart.Text(frame.text))
+                is StreamFrame.ReasoningComplete -> parts.add(MessagePart.Reasoning(
+                    id = frame.id, content = frame.content, summary = frame.summary.orEmpty(),
+                ))
+                is StreamFrame.ToolCallComplete -> parts.add(MessagePart.Tool.Call(
+                    id = frame.id, tool = frame.name, args = frame.content,
+                ))
+                is StreamFrame.End -> completed = frame
+                else -> Unit
+            }
+        }
+        val end = requireNotNull(completed) { "ChatGPT response did not complete" }
+        return Message.Assistant(parts = parts, metaInfo = end.metaInfo, finishReason = end.finishReason)
+    }
+
     internal fun buildResponsesRequestJson(
         prompt: Prompt,
         model: LLModel,
@@ -437,7 +473,7 @@ class MederiOpenAILLMClient(
         if (tools.isNotEmpty()) {
             // Responses API 工具是扁平结构（type/name/description/parameters 在根级），
             // 与 Chat 的 {type:function, function:{...}} 嵌套不同；参数 schema 复用 Chat 的转换
-            put("tools", buildJsonArray {
+            val declaredTools = buildJsonArray {
                 tools.forEach { tool ->
                     val chatTool = tool.toOpenAIChatTool()
                     add(buildJsonObject {
@@ -457,7 +493,15 @@ class MederiOpenAILLMClient(
                         }
                     })
                 }
-            })
+            }
+            put("tools", if (chatGptPlan) buildJsonArray {
+                add(buildJsonObject {
+                    put("type", "namespace")
+                    put("name", "mederi")
+                    put("description", "Mederi tools")
+                    put("tools", declaredTools)
+                })
+            } else declaredTools)
         }
         put("input", buildJsonArray {
             prompt.messages.forEach { message ->
@@ -525,6 +569,7 @@ class MederiOpenAILLMClient(
                                         put("type", if (custom) "custom_tool_call" else "function_call")
                                         put("call_id", part.id ?: "")
                                         put("name", part.tool)
+                                        if (chatGptPlan) put("namespace", "mederi")
                                         if (custom) put("input", ApplyPatchProtocol.decodeArguments(part.args))
                                         else put("arguments", part.args)
                                     })
@@ -537,7 +582,8 @@ class MederiOpenAILLMClient(
                 }
             }
         })
-        put("stream", stream)
+        if (chatGptPlan) put("store", false)
+        put("stream", stream || chatGptPlan)
     }.toString()
 
     // ------------------------------------------------------------------
@@ -574,12 +620,17 @@ class MederiOpenAILLMClient(
             val lastRawLines = ArrayDeque<String>()
             val errorSseLines = mutableListOf<String>()
             try {
+                // 每次实际收集（包括重试）重新获取凭据；不能把首次 access token
+                // 固定在 client 的默认头里让长任务过期后仍反复发送旧值。
+                val authorization = if (chatGptPlan) accessTokenProvider?.invoke()?.let {
+                    mapOf("Authorization" to "Bearer $it")
+                }.orEmpty() else emptyMap()
                 emitAll(
                     httpClient.lines(
                         path = responsesAPIPath,
                         requestBody = requestJson,
                         requestBodyType = String::class,
-                        headers = mapOf(
+                        headers = authorization + mapOf(
                             "Accept" to "text/event-stream",
                             "Cache-Control" to "no-cache",
                             "Content-Type" to "application/json"
@@ -652,7 +703,10 @@ class MederiOpenAILLMClient(
                                 errorMessage = error?.message?.lineSequence()?.firstOrNull()?.take(120)
                             )
                         }
-                        .map { data -> sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(data) }
+                        .map { data ->
+                            checkResponsesResponseError(data)
+                            sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(data)
+                        }
                         .let { processResponsesStreamingFlow(it) }
                         .requireEndFrame()
                 )
@@ -778,6 +832,7 @@ class MederiOpenAILLMClient(
                     if (index != null && index in toolMetaByIndex) completeTool(index, finalItem = event.item)
                 }
                 "response.completed", "response.incomplete" -> {
+                    require(!chatGptPlan || event.type == "response.completed") { "Incomplete ChatGPT response" }
                     require(event.type != "response.incomplete" || customInputs.isEmpty()) { "Incomplete apply_patch response" }
                     val response = event.response
                     if (customInputs.isNotEmpty()) {
@@ -829,6 +884,32 @@ class MederiOpenAILLMClient(
     // ------------------------------------------------------------------
     // 流式帧处理
     // ------------------------------------------------------------------
+
+    /** 在成功 DTO 忽略扩展字段之前捕获原始错误；同时覆盖无 choices 的错误帧。 */
+    internal fun checkChatResponseError(rawResponse: String) {
+        val envelope = sanitizeJson.decodeFromString<SanitizedChatErrorEnvelope>(rawResponse)
+        val error = envelope.error ?: envelope.choices.firstNotNullOfOrNull { it.error }
+        if (error == null && envelope.choices.none { it.finishReason == "error" }) return
+        throwProviderResponseError(rawResponse, error)
+    }
+
+    internal fun checkResponsesResponseError(rawResponse: String) {
+        val envelope = sanitizeJson.decodeFromString<SanitizedResponsesErrorEnvelope>(rawResponse)
+        val error = envelope.error ?: envelope.response?.error
+        if (error == null && envelope.type !in setOf("error", "response.failed") &&
+            envelope.status != "failed" && envelope.response?.status != "failed") return
+        val details = error ?: sanitizeJson.parseToJsonElement(rawResponse) as kotlinx.serialization.json.JsonObject
+        throwProviderResponseError(rawResponse, details)
+    }
+
+    private fun throwProviderResponseError(rawResponse: String, error: kotlinx.serialization.json.JsonObject?): Nothing {
+        val code = (error?.get("code") as? JsonPrimitive)?.intOrNull?.takeIf { it in 400..599 }
+        val message = (error?.get("message") as? JsonPrimitive)?.contentOrNull
+            ?: "Provider reported an error without an error message."
+        // 原始响应保存在 cause，统一分类/重试/子代理事件均可取回，不伪装成本地状态错误。
+        throw LLMClientException(clientName, message,
+            KoogHttpClientException(statusCode = code, errorBody = rawResponse))
+    }
 
     // internal 以便 MederiOpenAILLMClientTest 直接驱动流式管线
     internal fun processStreamingFlow(response: Flow<SanitizedStreamResponse>): Flow<StreamFrame> =

@@ -8,6 +8,7 @@ import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.SubagentChatItems
 import kotlin.test.Test
+import kotlin.test.assertNull
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -23,6 +24,30 @@ class SubagentEventParityTest {
         val envelope = CoreEvent(CoreEventType.SUBAGENT_PROGRESS, "parent", payload = mapOf(
             "agentId" to "child", "eventJson" to Json.encodeToString(event)), timestamp = event.timestamp)
         return SubagentTracker.apply(mapOf("child" to state), envelope).getValue("child")
+    }
+
+    @Test
+    fun retryAndFullErrorDiagnosticSurviveProgressReplayAndStaleSnapshots() {
+        val diagnostic = "network diagnostic\nCaused by: java.io.EOFException\n" + "full details\n".repeat(600)
+        val retry = child(CoreEventType.STATUS, null, mapOf("code" to "RETRYING", "scope" to "provider",
+            "attempt" to "3", "delayMs" to "1000", "message" to "connection reset"))
+        val failure = child(CoreEventType.MESSAGE_ERROR, null, mapOf("error" to "[NETWORK] EOFException",
+            "errorId" to "err-detail", "fullDiagnostic" to diagnostic))
+        val retrying = forward(base(), retry)
+        assertTrue(retrying.statusHint.orEmpty().contains("connection reset"))
+        val failed = forward(retrying, failure)
+        assertEquals(diagnostic, failed.errorDiagnostic)
+        assertEquals("err-detail", failed.errorId)
+        assertNull(failed.statusHint)
+        val replayed = SubagentTracker.replay(base().copy(status = "ERROR"), listOf(retry, failure))
+        assertEquals(diagnostic, replayed.errorDiagnostic)
+        val reconciled = SubagentTracker.reconcileSnapshots(listOf(base()), listOf(replayed)).single()
+        assertEquals(diagnostic, reconciled.errorDiagnostic)
+        assertEquals("ERROR", reconciled.status)
+        val wire = Json.decodeFromString<SubagentState>(Json.encodeToString(replayed))
+        assertEquals(diagnostic, wire.errorDiagnostic)
+        val finishedRetry = forward(retrying, child(CoreEventType.STATUS, null, mapOf("scope" to "provider", "code" to "RETRY_FINISHED")))
+        assertNull(finishedRetry.statusHint)
     }
 
     @Test
