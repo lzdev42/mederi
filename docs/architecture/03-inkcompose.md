@@ -235,6 +235,7 @@ commonMain 全部顶层 expect 函数（零 expect class/object）：`DiagramBlo
 ## 11. 构建配置（`inkcompose/build.gradle.kts`）
 
 - 源集组织：`val inkModules = [entry, image, latex-parser, latex-renderer, syntax-parser, syntax-render, diagram, markdown-parser, markdown-runtime, markdown-renderer, vtext, diff]`（12 个领域目录）；`commonMain.kotlin.srcDirs(inkModules.map { "common/$it/kotlin" })`；commonTest 同法映射 `common-test/<domain>/kotlin`；`jvmMain←jvm/kotlin(+resources←jvm/resources)`、`jvmTest←jvm-test/kotlin`、`androidMain←android/kotlin`、`iosMain←ios/kotlin`、`wasmJsMain←wasmJs/kotlin`。
+- 需要真实 Compose 或位图运行时的用例放在 `commonRenderTest`（`common-render-test/<domain>/kotlin`），由 JVM、iOS、wasmJs 和 Android 设备测试共享。Android 宿主 JVM 运行 `commonTest`，Android 设备测试使用 `AndroidJUnitRunner` 和测试 manifest 声明的 `ComponentActivity`。
 - 依赖：commonMain `api` = compose.runtime/foundation/ui/material3/components.resources + kotlinx-coroutines-core；`implementation` = coil-compose、coil-network-ktor3、**ktor-client-core**（对齐 Ktor 版本消除 wasmJs 传递 npm `ws` 版本冲突）、**kbrowser**。androidMain 加 androidx.graphics.path + **ktor-client-cio**（库自带引擎保证 URL 图即用）+ coil-svg；iosMain ktor-client-darwin；jvmMain compose.desktop.currentOs + ktor-client-cio + **kotlinx-coroutinesSwing**。
 - Compose resources：`packageOfResClass = "xyz.emuci.inkcompose.resources"`；`customDirectory("commonMain", common/composeResources)` —— KaTeX 字体 ×20 + NotoSansMongolian-Regular.ttf。
 - 所有 Test 任务注入 JCEF JVM 参数（`--enable-native-access=jcef` 与两处 add-opens，服务 Mermaid 离屏渲染测试）。`jvmToolchain(25)`。

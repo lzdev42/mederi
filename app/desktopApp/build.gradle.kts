@@ -85,6 +85,7 @@ compose.desktop {
                 "jcef",
                 "jdk.jfr",
                 "jdk.management",
+                "jdk.security.auth",
                 "jdk.unsupported"
             )
         }

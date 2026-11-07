@@ -7,8 +7,9 @@ import kotlin.test.assertEquals
 class TimeFormatterTest {
 
     private val utcZone = TimeZone.of("UTC")
-    private val shanghaiZone = TimeZone.of("Asia/Shanghai") // UTC+8
-    private val newYorkZone = TimeZone.of("America/New_York") // 2026-10-02 是 EDT (UTC-4)
+    // Exercise offset conversion on every target without requiring an IANA database in the browser.
+    private val shanghaiZone = TimeZone.of("+08:00")
+    private val newYorkZone = TimeZone.of("-04:00") // EDT on the sample date
 
     // 2026-10-02 04:15:30 UTC
     // 在上海（UTC+8）对应 2026-10-02 12:15:30

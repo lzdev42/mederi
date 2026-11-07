@@ -7,6 +7,11 @@ import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.tools.PlanTools
 import xyz.mederi.tools.ShellTools
 import xyz.mederi.tools.VerifyTools
+import xyz.mederi.tools.sandbox.CommandSandbox
+import xyz.mederi.tools.sandbox.ExecutionPermissionMode
+import xyz.mederi.tools.sandbox.ExecutionPermissions
+import xyz.mederi.tools.sandbox.SandboxManager
+import xyz.mederi.tools.sandbox.SandboxSettings
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -93,11 +98,19 @@ class AcceptanceEvidenceTest {
         try {
             val store = PlanStore(listOf(root.path))
             val data = File(root, "result.json").apply { writeText("""{"V-0":2}""") }
-            val task = task(0).copy(verification = VerificationSpec(command = "cat result.json"),
+            val directories = listOf(root.path)
+            val sandbox = CommandSandbox(directories, emptyList())
+            val command = if (sandbox.shell == "cmd") "type result.json" else "cat result.json"
+            val task = task(0).copy(verification = VerificationSpec(command = command),
                 overallAcceptance = true, targetFiles = listOf("result.json"))
             store.save(plan(task))
             val events = MutableSharedFlow<MederiEvent>(extraBufferCapacity = 8)
-            val tool = VerifyTools("session", store, events, ShellTools(listOf(root.path))).VerifySubtaskTool()
+            val permissions = SandboxManager().apply {
+                updateSettings("project", SandboxSettings(mode = ExecutionPermissionMode.FULL_ACCESS))
+            }
+            val shell = ShellTools(directories, executionPermissions = ExecutionPermissions(
+                permissions, directories, "session", projectId = "project"))
+            val tool = VerifyTools("session", store, events, shell).VerifySubtaskTool()
             val args = VerifyTools.VerifySubtaskArgs("plan_test", 0, "PASS", "")
             assertTrue(tool.execute(args).contains("observed=2"))
             assertEquals(SubtaskStatus.FAILED, store.load("plan_test")?.subtasks?.single()?.status)

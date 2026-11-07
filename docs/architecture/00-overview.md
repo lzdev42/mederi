@@ -52,7 +52,7 @@ mederi/                                  ← git 仓库根 = /Users/liuzhe/Proje
 │   ├── common/{entry,image,markdown-parser,markdown-renderer,markdown-runtime,
 │   │          latex-parser,latex-renderer,syntax-parser,syntax-render,diagram,vtext}/kotlin/
 │   ├── {jvm,android,ios,wasmJs}/kotlin/ ← 平台 actual 平铺
-│   ├── common-test/<domain>/ jvm-test/  ← 测试（jvmTest 2600+）
+│   ├── common-test/ common-render-test/ jvm-test/  ← 单元与渲染测试
 │   └── common/composeResources/font/    ← KaTeX×20 + NotoSansMongolian
 ├── scripts/                             ← e2e 冒烟/审批/收敛测试脚本（正式测试资产）
 ├── docs/                                ← 设计文档（本目录 architecture/ 在其中）

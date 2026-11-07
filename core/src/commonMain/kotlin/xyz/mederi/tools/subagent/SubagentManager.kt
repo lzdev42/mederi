@@ -2,6 +2,10 @@ package xyz.mederi.tools.subagent
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -163,25 +167,6 @@ class SubagentManager(
         planStore: PlanStore? = null
     ): String {
         val agentId = "sub_${UUID.randomUUID().toString().take(8)}"
-        // 先占位注册，保证 spawn 返回后立即可以 query 到（RUNNING）
-        val bg = BackgroundAgent(
-            agentId = agentId,
-            role = role,
-            parentSessionId = parentSessionId,
-            job = kotlinx.coroutines.Job(),
-            status = SubagentStatus.RUNNING,
-            result = null,
-            progress = "starting",
-            aiModel = aiModel,
-            reasoningLevel = reasoningLevel,
-            task = task,
-            briefing = briefing,
-            startedAt = java.time.Instant.now().toString(),
-            planId = planId,
-            executorSubtaskIndex = executorSubtaskIndex,
-            planStore = planStore
-        )
-
         // 并发上限（浏览器角色显式豁免——浏览器任务本就不经 spawn，此处是规则显式化）
         val limit = if (role == SubagentRole.BROWSER_OPERATOR || role == SubagentRole.BROWSER_BRAIN) {
             Int.MAX_VALUE
@@ -189,27 +174,38 @@ class SubagentManager(
             (sessionMaxConcurrentProvider?.invoke(parentSessionId) ?: maxConcurrentProvider?.invoke())
                 ?.coerceAtLeast(1) ?: Int.MAX_VALUE
         }
-        synchronized(spawnLock) {
+        val (bg, agentJob) = synchronized(spawnLock) {
             val running = agents.values.count {
                 it.parentSessionId == parentSessionId && it.status == SubagentStatus.RUNNING
             }
             if (running >= limit) {
                 throw SubagentLimitReachedException(running = running, limit = limit)
             }
+            val agentJob = Job(scope.coroutineContext[Job])
+            val bg = BackgroundAgent(
+                agentId = agentId,
+                role = role,
+                parentSessionId = parentSessionId,
+                job = agentJob,
+                status = SubagentStatus.RUNNING,
+                result = null,
+                progress = "starting",
+                aiModel = aiModel,
+                reasoningLevel = reasoningLevel,
+                task = task,
+                briefing = briefing,
+                startedAt = java.time.Instant.now().toString(),
+                planId = planId,
+                executorSubtaskIndex = executorSubtaskIndex,
+                planStore = planStore
+            )
             agents[agentId] = bg
+            bg to agentJob
         }
 
-        val job = scope.launch {
-            bg.progress = "running"
-            emitEvent(parentSessionId, EventType.SUBAGENT_STARTED, mapOf(
-                "agentId" to agentId,
-                "role" to role.name,
-                "modelId" to aiModel.id,
-                "modelName" to aiModel.name,
-                "reasoningLevel" to reasoningLevel.name,
-                "task" to task,
-                "startedAt" to bg.startedAt
-            ) + (briefing?.takeIf { it.isNotBlank() }?.let { mapOf("briefing" to it) } ?: emptyMap()))
+        // ATOMIC 让派发后立刻取消也能进入终态处理。runner 只在取消检查通过后执行。
+        @OptIn(ExperimentalCoroutinesApi::class)
+        val job = scope.launch(agentJob, start = CoroutineStart.ATOMIC) {
             suspend fun forwardProgress(event: MederiEvent) {
                 val sequence = synchronized(bg.progressEvents) {
                     bg.progressEvents.add(event)
@@ -220,6 +216,17 @@ class SubagentManager(
                     "sequence" to sequence.toString(), "eventJson" to Json.encodeToString(event)))
             }
             try {
+                bg.progress = "running"
+                emitEvent(parentSessionId, EventType.SUBAGENT_STARTED, mapOf(
+                    "agentId" to agentId,
+                    "role" to role.name,
+                    "modelId" to aiModel.id,
+                    "modelName" to aiModel.name,
+                    "reasoningLevel" to reasoningLevel.name,
+                    "task" to task,
+                    "startedAt" to bg.startedAt
+                ) + (briefing?.takeIf { it.isNotBlank() }?.let { mapOf("briefing" to it) } ?: emptyMap()))
+                ensureActive()
                 val result = subagentRunner.run(
                     task = task,
                     briefing = briefing,
@@ -333,7 +340,7 @@ class SubagentManager(
                 }
             }
         }
-        bg.job = job
+        job.invokeOnCompletion { agentJob.complete() }
         return agentId
     }
 

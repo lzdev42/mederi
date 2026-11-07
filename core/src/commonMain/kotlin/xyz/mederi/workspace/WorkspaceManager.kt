@@ -1909,7 +1909,13 @@ class WorkspaceManager(
 
         // 5. 目标确已注册为 git worktree
         val wtRes = gitDriver.runGit(target.absolutePath, listOf("worktree", "list", "--porcelain", "-z"))
-        if (wtRes.exitCode != 0 || "worktree ${target.canonicalPath}" !in wtRes.stdoutString.split('\u0000')) return false
+        if (wtRes.exitCode != 0) return false
+        val canonicalTarget = target.canonicalFile
+        if (wtRes.stdoutString.splitToSequence('\u0000').none { record ->
+                if (!record.startsWith("worktree ")) return@none false
+                val checkout = File(record.removePrefix("worktree "))
+                checkout.isAbsolute && checkout.canonicalFile == canonicalTarget
+            }) return false
 
         return true
     }

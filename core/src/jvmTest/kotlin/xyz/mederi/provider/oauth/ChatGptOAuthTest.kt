@@ -219,6 +219,14 @@ class ChatGptOAuthTest {
             if (Files.getFileStore(directory.toPath()).supportsFileAttributeView("posix")) {
                 assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(
                     Files.getPosixFilePermissions(directory.resolve("provider.json").toPath())))
+            } else {
+                for (path in listOf(directory, directory.resolve("provider.json"), directory.resolve("host.json"),
+                    directory.resolve("host.lock"))) {
+                    val view = Files.getFileAttributeView(path.toPath(), java.nio.file.attribute.AclFileAttributeView::class.java)
+                    val entry = view.acl.single()
+                    assertEquals(view.owner, entry.principal(), "only the owner may access ${path.name}")
+                    assertEquals(java.nio.file.attribute.AclEntryType.ALLOW, entry.type())
+                }
             }
             val provider = Provider("id", "ChatGPT", ProviderType.OPENAI_RESPONSES, "https://api.openai.com/v1",
                 authentication = ProviderAuthentication.CHATGPT_OAUTH, accessTokenProvider = { "secret" })

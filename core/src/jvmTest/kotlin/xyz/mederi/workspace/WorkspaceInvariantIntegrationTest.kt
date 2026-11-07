@@ -631,7 +631,7 @@ class WorkspaceInvariantIntegrationTest {
                             val outFile = File(projectDir, "fast_exit.txt")
                             val result = shell.BashTool().execute(
                                 xyz.mederi.tools.ShellTools.BashArgs(
-                                    command = "printf fast > '${outFile.path}'",
+                                    command = ">fast_exit.txt echo fast",
                                     background = true
                                 )
                             )
@@ -644,18 +644,20 @@ class WorkspaceInvariantIntegrationTest {
                             val lease = leases.acquireExecutionLease(projectDir.canonicalPath)
                             lease.close()
 
-                            // Shell exits immediately while its redirected child remains in the group.
-                            val lateFile = File(projectDir, "child_after_shell_exit.txt")
-                            val childResult = shell.BashTool().execute(
-                                xyz.mederi.tools.ShellTools.BashArgs(
-                                    command = "(sleep 1; printf child > '${lateFile.path}') </dev/null >/dev/null 2>&1 &",
-                                    background = true
+                            // POSIX shells can exit while their redirected child remains in the group.
+                            if (File.separatorChar == '/') {
+                                val lateFile = File(projectDir, "child_after_shell_exit.txt")
+                                val childResult = shell.BashTool().execute(
+                                    xyz.mederi.tools.ShellTools.BashArgs(
+                                        command = "(sleep 1; printf child > '${lateFile.path}') </dev/null >/dev/null 2>&1 &",
+                                        background = true
+                                    )
                                 )
-                            )
-                            assertTrue(childResult.contains("Background task started"), childResult)
-                            leases.withManagementIntent(File(root, "common").path, listOf(projectDir.path), permitOperationId = "wait_child") {
-                                assertTrue(lateFile.exists(), "Management cannot enter while the shell's child can still write")
-                                assertEquals("child", lateFile.readText())
+                                assertTrue(childResult.contains("Background task started"), childResult)
+                                leases.withManagementIntent(File(root, "common").path, listOf(projectDir.path), permitOperationId = "wait_child") {
+                                    assertTrue(lateFile.exists(), "Management cannot enter while the shell's child can still write")
+                                    assertEquals("child", lateFile.readText())
+                                }
                             }
                         }
 
@@ -683,10 +685,9 @@ class WorkspaceInvariantIntegrationTest {
                                 executionPermissions = permissions,
                                 leaseManager = leases
                             )
-                            val outFile = File(projectDir, "track_dead.txt")
                             val result = shell.BashTool().execute(
                                 xyz.mederi.tools.ShellTools.BashArgs(
-                                    command = "printf done > '${outFile.path}'",
+                                    command = ">track_dead.txt echo done",
                                     background = true
                                 )
                             )
@@ -738,7 +739,7 @@ class WorkspaceInvariantIntegrationTest {
                     val action = EnvironmentAction(
                         id = "act_permit",
                         name = "PermitAction",
-                        script = PlatformScript(default = "printf ok > '${marker.name}'")
+                        script = PlatformScript(default = ">${marker.name} echo ok")
                     )
                     mederi.workspaceManager.saveProjectEnvironment(
                         projectId,
@@ -764,7 +765,7 @@ class WorkspaceInvariantIntegrationTest {
                                 // 用 permit 执行 setup 脚本（模拟 POST_SETUP）
                                 val setupEnv = ProjectEnvironment(
                                     id = "env_setup_a", name = "Setup A", version = 0L,
-                                    setup = PlatformScript(default = "printf setup_done > 'permit_setup_a.txt'"),
+                                    setup = PlatformScript(default = ">permit_setup_a.txt echo setup_done"),
                                     actions = emptyList()
                                 )
                                 mederi.workspaceManager.saveProjectEnvironment(projectId, setupEnv, expectedVersion = 0L, workspaceId = ws.id)
@@ -823,7 +824,7 @@ class WorkspaceInvariantIntegrationTest {
                             // 这证明 permit 本身不会在无竞争时造成错误。
                             val setupEnv2 = ProjectEnvironment(
                                 id = "env_setup_c", name = "Setup C", version = 0L,
-                                setup = PlatformScript(default = "printf stale_ok > 'permit_stale_c.txt'"),
+                                setup = PlatformScript(default = ">permit_stale_c.txt echo stale_ok"),
                                 actions = emptyList()
                             )
                             mederi.workspaceManager.saveProjectEnvironment(projectId, setupEnv2, expectedVersion = 0L, workspaceId = ws.id)
@@ -939,16 +940,18 @@ class WorkspaceInvariantIntegrationTest {
             }
         )
 
-        // d: 改可执行位（chmod -x）
-        archivePreimageCase(
-            caseName = "d_exec_mode",
-            mutate = { checkout -> File(checkout, "exec.sh").setExecutable(false, false) },
-            assertMutated = { checkout ->
-                val exec = File(checkout, "exec.sh")
-                assertTrue(exec.exists(), "case d: exec.sh must be preserved")
-                assertFalse(exec.canExecute(), "case d: exec.sh must remain non-executable")
-            }
-        )
+        // Only POSIX filesystems expose an executable bit that the test can change independently.
+        if ("posix" in java.nio.file.FileSystems.getDefault().supportedFileAttributeViews()) {
+            archivePreimageCase(
+                caseName = "d_exec_mode",
+                mutate = { checkout -> assertTrue(File(checkout, "exec.sh").setExecutable(false, false)) },
+                assertMutated = { checkout ->
+                    val exec = File(checkout, "exec.sh")
+                    assertTrue(exec.exists(), "case d: exec.sh must be preserved")
+                    assertFalse(exec.canExecute(), "case d: exec.sh must remain non-executable")
+                }
+            )
+        }
 
         // e: 注入 computeFingerprint 失败 —— 恢复侧必须 fail-closed，不放行删除
         archivePreimageCase(
@@ -1587,8 +1590,10 @@ class WorkspaceInvariantIntegrationTest {
             File(target, "tomb.txt").writeText("should not exist")
         }
         // d. 可执行位被清除 → mode 不符
-        restoreCompletenessCase("d_exec_mode_cleared", expected = false) { target ->
-            File(target, "exec.sh").setExecutable(false, false)
+        if ("posix" in java.nio.file.FileSystems.getDefault().supportedFileAttributeViews()) {
+            restoreCompletenessCase("d_exec_mode_cleared", expected = false) { target ->
+                assertTrue(File(target, "exec.sh").setExecutable(false, false))
+            }
         }
         // e. 完整恢复：HEAD/headRef + index + 全部条目（file/symlink/tombstone/mode）+ worktree 注册 均匹配
         restoreCompletenessCase("e_full_restore", expected = true) { _ -> }

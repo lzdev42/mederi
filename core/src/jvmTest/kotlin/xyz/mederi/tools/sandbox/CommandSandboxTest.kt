@@ -27,11 +27,12 @@ class CommandSandboxTest {
 
     @Test
     fun seatbeltUsesTrustedInlineProfileAndEscapesPathsWithoutImplicitCaches() = fixture { root ->
-        val project = File(root, "quoted\"project").apply { mkdirs() }
+        val project = File(root, "project").apply { mkdirs() }
         File(project, ".git").mkdirs()
         val sandbox = CommandSandbox(listOf(project.path), emptyList(), "Mac OS X")
         val profile = sandbox.seatbeltProfile()
-        assertTrue(profile.contains("quoted\\\"project"))
+        assertTrue(profile.contains("(subpath ${CommandSandbox.sbplString(project.path)})"))
+        assertEquals("\"quoted\\\"project\"", CommandSandbox.sbplString("quoted\"project"))
         assertTrue(profile.contains("(deny file-write* (subpath"))
         assertFalse(profile.contains("(allow network*)"))
         assertFalse(profile.contains(".gradle"))
@@ -47,7 +48,8 @@ class CommandSandboxTest {
         assertFalse(sandbox.status().available)
         assertFailsWith<MederiStateException> { sandbox.wrap("echo payload") }
         val approved = sandbox.wrap("echo payload", unsandboxed = true)
-        assertEquals(listOf("cmd", "/c", "echo payload"), approved.argv)
+        val shellFlag = if (sandbox.shell == "cmd") "/c" else "-c"
+        assertEquals(listOf(sandbox.shell, shellFlag, "echo payload"), approved.argv)
         assertFalse(approved.processGroupLeader)
         val withDeny = CommandSandbox(emptyList(), emptyList(), "Windows 11", deniedPaths = listOf("/blocked"))
         assertFailsWith<MederiStateException> { withDeny.wrap("echo payload", unsandboxed = true) }
@@ -59,10 +61,11 @@ class CommandSandboxTest {
         File(project, ".git").mkdirs()
         val denied = File(project, "secret").apply { mkdirs() }
         val sandbox = CommandSandbox(listOf(project.path), emptyList(), "Mac OS X", deniedPaths = listOf(denied.path))
+        val escaped = CommandSandbox.sbplString(denied.path)
         for (full in listOf(false, true)) {
             val profile = sandbox.seatbeltProfile(fullAccess = full)
-            assertTrue(profile.contains("(deny file-read* (subpath \"${denied.path}\"))"))
-            assertTrue(profile.contains("(deny file-write* (subpath \"${denied.path}\"))"))
+            assertTrue(profile.contains("(deny file-read* (subpath $escaped))"))
+            assertTrue(profile.contains("(deny file-write* (subpath $escaped))"))
             if (full) {
                 assertTrue(profile.contains("(allow default)"))
                 assertFalse(profile.contains(".git"), "full access only retains explicit user deny rules")
@@ -128,6 +131,7 @@ class CommandSandboxTest {
 
     @Test
     fun seccompLauncherUsesAnonymousPipeAndPreservesPayloadStdin() = fixture { root ->
+        assumeTrue("seccomp launcher verification requires a POSIX /bin/sh", File("/bin/sh").canExecute())
         val output = File(root, "filter")
         val escaped = LinuxCommandSandbox.seccompProgram("x86_64")
         val process = ProcessBuilder("/bin/sh", "-c", LinuxCommandSandbox.SECCOMP_LAUNCHER,

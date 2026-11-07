@@ -13,6 +13,11 @@ import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.SubtaskStatus
 import xyz.mederi.plan.VerificationSpec
 import xyz.mederi.tools.PlanTools
+import xyz.mederi.tools.sandbox.CommandSandbox
+import xyz.mederi.tools.sandbox.ExecutionPermissionMode
+import xyz.mederi.tools.sandbox.ExecutionPermissions
+import xyz.mederi.tools.sandbox.SandboxManager
+import xyz.mederi.tools.sandbox.SandboxSettings
 import java.io.File
 import java.util.UUID
 import kotlin.test.AfterTest
@@ -50,7 +55,10 @@ class ConvergePlanMechanismTest {
         eventBus = eventBus
     )
 
-    private fun makePlan(subtaskStatus: SubtaskStatus = SubtaskStatus.FAILED): Plan {
+    private fun makePlan(
+        subtaskStatus: SubtaskStatus = SubtaskStatus.FAILED,
+        verificationCommand: String = "test -f file.txt"
+    ): Plan {
         val plan = Plan(
             id = "plan_${UUID.randomUUID().toString().take(8)}",
             title = "test plan",
@@ -68,7 +76,7 @@ class ConvergePlanMechanismTest {
                     planDetail = "do something",
                     spec = "spec content",
                     targetFiles = listOf("file.txt"),
-                    verification = VerificationSpec(command = "test -f file.txt"),
+                    verification = VerificationSpec(command = verificationCommand),
                     // executor 完成时记录了改动文件（规则 2 空产出门禁：非空即放行 PASS）
                     executorTouchedFiles = listOf("file.txt"),
                     dependsOn = emptyList(),
@@ -138,15 +146,21 @@ class ConvergePlanMechanismTest {
 
     @Test
     fun `verify_subtask PASS archives plan when all complete`() = runBlocking {
-        val plan = makePlan(SubtaskStatus.PENDING)
-        // verify_subtask 现在无条件执行验证命令——先创建 file.txt 让 `test -f file.txt` 真实通过
+        val directories = listOf(tmpDir.absolutePath)
+        val sandbox = CommandSandbox(directories, emptyList())
+        val command = if (sandbox.shell == "cmd") "if not exist file.txt exit /b 1" else "test -f file.txt"
+        val plan = makePlan(SubtaskStatus.PENDING, command)
         File(tmpDir, "file.txt").writeText("created by test")
-        // 传真实 ShellTools：验证器需要执行命令（2026-09-24 无条件执行改造）
-        val verifyTools = xyz.mederi.tools.VerifyTools(
+        // 验证计划归档，保留真实命令执行而无需宿主提供受限沙盒。
+        val manager = SandboxManager().apply {
+            updateSettings("project", SandboxSettings(mode = ExecutionPermissionMode.FULL_ACCESS))
+        }
+        val verifyTools = VerifyTools(
             sessionId = "sess_test",
             planStore = planStore,
             eventBus = eventBus,
-            shellTools = xyz.mederi.tools.ShellTools(listOf(tmpDir.absolutePath))
+            shellTools = ShellTools(directories, executionPermissions = ExecutionPermissions(
+                manager, directories, "sess_test", projectId = "project"))
         )
         val result = verifyTools.VerifySubtaskTool().execute(
             xyz.mederi.tools.VerifyTools.VerifySubtaskArgs(

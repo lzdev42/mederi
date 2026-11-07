@@ -22,11 +22,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
-import org.jetbrains.compose.resources.stringResource
 import xyz.emuci.inkcompose.SelectionMenuAction
-import xyz.emuci.inkcompose.resources.Res
-import xyz.emuci.inkcompose.resources.selection_copy
-import xyz.emuci.inkcompose.resources.selection_paste
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -74,20 +70,14 @@ class SelectionMenuRenderingTest {
     fun default_menu_disables_paste_without_target_and_copy_click_executes_then_dismisses() = runComposeUiTest {
         val toolbar = PopupTextToolbar()
         var copies = 0
-        var copyLabel = ""
-        var pasteLabel = ""
         toolbar.showMenu(Rect(40f, 40f, 40f, 40f), { copies++ }, null, {}, {})
-        setContent {
-            MenuFixture(toolbar) { copy, paste -> copyLabel = copy; pasteLabel = paste }
-        }
-        awaitSelectionTestContent("localized copy and paste labels") {
-            copyLabel.isNotBlank() && pasteLabel.isNotBlank()
-        }
-        onAllNodes(hasClickAction()).assertCountEquals(2)
-        onNodeWithText(copyLabel).assertIsDisplayed().assertIsEnabled()
-        onNodeWithText(pasteLabel).assertIsDisplayed().assertIsNotEnabled().performTouchInput { click() }
+        setContent { MenuFixture(toolbar) }
+        // The default action order is Copy then Paste, independent of when labels load.
+        val actions = onAllNodes(hasClickAction()).assertCountEquals(2)
+        actions[0].assertIsDisplayed().assertIsEnabled()
+        actions[1].assertIsDisplayed().assertIsNotEnabled().performTouchInput { click() }
         runOnIdle { assertEquals(TextToolbarStatus.Shown, toolbar.status) }
-        onNodeWithText(copyLabel).performClick()
+        actions[0].performClick()
         runOnIdle {
             assertEquals(1, copies)
             assertEquals(TextToolbarStatus.Hidden, toolbar.status)
@@ -100,12 +90,10 @@ class SelectionMenuRenderingTest {
         val toolbar = PopupTextToolbar()
         var copies = 0
         var pastes = 0
-        var pasteLabel = ""
         toolbar.showMenu(Rect(40f, 40f, 40f, 40f), { copies++ }, { pastes++ }, {}, {})
-        setContent { MenuFixture(toolbar) { _, paste -> pasteLabel = paste } }
-        awaitSelectionTestContent("localized paste label") { pasteLabel.isNotBlank() }
-        onAllNodes(hasClickAction()).assertCountEquals(2)
-        onNodeWithText(pasteLabel).assertIsEnabled().performClick()
+        setContent { MenuFixture(toolbar) }
+        val actions = onAllNodes(hasClickAction()).assertCountEquals(2)
+        actions[1].assertIsDisplayed().assertIsEnabled().performClick()
         runOnIdle {
             assertEquals(0, copies)
             assertEquals(1, pastes)
@@ -119,7 +107,6 @@ class SelectionMenuRenderingTest {
 private fun MenuFixture(
     toolbar: PopupTextToolbar,
     actions: List<SelectionMenuAction> = listOf(SelectionMenuAction.Copy, SelectionMenuAction.Paste),
-    onLabels: (String, String) -> Unit = { _, _ -> },
 ) {
     MaterialTheme {
         val controller = rememberMarkdownSelectionController(rememberCoroutineScope(), rememberTextMeasurer())
@@ -128,7 +115,6 @@ private fun MenuFixture(
             controller.state.range = SelectionRange(SelectionAnchor(1, 0), SelectionAnchor(1, 13))
             controller.state.isMouseInput = true
         }
-        onLabels(stringResource(Res.string.selection_copy), stringResource(Res.string.selection_paste))
         Box(Modifier.size(500.dp)) { PopupTextToolbarHost(toolbar, controller, actions) }
     }
 }

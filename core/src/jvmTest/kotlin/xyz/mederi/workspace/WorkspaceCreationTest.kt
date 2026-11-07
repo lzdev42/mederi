@@ -1,6 +1,7 @@
 package xyz.mederi.workspace
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import xyz.mederi.api.exception.MederiWorkspaceException
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.MessagePart
@@ -345,15 +346,12 @@ class WorkspaceCreationTest {
 
             // 准备环境，脚本向 markerFile 追加内容
             val envDir = File(srcRepo, ".mederi/environments").apply { mkdirs() }
-            val envJson = """
-                {
-                  "id": "append_env",
-                  "name": "Append Env",
-                  "version": 1,
-                  "setup": { "default": "echo SETUP_RAN >> '${markerFile.absolutePath}'" }
-                }
-            """.trimIndent()
-            File(envDir, "append_env.json").writeText(envJson)
+            val markerPath = markerFile.absoluteFile.invariantSeparatorsPath
+            val environment = ProjectEnvironment(
+                id = "append_env", name = "Append Env", version = 1,
+                setup = PlatformScript(default = ">>\"$markerPath\" echo SETUP_RAN"), actions = emptyList()
+            )
+            File(envDir, "append_env.json").writeText(Json.encodeToString(ProjectEnvironment.serializer(), environment))
 
             val (manager, wsStore, sessStore) = createManager(tempFolder)
             val permissions = fullAccessPermissions(tempFolder)

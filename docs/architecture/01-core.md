@@ -202,7 +202,7 @@ Provider 组：`list()`（读时合并 keys）/ `listWithoutKeys()` / `get/requi
 | --- | --- |
 | `ChatGptOAuthManager.kt` | `start(providerId): ChatGptAuthState` / `state(providerId): ChatGptAuthState` / `cancel(providerId)` / `disconnect(providerId)` / `delete(providerId)` / `accessToken(providerId): String`（均 suspend）；`isConnected(providerId): Boolean`；`close()` |
 | `ChatGptOAuthModels.kt` | 公开状态 `ChatGptAuthState(providerId,status,authUrl?,email?,error?)`；内部凭据 `ChatGptCredential(clientId,subject,email?,accessToken?,refreshToken?,idToken?,expiresAt,scopes)`、稳定宿主 `ChatGptHost(hostId)`；OIDC/token/JWKS DTO 使用 kotlinx.serialization，不出宿主 |
-| `ChatGptCredentialStore.kt` | 账号凭据及稳定 host ID；同目录原子替换、Unix owner-only 权限、拒绝符号链接、文件锁串行 rotating refresh；无目录时内存保存 |
+| `ChatGptCredentialStore.kt` | 账号凭据及稳定 host ID；POSIX owner-only 权限或 Windows owner-only ACL（提权进程产生组所有者时通过 `jdk.security.auth` 解析当前账号）；临时文件先限制权限再写入并同目录原子替换；拒绝符号链接，文件锁串行 rotating refresh；无目录时内存保存 |
 | `ChatGptOAuthTransport.kt` | 内部 `ChatGptOAuthTransport.get(url)/postForm(url,fields)`；`OpenAiOAuthTransport` 使用有界非流式 HTTPS auth.openai.com 请求、禁重定向、统一 UA；错误不附 token 响应体 |
 | `ChatGptIdTokenVerifier.kt` | `verify(token,jwks,issuer,clientId,nonce,nowSeconds)`：RS256/JWKS 签名、issuer、audience、expiry、nonce 验证；通过后才使用身份 |
 
@@ -1172,7 +1172,7 @@ apply_patch每次实际mutation前核对目标属于授权前捕获的canonical�
   - `WorkspaceLeaseManager`：按 `gitCommonDirectory` 进行跨项目/工作区协调，支持共享执行租约（多读/非独占）与独占管理意图（管理操作独占，**实际等待活跃执行租约归零**——`withManagementIntent` 轮询 `getExecutionCounter` 归零后进入临界、超时抛 `WORKSPACE_BUSY`），避免并发 Git 索引或工作树竞争损坏。执行租约生产调用方 = `TurnExecutor.runTurn`（RF-07，整个 turn 持租约、finally 释放），归档/配额快照因此包含等待期间的 late writes。
   - 超时管理与进程组清理：基于 `ProcessRegistry` 按进程组安全收割。
 - **快照与恢复**（`core/src/commonMain/kotlin/xyz/mederi/workspace/WorkspaceSnapshotService.kt`）：
-  - `captureSnapshot`：生成 `head.bundle`、暂存区 `index.bin`、blob 原始数据与清单 `manifest.json`，支持 `TRANSFER` 与 `PREIMAGE` 模式。
+  - `captureSnapshot`：生成 `head.bundle`、暂存区 `index.bin`、blob 原始数据与清单 `manifest.json`，支持 `TRANSFER` 与 `PREIMAGE` 模式。清单使用 Git 的 `/` 分隔路径，既有日志的 v2 指纹保留宿主分隔符计算方式；恢复时按 canonical 路径核对 worktree 注册。
   - `restoreToCleanCheckout`：在干净目录初始化仓库、解包 bundle、还原 stage0 blob、暂存区 index 与工作区未提交/忽略文件及符号链接（仅限自包含快照验证/明确导出，不用于正式受管恢复）。
   - `restoreToLinkedWorktree(snapshotId, targetCheckoutRoot, gitCommonDir)`（RF-06）：正式受管恢复路径——在**原仓库 common-dir** 以 `git worktree add --detach <target> <headOid>` 注册 detached linked worktree（原仓库缺少快照提交对象时，从 bundle 补齐对象），再调 `materializeSnapshotIntoCheckout` 物化快照；原 common-dir 缺失抛 WORKSPACE_MISSING，注册失败转 RECOVERY_REQUIRED。`WorkspaceManager.restoreWorkspace` 和 `executeRecovery(RESTORE_TO_NEW_MANAGED)` 均使用该方法并核验恢复结果。
   - `materializeSnapshotIntoCheckout(snapshotDir, manifest, targetRoot)`（RF-06）：快照物化共享方法——`hash-object -w --stdin` 写暂存区 blobs、物化条目（文件/目录/软链接/墓碑）、原子恢复 index.bin；目标须已是 git 仓库（linked worktree 或独立 init），不改变仓库注册/元数据。

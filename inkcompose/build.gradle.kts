@@ -49,7 +49,14 @@ kotlin {
         withHostTest {
             isIncludeAndroidResources = true
         }
+        withDeviceTestBuilder {
+            sourceSetTreeName = "test"
+        }.configure {
+            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        }
     }
+
+    applyDefaultHierarchyTemplate()
 
     sourceSets {
         commonMain {
@@ -72,7 +79,22 @@ kotlin {
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlinx.coroutinesTest)
+            }
+        }
+        val commonRenderTest = create("commonRenderTest") {
+            dependsOn(commonTest.get())
+            kotlin.srcDirs(inkModules.map { "common-render-test/$it/kotlin" })
+            dependencies {
                 implementation(libs.compose.uiTest)
+            }
+        }
+        // Android host tests use mock framework APIs. Real Compose scenes and bitmaps need instrumentation.
+        matching { it.name in setOf("jvmTest", "iosTest", "wasmJsTest", "androidDeviceTest") }.configureEach {
+            dependsOn(commonRenderTest)
+        }
+        named("androidDeviceTest") {
+            dependencies {
+                implementation(libs.androidx.testExt.junit)
             }
         }
         androidMain {

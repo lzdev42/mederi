@@ -268,16 +268,19 @@ class WorkspaceArchiveTest {
         val op = manager.executeHandoff(session.id, HandoffInput(targetKind = WorkspaceKind.MANAGED_WORKTREE, previewToken = preview.token, requestId = "req_sf"))
         val managedWs = wsStore.getWorkspace(op.targetWorkspaceId!!)!!
 
-        // 故意破坏快照存储目录（设置为不可写入文件）
+        // Block new snapshot writes without changing the snapshots created by handoff.
         val snapshotsDir = File(manager.snapshotsRoot)
-        snapshotsDir.setReadOnly()
+        val savedSnapshots = File(tempFolder, "saved-snapshots")
+        Files.move(snapshotsDir.toPath(), savedSnapshots.toPath())
+        snapshotsDir.writeText("not a directory")
 
         try {
             assertFailsWith<Exception> {
                 manager.archiveWorkspace(managedWs.id, ArchiveWorkspaceInput(requestId = "req_fail_arc"))
             }
         } finally {
-            snapshotsDir.setWritable(true)
+            assertTrue(snapshotsDir.delete())
+            Files.move(savedSnapshots.toPath(), snapshotsDir.toPath())
         }
 
         // 验证：快照失败时绝不删除受管工作区目录

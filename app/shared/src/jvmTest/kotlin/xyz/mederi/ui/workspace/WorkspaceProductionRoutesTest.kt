@@ -621,9 +621,17 @@ class WorkspaceProductionRoutesTest {
             val project = setup.projects.create(CreateProjectRequest("UI real fixture", projectDir.path))
             projectId = project.id
             setup.sandbox.updateSettings(projectId, SandboxSettings(mode = ExecutionPermissionMode.FULL_ACCESS))
+            setup.workspaceManager.sessionStore.insert(
+                Session(
+                    id = convId, projectId = projectId, title = "UI real", status = SessionStatus.IDLE,
+                    agentMode = AgentMode.AUTONOMOUS, aiModel = null, reasoningLevel = null,
+                    env = emptyMap(), createdAt = now(), updatedAt = now()
+                )
+            )
             val ws = setup.workspaceManager.createWorkspace(
                 projectId, projectDir.path,
-                selection = WorkspaceSelection(kind = kind, baseRef = "HEAD")
+                selection = WorkspaceSelection(kind = kind, baseRef = "HEAD"),
+                sessionId = convId
             )
             if (kind == WorkspaceKind.MANAGED_WORKTREE) {
                 val op = setup.workspaceManager.prepareWorkspace(ws.id, projectDir.path, "req_ui_real")
@@ -670,13 +678,6 @@ class WorkspaceProductionRoutesTest {
                     )
                 )
             }
-            setup.workspaceManager.sessionStore.insert(
-                Session(
-                    id = convId, projectId = projectId, title = "UI real", status = SessionStatus.IDLE,
-                    agentMode = AgentMode.AUTONOMOUS, aiModel = null, reasoningLevel = null,
-                    env = emptyMap(), createdAt = now(), updatedAt = now(), workspaceId = workspaceId
-                )
-            )
         } finally {
             setup.sandboxManager.close()
         }
@@ -812,6 +813,14 @@ class WorkspaceProductionRoutesTest {
             val createBranchLabel = getString(Res.string.workspace_create_branch_create)
             val restoreLabel = getString(Res.string.workspace_restore_action)
             val newWorktreeRoot = File(asm.root, "worktrees").canonicalPath
+            val branchName = "ui-test-branch"
+            fun openBranchDialog(selectorLabel: String) {
+                onNodeWithText(selectorLabel).performClick()
+                onNodeWithText(branchMenuLabel).performClick()
+                waitUntil("branch form is mounted", 15_000) {
+                    onAllNodesWithContentDescription("branch_name_field").fetchSemanticsNodes().isNotEmpty()
+                }
+            }
             setContent {
                 CompositionLocalProvider(LocalDensity provides Density(1f, 1.6f)) {
                     AppTheme {
@@ -911,46 +920,40 @@ class WorkspaceProductionRoutesTest {
             assertTrue(wtCall.automaticCleanup, "自动清理保持开启")
             // 持久回读：真实桥 getWorktreeSettings 返回保存值
             waitUntil(null, 15_000) {
-                runBlocking {
-                    asm.realCore.getWorktreeSettings().getOrNull()?.rootPath == newWorktreeRoot
-                }
+                asm.vm.dialogState.value == WorkspaceViewModel.WorkspaceDialogState.None &&
+                    runBlocking { asm.realCore.getWorktreeSettings().getOrNull()?.rootPath == newWorktreeRoot }
             }
 
             // d. 建分支：名称 + expectedGeneration（真实状态）；同名冲突错误可见
-            onNodeWithText(label).performClick()
-            waitForIdle()
-            onNodeWithText(branchMenuLabel).performClick()
-            waitForIdle()
-            onNodeWithContentDescription("branch_name_field").performTextInput("ui-test-branch")
+            openBranchDialog(label)
+            onNodeWithContentDescription("branch_name_field").performTextInput(branchName)
             assertTouchHeightAtLeast44(createBranchLabel)
             assertNoHorizontalOverflow(createBranchLabel, containerWidthPx)
+            val beforeBranch = asm.realCore.getConversationWorkspace(asm.convId).getOrThrow().active
             onNodeWithText(createBranchLabel).performClick()
             waitForIdle()
             waitUntil(null, 30_000) { asm.recording.createBranchCalls.isNotEmpty() }
             val branchCall = asm.recording.createBranchCalls.first()
             assertEquals(asm.workspaceId, branchCall.first, "建分支必须在当前工作区")
-            assertEquals("ui-test-branch", branchCall.second.name, "分支名必须是输入值")
-            val activeInfo = asm.realCore.getConversationWorkspace(asm.convId).getOrThrow().active
-            assertEquals(activeInfo.workspace.generation, branchCall.second.expectedGeneration, "expectedGeneration 必须是当前真实 generation")
-            assertEquals(activeInfo.headOid, branchCall.second.expectedHead, "expectedHead 必须是当前真实 HEAD")
-            // 同名再建 → 冲突错误在 UI 可见（不自动改名）
-            waitUntil(null, 30_000) {
-                asm.vm.dialogState.value is WorkspaceViewModel.WorkspaceDialogState.None ||
-                    asm.vm.dialogState.value is WorkspaceViewModel.WorkspaceDialogState.CreateBranch
+            assertEquals(branchName, branchCall.second.name, "分支名必须是输入值")
+            assertEquals(beforeBranch.workspace.generation, branchCall.second.expectedGeneration, "expectedGeneration 必须是创建前的真实 generation")
+            assertEquals(beforeBranch.headOid, branchCall.second.expectedHead, "expectedHead 必须是创建前的真实 HEAD")
+            waitUntil("created branch is projected and dialog is closed", 30_000) {
+                val active = asm.vm.snapshot?.workspaceInfo?.active
+                asm.vm.dialogState.value == WorkspaceViewModel.WorkspaceDialogState.None &&
+                    active?.branch == branchName && active.workspace.generation == beforeBranch.workspace.generation + 1
             }
-            asm.vm.dismissDialog()
-            waitForIdle()
-            onNodeWithText(label).performClick()
-            waitForIdle()
-            onNodeWithText(branchMenuLabel).performClick()
-            waitForIdle()
-            onNodeWithContentDescription("branch_name_field").performTextInput("ui-test-branch")
+            val createdBranchLabel = realSelectorLabel(asm)
+            // 同名再建 → 冲突错误在 UI 可见（不自动改名）
+            openBranchDialog(createdBranchLabel)
+            onNodeWithContentDescription("branch_name_field").performTextInput(branchName)
             onNodeWithText(createBranchLabel).performClick()
             waitForIdle()
             waitUntil(null, 30_000) {
                 (asm.vm.dialogState.value as? WorkspaceViewModel.WorkspaceDialogState.CreateBranch)?.errorMessage != null
             }
             val conflictMessage = (asm.vm.dialogState.value as WorkspaceViewModel.WorkspaceDialogState.CreateBranch).errorMessage!!
+            assertTrue(conflictMessage.contains("already exists"), conflictMessage)
             onNodeWithText(conflictMessage).assertExists("同名建分支的冲突错误必须在 UI 可见")
 
             // e. 恢复：RECOVERY_REQUIRED 操作（预置经真实 store）→ 状态条恢复按钮可见 → 44dp 触达 → 真实点击
@@ -971,7 +974,7 @@ class WorkspaceProductionRoutesTest {
             assertNoHorizontalOverflow(restoreLabel, 280f)
 
             // 环境编辑面板关键路径
-            onNodeWithText(label).performClick()
+            onNodeWithText(createdBranchLabel).performClick()
             waitForIdle()
             onNodeWithText(editEnvironmentLabel).performClick()
             waitUntil(timeoutMillis = 15_000) {
@@ -983,10 +986,7 @@ class WorkspaceProductionRoutesTest {
             waitForIdle()
 
             // 创建分支面板关键路径
-            onNodeWithText(label).performClick()
-            waitForIdle()
-            onNodeWithText(branchMenuLabel).performClick()
-            waitForIdle()
+            openBranchDialog(createdBranchLabel)
             assertTouchHeightAtLeast44(createBranchLabel)
             assertNoHorizontalOverflow(createBranchLabel, 280f)
             onNodeWithContentDescription("Close").performClick()

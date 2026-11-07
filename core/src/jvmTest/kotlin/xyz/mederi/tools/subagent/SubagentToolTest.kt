@@ -6,7 +6,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import xyz.mederi.domain.model.AIModel
+import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.SubagentRole
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import kotlin.test.Test
@@ -85,11 +87,11 @@ class SubagentToolTest {
                 planStore: xyz.mederi.plan.PlanStore?,
                 agentId: String?, onProgress: (suspend (xyz.mederi.domain.model.MederiEvent) -> Unit)?
             ): String {
-                delay(Long.MAX_VALUE)
-                return ""
+                error("A subagent stopped before dispatch must not invoke its runner")
             }
         }
-        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        // 复用 runBlocking 的事件循环，两个 STOP 都先于排队的 runner。
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
         try {
             val manager = SubagentManager(hangRunner, scope, bus)
             val tool = SubagentTool(
@@ -118,20 +120,15 @@ class SubagentToolTest {
 
             val aiStopResult = tool.execute(SubagentArgs(action = SubagentAction.STOP, agentId = aiStoppedId))
             val userStopResult = manager.stop(userStoppedId)
-            println("[DIAG] aiStopResult=$aiStopResult")
-            println("[DIAG] userStopResult=$userStopResult")
-
-            waitFor {
-                bus.replayCache.count { it.type == xyz.mederi.domain.model.EventType.SUBAGENT_STOPPED } >= 2
+            withTimeout(5_000) {
+                while (bus.replayCache.count { it.type == EventType.SUBAGENT_STOPPED } < 2) delay(20)
             }
             val aiEvent = bus.replayCache.first {
-                it.type == xyz.mederi.domain.model.EventType.SUBAGENT_STOPPED && it.payload["agentId"] == aiStoppedId
+                it.type == EventType.SUBAGENT_STOPPED && it.payload["agentId"] == aiStoppedId
             }
             val userEvent = bus.replayCache.first {
-                it.type == xyz.mederi.domain.model.EventType.SUBAGENT_STOPPED && it.payload["agentId"] == userStoppedId
+                it.type == EventType.SUBAGENT_STOPPED && it.payload["agentId"] == userStoppedId
             }
-            println("[DIAG] aiEvent.payload=${aiEvent.payload}")
-            println("[DIAG] userEvent.payload=${userEvent.payload}")
 
             assertTrue(aiStopResult.contains("\"result\":\"已被主agent关闭\""), "主 Agent 关闭应返回 '已被主agent关闭': $aiStopResult")
             assertTrue(userStopResult.contains("\"result\":\"被用户关闭\""), "用户关闭应返回 '被用户关闭': $userStopResult")

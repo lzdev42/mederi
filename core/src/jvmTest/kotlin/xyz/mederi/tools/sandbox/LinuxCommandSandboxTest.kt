@@ -163,7 +163,8 @@ class LinuxCommandSandboxTest {
         val project = File(root, "project").apply { mkdirs() }
         val directory = File(project, "private").apply { mkdirs() }
         val file = File(project, "credentials").apply { writeText("original-secret") }
-        val permissions = Files.getPosixFilePermissions(file.toPath())
+        val posix = Files.getFileStore(file.toPath()).supportsFileAttributeView("posix")
+        val permissions = if (posix) Files.getPosixFilePermissions(file.toPath()) else null
         val sandbox = LinuxCommandSandbox(listOf(project.path), emptyList(), tempDirs = emptyList(),
             probe = { success }, deniedPaths = listOf(directory.path, file.path))
         val restricted = sandbox.wrap(listOf("true"))
@@ -178,7 +179,7 @@ class LinuxCommandSandboxTest {
         assertFalse("--unshare-net" in full)
         assertFalse("--seccomp" in full)
         assertEquals("original-secret", file.readText())
-        assertEquals(permissions, Files.getPosixFilePermissions(file.toPath()))
+        if (posix) assertEquals(permissions, Files.getPosixFilePermissions(file.toPath()))
     }
 
     @Test

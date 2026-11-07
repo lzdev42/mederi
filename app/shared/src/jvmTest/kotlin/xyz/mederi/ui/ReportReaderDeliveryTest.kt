@@ -62,8 +62,8 @@ class ReportReaderDeliveryTest {
         } }
         onNodeWithText(metadata).assertIsDisplayed()
         onNodeWithText(copy).assertIsDisplayed()
-        onNodeWithText("Full report fixture", substring = true).assertExists()
-        onNodeWithText(title).assertDoesNotExist()
+        onNodeWithText("Full report fixture", substring = true, useUnmergedTree = true).assertExists()
+        onNodeWithText(title, useUnmergedTree = true).assertDoesNotExist()
         onNodeWithText(notice).assertDoesNotExist(); onNodeWithText(reload).assertDoesNotExist()
     }
 

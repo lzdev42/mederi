@@ -144,8 +144,10 @@ class WorkspaceNativeLinuxTest {
     @Test
     fun nativeFullAccessRetainsBlacklistMasksWithoutHostMutation() = fixture { root ->
         val required = System.getenv("MEDERI_REQUIRE_LINUX_SANDBOX") == "1"
-        val linux = System.getProperty("os.name").lowercase().contains("linux")
+        val os = System.getProperty("os.name").lowercase()
+        val linux = os.contains("linux")
         if (required) assertTrue(linux, "This verification requires a Linux host")
+        assumeTrue("Linux mask construction requires a POSIX host", !os.startsWith("windows"))
 
         val origProject = File(root, "orig-proj").apply { mkdirs() }
         val origSecret = File(origProject, "secret.key").apply { writeText("orig-secret-key") }

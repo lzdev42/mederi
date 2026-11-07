@@ -105,7 +105,7 @@ open class WorkspaceSnapshotService(
         val index = resolveIndexFile(root)
         val indexSha = if (Files.notExists(index.toPath(), NOFOLLOW_LINKS)) null else fileSha256(index)
         val entries = walkNoFollow(root).map { file ->
-            captureFileEntry(root, file.relativeTo(root).path, null, SnapshotEntryClass.IGNORED)
+            captureFileEntry(root, file.relativeTo(root).invariantSeparatorsPath, null, SnapshotEntryClass.IGNORED)
         }
         return fingerprint(head.stdoutString.trim(), headRef, indexSha, entries)
     }
@@ -144,8 +144,9 @@ open class WorkspaceSnapshotService(
         add(headOid)
         add(headRef)
         add(indexSha)
-        for (entry in entries.filter { it.exists }.sortedBy { it.repoRelativePath }) {
-            add(entry.repoRelativePath)
+        // Existing journals store the v2 fingerprint with host separators.
+        for (entry in entries.filter { it.exists }.sortedBy { it.repoRelativePath.replace('/', File.separatorChar) }) {
+            add(entry.repoRelativePath.replace('/', File.separatorChar))
             add(entry.kind.name)
             add(entry.sha256)
             add(entry.linkTarget)
@@ -314,7 +315,7 @@ open class WorkspaceSnapshotService(
             // PREIMAGE and its verification walk the same scope, including ignored files and directories.
             if (captureType == SnapshotCaptureType.PREIMAGE) {
                 walkNoFollow(root).forEach { file ->
-                    val path = file.relativeTo(root).path
+                    val path = file.relativeTo(root).invariantSeparatorsPath
                     if (visitedPaths.add(path)) {
                         entries.add(captureFileEntry(root, path, blobsDir, SnapshotEntryClass.IGNORED))
                     }
@@ -612,8 +613,8 @@ open class WorkspaceSnapshotService(
         // 3. 物化条目 (文件、目录、软链接、模式、墓碑删除)
         // T07: 统一安全落盘原语 (safeMaterializeFile/safeMaterializeSymlink/safeDeleteEntry)：
         // 每个落盘路径逐组件检查祖先不为符号链接，且目标本身不为符号链接，杜绝写穿到链接目标（工作区外）。
-        val orderedEntries = manifest.entries.filterNot { it.exists }.sortedByDescending { it.repoRelativePath.count { ch -> ch == '/' } } +
-            manifest.entries.filter { it.exists }.sortedBy { it.repoRelativePath.count { ch -> ch == '/' } }
+        val orderedEntries = manifest.entries.filterNot { it.exists }.sortedByDescending { snapshotPath(it.repoRelativePath).count { ch -> ch == '/' } } +
+            manifest.entries.filter { it.exists }.sortedBy { snapshotPath(it.repoRelativePath).count { ch -> ch == '/' } }
         for (entry in orderedEntries) {
             val dest = File(targetRoot, entry.repoRelativePath)
             if (!noSymlinkAncestor(dest, targetRoot)) {
@@ -685,7 +686,7 @@ open class WorkspaceSnapshotService(
             )
         }
         val manifest = json.decodeFromString(SnapshotManifest.serializer(), manifestFile.readText())
-        val preimageByPath = manifest.entries.associateBy { it.repoRelativePath }
+        val preimageByPath = manifest.entries.associateBy { snapshotPath(it.repoRelativePath) }
         val root = File(checkoutRoot).canonicalFile
         val blobsDir = File(snapshotDir, "blobs")
 
@@ -694,7 +695,8 @@ open class WorkspaceSnapshotService(
         val affectedPaths = journalRecords
             .flatMap { it.affectedPaths }
             .fold(mutableMapOf<String, PhasePathRecord>()) { acc, record ->
-                acc[record.repoRelativePath] = record
+                val path = snapshotPath(record.repoRelativePath)
+                acc[path] = if (path == record.repoRelativePath) record else record.copy(repoRelativePath = path)
                 acc
             }
             .values
@@ -758,7 +760,7 @@ open class WorkspaceSnapshotService(
             if (currentStates[path]?.type != "directory" || (before?.exists == true && before.kind == SnapshotEntryKind.DIRECTORY)) continue
             Files.newDirectoryStream(File(root, path).toPath()).use { children ->
                 for (child in children) {
-                    val childPath = root.toPath().relativize(child).toString()
+                    val childPath = child.toFile().relativeTo(root).invariantSeparatorsPath
                     if (childPath !in currentStates || preimageByPath[childPath]?.exists == true) {
                         throw MederiWorkspaceException(WorkspaceErrorCode.RECOVERY_REQUIRED, "Rollback found an unowned directory entry: $childPath")
                     }
@@ -819,7 +821,7 @@ open class WorkspaceSnapshotService(
                 val children = Files.newDirectoryStream(dir.toPath()).use { it.toList() }
                 for (path in children) {
                     val file = path.toFile()
-                    val relative = file.relativeTo(root).path
+                    val relative = file.relativeTo(root).invariantSeparatorsPath
                     if (file.name == ".git" || isD09ArtifactPath(relative)) continue
                     yield(file)
                     val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
@@ -918,11 +920,11 @@ open class WorkspaceSnapshotService(
         val blobsDir = File(snapshotDir, "blobs")
         val seen = mutableMapOf<String, SnapshotEntry>()
         for (entry in manifest.entries) {
-            val p = entry.repoRelativePath
-            if (p.startsWith("/") || p.startsWith("../") || p.contains("/../") || p == ".." || p.contains("\u0000")) {
+            val p = snapshotPath(entry.repoRelativePath)
+            if (p.isEmpty() || p.contains("\u0000") || File(p).toPath().root != null || p.split('/').any { it == ".." }) {
                 throw MederiValidationException("Path traversal or illegal path detected in snapshot manifest: $p")
             }
-            if (p == ".git" || p.startsWith(".git/") || p.contains("/.git/")) {
+            if (p.split('/').any { it.equals(".git", ignoreCase = File.separatorChar == '\\') }) {
                 throw MederiValidationException("Illegal .git entry in snapshot manifest: $p")
             }
             // 拒绝重复路径与类型不一致
@@ -962,7 +964,7 @@ open class WorkspaceSnapshotService(
         }
         // 二次全量父级校验：覆盖条目未按路径排序（父在后、子在前）的情况。
         for (entry in manifest.entries) {
-            val p = entry.repoRelativePath
+            val p = snapshotPath(entry.repoRelativePath)
             var parent = p
             while (parent.contains("/")) {
                 parent = parent.substringBeforeLast('/')
@@ -976,6 +978,9 @@ open class WorkspaceSnapshotService(
             }
         }
     }
+
+    // Windows snapshots written before Git-style path normalization may contain native separators.
+    private fun snapshotPath(path: String): String = path.replace(File.separatorChar, '/')
 
     companion object {
         fun isD09ArtifactPath(relPath: String): Boolean {
