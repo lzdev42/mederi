@@ -18,7 +18,7 @@ enum class SubagentRole {
      * 浏览器操作员（BrowserOperator，手和眼）。配置专属角色：仅用于在设置页为浏览器子代理
      * 单独配置模型/推理档；实际执行不走 [SubagentRunnerImpl]（turn 子代理），
      * 由 BrowserTaskManager 在后台驱动（4-phase 循环：perceive→decide→execute→postprocess）。
-     * 浏览器实现（JCEF/Camoufox）由主代理在 browser(RUN) 的 browser 参数选择，与角色无关。
+     * 已注册的浏览器由主代理在 browser(RUN) 的 browser 参数选择，与角色无关。
      */
     BROWSER_OPERATOR,
 

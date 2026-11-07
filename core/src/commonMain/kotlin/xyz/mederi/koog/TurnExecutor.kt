@@ -154,8 +154,7 @@ class TurnExecutor(
     private val subagentConfigManager: SubagentConfigManager? = null,
     private val compactionThresholdPercent: () -> Int = { 70 },
     /**
-     * 浏览器任务运行目录解析（browserHome 懒解析，每次浏览器任务调用；null = BrowserTaskManager
-     * 用默认 workingDir/recipeStore）。由 Mederi 装配注入，用户改 browserHome 后下一任务即生效。
+     * 宿主可注入每项浏览器任务的报告与配方目录。
      */
     private val browserRuntimeProvider: (suspend () -> xyz.mederi.browser.BrowserRuntimeDirs?)? = null,
     private val workspaceResolver: xyz.mederi.workspace.ExecutionWorkspaceResolver? = null,
@@ -289,8 +288,6 @@ class TurnExecutor(
 
     // 浏览器任务管理：持有 BrowserRegistry（各宿主注册浏览器，启动装配时填充）。
     // 主代理获得 browser 工具（仅当有浏览器注册时）；无浏览器时不注册工具、提示词不提及浏览器。
-    // ST3 已接线：browserRuntimeProvider 由 Mederi 装配注入（browserHome 懒解析 → reports/skills），
-    // BrowserTaskManager.runTask 逐任务解析 workingDir/recipeStore 供 DrillExecutor/Brain/RecipeStore。
     private val browserTaskManager: xyz.mederi.browser.BrowserTaskService? =
         xyz.mederi.browser.BrowserTaskManager(
             providerManager = providerManager,

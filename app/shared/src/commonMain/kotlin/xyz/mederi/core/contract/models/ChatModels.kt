@@ -229,7 +229,7 @@ enum class CoreEventType {
     STATUS,
 
     /**
-     * 浏览器任务事件。payload: taskId / status / browser(jcef|camoufox) / step / thought / message。
+     * 浏览器任务事件。payload: taskId / status / browser（后端名称）/ step / thought / message。
      * UI 据此展开浏览器面板（browser=="jcef" 时自动展开 JCEF 窗口）。
      */
     BROWSER_TASK_STARTED,

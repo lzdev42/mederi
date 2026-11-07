@@ -1,11 +1,5 @@
 package xyz.mederi.browser
 
-/**
- * DEAD CODE (2026-10): JCEF 自动化后端退役，改用 camoufox。
- * 本文件暂定不用，是死代码但禁止清理，以后根据情况决定是否启用。
- *
- * （原用途：JCEF/KBrowser 自动化后端（core 侧））
- */
 import xyz.kbrowser.webview.ElementNotFoundException
 import xyz.kbrowser.webview.KBLocator
 import xyz.kbrowser.webview.KBrowser
@@ -15,11 +9,11 @@ import xyz.mederi.browser.bidi.KeyboardKey
 import xyz.mederi.browser.bidi.OperationResult
 
 /**
- * [BrowserControl] 的 JCEF/KBrowser 实现（core 侧自动化引擎），替代 Camoufox 成为主力引擎。
+ * [BrowserControl] 的 JCEF/KBrowser 适配器，由宿主按需接入。
  *
  * 用 KBrowser 的 [KBPage]/KBWebView API 做薄适配：KBPage 已有大部分所需方法
  * （坐标点击 + 验证、逐字符输入、滚动、按键、JS、快照、截图、上传、waitFor）。
- * a11y tree snapshot 与 BiDi 对齐：refid 定位，KBPage.snapshot(CLEAN) 返回
+ * a11y tree snapshot 使用 refid 定位，KBPage.snapshot(CLEAN) 返回
  * yaml + rawTree（rawTree 仅用于同批 refid 重映射，用完即丢）。
  *
  * 生命周期与职责边界：

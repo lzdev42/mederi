@@ -91,8 +91,6 @@ class Mederi private constructor(
     val settingsStore: SettingsStore,
     val sandboxManager: xyz.mederi.tools.sandbox.SandboxManager,
     val sandbox: SandboxApi,
-    /** 浏览器设置管理器（唯一真理源；Mederi 创建并持有，装配层复用同一实例，避免双缓存）。 */
-    val browserSettingsManager: xyz.mederi.browser.BrowserSettingsManager,
     private val apiKeyStore: ApiKeyStore?,
     val sessionStore: SessionStore?,
     val workspaceStore: xyz.mederi.store.WorkspaceStore,
@@ -297,13 +295,6 @@ class Mederi private constructor(
                 providerManager = providerManager,
                 sessionStore = sessionStore
             )
-            // 浏览器设置管理器：唯一真理源（BrowserSettingsApi 与浏览器任务运行目录解析共用此实例，避免双缓存）
-            val browserSettingsManager = xyz.mederi.browser.BrowserSettingsManager(settingsStore)
-            // 浏览器任务运行目录解析：每任务懒解析 browserHome（reports → DrillExecutor/Brain，skills → RecipeStore），
-            // 用户改 browserHome 后下一任务即生效；经 SessionManagerImpl → TurnExecutor → BrowserTaskManager 透传。
-            val browserRuntimeProvider: suspend () -> xyz.mederi.browser.BrowserRuntimeDirs? = {
-                xyz.mederi.browser.browserRuntimeDirs(browserSettingsManager.get().browserHome)
-            }
             val sessionManager = SessionManagerImpl(
                 // RF-02：workspaceResolver 在本构造前创建，注入 TurnExecutor 解析 managed 工作区。
                 workspaceResolver = xyz.mederi.workspace.ExecutionWorkspaceResolver(
@@ -322,7 +313,6 @@ class Mederi private constructor(
                 skills = skillManager,
                 subagentConfigManager = subagentConfigManager,
                 compactionThresholdPercent = config.compactionThresholdPercent,  // 新增
-                browserRuntimeProvider = browserRuntimeProvider,
                 // RF-02：首次 send 准备门禁——把会话绑定的 REQUESTED managed 工作区准备到 READY。
                 workspacePreparer = workspaceManager::prepareSessionWorkspace,
                 // RF-07：turn 执行持工作区租约，归档/配额等待活跃执行结束后才快照。
@@ -347,7 +337,6 @@ class Mederi private constructor(
                 settingsStore = settingsStore,
                 sandboxManager = sandboxManager,
                 sandbox = sandboxApi,
-                browserSettingsManager = browserSettingsManager,
                 apiKeyStore = apiKeyStore,
                 sessionStore = sessionStore,
                 workspaceStore = workspaceStore,

@@ -25,9 +25,7 @@ private data class ChatMessage(val sender: String, val text: String)
 /**
  * 确定性自动化脚本（Drill）执行器。
  *
- * 由 BrowserPilot 的 DrillExecutor port 而来，但只依赖 [BrowserControl] 抽象——
- * 不接触 BiDiPage / BrowserSession / owner（标签页由 control 内部管理，这里通过
- * openTab / listTabs / closeTab / selectTab 操作）。
+ * 移植自 BrowserPilot。执行器通过 [BrowserControl] 操作页面与标签页。
  *
  * 两阶段执行模型：
  * - `item_steps == null` → legacy loop：loop_count 轮循环执行 steps，record_result 步骤抓结果；

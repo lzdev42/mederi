@@ -1,31 +1,15 @@
 package xyz.mederi.browser
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * browserHome 接线单元测试：browserRuntimeDirs 路径解析 + resolveRecipeFrom 从 skills 目录载出配方。
- */
-class BrowserHomeWiringTest {
-
-    @Test
-    fun browserRuntimeDirsParsesReportsAndSkills() {
-        val tmp = java.nio.file.Files.createTempDirectory("browser-home").toFile()
-        val dirs = browserRuntimeDirs(tmp.absolutePath)
-        assertNotNull(dirs)
-        assertEquals(java.io.File(tmp, "reports"), dirs!!.workingDir)
-        assertEquals(java.io.File(tmp, "skills"), dirs.skillsDir)
-        // 未配置（null/空白）不伪造路径，返回 null
-        assertNull(browserRuntimeDirs(null))
-        assertNull(browserRuntimeDirs(""))
-    }
+class BrowserRecipeResolutionTest {
 
     @Test
     fun resolveRecipeFromLoadsDrillScriptFromSkillsDir() {
-        val tmp = java.nio.file.Files.createTempDirectory("browser-home-skill").toFile()
+        val tmp = java.nio.file.Files.createTempDirectory("browser-recipe-skill").toFile()
         val skillsDir = java.io.File(tmp, "skills")
         skillsDir.mkdirs()
         java.io.File(skillsDir, "demo.md").writeText(

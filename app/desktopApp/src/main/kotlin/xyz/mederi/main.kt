@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import xyz.mederi.browser.KBrowserRuntime
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.mcp.runtime.McpRuntime
 import xyz.mederi.runtime.RuntimeSetupPage
@@ -101,16 +102,14 @@ fun main() = application {
                     if (aiCore is MederiAiCore) {
                         appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)
 
-                        // KBrowser 在 MederiAiCore.initialize() 中初始化，但 onAppStateReady 在 initialize() 之前调用，
-                        // 故用后台协程等 isReady 变 true 后再读取 kBrowser 注入。
+                        // JCEF 是桌面渲染能力，由桌面宿主初始化并注入 InkCompose。
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-                            aiCore.isReady.first { it }  // 等 initialize() 完成
-                            val kb = aiCore.kBrowser
+                            aiCore.isReady.first { it }
+                            val kb = KBrowserRuntime.ensureInitialized()
                             if (kb != null) {
                                 xyz.emuci.diagram.mermaid.SingleMermaidWorker.attachBrowser(kb)
                                 xyz.emuci.inkcompose.MarkdownExporter.setBrowser(kb)
                             }
-                            // kb == null → JCEF 不支持（headless 无 Xvfb 等）：inkcompose 降级源码展示，无浏览器面板
                         }
                     }
 

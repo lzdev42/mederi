@@ -42,7 +42,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --output, -o DIR  Output directory (default: ./release)"
             echo "  --help, -h        Show this help"
             echo "Builds desktop, server-bundled (JVM + Web UI), server-api (no JVM/Web UI)."
-            echo "Requires a JBR 25 SDK with JCEF; Windows requires Git Bash."
+            echo "Desktop requires a JBR 25 SDK with JCEF. Set MEDERI_SERVER_JAVA_HOME to a standard Java 25 JDK."
+            echo "Windows requires Git Bash."
             exit 0
             ;;
         *)
@@ -132,9 +133,15 @@ export JAVA_HOME
     echo "❌ JAVA_HOME 必须指向带 JCEF 的 JBR SDK: $JAVA_HOME"; exit 1;
 }
 RELEASE_JAVA_HOME="$JAVA_HOME"
+SERVER_JAVA_HOME="${MEDERI_SERVER_JAVA_HOME:-}"
+[[ -n "$SERVER_JAVA_HOME" ]] || { echo "❌ 请设置 MEDERI_SERVER_JAVA_HOME 为普通 Java 25 JDK"; exit 1; }
 if [[ "$PLATFORM" == "windows" ]]; then
     RELEASE_JAVA_HOME=$(cygpath -m "$JAVA_HOME")
+    SERVER_JAVA_HOME=$(cygpath -m "$SERVER_JAVA_HOME")
 fi
+[[ -f "$SERVER_JAVA_HOME/jmods/java.base.jmod" && ! -e "$SERVER_JAVA_HOME/jmods/jcef.jmod" ]] || {
+    echo "❌ MEDERI_SERVER_JAVA_HOME 必须指向不含 JCEF 的 Java 25 JDK: $SERVER_JAVA_HOME"; exit 1;
+}
 echo "☕ Release JBR: $JAVA_HOME"
 
 # ==========================================
@@ -142,15 +149,19 @@ echo "☕ Release JBR: $JAVA_HOME"
 # ==========================================
 cd "$PROJECT_DIR"
 
-GRADLE_ARGS=(--no-configuration-cache "-Pmederi.releaseJavaHome=$RELEASE_JAVA_HOME")
+DESKTOP_GRADLE_ARGS=(--no-configuration-cache "-Pmederi.releaseJavaHome=$RELEASE_JAVA_HOME")
 if [[ "$CLEAN_BUILD" == "true" ]]; then
     echo "🧹 清理旧构建..."
-    ./gradlew :app:desktopApp:clean :server:clean "${GRADLE_ARGS[@]}"
+    ./gradlew :app:desktopApp:clean :server:clean "${DESKTOP_GRADLE_ARGS[@]}"
 fi
 
-echo "🚀 构建 Desktop 和两种 Server 发布目录..."
-./gradlew :app:desktopApp:createReleaseDistributable \
-    :server:installServerBundled :server:installServerApi "${GRADLE_ARGS[@]}"
+echo "🚀 构建 Desktop 发布目录..."
+./gradlew :app:desktopApp:createReleaseDistributable "${DESKTOP_GRADLE_ARGS[@]}"
+
+echo "🚀 使用普通 Java 25 构建两种 Server 发布目录..."
+JAVA_HOME="$SERVER_JAVA_HOME" ./gradlew :server:installServerBundled :server:installServerApi \
+    --no-configuration-cache "-Pmederi.serverJavaHome=$SERVER_JAVA_HOME" \
+    -Porg.gradle.java.installations.auto-detect=false "-Porg.gradle.java.installations.paths=$SERVER_JAVA_HOME"
 
 # 所有整理操作在仓库 temp 下进行，避免污染 Gradle 输出与临时目录外溢。
 mkdir -p "$PROJECT_DIR/temp"
@@ -248,16 +259,11 @@ for variant in bundled api; do
     SERVER_DIR="$STAGING/${APP_NAME}-server-$variant-$PLATFORM-$ARCH_NAME"
     cp -R "$PROJECT_DIR/server/build/install/server-$variant" "$SERVER_DIR"
     if [[ "$variant" == "bundled" ]]; then
-        if [[ "$PLATFORM" == "macos" ]]; then
-            RUNTIME_HOME="runtime/Contents/Home"
-        else
-            RUNTIME_HOME="runtime"
-        fi
-        cat > "$SERVER_DIR/run.sh" <<EOF
+        cat > "$SERVER_DIR/run.sh" <<'EOF'
 #!/usr/bin/env sh
-HERE=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
-export JAVA_HOME="\$HERE/$RUNTIME_HOME"
-exec "\$HERE/bin/server" "\$@"
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export JAVA_HOME="$HERE/runtime"
+exec "$HERE/bin/server" "$@"
 EOF
         # Windows 分发使用 CRLF，且固定指向包内运行时，不受系统 JAVA_HOME 影响。
         printf '@echo off\r\nsetlocal\r\nset "JAVA_HOME=%%~dp0runtime"\r\ncall "%%~dp0bin\server.bat" %%*\r\nexit /b %%errorlevel%%\r\n' > "$SERVER_DIR/run.bat"

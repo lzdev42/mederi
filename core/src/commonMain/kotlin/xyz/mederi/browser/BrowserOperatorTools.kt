@@ -11,7 +11,7 @@ import xyz.mederi.browser.BrowserControl
 import xyz.mederi.browser.bidi.OperationResult
 
 /**
- * 通用浏览器操作工具集（基于 BrowserControl 抽象，jcef/camoufox 后端自动适配），
+ * 通用浏览器操作工具集（基于 BrowserControl 抽象），
  * 由 BrowserOperator 直接装配。
  */
 

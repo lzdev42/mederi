@@ -72,23 +72,16 @@ import xyz.mederi.core.contract.dto.ReadyInfo
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ApiKeyOption
 import xyz.mederi.core.contract.models.BackgroundTaskInfo
-import xyz.mederi.core.contract.models.BrowserOption
-import xyz.mederi.core.contract.models.BrowserStatus
-import xyz.mederi.core.contract.models.CamoufoxSettings
-import xyz.mederi.core.contract.models.CamoufoxUpdate
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.Conversation
-import xyz.mederi.core.contract.models.SetDefaultBrowserInput
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.SubagentReportDto
-import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
-import xyz.mederi.core.contract.models.DefaultBrowserResponse
 import xyz.mederi.core.contract.models.FileDiff
 import xyz.mederi.core.contract.models.McpServerItem
 import xyz.mederi.core.contract.models.SkillItem
@@ -787,46 +780,6 @@ class ServerAiCore(
     }
     override suspend fun deactivateSkill(conversationId: String, skillName: String): Result<Unit> = runCatching {
         httpCall("/v1/sessions/$conversationId/skills/${skillName.encodeURLParameter()}", method = HttpMethod.Delete)
-    }
-
-    // ------------------------------------------------------------------
-    // 浏览器设置（遥控 REST 桥）
-    // ------------------------------------------------------------------
-
-    override suspend fun getCamoufoxSettings(): Result<CamoufoxSettings> = runCatching {
-        httpGet("/v1/browser/settings")
-    }
-
-    override suspend fun updateCamoufoxSettings(input: UpdateCamoufoxSettingsInput): Result<CamoufoxSettings> = runCatching {
-        httpSend("/v1/browser/settings", requestBody = input)
-    }
-
-    override suspend fun getCamoufoxStatus(): Result<BrowserStatus> = runCatching {
-        httpGet("/v1/browser/status")
-    }
-
-    override suspend fun checkCamoufoxUpdate(): Result<CamoufoxUpdate> = runCatching {
-        httpSend("/v1/browser/check-update")
-    }
-
-    override suspend fun installCamoufox(versionTag: String?): Result<Unit> = runCatching {
-        httpCall(if (versionTag != null) "/v1/browser/install?version=${versionTag.encodeURLParameter()}" else "/v1/browser/install")
-    }
-
-    override suspend fun listInstalledCamoufoxVersions(): Result<List<String>> = runCatching {
-        httpGet("/v1/browser/versions")
-    }
-
-    override suspend fun availableBrowsers(): Result<List<BrowserOption>> = runCatching {
-        httpGet("/v1/browser/list")
-    }
-
-    override suspend fun getDefaultBrowser(): Result<String?> = runCatching {
-        httpGet<DefaultBrowserResponse>("/v1/browser/default").name
-    }
-
-    override suspend fun setDefaultBrowser(input: SetDefaultBrowserInput): Result<Unit> = runCatching {
-        httpSend("/v1/browser/default", requestBody = input)
     }
 
     // ------------------------------------------------------------------

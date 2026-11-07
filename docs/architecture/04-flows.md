@@ -648,22 +648,22 @@ sequenceDiagram
     participant BTM as BrowserTaskManager
     participant BO as BrowserOperator(手和眼)
     participant BB as BrowserBrain(大脑)
-    participant BC as BrowserControl(Camoufox)
+    participant BC as 宿主注册的 BrowserControl
     participant EB as eventBus
     participant WV as WorkspaceViewModel
 
     U->>MA: "搜一下51job的Java开发工作"
-    MA->>RBT: browser(action=RUN, task, browser="camoufox", recipe="job_filter")
+    MA->>RBT: browser(action=RUN, task, browser="host_browser", recipe="job_filter")
     RBT->>BTM: runTask(task, model, projectId, sessionId, browser, recipe)
     BTM->>BTM: resolve(browser)→factory(suspend)→createBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
-    BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="camoufox")
-    RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"camoufox"} (立即返回, 不阻塞)
+    BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="host_browser")
+    RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"host_browser"} (立即返回, 不阻塞)
     MA-->>U: 主代理继续对话(浏览器任务在后台跑)
     Note over WV: 任意 BROWSER_TASK_STARTED：UI 自动展开浏览器面板
     EB-->>WV: BROWSER_TASK_STARTED(任意 browser)
-    Note over WV: openDockPanel(BROWSER)（Camoufox 任务监控）
+    Note over WV: openDockPanel(BROWSER_AUTOMATION)（任务监控）
     Note over BTM,BC: 后台执行(与主 turn 并行)
-    BTM->>BC: Camoufox: BiDiBrowserControl(binary 已下载)→start()
+    BTM->>BC: start()
     BTM->>BO: operator.run(task)
     loop AIAgent tool-calling 循环(每步)
         BO->>BO: agent.run → call_llm(nodePerceive 注入当步 axtree)
@@ -692,7 +692,7 @@ sequenceDiagram
     BTM->>EB: BROWSER_TASK_COMPLETED/ERROR(taskId, role="BROWSER_OPERATOR", summary, reportPath)
     EB-->>WV: 终态事件 (终态一律关闭 Dock 面板并清空 taskId)
     EB-->>MA: TurnExecutor 监听终态 → 组装 <event_message> 自动唤醒主 turn 汇报！
-    Note over BTM,BC: 终态一律 withContext(NonCancellable) control.close()（JCEF 销毁会话 Tab / Camoufox 杀进程）
+    Note over BTM,BC: 终态一律 withContext(NonCancellable) control.close()
     BTM->>BC: control.close() 关闭底层 Tab
 ```
 
@@ -700,17 +700,13 @@ sequenceDiagram
 > - **两路汇报**：无需判定内容时，操作员（`BrowserOperator`）直接向主 Agent 汇报；需判定内容时（通过 `needsBrainJudgment` 留口识别，如带 judgeRules 配方），操作员先把提取信息交给大脑（`BrowserBrain`）判定，大脑将判定/简报反馈给操作员后，由操作员统一向主 Agent 汇报。
 > - **自动唤醒**：任务终态发 `BROWSER_TASK_COMPLETED/ERROR/STOPPED`（携带 `role=BROWSER_OPERATOR`），`TurnExecutor` 订阅并组装 `<event_message type="browser_task_completed">` 放入待发队列，自动唤醒主 Agent 开启新 turn 向用户汇报，无需主代理主动轮询。
 > - **用户停止链路（真停）**：UI 浮条「停止」→ `WorkspaceViewModel.stopBrowserAutomation()` 读 `browserAutomationState.taskId` → `AiCore.stopBrowserTask(taskId)` → `MederiAiCore` → `SessionApi.stopBrowserTask` → `BrowserTaskManager.stopTask`：同步置 STOPPED + 发 `BROWSER_TASK_STOPPED` + `cancel(job)`，协程 `finally` 在 `NonCancellable` 上下文 `control.close()` 真正关闭浏览器。UI 不再 `abort()` 主 turn（浏览器任务与主 turn 无生命周期绑定）。
-> - **生命周期（终态一律关闭）**：任务终态（完成/失败/停止）一律 `control.close()` 真正关闭浏览器（JCEF 销毁会话 Tab / Camoufox 杀进程）并折叠 UI Dock 面板；已删除基于 isTest 关键词保留现场的旧逻辑。
-> 浏览器选择（2026-09）：`browser`(RUN) 的 `browser` 参数缺省 → BrowserRegistry 默认
-> （defaultName 优先 → 内置 JCEF 优先 → 第一个注册的）。2026-10 起 JCEF（JcefBrowserControl）
-> 重新注册为主力引擎（MederiAiCore 在 kBrowser 非空时条件注册），Camoufox（BiDiBrowserControl）
-> 降级为可选 backup；headless server 无 JCEF 时默认 camoufox。
-> 任意 BROWSER_TASK_STARTED 都会把浏览器面板展开为浏览器任务监控视图（jcef 任务由 UI host 上报 tab 状态）。
-> 浏览器面板在所有端均可展开（遥控端/wasm 同样适用）。
+> - **生命周期（终态一律关闭）**：任务终态（完成/失败/停止）一律 `control.close()` 真正关闭浏览器并折叠 UI Dock 面板；已删除基于 isTest 关键词保留现场的旧逻辑。
+> 浏览器任务依赖宿主通过 `BrowserRegistry` 注册 `BrowserControl`。主代理只有在有可用后端时才收到 `browser` 工具。应用发行入口仅装配桌面渲染，Core 扩展接口保留供宿主注册浏览器。
+> 任意 BROWSER_TASK_STARTED 都会把浏览器自动化监控面板展开，遥控端同样可以查看任务事件。
 
 > 执行模型（2026-10 重构）：BrowserOperator 遵循 4-phase 循环（perceive → decide → execute → postprocess）。
 > 感知层统一走 **纯 axtree 快照**（`SnapshotMode.CLEAN` YAML，暂时不传截图），单步重建 prompt，杜绝上下文累积与 a11y 快照爆炸；采用 Koog 原生 tool-calling（原生 tool-calling 为唯一路径），页面物理工具
-> 由通用工具集 `buildBrowserOperatorTools(control)` 装配（基于 BrowserControl 抽象，jcef/camoufox 后端自动适配），Core 注册内部工具
+> 由通用工具集 `buildBrowserOperatorTools(control)` 装配（基于 BrowserControl 抽象，适配宿主注册的实现），Core 注册内部工具
 > （done/update_memory/collect_info/judge/execute_drill），删除无用工具（sleep/back/noop/close/screenshot）；
 > 配备 `BrowserCollector` 临时存储器，支持在多网站查找时调用 `collect_info` 暂存 Markdown 内容（含图片链接），解耦上下文避免 Token 膨胀，并在终态由 Brain / 操作员统一汇总；
 > `execute_drill` 支持 recipe 挂载脚本（空参执行），drill 定位器支持语义 getBy* 与元素级 press/check/scroll/type；
@@ -724,13 +720,10 @@ sequenceDiagram
 > 各取配置的独立模型/推理档（设置页 Agents 面板与 Executor/Researcher 同款卡片可配模型+推理档+恢复继承），
 > 配置了独立模型/推理档则覆盖父会话，否则继承；operator/brain 各建独立 llmCaller
 > （BrowserLLMHelper 或注入的 llmCallerProvider），Operator 按操作者模型执行、Brain 按大脑模型执行。
-> 浏览器实现（jcef 主力 + camoufox backup）仍由 browser(RUN) 的 browser 参数选择，与角色配置无关。
+> 浏览器实现由 browser(RUN) 的 browser 参数选择，与角色配置无关。
 
-> 会话隔离与 Tab 自治生命周期（2026-10）：
-> 1. 会话硬隔离：BrowserTaskManager.runTask 提取 taskObj.parentSessionId 传给 BrowserRegistry.resolve(browser).factory(taskId, sessionId)。桌面宿主 JcefBrowserHost 按 sessionId 维护独立 BrowserSessionState，一个会话即一个独立的浏览器容器，彼此页面与 Tab 绝对隔离；
-> 2. 后台常驻与视图换绑：所有 Tab 底层 CEF KBPage 均在后台独立常驻运行。切会话时 UI 仅切换挂载对应 sessionId 的激活 Tab，不中断后台 Tab 的生命周期与自动化任务；
-> 3. 子 Agent 自治生命周期：AI 浏览器操作员获取的 JcefSessionBrowserControl 严格受限在其父会话内，支持 tabs(action="NEW/SWITCH/CLOSE/LIST") 自主关闭已完成的 Tab（保留至少一个 Tab 防崩溃）；
-> 4. 资源回收闭环：当用户在侧边栏删除会话或项目时，AppState 级联调用 UiBrowserHost.closeSession(sessionId)，彻底关闭对应会话下所有后台 KBPage 并释放 Chromium 资源。
+> `BrowserTaskManager` 把父会话 ID 和任务 ID 传给注册的浏览器工厂，终态关闭控制器。
+> 桌面浏览器宿主组件按会话管理 KBPage，AppState 在会话或项目删除时回收已挂载宿主的页面资源。
 
 ## 9. 会话自动改名（SessionTitleService）
 
@@ -813,18 +806,15 @@ sequenceDiagram
     MED->>MED: MederiPaths.ensureDirectories + handleLegacyFiles(旧文件须批准)
     MED->>MED: 双库 driver + Schema.create + 7 Store 装配
     MED->>MED: Manager 层 + API 层装配
-    MAC->>MAC: KBrowserRuntime.ensureInitialized() → _kBrowser（JCEF 不可用/失败 → null 降级）
-    MAC->>MAC: BrowserRegistry.register(camoufox, backup) + 条件注册 jcef（_kBrowser 非空时, 主力引擎）
     MAC->>MAC: cleanupLegacyBuiltinProviders / cleanupStaleRunningSessions / syncBuiltinProviders
     MAC->>MAC: refreshGlobalState(4 个 StateFlow) → isReady=true
     MAC->>SVC: modelCatalog.start()(models.dev 每小时刷新)
     MAC->>SVC: autoRefreshBuiltinGoogleModels(后台)
     MAC->>SVC: autotitleService.start()(自动改名)
     MAC->>SVC: startSessionStatusSync()(core 事件流 → _projects 会话状态点, 驱动侧边栏)
-    MAC->>SVC: startCamoufoxUpdateCheck()(后台 Camoufox 更新检查)
     APP->>ST: hydrate()(恢复偏好, 列表就绪后 3s 内回填选中态)
     APP->>APP: MainScreen 组合 Sidebar+Workspace, WorkspaceViewModel.attach(选中会话)
-    M->>M: onAppStateReady: aiCore.kBrowser 非空 → 注入 inkcompose（SingleMermaidWorker/MarkdownExporter）+ uiBrowserHost = JcefBrowserHost(kBrowser)
+    M->>M: 等待 isReady → KBrowserRuntime.ensureInitialized() → 成功后注入 InkCompose Mermaid/PDF 渲染
     M->>M: 观察 remoteControlEnabled → 自动启停内嵌 Server
 ```
 

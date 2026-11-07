@@ -19,7 +19,7 @@ import kotlin.concurrent.Volatile
  *
  * 不负责（调用方各自职责，勿在此注入）：
  * - 向 inkcompose 注入（SingleMermaidWorker.attachBrowser / MarkdownExporter.setBrowser）——那是 main.kt 的职责；
- * - BrowserRegistry 注册——那是 MederiAiCore 的职责。
+ * - BrowserRegistry 注册——由提供自动化后端的宿主负责。
  *
  * 从 desktopApp 的 DesktopBrowserRuntime 搬迁而来（剥离 inkcompose 注入部分）。
  */

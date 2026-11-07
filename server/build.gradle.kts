@@ -1,5 +1,4 @@
 import org.gradle.jvm.toolchain.JavaLanguageVersion
-import org.gradle.jvm.toolchain.JvmVendorSpec
 import org.gradle.language.jvm.tasks.ProcessResources
 import org.gradle.jvm.application.tasks.CreateStartScripts
 
@@ -12,19 +11,11 @@ group = "xyz.mederi"
 version = "1.0.0"
 application {
     mainClass = "xyz.mederi.ApplicationKt"
-    // JCEF JVM args：server 用 JBR（JvmVendorSpec.JETBRAINS），JCEF 经 :app:shared 传递依赖在 classpath 上，
-    // 与 app/desktopApp/build.gradle.kts 的 compose.desktop.application.jvmArgs 对齐，使 server 进程能初始化 JCEF。
-    applicationDefaultJvmArgs = listOf(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
 }
 
 java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(25))
-        vendor.set(JvmVendorSpec.JETBRAINS)
     }
 }
 
@@ -68,7 +59,6 @@ val apiStartScripts by tasks.registering(CreateStartScripts::class) {
     mainClass.set(application.mainClass)
     classpath = files(apiJar) + configurations.runtimeClasspath.get()
     outputDir = layout.buildDirectory.dir("apiScripts").get().asFile
-    // 普通 Java 25 即可运行；JCEF 浏览器能力由部署者的运行时决定。
     defaultJvmOpts = emptyList<String>()
 }
 
@@ -82,22 +72,21 @@ val installServerApi by tasks.registering(Sync::class) {
     }
 }
 
-// 复制完整 JBR（包含 JCEF native 文件），不以普通 jlink 镜像冒充带浏览器的运行时。
-val releaseJavaHome = providers.gradleProperty("mederi.releaseJavaHome")
+val serverJavaHome = providers.gradleProperty("mederi.serverJavaHome")
+    .orElse(providers.environmentVariable("MEDERI_SERVER_JAVA_HOME"))
 val installServerBundled by tasks.registering(Sync::class) {
     dependsOn(tasks.named("installDist"))
     into(layout.buildDirectory.dir("install/server-bundled"))
     from(tasks.named("installDist"))
-    from(releaseJavaHome.map { home ->
-        val javaHome = file(home)
-        if (javaHome.name == "Home" && javaHome.parentFile.name == "Contents") {
-            javaHome.parentFile.parentFile
-        } else javaHome
-    }) { into("runtime") }
+    from(serverJavaHome.map { file(it) }) { into("runtime") }
     doFirst {
-        require(releaseJavaHome.isPresent) { "Set -Pmederi.releaseJavaHome to a JBR SDK with JCEF" }
-        require(file("${releaseJavaHome.get()}/jmods/jcef.jmod").isFile) {
-            "Bundled server requires a JBR SDK with JCEF"
+        require(serverJavaHome.isPresent) { "Set MEDERI_SERVER_JAVA_HOME to a standard Java 25 JDK" }
+        val home = file(serverJavaHome.get())
+        val release = home.resolve("release")
+        require(release.isFile && release.useLines { lines ->
+            lines.any { it == "JAVA_VERSION=\"25\"" || it.startsWith("JAVA_VERSION=\"25.") }
+        } && home.resolve("jmods/java.base.jmod").isFile && !home.resolve("jmods/jcef.jmod").exists()) {
+            "Bundled server requires a standard Java 25 JDK without JCEF: $home"
         }
     }
 }

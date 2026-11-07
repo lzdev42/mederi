@@ -45,7 +45,7 @@ class BrowserToolTest {
             return "STOPPED"
         }
 
-        override fun availableBrowsers(): List<String> = listOf("jcef", "camoufox")
+        override fun availableBrowsers(): List<String> = listOf("jcef", "custom-browser")
         override fun defaultBrowser(): String = "jcef"
 
         override suspend fun browserStatus(currentSessionId: String): String {
@@ -69,14 +69,14 @@ class BrowserToolTest {
     fun `run delegates with task and browser and recipe`() = runBlocking {
         val svc = FakeService()
         val result = newTool(svc).execute(
-            BrowserArgs(action = BrowserTaskAction.RUN, task = "search jobs", browser = "camoufox", recipe = "job_filter")
+            BrowserArgs(action = BrowserTaskAction.RUN, task = "search jobs", browser = "custom-browser", recipe = "job_filter")
         )
 
         assertEquals("search jobs", svc.lastRunTask)
-        assertEquals("camoufox", svc.lastBrowser)
+        assertEquals("custom-browser", svc.lastBrowser)
         assertEquals("job_filter", svc.lastRecipe?.name)
         assertTrue(result.contains("\"taskId\":\"task_1\""), "RUN 应返回 taskId JSON: $result")
-        assertTrue(result.contains("\"browser\":\"camoufox\""), "RUN 应返回所选 browser: $result")
+        assertTrue(result.contains("\"browser\":\"custom-browser\""), "RUN 应返回所选 browser: $result")
     }
 
     @Test

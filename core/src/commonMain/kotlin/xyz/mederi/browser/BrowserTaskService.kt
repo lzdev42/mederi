@@ -6,8 +6,7 @@ import xyz.mederi.provider.domain.model.ReasoningLevel
 /**
  * 浏览器任务服务接口（主代理工具只依赖这个）。
  *
- * 实现（BrowserTaskManager）持有 [BrowserRegistry]——UI 注册 JCEF、core 注册 Camoufox，
- * AI 通过 run_browser_task 的 browser 参数选择；本接口暴露已注册浏览器供工具动态描述。
+ * 宿主通过 [BrowserRegistry] 注册浏览器。主代理可通过 browser(RUN) 的 browser 参数选择。
  */
 interface BrowserTaskService {
 
@@ -40,7 +39,7 @@ interface BrowserTaskService {
 
     /**
      * 浏览器运行状态查询（browser_info，只读、无副作用，与任务操作区分）。
-     * 返回 [BrowserStatusInfo] 的 JSON：每个已注册浏览器（JCEF/Camoufox 可同时打开）的
+     * 返回 [BrowserStatusInfo] 的 JSON：每个已注册浏览器的
      * 使用状态、打开实例（tab/无头进程）数量、各自页面 URL/标题，以及是否由当前会话启动。
      */
     suspend fun browserStatus(currentSessionId: String): String

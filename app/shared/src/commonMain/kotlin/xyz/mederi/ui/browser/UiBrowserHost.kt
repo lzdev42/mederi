@@ -1,26 +1,12 @@
 package xyz.mederi.ui.browser
 
-/**
- * DEAD CODE (2026-10): JCEF 自动化后端退役，改用 camoufox。
- * 本文件暂定不用，是死代码但禁止清理，以后根据情况决定是否启用。
- *
- * （原用途：UI 浏览器 host 抽象）
- */
 import androidx.compose.runtime.Composable
 import xyz.mederi.theme.MederiColors
 
 /**
- * UI 端内置浏览器宿主（desktop 注入 JCEF 实现；遥控/wasm 不注入 → 面板显示"当前端不可用"）。
+ * UI 端内置浏览器的可选宿主。未注入宿主时，面板显示当前端不可用。
  *
- * 它不是一个完整浏览器，而是"一个 tab = 一个 KBPage"的轻量标签容器：
- * - 每个 tab 持有独立的 [KBPage]（viewport-less，挂进 KBWebView 渲染）；
- * - AI 任务创建专属 tab 的逻辑在 desktopApp 的宿主实现里（core 的 BrowserRegistry 注册 lambda
- *   直接调宿主的创建方法，两者都在 desktopApp，commonMain 不需要知道 core 浏览器类型——
- *   core 仅有 jvm 目标，wasm/移动端经契约桥访问、不直连 core，commonMain 禁止引用 core 类型）。
- * - 用户可手动开/关 tab，切 tab 不影响 AI 正在操作的页面（每个 control 绑定自己的 KBPage）。
- *
- * 装配：desktopApp 的 onAppStateReady 里 `appState.uiBrowserHost = JcefBrowserHost()`，
- * 同时 `BrowserRegistry.register("jcef", BrowserKind.JCEF) { host.createAiTab() }`。
+ * 桌面 JCEF 实现为每个标签页持有独立的 KBPage，并按会话管理页面资源。
  */
 interface UiBrowserHost {
 

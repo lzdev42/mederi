@@ -128,9 +128,6 @@ class AppState(
     /** MCP 服务状态唯一真理源：概览面板、MCP 市场等全局共享 */
     val mcpStore: McpStore = McpStore(aiCore, scope)
 
-    /** Camoufox 浏览器设置状态唯一真理源：设置页 BROWSER Tab 等共享 */
-    val browserSettingsStore: BrowserSettingsStore = BrowserSettingsStore(aiCore, scope)
-
     /** 项目执行权限的共享表现投影：输入区与项目设置不可各存配置副本。 */
     internal val projectPermissionStore = ProjectPermissionStore(aiCore, scope)
 

@@ -37,7 +37,11 @@ class ReleasePackagingTest(unittest.TestCase):
                 jbr = root / 'jbr'
                 java_home = jbr / 'Contents/Home' if platform == 'macos' else jbr
                 (java_home / 'jmods').mkdir(parents=True)
+                (java_home / 'jmods/java.base.jmod').touch()
                 (java_home / 'jmods/jcef.jmod').touch()
+                server_java = root / 'server-java'
+                (server_java / 'jmods').mkdir(parents=True)
+                (server_java / 'jmods/java.base.jmod').touch()
                 if platform == 'macos':
                     (jbr / 'Contents/Frameworks/cef_server.app').mkdir(parents=True)
                 # Real ZIP assembly with the same CLI shape as jar, so archive contents can be checked.
@@ -55,22 +59,29 @@ with zipfile.ZipFile(out, 'w') as z:
                 executable(root / 'gradlew', '''#!/usr/bin/env bash
 set -e
 printf '%s\\n' "$@" >> gradle-calls
-[[ " $* " == *createReleaseDistributable* ]] || exit 0
-parent=app/desktopApp/build/compose/binaries/main-release/app
-if [[ "$FAKE_PLATFORM" == macos ]]; then
-    mkdir -p "$parent/Mederi.app/Contents"
-    touch "$parent/Mederi.app/Contents/Info.plist"
-else
-    mkdir -p "$parent/Mederi/bin"
-    touch "$parent/Mederi/bin/Mederi"
+if [[ " $* " == *createReleaseDistributable* ]]; then
+    test -f "$JAVA_HOME/jmods/jcef.jmod"
+    parent=app/desktopApp/build/compose/binaries/main-release/app
+    if [[ "$FAKE_PLATFORM" == macos ]]; then
+        mkdir -p "$parent/Mederi.app/Contents"
+        touch "$parent/Mederi.app/Contents/Info.plist"
+    else
+        mkdir -p "$parent/Mederi/bin"
+        touch "$parent/Mederi/bin/Mederi"
+    fi
 fi
-for variant in bundled api; do
-    mkdir -p "server/build/install/server-$variant/bin" "server/build/install/server-$variant/lib"
-    touch "server/build/install/server-$variant/lib/$variant.jar"
-done
-mkdir -p server/build/install/server-bundled/runtime
+if [[ " $* " == *installServerBundled* ]]; then
+    test "$JAVA_HOME" = "$MEDERI_SERVER_JAVA_HOME"
+    for variant in bundled api; do
+        mkdir -p "server/build/install/server-$variant/bin" "server/build/install/server-$variant/lib"
+        touch "server/build/install/server-$variant/lib/$variant.jar"
+    done
+    mkdir -p server/build/install/server-bundled/runtime
+    touch server/build/install/server-bundled/runtime/release
+fi
 ''')
                 env = dict(os.environ, JAVA_HOME=str(java_home), FAKE_PLATFORM=platform,
+                           MEDERI_SERVER_JAVA_HOME=str(server_java),
                            PATH=f'{tools}:{os.environ["PATH"]}')
                 result = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign',
                                          '--output', 'relative output'], cwd=root, env=env,
@@ -94,7 +105,10 @@ mkdir -p server/build/install/server-bundled/runtime
                             self.assertTrue(t.getmember(stem + '/run.sh').mode & 0o111)
                             subprocess.run(['sh', '-n'], input=launcher, text=True, check=True)
                     self.assertEqual('JAVA_HOME' in launcher, variant == 'bundled')
-                    if variant == 'api':
+                    if variant == 'bundled':
+                        self.assertIn(stem + '/runtime/release', names)
+                        self.assertNotIn('Contents/Home', launcher)
+                    else:
                         self.assertFalse(any('/runtime' in n for n in names))
                 if platform == 'macos':
                     self.assertTrue((output / 'Mederi.app').is_dir())
@@ -103,8 +117,15 @@ mkdir -p server/build/install/server-bundled/runtime
                     self.assertTrue((output / f'Mederi-desktop-{platform}-{arch}{suffix}').is_file())
                 calls = (root / 'gradle-calls').read_text()
                 self.assertIn(':server:installServerApi', calls)
+                self.assertIn(f'-Pmederi.serverJavaHome={server_java}', calls)
                 self.assertNotIn('packageReleaseDistributionForCurrentOS', calls)
                 self.assertEqual(list((root / 'temp').iterdir()), [])
+
+                env['MEDERI_SERVER_JAVA_HOME'] = str(java_home)
+                rejected = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign'],
+                                          cwd=root, env=env, capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn('MEDERI_SERVER_JAVA_HOME', rejected.stdout)
 
 
 if __name__ == '__main__':

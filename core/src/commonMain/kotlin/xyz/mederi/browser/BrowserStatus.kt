@@ -8,7 +8,7 @@ import kotlinx.serialization.Serializable
  * 与任务操作（run_browser_task/browser_task_status/stop_browser_task）分开——
  * 主代理查询"现在浏览器什么状态"时用这个工具，不派发任务。
  *
- * 注意：内置 JCEF 与外置 Camoufox 可能同时打开。每个注册的浏览器都会出现在
+ * 每个注册的浏览器都会出现在
  * [BrowserStatusInfo.browsers] 里（instances 空 = 当前未在使用）；instance 标注
  * 是任务驱动还是用户手动开的，以及是否由当前会话启动。
  */
@@ -20,9 +20,9 @@ data class BrowserStatusInfo(
 /** 单个已注册浏览器的状态。 */
 @Serializable
 data class BrowserStatusEntry(
-    /** 注册名（AI 工具参数用）：jcef / camoufox。 */
+    /** 注册名（AI 工具参数用）。 */
     val name: String,
-    /** 浏览器种类：JCEF / CAMOUFOX。 */
+    /** 浏览器种类：JCEF / CUSTOM。 */
     val kind: String,
     /** 人话标签。 */
     val label: String,
@@ -32,7 +32,7 @@ data class BrowserStatusEntry(
     val instances: List<BrowserInstanceInfo> = emptyList()
 )
 
-/** 一个打开中的浏览器实例（JCEF 的一个 tab / Camoufox 的一个无头进程）。 */
+/** 一个打开中的浏览器实例。 */
 @Serializable
 data class BrowserInstanceInfo(
     /** 实例 ID：任务驱动 = taskId；用户手动开 = tab 编号。 */
@@ -52,8 +52,7 @@ data class BrowserInstanceInfo(
 /**
  * 注册浏览器可选上报的运行状态源（默认 null = 该浏览器只有任务驱动的实例）。
  *
- * - JCEF：desktop UI 注册时提供，实时上报当前打开的所有 tab（含用户手动开的）；
- * - Camoufox：无 UI 状态，直接用任务表（活跃任务 = 打开的无头进程），不需要状态源。
+ * 宿主可以上报打开的标签页。未提供时由任务表推导浏览器状态。
  */
 fun interface BrowserStatusSource {
     /** 当前打开的实例快照（实例 ID / 来源 taskId / URL / 标题）。实现须线程安全（可在内部切 Main）。 */

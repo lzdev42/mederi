@@ -12,25 +12,21 @@ enum class BrowserKind(val label: String) {
      */
     JCEF("built-in visible browser (JCEF) — shows the page live; prefer for testing the user's own web pages or when the user wants to watch"),
 
-    /**
-     * 无头反检测浏览器（Camoufox，core 提供）。反爬、不暴露窗口。
-     * 优先用于：第三方网站的自动化操作/抓取。
-     */
-    CAMOUFOX("headless anti-detection browser (Camoufox) — prefer for automation/scraping on third-party sites")
+    /** 宿主提供的自定义浏览器实现。 */
+    CUSTOM("custom browser")
 }
 
 /**
  * 已注册的浏览器（名称 = AI 看到的标识）。
  *
  * 工厂是 suspend 且带 taskId：JCEF 版创建 KBPage 需要挂到 Main 线程且 newPage 本身是 suspend，
- * 同时需要把 taskId 记到 tab 上（browser_info 据此判断是不是当前会话启动的）；
- * Camoufox 版工厂只构造对象（真正的进程启动在 start() 里，非 suspend）。
+ * 同时需要把 taskId 记到 tab 上（browser_info 据此判断是不是当前会话启动的）。
  */
 class RegisteredBrowser(
     val name: String,
     val kind: BrowserKind,
     val factory: suspend (taskId: String, sessionId: String) -> BrowserControl,
-    /** 可选运行状态上报源（browser_info 用）：JCEF = UI host 上报 tab；Camoufox = null（用任务表）。 */
+    /** 可选运行状态上报源（browser_info 用），未提供时从任务表获取。 */
     val statusSource: BrowserStatusSource? = null
 )
 
@@ -38,15 +34,15 @@ class RegisteredBrowser(
  * 浏览器注册中心：各宿主注册其可用的浏览器，AI 通过 browser(browser=name) 选择。
  *
  * - [register] 幂等：同名覆盖（宿主重连时更新实例）。
- * - [resolve] null → 用 [default]（默认名优先，否则退回第一个注册的）。
+ * - [resolve] null → 用 [default]（默认名优先，否则选择一个已注册浏览器）。
  * - 注册发生在启动装配阶段（各宿主注册其浏览器实例），
  *   注册后立即生效——BrowserTaskManager 持有本注册中心引用，无需重启。
- * - 默认策略：defaultName 指定的浏览器优先；否则第一个注册的。
+ * - 默认策略：defaultName 指定的浏览器优先；否则选择一个已注册浏览器。
  *   无浏览器注册时 resolve 返回 null，浏览器任务会失败。
  */
 object BrowserRegistry {
 
-    /** 默认浏览器名（UI 可设置，最高优先级）；null = 第一个注册的。 */
+    /** 宿主可设置优先使用的浏览器名。 */
     @Volatile
     var defaultName: String? = null
 
@@ -79,7 +75,7 @@ object BrowserRegistry {
         name?.let { browsers[it] } ?: default()
 
     /**
-     * 默认浏览器：defaultName 指定的；否则第一个注册的。
+     * 默认浏览器：defaultName 指定的；否则选择一个已注册浏览器。
      * 无浏览器注册时返回 null。
      */
     fun default(): RegisteredBrowser? =

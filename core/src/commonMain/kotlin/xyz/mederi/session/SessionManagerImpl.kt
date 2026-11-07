@@ -58,7 +58,7 @@ class SessionManagerImpl(
     private val subagentConfigManager: xyz.mederi.tools.subagent.SubagentConfigManager? = null,
     private val compactionThresholdPercent: () -> Int = { 70 },
     /**
-     * 浏览器任务运行目录解析（browserHome 懒解析，透传给 [TurnExecutor] → BrowserTaskManager）。
+     * 宿主可注入浏览器任务运行目录，经 [TurnExecutor] 转交 BrowserTaskManager。
      */
     private val browserRuntimeProvider: (suspend () -> xyz.mederi.browser.BrowserRuntimeDirs?)? = null,
     /**

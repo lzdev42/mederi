@@ -31,8 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
  * 主代理的 turn 不阻塞，可继续对话。任务细节通过事件流暴露给 UI（用户自己看），
  * 主代理不需要看。
  *
- * 浏览器选择走 [BrowserRegistry]：UI 注册 JCEF、core 注册 Camoufox，AI 通过
- * run_browser_task 的 browser 参数选择，工具描述动态列出可用浏览器。
+ * 浏览器选择走 [BrowserRegistry]。主代理通过 browser(RUN) 的 browser 参数选择宿主已注册的浏览器。
  *
  * 所有复杂状态收敛在 [tasks] 表里。
  *
@@ -43,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap
  * @param recipeStore 配方存储；非 null 且任务 recipe 非 inline（无 drillScript）时，按 recipe.name 解析 skill 增强配方。
  * @param llmCallerProvider LLM caller 工厂注入（测试/自定义 LLM 路径）；null = 走 [BrowserLLMHelper] 真路径。
  * @param subagentConfigManager 子代理模型配置（操作者/大脑独立模型解析）；null = 全部继承父会话模型。
- * @param runtimeProvider 每任务运行目录解析（browserHome 懒解析：reports → DrillExecutor/Brain，skills → RecipeStore）；null = 用构造参数 workingDir/recipeStore。
+ * @param runtimeProvider 每任务可选的运行目录解析；null = 用构造参数 workingDir/recipeStore。
  */
 class BrowserTaskManager(
     private val providerManager: ProviderManager,
@@ -54,7 +53,7 @@ class BrowserTaskManager(
     private val llmCallerProvider: ((aiModel: AIModel, reasoningLevel: ReasoningLevel, apiKeyId: String?) -> BrowserLLMCaller)? = null,
     private val subagentConfigManager: SubagentConfigManager? = null,
     /**
-     * 每任务运行目录解析（browserHome 懒解析，每次 runTask 调用；用户改 browserHome 后下一任务即生效）；
+     * 每任务运行目录解析（每次 runTask 调用）；
      * null = 用构造参数 workingDir/recipeStore。
      */
     private val runtimeProvider: (suspend () -> BrowserRuntimeDirs?)? = null
@@ -120,7 +119,7 @@ class BrowserTaskManager(
                 TaskStatusResult(
                     taskId = "none",
                     status = "ERROR",
-                    message = "没有可用的浏览器：需先安装并注册浏览器后才能执行浏览器任务"
+                    message = "没有可用的浏览器：宿主尚未注册浏览器后端"
                 )
             )
         val taskId = "bt_${UUID.randomUUID().toString().take(8)}"
@@ -162,10 +161,7 @@ class BrowserTaskManager(
                 message = "启动浏览器"
             )
 
-            // ST3 完整接线：每任务懒解析 browserHome 运行目录（reports → DrillExecutor/Brain 落盘、
-            // skills → RecipeStore 配方加载），recipe 解析（RecipeStore）+ LLM caller 注入
-            // （llmCallerProvider 优先，否则 BrowserLLMHelper 真路径）+ workingDir/drillExecutor 真传，
-            // 修复 ST2 的 null。runtimeProvider 失败时安全回退构造参数（不阻塞任务）。
+            // 宿主可为每项任务提供报告与配方目录，解析失败时回退到构造参数。
             val runtime = runtimeProvider?.let { provider -> runCatching { provider() }.getOrNull() }
             val effectiveWorkingDir = runtime?.workingDir ?: workingDir
             val effectiveRecipeStore = runtime?.skillsDir?.let { RecipeStore(it) } ?: recipeStore
@@ -173,7 +169,7 @@ class BrowserTaskManager(
 
             // 浏览器子代理独立模型解析（2026-09-23）：操作者（BROWSER_OPERATOR）与大脑（BROWSER_BRAIN）
             // 在设置页各自可配模型/推理档；配置了独立模型则覆盖，否则继承父会话模型。
-            // 浏览器实现（JCEF/Camoufox）由主代理在 browser(RUN) 的 browser 参数选择，与角色配置无关。
+            // 浏览器实现由主代理在 browser(RUN) 的 browser 参数选择，与角色配置无关。
             val (operatorModel, operatorReasoning) = subagentConfigManager?.resolve(
                 role = SubagentRole.BROWSER_OPERATOR,
                 fallbackModel = aiModel,
@@ -395,11 +391,11 @@ class BrowserTaskManager(
         Json.encodeToString(BrowserStatusInfo.serializer(), browserStatusInfo(currentSessionId))
 
     /**
-     * 聚合当前所有已注册浏览器的运行状态（内置 JCEF 与外置 Camoufox 可同时打开）。
+     * 聚合当前所有已注册浏览器的运行状态。
      *
      * - JCEF：实例 = UI host 上报的所有 tab（含用户手动开的 + 已完成任务留下的）；
      *   每个 tab 的 taskId 决定 isCurrentSession（对照任务表的 parentSessionId）。
-     * - Camoufox：实例 = 活跃任务（STARTED/RUNNING，即正在跑的无头进程），URL 实时从 control 读取。
+     * - 未提供状态源：实例取活跃任务（STARTED/RUNNING），URL 从 control 读取。
      */
     suspend fun browserStatusInfo(currentSessionId: String): BrowserStatusInfo {
         val entries = BrowserRegistry.list().map { registered ->
@@ -421,7 +417,7 @@ class BrowserTaskManager(
                         )
                     }
             } else {
-                // 无状态源（Camoufox）：活跃任务 = 打开的无头进程
+                // 无状态源时从活跃任务推导实例
                 tasks.values
                     .filter {
                         it.browserName == registered.name &&
@@ -564,17 +560,8 @@ data class BrowserTaskDetails(
     val collectedItems: List<BrowserCollectedItem> = emptyList()
 )
 
-/** 浏览器任务运行目录（每任务懒解析，用户改 browserHome 后下一任务即生效）。 */
+/** 宿主注入的浏览器任务报告与配方目录。 */
 data class BrowserRuntimeDirs(val workingDir: File?, val skillsDir: File?)
-
-/**
- * 从 browserHome 路径解析任务运行目录：reports 给 DrillExecutor/BrowserBrain（报告与文件写入），
- * skills 给 RecipeStore（skill 配方加载）。未配置（null/空白）返回 null（不伪造路径）。
- */
-fun browserRuntimeDirs(browserHomePath: String?): BrowserRuntimeDirs? {
-    val home = xyz.mederi.browser.install.BrowserHome.of(browserHomePath) ?: return null
-    return BrowserRuntimeDirs(workingDir = home.reportsDir, skillsDir = home.skillsDir)
-}
 
 /**
  * ST3：配方解析——非 inline recipe（未带 drillScript）且配了 store 时，

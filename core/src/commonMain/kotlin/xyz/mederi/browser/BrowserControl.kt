@@ -3,23 +3,6 @@ package xyz.mederi.browser
 import xyz.mederi.browser.bidi.KeyboardKey
 import xyz.mederi.browser.bidi.OperationResult
 
-/**
- * 浏览器控制抽象。
- *
- * mederi core 只依赖这个接口操作浏览器——不关心底层是 Camoufox（BiDi 协议）还是
- * 桌面版集成的 JCEF（app 层实现）。BrowserOperator / BrowserTaskManager 只跟它打交道。
- *
- * 实现选择与注册（2026-09-14）：
- * - core 默认 `BiDiBrowserControl`（Camoufox + BiDi 协议，反检测无头）。
- * - 桌面版 JCEF（KBrowser）由 UI 层实现本接口并注册进 [BrowserRegistry]（name="jcef"）。
- * - AI 通过 run_browser_task(browser=name) 选择；[start]/[close] 语义：
- *   Camoufox 版 start 真正拉起浏览器、close 关闭；JCEF 版由 UI 拥有页面生命周期，
- *   start/close 可为幂等空实现（不杀 UI 正在渲染的浏览器）。
- *
- * 操作以 a11y tree 的 elementRef（refid）定位元素——snapshot 返回的 YAML 树里每行
- * 对应一个 refid，LLM 据此选择要操作的元素（KBrowser 与 BiDi 均为 refid 定位，API 对齐）。
- */
-
 /** 页面快照：a11y tree 的紧凑 YAML + 原始树（rawTree 仅用于同批内 refid 重映射，用完即丢）。 */
 data class PageSnapshot(
     val url: String,
@@ -31,6 +14,10 @@ data class PageSnapshot(
 /** 语义定位方式（对齐 Playwright locator 家族；Drill 的 playwright_api 映射到此）。 */
 enum class LocatorKind { CSS, XPATH, TEXT, ROLE, LABEL, PLACEHOLDER, ALT_TEXT, TITLE, TEST_ID }
 
+/**
+ * BrowserOperator 与 BrowserTaskManager 通过此接口控制宿主注册到 [BrowserRegistry] 的浏览器。
+ * 主代理可通过快照中的 refid 定位页面元素。
+ */
 interface BrowserControl {
 
     /** 启动浏览器（连接内核），幂等。 */
@@ -63,7 +50,7 @@ interface BrowserControl {
     /**
      * 页面级滚动（无 refid）：滚动整个文档/视口。
      * 与 [scroll] 互斥：不带 refid 时用此方法，避免空串进入 refid 查找。
-     * 默认用 window.scrollBy；真实后端（JCEF/Camoufox）覆盖为视口中心真实滚轮事件。
+     * 默认用 window.scrollBy；后端可覆盖为视口中心真实滚轮事件。
      */
     suspend fun scrollPage(deltaX: Int, deltaY: Int): OperationResult =
         runCatching { evaluateJavascript("window.scrollBy($deltaX,$deltaY)") }
@@ -82,7 +69,7 @@ interface BrowserControl {
     suspend fun screenshot(): ByteArray?
 
     // ── 以下为 Drill（确定性自动化脚本）所需的新契约，全部提供 default 实现 ──
-    // 后端（BiDi / JCEF）未实现时抛 UnsupportedOperationException，不破坏既有实现编译。
+    // 后端未实现时抛 UnsupportedOperationException，不破坏既有实现编译。
 
     /** 按 CSS/文本选择器定位元素（Playwright 风格 locator 的轻量版）。 */
     suspend fun locator(selector: String): BrowserLocator =

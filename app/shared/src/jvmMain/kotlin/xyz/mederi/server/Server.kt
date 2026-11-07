@@ -38,9 +38,6 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
-import xyz.mederi.core.contract.models.DefaultBrowserResponse
-import xyz.mederi.core.contract.models.SetDefaultBrowserInput
-import xyz.mederi.core.contract.models.UpdateCamoufoxSettingsInput
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import xyz.mederi.core.contract.models.*
@@ -608,41 +605,6 @@ fun Route.v1Routes(aiCore: AiCore) {
     }
     delete("/v1/sessions/{id}/skills/{name}") {
         call.respondResult(aiCore.deactivateSkill(call.parameters["id"]!!, call.parameters["name"]!!))
-    }
-
-    // ------------------------------------------------------------------
-    // 浏览器设置
-    // ------------------------------------------------------------------
-
-    get("/v1/browser/settings") {
-        call.respondResult(aiCore.getCamoufoxSettings())
-    }
-    post("/v1/browser/settings") {
-        val input = call.receive<UpdateCamoufoxSettingsInput>()
-        call.respondResult(aiCore.updateCamoufoxSettings(input))
-    }
-    get("/v1/browser/status") {
-        call.respondResult(aiCore.getCamoufoxStatus())
-    }
-    post("/v1/browser/check-update") {
-        call.respondResult(aiCore.checkCamoufoxUpdate())
-    }
-    post("/v1/browser/install") {
-        val version = call.parameters["version"]
-        call.respondResult(aiCore.installCamoufox(version))
-    }
-    get("/v1/browser/versions") {
-        call.respondResult(aiCore.listInstalledCamoufoxVersions())
-    }
-    get("/v1/browser/list") {
-        call.respondResult(aiCore.availableBrowsers())
-    }
-    get("/v1/browser/default") {
-        call.respondResult(aiCore.getDefaultBrowser().map { DefaultBrowserResponse(it) })
-    }
-    post("/v1/browser/default") {
-        val input = call.receive<SetDefaultBrowserInput>()
-        call.respondResult(aiCore.setDefaultBrowser(input))
     }
 
     // ------------------------------------------------------------------

@@ -11,7 +11,6 @@ object BrowserConstants {
     const val DEFAULT_VIEWPORT_HEIGHT = 720
 
     const val DEFAULT_BROWSER_JCEF = "jcef"
-    const val DEFAULT_BROWSER_CAMOUFOX = "camoufox"
     const val DEFAULT_SESSION_ID = "__default__"
 
     object ToolNames {

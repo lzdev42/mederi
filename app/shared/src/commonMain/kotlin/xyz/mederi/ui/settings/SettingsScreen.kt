@@ -29,7 +29,7 @@ import xyz.mederi.theme.*
 import xyz.mederi.ui.components.atoms.WorkspaceIconButton
 import xyz.mederi.ui.components.atoms.WorkspaceNavigationTab
 
-internal enum class SettingsTab { PROVIDERS, AGENTS, GENERAL, SANDBOX, BROWSER, REMOTE, SYSTEM }
+internal enum class SettingsTab { PROVIDERS, AGENTS, GENERAL, SANDBOX, REMOTE, SYSTEM }
 
 @Composable
 internal fun settingsTabLabel(tab: SettingsTab): String = stringResource(when (tab) {
@@ -37,7 +37,6 @@ internal fun settingsTabLabel(tab: SettingsTab): String = stringResource(when (t
     SettingsTab.AGENTS -> Res.string.settings_tab_agents
     SettingsTab.GENERAL -> Res.string.settings_tab_general
     SettingsTab.SANDBOX -> Res.string.settings_tab_sandbox
-    SettingsTab.BROWSER -> Res.string.settings_tab_browser
     SettingsTab.REMOTE -> Res.string.settings_tab_remote
     SettingsTab.SYSTEM -> Res.string.settings_tab_system
 })
@@ -48,7 +47,6 @@ private fun settingsTabSubtitle(tab: SettingsTab): String = stringResource(when 
     SettingsTab.AGENTS -> Res.string.settings_agents_desc
     SettingsTab.GENERAL -> Res.string.settings_appearance_desc
     SettingsTab.SANDBOX -> Res.string.settings_sandbox_desc
-    SettingsTab.BROWSER -> Res.string.settings_browser_desc
     SettingsTab.REMOTE -> Res.string.settings_remote_desc
     SettingsTab.SYSTEM -> Res.string.settings_system_title
 })
@@ -64,7 +62,6 @@ fun SettingsDialog(isVisible: Boolean, onClose: () -> Unit) {
                 SettingsTab.AGENTS -> AgentSettingsPanel(isCompact = compact)
                 SettingsTab.GENERAL -> GeneralSettingsPanel(isCompact = compact)
                 SettingsTab.SANDBOX -> SandboxSettingsPanel()
-                SettingsTab.BROWSER -> BrowserSettingsPanel()
                 SettingsTab.REMOTE -> RemoteSettingsPanel(isCompact = compact)
                 SettingsTab.SYSTEM -> SystemSettingsPanel(isCompact = compact)
             }
@@ -137,7 +134,6 @@ private fun SettingsNavigation(selectedTab: SettingsTab, onSelectTab: (SettingsT
                 SettingsTab.AGENTS -> FeatherIcons.Users
                 SettingsTab.GENERAL -> FeatherIcons.Droplet
                 SettingsTab.SANDBOX -> FeatherIcons.Shield
-                SettingsTab.BROWSER -> FeatherIcons.Globe
                 SettingsTab.REMOTE -> FeatherIcons.Sliders
                 SettingsTab.SYSTEM -> FeatherIcons.Activity
             }
