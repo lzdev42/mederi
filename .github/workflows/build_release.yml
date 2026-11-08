@@ -43,7 +43,7 @@ jobs:
             architecture: x64
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 180
 
     env:
       APP_NAME: Mederi

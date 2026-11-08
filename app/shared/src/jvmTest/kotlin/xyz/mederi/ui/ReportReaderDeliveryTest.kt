@@ -62,7 +62,8 @@ class ReportReaderDeliveryTest {
         } }
         onNodeWithText(metadata).assertIsDisplayed()
         onNodeWithText(copy).assertIsDisplayed()
-        onNodeWithText("Full report fixture", substring = true, useUnmergedTree = true).assertExists()
+        waitUntilAtLeastOneExists(hasText("Full report fixture", substring = true))
+        onNodeWithText("Full report fixture", substring = true).assertExists()
         onNodeWithText(title, useUnmergedTree = true).assertDoesNotExist()
         onNodeWithText(notice).assertDoesNotExist(); onNodeWithText(reload).assertDoesNotExist()
     }
@@ -78,6 +79,7 @@ class ReportReaderDeliveryTest {
         } }
         onNodeWithText(missing).assertIsDisplayed(); onNodeWithText(notice).assertIsDisplayed()
         onNodeWithText(metadata).assertIsDisplayed()
+        waitUntilAtLeastOneExists(hasText("Original final line", substring = true))
         onNodeWithText("Original final line", substring = true).assertExists()
         onNodeWithText(reload).performClick()
         runOnIdle { assertEquals(1, retries) }
