@@ -33,19 +33,27 @@ import xyz.mederi.theme.*
 import xyz.mederi.ui.components.ProviderIcon
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.ui.components.atoms.WorkspacePanelEmptyState
+import xyz.mederi.ui.components.atoms.WorkspaceTextField
 
 /** 同一搜索字段用于目录/已配置；查询与数据归VM，不在字段里持有副本。 */
 @Composable
 internal fun ProviderSearchField(query: String, label: String, onChange: (String) -> Unit, enabled: Boolean = true) {
     val colors = LocalMederiColors.current
-    OutlinedTextField(query, onChange, enabled = enabled, singleLine = true,
-        label = { Text(label, style = WorkspaceStyle.Caption) },
-        textStyle = WorkspaceStyle.Body.copy(color = colors.textPrimary),
-        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(WorkspaceStyle.ObjectRadius),
-        leadingIcon = { Icon(FeatherIcons.Search, null, modifier = Modifier.size(WorkspaceStyle.IconSize)) },
-        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = colors.accentText,
-            unfocusedBorderColor = colors.surfaceCardBorder, focusedContainerColor = colors.surfaceInput,
-            unfocusedContainerColor = colors.surfaceInput))
+    WorkspaceTextField(
+        value = query,
+        onValueChange = onChange,
+        modifier = Modifier.fillMaxWidth(),
+        enabled = enabled,
+        placeholder = label,
+        leadingIcon = {
+            Icon(
+                imageVector = FeatherIcons.Search,
+                contentDescription = null,
+                tint = colors.textMuted,
+                modifier = Modifier.size(WorkspaceStyle.IconSize),
+            )
+        },
+    )
 }
 
 /** 管理与目录共用一行外观；可选中项用Tab语义，目录选择用Button，不复制宽窄实现。 */

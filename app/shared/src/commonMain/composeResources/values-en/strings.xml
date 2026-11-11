@@ -221,7 +221,20 @@
     <string name="settings_show">Show</string>
     <string name="settings_hide">Hide</string>
     <string name="settings_tunnel_title">Cloudflare tunnel</string>
-    <string name="settings_tunnel_desc">Expose this machine to the internet via a Cloudflare tunnel (enter token + domain; requires cloudflared)</string>
+    <string name="settings_tunnel_desc">Access this machine over a Cloudflare tunnel. Requires cloudflared.</string>
+    <string name="settings_tunnel_api_token_label">Cloudflare API token</string>
+    <string name="settings_tunnel_api_token_placeholder">API token with tunnel and DNS permissions</string>
+    <string name="settings_tunnel_api_token_note">Automatic setup requires Cloudflare Tunnel Edit on the account and DNS Edit and Zone Read on the domain. Leave blank to run an existing manual tunnel.</string>
+    <string name="settings_tunnel_domain_required_label">Public hostname</string>
+    <string name="settings_tunnel_invalid_domain">Enter a full Cloudflare subdomain, such as m.example.com.</string>
+    <string name="settings_tunnel_dns_conflict">%1$s has a DNS record that is incompatible with a proxied Cloudflare tunnel CNAME.</string>
+    <string name="settings_tunnel_remote_config_required">This tunnel must be remotely managed by Cloudflare.</string>
+    <string name="settings_tunnel_zone_missing">No active Cloudflare zone was found for %1$s. Check the domain and Zone Read permission.</string>
+    <string name="settings_tunnel_route_conflict">The tunnel has multiple default routes for %1$s.</string>
+    <string name="settings_tunnel_api_failed">Cloudflare request %1$s failed (HTTP %2$d, error codes %3$s).</string>
+    <string name="settings_tunnel_api_unavailable">Cloudflare setup could not finish. Check your network connection or retry.</string>
+    <string name="settings_tunnel_route_unreachable">The tunnel connected, but %1$s did not return a Mederi readiness response. Check the domain or access policy and retry.</string>
+    <string name="settings_tunnel_token_storage_failed">Could not read or save the Cloudflare API token on this device.</string>
     <string name="settings_tunnel_start">Start tunnel</string>
     <string name="settings_tunnel_starting">Starting tunnel…</string>
     <string name="settings_tunnel_running">Tunnel running</string>
@@ -440,10 +453,11 @@
     <string name="sysinfo_cores">(%1$d cores)</string>
     <string name="sysinfo_heap">JVM Heap</string>
     <string name="sysinfo_memory_rss">Memory (RSS)</string>
-    <string name="rightdock_artifacts">Viewer</string>
+    <string name="rightdock_files">Files</string>
+    <string name="rightdock_artifacts">Documents</string>
     <string name="rightdock_browser">Web</string>
     <string name="rightdock_browser_automation">Browser Automation</string>
-    <string name="rightdock_diff">Files</string>
+    <string name="rightdock_diff">Changes</string>
     <string name="rightdock_overview">Overview</string>
     <string name="rightdock_plan">Plan</string>
     <string name="rightdock_settings">Settings</string>
@@ -556,8 +570,6 @@
     <string name="browser_js_prompt_title">Page prompt</string>
     <string name="browser_ok">OK</string>
     <!-- Files dual tab & file tree (added in S1) -->
-    <string name="files_subtab_tree">Tree</string>
-    <string name="files_subtab_diff">Modified</string>
     <string name="tree_collapse_all">Collapse All</string>
     <string name="tree_refresh">Refresh</string>
     <string name="tree_search_placeholder">Filter files…</string>
@@ -651,8 +663,11 @@
     <!-- Diff summary card (ChatCards.kt) -->
     <string name="diff_files_changed">%1$d file(s) changed +%2$d -%3$d</string>
     <string name="diff_review">Review</string>
+    <string name="diff_expand_all">Expand all (%1$d)</string>
+    <string name="diff_collapse">Collapse</string>
     <!-- Right extension panel (RightExtensionPanel.kt) -->
     <string name="rp_todo_list_title">TODO-LIST</string>
+    <string name="rp_documents_title">Documents</string>
     <!-- System info bar (SystemInfoBar.kt) -->
     <string name="sys_cpu">CPU</string>
     <!-- Provider settings panel (ProviderSettingsPanel.kt) -->
@@ -663,6 +678,19 @@
     <string name="provider_reasoning_label">REASONING</string>
     <string name="provider_api_key_placeholder">sk-...</string>
     <string name="provider_base_url_placeholder">https://...</string>
+    <string name="provider_auto_retry_label">Auto retry</string>
+    <string name="provider_retry_label">Retry delay cap (seconds)</string>
+    <string name="provider_retry_delay_label">Max delay (s)</string>
+    <string name="provider_retry_placeholder">Empty for default</string>
+    <string name="provider_retry_save">Save</string>
+    <string name="provider_retry_current">Current: %1$s</string>
+    <string name="provider_retry_default">Default (random 0–30 s)</string>
+    <string name="provider_retry_disabled">No retry</string>
+    <string name="provider_retry_immediate">Retry immediately (no delay)</string>
+    <string name="provider_retry_range">Random 1–%1$d s</string>
+    <string name="provider_retry_hint">Empty for default (random 0–30 s); 0 retries immediately; server Retry-After takes priority</string>
+    <string name="provider_retry_invalid">Enter 0 or a positive integer</string>
+    <string name="provider_retry_saved">Retry setting saved</string>
     <!-- Model capability tags (ChatInputCard.kt ModelCapabilityTag) -->
     <string name="cap_thinking">Thinking</string>
     <string name="cap_image">Image</string>

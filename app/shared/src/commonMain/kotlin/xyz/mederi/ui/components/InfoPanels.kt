@@ -124,8 +124,18 @@ internal fun DiffFilesContent(
 }
 
 @Composable
+/**
+ * 文档阅读面板（2026-11 更名"文档"）：纯阅读器，无 dock 按钮——
+ * 由 openDocument（文件树点文件 / 概览"文档"行 / 对话流文档卡 / 报告查看）触达打开。
+ * 项目目录浏览在"文件"（FILES）面板。
+ */
 internal fun ArtifactsPanelContent(viewModel: WorkspaceViewModel, colors: MederiColors) {
-    ReaderPanelContent(viewModel.readerPanelState, viewModel::openArtifact, viewModel::retryReport, colors)
+    ReaderPanelContent(
+        state = viewModel.readerPanelState,
+        onSelect = viewModel::openArtifact,
+        onRetry = viewModel::retryReport,
+        colors = colors,
+    )
 }
 
 /** 纯阅读面板：不接VM，不读取Core/文件；状态投影和操作由Route装配。 */
@@ -135,6 +145,7 @@ internal fun ReaderPanelContent(
     onSelect: (String) -> Unit,
     onRetry: (ReportKey) -> Unit,
     colors: MederiColors,
+    modifier: Modifier = Modifier,
 ) {
     val items = state.items
     if (items.isEmpty()) {
@@ -147,7 +158,7 @@ internal fun ReaderPanelContent(
     }
     val activeItem = state.activeItem ?: return
     val showTabs = items.size > 1
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = modifier.fillMaxSize()) {
         if (showTabs) {
             ArtifactTabs(items, activeItem.id, onSelect, colors)
         }

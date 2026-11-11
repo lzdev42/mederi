@@ -35,6 +35,8 @@ private data class ChatMessage(val sender: String, val text: String)
  * infinite_scroll / fetch_content / ask_ai（经 [onJudgeContent] 回调）/ abort_item /
  * branch / write_file / append_file / open_tab / click_new_tab / close_tab /
  * wait_for / wait / type_slowly。罕见动作 extract_chat_history / upload_file 为 stub。
+ * [BrowserControl] 契约 default 抛出的 UnsupportedOperationException 被捕获为该 step 的
+ * FAIL（原因文本含 "unsupported by backend"），不冒泡中断整个 drill，也不伪装成功。
  *
  * @param control   浏览器控制抽象（唯一与浏览器交互的入口）
  * @param workingDir 输出目录；write_file / append_file 的 file_path 相对它解析，
@@ -94,6 +96,7 @@ class DrillExecutor(
 
         val drillResults = mutableListOf<Map<String, String>>()
         val extractedItems = mutableListOf<Map<String, String>>()
+        val unsupportedFailures = mutableListOf<String>()
 
         var round = 1
         return try {
@@ -104,12 +107,14 @@ class DrillExecutor(
                         script = finalScript,
                         onJudgeContent = onJudgeContent,
                         drillResults = drillResults,
-                        extractedItems = extractedItems
+                        extractedItems = extractedItems,
+                        unsupportedFailures = unsupportedFailures
                     )
                 } else {
                     runLegacyLoopWorkflow(
                         script = finalScript,
-                        drillResults = drillResults
+                        drillResults = drillResults,
+                        unsupportedFailures = unsupportedFailures
                     )
                 }
                 val duration = System.currentTimeMillis() - startTime
@@ -120,6 +125,18 @@ class DrillExecutor(
                 } else {
                     break
                 }
+            }
+
+            if (unsupportedFailures.isNotEmpty()) {
+                val summary = unsupportedFailures.joinToString("; ")
+                DebugLog.error("drill", "Drill FAIL(unsupported): task='${finalScript.task_name}', $summary")
+                return DrillResult(
+                    task_name = finalScript.task_name,
+                    success = false,
+                    drill_results = drillResults,
+                    error_message = summary,
+                    error_type = "UNSUPPORTED"
+                )
             }
 
             DebugLog.info("drill", "Drill SUCCESS: task='${finalScript.task_name}', rounds=$round, drillResults=${drillResults.size}")
@@ -147,7 +164,8 @@ class DrillExecutor(
         script: DrillScript,
         onJudgeContent: (suspend (content: String, instruction: String) -> BrainResult)?,
         drillResults: MutableList<Map<String, String>>,
-        extractedItems: MutableList<Map<String, String>>
+        extractedItems: MutableList<Map<String, String>>,
+        unsupportedFailures: MutableList<String>
     ) {
         extractedItems.clear()
         val totalSteps = script.steps.size
@@ -168,6 +186,10 @@ class DrillExecutor(
                 }
                 val stepDuration = System.currentTimeMillis() - stepStart
                 DebugLog.info("drill", "Drill step [${stepIndex + 1}/$totalSteps] '${step.step_name}' done in ${stepDuration}ms")
+            } catch (e: UnsupportedOperationException) {
+                val reason = "unsupported by backend (step '${step.step_name}'): ${e.message ?: "unsupported operation"}"
+                DebugLog.error("drill", "页面级步骤 [${stepIndex + 1}/$totalSteps] '${step.step_name}' 执行失败(后端不支持): $reason")
+                unsupportedFailures += reason
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 DebugLog.error("drill", "页面级步骤 [${stepIndex + 1}/$totalSteps] '${step.step_name}' 执行失败: ${e::class.simpleName}: ${e.message}")
@@ -188,12 +210,14 @@ class DrillExecutor(
 
                 val itemContext = item.toMutableMap()
                 itemContext["_item_index"] = (itemIndex + 1).toString()
+                var lastStepName: String? = null
                 try {
                     itemSteps.forEachIndexed { stepIndex, step ->
                         yield()
                         DebugLog.info("drill", "执行条目子步骤 [${stepIndex + 1}/${itemSteps.size}]: ${step.step_name} (动作: ${step.action})")
                         val stepStart = System.currentTimeMillis()
-                        executeItemStep(step, itemContext, onJudgeContent, script.image_assets)
+                        lastStepName = step.step_name
+                        executeItemStep(step, itemContext, onJudgeContent, script.image_assets, unsupportedFailures)
                         val stepDuration = System.currentTimeMillis() - stepStart
                     }
                     drillResults.add(itemContext)
@@ -201,6 +225,14 @@ class DrillExecutor(
                     successCount++
                     val itemDuration = System.currentTimeMillis() - itemStart
                     DebugLog.info("drill", "Item ${itemIndex + 1}/${extractedItems.size} done in ${itemDuration}ms, success=$successCount")
+                    } catch (e: UnsupportedOperationException) {
+                        val itemDuration = System.currentTimeMillis() - itemStart
+                        val reason = "unsupported by backend (step '$lastStepName'): ${e.message ?: "unsupported operation"}"
+                        DebugLog.error("drill", "Item ${itemIndex + 1}/${extractedItems.size} failed (${itemDuration}ms, 后端不支持): $reason")
+                        itemContext["_status"] = "FAIL"
+                        itemContext["_failure_reason"] = reason
+                        drillResults.add(itemContext)
+                        unsupportedFailures += reason
                 } catch (e: AbortItemException) {
                     val itemDuration = System.currentTimeMillis() - itemStart
                     DebugLog.info("drill", "Item ${itemIndex + 1}/${extractedItems.size} aborted (${itemDuration}ms): ${e.message}")
@@ -236,7 +268,8 @@ class DrillExecutor(
 
     private suspend fun runLegacyLoopWorkflow(
         script: DrillScript,
-        drillResults: MutableList<Map<String, String>>
+        drillResults: MutableList<Map<String, String>>,
+        unsupportedFailures: MutableList<String>
     ) {
         repeat(script.loop_count) { loopIndex ->
             val loopStart = System.currentTimeMillis()
@@ -271,6 +304,11 @@ class DrillExecutor(
                         anyStepFound = true
                     }
                     val stepDuration = System.currentTimeMillis() - stepStart
+                } catch (e: UnsupportedOperationException) {
+                    val reason = "unsupported by backend (step '${step.step_name}'): ${e.message ?: "unsupported operation"}"
+                    DebugLog.error("drill", "步骤 '${step.step_name}' 后端不支持: $reason")
+                    unsupportedFailures += reason
+                    anyStepFound = true
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     DebugLog.error("drill", "步骤 '${step.step_name}' 执行异常: ${e::class.simpleName}: ${e.message}")
@@ -295,7 +333,8 @@ class DrillExecutor(
         step: DrillStep,
         itemContext: MutableMap<String, String>,
         onJudgeContent: (suspend (content: String, instruction: String) -> BrainResult)? = null,
-        imageAssets: Map<String, ImageAsset>? = null
+        imageAssets: Map<String, ImageAsset>? = null,
+        unsupportedFailures: MutableList<String>
     ) {
         // 对 selector_value 和 action_value 做模板变量替换
         val resolvedStep = resolveStepTemplates(step, itemContext)
@@ -319,7 +358,7 @@ class DrillExecutor(
                     "ask_ai" -> handleAskAI(resolvedStep, itemContext, onJudgeContent, imageAssets)
                     "extract_chat_history" -> handleExtractChatHistory(resolvedStep, itemContext)
                     "abort_item" -> handleAbortItem(resolvedStep, itemContext)
-                    "branch" -> handleBranch(resolvedStep, itemContext, onJudgeContent, imageAssets)
+                    "branch" -> handleBranch(resolvedStep, itemContext, onJudgeContent, imageAssets, unsupportedFailures)
                     "type_slowly" -> handleTypeSlowly(resolvedStep, itemContext)
                     "upload_file" -> handleUploadFile(resolvedStep, itemContext, imageAssets)
                     "write_file" -> handleWriteFile(resolvedStep, itemContext)
@@ -634,7 +673,8 @@ $assetLines"""
         step: DrillStep,
         itemContext: MutableMap<String, String>,
         onJudgeContent: (suspend (content: String, instruction: String) -> BrainResult)?,
-        imageAssets: Map<String, ImageAsset>?
+        imageAssets: Map<String, ImageAsset>?,
+        unsupportedFailures: MutableList<String>
     ) {
         val branches = step.branches ?: throw IllegalArgumentException("branch 需要 branches")
         val timeoutMs = step.timeout_ms ?: 0L
@@ -689,7 +729,7 @@ $assetLines"""
         stepsToExecute?.forEachIndexed { stepIndex, subStep ->
             yield()
             DebugLog.info("drill", "执行分支子步骤 [${stepIndex + 1}/${stepsToExecute.size}]: ${subStep.step_name} (动作: ${subStep.action})")
-            executeItemStep(subStep, itemContext, onJudgeContent, imageAssets)
+            executeItemStep(subStep, itemContext, onJudgeContent, imageAssets, unsupportedFailures)
         }
     }
 

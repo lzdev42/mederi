@@ -3,10 +3,13 @@ package xyz.mederi.core.bridge
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.MessageRole
+import xyz.mederi.ui.ChatListItem
+import xyz.mederi.ui.computeChatItems
 
 /**
  * [MederiModelMapper.toUsageBackfill] 从历史 assistant 消息回填 requestCount / lastRequestUsage。
@@ -81,14 +84,11 @@ class MederiModelMapperTest {
         assertEquals(true, pending.pendingSteering)
     }
 
-    // ── UI_HIDDEN_MARKER 剥离的角色作用域（回归：ASSISTANT 字面提及标记不得被截断）──
+    // ── UI 剥离作用域与内部触发消息隐藏（ASSISTANT 不被剥离；hiddenFromUi 不落渲染块）──
 
     @Test
-    fun toChatMessage_assistantTextWithLiteralMarkerIsNotTruncated() {
-        // 回归：ASSISTANT 回复里字面提及 <<<NOT_FOR_UI>>> 时不得被 sanitize 截断。
-        // 标记剥离只作用于 USER 消息（环境元数据附在用户消息尾部、内部指令消息以标记开头、
-        // 工具边界插话用 <user_intervention> 包装——三者都是 USER 角色）。
-        val body = "你看一下如何解决 `<<<NOT_FOR_UI>>>` 这个字符"
+    fun toChatMessage_assistantTextIsNotStripped() {
+        val body = "你看一下 `<user_intervention>example</user_intervention>` 这个标签"
         val message = Message(
             sessionId = "s",
             role = MessageRole.ASSISTANT,
@@ -97,21 +97,27 @@ class MederiModelMapperTest {
         )
         val chat = MederiModelMapper.toChatMessage(message)
         val textBlock = chat.blocks.filterIsInstance<ChatBlock.Text>().single()
-        assertEquals(body, textBlock.text, "ASSISTANT 原文不得因字面提及标记而被截断")
+        assertEquals(body, textBlock.text, "ASSISTANT 原文不得被 USER 视图净化规则篡改")
     }
 
     @Test
-    fun toChatMessage_userTextWithEnvMarkerIsStripped() {
-        // 回归守卫：USER 消息尾部的环境元数据块仍须被剥离（上一修复不得误伤 USER 路径）。
-        val userText = "帮我看下这个 bug"
-        val message = Message(
+    fun toChatMessage_hiddenFromUiClearsBlocksAndSeparatesTurnsWithoutUserBubble() {
+        val internalTrigger = Message(
+            id = "msg_plan_exec",
             sessionId = "s",
             role = MessageRole.USER,
-            parts = listOf(MessagePart.Text(userText + "\n<<<NOT_FOR_UI>>>\nNOTE FOR AI (hidden): UTC now")),
-            createdAt = "2026-01-01T00:00:00Z",
+            parts = listOf(MessagePart.Text("Plan 'x' (id=plan_1) has been approved by the user.")),
+            createdAt = "2026-01-01T00:01:00Z",
+            hiddenFromUi = true,
         )
-        val chat = MederiModelMapper.toChatMessage(message)
-        val textBlock = chat.blocks.filterIsInstance<ChatBlock.Text>().single()
-        assertEquals(userText, textBlock.text, "USER 消息尾部的 <<<NOT_FOR_UI>>> 环境块仍须被剥离")
+        val mappedHidden = MederiModelMapper.toChatMessage(internalTrigger)
+        assertTrue(mappedHidden.hiddenFromUi)
+        assertTrue(mappedHidden.blocks.isEmpty(), "hiddenFromUi=true 投影不得携带可见渲染块")
+
+        val planTurn = MederiModelMapper.toChatMessage(msg(MessageRole.ASSISTANT).copy(id = "a1"))
+        val execTurn = MederiModelMapper.toChatMessage(msg(MessageRole.ASSISTANT).copy(id = "a2"))
+        val items = computeChatItems(listOf(planTurn, mappedHidden, execTurn), isWorking = false, snapshot = null)
+        assertEquals(0, items.count { it is ChatListItem.TextMessage && it.isUser }, "隐藏内部消息不得渲染为用户气泡")
+        assertEquals(2, items.count { it is ChatListItem.Footer }, "隐藏触发消息仍应隔离前后两个 Assistant 轮次")
     }
 }

@@ -1,6 +1,6 @@
 # 对话工作台 UI 盘点与迁移表
 
-> 2026-10-28 静态盘点。实施顺序、理念与验收以[整体改造计划](conversation-workspace-redesign-plan.md)为入口。
+> 2026-10-28 静态盘点。通用设计与交互以 [UI 开发标准](standard/README.md) 为准。
 > 范围是整个对话工作台，不仅消息列表；路径前缀 `app/shared/src/commonMain/kotlin/xyz/mederi/`。
 > “目标”均为待实施建议，不能当作当前代码结构；最近已完成局部改动单独标明。
 
@@ -134,7 +134,7 @@ C17错误详情复用MederiDialog/ActionButton，保留完整报告/复制/GitHu
 
 ### 设置S1衔接（2026-10-29）
 
-用户调整优先级，先迁设置导航与外观/系统样板。SettingsDialog七入口与原Route不变；公共SettingsSection/Card/Row同族轻量规格，选择/复制复用已有原子。工作台Skill/MCP遗漏弹窗、全局MotionPolicy及剩余MVVM收口仍待后续，不因转向设置而标记完成。详细盘点与证据见settings-redesign-plan.md/settings-first-delivery.md。
+用户调整优先级，先迁设置导航与外观/系统样板。SettingsDialog七入口与原Route不变；公共SettingsSection/Card/Row同族轻量规格，选择/复制复用已有原子。工作台Skill/MCP遗漏弹窗、全局MotionPolicy及剩余MVVM收口仍待后续，不因转向设置而标记完成。详细盘点与证据见[设置第一批交付](settings-first-delivery.md)。
 
 
 ### 供应商S2a衔接（2026-10-29）
@@ -191,3 +191,7 @@ DiffPresenter按session缓存messageId范围/内容/选择/反馈，关闭/换�
 ### 2026-10-31 R02a/b主对话反馈切片
 
 WorkspaceFeedbackPresenter按Session/Draft分离Core投影、本地失败、关闭身份与详情身份；输入区纯WorkspaceFeedbackContent和Workspace详情消费同一feedbackState，继续委托原ErrorBoard/ErrorDetailDialog。相同快照不撤销关闭，新错误可见；本地失败无旧Core诊断/ID/断流继续。创建/发送/回滚捕获原目标与sequence，回滚恢复需原上下文/文本/附件仍有效。256项相关回归（新增15＋额外既有会话恢复7）与wasm/JVM通过，见workspace-feedback-ownership-delivery.md。无新视觉样式；剩余Chrome/独立提示/整体R02a/b/c、S6/实机继续保留。
+
+### 2026-11 文件管理器 / 文档面板 / 概览文档行定稿
+
+dock rail 定稿四入口：代码变更(DIFF=DiffPanelContent 直接挂接，TurnDiffSummaryCard 点文件行直达该文件 diff、超5文件默认折叠) / 文件(FILES=文件管理器，TreePanelContent 全宽项目目录树，点文件 openDocument(Path) 在文档面板打开) / 终端 / 网页。文档面板(ARTIFACTS=阅读器)无 dock 按钮——由 openDocument / 概览"文档"行 / 对话流文档卡触达打开。FilesPanel 双 Tab 包装层(FilesPanelContent/FilesTab/FilesPanelTabs)删除，其两个 tab 测试随之下线。概览新增 OverviewDocumentsRow（索引4，紧随实施计划）：数据=WorkspaceViewModel.sessionDocuments（chatItems 的 DocumentCard 按 artifactId 去重投影），空整行不渲染，点击 openDocument(Content) 打开文档面板；测试 OverviewDocumentsRowTest。

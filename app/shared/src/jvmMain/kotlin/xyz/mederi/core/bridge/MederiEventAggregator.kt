@@ -1,5 +1,6 @@
 package xyz.mederi.core.bridge
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
@@ -152,7 +153,18 @@ object MederiEventAggregator {
                 }
             }
 
-            val emissions = ConversationStateReducer.applyWithRefresh(snapshot, event) { refreshPage() }
+            // per-event 异常隔离：一个坏事件不杀整条 UI 订阅（log + 跳过、保留上一好快照）。
+            // 注意：不做 live 水合 pendingQuestion——原始设计里水合只发生在 observe 启动时
+            // （切走再切回重建快照）；live 水合会在问题已回答、ToolResult 尚未落库的窗口期
+            // 重建出幽灵 pendingQuestion（强制 WaitingUser、挡住发送→停止转换），弊大于利。
+            val emissions = try {
+                ConversationStateReducer.applyWithRefresh(snapshot, event) { refreshPage() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DebugLog.error("Aggregator", "event processing failed: type=${event.type}, error=${e.message}", e)
+                listOf(snapshot)
+            }
             emissions.forEach {
                 val blockCount = it.messages.sumOf { m -> m.blocks.size }
                 if (isDelta) {

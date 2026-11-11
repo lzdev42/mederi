@@ -60,8 +60,8 @@ class FileSystemTools(
 
     @Serializable
     data class ReadFileArgs(
-        @LLMDescription("File path, absolute or relative to the project root.")
-        val path: String = "",
+        @LLMDescription("Required. File path, absolute or relative to the project root. Must not be empty.")
+        val path: String,
         @LLMDescription("Line number to start reading from (1-based). Default 1.")
         val offset: Int = 1,
         @LLMDescription("Max lines to return; 0 = no limit.")
@@ -110,6 +110,9 @@ class FileSystemTools(
         description = "Read a local file and return its text content, starting at offset (1-based) up to max_lines lines. Each line is prefixed by its 1-based line number as `<line>: <content>`. The prefix is for reference and is not part of file content. The result reports the returned line range and the next offset when more remain."
     ) {
         override suspend fun execute(args: ReadFileArgs): String {
+            require(args.path.isNotBlank()) {
+                "read_file requires a non-empty 'path' argument; provide a file path (absolute or relative to the project root)"
+            }
             val file = resolveForRead(args.path, mustExist = true, mustBeFile = true)
             val content = file.readText()
             // 空文件特判："" 的 lines() 在 Kotlin 返回 [" "]（非空），会误报 total=1
@@ -490,7 +493,10 @@ class FileSystemTools(
         for (dir in allowedDirectories) {
             val dirPath = Path(dir).absolute().normalize()
             if (abs.startsWith(dirPath)) {
-                return abs.relativeTo(dirPath).toString()
+                // 恰好等于允许目录本身时 relativeTo 得空串，会让错误消息冒号后什么都不显示；
+                // 此时回退显示绝对路径。
+                val relative = abs.relativeTo(dirPath).toString()
+                if (relative.isNotEmpty()) return relative
             }
         }
         return abs.toString()

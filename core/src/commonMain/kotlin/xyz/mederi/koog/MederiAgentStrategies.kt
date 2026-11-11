@@ -184,15 +184,16 @@ internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
     return guarded
 }
 
-/** 网络抛错时保留已输出正文/推理，再向上抛原异常；绝不执行中断的工具调用。 */
-private suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
+/** 网络抛错/取消（用户中止、关闭应用）时保留已输出正文/推理落库，再向上抛原异常；绝不执行中断的工具调用。 */
+internal suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
     persister: TurnIncrementalPersister?, responseId: String?,
 ): Message.Assistant {
     val frames = mutableListOf<StreamFrame>()
     try {
         collect { frames.add(it) }
     } catch (error: Throwable) {
-        if (error is kotlinx.coroutines.CancellationException) throw error
+        // 取消（用户中止/关闭应用）与流错误同构：半截正文必须先落库再 rethrow
+        // （persist-then-rethrow——"手动关闭一定保存"）。persist 失败不吞原异常。
         val partial = frames.filter { it is StreamFrame.TextDelta || it is StreamFrame.TextComplete ||
             it is StreamFrame.ReasoningDelta || it is StreamFrame.ReasoningComplete }
         if (partial.isNotEmpty()) {
@@ -201,7 +202,8 @@ private suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
             val readable = if (text.isNotEmpty() && partial.none { it is StreamFrame.TextComplete })
                 partial + StreamFrame.TextComplete(text) else partial
             val response = readable.toAssistantMessageSafe().let { if (responseId != null) it.copy(id = responseId) else it }
-            persister?.persistAssistant(response)
+            runCatching { persister?.persistAssistant(response) }
+                .onFailure { xyz.mederi.debug.DebugLog.error("Persist", "partial persist on cancel/error failed: ${it.message}", it) }
         }
         throw error
     }
@@ -268,19 +270,26 @@ private fun nodeLLMSendToolResultsPersistable(
     pollSteering: (() -> SteeringItem?)? = null
 ): AIAgentNodeDelegate<ReceivedToolResults, Message.Assistant> =
     node("send_tool_results") {
-        persister?.persistToolResults(it)
+        // 与 beginResponse() 同理：生成稳定 ID，让增量落库版与内存 Prompt 版共用同一 ID，
+        // turn 结束 ChatMemory 回写时按 id 过滤跳过，避免靠内容指纹对齐误判重复追加。
+        val toolResultId = "msg_${java.util.UUID.randomUUID()}"
+        persister?.persistToolResults(it, id = toolResultId)
         llm.writeSession {
             appendPrompt {
-                user {
-                    it.toolResults.forEach { toolResult -> toolResult(toolResult.toMessagePart()) }
-                }
+                message(
+                    Message.User(
+                        parts = it.toolResults.map(ReceivedToolResult::toMessagePart),
+                        metaInfo = RequestMetaInfo.create(KoogClock.System),
+                        id = toolResultId
+                    )
+                )
             }
             // 工具边界检查引导注入
             var steer = pollSteering?.invoke()
             while (steer != null) {
                 val current = steer
                 val steerId = current.messageId ?: "msg_${java.util.UUID.randomUUID()}"
-                appendPrompt { message(current.toKoogSteering(persister?.includeImages ?: true)) }
+                appendPrompt { message(current.copy(messageId = steerId).toKoogSteering(persister?.includeImages ?: true)) }
                 if (current.messageId != null) persister?.consumeSteering(current)
                 else persister?.persistSteeringUserMessage(current.text, id = steerId, timestamp = current.timestamp)
                 steer = pollSteering?.invoke()
@@ -337,7 +346,7 @@ fun mederiSingleRunStrategy(
             if (steer != null) {
                 val steerId = steer.messageId ?: "msg_${java.util.UUID.randomUUID()}"
                 llm.writeSession {
-                    appendPrompt { message(steer.toKoogSteering(persister?.includeImages ?: true)) }
+                    appendPrompt { message(steer.copy(messageId = steerId).toKoogSteering(persister?.includeImages ?: true)) }
                 }
                 if (steer.messageId != null) persister?.consumeSteering(steer)
                 else persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
@@ -407,7 +416,7 @@ fun mederiSingleRunStrategyWithCompression(
             if (steer != null) {
                 val steerId = steer.messageId ?: "msg_${java.util.UUID.randomUUID()}"
                 llm.writeSession {
-                    appendPrompt { message(steer.toKoogSteering(persister?.includeImages ?: true)) }
+                    appendPrompt { message(steer.copy(messageId = steerId).toKoogSteering(persister?.includeImages ?: true)) }
                 }
                 if (steer.messageId != null) persister?.consumeSteering(steer)
                 else persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)

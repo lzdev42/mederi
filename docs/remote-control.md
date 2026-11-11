@@ -26,11 +26,24 @@
 - 用户提交 → 同接口重试（真实服务端判定，不做本地比对）→ 通过写 `localStorage("mederi.remote.password")`
 - **禁止 `?password=` URL 参数**（会留浏览器历史）
 
-### Cloudflare 隧道（desktop jvmMain）
+### Cloudflare 隧道（桌面宿主）
 
-`DesktopRemoteControlHooks`（`app/desktopApp/.../DesktopRemoteControlHooks.kt`，desktop 宿主专属注入）：
+设置中填完整的公网子域名（例如 `m.emuci.site`）和 Cloudflare API Token。域名所在 Zone（例如
+`emuci.site`）需要在 Cloudflare 中激活。Token 授予对应账户的 Cloudflare Tunnel Edit，以及目标
+Zone 的 DNS Edit 和 Zone Read。桌面仍需安装 `cloudflared`。
 
-- `cloudflared --version` 探测；未装 → UI 显示"请自行安装"，mederi 不代装不教程
-- `startTunnel()`：**pty4j**（JVM-only 无 KMP 替代品）以真实 pty 拉起 `cloudflared tunnel run`
-- **生命周期**：本进程退出 → OS 关 pty master → SIGHUP → cloudflared 退出（"终端关了进程就死"，无需看门狗）
-- **域名**：解析 `~/.cloudflared/config.yml` 第一条 ingress `hostname`；**局域网地址**：`localAddress` 枚举 site-local IPv4
+- `AppState.startTunnel()` 使用 `RemoteServerUiState.Running.port`，由 Ktor `resolvedConnectors()`
+  报告实际监听端口。端口回退后用同一个来源，不依赖上次保存值。
+- `CloudflareTunnelProvisioner` 按公网主机名查 Zone 和现有 CNAME。已有代理 CNAME 指向同账户的
+  Cloudflare 远程管理隧道时复用它；没有记录时按固定名称查找或创建隧道，再补建代理 CNAME。
+  遇到冲突的 DNS 记录停止并报错。
+- 读取隧道配置，将对应主机名的 `service` 对齐到 `http://127.0.0.1:<实际端口>`，保留其他规则、
+  顺序及源站设置。配置一致时跳过 PUT；端口变化不会修改已有 DNS 记录。
+- API 取得连接器 Token，以 `TUNNEL_TOKEN` 环境变量交给 pty4j 启动的 `cloudflared`。
+  连接边缘后，自动模式验证公网 `/v1/ready` 可达。公网验证需要该探测路径允许访问。
+- 自动模式首次启动成功后，随遥控服务恢复。显式停止隧道关闭自动恢复；关闭遥控或退出应用暂停连接。
+  pty 生命周期保留，应用退出时 OS 关闭 pty master，`cloudflared` 随之退出。
+- API Token 保存到本机 `~/.mederi/cloudflare-api-token`，文件只允许所有者访问。公网域名和自动恢复
+  开关仍存设备偏好。不填 API Token 时仍可使用已有连接器 Token 启动手动配置的隧道。
+
+[Cloudflare 官方 API 设置流程](https://developers.cloudflare.com/tunnel/get-started/)

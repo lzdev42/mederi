@@ -104,6 +104,7 @@ class WorkspaceRepairIntegrationTest {
         override suspend fun require(id: String) = provider
         override suspend fun create(name: String, type: ProviderType, baseUrl: String, reasoningParameter: ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?) = unused()
         override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: ReasoningParameter?, modelsDevKey: String?) = unused()
+        override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?) = unused()
         override suspend fun delete(id: String) = unused()
         override suspend fun listKeys(providerId: String) = provider.apiKeys
         override suspend fun addKey(providerId: String, name: String, value: String, isDefault: Boolean) = unused()
@@ -190,6 +191,8 @@ class WorkspaceRepairIntegrationTest {
             projectManager = projectManager, workspaceResolver = resolver,
             llmClientFactory = { _, _ -> client },
             leaseManager = workspaceManager.leaseManager,
+            sessionStore = xyz.mederi.store.InMemorySessionStore(),
+            historyStore = xyz.mederi.store.InMemoryHistoryStore(),
         )
 
         suspend fun prepareManagedWorkspace(sessionId: String): Workspace {

@@ -17,7 +17,6 @@ object PromptComposer {
 
     /**
      * 组装 Prompt：用户主指令在上，大段文本以带编号的 XML 标签追加在后。
-     * 服务端 TurnExecutor 会在最后追加 metaNote，保证 metaNote 永远在最底部。
      */
     fun compose(instruction: String, pastedTexts: List<PastedTextAttachment>): String {
         val trimmedInstruction = instruction.trim()
@@ -39,9 +38,6 @@ object PromptComposer {
         return builder.toString().trim()
     }
 
-    /** 环境注入标记（core `xyz.mederi.domain.model.UI_HIDDEN_MARKER` 的镜像，同值由 TextProtocolContractTest 锁定）。 */
-    const val UI_HIDDEN_MARKER = "<<<NOT_FOR_UI>>>"
-
     /** 工具边界 steering 包装标签（镜像 core `xyz.mederi.prompt.SteeringPrompt`，契约由 TextProtocolContractTest 锁定）。 */
     const val USER_INTERVENTION_OPEN_TAG = "<user_intervention>"
     const val USER_INTERVENTION_CLOSE_TAG = "</user_intervention>"
@@ -62,12 +58,10 @@ object PromptComposer {
     }
 
     /**
-     * 净化对用户可见的正文：统一剔除 <<<NOT_FOR_UI>>> 环境信息与 <user_intervention> 标签。
+     * 净化对用户可见的正文：剥离 <user_intervention> 标签及内部系统说明。
      */
-    fun sanitizeUserVisibleText(text: String): String {
-        val withoutHidden = text.substringBefore(UI_HIDDEN_MARKER).trimEnd()
-        return stripUserIntervention(withoutHidden)
-    }
+    fun sanitizeUserVisibleText(text: String): String =
+        stripUserIntervention(text).trimEnd()
 
     data class ParsedPrompt(
         val instruction: String,

@@ -37,6 +37,21 @@ data class Provider(
     val models: List<AIModel> = emptyList(),
     val responseSanitization: Boolean = false,
     val modelsDevKey: String? = null,
+    /**
+     * LLM 限流是否自动重试环境态临时故障（限流/网关过载/网络中断）。
+     * false = 不重试，临时故障立即上抛（含服务端 Retry-After 建议也忽略）。
+     */
+    val autoRetryEnabled: Boolean = true,
+    /**
+     * LLM 限流重试的最大随机等待秒数（[autoRetryEnabled] 开启时生效）：
+     * - null（默认）= 全局默认区间（默认随机 0~30 秒）。
+     * - 0 = 无延迟立即重试。
+     * - N >= 1 = 随机 1~N 秒。
+     *
+     * 重试时服务端 Retry-After 建议优先（+0~1 秒抖动），无建议才用此区间；
+     * null 表示未按供应商设置，走全局默认区间。
+     */
+    val retryMaxDelaySeconds: Int? = null,
     @Transient
     val apiKeys: List<ProviderApiKey> = emptyList(),
     val authentication: ProviderAuthentication = ProviderAuthentication.API_KEY,

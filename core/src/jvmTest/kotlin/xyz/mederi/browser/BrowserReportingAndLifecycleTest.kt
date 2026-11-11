@@ -57,7 +57,7 @@ class BrowserReportingAndLifecycleTest {
     @Test
     fun testNoJudgmentTaskReportsDirectlyAndClosesBrowser() = runBlocking {
         val fakeControl = FakeBrowserControl()
-        BrowserRegistry.register("fake-direct", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
+        BrowserRegistry.register("fake-direct", BrowserKind.OBSCURA, factory = { _, _ -> fakeControl })
 
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 10)
         var brainCallCount = 0
@@ -102,7 +102,7 @@ class BrowserReportingAndLifecycleTest {
     @Test
     fun testJudgmentTaskCallsBrainForReport() = runBlocking {
         val fakeControl = FakeBrowserControl()
-        BrowserRegistry.register("fake-judge", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
+        BrowserRegistry.register("fake-judge", BrowserKind.OBSCURA, factory = { _, _ -> fakeControl })
 
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 10)
         var brainCalled = false
@@ -147,7 +147,7 @@ class BrowserReportingAndLifecycleTest {
     @Test
     fun testTaskTextContainingTestKeywordStillClosesBrowser() = runBlocking {
         val fakeControl = FakeBrowserControl()
-        BrowserRegistry.register("fake-keyword", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
+        BrowserRegistry.register("fake-keyword", BrowserKind.OBSCURA, factory = { _, _ -> fakeControl })
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 10)
         val manager = BrowserTaskManager(
             providerManager = FakeProviderManager(emptyMap()),
@@ -175,7 +175,7 @@ class BrowserReportingAndLifecycleTest {
             currentUrl = "https://example.com/item",
             title = "Example Shop"
         )
-        BrowserRegistry.register("fake-collect", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
+        BrowserRegistry.register("fake-collect", BrowserKind.OBSCURA, factory = { _, _ -> fakeControl })
 
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 10)
         var receivedBrainPrompt = ""

@@ -147,6 +147,8 @@ data class Message(
     val workCompletedAt: Long? = null,
     /** 已接收的首次输入，等待该工作区准备成功后才能进入模型上下文。 */
     val pendingWorkspaceInput: PendingWorkspaceInput? = null,
+    /** 内部系统触发消息（如跨 turn 计划批准指令）：保留在历史与 AI 视图中，不在 UI 聊天列表展示。 */
+    val hiddenFromUi: Boolean = false,
 )
 
 /** 与用户消息同一条历史记录持久化。密钥只保存选择的 ID。 */
@@ -158,9 +160,3 @@ data class PendingWorkspaceInput(
     val reasoningLevel: ReasoningLevel?,
     val apiKeyId: String?,
 )
-
-/**
- * UI 隐藏标记：消息文本中该标记之后的内容（元数据，如发送时间）不展示给用户，但会发给 AI。
- * 选 `<<<...>>>` 三尖括号形式——任何 Markdown 渲染器都不会把它解析为结构，字符串本身也极难与用户输入撞车。
- */
-const val UI_HIDDEN_MARKER = "<<<NOT_FOR_UI>>>"

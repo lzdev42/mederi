@@ -14,6 +14,7 @@ import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import xyz.mederi.domain.model.MederiEvent
+import java.io.File
 import kotlin.random.Random
 import kotlin.test.*
 
@@ -50,7 +51,7 @@ class RetryableLLMClientTest {
         val error = wrappedTransportError(xyz.mederi.http.SseIdleTimeoutException("no SSE lines for 90s"))
         val events = bus()
         val client = RetryableLLMClient(Client { calls++; throw error },
-            minDelayMs = 0, maxDelayMs = 0, statusBus = events, sessionIdProvider = { "child" })
+            settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) }, statusBus = events, sessionIdProvider = { "child" })
         withTimeout(5_000) {
             assertSame(error, assertFailsWith<ai.koog.prompt.executor.clients.LLMClientException> {
                 client.executeStreaming(input, model, emptyList()).toList()
@@ -72,7 +73,7 @@ class RetryableLLMClientTest {
                 val events = bus()
                 val error = wrappedTransportError(cause)
                 val client = RetryableLLMClient(Client { if (++calls == 1) throw error },
-                    minDelayMs = 0, maxDelayMs = 0, statusBus = events, sessionIdProvider = { "sub-agent" })
+                    settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) }, statusBus = events, sessionIdProvider = { "sub-agent" })
                 when (mode) {
                     "stream" -> assertEquals(1, client.executeStreaming(input, model, emptyList()).toList().size)
                     "execute" -> assertEquals(response, client.execute(input, model, emptyList()))
@@ -98,7 +99,7 @@ class RetryableLLMClientTest {
                     emit(StreamFrame.TextDelta("partial response"))
                     throw error
                 }
-            }, minDelayMs = 0, maxDelayMs = 0, statusBus = events, sessionIdProvider = { "sub-agent" })
+            }, settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) }, statusBus = events, sessionIdProvider = { "sub-agent" })
             val received = mutableListOf<StreamFrame>()
             assertSame(error, assertFailsWith<ai.koog.prompt.executor.clients.LLMClientException> {
                 client.executeStreaming(input, model, emptyList()).collect { received += it }
@@ -114,7 +115,7 @@ class RetryableLLMClientTest {
         var calls = 0
         val http = ai.koog.http.client.KoogHttpClientException(statusCode = 401, cause = java.io.EOFException())
         val error = wrappedTransportError(http)
-        val client = RetryableLLMClient(Client { calls++; throw error }, minDelayMs = 0, maxDelayMs = 0)
+        val client = RetryableLLMClient(Client { calls++; throw error }, settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) })
         assertSame(error, assertFailsWith<ai.koog.prompt.executor.clients.LLMClientException> {
             client.executeStreaming(input, model, emptyList()).toList()
         })
@@ -154,7 +155,7 @@ class RetryableLLMClientTest {
         var calls = 0
         val events = bus()
         val client = RetryableLLMClient(Client { if (++calls <= 120) error("503 overloaded") },
-            minDelayMs = 0, maxDelayMs = 0, statusBus = events, sessionIdProvider = { "s" })
+            settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) }, statusBus = events, sessionIdProvider = { "s" })
         assertEquals(response, client.execute(input, model, emptyList()))
         assertEquals(121, calls)
         assertEquals("RETRY_FINISHED", events.replayCache.last().payload["code"])
@@ -164,7 +165,7 @@ class RetryableLLMClientTest {
     fun choicesAlsoRetriesPastOldLimitAndPropagatesPermanentFailure() = runBlocking {
         var calls = 0
         val client = RetryableLLMClient(Client { if (++calls <= 120) error("502 bad gateway") },
-            minDelayMs = 0, maxDelayMs = 0)
+            settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) })
         assertFailsWith<UnsupportedOperationException> { client.executeMultipleChoices(input, model, emptyList()) }
         assertEquals(121, calls)
     }
@@ -174,7 +175,7 @@ class RetryableLLMClientTest {
         var calls = 0
         val events = bus()
         val client = RetryableLLMClient(Client { calls++; error("429 rate limit") },
-            minDelayMs = 30_000, maxDelayMs = 30_000, statusBus = events, sessionIdProvider = { "s" })
+            settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 30_000, maxDelayMs = 30_000) }, statusBus = events, sessionIdProvider = { "s" })
         val job = launch(start = CoroutineStart.UNDISPATCHED) { client.executeStreaming(input, model, emptyList()).toList() }
         assertEquals("RETRYING", events.replayCache.last().payload["code"])
         withTimeout(1000) { job.cancelAndJoin() }
@@ -186,13 +187,13 @@ class RetryableLLMClientTest {
     fun cancellationWithZeroDelayAndPermanentErrorsNeverRetry() = runBlocking {
         val job = Job()
         var calls = 0
-        val client = RetryableLLMClient(Client { calls++; job.cancel(); error("429 rate limit") }, minDelayMs = 0, maxDelayMs = 0)
+        val client = RetryableLLMClient(Client { calls++; job.cancel(); error("429 rate limit") }, settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) })
         assertFailsWith<CancellationException> {
             withContext(job) { client.execute(input, model, emptyList()) }
         }
         assertEquals(1, calls)
         calls = 0
-        val permanent = RetryableLLMClient(Client { calls++; error("401 invalid API key") }, minDelayMs = 0, maxDelayMs = 0)
+        val permanent = RetryableLLMClient(Client { calls++; error("401 invalid API key") }, settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) })
         assertFailsWith<IllegalStateException> { permanent.execute(input, model, emptyList()) }
         assertEquals(1, calls)
     }
@@ -203,7 +204,8 @@ class RetryableLLMClientTest {
             val events = bus()
             val error = xyz.mederi.http.ProviderHttpException(429, mapOf("retry-after" to "120"), null,
                 ai.koog.http.client.KoogHttpClientException(statusCode = 429))
-            val client = RetryableLLMClient(Client { calls++; throw error }, minDelayMs = 0, maxDelayMs = 0,
+            val client = RetryableLLMClient(Client { calls++; throw error },
+                settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) },
                 statusBus = events, sessionIdProvider = { "s" })
             val job = launch(start = CoroutineStart.UNDISPATCHED) {
                 when (mode) {
@@ -228,7 +230,7 @@ class RetryableLLMClientTest {
             val error = xyz.mederi.http.ProviderHttpException(429, headers, body,
                 ai.koog.http.client.KoogHttpClientException(statusCode = 429, errorBody = body))
             val events = bus()
-            val client = RetryableLLMClient(Client { calls++; throw error }, minDelayMs = 0, maxDelayMs = 0,
+            val client = RetryableLLMClient(Client { calls++; throw error }, settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0) },
                 statusBus = events, sessionIdProvider = { "s" })
             assertFailsWith<xyz.mederi.http.ProviderHttpException> { client.execute(input, model, emptyList()) }
             assertEquals(1, calls)
@@ -268,6 +270,75 @@ class RetryableLLMClientTest {
             assertEquals("inference exceeds tpm/rpm limit", retry.payload["message"])
             assertEquals("RETRY_FINISHED", events.replayCache.last().payload["code"])
         }
+    }
+
+    @Test
+    fun `retry disabled rethrows transient failure immediately on execute and stream`() = runBlocking {
+        val events = bus()
+        val http = ai.koog.http.client.KoogHttpClientException(
+            statusCode = 429, errorBody = """{"error":{"message":"rate limit exceeded"}}""")
+        val error = wrappedTransportError(http)
+
+        suspend fun rethrownSame(block: suspend () -> Unit): Boolean = try {
+            withTimeout(5_000) { block() }
+            false
+        } catch (e: Throwable) {
+            e === error
+        }
+
+        var streamCalls = 0
+        val streamClient = RetryableLLMClient(Client { streamCalls++; throw error },
+            settingsProvider = { ProviderRetrySettings(enabled = false, minDelayMs = 0, maxDelayMs = 0) },
+            statusBus = events, sessionIdProvider = { "s" })
+        val streamRethrown = rethrownSame { streamClient.executeStreaming(input, model, emptyList()).toList() }
+        assertEquals(1, streamCalls)
+        assertTrue(streamRethrown, "stream path must rethrow the exact transient exception instance")
+
+        var executeCalls = 0
+        val executeClient = RetryableLLMClient(Client { executeCalls++; throw error },
+            settingsProvider = { ProviderRetrySettings(enabled = false, minDelayMs = 0, maxDelayMs = 0) },
+            statusBus = events, sessionIdProvider = { "s" })
+        val executeRethrown = rethrownSame { executeClient.execute(input, model, emptyList()) }
+        assertEquals(1, executeCalls)
+        assertTrue(executeRethrown, "execute path must rethrow the exact transient exception instance")
+
+        val retryingEvents = events.replayCache.count { it.payload["code"] == "RETRYING" }
+        assertEquals(0, retryingEvents)
+
+        // 验收观测值（断言在前：断言失败则不写文件=not-run=FAIL）
+        val observationDir = File("build/retry-behavior")
+        observationDir.mkdirs()
+        File(observationDir, "disabled.txt").writeText(
+            "executeRethrown=$executeRethrown,streamRethrown=$streamRethrown,retryingEvents=$retryingEvents"
+        )
+    }
+
+    @Test
+    fun `retry settings are re-read per attempt for real-time effect`() = runBlocking {
+        // 真理源实时性：第一次读 enabled（0ms 立即重试）→ 重试再失败 → 第二次读 disabled → 立即上抛。
+        // 若设置在构造时固化（旧行为），第二次读到的仍是 enabled，循环不会停。
+        val body = """{"error":{"message":"rate limit exceeded"}}"""
+        val http = ai.koog.http.client.KoogHttpClientException(statusCode = 429, errorBody = body)
+        val metadata = xyz.mederi.http.ProviderHttpException(429, emptyMap(), body, http)
+        val wrapper = ai.koog.http.client.KoogHttpClientException(message = "Exception during streaming", cause = metadata)
+        val error = ai.koog.prompt.executor.clients.LLMClientException("MederiOpenAILLMClient", "streaming failed", wrapper)
+        var settingsReads = 0
+        var calls = 0
+        val client = RetryableLLMClient(
+            Client { calls++; throw error },
+            settingsProvider = {
+                settingsReads++
+                if (settingsReads <= 1) ProviderRetrySettings(enabled = true, minDelayMs = 0, maxDelayMs = 0)
+                else ProviderRetrySettings(enabled = false, minDelayMs = 0, maxDelayMs = 0)
+            },
+            statusBus = bus(), sessionIdProvider = { "s" })
+        withTimeout(5_000) {
+            assertSame(error, assertFailsWith<ai.koog.prompt.executor.clients.LLMClientException> {
+                client.execute(input, model, emptyList())
+            })
+        }
+        assertEquals(2, calls, "first attempt + one retry, then disabled stops the loop")
+        assertEquals(2, settingsReads, "settings must be re-read on every retry decision")
     }
 
 }

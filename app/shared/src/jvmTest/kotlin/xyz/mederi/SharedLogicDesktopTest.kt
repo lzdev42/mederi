@@ -149,18 +149,17 @@ class SharedLogicDesktopTest {
     @Test
     fun testUserMessageToChatMessageTextMapping() {
         val userPrompt = "Hello Mederi"
-        val metaNote = "\n${xyz.mederi.domain.model.UI_HIDDEN_MARKER}\nNOTE FOR AI: ..."
         val coreMsg = xyz.mederi.domain.model.Message(
             id = "msg_123",
             sessionId = "conv_1",
             role = xyz.mederi.domain.model.MessageRole.USER,
-            parts = listOf(xyz.mederi.domain.model.MessagePart.Text(userPrompt + metaNote)),
+            parts = listOf(xyz.mederi.domain.model.MessagePart.Text(userPrompt)),
             status = xyz.mederi.domain.model.MessageStatus.COMPLETED,
             createdAt = "2026-09-08T12:00:00Z"
         )
         val chatMsg = xyz.mederi.core.bridge.MederiModelMapper.toChatMessage(coreMsg)
         val textBlock = chatMsg.blocks.filterIsInstance<xyz.mederi.core.contract.models.ChatBlock.Text>().first()
-        assertEquals(userPrompt, textBlock.text, "真实用户消息解析后不应残留多余换行符")
+        assertEquals(userPrompt, textBlock.text, "用户消息映射后应完整保留原文")
     }
 
     @Test
@@ -2172,7 +2171,8 @@ class SharedLogicDesktopTest {
             println("[LOG-VERIFY-TARGET-FIXED] write_log target = $writeLogTarget")
             println("[LOG-VERIFY-TARGET-FIXED] nonTargetFiltered = $nonTargetFiltered")
 
-            assertEquals("#4 (PASS)", verifyTarget)
+            // 该会话快照里没有 plan_2e844161 的计划投影 → 回退为 1-based 序号，不显示模型声明状态
+            assertEquals("5", verifyTarget)
             assertEquals(".mederi/notebook.md", writeLogTarget)
             assertNull(nonTargetFiltered)
         } finally {

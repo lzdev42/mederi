@@ -32,25 +32,28 @@ import kotlin.random.Random
  * - 重试期间经 [statusBus] 发 [EventType.STATUS] 事件（session 作用域），UI 状态栏据此显示
  *   "重试中"；不触碰 session 状态机、不落库、不污染业务流——对 TurnExecutor/Koog agent
  *   完全透明，它们看到的只是一次变慢的请求
- * - 服务端retry-after-ms/Retry-After/Google RetryInfo为下限，加0~1秒抖动；缺失/无效才随机0~30秒
+ * - 服务端retry-after-ms/Retry-After/Google RetryInfo为下限，加0~1秒抖动；缺失/无效才用随机区间
  * - 临时故障无限重试，直到成功或协程取消；每次请求独立计数，恢复首帧即清除重试提示
+ * - 重试设置（开关/随机区间）每次重试决策时经 [settingsProvider] 实时读取唯一真理源——
+ *   turn 运行中用户改供应商设置立即生效，不等下个 turn 重建 client
  *
  * 不变量：CancellationException 永不重试（用户中止必须即时生效）。
+ * settingsProvider 读到 enabled=false 时临时故障立即上抛（含服务端建议也忽略）。
  *
  * 流式重试安全性：首帧尚未发出前失败 = 本次请求整体作废，可安全重来；
  * 首帧已发出后失败 = 流已被消费一半，重试会造成重复内容，只能上抛。
  *
  * @property delegate 被包装的真实客户端
- * @property minDelayMs 随机退避下限，默认 0s
- * @property maxDelayMs 随机退避上限，默认 30s
+ * @property settingsProvider 重试设置提供器（suspend，每次重试决策时调用）：
+ *   enabled=false = 临时故障立即上抛（含服务端建议也忽略）——供应商三态 0 走这里。
+ *   null = 全局默认（无限重试，LlmRetryConfig 区间，同样按次实时读取）
  * @property statusBus 状态事件总线；null = 静默重试
  * @property sessionIdProvider 当前 turn 的 session id 提供器（STATUS 事件路由用）
  * @property random 随机源（测试注入）
  */
 class RetryableLLMClient(
     private val delegate: LLMClient,
-    private val minDelayMs: Long = 0,
-    private val maxDelayMs: Long = 30_000,
+    private val settingsProvider: (suspend () -> ProviderRetrySettings)? = null,
     private val statusBus: MutableSharedFlow<MederiEvent>? = null,
     private val sessionIdProvider: () -> String? = { null },
     private val random: Random = Random.Default,
@@ -106,9 +109,10 @@ class RetryableLLMClient(
                     } catch (e: Throwable) {
                         // 本地空闲超时交给 turn 追加 Continue；首帧前也不能在这里重放旧请求。
                         // 其他首帧后失败不可重发，避免重复内容。
-                        if (emitted || isSseIdleTimeout(e) || !isTransient(e)) throw e
+                        val settings = currentSettings()
+                        if (emitted || !settings.enabled || isSseIdleTimeout(e) || !isTransient(e)) throw e
                         attempt++
-                        val delayMs = retryDelayMs(e)
+                        val delayMs = retryDelayMs(e, settings)
                         StreamTrace.record("Stream.Summary", mapOf(
                             "event" to "stream-retry", "attempt" to attempt.toString(), "note" to firstLine(e),
                         ))
@@ -139,6 +143,18 @@ class RetryableLLMClient(
     // 重试内核（非流式路径）
     // ------------------------------------------------------------------
 
+    /**
+     * 按重试决策取当前生效设置：优先 [settingsProvider]（唯一真理源实时读），
+     * 无提供器时用全局默认（LlmRetryConfig 同样按次读取，环境变量改动同样生效）。
+     */
+    private suspend fun currentSettings(): ProviderRetrySettings =
+        settingsProvider?.invoke()
+            ?: ProviderRetrySettings(
+                enabled = true,
+                minDelayMs = LlmRetryConfig.minDelayMs,
+                maxDelayMs = LlmRetryConfig.maxDelayMs
+            )
+
     private suspend fun <T> retrying(op: String, block: suspend (attempt: Long) -> T): T {
         var attempt = 0L
         try {
@@ -150,9 +166,10 @@ class RetryableLLMClient(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    if (!isTransient(e)) throw e
+                    val settings = currentSettings()
+                    if (!settings.enabled || !isTransient(e)) throw e
                     attempt++
-                    val delayMs = retryDelayMs(e)
+                    val delayMs = retryDelayMs(e, settings)
                     DebugLog.event("Retry", "$op retry $attempt in ${delayMs}ms: ${firstLine(e)}")
                     emitStatus("RETRYING", firstLine(e), attempt, delayMs)
                     delay(delayMs)
@@ -193,9 +210,9 @@ class RetryableLLMClient(
      */
     private fun isTransient(e: Throwable): Boolean = isTransientError(e)
 
-    private fun retryDelayMs(error: Throwable): Long {
+    private fun retryDelayMs(error: Throwable, settings: ProviderRetrySettings): Long {
         val advice = ProviderRetryPolicy.inspect(error)
-        val serverDelay = advice.delayMs ?: return random.nextLong(minDelayMs, maxDelayMs + 1)
+        val serverDelay = advice.delayMs ?: return random.nextLong(settings.minDelayMs, settings.maxDelayMs + 1)
         val jitter = random.nextLong(0, 1001)
         val result = if (serverDelay > Long.MAX_VALUE - jitter) Long.MAX_VALUE else serverDelay + jitter
         DebugLog.event("Retry", "server delay source=${advice.source}, minimum=${serverDelay}ms, jitter=${jitter}ms")

@@ -12,7 +12,7 @@ Windows 使用 Git Bash。Desktop 构建使用 `JAVA_HOME` 指向 **JBR 25 SDK w
 也可在 Actions 手动触发。每组各上传三个 Artifact，每个只含一个发行包，保留 7 天。
 
 macOS ARM64 运行 `./gradlew allTests test --continue --no-configuration-cache`，覆盖 Android 宿主、WasmJS 浏览器、iOS 模拟器和 Android 应用单元测试，随后运行打包脚本模拟测试。
-其余组运行 `./gradlew jvmTest test -x :app:androidApp:test --continue --no-configuration-cache`，覆盖当前宿主上的 JVM 测试。
+其余原生架构组（Linux x64/arm64、Windows x64）运行 `./gradlew jvmTest test -x :app:androidApp:test --continue --no-configuration-cache`。macOS x64 组跳过转译层下的全量测试矩阵，仅执行发布打包与产物架构校验。
 Gradle 从各模块的标准测试源集自动发现测试。在现有测试源集添加测试类或用例，无需改 workflow。
 Android 真机测试和需要单独启动服务或配置凭据的 E2E 脚本单独运行。
 Android 应用和 InkCompose 设备测试最低需要 Android 14（API 34），与 KBrowser Android 的要求一致。
@@ -47,6 +47,13 @@ JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自�
 `<arch>` 为 `x64` 或 `arm64`；JBR 与宿主必须匹配。`--name` 修改压缩包文件名前缀，
 不修改 `.app` 的 bundle 名、应用标识或可执行文件名。脚本不生成 MSI、DEB、DMG 安装包。
 绿色版表示解压即用，不表示用户数据存进程序目录：默认数据仍在 `~/.mederi`。
+
+打包脚本每次打包时自动拉取并解压最新版标准 Obscura（Stealth 浏览器可执行文件 `obscura` 及配套 worker）：
+- Desktop：macOS 部署于 `Contents/Resources/`（带 ad-hoc 签名），Linux/Windows 部署于 `resources/`；
+- Server：完整版与 API 版均部署于各自根目录下的 `resources/`。
+测试与离线打包可通过 `--skip-obscura` 跳过下载。
+
+运行时解析（零设置面）：发布包固定目录（macOS `.app` Contents/Resources、桌面/服务端 `resources/`）→ PATH 开发兜底；落空即不注册 obscura 后端，browser 工具缺席。运行时永远 `mcp --stealth --allow-private-network`（关闭 SSRF 拦截，兼容本机代理 fake-ip DNS），不可配。
 
 ## 启动
 

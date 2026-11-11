@@ -67,7 +67,7 @@ class BrowserStopAndCloseTest {
     @Test
     fun stopTaskReallyClosesBrowserEvenWhenCloseSuspends() = runBlocking {
         val fakeControl = FakeBrowserControl(closeDelayMs = 100)
-        BrowserRegistry.register("fake-stop-close", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
+        BrowserRegistry.register("fake-stop-close", BrowserKind.OBSCURA, factory = { _, _ -> fakeControl })
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 10)
         val manager = BrowserTaskManager(
             providerManager = FakeProviderManager(emptyMap()),
@@ -107,7 +107,7 @@ class BrowserStopAndCloseTest {
     @Test
     fun stopTaskOnCompletedTaskReturnsRealStatus() = runBlocking {
         val fakeControl = FakeBrowserControl()
-        BrowserRegistry.register("fake-stop-done", BrowserKind.JCEF, factory = { _, _ -> fakeControl })
+        BrowserRegistry.register("fake-stop-done", BrowserKind.OBSCURA, factory = { _, _ -> fakeControl })
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 10)
         val manager = BrowserTaskManager(
             providerManager = FakeProviderManager(emptyMap()),

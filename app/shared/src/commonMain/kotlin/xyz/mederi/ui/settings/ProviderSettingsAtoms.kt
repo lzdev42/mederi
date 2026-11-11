@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -99,14 +98,6 @@ internal fun ProtocolSelectorBar(selected: ProtocolType, onSelect: (ProtocolType
         }
     }
 }
-
-@Composable
-internal fun switchColors(colors: MederiColors) = SwitchDefaults.colors(
-    checkedThumbColor = colors.onAccentPrimary,
-    checkedTrackColor = colors.accentPrimary,
-    uncheckedThumbColor = colors.textMuted,
-    uncheckedTrackColor = colors.surfaceInput,
-)
 
 @Composable
 internal fun checkboxColors(colors: MederiColors) = CheckboxDefaults.colors(

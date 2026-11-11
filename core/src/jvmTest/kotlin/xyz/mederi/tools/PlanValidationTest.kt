@@ -69,6 +69,7 @@ class PlanValidationTest {
         assertTrue(result.contains("ASCII"), "Error should explain the ASCII requirement: $result")
     }
 
+
     @Test
     fun `pure ASCII command passes validation`() = runBlocking {
         val result = planTools().WritePlanTool().execute(

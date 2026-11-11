@@ -27,6 +27,7 @@ class FakeProviderManager(
     override suspend fun require(id: String): Provider = throw NotImplementedError()
     override suspend fun create(name: String, type: ProviderType, baseUrl: String, reasoningParameter: ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?): Provider = throw NotImplementedError()
     override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: ReasoningParameter?, modelsDevKey: String?): Provider = throw NotImplementedError()
+    override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Provider = throw NotImplementedError()
     override suspend fun delete(id: String) {}
     override suspend fun listKeys(providerId: String): List<ProviderApiKey> = emptyList()
     override suspend fun addKey(providerId: String, name: String, value: String, isDefault: Boolean): ProviderApiKey = throw NotImplementedError()

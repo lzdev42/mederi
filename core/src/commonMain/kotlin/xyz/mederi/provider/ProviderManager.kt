@@ -47,6 +47,19 @@ interface ProviderManager {
         modelsDevKey: String? = null
     ): Provider
 
+    /**
+     * 设置供应商 LLM 限流重试配置（**replace 语义**，与 [update] 的合并语义刻意不同）。
+     *
+     * 本方法是显式写入，retryMaxDelaySeconds 的 null 表示清除设置、恢复全局默认区间，**不是**"不改动"：
+     * - autoRetryEnabled = 自动重试开关；false = 不重试，临时故障立即上抛。
+     * - retryMaxDelaySeconds null = 清除，恢复全局默认区间（默认随机 0~30 秒）。
+     * - 0 = 无延迟立即重试。
+     * - N >= 1 = 随机 1~N 秒。
+     *
+     * @throws IllegalArgumentException retryMaxDelaySeconds < 0 时抛出（不兜底、不静默钳位）。
+     */
+    suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Provider
+
     suspend fun delete(id: String)
 
     /** Create an independent ChatGPT subscription connection. */

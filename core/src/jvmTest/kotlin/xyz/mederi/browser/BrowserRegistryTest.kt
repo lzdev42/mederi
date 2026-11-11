@@ -28,7 +28,7 @@ class BrowserRegistryTest {
     @Test
     fun `default respects explicit defaultName override`() {
         register(T_CUSTOM, BrowserKind.CUSTOM)
-        register(T_JCEF, BrowserKind.JCEF)
+        register(T_JCEF, BrowserKind.OBSCURA)
         BrowserRegistry.defaultName = T_CUSTOM
         assertEquals(T_CUSTOM, BrowserRegistry.default()?.name)
     }
@@ -47,7 +47,7 @@ class BrowserRegistryTest {
     @Test
     fun `resolve unknown name falls back to default`() {
         register(T_CUSTOM, BrowserKind.CUSTOM)
-        register(T_JCEF, BrowserKind.JCEF)
+        register(T_JCEF, BrowserKind.OBSCURA)
         BrowserRegistry.defaultName = T_JCEF
         assertEquals(T_JCEF, BrowserRegistry.resolve("unknown")?.name)
     }
@@ -58,7 +58,7 @@ class BrowserRegistryTest {
         var passedSession = ""
         BrowserRegistry.register(
             name = "test_dual",
-            kind = BrowserKind.JCEF,
+            kind = BrowserKind.OBSCURA,
             factory = { taskId, sessionId ->
                 passedTask = taskId
                 passedSession = sessionId

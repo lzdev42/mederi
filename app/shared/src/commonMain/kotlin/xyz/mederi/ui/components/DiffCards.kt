@@ -25,8 +25,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.File
 import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.diff_collapse
+import mederi.app.shared.generated.resources.diff_expand_all
 import mederi.app.shared.generated.resources.diff_files_changed
 import mederi.app.shared.generated.resources.diff_review
+import xyz.mederi.ui.components.atoms.ExpandableContent
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.TurnDiffSummaryUi
 import xyz.mederi.theme.LocalMederiColors
@@ -83,6 +86,9 @@ fun FileDiffRow(
     }
 }
 
+/** 超过此数量默认折叠，防止大轮次变更撑爆对话流 */
+private const val DIFF_COLLAPSE_THRESHOLD = 5
+
 /** 对话中的变更事实与Review入口；操作由调用方路由，不在卡片持有文件状态。 */
 @Composable
 fun TurnDiffSummaryCard(
@@ -93,18 +99,38 @@ fun TurnDiffSummaryCard(
 ) {
     if (summary.files.isEmpty()) return
     val colors = LocalMederiColors.current
+    val isLarge = summary.files.size > DIFF_COLLAPSE_THRESHOLD
+    var expanded by remember(summary.files.size) { mutableStateOf(!isLarge) }
+
     Column(
         modifier = modifier.widthIn(max = ChatLayout.actionCardMaxWidth).padding(vertical = MederiSpacing.XS),
         verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM)) {
-            Text(stringResource(Res.string.diff_files_changed, summary.files.size, summary.totalAdditions, summary.totalDeletions),
-                color = colors.textPrimary, style = WorkspaceStyle.Title, modifier = Modifier.weight(1f))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+        ) {
+            Text(
+                stringResource(Res.string.diff_files_changed, summary.files.size, summary.totalAdditions, summary.totalDeletions),
+                color = colors.textPrimary,
+                style = WorkspaceStyle.Title,
+                modifier = Modifier.weight(1f),
+            )
+            if (isLarge) {
+                WorkspaceActionButton(
+                    text = stringResource(if (expanded) Res.string.diff_collapse else Res.string.diff_expand_all, summary.files.size),
+                    onClick = { expanded = !expanded },
+                )
+            }
             WorkspaceActionButton(text = stringResource(Res.string.diff_review), onClick = onReviewClick)
         }
-        summary.files.forEach { file ->
-            FileDiffRow(file.path, file.additions, file.deletions, onClick = { onFileClick(file.path) })
+        ExpandableContent(expanded = expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
+                summary.files.forEach { file ->
+                    FileDiffRow(file.path, file.additions, file.deletions, onClick = { onFileClick(file.path) })
+                }
+            }
         }
     }
 }

@@ -61,6 +61,7 @@ internal fun BrowserUnsupportedPlaceholder(colors: MederiColors, modifier: Modif
 internal fun rightDockPanelTitle(panel: RightDockPanel): String = stringResource(
     when (panel) {
         RightDockPanel.DIFF -> Res.string.rightdock_diff
+        RightDockPanel.FILES -> Res.string.rightdock_files
         RightDockPanel.ARTIFACTS -> Res.string.rightdock_artifacts
         RightDockPanel.TERMINAL -> Res.string.rightdock_terminal
         RightDockPanel.BROWSER -> Res.string.rightdock_browser

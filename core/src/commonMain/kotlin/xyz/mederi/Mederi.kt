@@ -52,6 +52,7 @@ import xyz.mederi.store.SessionStore
 import xyz.mederi.store.SettingsStore
 import xyz.mederi.db.config.MederiConfigDatabase
 import xyz.mederi.db.data.MederiDataDatabase
+import xyz.mederi.store.db.DatabaseManager
 import xyz.mederi.store.sqlite.SqliteApiKeyStore
 import xyz.mederi.store.sqlite.SqliteDiffStore
 import xyz.mederi.store.sqlite.SqliteHistoryStore
@@ -125,7 +126,9 @@ class Mederi private constructor(
      * models.dev 模型元数据目录（内存索引，启动后调用 [ModelCatalog.start] 开始
      * 立即拉取 + 每小时刷新；不 start 也可用，查询返回空）。
      */
-    val modelCatalog: xyz.mederi.metadata.ModelCatalog
+    val modelCatalog: xyz.mederi.metadata.ModelCatalog,
+    /** data.db 存储管理器（单写队列宿主）；纯内存模式（无 configDir）为 null。 */
+    val dataDatabaseManager: DatabaseManager? = null
 ) {
     companion object {
 
@@ -210,6 +213,9 @@ class Mederi private constructor(
                         migrateDataDb(driver)
                     }
             }
+            // data.db 存储管理器（B）：driver 经 Schema/迁移初始化后收口进 DatabaseManager，
+            // 四个 data store 共享其单写队列（写操作唯一串行入口，写竞争在构造上消失）。
+            val dataDbm = dataDriver?.let { DatabaseManager(it) }
 
             // === 配置库 store（config.db） ===
             val apiKeyStore = config.apiKeyStore
@@ -234,19 +240,19 @@ class Mederi private constructor(
 
             // === 数据库 store（data.db） ===
             val historyStore = config.historyStore
-                ?: dataDriver?.let { SqliteHistoryStore(it) }
+                ?: dataDbm?.let { SqliteHistoryStore(it) }
                 ?: InMemoryHistoryStore()
 
             val sessionStore = config.sessionStore
-                ?: dataDriver?.let { SqliteSessionStore(it) }
+                ?: dataDbm?.let { SqliteSessionStore(it) }
                 ?: InMemorySessionStore()
 
             val diffStore = config.diffStore
-                ?: dataDriver?.let { SqliteDiffStore(it) }
+                ?: dataDbm?.let { SqliteDiffStore(it) }
                 ?: InMemoryDiffStore()
 
             val workspaceStore = config.workspaceStore
-                ?: dataDriver?.let { xyz.mederi.store.sqlite.SqliteWorkspaceStore(it) }
+                ?: dataDbm?.let { xyz.mederi.store.sqlite.SqliteWorkspaceStore(it) }
                 ?: xyz.mederi.store.InMemoryWorkspaceStore(sessionStore)
 
             // === 元数据目录（内存，UI 启动后调用 modelCatalog.start() 开始刷新） ===
@@ -354,7 +360,8 @@ class Mederi private constructor(
                 mcpServers = mcpServerApi,
                 skills = skillApi,
                 subagentConfigs = subagentConfigApi,
-                modelCatalog = modelCatalog
+                modelCatalog = modelCatalog,
+                dataDatabaseManager = dataDbm
             )
         }
 
@@ -463,6 +470,8 @@ class Mederi private constructor(
                 properties = java.util.Properties().apply {
                     put("foreign_keys", "true")
                     put("journal_mode", "WAL")
+                    // 跨进程/外部 sqlite3 兜底：撞写锁等待而非立即失败（进程内由单写队列根治）
+                    put("busy_timeout", "5000")
                 }
             )
             return driver

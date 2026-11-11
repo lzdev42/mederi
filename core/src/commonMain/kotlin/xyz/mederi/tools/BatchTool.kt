@@ -24,6 +24,9 @@ internal class BatchTool(
     name = ToolName.BATCH.value,
     description = "Run independent operations together and return all results in input order. " +
         "Available members: ${operations.keys.joinToString()}. Each call uses the original tool's parameters. " +
+        "Each call must nest the member tool's arguments under a \"parameters\" object, " +
+        "e.g. {\"calls\":[{\"tool\":\"read_file\",\"parameters\":{\"path\":\"src/Main.kt\"}}," +
+        "{\"tool\":\"bash\",\"parameters\":{\"command\":\"ls\"}}]}. " +
         "Send multiple independent operations in one batch to collect their results in a single round. " +
         "Members run concurrently; do not batch dependencies, overlapping writes, duplicate commands, or background commands. " +
         "Each member retains its original sandbox and approval checks. One member failure does not discard other results. " +

@@ -14,6 +14,15 @@ interface ProviderApi {
     suspend fun create(request: CreateProviderRequest): Provider
     suspend fun get(id: String): Provider
     suspend fun update(id: String, request: UpdateProviderRequest): Provider
+
+    /**
+     * 设置供应商 LLM 限流重试配置（replace 语义，见 [ProviderManager]）。
+     *
+     * autoRetryEnabled=false = 不重试；retryMaxDelaySeconds=null 清除设置恢复全局默认区间；
+     * 0 = 无延迟立即重试；N >= 1 = 随机 1~N 秒。
+     * retryMaxDelaySeconds 负数抛 MederiValidationException。
+     */
+    suspend fun setRetrySettings(providerId: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Provider
     suspend fun delete(id: String)
 
     suspend fun addKey(providerId: String, request: CreateApiKeyRequest): ProviderApiKey

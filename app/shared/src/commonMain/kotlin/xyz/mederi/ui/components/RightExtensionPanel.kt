@@ -141,6 +141,7 @@ private fun RightExtensionPanelContent(
 
     val panelIcon = when (panel) {
         RightDockPanel.DIFF -> FeatherIcons.Folder
+        RightDockPanel.FILES -> FeatherIcons.Folder
         RightDockPanel.ARTIFACTS -> FeatherIcons.FileText
         RightDockPanel.TERMINAL -> FeatherIcons.Terminal
         RightDockPanel.BROWSER_AUTOMATION -> FeatherIcons.Globe
@@ -207,7 +208,11 @@ private fun RightExtensionPanelContent(
                     .weight(1f)
             ) {
                 when (panel) {
-                    RightDockPanel.DIFF -> FilesPanelContent(
+                    RightDockPanel.DIFF -> DiffPanelContent(
+                        viewModel = viewModel,
+                        colors = colors
+                    )
+                    RightDockPanel.FILES -> TreePanelContent(
                         viewModel = viewModel,
                         colors = colors
                     )

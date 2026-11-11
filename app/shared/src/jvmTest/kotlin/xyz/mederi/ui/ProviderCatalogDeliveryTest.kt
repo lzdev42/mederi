@@ -13,6 +13,7 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.*
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.theme.*
 import xyz.mederi.ui.settings.*
 import java.io.File
@@ -231,6 +232,50 @@ class ProviderCatalogDeliveryTest {
         assertTrue(button.left >= field.left - 1f && button.right <= field.right + 1f)
         assertTrue(label.bottom <= field.top + 1f && button.bottom <= field.top + 1f)
         assertTrue(detail.top <= field.top, "The detail should start alongside the toolbar, not below it")
+    }
+
+    @Test
+    fun managementSearchFieldStaysCompactSingleLineInSidebarAndRendersWorkspacePreview() = runComposeUiTest {
+        val mode = mutableStateOf(AppThemeMode.DARK)
+        val detailModel = ModelItemUiState("m1", "vendor/m1", "Model 1", isEnabled = true, supportsThinking = true,
+            supportsImages = true, contextWindow = 128000, maxTokens = 8192, reasoningLevels = listOf("NONE", "HIGH"))
+        val configuredList = listOf(
+            ProviderItemUiState("configured", "Agnes SG", true, true,
+                protocolType = ProtocolType.OPENAI_CHAT, baseUrl = "https://apihub.example.invalid/v1",
+                apiKey = "sk-••••••d9TI", reasoningLevels = mapOf("HIGH" to "{}"),
+                autoRetryEnabled = true, retryMaxDelaySeconds = null, models = listOf(detailModel)),
+            ProviderItemUiState("private", "Google Gemini", true, true,
+                baseUrl = "https://generativelanguage.example.invalid/v1beta"),
+        )
+        val state = mutableStateOf(ProviderSettingsUiState(configuredList, "configured"))
+        var search = ""; var density = 1f
+        val detailActions = ProviderDetailActions({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, { _, _ -> })
+        setContent { AppTheme(mode.value) {
+            density = LocalDensity.current.density
+            search = stringResource(Res.string.provider_manage_search)
+            SettingsWorkspaceContent(SettingsTab.PROVIDERS, {}, {},
+                Modifier.width(960.dp).height(720.dp).background(LocalMederiColors.current.surfaceWorkspace).testTag("fullProviderSample")) { _, compact ->
+                ProviderSettingsContent(
+                    state = state.value, presets = presets,
+                    onProviderQuery = {}, onPresetQuery = {}, onOpenCatalog = {}, onManage = {}, onCustom = {},
+                    onSelectProvider = {}, onSelectPreset = {}, onDismissError = {},
+                    detail = { p, isCompact ->
+                        ProviderDetailContent(p, p.models, "", CapabilityFilter.ALL, detailActions, isCompact = isCompact || compact)
+                    },
+                    custom = {}, preset = {},
+                )
+            }
+        } }
+        val searchField = onNode(hasText(search) and hasSetTextAction()).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertTrue(searchField.height <= 36f * density, "Sidebar search box should be single-line compact (~30dp), was ${searchField.height / density}dp")
+        System.getenv("MEDERI_UI_PREVIEW_DIR")?.let { path ->
+            val directory = File(path).apply { mkdirs() }
+            for (theme in listOf(AppThemeMode.DARK, AppThemeMode.LIGHT)) {
+                runOnIdle { mode.value = theme }
+                ImageIO.write(onNodeWithTag("fullProviderSample").captureToImage().toAwtImage(), "png",
+                    File(directory, "provider-manage-full-${theme.name.lowercase()}.png"))
+            }
+        }
     }
 
     @Test

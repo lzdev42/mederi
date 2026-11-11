@@ -39,6 +39,7 @@ class TurnIncrementalPersister(
     private val historyStore: HistoryStore,
     private val diagnostics: MessageDiagnostics = MessageDiagnostics(),
     private val eventBus: kotlinx.coroutines.flow.MutableSharedFlow<MederiEvent>? = null,
+    private val toolTimings: TurnToolTimings? = null,
     val turnId: String? = null,
     val includeImages: Boolean = true,
     val workStartedAt: Long? = null,
@@ -98,18 +99,21 @@ class TurnIncrementalPersister(
         }
     }
 
-    /** tool results user 消息落库（下一轮 LLM 崩溃时结果不丢） */
-    suspend fun persistToolResults(results: ReceivedToolResults) {
+    /** tool results user 消息落库（下一轮 LLM 崩溃时结果不丢），可选指定 [id] 与内存 Prompt 共用。 */
+    suspend fun persistToolResults(results: ReceivedToolResults, id: String? = null) {
         runCatching {
             val parts = results.toolResults.map(ReceivedToolResult::toMessagePart)
             val koogUser = KoogMessage.User(
                 parts = parts,
-                metaInfo = RequestMetaInfo.create(KoogClock.System)
+                metaInfo = RequestMetaInfo.create(KoogClock.System),
+                id = id
             )
+            // 增量落库时即回填工具计时（共用 ID 后 store() 按 id 过滤跳过，不再重复回写）
             val msg = KoogMessageMapper.fromKoogUserMessage(sessionId, koogUser)
                 .withDiagnostics(diagnostics)
+                .withToolTimings(toolTimings)
             persistBeforePending(msg)
-            DebugLog.event("Persist", "tool results appended: ${parts.size} parts")
+            DebugLog.event("Persist", "tool results appended: id=${msg.id}, ${parts.size} parts")
         }.onFailure { e ->
             DebugLog.error("Persist", "tool results persist failed: ${e.message}", e)
             throw e

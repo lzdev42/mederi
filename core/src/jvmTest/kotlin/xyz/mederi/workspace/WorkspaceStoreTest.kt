@@ -23,11 +23,11 @@ import kotlin.test.assertTrue
 
 class WorkspaceStoreTest {
 
-    private fun createInMemoryDriver(): JdbcSqliteDriver {
+    private fun createInMemoryDb(): xyz.mederi.store.db.DatabaseManager {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         MederiDataDatabase.Schema.create(driver)
         Mederi.migrateDataDb(driver)
-        return driver
+        return xyz.mederi.store.db.DatabaseManager(driver)
     }
 
     @Test
@@ -128,7 +128,10 @@ class WorkspaceStoreTest {
         assertEquals(Mederi.DATA_DB_VERSION, version)
 
         // 验证旧会话数据无损，新字段具有默认兼容值
-        val sessionStore = SqliteSessionStore(driver)
+        val db = xyz.mederi.store.db.DatabaseManager(driver)
+
+        // 验证旧会话数据无损，新字段具有默认兼容值
+        val sessionStore = SqliteSessionStore(db)
         val session = sessionStore.get("sess_legacy")
         assertNotNull(session)
         assertEquals("Legacy Title", session.title)
@@ -141,7 +144,7 @@ class WorkspaceStoreTest {
         assertNull(session.subagentMaxConcurrent)
 
         // 验证旧 Diff 数据无损
-        val diffStore = SqliteDiffStore(driver)
+        val diffStore = SqliteDiffStore(db)
         val diffs = diffStore.list("sess_legacy")
         assertEquals(1, diffs.size)
         assertEquals("--- a\n+++ b", diffs[0].unifiedDiff)
@@ -149,7 +152,7 @@ class WorkspaceStoreTest {
         assertNull(diffs[0].checkoutRootAtCreation)
 
         // 验证新表 workspaces 与 workspace_operations 正常读写
-        val workspaceStore = SqliteWorkspaceStore(driver)
+        val workspaceStore = SqliteWorkspaceStore(db)
         val ws = Workspace(
             id = "ws_test",
             projectId = "proj_legacy",
@@ -169,8 +172,8 @@ class WorkspaceStoreTest {
 
     @Test
     fun roundTripsSelectionPlanAndPhasePostimages() = runBlocking {
-        val driver = createInMemoryDriver()
-        val store = SqliteWorkspaceStore(driver)
+        val db = createInMemoryDb()
+        val store = SqliteWorkspaceStore(db)
 
         val pendingSelection = PendingWorkspaceSelection(
             selection = WorkspaceSelection(
@@ -306,9 +309,9 @@ class WorkspaceStoreTest {
 
     @Test
     fun commitsBindingAndOperationInOneTransaction() = runBlocking {
-        val driver = createInMemoryDriver()
-        val sessionStore = SqliteSessionStore(driver)
-        val workspaceStore = SqliteWorkspaceStore(driver)
+        val db = createInMemoryDb()
+        val sessionStore = SqliteSessionStore(db)
+        val workspaceStore = SqliteWorkspaceStore(db)
 
         val session = Session(
             id = "sess_commit_1",
@@ -382,9 +385,9 @@ class WorkspaceStoreTest {
 
     @Test
     fun rejectsStaleGenerationWithoutPartialUpdates() = runBlocking {
-        val driver = createInMemoryDriver()
-        val sessionStore = SqliteSessionStore(driver)
-        val workspaceStore = SqliteWorkspaceStore(driver)
+        val db = createInMemoryDb()
+        val sessionStore = SqliteSessionStore(db)
+        val workspaceStore = SqliteWorkspaceStore(db)
 
         val session = Session(
             id = "sess_stale",
@@ -465,8 +468,8 @@ class WorkspaceStoreTest {
 
     @Test
     fun preservesWorkspaceFieldsDuringComposeSave() = runBlocking {
-        val driver = createInMemoryDriver()
-        val sessionStore = SqliteSessionStore(driver)
+        val db = createInMemoryDb()
+        val sessionStore = SqliteSessionStore(db)
 
         val session = Session(
             id = "sess_compose",

@@ -75,6 +75,12 @@ fun FloatingOverviewWindow(
             expanded = state.expandedRowIndex == 3,
             onToggle = { state.expandedRowIndex = if (state.expandedRowIndex == 3) null else 3 },
         )
+        // 文档（2026-11）：计划以外的会话文档；点击在文档面板（ARTIFACTS，无 dock 按钮）打开阅读。
+        OverviewDocumentsRow(
+            viewModel = viewModel,
+            expanded = state.expandedRowIndex == 4,
+            onToggle = { state.expandedRowIndex = if (state.expandedRowIndex == 4) null else 4 },
+        )
         OverviewMcpRow(
             viewModel = viewModel,
             expanded = state.expandedRowIndex == 5,

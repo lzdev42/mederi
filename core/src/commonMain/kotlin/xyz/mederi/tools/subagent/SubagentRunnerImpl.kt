@@ -32,8 +32,6 @@ import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.skills.SkillManager
 import xyz.mederi.plan.PlanStore
-import xyz.mederi.store.InMemoryHistoryStore
-import xyz.mederi.store.InMemorySessionStore
 import java.time.Instant
 import java.util.UUID
 /**
@@ -57,6 +55,10 @@ class SubagentRunnerImpl(
     private val llmClientFactory: (xyz.mederi.provider.domain.model.Provider, String) -> ai.koog.prompt.executor.clients.LLMClient = xyz.mederi.provider.infrastructure.koog.KoogClientFactory::create,
     /** RF-07：工作区执行租约（父级注入）。子代理 turn 同样持租约，归档等待窗口覆盖活跃子代理。 */
     private val leaseManager: xyz.mederi.workspace.WorkspaceLeaseManager? = null,
+    /** 子代理会话存储（TurnExecutor 经 EphemeralSessionStore 装饰注入；测试可传 InMemory 实现）。 */
+    private val sessionStore: xyz.mederi.store.SessionStore,
+    /** 子代理历史存储（同上，EphemeralHistoryStore 装饰注入）。 */
+    private val historyStore: xyz.mederi.store.HistoryStore,
 ) : SubagentRunner {
     override suspend fun run(
         task: String,
@@ -78,8 +80,9 @@ class SubagentRunnerImpl(
         val sessionId = agentId ?: "sub_${UUID.randomUUID().toString().take(8)}"
         val now = Instant.now().toString()
 
-        val sessionStore = InMemorySessionStore()
-        val historyStore = InMemoryHistoryStore()
+        // 无持久化会话注册：子代理会话纯内存（永不落 data.db），turn 结束 finally 清理
+        sessionStore.registerEphemeral(sessionId)
+        historyStore.registerEphemeral(sessionId)
         val eventBus = MutableSharedFlow<MederiEvent>(replay = 64)
         // 文件写入缓冲：子代理的文件工具经 onFileTouched 回调 append，turn 结束 finally 时 flush 到 PlanStore。
         val touchedFiles = java.util.concurrent.ConcurrentLinkedQueue<String>()
@@ -244,6 +247,11 @@ class SubagentRunnerImpl(
                         else st
                     })
                 }
+            }
+            // 无持久化会话清理：turn 结束（成功/失败/取消）删除 overlay + 注销登记（对齐旧 GC 生命周期）
+            withContext(NonCancellable) {
+                sessionStore.delete(sessionId)
+                historyStore.delete(sessionId)
             }
         }
     }

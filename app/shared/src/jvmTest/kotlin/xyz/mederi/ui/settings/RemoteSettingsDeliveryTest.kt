@@ -14,6 +14,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.SandboxStatusInfo
@@ -32,7 +33,7 @@ class RemoteSettingsDeliveryTest {
         TunnelUiState.Idle, "token-original", "app.example.invalid", "192.168.1.9")
     private fun actions(events: MutableList<String>) = RemoteSettingsActions(
         { on, pass -> events += "toggle:$on:$pass" }, { events += "token:$it" }, { events += "domain:$it" },
-        { events += "start-tunnel" }, { events += "stop-tunnel" }, { events += "retry-server:$it" }, { events += "copy:$it" })
+        { events += "start-tunnel" }, { events += "stop-tunnel" }, { events += "retry-server:$it" }, { events += "copy:$it" }, { events += "api-token:$it" })
 
     @Test
     fun passwordDraftAndVisibilityDoNotSaveUntilTheOriginalToggleAction() = runComposeUiTest {
@@ -146,6 +147,46 @@ class RemoteSettingsDeliveryTest {
     }
 
     @Test
+    fun managedTunnelResumesWithTheNewListenerPortAfterRemoteRestarts() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val prefs = InMemoryPreferencesStore()
+        val app = AppState(MockAiCore(), prefs, scope)
+        val ports = ArrayDeque(listOf(49321, 50713))
+        val tunnelPorts = mutableListOf<Int>()
+        app.remoteControl = object : RemoteControlHooks {
+            override suspend fun start(port: Int, password: String?) = RemoteStartResult.Started(ports.removeFirst(), true)
+            override fun stop() = Unit
+            override val isRunning = true
+            override val localAddress: String? = null
+            override fun isCloudflaredInstalled() = true
+            override suspend fun startTunnel(port: Int, token: String, domain: String?, apiToken: String?): TunnelStartResult {
+                assertEquals("api-token", apiToken)
+                assertEquals("m.example.com", domain)
+                tunnelPorts += port
+                return TunnelStartResult.Started("https://m.example.com")
+            }
+            override fun stopTunnel() = Unit
+        }
+
+        try {
+            app.setTunnelApiToken("api-token")
+            app.setTunnelDomain("m.example.com")
+            app.setRemoteControl(true, null)
+            withTimeout(3_000) { app.remoteServerState.first { it is RemoteServerUiState.Running } }
+            app.startTunnel()
+            withTimeout(3_000) { app.tunnelState.first { it is TunnelUiState.Running } }
+
+            app.setRemoteControl(false, null)
+            assertEquals(TunnelUiState.Idle, app.tunnelState.value)
+            app.setRemoteControl(true, null)
+            withTimeout(3_000) { app.tunnelState.first { it is TunnelUiState.Running } }
+            assertEquals(listOf(49321, 50713), tunnelPorts)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun routeCanBeHiddenAndReopenedWithoutStoppingOrRestartingItsHost() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         var starts = 0; var stops = 0; val visible = mutableStateOf(true); var title = ""
@@ -156,7 +197,7 @@ class RemoteSettingsDeliveryTest {
             override val isRunning = true
             override val localAddress = "192.168.1.9"
             override fun isCloudflaredInstalled() = false
-            override fun startTunnel(port: Int, token: String, domain: String?) = TunnelStartResult.NotInstalled
+            override suspend fun startTunnel(port: Int, token: String, domain: String?, apiToken: String?) = TunnelStartResult.NotInstalled
             override fun stopTunnel() = Unit
         }
         try {

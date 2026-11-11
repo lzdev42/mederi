@@ -25,7 +25,7 @@ import kotlin.test.assertEquals
  * P3 跨 turn 批准（"批准与 turn 解耦"）行为锁定：
  * 无存活 requester（翻历史/重启）时批准一个 PENDING_APPROVAL 计划：
  * - 计划状态被置为 APPROVED 落盘
- * - 以一条 UI 隐藏内部消息（<<<NOT_FOR_UI>>> 开头）启动新执行 turn（historyStore 可见、用户不可见）
+ * - 以一条 UI 隐藏内部消息（hiddenFromUi = true）启动新执行 turn（historyStore 可见、用户不可见）
  * - 已 APPROVED/终态/他会话计划 → 拒绝跨 turn 批准（no-op）
  */
 class PlanCrossTurnApprovalTest {
@@ -42,6 +42,7 @@ class PlanCrossTurnApprovalTest {
         override suspend fun require(id: String) = unused()
         override suspend fun create(name: String, type: xyz.mederi.provider.domain.model.ProviderType, baseUrl: String, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?) = unused()
         override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?) = unused()
+        override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?) = unused()
         override suspend fun delete(id: String) = unused()
         override suspend fun listKeys(providerId: String) = unused()
         override suspend fun addKey(providerId: String, name: String, value: String, isDefault: Boolean) = unused()

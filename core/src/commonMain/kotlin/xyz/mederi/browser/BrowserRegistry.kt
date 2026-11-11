@@ -7,10 +7,10 @@ import java.util.concurrent.ConcurrentHashMap
  */
 enum class BrowserKind(val label: String) {
     /**
-     * 内置可见浏览器（JCEF，UI 提供）。页面可见，用户能看到在做什么。
-     * 优先用于：测试用户开发的网页、需要用户观察/交互的场景。
+     * 内置无头浏览器（Obscura，外挂二进制）：经 MCP stdio 驱动的独立进程，永远 stealth。
+     * 适合所有无头自动化浏览任务（页面不可见）。
      */
-    JCEF("built-in visible browser (JCEF) — shows the page live; prefer for testing the user's own web pages or when the user wants to watch"),
+    OBSCURA("built-in headless browser (Obscura) — external binary driven over MCP stdio, always stealth"),
 
     /** 宿主提供的自定义浏览器实现。 */
     CUSTOM("custom browser")
@@ -19,8 +19,8 @@ enum class BrowserKind(val label: String) {
 /**
  * 已注册的浏览器（名称 = AI 看到的标识）。
  *
- * 工厂是 suspend 且带 taskId：JCEF 版创建 KBPage 需要挂到 Main 线程且 newPage 本身是 suspend，
- * 同时需要把 taskId 记到 tab 上（browser_info 据此判断是不是当前会话启动的）。
+ * 工厂是 suspend 且带 taskId：便于后端按需起进程/建页等异步初始化，
+ * 同时需要把 taskId 记到实例上（browser_info 据此判断是不是当前会话启动的）。
  */
 class RegisteredBrowser(
     val name: String,

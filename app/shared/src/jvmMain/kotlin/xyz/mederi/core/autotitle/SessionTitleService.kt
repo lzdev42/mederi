@@ -15,7 +15,6 @@ import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.Session
-import xyz.mederi.domain.model.UI_HIDDEN_MARKER
 import xyz.mederi.provider.domain.model.Provider
 import xyz.mederi.provider.infrastructure.koog.OneShotCompletion
 
@@ -72,7 +71,7 @@ class SessionTitleService(
                 if (session.title != DEFAULT_TITLE) return@launch
 
                 val messages = mederi.sessionManager.listMessages(sessionId)
-                val userMessages = messages.filter { it.role == MessageRole.USER }
+                val userMessages = messages.filter { it.role == MessageRole.USER && !it.hiddenFromUi }
                 // 发送时触发：恰好一条 user 消息（assistant 可能还没回复，不设数量条件）
                 if (userMessages.size != 1) return@launch
 
@@ -80,7 +79,6 @@ class SessionTitleService(
                     .flatMap { it.parts }
                     .filterIsInstance<MessagePart.Text>()
                     .joinToString("\n") { it.text }
-                    .substringBefore(UI_HIDDEN_MARKER)
                     .trim()
                 if (firstUserText.isEmpty()) return@launch
 

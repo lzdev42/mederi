@@ -20,7 +20,7 @@
 | 改 apply_patch（补丁语法、模型调用格式、路径/写锁/回滚、上游升级） | `docs/apply-patch.md` |
 | 改 provider/model 同步、模型元数据字段、ModelMerge、图片能力门禁 | `docs/model-metadata.md` |
 | 桌面端 UI 开发/UI 测试/写跨平台测试 | `docs/ui-dev-workflow.md` |
-| 对话工作台 UI 整体改造/续做（理念、MVVM 边界、一致性、实施顺序与验收） | `docs/design/conversation-workspace-redesign-plan.md`（主计划）+ `docs/design/conversation-workspace-ui-inventory.md`（部件清单） |
+| 对话工作台 UI（设计标准、MVVM 边界与部件清单） | `docs/design/standard/README.md` + `docs/design/conversation-workspace-ui-inventory.md` |
 | 查代码结构（类图/流程图/签名/端点/表结构） | `docs/architecture/`（见 §0） |
 
 ## 0. 架构速查文档（AI 必读入口）
@@ -182,7 +182,7 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 ### 计划/Spec 分层（硬性）
 
 - create_plan = WHAT（用户批准的对象，含每个子任务的 verification 契约：命令 + 预期结果 + 机器校验字面量）
-- 批准后 generate_spec 逐子任务派生 HOW（行级实现规范，写入 Subtask.spec，brief 永不覆盖）
+- 批准后 generate_spec 逐子任务派生 HOW（判断级实现规范——编码分析已有的结论：核心问题/根因、已定方案、需求架构、关键决策/约束、验收契约；不要求主代理为写 spec 二次读代码。写入 Subtask.spec，brief 永不覆盖）
  - subagent(SPAWN, planId, subtaskIndex) 执行存储的 spec——但 generate_spec 后**并非每子任务必 spawn**，按「执行路径选择」（§5.6）判据逐子任务选直接执行或 spawn
 - verify 两分支（根因轴，**先验实现、实现无误再验计划**）：
   - PASS → 下一个子任务
@@ -222,9 +222,9 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 └─【复杂改动】方案未定 / 需工程分解 → Plan Loop：
      （理解不足先 subagent(SPAWN_RESEARCHER)）→ create_plan → 批准 → generate_spec
      → 执行路径选择（见下「执行路径选择」）：
-        ├─【直接执行】主代理已读透目标代码 + 少量工具调用 + 无并行收益
-        │    → apply_patch/edit_file/write_file + bash → verify_subtask
-        └─【subagent(SPAWN)】需读大量未知文件 / 可与其他子任务并行 / 多轮工具往返需隔离上下文
+        ├─【直接执行】极小改动（几行、无判断）→ apply_patch/edit_file/write_file + bash → verify_subtask
+        └─【subagent(SPAWN)】默认路径——主代理贵+用量有限，实现工作卸载给便宜子代理
+             → spec 编码分析结论（不二次读代码），子代理读文件/写代码/跑构建
              → END TURN（子代理后台跑，完成自动唤醒父 turn）→ 唤醒后 verify_subtask
       verify_subtask（机器无条件执行验证命令 + 字面量硬校验）：
        ├─ PASS → 下一个子任务
@@ -238,22 +238,23 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 
 ### briefing 调查纪律（硬性）
 
-派发任何子代理前，主代理必须自己先调查相关代码/文件，掌握现状（文件路径、签名、调用链、相关类型、改动边界）。子代理不继承父对话，拿到 briefing 就该知道怎么回事——不应重复主代理已做的探索（那等于把主代理的活又干一遍，白费时间和 tokens）。写 self-contained briefing，基于你实际读到的内容，不是把用户原话转发；写不出 self-contained briefing 就是调查不够，继续查。子代理上下文不足时可精准补查具体文件/段落，但不应广泛重新探索。
+派发任何子代理前，主代理必须自己先调查相关代码/文件——这是**分析**（找根因、定方案），是**沉没成本**（无论如何要花）。子代理不继承父对话，briefing/spec 编码分析已得出的结论（文件路径、核心问题、已定方案、约束/陷阱、改动边界），子代理拿到就该知道怎么回事——不应重复主代理已做的探索（那等于把主代理的活又干一遍，白费时间和 tokens）。写 self-contained briefing，基于你实际读到的内容，不是把用户原话转发；写不出 self-contained briefing 就是调查不够，继续查。**但调查 = 分析（理解问题），不 = 写 spec（提取精确签名/调用链）**——精确签名/行级改动留给子代理读文件找，主代理不为写 spec 二次读代码。子代理上下文不足时可精准补查具体文件/段落，但不应广泛重新探索。
 
 ### 执行路径选择（硬性判据）
 
-generate_spec 之后、执行之前，主代理逐子任务判断走**直接执行**还是 **subagent(SPAWN)**。判据不是"是不是 plan 子任务"，而是"spawn 有没有净值收益"：
+generate_spec 之后、执行之前，主代理逐子任务判断走**直接执行**还是 **subagent(SPAWN)**。判据不是"是不是 plan 子任务"，而是"哪种路径更省主代理预算"。
 
-- **直接执行**（apply_patch / edit_file / write_file + bash，然后 verify_subtask）——满足以下**全部**条件：
-  1. 主代理在调研 / 写 spec 阶段已读透目标代码，执行所需上下文已在主线
-  2. 执行动作是少量工具调用（预计几次写 + 一次编译 / 验证），不会把大段文件内容灌进主线上下文
-  3. 无并行收益可图（该子任务依赖前序，或后续子任务都串行）
-- **subagent(SPAWN)** ——满足以下**任一**条件：
-  1. 执行需要读大量主代理尚未读过的文件 / 探索未知代码区，直接执行会膨胀主线上下文
+**成本不对称（核心动机）**：主代理请求贵且用量有限，子代理请求便宜。主代理预算花在分析、架构决策、验收契约、review 上；实现工作（读文件找签名、写代码、跑构建、修编译错）卸载给子代理。分析预算是沉没成本（无论如何要花）；spec 编码分析结论，近零增量——不为写 spec 二次读代码。
+
+- **直接执行**（apply_patch / edit_file / write_file + bash，然后 verify_subtask）——仅限**极小改动**：
+  1. 几行代码、无判断（typo、改常量、机械重命名）
+  2. 不值得一次 spawn 的 briefing + review 开销
+- **subagent(SPAWN)** ——默认路径，满足以下**任一**条件即 spawn：
+  1. 改动涉及实质实现逻辑（非几行 typo）——主代理预算不该花在读文件写代码上
   2. 与其他独立子任务可并行，spawn 能并行跑省墙钟时间
-  3. 执行涉及多轮工具往返，隔离在子代理里更省主线 context budget
+  3. 执行涉及多轮工具往返（读文件 + 写代码 + 跑构建 + 修编译错），隔离在子代理里更省主线 context budget
 
-**核心原则**：spawn 的唯一正当理由是"隔离上下文膨胀"或"换并行"，不是"plan 子任务就该 spawn"。主代理已读透、已知道怎么改的子任务，直接改——让子代理重新发现主代理已知的东西是纯浪费（零上下文的子代理要重新读文件、重新理解，再加一轮异步往返延迟 + spec 转录损耗）。能并行 / 能隔离上下文膨胀的才 spawn。
+**主代理 = 出题人 + 批卷人，子代理 = 答题者**：spec 设题（已定方案 + 约束），验收批卷（行为级机器硬校验），子代理填空（实现细节）。spec 防"走错路"（事前），验收防"做错了"（事后）——子代理的填空自由度在两层之间是安全的。是否用子代理仍是主代理自己的判断，但判断时要正确权衡：inline 做 = 烧主代理预算；delegate = briefing + review 开销（便宜劳动）。
 
 ### 拆小可验证（硬性要求）
 

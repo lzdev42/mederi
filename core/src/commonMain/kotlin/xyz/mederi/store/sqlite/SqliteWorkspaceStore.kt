@@ -1,13 +1,12 @@
 package xyz.mederi.store.sqlite
 
-import app.cash.sqldelight.db.SqlDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.api.exception.MederiWorkspaceException
-import xyz.mederi.db.data.MederiDataDatabase
 import xyz.mederi.store.WorkspaceStore
+import xyz.mederi.store.db.DatabaseManager
 import xyz.mederi.workspace.Workspace
 import xyz.mederi.workspace.WorkspaceErrorCode
 import xyz.mederi.workspace.WorkspaceOperation
@@ -15,15 +14,17 @@ import java.time.Instant
 
 /**
  * 基于 SQLDelight + SQLite 的 WorkspaceStore 实现（data.db）。
+ *
+ * 写操作经 [DatabaseManager] 单写队列串行执行；读操作保持并发（WAL 读写不互斥）。
  */
 class SqliteWorkspaceStore(
-    driver: SqlDriver,
+    private val db: DatabaseManager,
     private val json: Json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
 ) : WorkspaceStore {
-    private val database = MederiDataDatabase(driver)
+    private val database = db.database
     private val queries = database.dataDatabaseQueries
 
     override suspend fun getWorkspace(id: String): Workspace? = withContext(Dispatchers.IO) {
@@ -38,7 +39,7 @@ class SqliteWorkspaceStore(
         }
     }
 
-    override suspend fun saveWorkspace(workspace: Workspace): Unit = withContext(Dispatchers.IO) {
+    override suspend fun saveWorkspace(workspace: Workspace):Unit = db.write {
         queries.insertWorkspace(
             id = workspace.id,
             project_id = workspace.projectId,
@@ -50,7 +51,7 @@ class SqliteWorkspaceStore(
         )
     }
 
-    override suspend fun deleteWorkspace(id: String): Unit = withContext(Dispatchers.IO) {
+    override suspend fun deleteWorkspace(id: String):Unit = db.write {
         queries.deleteWorkspace(id)
     }
 
@@ -72,7 +73,7 @@ class SqliteWorkspaceStore(
         }
     }
 
-    override suspend fun saveOperation(operation: WorkspaceOperation): Unit = withContext(Dispatchers.IO) {
+    override suspend fun saveOperation(operation: WorkspaceOperation):Unit = db.write {
         queries.insertWorkspaceOperation(
             id = operation.id,
             idempotency_key = operation.idempotencyKey,
@@ -84,7 +85,7 @@ class SqliteWorkspaceStore(
         )
     }
 
-    override suspend fun deleteOperation(id: String): Unit = withContext(Dispatchers.IO) {
+    override suspend fun deleteOperation(id: String):Unit = db.write {
         queries.deleteWorkspaceOperation(id)
     }
 
@@ -95,7 +96,7 @@ class SqliteWorkspaceStore(
         newWorkspace: Workspace,
         associatedWorktreeId: String?,
         operation: WorkspaceOperation
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean = db.write {
         database.transactionWithResult {
             // 1. Check session
             val sessionRow = queries.getSession(sessionId).executeAsOneOrNull()

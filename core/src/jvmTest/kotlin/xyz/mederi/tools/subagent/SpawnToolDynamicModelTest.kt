@@ -181,6 +181,7 @@ class SpawnToolDynamicModelTest {
         override suspend fun require(id: String): xyz.mederi.provider.domain.model.Provider = throw NotImplementedError()
         override suspend fun create(name: String, type: xyz.mederi.provider.domain.model.ProviderType, baseUrl: String, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?): xyz.mederi.provider.domain.model.Provider = throw NotImplementedError()
         override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?): xyz.mederi.provider.domain.model.Provider = throw NotImplementedError()
+        override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): xyz.mederi.provider.domain.model.Provider = throw NotImplementedError()
         override suspend fun delete(id: String) {}
         override suspend fun listKeys(providerId: String): List<xyz.mederi.provider.domain.model.ProviderApiKey> = emptyList()
         override suspend fun addKey(providerId: String, name: String, value: String, isDefault: Boolean): xyz.mederi.provider.domain.model.ProviderApiKey = throw NotImplementedError()

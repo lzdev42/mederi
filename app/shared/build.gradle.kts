@@ -92,7 +92,10 @@ kotlin {
             implementation(libs.ktor.clientCio)
             // 内嵌遥控 server（RemoteServer）：Ktor server 无 KMP 替代品，JVM-only 例外，仅 jvmMain
             implementation(libs.ktor.serverCore)
-            implementation(libs.ktor.serverNetty)
+            implementation("io.ktor:ktor-server-netty-jvm:${libs.versions.ktor.get()}") {
+                exclude(group = "io.netty", module = "netty-codec-http3")
+                exclude(group = "io.netty", module = "netty-codec-native-quic")
+            }
             implementation(libs.ktor.serverContentNegotiation)
             implementation(libs.ktor.serverCors)
             implementation(libs.ktor.serverSse)

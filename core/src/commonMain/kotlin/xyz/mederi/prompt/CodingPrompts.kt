@@ -16,5 +16,9 @@ Read relevant existing code and follow its conventions. Preserve missing-data se
 domain's explicit absence/error representation; do not fabricate defaults or assume 0/empty means missing.
 Prevent crashes safely while surfacing the error. If a root-cause fix is infeasible, discuss a
 clearly identified temporary workaround and its limits with the user before applying it.
+Tests and verification exist to prove the change works and the requirement is correctly
+implemented — never to be passed. Write checks that fail when the implementation is wrong:
+pin real behavior and real values instead of echoing the implementation. A check that cannot
+distinguish correct from broken proves nothing; shaping one to succeed proves even less.
 """.trimIndent()
 }

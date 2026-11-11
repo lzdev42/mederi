@@ -30,8 +30,6 @@ kotlin {
             // Office 文档处理（JVM-only，无 KMP 替代品）：docx/xlsx/pptx 读写 + docx→HTML 预览
             implementation(libs.poi.ooxml)
             implementation(libs.mammoth)
-            // KBrowser/JCEF 浏览器运行时：Mermaid 离屏渲染与内置浏览器 Tab 共用同一运行时（useOsr=true）
-            implementation(libs.kbrowser)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -41,6 +39,15 @@ kotlin {
             implementation(libs.kotlinx.coroutinesCore)
         }
     }
+}
+
+// 观测文件（TestObservations 写入）声明为 jvmTest 任务输出：
+// 验证命令 `rm -f core/build/test-obs.json && gradle ...` 删除该文件后，
+// gradle 检测到输出缺失 → 任务失效 → 强制重跑测试 → 文件重建 → 后续 cat/python 成功。
+// 正常开发（未删除）保持 up-to-date 优化不受影响。
+// 注意：--rerun 是位置性任务选项（只附着紧前任务名），不能依赖它批量强制多个任务。
+tasks.named<Test>("jvmTest") {
+    outputs.file(layout.buildDirectory.file("test-obs.json"))
 }
 
 sqldelight {

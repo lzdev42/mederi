@@ -218,7 +218,7 @@ class BrowserDrillFoundationTest {
         override suspend fun type(elementRef: String, text: String): OperationResult = OperationResult.Acknowledged
         override suspend fun scroll(elementRef: String, deltaX: Int, deltaY: Int): OperationResult = OperationResult.Acknowledged
         override suspend fun press(key: KeyboardKey): OperationResult = OperationResult.Acknowledged
-        override suspend fun snapshot(): PageSnapshot = PageSnapshot("", "", "", null)
+        override suspend fun snapshot(): PageSnapshot = PageSnapshot("", "", "")
         override suspend fun screenshot(): ByteArray? = null
     }
 

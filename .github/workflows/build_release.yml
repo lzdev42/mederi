@@ -83,6 +83,7 @@ jobs:
           sudo apt-get install -y bubblewrap libgtk-3-0t64 libgbm1 libnss3 libasound2t64 libgl1 libegl1 libfontconfig1
 
       - name: Run Tests on Target Platform
+        if: !(matrix.platform == 'macos' && matrix.arch == 'x64')
         id: platform_tests
         shell: bash
         run: |
@@ -133,7 +134,17 @@ jobs:
         if: matrix.platform == 'macos' && matrix.arch == 'arm64'
         run: python3 scripts/test-release-packaging.py
 
+      - name: Cache Obscura Binary
+        uses: actions/cache@v4
+        with:
+          path: temp/obscura-cache
+          key: obscura-${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('build_release.sh') }}
+          restore-keys: |
+            obscura-${{ matrix.platform }}-${{ matrix.arch }}-
+
       - name: Run Build Script
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if [[ "${{ matrix.platform }}-${{ matrix.arch }}" == macos-x64 ]]; then

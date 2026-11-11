@@ -31,15 +31,16 @@ fun RemoteSettingsPanel(isCompact: Boolean = false) {
     val server by appState.remoteServerState.collectAsState()
     val tunnel by appState.tunnelState.collectAsState()
     val token by appState.tunnelToken.collectAsState()
+    val apiToken by appState.tunnelApiToken.collectAsState()
     val domain by appState.tunnelDomain.collectAsState()
     val copy = rememberCopyFeedback()
     var copiedValue by remember { mutableStateOf<String?>(null) }
     CopyFeedbackScope(copy) { copied ->
         RemoteSettingsContent(RemoteSettingsUiState(appState.remoteControl != null, enabled, password,
-            server, tunnel, token, domain, appState.remoteControl?.localAddress),
+            server, tunnel, token, domain, appState.remoteControl?.localAddress, apiToken),
             RemoteSettingsActions(appState::setRemoteControl, appState::setTunnelToken, appState::setTunnelDomain,
                 appState::startTunnel, appState::stopTunnel, { appState.setRemoteControl(true, it) },
-                { copiedValue = it; copy.copy(it) }), copiedValue = if (copied) copiedValue else null)
+                { copiedValue = it; copy.copy(it) }, appState::setTunnelApiToken), copiedValue = if (copied) copiedValue else null)
     }
 }
 
@@ -52,6 +53,7 @@ internal data class RemoteSettingsUiState(
     val token: String,
     val domain: String,
     val localAddress: String?,
+    val apiToken: String = "",
 )
 
 internal data class RemoteSettingsActions(
@@ -62,6 +64,7 @@ internal data class RemoteSettingsActions(
     val stopTunnel: () -> Unit,
     val retryServer: (String) -> Unit,
     val copy: (String) -> Unit,
+    val apiToken: (String) -> Unit,
 )
 
 @Composable
@@ -117,11 +120,17 @@ internal fun RemoteSettingsContent(
                 SettingsSection(stringResource(Res.string.settings_tunnel_title), stringResource(Res.string.settings_tunnel_desc)) {
                     when (val tunnel = state.tunnel) {
                         TunnelUiState.Idle, is TunnelUiState.Failed -> {
-                            SettingsSecretField(stringResource(Res.string.settings_tunnel_token_label), state.token, actions.token,
-                                stringResource(Res.string.settings_tunnel_token_placeholder), stringResource(Res.string.settings_tunnel_token_note))
+                            SettingsSecretField(stringResource(Res.string.settings_tunnel_api_token_label), state.apiToken, actions.apiToken,
+                                stringResource(Res.string.settings_tunnel_api_token_placeholder), stringResource(Res.string.settings_tunnel_api_token_note))
+                            if (state.apiToken.isBlank()) {
+                                SettingsSecretField(stringResource(Res.string.settings_tunnel_token_label), state.token, actions.token,
+                                    stringResource(Res.string.settings_tunnel_token_placeholder), stringResource(Res.string.settings_tunnel_token_note))
+                            }
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(stringResource(Res.string.settings_tunnel_domain_label), style = WorkspaceStyle.Caption, color = colors.textSecondary)
-                                val domainLabel = stringResource(Res.string.settings_tunnel_domain_label)
+                                val domainLabel = stringResource(
+                                    if (state.apiToken.isBlank()) Res.string.settings_tunnel_domain_label else Res.string.settings_tunnel_domain_required_label
+                                )
+                                Text(domainLabel, style = WorkspaceStyle.Caption, color = colors.textSecondary)
                                 WorkspaceTextField(state.domain, actions.domain, Modifier.fillMaxWidth().semantics { contentDescription = domainLabel },
                                     placeholder = stringResource(Res.string.settings_tunnel_domain_placeholder), monospace = true)
                             }

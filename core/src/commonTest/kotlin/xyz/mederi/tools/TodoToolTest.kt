@@ -111,14 +111,50 @@ class TodoToolTest {
     }
 
     @Test
-    fun `failed status rejected for model todos`() = runBlocking {
+    fun `failed status is accepted for corrective todo flow`() = runBlocking {
         makeSession()
         val result = makeAgentTools().UpdateTodoTool().execute(
             AgentTools.UpdateTodoArgs(todos = listOf(todoArg("a", TodoStatus.FAILED)))
         )
-        assertTrue(result.startsWith("Error:"), "实际返回: $result")
-        assertTrue(result.contains("reserved for plan verification"))
-        assertEquals(emptyList(), sessionStore.get("sess_todo_test")!!.todos)
+        assertTrue(result.startsWith("Todo list updated"), "实际返回: $result")
+        assertEquals(listOf(TodoItem("a", TodoStatus.FAILED)), sessionStore.get("sess_todo_test")!!.todos)
+    }
+
+    @Test
+    fun `todo with detail persists and round-trips with old format compatibility`() = runBlocking {
+        makeSession()
+        val collector = collectEvents()
+        val detail = xyz.mederi.domain.model.TodoDetail(
+            background = "prior bug investigation",
+            requirement = "add detail support",
+            approach = "optional 7-field structure",
+            scope = "Todo.kt, AgentTools.kt",
+            done = "tests pass",
+            notes = "backward compatible",
+            attempts = "none"
+        )
+        val items = listOf(
+            AgentTools.TodoItemArg(content = "fix bug", status = TodoStatus.IN_PROGRESS, detail = detail),
+            AgentTools.TodoItemArg(content = "cleanup", status = TodoStatus.PENDING)
+        )
+        val result = makeAgentTools().UpdateTodoTool().execute(AgentTools.UpdateTodoArgs(todos = items))
+        yield()
+
+        assertTrue(result.startsWith("Todo list updated"))
+        val persisted = sessionStore.get("sess_todo_test")!!.todos
+        assertEquals(2, persisted.size)
+        assertEquals(detail, persisted[0].detail)
+        assertEquals(null, persisted[1].detail)
+
+        // 旧格式兼容性测试：旧 JSON 没有 detail 字段，反序列化时 detail 应为 null
+        val oldJson = """[{"content":"legacy step","status":"pending"}]"""
+        val decoded = decodeTodos(oldJson)
+        assertEquals(1, decoded?.size)
+        assertEquals("legacy step", decoded?.get(0)?.content)
+        assertEquals(TodoStatus.PENDING, decoded?.get(0)?.status)
+        assertEquals(null, decoded?.get(0)?.detail)
+
+        collector.cancel()
     }
 
     @Test

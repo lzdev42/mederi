@@ -289,4 +289,75 @@ class HistoryStoreChatHistoryProviderTest {
         assertEquals("recent", window.last().id, "SUMMARY必须在保留原文之前，pending不参与recent尾部对齐")
     }
 
+    // ── ⑥ ToolResult 共用 ID 去重 ─────────────────────────────────────────
+    @Test
+    fun toolResultSharedIdDeduplicatesOnStore() = runBlocking {
+        val store = InMemoryHistoryStore()
+        val t = KoogInstant.parse("2026-11-09T01:50:00Z")
+        val existing = listOf(
+            mederiMessage("u1", MessageRole.USER, listOf(MederiMessagePart.Text("go"))),
+            mederiMessage("a1", MessageRole.ASSISTANT, listOf(MederiMessagePart.ToolCall("c1", "read_file", "{}"))),
+            mederiMessage("tr1", MessageRole.USER, listOf(MederiMessagePart.ToolResult("c1", "read_file", "err", isError = true, status = "failed", durationMs = 5))),
+            mederiMessage("a2", MessageRole.ASSISTANT, listOf(MederiMessagePart.ToolCall("c2", "read_file", "{}"))),
+            mederiMessage("tr2", MessageRole.USER, listOf(MederiMessagePart.ToolResult("c2", "read_file", "err", isError = true, status = "failed", durationMs = 4))),
+            mederiMessage("a3", MessageRole.ASSISTANT, listOf(MederiMessagePart.Text("done")))
+        )
+        existing.forEach { store.append("s1", it) }
+
+        val provider = HistoryStoreChatHistoryProvider(store)
+        provider.store(
+            "s1",
+            listOf(
+                KoogMessage.User(parts = listOf(KoogMessagePart.Text("go")), metaInfo = RequestMetaInfo(t), id = "u1"),
+                KoogMessage.Assistant(parts = listOf(KoogMessagePart.Tool.Call("c1", "read_file", "{}")), metaInfo = ResponseMetaInfo(t), finishReason = "tool_calls", id = "a1"),
+                KoogMessage.User(parts = listOf(KoogMessagePart.Tool.Result("c1", "read_file", "err", isError = true)), metaInfo = RequestMetaInfo(t), id = "tr1"),
+                KoogMessage.Assistant(parts = listOf(KoogMessagePart.Tool.Call("c2", "read_file", "{}")), metaInfo = ResponseMetaInfo(t), finishReason = "tool_calls", id = "a2"),
+                KoogMessage.User(parts = listOf(KoogMessagePart.Tool.Result("c2", "read_file", "err", isError = true)), metaInfo = RequestMetaInfo(t), id = "tr2"),
+                KoogMessage.Assistant(parts = listOf(KoogMessagePart.Text("done")), metaInfo = ResponseMetaInfo(t), finishReason = "stop", id = "a3")
+            )
+        )
+
+        val stored = store.load("s1")
+        assertEquals(6, stored.size, "共用 ID 后回写不应重复追加 ToolResult")
+        assertEquals("a3", stored.last().id)
+        val tr1 = stored.single { it.id == "tr1" }.parts.single() as MederiMessagePart.ToolResult
+        assertEquals("failed", tr1.status)
+        assertEquals(5L, tr1.durationMs)
+    }
+
+    // ── ⑦ 同输出不同 toolCallId 不发生指纹碰撞 ────────────────────────────
+    @Test
+    fun signatureDistinguishesDifferentToolCallIdsWithSameOutput() = runBlocking {
+        val store = InMemoryHistoryStore()
+        val t = KoogInstant.parse("2026-11-09T01:50:00Z")
+        // 模拟无增量持久化（ToolResult 为 id=null 路径）：库中已有 4 轮，其中 c1 与 c3 输出完全相同但 toolCallId 不同
+        store.append("s1", mederiMessage("u1", MessageRole.USER, listOf(MederiMessagePart.Text("go"))))
+        store.append("s1", mederiMessage("a1", MessageRole.ASSISTANT, listOf(MederiMessagePart.ToolCall("c1", "read_file", "{}"))))
+        store.append("s1", mederiMessage("tr1", MessageRole.USER, listOf(MederiMessagePart.ToolResult("c1", "read_file", "Path is not a file: !", isError = true))))
+        store.append("s1", mederiMessage("a2", MessageRole.ASSISTANT, listOf(MederiMessagePart.ToolCall("c2", "read_file", "{}"))))
+        store.append("s1", mederiMessage("tr2", MessageRole.USER, listOf(MederiMessagePart.ToolResult("c2", "read_file", "ok1"))))
+        store.append("s1", mederiMessage("a3", MessageRole.ASSISTANT, listOf(MederiMessagePart.ToolCall("c3", "read_file", "{}"))))
+        store.append("s1", mederiMessage("tr3", MessageRole.USER, listOf(MederiMessagePart.ToolResult("c3", "read_file", "Path is not a file: !", isError = true))))
+        store.append("s1", mederiMessage("a4", MessageRole.ASSISTANT, listOf(MederiMessagePart.Text("done"))))
+
+        val provider = HistoryStoreChatHistoryProvider(store)
+        provider.store(
+            "s1",
+            listOf(
+                KoogMessage.User(parts = listOf(KoogMessagePart.Text("go")), metaInfo = RequestMetaInfo(t), id = "u1"),
+                KoogMessage.Assistant(parts = listOf(KoogMessagePart.Tool.Call("c1", "read_file", "{}")), metaInfo = ResponseMetaInfo(t), finishReason = "tool_calls", id = "a1"),
+                KoogMessage.User(parts = listOf(KoogMessagePart.Tool.Result("c1", "read_file", "Path is not a file: !", isError = true)), metaInfo = RequestMetaInfo(t), id = null),
+                KoogMessage.Assistant(parts = listOf(KoogMessagePart.Tool.Call("c2", "read_file", "{}")), metaInfo = ResponseMetaInfo(t), finishReason = "tool_calls", id = "a2"),
+                KoogMessage.User(parts = listOf(KoogMessagePart.Tool.Result("c2", "read_file", "ok1")), metaInfo = RequestMetaInfo(t), id = null),
+                KoogMessage.Assistant(parts = listOf(KoogMessagePart.Tool.Call("c3", "read_file", "{}")), metaInfo = ResponseMetaInfo(t), finishReason = "tool_calls", id = "a3"),
+                KoogMessage.User(parts = listOf(KoogMessagePart.Tool.Result("c3", "read_file", "Path is not a file: !", isError = true)), metaInfo = RequestMetaInfo(t), id = null),
+                KoogMessage.Assistant(parts = listOf(KoogMessagePart.Text("done")), metaInfo = ResponseMetaInfo(t), finishReason = "stop", id = "a4")
+            )
+        )
+
+        val stored = store.load("s1")
+        assertEquals(8, stored.size, "不同 toolCallId 不应因输出相同而碰撞错位并追加重复 ToolResult")
+        assertEquals("a4", stored.last().id)
+    }
+
 }

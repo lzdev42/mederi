@@ -500,6 +500,16 @@ class ServerAiCore(
         refreshProvidersAndModels()
     }
 
+    override suspend fun setProviderRetrySetting(
+        providerId: String,
+        autoRetryEnabled: Boolean,
+        retryMaxDelaySeconds: Int?
+    ): Result<Unit> = runCatching {
+        httpCall("/v1/providers/$providerId/retry", HttpMethod.Patch,
+            xyz.mederi.core.contract.dto.SetProviderRetryInput(autoRetryEnabled, retryMaxDelaySeconds))
+        refreshProvidersAndModels()
+    }
+
     override suspend fun addBuiltinProvider(name: String, apiKey: String): Result<ProviderConfig> = runCatching {
         val config = httpSend<ProviderConfig>(
             "/v1/providers/builtin",

@@ -8,6 +8,7 @@ set -euo pipefail
 # ==========================================
 
 SKIP_SIGN=false
+SKIP_OBSCURA=false
 OUTPUT_DIR=""
 CLEAN_BUILD=true
 APP_NAME="${APP_NAME:-Mederi}"
@@ -23,6 +24,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_SIGN=true
             shift
             ;;
+        --skip-obscura)
+            SKIP_OBSCURA=true
+            shift
+            ;;
         --no-clean)
             CLEAN_BUILD=false
             shift
@@ -36,10 +41,11 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --name, -n NAME   Application display name (default: Mederi)"
-            echo "  --skip-sign       Skip code signing (useful for CI without certs)"
-            echo "  --no-clean        Skip cleaning build artifacts"
-            echo "  --output, -o DIR  Output directory (default: ./release)"
+            echo "  --name, -n NAME     Application display name (default: Mederi)"
+            echo "  --skip-sign         Skip code signing (useful for CI without certs)"
+            echo "  --skip-obscura      Skip downloading Obscura browser binary"
+            echo "  --no-clean          Skip cleaning build artifacts"
+            echo "  --output, -o DIR    Output directory (default: ./release)"
             echo "  --help, -h        Show this help"
             echo "Builds desktop, server-bundled (JVM + Web UI), server-api (no JVM/Web UI)."
             echo "Requires a JBR 25 SDK with JCEF. Server is linked without JCEF from the same JDK."
@@ -176,6 +182,141 @@ archive_folder() {
 # ==========================================
 echo "📦 整理发布产物..."
 
+OBSCURA_DIR="$STAGING/obscura"
+prepare_obscura() {
+    if [[ "$SKIP_OBSCURA" == "true" ]]; then
+        echo "⏭️ 跳过下载 Obscura (--skip-obscura)"
+        return 0
+    fi
+
+    echo "🌐 下载最新版 Obscura ($PLATFORM-$ARCH_NAME)..."
+    local obs_os="$PLATFORM"
+    local obs_arch="$ARCH_NAME"
+    if [[ "$obs_arch" == "arm64" ]]; then obs_arch="aarch64"; fi
+    if [[ "$obs_arch" == "x64" ]]; then obs_arch="x86_64"; fi
+
+    local ext="tar.gz"
+    if [[ "$PLATFORM" == "windows" ]]; then ext="zip"; fi
+
+    local asset_name="obscura-${obs_arch}-${obs_os}-stealth.${ext}"
+    local cache_dir="$PROJECT_DIR/temp/obscura-cache"
+    mkdir -p "$cache_dir" "$OBSCURA_DIR"
+
+    # 若环境中有 GITHUB_TOKEN（如 CI 运行），加入认证 Header 提高优先级和速率限制
+    local auth_header=""
+    local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    if [[ -n "$token" ]]; then
+        auth_header="Authorization: Bearer $token"
+    fi
+
+    # 优先通过 GitHub API 获取最新 tag，直连静态资产，减少 302 重定向层级避免网关 504
+    local latest_tag=""
+    if [[ -n "$auth_header" ]]; then
+        latest_tag=$(curl -fsSL --connect-timeout 10 -H "$auth_header" "https://api.github.com/repos/h4ckf0r0day/obscura/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
+    else
+        latest_tag=$(curl -fsSL --connect-timeout 10 "https://api.github.com/repos/h4ckf0r0day/obscura/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
+    fi
+
+    local download_url=""
+    if [[ -n "$latest_tag" ]]; then
+        download_url="https://github.com/h4ckf0r0day/obscura/releases/download/${latest_tag}/${asset_name}"
+        echo "  检测到最新版本: $latest_tag"
+    else
+        download_url="https://github.com/h4ckf0r0day/obscura/releases/latest/download/${asset_name}"
+    fi
+
+    local archive_file="$cache_dir/$asset_name"
+    local tmp_archive="$cache_dir/${asset_name}.tmp.$$"
+
+    local has_valid_cache=false
+    if [[ -f "$archive_file" && -s "$archive_file" ]]; then
+        if [[ "$ext" == "zip" ]]; then
+            if command -v unzip >/dev/null 2>&1; then
+                unzip -tq "$archive_file" >/dev/null 2>&1 && has_valid_cache=true
+            elif command -v python3 >/dev/null 2>&1; then
+                python3 -c "import zipfile, sys; sys.exit(0 if zipfile.ZipFile('$archive_file').testzip() is None else 1)" 2>/dev/null && has_valid_cache=true
+            else
+                has_valid_cache=true
+            fi
+        else
+            tar -tzf "$archive_file" >/dev/null 2>&1 && has_valid_cache=true
+        fi
+    fi
+
+    echo "  正在拉取最新版: $download_url"
+    local download_success=false
+
+    # 尝试下载到临时文件，增加重试与全部错误自动重试
+    local curl_exit=0
+    if [[ -n "$auth_header" ]]; then
+        curl -fSL --connect-timeout 30 --retry 5 --retry-delay 2 --retry-all-errors -H "$auth_header" "$download_url" -o "$tmp_archive" || curl_exit=$?
+    else
+        curl -fSL --connect-timeout 30 --retry 5 --retry-delay 2 --retry-all-errors "$download_url" -o "$tmp_archive" || curl_exit=$?
+    fi
+
+    if [[ $curl_exit -eq 0 && -f "$tmp_archive" ]]; then
+        local valid_download=false
+        if [[ "$ext" == "zip" ]]; then
+            if command -v unzip >/dev/null 2>&1; then
+                unzip -tq "$tmp_archive" >/dev/null 2>&1 && valid_download=true
+            elif command -v python3 >/dev/null 2>&1; then
+                python3 -c "import zipfile, sys; sys.exit(0 if zipfile.ZipFile('$tmp_archive').testzip() is None else 1)" 2>/dev/null && valid_download=true
+            else
+                valid_download=true
+            fi
+        else
+            tar -tzf "$tmp_archive" >/dev/null 2>&1 && valid_download=true
+        fi
+
+        if [[ "$valid_download" == "true" ]]; then
+            mv -f "$tmp_archive" "$archive_file"
+            download_success=true
+            echo "  ✓ 最新版下载完成并校验成功"
+        else
+            echo "  ⚠️ 下载文件校验未通过（可能返回了网关错误页或数据残缺）"
+            rm -f "$tmp_archive"
+        fi
+    else
+        rm -f "$tmp_archive"
+    fi
+
+    if [[ "$download_success" == "false" ]]; then
+        if [[ "$has_valid_cache" == "true" ]]; then
+            echo "  ⚠️ 远程下载最新版失败（网络超时/504），自动降级使用本地已有完整缓存: $asset_name"
+        else
+            echo "❌ 下载 Obscura 失败且本地无有效缓存: $download_url"
+            echo "💡 提示: 请检查网络连接/代理，或手动将 $asset_name 放入 $cache_dir"
+            exit 1
+        fi
+    fi
+
+    echo "📦 解压 Obscura 到 $OBSCURA_DIR..."
+    if [[ "$PLATFORM" == "windows" ]]; then
+        if command -v unzip >/dev/null 2>&1; then
+            unzip -q -o "$archive_file" -d "$OBSCURA_DIR"
+        elif command -v python3 >/dev/null 2>&1; then
+            python3 -c "import zipfile; zipfile.ZipFile('$archive_file').extractall('$OBSCURA_DIR')"
+        else
+            "$JAVA_HOME/bin/jar" -xf "$archive_file"
+        fi
+    else
+        tar -xzf "$archive_file" -C "$OBSCURA_DIR"
+        chmod +x "$OBSCURA_DIR/obscura"* 2>/dev/null || true
+    fi
+}
+
+deploy_obscura() {
+    local target_res_dir="$1"
+    if [[ "$SKIP_OBSCURA" == "true" || ! -d "$OBSCURA_DIR" ]]; then
+        return 0
+    fi
+    mkdir -p "$target_res_dir"
+    cp -R "$OBSCURA_DIR/"* "$target_res_dir/"
+    chmod +x "$target_res_dir/obscura"* 2>/dev/null || true
+}
+
+prepare_obscura
+
 case "$PLATFORM" in
     macos)
         APP_DIR=$(find "$PROJECT_DIR/app/desktopApp/build/compose/binaries/main-release/app" -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
@@ -205,12 +346,22 @@ case "$PLATFORM" in
             cp -R "$FRAMEWORKS_SRC/"* "$CEF_DST/"
         fi
 
+        echo "💉 部署 Obscura 到 App 资源目录..."
+        deploy_obscura "$FINAL_APP/Contents/Resources"
+
         if [[ "$SKIP_SIGN" == "false" ]]; then
             echo "🔏 执行 Ad-hoc 签名..."
             codesign --remove-signature "$FINAL_APP" 2>/dev/null || true
             find "$FINAL_APP" -name "*.dylib" -exec codesign --force -s - {} \; 2>/dev/null || true
             find "$FINAL_APP" -name "*.jnilib" -exec codesign --force -s - {} \; 2>/dev/null || true
             
+            if [[ -f "$FINAL_APP/Contents/Resources/obscura" ]]; then
+                codesign --force -s - "$FINAL_APP/Contents/Resources/obscura" 2>/dev/null || true
+            fi
+            if [[ -f "$FINAL_APP/Contents/Resources/obscura-worker" ]]; then
+                codesign --force -s - "$FINAL_APP/Contents/Resources/obscura-worker" 2>/dev/null || true
+            fi
+
             CEF_FW_DIR="$FINAL_APP/Contents/runtime/Contents/Frameworks"
             if [[ -d "$CEF_FW_DIR/cef_server.app" ]]; then
                 find "$CEF_FW_DIR" -name "*.dylib" -exec codesign --force -s - {} \; 2>/dev/null || true
@@ -240,6 +391,13 @@ case "$PLATFORM" in
         rm -rf "$DESKTOP_RUNTIME"
         mkdir -p "$(dirname "$DESKTOP_RUNTIME")"
         cp -R "$JAVA_HOME" "$DESKTOP_RUNTIME"
+        # 裁剪仅编译期使用的 SDK 文件（jmods/、C 头文件 include/ 与开发工具），精简绿色运行时
+        rm -rf "$DESKTOP_RUNTIME/jmods" "$DESKTOP_RUNTIME/include" "$DESKTOP_RUNTIME/demo" "$DESKTOP_RUNTIME/man"
+        rm -f "$DESKTOP_RUNTIME/bin/javac"* "$DESKTOP_RUNTIME/bin/javadoc"* "$DESKTOP_RUNTIME/bin/jlink"* "$DESKTOP_RUNTIME/bin/jpackage"* "$DESKTOP_RUNTIME/bin/jshell"* 2>/dev/null || true
+
+        echo "💉 部署 Obscura 到 Desktop 资源目录..."
+        deploy_obscura "$DESKTOP_DIR/resources"
+
         archive_folder "$DESKTOP_DIR"
         ;;
 esac
@@ -248,6 +406,9 @@ esac
 for variant in bundled api; do
     SERVER_DIR="$STAGING/${APP_NAME}-server-$variant-$PLATFORM-$ARCH_NAME"
     cp -R "$PROJECT_DIR/server/build/install/server-$variant" "$SERVER_DIR"
+
+    echo "💉 部署 Obscura 到 Server ($variant) 资源目录..."
+    deploy_obscura "$SERVER_DIR/resources"
     if [[ "$variant" == "bundled" ]]; then
         cat > "$SERVER_DIR/run.sh" <<'EOF'
 #!/usr/bin/env sh

@@ -4,14 +4,18 @@ import ai.koog.agents.core.tools.SimpleTool
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonTransformingSerializer
 import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.MessageRole
+import xyz.mederi.domain.model.TodoDetail
 import xyz.mederi.domain.model.TodoItem
 import xyz.mederi.domain.model.TodoStatus
 import xyz.mederi.domain.model.encodeTodos
@@ -23,6 +27,18 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * ask_user 参数形状矫正：questions 被模型序列化成 JSON 字符串 / 单对象时矫正（LenientArgs.kt）。
+ * glm-5.3 实测复现（sess_e5a60397 seq119、sess_be789501 seq95）：question 文本内嵌
+ * ASCII 引号时，模型把整个 questions 数组包成字符串 →
+ * "Expected JsonArray, but had JsonLiteral ... at path: $.questions"，回喂重试虽可自纠但浪费一轮。
+ */
+private object LenientAskUserArgs :
+    JsonTransformingSerializer<AgentTools.AskUserArgs>(AgentTools.AskUserArgs.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        coerceObjectListField(element, "questions")
+}
 
 /**
  * Agent 自管理工具集。
@@ -54,10 +70,12 @@ class AgentTools(
 
     @Serializable
     data class TodoItemArg(
-        @LLMDescription("Todo content: one concrete, actionable step.")
+        @LLMDescription("Todo title / content: one concrete, actionable step.")
         val content: String,
-        @LLMDescription("Status: pending, in_progress, completed, or cancelled.")
-        val status: TodoStatus
+        @LLMDescription("Status: pending, in_progress, completed, cancelled, or failed.")
+        val status: TodoStatus,
+        @LLMDescription("Optional structured detail for working memory (background, requirement, approach, scope, done, notes, attempts).")
+        val detail: TodoDetail? = null
     )
 
     @Serializable
@@ -72,7 +90,9 @@ class AgentTools(
         argsType = typeToken<UpdateTodoArgs>(),
         name = ToolName.UPDATE_TODO.value,
         description = "Replace the entire current todo list. One call sets the whole list (passing an empty " +
-            "list clears it); at most one item may be in_progress."
+            "list clears it); at most one item may be in_progress. Optional structured detail provides " +
+            "working memory for the active item. Use failed status when an item cannot be completed as planned, " +
+            "followed by adding a corrective todo item."
     ) {
         override suspend fun execute(args: UpdateTodoArgs): String {
             if (sessionStore == null) {
@@ -82,9 +102,6 @@ class AgentTools(
             val errors = mutableListOf<String>()
             args.todos.forEachIndexed { i, item ->
                 if (item.content.isBlank()) errors.add("Todo $i: content must not be blank.")
-                if (item.status == TodoStatus.FAILED)
-                    errors.add("Todo $i: status 'failed' is reserved for plan verification results — " +
-                        "use pending / in_progress / completed / cancelled.")
             }
             val inProgressCount = args.todos.count { it.status == TodoStatus.IN_PROGRESS }
             if (inProgressCount > 1)
@@ -94,7 +111,7 @@ class AgentTools(
                     errors.mapIndexed { i, e -> "${i + 1}. $e" }.joinToString("\n")
 
             // 唯一真理源落库；事件与提示词挂载都只是这份持久化状态的投影
-            val items = args.todos.map { TodoItem(content = it.content, status = it.status) }
+            val items = args.todos.map { TodoItem(content = it.content, status = it.status, detail = it.detail) }
             sessionStore.updateTodos(sessionId, items)
 
             eventBus.emit(
@@ -288,7 +305,8 @@ class AgentTools(
         val multiSelect: Boolean = false
     )
 
-    @Serializable
+    @KeepGeneratedSerializer
+    @Serializable(with = LenientAskUserArgs::class)
     data class AskUserArgs(
         @LLMDescription("Questions to ask the user. May contain multiple.")
         val questions: List<AskUserQuestionArg>

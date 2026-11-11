@@ -100,6 +100,10 @@ class ProviderApiImpl(
         )
     }
 
+    override suspend fun setRetrySettings(providerId: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Provider = mederiCall {
+        providerManager.updateRetrySettings(providerId, autoRetryEnabled, retryMaxDelaySeconds)
+    }
+
     override suspend fun delete(id: String) {
         mederiCall { providerManager.delete(id) }
     }

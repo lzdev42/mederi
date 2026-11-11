@@ -197,6 +197,8 @@ class BrowserArchitectureFlowTest {
             modelsDevKey: String?
         ): Provider = untouched()
 
+        override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Provider = untouched()
+
         override suspend fun delete(id: String): Unit = untouched()
         override suspend fun listKeys(providerId: String): List<ProviderApiKey> = untouched()
         override suspend fun addKey(providerId: String, name: String, value: String, isDefault: Boolean): ProviderApiKey = untouched()
@@ -324,7 +326,7 @@ class BrowserArchitectureFlowTest {
                 elements = mapOf(".item" to FakeElement(count = 1)),
                 jsResults = mapOf("document.querySelectorAll" to """[{"title":"X","link":"https://x"}]""")
             )
-            BrowserRegistry.register("fake-arch", BrowserKind.JCEF, factory = { control })
+            BrowserRegistry.register("fake-arch", BrowserKind.OBSCURA, factory = { control })
             val manager = newManager(scope, eventBus, workDir, llm, skillsDir = skillsDir)
             val events = subscribe(scope, eventBus)
 
@@ -440,7 +442,7 @@ class BrowserArchitectureFlowTest {
         try {
             val llm = FakeLLMCaller(supportsImages = true, decisions = listOf(DONE_ONLY_DECISION))
             val control = FakeBrowserControl()
-            BrowserRegistry.register("fake-arch", BrowserKind.JCEF, factory = { control })
+            BrowserRegistry.register("fake-arch", BrowserKind.OBSCURA, factory = { control })
             val manager = newManager(scope, eventBus, workDir, llm)
 
             val taskId = manager.runTask(
@@ -472,7 +474,7 @@ class BrowserArchitectureFlowTest {
         try {
             val llm = FakeLLMCaller(supportsImages = false, decisions = listOf(DONE_ONLY_DECISION))
             val control = FakeBrowserControl()
-            BrowserRegistry.register("fake-arch", BrowserKind.JCEF, factory = { control })
+            BrowserRegistry.register("fake-arch", BrowserKind.OBSCURA, factory = { control })
             val manager = newManager(scope, eventBus, workDir, llm)
 
             val taskId = manager.runTask(
@@ -503,7 +505,7 @@ class BrowserArchitectureFlowTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val control = FakeBrowserControl()
-            BrowserRegistry.register("fake-arch", BrowserKind.JCEF, factory = { control })
+            BrowserRegistry.register("fake-arch", BrowserKind.OBSCURA, factory = { control })
 
             val opModel = AIModel(id = "op", providerModelId = "op", name = "op", supportsImages = true)
             val brainModel = AIModel(id = "brain", providerModelId = "brain", name = "brain")
@@ -562,7 +564,7 @@ class BrowserArchitectureFlowTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val control = FakeBrowserControl()
-            BrowserRegistry.register("fake-arch", BrowserKind.JCEF, factory = { control })
+            BrowserRegistry.register("fake-arch", BrowserKind.OBSCURA, factory = { control })
 
             val opModel = AIModel(id = "op", providerModelId = "op", name = "op", supportsImages = true)
             val configManager = SubagentConfigManager(

@@ -28,7 +28,9 @@ class FakeBrowserControl(
     elements: Map<String, FakeElement> = emptyMap(),
     jsResults: Map<String, String> = emptyMap(),
     /** close() 的挂起时长（毫秒）。>0 时 close 内部有真实挂起点，用于验证 NonCancellable 关闭路径。 */
-    var closeDelayMs: Long = 0
+    var closeDelayMs: Long = 0,
+    /** 后端不支持脚本化映射：selector → 异常消息；uploadFileBySelector 命中即抛 UnsupportedOperationException。 */
+    var unsupportedSelectors: Map<String, String> = emptyMap()
 ) : BrowserControl {
 
     /** selector → 元素状态。 */
@@ -117,8 +119,7 @@ class FakeBrowserControl(
     override suspend fun snapshot(): PageSnapshot = PageSnapshot(
         url = currentUrl,
         title = title,
-        yaml = "url: $currentUrl\ntitle: $title",
-        rawTree = null
+        yaml = "url: $currentUrl\ntitle: $title"
     )
 
     override suspend fun screenshot(): ByteArray? = FIXED_SCREENSHOT
@@ -179,6 +180,7 @@ class FakeBrowserControl(
     }
 
     override suspend fun uploadFileBySelector(selector: String, filePaths: List<String>): OperationResult {
+        unsupportedSelectors[selector]?.let { throw UnsupportedOperationException(it) }
         log += "uploadFileBySelector $selector ${filePaths.joinToString(",")}"
         return OperationResult.Success("upload_file", detail = filePaths.joinToString(","))
     }

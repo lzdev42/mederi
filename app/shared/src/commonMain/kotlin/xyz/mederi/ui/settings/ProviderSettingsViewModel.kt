@@ -46,6 +46,8 @@ import mederi.app.shared.generated.resources.provider_created_success
 import mederi.app.shared.generated.resources.provider_delete_failed
 import mederi.app.shared.generated.resources.provider_deleted
 import mederi.app.shared.generated.resources.provider_disconnected
+import mederi.app.shared.generated.resources.provider_retry_invalid
+import mederi.app.shared.generated.resources.provider_retry_saved
 import mederi.app.shared.generated.resources.provider_save_failed
 
 /**
@@ -140,6 +142,10 @@ data class ProviderItemUiState(
     val apiKeys: List<ApiKeyOption> = emptyList(),
     val reasoningLevels: Map<String, String?> = emptyMap(),
     val responseSanitization: Boolean = false,
+    /** 供应商级自动重试开关：false=临时故障立即上抛不重试。 */
+    val autoRetryEnabled: Boolean = true,
+    /** 供应商级重试等待上限（秒）：null=全局默认区间（默认随机 0~30 秒）；0=无延迟立即重试；N≥1=随机 1~N 秒。 */
+    val retryMaxDelaySeconds: Int? = null,
     val models: List<ModelItemUiState> = emptyList(),
     val syncStatus: ModelsSyncStatus = ModelsSyncStatus.Idle,
     val isChatGptOAuth: Boolean = false
@@ -251,6 +257,22 @@ data class ProviderSettingsUiState(
                 matchesQuery && matchesFilter
             }
         }
+}
+
+/**
+ * 解析重试等待上限输入：空=恢复默认；非数字/负数/溢出=非法；合法=秒数值。纯函数（jvmTest 直测）。
+ */
+internal sealed interface RetryInputParse {
+    data class Valid(val seconds: Int) : RetryInputParse
+    data object RestoreDefault : RetryInputParse
+    data object Invalid : RetryInputParse
+}
+
+internal fun parseRetryMaxDelayInput(text: String): RetryInputParse {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return RetryInputParse.RestoreDefault
+    val n = trimmed.toIntOrNull() ?: return RetryInputParse.Invalid
+    return if (n >= 0) RetryInputParse.Valid(n) else RetryInputParse.Invalid
 }
 
 /**
@@ -379,6 +401,8 @@ class ProviderSettingsViewModel(
             apiKeys = config.apiKeys,
             reasoningLevels = config.reasoningLevels,
             responseSanitization = config.responseSanitization,
+            autoRetryEnabled = config.autoRetryEnabled,
+            retryMaxDelaySeconds = config.retryMaxDelaySeconds,
             models = config.models.map { toModelItemUiState(it) },
             syncStatus = syncStatus,
             isChatGptOAuth = config.isChatGptOAuth
@@ -569,6 +593,33 @@ class ProviderSettingsViewModel(
                     }
                 )
             }
+        }
+    }
+
+    /**
+     * 保存供应商重试等待上限设置。
+     *
+     * 空输入 = 恢复默认（发 null 到契约层）；非数字/负数/溢出 = 前置拦截给友好错误，不发请求。
+     */
+    fun saveProviderRetrySetting(providerId: String, autoRetryEnabled: Boolean, text: String) {
+        val parsed = parseRetryMaxDelayInput(text)
+        val seconds: Int? = when (parsed) {
+            is RetryInputParse.Valid -> parsed.seconds
+            RetryInputParse.RestoreDefault -> null
+            RetryInputParse.Invalid -> {
+                uiState = uiState.copy(errorMessage = UiMessage(Res.string.provider_retry_invalid))
+                return
+            }
+        }
+        viewModelScope.launch {
+            appState.aiCore.setProviderRetrySetting(providerId, autoRetryEnabled, seconds).fold(
+                onSuccess = {
+                    uiState = uiState.copy(errorMessage = null, successMessage = UiMessage(Res.string.provider_retry_saved))
+                },
+                onFailure = { e ->
+                    uiState = uiState.copy(successMessage = null, errorMessage = UiMessage(Res.string.provider_save_failed, listOf(e.message ?: "?")))
+                }
+            )
         }
     }
 

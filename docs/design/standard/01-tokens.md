@@ -2,7 +2,7 @@
 
 > 本文件是 Mederi UI 的**取值真理源**。配色、排版、间距、圆角的精确值都在这里，组件层（`02-components.md`）与约定层（`03-conventions.md`）只允许引用本文件的语义别名，不得自创色值。
 >
-> 色值取自 `docs/design/mederi_ui_prototype.html` 的 `:root` 两个块（Radix Themes 色阶）。所有 hex 逐字照原型，不自创。
+> 以下色值沿用 Radix Themes 色阶。
 
 ## 1. 配色
 

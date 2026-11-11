@@ -59,6 +59,13 @@ interface AiCore {
         Result.failure(UnsupportedOperationException("ChatGPT usage unavailable"))
 
     suspend fun configureProvider(providerId: String, input: ProviderUpdateInput): Result<Unit>
+    /**
+     * 单独设置供应商 LLM 重试配置（自动重试开关 + 最大退避延迟）。
+     * @param autoRetryEnabled 自动重试开关；false = 不重试，临时故障立即上抛。
+     * @param retryMaxDelaySeconds 最大随机退避秒数；null = 全局默认区间；0 = 无延迟立即重试；N≥1 = 随机 1~N 秒。
+     *   重试时服务端 Retry-After 建议优先。
+     */
+    suspend fun setProviderRetrySetting(providerId: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Result<Unit>
     suspend fun addBuiltinProvider(name: String, apiKey: String): Result<ProviderConfig>
     suspend fun deleteProvider(providerId: String): Result<Unit>
     suspend fun addProviderModel(providerId: String, providerModelId: String, name: String, supportsThinking: Boolean = false, supportsImages: Boolean = false, contextWindow: Int? = null, maxTokens: Int? = null, reasoningLevels: List<String> = emptyList(), isEnabled: Boolean = true): Result<Unit>

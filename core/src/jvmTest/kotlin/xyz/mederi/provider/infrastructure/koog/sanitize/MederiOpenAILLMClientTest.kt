@@ -5,9 +5,13 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import ai.koog.http.client.KoogHttpClient
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.base.models.OpenAIUsage
 import ai.koog.prompt.executor.clients.openai.base.models.PromptTokensDetails
+import ai.koog.prompt.llm.LLMProvider
+import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
@@ -290,5 +294,77 @@ class MederiOpenAILLMClientTest {
         val end = frames.filterIsInstance<StreamFrame.End>().single()
 
         assertEquals("stop", end.finishReason, "末尾帧的空串 finishReason 不得覆盖已收到的有效 finishReason")
+    }
+
+    @Test
+    fun `chat streaming decodes hetzner non-standard chunks and preserves trailing cached tokens`() = runBlocking {
+        val rawChunks = listOf(
+            """{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3.6-35B-A3B","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}],"usage":{"prompt_tokens":2540,"total_tokens":2540,"completion_tokens":0,"completion_tokens_details":{"reasoning_tokens":0}},"prompt_token_ids":null,"prompt_text":null}""",
+            """{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3.6-35B-A3B","choices":[{"index":0,"delta":{"reasoning":"thinking"},"logprobs":null,"finish_reason":null,"token_ids":null}],"usage":{"prompt_tokens":2540,"total_tokens":2545,"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":5}}}""",
+            """{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3.6-35B-A3B","choices":[{"index":0,"delta":{"content":"391"},"logprobs":null,"finish_reason":"stop","stop_reason":null,"token_ids":null}],"usage":{"prompt_tokens":2540,"total_tokens":2556,"completion_tokens":16,"completion_tokens_details":{"reasoning_tokens":5}}}""",
+            """{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3.6-35B-A3B","choices":[],"usage":{"prompt_tokens":2540,"total_tokens":2556,"completion_tokens":16,"prompt_tokens_details":{"cached_tokens":2096,"created_cache_tokens":0},"completion_tokens_details":{"reasoning_tokens":5}}}"""
+        )
+        val decoded = kotlinx.coroutines.flow.flow {
+            rawChunks.forEach { emit(sanitizeJson.decodeFromString<SanitizedStreamResponse>(it)) }
+        }
+        val frames = makeClient().processStreamingFlow(decoded).toList()
+        val end = frames.filterIsInstance<StreamFrame.End>().single()
+
+        assertEquals("stop", end.finishReason)
+        assertEquals(2540, end.metaInfo.inputTokensCount)
+        assertEquals(16, end.metaInfo.outputTokensCount)
+        assertEquals("2096", end.metaInfo.metadata?.get("cachedTokens")?.jsonPrimitive?.content)
+        assertEquals("thinking", frames.filterIsInstance<StreamFrame.ReasoningDelta>().single().text)
+        assertEquals("391", frames.filterIsInstance<StreamFrame.TextDelta>().single().text)
+    }
+
+    @Test
+    fun `responses streaming handles null content array, cached tokens, and incomplete status`() = runBlocking {
+        val rawEvents = listOf(
+            """{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","summary":[],"type":"reasoning","content":null,"encrypted_content":null,"status":"in_progress"}}""",
+            """{"type":"response.reasoning_text.delta","output_index":0,"item_id":"rs_1","delta":"step 1"}""",
+            """{"type":"response.completed","response":{"id":"resp_1","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"rs_1","summary":[],"type":"reasoning","content":[{"type":"reasoning_text","text":"step 1"}]}],"usage":{"input_tokens":2540,"output_tokens":16,"total_tokens":2556,"input_tokens_details":{"cached_tokens":2096,"cache_write_tokens":0}}}}"""
+        )
+        val events = kotlinx.coroutines.flow.flow {
+            rawEvents.forEach { emit(sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(it)) }
+        }
+        val frames = makeClient().processResponsesStreamingFlow(events).toList()
+        val end = frames.filterIsInstance<StreamFrame.End>().single()
+
+        assertEquals("incomplete", end.finishReason)
+        assertEquals(2540, end.metaInfo.inputTokensCount)
+        assertEquals(16, end.metaInfo.outputTokensCount)
+        assertEquals("2096", end.metaInfo.metadata?.get("cachedTokens")?.jsonPrimitive?.content)
+        assertEquals("step 1", frames.filterIsInstance<StreamFrame.ReasoningDelta>().single().text)
+    }
+
+    @Test
+    fun `responses non-stream preserves cached tokens and incomplete status`() = runBlocking {
+        val body = """{"id":"resp_1","status":"incomplete","output":[{"type":"reasoning","id":"rs_1","summary":null,"content":[{"type":"reasoning_text","text":"partial"}]}],"usage":{"input_tokens":2540,"output_tokens":16,"total_tokens":2556,"input_tokens_details":{"cached_tokens":2096,"cache_write_tokens":0}}}"""
+        val http = object : KoogHttpClient {
+            override val clientName: String = "fake-responses"
+            override suspend fun <R : Any> get(path: String, responseType: KClass<R>, parameters: Map<String, String>, headers: Map<String, String>): R = error("not used")
+            @Suppress("UNCHECKED_CAST")
+            override suspend fun <T : Any, R : Any> post(path: String, requestBody: T, requestBodyType: KClass<T>, responseType: KClass<R>, parameters: Map<String, String>, headers: Map<String, String>): R = body as R
+            override fun <T : Any, R : Any, O : Any> sse(path: String, requestBody: T, requestBodyType: KClass<T>, dataFilter: (String?) -> Boolean, decodeStreamingResponse: (String) -> R, processStreamingChunk: (R) -> O?, parameters: Map<String, String>, headers: Map<String, String>): Flow<O> = error("not used")
+            override fun <T : Any> lines(path: String, requestBody: T, requestBodyType: KClass<T>, parameters: Map<String, String>, headers: Map<String, String>): Flow<String> = error("not used")
+            override fun close() = Unit
+        }
+        val factory = object : KoogHttpClient.Factory {
+            override fun create(clientName: String, baseUrl: String, headers: Map<String, String>, queryParameters: Map<String, String>, requestTimeoutMillis: Long, connectTimeoutMillis: Long, socketTimeoutMillis: Long, json: Json): KoogHttpClient = http
+        }
+        val client = MederiOpenAILLMClient(
+            apiKey = "test-key",
+            settings = OpenAIClientSettings(),
+            httpClientFactory = factory,
+            chatCompletionsPath = "https://example.com/v1/chat/completions"
+        )
+        val response = client.execute(Prompt(emptyList(), "sess-1"), LLModel(LLMProvider.OpenAI, "Qwen/Qwen3.6-35B-A3B"), emptyList())
+
+        assertEquals("incomplete", response.finishReason)
+        assertEquals(2540, response.metaInfo.inputTokensCount)
+        assertEquals(16, response.metaInfo.outputTokensCount)
+        assertEquals("2096", response.metaInfo.metadata?.get("cachedTokens")?.jsonPrimitive?.content)
+        assertEquals(listOf("partial"), response.parts.filterIsInstance<MessagePart.Reasoning>().single().content)
     }
 }

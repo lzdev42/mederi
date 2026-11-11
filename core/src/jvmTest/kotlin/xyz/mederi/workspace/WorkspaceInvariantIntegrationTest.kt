@@ -1297,8 +1297,9 @@ class WorkspaceInvariantIntegrationTest {
                 var driver = JdbcSqliteDriver("jdbc:sqlite:${dbFile.absolutePath}")
                 MederiDataDatabase.Schema.create(driver)
                 Mederi.migrateDataDb(driver)
-                var sessions: xyz.mederi.store.SessionStore = SqliteSessionStore(driver)
-                var delegate: WorkspaceStore = SqliteWorkspaceStore(driver)
+                val dbm = xyz.mederi.store.db.DatabaseManager(driver)
+                var sessions: xyz.mederi.store.SessionStore = SqliteSessionStore(dbm)
+                var delegate: WorkspaceStore = SqliteWorkspaceStore(dbm)
 
                 // 装饰器：根据 case 在特定阶段注入崩溃
                 val store = object : WorkspaceStore by delegate {
@@ -1373,8 +1374,9 @@ class WorkspaceInvariantIntegrationTest {
                 // 真实关闭旧连接并重开磁盘 SQLite（验证跨进程重启/重开后的真实恢复能力）
                 driver.close()
                 val reopenedDriver = JdbcSqliteDriver("jdbc:sqlite:${dbFile.absolutePath}")
-                val reopenedSessions = SqliteSessionStore(reopenedDriver)
-                val reopenedStore = SqliteWorkspaceStore(reopenedDriver)
+                val reopenedDbm = xyz.mederi.store.db.DatabaseManager(reopenedDriver)
+                val reopenedSessions = SqliteSessionStore(reopenedDbm)
+                val reopenedStore = SqliteWorkspaceStore(reopenedDbm)
                 val restarted = WorkspaceManager(
                     reopenedStore, reopenedSessions, InMemoryHistoryStore(),
                     worktreesRoot = wt
@@ -1729,8 +1731,9 @@ class WorkspaceInvariantIntegrationTest {
                 Mederi.migrateDataDb(driver)
 
                 val faultDriver = FaultInjectingDriver(driver, failOnSql)
-                val sessionStore = SqliteSessionStore(faultDriver)
-                val workspaceStore = SqliteWorkspaceStore(faultDriver)
+                val faultDbm = xyz.mederi.store.db.DatabaseManager(faultDriver)
+                val sessionStore = SqliteSessionStore(faultDbm)
+                val workspaceStore = SqliteWorkspaceStore(faultDbm)
 
                 val sessionId = "sess_$boundary"
                 sessionStore.insert(
@@ -1795,8 +1798,9 @@ class WorkspaceInvariantIntegrationTest {
                 val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
                 MederiDataDatabase.Schema.create(driver)
                 Mederi.migrateDataDb(driver)
-                val sessionStore = SqliteSessionStore(driver)
-                val workspaceStore = SqliteWorkspaceStore(driver)
+                val dbm = xyz.mederi.store.db.DatabaseManager(driver)
+                val sessionStore = SqliteSessionStore(dbm)
+                val workspaceStore = SqliteWorkspaceStore(dbm)
 
                 sessionStore.insert(
                     Session(

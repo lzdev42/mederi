@@ -2,6 +2,23 @@ package xyz.mederi
 
 import com.pty4j.PtyProcess
 import com.pty4j.PtyProcessBuilder
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.parameter
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import mederi.app.shared.generated.resources.*
+import xyz.mederi.core.contract.dto.ReadyInfo
+import xyz.mederi.ui.UiMessage
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.server.Server
 import xyz.mederi.ui.appstate.RemoteControlHooks
@@ -11,6 +28,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -18,7 +36,7 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * desktop 宿主实现：内嵌 server 启停 + Cloudflare 隧道。
  *
- * 隧道用 pty4j 以真实 pty 拉起 `cloudflared tunnel --no-autoupdate run --token <token>`
+ * 隧道用 pty4j 以真实 pty 拉起 `cloudflared tunnel --no-autoupdate run (TUNNEL_TOKEN)`
  * （连接器 token 模式）：本进程（含 kill -9 / 崩溃）退出时 OS 关闭 pty master，
  * 内核向 pty 前台进程组发 SIGHUP，cloudflared 随之退出 —— 与"终端关了进程就死"
  * 同语义，无需看门狗轮询。
@@ -33,7 +51,7 @@ class DesktopRemoteControlHooks(
     private val webappDir: String?,
 ) : RemoteControlHooks {
 
-    private var tunnelProcess: PtyProcess? = null
+    @Volatile private var tunnelProcess: PtyProcess? = null
     private val homeDir: String = System.getProperty("user.home") ?: ""
 
     override suspend fun start(port: Int, password: String?): RemoteStartResult =
@@ -109,32 +127,83 @@ class DesktopRemoteControlHooks(
     /** 探测 cloudflared：能解析到可执行路径即视为已安装。 */
     override fun isCloudflaredInstalled(): Boolean = resolveCloudflaredPath() != null
 
-    /**
-     * 启动隧道。启动后读 pty 输出确认 cloudflared 连上 Cloudflare 边缘网络，
-     * 避免进程启动即退/连不上时误报成功（面板显示 Inactive）。
-     *
-     * cloudflared 健康启动输出 "Registered tunnel connection"（建立到边缘的连接，
-     * 通常 4 条 = Healthy）；出错时输出 " ERR ..." 或直接退出。我们等到第一条
-     * Registered 即返回 Started（后续连接异步建立），出错/退出返回 Failed（带日志行）。
-     */
-    override fun startTunnel(port: Int, token: String, domain: String?): TunnelStartResult {
-        // token 为空 → 直接失败
-        if (token.isBlank()) return TunnelStartResult.Failed("请先填写隧道 token")
-
-        // 已在运行 → 幂等返回
-        val running = tunnelProcess
-        if (running != null && running.isAlive) {
-            return TunnelStartResult.Started(formatTunnelUrl(domain))
+    override suspend fun startTunnel(port: Int, token: String, domain: String?, apiToken: String?): TunnelStartResult {
+        if (apiToken == null && token.isBlank()) {
+            return TunnelStartResult.ConfigurationFailed(UiMessage(Res.string.settings_tunnel_no_token))
         }
-        val cloudflared = resolveCloudflaredPath() ?: return TunnelStartResult.NotInstalled
+        val cloudflared = runInterruptible(Dispatchers.IO) { resolveCloudflaredPath() }
+            ?: return TunnelStartResult.NotInstalled
+        if (apiToken == null) return connect(cloudflared, token.trim(), formatTunnelUrl(domain))
 
+        return try {
+            HttpClient(CIO) {
+                followRedirects = false
+                install(HttpTimeout) { requestTimeoutMillis = 10_000 }
+            }.use { client ->
+                val connection = CloudflareTunnelProvisioner(client).prepare(apiToken, domain, port)
+                val url = "https://${connection.hostname}"
+                val result = connect(cloudflared, connection.token, url)
+                if (result !is TunnelStartResult.Started) return result
+                if (verifyPublicRoute(client, url) && tunnelProcess?.isAlive == true) {
+                    result
+                } else {
+                    stopTunnel()
+                    TunnelStartResult.ConfigurationFailed(UiMessage(Res.string.settings_tunnel_route_unreachable, listOf(url)))
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            stopTunnel()
+            throw cancelled
+        } catch (failure: CloudflareTunnelProvisioner.SetupFailure) {
+            TunnelStartResult.ConfigurationFailed(failure.reason)
+        } catch (_: Exception) {
+            stopTunnel()
+            TunnelStartResult.ConfigurationFailed(UiMessage(Res.string.settings_tunnel_api_unavailable))
+        }
+    }
+
+    private suspend fun verifyPublicRoute(client: HttpClient, url: String): Boolean {
+        return withTimeoutOrNull(30_000) {
+            val json = Json { ignoreUnknownKeys = true }
+            repeat(8) {
+                try {
+                    val response = client.get("$url/v1/ready") {
+                        header(HttpHeaders.CacheControl, "no-cache")
+                        parameter("probe", UUID.randomUUID().toString())
+                    }
+                    if (response.status.value == 200 && json.decodeFromString<ReadyInfo>(response.bodyAsText()).ready) {
+                        return@withTimeoutOrNull true
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // DNS, TLS and tunnel configuration can take a few seconds to propagate.
+                }
+                delay(2_000)
+            }
+            false
+        } ?: false
+    }
+
+    private suspend fun connect(cloudflared: String, token: String, url: String?): TunnelStartResult {
+        return try {
+            runInterruptible(Dispatchers.IO) { connectProcess(cloudflared, token, url) }
+                .also { if (it !is TunnelStartResult.Started) stopTunnel() }
+        } catch (cancelled: CancellationException) {
+            stopTunnel()
+            throw cancelled
+        }
+    }
+
+    private fun connectProcess(cloudflared: String, token: String, url: String?): TunnelStartResult {
+        if (tunnelProcess?.isAlive == true) return TunnelStartResult.Started(url)
         return runCatching {
             // 用绝对路径启动，避免 pty 子进程 PATH 受限找不到 cloudflared。
             // --no-autoupdate 防止 cloudflared 自动更新重启导致 pty 断开（官方推荐）。
-            // 不调 setEnvironment —— 默认继承父进程完整环境（含 PATH/HOME），
-            // setEnvironment 会替换而非合并环境，丢掉 PATH 等会让 cloudflared 运行异常。
+            // 保留父进程环境，连接器 Token 通过环境传递以避免出现在命令行。
             val process = PtyProcessBuilder()
-                .setCommand(arrayOf(cloudflared, "tunnel", "--no-autoupdate", "run", "--token", token))
+                .setCommand(arrayOf(cloudflared, "tunnel", "--no-autoupdate", "run"))
+                .setEnvironment(System.getenv() + ("TUNNEL_TOKEN" to token))
                 .setDirectory(homeDir)
                 .start()
             tunnelProcess = process
@@ -153,11 +222,11 @@ class DesktopRemoteControlHooks(
                     while (line != null) {
                         synchronized(recentLines) {
                             if (recentLines.size >= 20) recentLines.pollFirst()
-                            recentLines.addLast(line)
+                            recentLines.addLast(line.replace(token, "[redacted]"))
                         }
                         if (line.contains("Registered tunnel connection")) {
                             // 至少一条连接成功 → 隧道已连通 Cloudflare 边缘
-                            outcome.compareAndSet(null, TunnelStartResult.Started(formatTunnelUrl(domain)))
+                            outcome.compareAndSet(null, TunnelStartResult.Started(url))
                             latch.countDown()
                         }
                         line = reader.readLine()
@@ -183,7 +252,7 @@ class DesktopRemoteControlHooks(
                     "cloudflared 连接超时\n${diagLines()}"
                 TunnelStartResult.Failed(msg)
             }
-        }.getOrElse { TunnelStartResult.Failed(it.message ?: "隧道启动失败") }
+        }.getOrElse { TunnelStartResult.Failed(it.message?.replace(token, "[redacted]") ?: "隧道启动失败") }
     }
 
     /** 停止隧道：destroy（pty 下等效于终端里 Ctrl-C / 关闭，cloudflared 收 SIGHUP 退出）。 */

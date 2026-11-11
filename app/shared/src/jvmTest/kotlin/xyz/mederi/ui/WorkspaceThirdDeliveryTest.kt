@@ -33,8 +33,7 @@ import xyz.mederi.ui.components.ImageReaderToolbar
 import xyz.mederi.ui.components.ExportActionButton
 import xyz.mederi.ui.components.ExportOutcome
 import xyz.mederi.util.ExportStatus
-import xyz.mederi.ui.components.FilesPanelTabs
-import xyz.mederi.ui.components.FilesTab
+
 import xyz.mederi.ui.components.ProjectTreeContent
 import xyz.mederi.ui.host.FileNode
 import xyz.mederi.ui.host.ProjectFileTreeProvider
@@ -143,47 +142,8 @@ class WorkspaceThirdDeliveryTest {
         override fun readText(path: String): String? = null
     }
 
-    @Test
-    fun filesTabsSwitchThroughCallerAndExposeSelectionAndCount() = runComposeUiTest {
-        val current = mutableStateOf(FilesTab.Tree)
-        var tree = ""
-        var diff = ""
-        setContent {
-            AppTheme {
-                tree = stringResource(Res.string.files_subtab_tree)
-                diff = stringResource(Res.string.files_subtab_diff)
-                FilesPanelTabs(current.value, 3, { current.value = it }, Modifier.width(280.dp))
-            }
-        }
-        onNodeWithText(tree).assertIsSelected()
-        onNodeWithText(diff).assertIsNotSelected().performClick()
-        onNodeWithText(diff).assertIsSelected()
-        onNodeWithText("3", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithText(tree).assertIsNotSelected().performClick()
-        runOnIdle { assertEquals(FilesTab.Tree, current.value) }
-    }
-
-    @Test
-    fun fileNavigationKeepsBothActionsInsideNarrowWidthWithLargerText() = runComposeUiTest {
-        var tree = ""
-        var diff = ""
-        setContent {
-            AppTheme {
-                CompositionLocalProvider(LocalDensity provides Density(1f, 1.5f)) {
-                    tree = stringResource(Res.string.files_subtab_tree)
-                    diff = stringResource(Res.string.files_subtab_diff)
-                    FilesPanelTabs(FilesTab.Tree, 123, {}, Modifier.width(280.dp).testTag("largeTextTabs"))
-                }
-            }
-        }
-        val group = onNodeWithTag("largeTextTabs").fetchSemanticsNode().boundsInRoot
-        for (label in listOf(tree, diff)) {
-            onNodeWithText(label).assertIsDisplayed()
-            val bounds = onNodeWithText(label).fetchSemanticsNode().boundsInRoot
-            assertTrue(bounds.left >= group.left && bounds.right <= group.right)
-        }
-        onNodeWithText("123", useUnmergedTree = true).assertIsDisplayed()
-    }
+    // 2026-11：FilesPanel 双 Tab（树/变更）包装层已删除——变更看 DIFF 面板，
+    // 项目文件树移入文件查看器（ARTIFACTS）面板左侧常驻。FilesPanelTabs 两个测试随之移除。
 
     @Test
     fun filteringRetainsAncestorsAndFileOpenReceivesFullNode() = runComposeUiTest {
@@ -383,7 +343,6 @@ class WorkspaceThirdDeliveryTest {
                     .background(LocalMederiColors.current.surfaceWorkspace).padding(24.dp).testTag("fileSample"),
                     horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                     Column(Modifier.width(260.dp)) {
-                        FilesPanelTabs(FilesTab.Tree, 3, {})
                         ProjectTreeContent(fixture.root, fixture, LocalMederiColors.current, {}, Modifier.weight(1f))
                     }
                     Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {

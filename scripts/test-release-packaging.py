@@ -81,7 +81,7 @@ fi
                 env = dict(os.environ, JAVA_HOME=str(java_home), FAKE_PLATFORM=platform,
                            PATH=f'{tools}:{os.environ["PATH"]}')
                 env.pop('MEDERI_SERVER_JAVA_HOME', None)
-                result = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign',
+                result = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign', '--skip-obscura',
                                          '--output', 'relative output'], cwd=root, env=env,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

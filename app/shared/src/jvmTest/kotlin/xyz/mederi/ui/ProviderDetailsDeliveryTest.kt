@@ -35,7 +35,7 @@ class ProviderDetailsDeliveryTest {
         { events += "query:$it" }, { events += "filter:${it.name}" }, { events += "all:$it" },
         { events += "refresh" }, { events += "setup" }, { events += "add" },
         { events += "toggle:${it.id}" }, { events += "edit:${it.id}" }, { events += "delete:${it.id}" },
-        { events += "delete-provider" })
+        { events += "delete-provider" }, { enabled, text -> events += "retry:$enabled:$text" })
 
     @Test
     fun toolbarActionsQueryAndAllFiltersAreIndependent() = runComposeUiTest {
@@ -176,6 +176,80 @@ class ProviderDetailsDeliveryTest {
         onNodeWithText("Model model-39").assertIsDisplayed()
         runOnIdle { data.value = provider().copy(id = "provider-b", name = "Another provider") }
         onNodeWithText("Another provider").assertIsDisplayed()
+    }
+
+    @Test
+    fun retryRowPlacesCompactSwitchAndRightSideDelayInputWithEmptyDefaultPlaceholder() = runComposeUiTest {
+        val data = mutableStateOf(provider().copy(autoRetryEnabled = true, retryMaxDelaySeconds = null))
+        val saved = mutableListOf<Pair<Boolean, String>>()
+        var autoRetryLabel = ""; var delayLabel = ""; var placeholder = ""; var saveLabel = ""
+        var density = 1f
+        setContent { AppTheme {
+            density = LocalDensity.current.density
+            autoRetryLabel = stringResource(Res.string.provider_auto_retry_label)
+            delayLabel = stringResource(Res.string.provider_retry_delay_label)
+            placeholder = stringResource(Res.string.provider_retry_placeholder)
+            saveLabel = stringResource(Res.string.provider_retry_save)
+            Box(Modifier.width(560.dp)) {
+                ProviderRetrySettingRow(data.value, LocalMederiColors.current) { enabled, text ->
+                    saved += enabled to text
+                }
+            }
+        } }
+        onNodeWithText(placeholder).assertIsDisplayed()
+        val switchBounds = onNodeWithContentDescription(autoRetryLabel).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val inputNode = onNodeWithContentDescription(delayLabel).assertIsDisplayed().assertIsEnabled()
+        val inputBounds = inputNode.fetchSemanticsNode().boundsInRoot
+        val saveBounds = onNodeWithText(saveLabel).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+
+        assertTrue(kotlin.math.abs(switchBounds.center.y - inputBounds.center.y) <= 4f * density,
+            "Switch and delay input should stay on one horizontal row")
+        assertTrue(inputBounds.left > switchBounds.right, "Delay input should be placed on the right of switch")
+        assertTrue(saveBounds.left >= inputBounds.right - 1f && kotlin.math.abs(saveBounds.center.y - inputBounds.center.y) <= 4f * density,
+            "Save action should align inline to the right of delay input")
+        assertTrue(inputBounds.height <= 36f * density, "Delay input should stay compact (~30dp), was ${inputBounds.height / density}dp")
+        assertTrue(saveBounds.height <= 36f * density, "Save button should stay compact (~30dp), was ${saveBounds.height / density}dp")
+
+        onNodeWithText(saveLabel).performClick()
+        inputNode.performTextInput(" 15 ")
+        onNodeWithText(saveLabel).performClick()
+        inputNode.performTextReplacement("")
+        onNodeWithText(saveLabel).performClick()
+        runOnIdle {
+            assertEquals(listOf(true to "", true to " 15 ", true to ""), saved)
+            data.value = data.value.copy(retryMaxDelaySeconds = 8)
+        }
+        onNodeWithText("8").assertIsDisplayed()
+        onNodeWithContentDescription(autoRetryLabel).performClick()
+        onNodeWithContentDescription(delayLabel).assertIsNotEnabled()
+        onNodeWithText(saveLabel).performClick()
+        runOnIdle { assertEquals(false to "8", saved.last()) }
+    }
+
+    @Test
+    fun narrowLargeFontRetryRowWrapsAndKeepsControlsReachable() = runComposeUiTest {
+        val data = provider().copy(autoRetryEnabled = true, retryMaxDelaySeconds = null)
+        val saved = mutableListOf<Pair<Boolean, String>>()
+        var autoRetryLabel = ""; var delayLabel = ""; var saveLabel = ""
+        setContent { AppTheme {
+            autoRetryLabel = stringResource(Res.string.provider_auto_retry_label)
+            delayLabel = stringResource(Res.string.provider_retry_delay_label)
+            saveLabel = stringResource(Res.string.provider_retry_save)
+            val currentDensity = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(currentDensity.density, 2f)) {
+                Column(Modifier.width(280.dp).height(400.dp).verticalScroll(rememberScrollState())) {
+                    ProviderRetrySettingRow(data, LocalMederiColors.current) { enabled, text ->
+                        saved += enabled to text
+                    }
+                }
+            }
+        } }
+        val switchBounds = onNodeWithContentDescription(autoRetryLabel).performScrollTo().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val inputBounds = onNodeWithContentDescription(delayLabel).performScrollTo().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertTrue(inputBounds.top >= switchBounds.bottom - 1f, "Narrow/2x fontScale layout should wrap cleanly onto a second row")
+        onNodeWithContentDescription(delayLabel).performTextInput("20")
+        onNodeWithText(saveLabel).performScrollTo().assertIsDisplayed().performClick()
+        runOnIdle { assertEquals(listOf(true to "20"), saved) }
     }
 
     @Test

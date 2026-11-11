@@ -1,7 +1,7 @@
 # 供应商设置：可扩展的管理与添加布局
 
 > 2026-10-29：用户指出内置供应商增多后选取困难。布局方案已获用户批准，S2a目录/管理与对齐代码及组件验证完成，见[交付记录](settings-provider-catalog-delivery.md)；S2b详情/模型/表单代码与组件验证完成，见[交付记录](settings-provider-details-delivery.md)，完整APP仍待验。
-> 上级：[设置总计划](settings-redesign-plan.md)。沿用同一canonical设计规格、MVVM与共享组件。
+> 沿用 [Mederi UI 开发标准](standard/README.md) 的设计规格、MVVM 与共享组件。
 
 ## 1. 从实际代码确认的问题
 

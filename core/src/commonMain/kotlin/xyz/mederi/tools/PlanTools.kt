@@ -58,23 +58,6 @@ private object LenientStringList :
  * 做成按字段名单变换的顶层工具函数，供 args 类级别的 JsonTransformingSerializer 调用——
  * 模型错形出现在哪个字段不可预测，类级变换一次覆盖全部复合列表字段。
  */
-private fun coerceObjectListField(element: JsonElement, fieldName: String): JsonElement {
-    if (element !is kotlinx.serialization.json.JsonObject) return element
-    val value = element[fieldName] ?: return element
-    val fixed: JsonElement = when (value) {
-        is JsonArray -> value
-        is kotlinx.serialization.json.JsonObject -> JsonArray(listOf(value))
-        is kotlinx.serialization.json.JsonPrimitive -> runCatching {
-            when (val parsed = Json.parseToJsonElement(value.content)) {
-                is JsonArray -> parsed
-                is kotlinx.serialization.json.JsonObject -> JsonArray(listOf(parsed))
-                else -> JsonArray(emptyList())
-            }
-        }.getOrDefault(JsonArray(emptyList()))
-        else -> JsonArray(emptyList())
-    }
-    return kotlinx.serialization.json.JsonObject(element.toMutableMap().apply { put(fieldName, fixed) })
-}
 
 /** 复合列表字段名（SubtaskArg + WritePlanArgs，形状矫正目标） */
 private val OBJECT_LIST_FIELDS = listOf("decisions", "keyDecisions", "changes")
@@ -143,21 +126,21 @@ class PlanTools(
     data class PlannedChangeArg(
         @LLMDescription("Module or component grouping label, e.g. 'core', 'cli', 'ui'. Required.")
         val module: String = "",
-        @LLMDescription("Action type: MODIFY, NEW, or DELETE.")
-        val action: String,
-        @LLMDescription("File path to be created or modified.")
-        val filePath: String,
+        @LLMDescription("Action type: MODIFY, NEW, or DELETE. Required.")
+        val action: String = "",
+        @LLMDescription("File path to be created or modified. Required.")
+        val filePath: String = "",
         @LLMDescription("What specifically changes in this file — not just 'Add X' but 'Add X that does Y, called from Z'. For MODIFY: what exists now and what it becomes.")
-        val description: String,
-        @LLMDescription("Why this change is needed here, and why this approach.")
-        val rationale: String
+        val description: String = "",
+        @LLMDescription("Why this change is needed here, and why this approach. Required.")
+        val rationale: String = ""
     )
 
     @KeepGeneratedSerializer
     @Serializable(with = LenientSubtaskArg::class)
     data class SubtaskArg(
-        @LLMDescription("Subtask name. Concise action-noun.")
-        val name: String,
+        @LLMDescription("Subtask name (concise action-noun). Required.")
+        val name: String = "",
         @LLMDescription(
             "Brief: what this subtask achieves, the approach (how), and which files are touched. " +
                 "The user reviews this to understand HOW the subtask will be done before approving. " +
@@ -215,8 +198,8 @@ class PlanTools(
     data class WritePlanArgs(
         @LLMDescription("Optional. Empty = create a new plan. Non-empty = update an existing PENDING_APPROVAL plan in place — only provide fields you want to change, blank/empty fields keep their existing values.")
         val planId: String = "",
-        @LLMDescription("Plan title.")
-        val title: String,
+        @LLMDescription("Plan title. Required for new plans.")
+        val title: String = "",
         @LLMDescription(
             "ONE sentence for the approval card: what will change and to what end. " +
                 "Must NOT duplicate the Goal/Approach content; this is the single-line takeaway for the approval card."
@@ -283,8 +266,8 @@ class PlanTools(
         val researchNotes: String = "",
         @LLMDescription("Optional. Plan-level technical context: cross-subtask shared background, plan-level key decisions/changes/data. Omit when there is no cross-subtask content.")
         val appendix: String? = null,
-        @LLMDescription("Subtask list (the skeleton). Each must include name, brief intent, targetFiles, and verification. Detailed implementation specs are generated after approval via generate_spec.")
-        val subtasks: List<SubtaskArg>
+        @LLMDescription("Subtask list (the skeleton). Required for new plans; in update mode keep empty — subtasks cannot be edited in place, submit a new draft instead. Each subtask must include name, brief intent, targetFiles, and verification. Detailed implementation specs are generated after approval via generate_spec.")
+        val subtasks: List<SubtaskArg> = emptyList()
     )
 
     @KeepGeneratedSerializer
@@ -352,12 +335,10 @@ class PlanTools(
                 if (existing.subtasks.any { it.acceptanceCases.isNotEmpty() } || args.subtasks.isNotEmpty())
                     return "Error: submit a new draft with a new plan ID so the approval refers to the exact version."
                 if (args.changes.isNotEmpty()) {
-                    for (c in args.changes) {
-                        if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
-                            return "Error: Change ${c.filePath}: action must be MODIFY, NEW, or DELETE."
-                        if (c.action.equals("NEW", ignoreCase = true) && c.rationale.isBlank())
-                            return "Error: Change ${c.filePath}: a [NEW] file must justify why an existing file cannot be modified instead."
-                    }
+                    val changeErrors = validateChanges(args.changes)
+                    if (changeErrors.isNotEmpty())
+                        return "Error: Plan validation failed — fix ALL of the following items, then retry write_plan once with the complete arguments:\n" +
+                            changeErrors.mapIndexed { i, e -> "${i + 1}. $e" }.joinToString("\n")
                 }
 
                 // 应用非空字段，blank/empty = 保持原值
@@ -718,8 +699,10 @@ class PlanTools(
                     current.status == SubtaskStatus.COMPLETED || (current.spec != st.spec && args.reason.isBlank()))
                     return@updatePlan null
                 p.copy(
+                    status = if (p.status == PlanStatus.APPROVED) PlanStatus.IN_PROGRESS else p.status,
                     subtasks = p.subtasks.map { s ->
                         if (s.index == args.subtaskIndex) s.copy(
+                            status = if (s.status == SubtaskStatus.PENDING) SubtaskStatus.IN_PROGRESS else s.status,
                             spec = args.spec,
                             specChanges = s.specChanges + SpecChange(
                                 oldSpec = s.spec,
@@ -772,6 +755,37 @@ class PlanTools(
         return null
     }
 
+    /**
+     * changes 逐项校验（create 与 update 两个路径共用）。
+     *
+     * 与 DTO 全字段默认值化配套：字段缺漏不再在解码期逐个炸（kotlinx
+     * "Field 'rationale' is required ... $.3" 只报第一个，模型需要逐轮猜补——2026-11-09
+     * 实测一个 plan 里 7/18 个 change 缺 rationale），而是到这里一次性全部点名
+     * （validatePlan 的「fix ALL + retry once」设计）。
+     * 校验与原解码期必填语义严格对齐：缺失与空白同等报错（DTO 默认值化后两者不可区分），不留静默通道。
+     */
+    private fun validateChanges(changes: List<PlannedChangeArg>): List<String> {
+        val errors = mutableListOf<String>()
+        changes.forEachIndexed { i, c ->
+            val label = "Change $i (${c.filePath.ifBlank { "<filePath missing>" }})"
+            if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
+                errors.add(
+                    "$label: action must be MODIFY, NEW, or DELETE (got \"${c.action}\"). " +
+                        "Example: {module: \"core\", action: \"NEW\", filePath: \"main.go\", description: \"...\", rationale: \"...\"}."
+                )
+            if (c.filePath.isBlank())
+                errors.add("$label: filePath is required — which file does this change touch?")
+            if (c.description.isBlank())
+                errors.add("$label: description is required — what specifically changes in this file, not just the file name.")
+            if (c.rationale.isBlank())
+                errors.add(
+                    "$label: rationale is required — why this change is needed here and why this approach." +
+                        if (c.action.equals("NEW", ignoreCase = true)) " A [NEW] file must justify why an existing file cannot be modified instead." else ""
+                )
+        }
+        return errors
+    }
+
     private fun validatePlan(args: WritePlanArgs): String? {
         val errors = mutableListOf<String>()
         if (args.subtasks.isEmpty())
@@ -792,16 +806,12 @@ class PlanTools(
             )
         if (args.languageStack.isBlank())
             errors.add("Language stack is required, e.g. 'Go 1.22', 'Kotlin 2.1 + Gradle 8.10'.")
-        for (c in args.changes) {
-            if (!c.action.uppercase().matches(Regex("MODIFY|NEW|DELETE")))
-                errors.add(
-                    "Change ${c.filePath}: action must be MODIFY, NEW, or DELETE (got \"${c.action}\"). " +
-                        "Example: {module: \"core\", action: \"NEW\", filePath: \"main.go\", description: \"...\", rationale: \"...\"}."
-                )
-            if (c.action.equals("NEW", ignoreCase = true) && c.rationale.isBlank())
-                errors.add("Change ${c.filePath}: a [NEW] file must justify why an existing file cannot be modified instead.")
-        }
+        errors.addAll(validateChanges(args.changes))
+        if (args.title.isBlank())
+            errors.add("Title is required — name what will change and to what end.")
         args.subtasks.forEachIndexed { i, st ->
+            if (st.name.isBlank())
+                errors.add("Subtask $i: name is required (concise action-noun).")
             if (st.verification.isBlank() && st.acceptanceCases.none { it.manual })
                 errors.add("Subtask $i (${st.name}): verification is required.")
             val hasCJK = st.verification.any { it.code in 0x4E00..0x9FFF }

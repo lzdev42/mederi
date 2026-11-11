@@ -1,33 +1,34 @@
 package xyz.mederi.store.sqlite
 
-import app.cash.sqldelight.db.SqlDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import xyz.mederi.db.data.MederiDataDatabase
 import xyz.mederi.store.DiffStore
+import xyz.mederi.store.db.DatabaseManager
 import xyz.mederi.tools.diff.FileChange
 import xyz.mederi.tools.diff.TurnDiff
 
 /**
  * 基于 SQLDelight + SQLite 的 DiffStore 实现（data.db）。
  *
- * @param driver 数据库 driver（由 Mederi 装配层创建并共享）。
+ * 写操作经 [DatabaseManager] 单写队列串行执行；读操作保持并发（WAL 读写不互斥）。
+ *
+ * @param db 数据库管理器（由 Mederi 装配层创建并共享，写操作唯一串行入口）。
  * @param json JSON 序列化器。
  */
 class SqliteDiffStore(
-    driver: SqlDriver,
+    private val db: DatabaseManager,
     private val json: Json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
 ) : DiffStore {
 
-    private val queries = MederiDataDatabase(driver).dataDatabaseQueries
+    private val queries = db.database.dataDatabaseQueries
     private val fileChangeSerializer = ListSerializer(FileChange.serializer())
 
-    override suspend fun save(diff: TurnDiff): Unit = withContext(Dispatchers.IO) {
+    override suspend fun save(diff: TurnDiff): Unit = db.write {
         queries.insertDiff(
             session_id = diff.sessionId,
             message_id = diff.messageId,
@@ -89,7 +90,7 @@ class SqliteDiffStore(
         }
     }
 
-    override suspend fun delete(sessionId: String): Unit = withContext(Dispatchers.IO) {
+    override suspend fun delete(sessionId: String):Unit = db.write {
         queries.deleteDiffsBySession(sessionId)
     }
 }

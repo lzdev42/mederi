@@ -123,6 +123,19 @@ class ProviderManagerImpl(
         return updated
     }
 
+    override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Provider {
+        val existing = require(id)
+        require(retryMaxDelaySeconds == null || retryMaxDelaySeconds >= 0) {
+            "retryMaxDelaySeconds cannot be negative: $retryMaxDelaySeconds"
+        }
+        val updated = existing.copy(
+            autoRetryEnabled = autoRetryEnabled,
+            retryMaxDelaySeconds = retryMaxDelaySeconds
+        )
+        saveProviderInternal(updated)
+        return updated
+    }
+
     /**
      * 校验推理参数配置（写入前拦截）。
      *

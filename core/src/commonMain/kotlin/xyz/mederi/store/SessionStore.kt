@@ -97,4 +97,7 @@ interface SessionStore {
      * 删除会话。
      */
     suspend fun delete(id: String)
+
+    /** 无持久化会话注册（子代理会话）：注册后该会话纯内存、永不落盘。默认 no-op（实现自选持久化策略）。 */
+    fun registerEphemeral(sessionId: String) {}
 }

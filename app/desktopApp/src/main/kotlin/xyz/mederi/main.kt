@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import xyz.mederi.browser.KBrowserRuntime
+import xyz.mederi.browser.DesktopKBrowserRuntime
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.mcp.runtime.McpRuntime
 import xyz.mederi.runtime.RuntimeSetupPage
@@ -58,12 +58,13 @@ fun main() = application {
     fun requestClose() {
         // null means detection is still in progress. Only a successful probe unlocks exit.
         if (missingRuntimes.value?.isEmpty() != true) return
-        Server.stop()
+        appStateHolder.value?.stopRemoteControl() ?: Server.stop()
         terminalHub.shutdown()
         appStateHolder.value?.uiBrowserHost?.shutdown()
-        xyz.mederi.browser.KBrowserRuntime.shutdown()
-        appStateHolder.value?.remoteControl?.stopTunnel()
+        xyz.mederi.browser.DesktopKBrowserRuntime.shutdown()
         appStateHolder.value?.let { runBlocking { it.flushAll() } }
+        // abort 在飞 turn + drain data.db 写队列（半截正文已由流式取消路径落库）
+        (appStateHolder.value?.aiCore as? MederiAiCore)?.shutdown()
         exitApplication()
     }
 
@@ -105,7 +106,7 @@ fun main() = application {
                         // JCEF 是桌面渲染能力，由桌面宿主初始化并注入 InkCompose。
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
                             aiCore.isReady.first { it }
-                            val kb = KBrowserRuntime.ensureInitialized()
+                            val kb = DesktopKBrowserRuntime.ensureInitialized()
                             if (kb != null) {
                                 xyz.emuci.diagram.mermaid.SingleMermaidWorker.attachBrowser(kb)
                                 xyz.emuci.inkcompose.MarkdownExporter.setBrowser(kb)

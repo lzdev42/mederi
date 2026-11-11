@@ -17,7 +17,7 @@ import java.util.Locale
  *
  * 环境信息（时间 / OS / Shell / 沙箱 / 项目目录 / Java）从用户消息尾部移出，
  * 改为系统提示词动态后缀每轮注入——避免每条历史消息各带一份环境快照导致 token 膨胀。
- * 用户消息仅保留时间戳（per-message），环境元数据在此每轮刷新。
+ * 用户消息只存干净正文（时间由 Message.createdAt 记录），环境元数据在此每轮刷新。
  */
 object EnvironmentInfoProvider {
 

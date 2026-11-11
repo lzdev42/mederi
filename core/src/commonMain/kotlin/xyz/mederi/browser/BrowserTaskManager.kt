@@ -393,7 +393,7 @@ class BrowserTaskManager(
     /**
      * 聚合当前所有已注册浏览器的运行状态。
      *
-     * - JCEF：实例 = UI host 上报的所有 tab（含用户手动开的 + 已完成任务留下的）；
+     * - 带 UI 状态源的后端：实例 = host 上报的所有 tab（含用户手动开的 + 已完成任务留下的）；
      *   每个 tab 的 taskId 决定 isCurrentSession（对照任务表的 parentSessionId）。
      * - 未提供状态源：实例取活跃任务（STARTED/RUNNING），URL 从 control 读取。
      */
@@ -402,7 +402,7 @@ class BrowserTaskManager(
             val taskIdToTask = tasks.values.associateBy { it.taskId }
             val instances = mutableListOf<BrowserInstanceInfo>()
             if (registered.statusSource != null) {
-                // 有 UI 状态源的（JCEF）：以 host 上报为准（覆盖任务驱动 + 用户手动开的 tab）
+                // 有 UI 状态源的：以 host 上报为准（覆盖任务驱动 + 用户手动开的 tab）
                 runCatching { registered.statusSource.instances() }.getOrElse { emptyList() }
                     .forEach { inst ->
                         val task = inst.taskId?.let { taskIdToTask[it] }

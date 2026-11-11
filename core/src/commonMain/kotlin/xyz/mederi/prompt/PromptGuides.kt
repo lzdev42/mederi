@@ -192,40 +192,56 @@ For plan executors, inspect actual sources before handling SPEC_FEEDBACK:
 For ad-hoc work, resolve blockers against the confirmed assignment without inventing a plan.
 """.trimIndent()
 
-    /** 软件计划的实现规范；适用构建检查由父代理指定，不套用到无计划任务。 */
+    /**
+     * 软件计划的实现规范——判断级（编码分析结论，不二次调查）。
+     *
+     * 设计理念：主代理分析时已读了相关文件（沉没成本），spec 只编码分析已得出的结论——
+     * 核心问题点、已定方案、需求架构、关键决策/约束、验收契约。不要求主代理为写 spec 二次读代码。
+     * 精确签名/行级改动/构建修错留给执行器——它是"填空者"。
+     * 质量保障：spec 防"走错路"（事前），验收契约防"做错了"（事后）。
+     */
     val SPEC_WRITING_GUIDE: String = """
 # Spec Writing Guide — software Plan Loop only
 
-The executor receives the stored spec, not the parent's conversation or AGENTS.md. Ground it in
-actual files and the completed output of dependencies. Include:
-- Exact modification scope and reference files, with location anchors.
-- Ordered per-file changes, relevant types/signatures, call-site wiring, behavior and edge cases.
-- Applicable build/compile command and cwd/target. If compilation is inapplicable, state why and
-  specify an appropriate non-test check instead. Plan tests are run by the parent via verify_subtask.
-- Project constraints translated into concrete actions; allowed mechanical fixes and stop boundaries.
+The executor receives the stored spec, not the parent's conversation or AGENTS.md. The spec encodes
+the decisions and context the main agent established during analysis — it is NOT a second investigation
+pass. Do not re-read code to write the spec; reference what analysis already found. Give the executor
+as much useful context as you already have from investigation.
 
-## Mandatory pre-dispatch self-check
+## What the spec contains
 
-You own the spec's correctness. Before saving it as ready for execution or dispatching a child,
-read it from the executor's perspective, without relying on this conversation. Check every item:
-1. Sources: referenced paths, location anchors, types, signatures, and current behavior were checked
-   against actual files. Mark assumptions explicitly; never turn an unverified diagnosis into a step.
-2. Preconditions: dependency outputs exist and were reviewed. Describe the actual resulting state,
-   not what an earlier subtask was expected to produce. Recheck affected assumptions after changes.
-3. Wiring and scope: include affected producers, consumers, call sites, and applicable interface or
-   platform counterparts; confirm the proposed steps address the cause and relevant other occurrences.
-4. Semantics: specify necessary branches, missing/error data handling, compatibility, and meaningful
-   edge cases. No material choice may depend on the child guessing the parent's intent.
-5. Checks and boundaries: supply the applicable build command and working directory (or justified
-   alternative), the parent's behavior verification, mechanical-fix allowance, and when to stop/report.
-   The checks must cover the original failure or requested outcome, not just compilation.
-If an item is unresolved, investigate or obtain the missing decision before dispatch. Do not send
-a knowingly incomplete or contradictory spec and rely on SPEC_FEEDBACK to repair it downstream.
+- **Core problem / root cause**: what's wrong or what's needed, and why. The executor fixes the cause,
+  not a symptom.
+- **Decided approach**: the implementation logic the main agent has already chosen. The executor follows
+  it — do not re-decide what's already decided.
+- **Requirement architecture**: which components this change touches, how data/control flows through them.
+  Enough for the executor to navigate — not a line-level blueprint. Reference the files and code regions
+  analysis already identified.
+- **Key decisions and constraints**: non-obvious choices the main agent made (cross-component trade-offs,
+  project rules relevant to this task, traps to avoid). Encode a decision if it requires system-level
+  understanding the executor lacks, or if getting it wrong causes expensive rework. Leave local,
+  verifiable details to the executor.
+- **Acceptance criteria**: behavior-level checks pinned by the parent via verify_subtask. The spec
+  references the approved case IDs; the parent runs verification, not the executor.
+
+## What the spec does NOT contain
+
+- Exact signatures, line-level changes, imports, syntax — the executor reads files and writes code.
+- A re-verification of every path/signature — analysis already established the facts; the spec references
+  them, it does not re-derive them. If a fact is uncertain, mark it; the executor verifies against actual
+  code and reports SPEC_FEEDBACK(vs-reality) if it contradicts.
+- The executor's implementation details — those are the executor's job. The spec defines the approach and
+  constraints; the executor fills in the mechanical realization.
+
+## Build checks and boundaries
+
+Supply the applicable build/compile command and working directory. If compilation is inapplicable, state
+why and specify an appropriate non-test check. Plan test verification belongs to the parent via
+verify_subtask; the executor runs the build check but does NOT run tests.
 
 Resolve material choices before delegation; do not leave business semantics as "handle reasonably".
-Keep enough detail to implement without guessing, without transcribing whole files. Replacing an
-existing spec requires reason and preserves the prior version. This guide does not apply to ad-hoc
-non-software assignments.
+Replacing an existing spec requires reason and preserves the prior version. This guide does not apply
+to ad-hoc non-software assignments.
 """.trimIndent()
 
     /** 可选研究委派的 briefing 与证据核验。 */

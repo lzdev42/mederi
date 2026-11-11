@@ -186,6 +186,16 @@ class MockAiCore(
         _availableModels.value = _providers.value.flatMap { it.models.filter { m -> m.isEnabled } }
     }
 
+    override suspend fun setProviderRetrySetting(
+        providerId: String,
+        autoRetryEnabled: Boolean,
+        retryMaxDelaySeconds: Int?
+    ): Result<Unit> = runCatching {
+        _providers.value = _providers.value.map {
+            if (it.id == providerId) it.copy(autoRetryEnabled = autoRetryEnabled, retryMaxDelaySeconds = retryMaxDelaySeconds) else it
+        }
+    }
+
     override suspend fun addBuiltinProvider(name: String, apiKey: String): Result<ProviderConfig> = runCatching {
         // Mock: 直接返回一个内置示例
         ProviderConfig(

@@ -31,6 +31,7 @@ tasks.named<ProcessResources>("processResources") {
     dependsOn(wasmJsDistTask)
     from(wasmJsProject.layout.buildDirectory.dir("dist/wasmJs/productionExecutable")) {
         into("static")
+        exclude("**/*.map")
     }
 }
 
@@ -106,9 +107,38 @@ val linkServerRuntime by tasks.registering(Exec::class) {
         }
         val runtime = linkedServerRuntime.get().asFile
         check(runtime.deleteRecursively()) { "Cannot replace Server runtime: $runtime" }
-        val modules = serverJavaModules.get().filterNot { it == "jcef" }.joinToString(",")
-        commandLine(jlink.absolutePath, "--module-path", jmods.absolutePath,
-            "--add-modules", modules, "--output", runtime.absolutePath)
+        val requiredModules = setOf(
+            "java.base",
+            "java.desktop",
+            "java.instrument",
+            "java.logging",
+            "java.management",
+            "java.naming",
+            "java.net.http",
+            "java.prefs",
+            "java.security.jgss",
+            "java.security.sasl",
+            "java.sql",
+            "java.xml",
+            "java.xml.crypto",
+            "jdk.crypto.ec",
+            "jdk.httpserver",
+            "jdk.jfr",
+            "jdk.management",
+            "jdk.security.auth",
+            "jdk.unsupported",
+            "jdk.zipfs"
+        )
+        val modules = serverJavaModules.get().filter { it in requiredModules }.joinToString(",")
+        commandLine(
+            jlink.absolutePath,
+            "--module-path", jmods.absolutePath,
+            "--add-modules", modules,
+            "--strip-debug",
+            "--no-header-files",
+            "--no-man-pages",
+            "--output", runtime.absolutePath
+        )
     }
     doLast {
         val release = linkedServerRuntime.get().file("release").asFile
@@ -130,10 +160,26 @@ val installServerBundled by tasks.registering(Sync::class) {
 
 dependencies {
     // JVM 变体：复用 MederiAiCore 桥接 + contract DTO（wasm 浏览器经本模块 REST/SSE 访问与 desktop 一致的 AiCore 语义）
-    implementation(project(":app:shared"))
+    // 无头 server 排除无需渲染的 Compose UI、Skiko 和富文本渲染器
+    implementation(project(":app:shared")) {
+        exclude(group = "org.jetbrains.compose.ui")
+        exclude(group = "org.jetbrains.compose.foundation")
+        exclude(group = "org.jetbrains.compose.material3")
+        exclude(group = "org.jetbrains.compose.material")
+        exclude(group = "org.jetbrains.compose.animation")
+        exclude(group = "org.jetbrains.compose.components")
+        exclude(group = "org.jetbrains.skiko")
+        exclude(module = "inkcompose")
+        exclude(group = "io.coil-kt.coil3")
+        exclude(group = "br.com.devsrsouza.compose.icons")
+        exclude(group = "org.jetbrains.jediterm")
+    }
     implementation(libs.logback)
     implementation(libs.ktor.serverCore)
-    implementation(libs.ktor.serverNetty)
+    implementation(libs.ktor.serverNetty) {
+        exclude(group = "io.netty", module = "netty-codec-http3")
+        exclude(group = "io.netty", module = "netty-codec-native-quic")
+    }
     implementation(libs.ktor.serverContentNegotiation)
     implementation(libs.ktor.serverCors)
     implementation(libs.ktor.serverSse)

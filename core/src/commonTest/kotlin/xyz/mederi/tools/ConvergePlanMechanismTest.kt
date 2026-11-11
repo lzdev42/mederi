@@ -181,4 +181,29 @@ class ConvergePlanMechanismTest {
         assertTrue(archivedJson.contains("\"COMPLETED\"") && archivedJson.contains("subtask 0"),
             "Subtask not COMPLETED in archived JSON")
     }
+
+    @Test
+    fun `generate_spec transitions subtask and plan to IN_PROGRESS`() = runBlocking {
+        val plan = makePlan(SubtaskStatus.PENDING).let { p ->
+            val approved = p.copy(
+                status = PlanStatus.APPROVED,
+                subtasks = p.subtasks.map { it.copy(spec = null) }
+            )
+            planStore.save(approved)
+            approved
+        }
+        val specTool = planTools.GenerateSpecTool()
+        val result = specTool.execute(
+            PlanTools.GenerateSpecArgs(
+                planId = plan.id,
+                subtaskIndex = 0,
+                spec = "1. do something\n2. verify it"
+            )
+        )
+        assertTrue(result.contains("Spec saved for Subtask 0"), result)
+        val reloaded = planStore.load(plan.id)
+        assertNotNull(reloaded)
+        assertEquals(PlanStatus.IN_PROGRESS, reloaded.status)
+        assertEquals(SubtaskStatus.IN_PROGRESS, reloaded.subtasks[0].status)
+    }
 }

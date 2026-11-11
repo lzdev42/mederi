@@ -22,7 +22,7 @@ data class BrowserStatusInfo(
 data class BrowserStatusEntry(
     /** 注册名（AI 工具参数用）。 */
     val name: String,
-    /** 浏览器种类：JCEF / CUSTOM。 */
+    /** 浏览器种类：OBSCURA / CUSTOM。 */
     val kind: String,
     /** 人话标签。 */
     val label: String,

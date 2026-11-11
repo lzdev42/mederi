@@ -7,15 +7,26 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
@@ -25,9 +36,11 @@ import xyz.mederi.core.contract.models.ReasoningLevels
 import xyz.mederi.theme.*
 import xyz.mederi.ui.components.ErrorBoard
 import xyz.mederi.ui.components.atoms.ConfirmDialog
+import xyz.mederi.ui.components.atoms.MederiMiniSwitch
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.ui.components.atoms.WorkspaceActionTone
 import xyz.mederi.ui.components.atoms.WorkspaceNavigationTab
+import xyz.mederi.ui.components.atoms.WorkspaceTextField
 
 /** 详情Route只装配已有VM动作和领域弹窗；呈现交给不可变数据+回调。 */
 @Composable
@@ -62,6 +75,7 @@ internal fun ProviderDetailWorkspace(
             toggleModel = { viewModel.toggleModelEnabled(provider.id, it.id) },
             editModel = { editingModel = it }, deleteModel = { viewModel.deleteModel(provider.id, it.id) },
             deleteProvider = { showDeleteConfirm = true },
+            saveRetry = { enabled, text -> viewModel.saveProviderRetrySetting(provider.id, enabled, text) },
         ), successMessage = feedbackText, isCompact = isCompact, colors = colors, authorization = authorization)
 
     // 弹窗部分
@@ -173,6 +187,7 @@ internal data class ProviderDetailActions(
     val editModel: (ModelItemUiState) -> Unit,
     val deleteModel: (ModelItemUiState) -> Unit,
     val deleteProvider: () -> Unit,
+    val saveRetry: (Boolean, String) -> Unit,
 )
 
 /** 单一阅读滚动包含头部/凭据/工具栏/模型，避免小窗口或大字体时固定区挤掉所有模型。 */
@@ -224,6 +239,7 @@ internal fun ProviderDetailContent(
                 }
             }
         }
+        item(key = "header:retry") { ProviderRetrySettingRow(provider, colors, actions.saveRetry) }
         item(key = "header:model-toolbar") { ProviderModelToolbar(provider, query, filter, actions) }
         if (provider.syncStatus is ModelsSyncStatus.Error) item(key = "header:sync-error") {
             ErrorBoard(stringResource(Res.string.settings_panel_fetch_failed, provider.syncStatus.message),
@@ -255,6 +271,118 @@ internal fun ProviderDetailContent(
                 HorizontalDivider(color = colors.divider.copy(alpha = 0.5f))
             }
         }
+    }
+}
+
+/** 重试设置入口（自动重试开关 + 延迟上限）：全部供应商类型可见；空输入=恢复默认，非法输入由 VM 前置拦截。 */
+@Composable
+internal fun ProviderRetrySettingRow(provider: ProviderItemUiState, colors: MederiColors, onSave: (Boolean, String) -> Unit) {
+    var autoRetry by remember(provider.id) { mutableStateOf(provider.autoRetryEnabled) }
+    var retryText by remember(provider.id) { mutableStateOf(provider.retryMaxDelaySeconds?.toString() ?: "") }
+    LaunchedEffect(provider.id, provider.autoRetryEnabled, provider.retryMaxDelaySeconds) {
+        autoRetry = provider.autoRetryEnabled
+        retryText = provider.retryMaxDelaySeconds?.toString() ?: ""
+    }
+    val savedText = provider.retryMaxDelaySeconds?.toString() ?: ""
+    val hasChanges = autoRetry != provider.autoRetryEnabled || retryText.trim() != savedText
+
+    val autoRetryLabel = stringResource(Res.string.provider_auto_retry_label)
+    val delayLabel = stringResource(Res.string.provider_retry_delay_label)
+    val placeholder = stringResource(Res.string.provider_retry_placeholder)
+    val saveLabel = stringResource(Res.string.provider_retry_save)
+    val currentValue = when {
+        !provider.autoRetryEnabled -> stringResource(Res.string.provider_retry_disabled)
+        else -> when (val v = provider.retryMaxDelaySeconds) {
+            null -> stringResource(Res.string.provider_retry_default)
+            0 -> stringResource(Res.string.provider_retry_immediate)
+            else -> stringResource(Res.string.provider_retry_range, v)
+        }
+    }
+    val currentSummary = stringResource(Res.string.provider_retry_current, currentValue)
+    val hintText = stringResource(Res.string.provider_retry_hint)
+
+    val switchBlock: @Composable () -> Unit = {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+        ) {
+            Text(autoRetryLabel, style = WorkspaceStyle.Body, color = colors.textPrimary)
+            CompositionLocalProvider(LocalMederiColors provides colors) {
+                MederiMiniSwitch(
+                    checked = autoRetry,
+                    onCheckedChange = { autoRetry = it },
+                    contentDescription = autoRetryLabel,
+                )
+            }
+        }
+    }
+
+    val delayInputBlock: @Composable (Boolean) -> Unit = { fillInputWidth ->
+        CompositionLocalProvider(LocalMederiColors provides colors) {
+            Row(
+                modifier = if (fillInputWidth) Modifier.fillMaxWidth() else Modifier,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+            ) {
+                Text(delayLabel, style = WorkspaceStyle.Caption, color = colors.textSecondary)
+                WorkspaceTextField(
+                    value = retryText,
+                    onValueChange = { retryText = it },
+                    modifier = (if (fillInputWidth) Modifier.weight(1f) else Modifier.width(148.dp))
+                        .semantics { contentDescription = delayLabel },
+                    enabled = autoRetry,
+                    placeholder = placeholder,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { onSave(autoRetry, retryText) }),
+                )
+                WorkspaceActionButton(
+                    text = saveLabel,
+                    onClick = { onSave(autoRetry, retryText) },
+                    primary = hasChanges,
+                    colors = colors,
+                )
+            }
+        }
+    }
+
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val singleRowMinWidth = remember(autoRetryLabel, delayLabel, saveLabel, density.fontScale, density.density) {
+        val leftW = measurer.measure(AnnotatedString(autoRetryLabel), style = WorkspaceStyle.Body, softWrap = false).size.width
+        val rightLabelW = measurer.measure(AnnotatedString(delayLabel), style = WorkspaceStyle.Caption, softWrap = false).size.width
+        val saveW = measurer.measure(AnnotatedString(saveLabel), style = WorkspaceStyle.Body, softWrap = false).size.width
+        val textDp = with(density) { (leftW + rightLabelW + saveW).toDp() }
+        // switch(30) + delayInput(148) + savePadding(24) + innerGaps(8+8+8+16=40+)
+        textDp + 30.dp + 148.dp + 24.dp + 44.dp
+    }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(MederiSpacing.Tight)) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth >= singleRowMinWidth) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    switchBlock()
+                    delayInputBlock(false)
+                }
+            } else {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(MederiSpacing.SM)) {
+                    switchBlock()
+                    delayInputBlock(true)
+                }
+            }
+        }
+        Text(
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = colors.textSecondary)) { append(currentSummary) }
+                append(" · ")
+                append(hintText)
+            },
+            style = WorkspaceStyle.Caption,
+            color = colors.textMuted,
+        )
     }
 }
 

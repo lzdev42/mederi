@@ -1,13 +1,10 @@
 package xyz.mederi.store.sqlite
 
-import app.cash.sqldelight.db.SqlDriver
-import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
-import xyz.mederi.db.data.MederiDataDatabase
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
@@ -17,17 +14,20 @@ import xyz.mederi.domain.model.decodeTodos
 import xyz.mederi.domain.model.encodeTodos
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.store.SessionStore
+import xyz.mederi.store.db.DatabaseManager
 import java.time.Instant
-import java.util.Properties
 
 /**
  * 基于 SQLDelight + SQLite 的 SessionStore 实现（data.db）。
  *
- * @param driver 数据库 driver（由 Mederi 装配层创建并共享）。
+ * 写操作经 [DatabaseManager] 单写队列串行执行（进程内写竞争在构造上消失）；
+ * 读操作保持并发（WAL 读写不互斥）。
+ *
+ * @param db 数据库管理器（由 Mederi 装配层创建并共享，写操作唯一串行入口）。
  */
-class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStore {
+class SqliteSessionStore(private val db: DatabaseManager) : SessionStore {
 
-    private val queries = MederiDataDatabase(driver).dataDatabaseQueries
+    private val queries = db.database.dataDatabaseQueries
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -89,7 +89,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         }
     }
 
-    override suspend fun insert(session: Session): Unit = withContext(Dispatchers.IO) {
+    override suspend fun insert(session: Session): Unit = db.write {
         queries.insertSession(
             id = session.id,
             project_id = session.projectId,
@@ -114,7 +114,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         )
     }
 
-    override suspend fun update(id: String, status: SessionStatus?, title: String?): Unit = withContext(Dispatchers.IO) {
+    override suspend fun update(id: String, status: SessionStatus?, title: String?): Unit = db.write {
         val now = Instant.now().toString()
         when {
             status != null && title != null -> {
@@ -132,7 +132,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         aiModel: AIModel?,
         reasoningLevel: ReasoningLevel?,
         apiKeyId: String?
-    ): Unit = withContext(Dispatchers.IO) {
+    ): Unit = db.write {
         queries.updateSessionAgentConfig(
             agentMode?.name,
             aiModel?.let { serializeAIModel(it) },
@@ -150,7 +150,7 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         reasoningLevel: ReasoningLevel?,
         apiKeyId: String?,
         draftText: String
-    ): Unit = withContext(Dispatchers.IO) {
+    ): Unit = db.write {
         queries.updateSessionComposeState(
             agentMode.name,
             aiModel?.let { serializeAIModel(it) },
@@ -161,40 +161,40 @@ class SqliteSessionStore(driver: app.cash.sqldelight.db.SqlDriver) : SessionStor
         )
     }
 
-    override suspend fun updateTodos(id: String, todos: List<TodoItem>): Unit = withContext(Dispatchers.IO) {
+    override suspend fun updateTodos(id: String, todos: List<TodoItem>): Unit = db.write {
         queries.updateSessionTodos(todos.encodeTodos(), id)
     }
 
-    override suspend fun updateActiveSkills(id: String, activeSkills: List<String>): Unit = withContext(Dispatchers.IO) {
+    override suspend fun updateActiveSkills(id: String, activeSkills: List<String>): Unit = db.write {
         queries.updateSessionActiveSkills(activeSkills.encodeActiveSkills(), id)
     }
 
-    override suspend fun updateWorkspaceBinding(id: String, workspaceId: String?, associatedWorktreeId: String?): Unit = withContext(Dispatchers.IO) {
+    override suspend fun updateWorkspaceBinding(id: String, workspaceId: String?, associatedWorktreeId: String?): Unit = db.write {
         queries.updateSessionWorkspaceBinding(workspaceId, associatedWorktreeId, Instant.now().toString(), id)
     }
 
-    override suspend fun setArchived(id: String, archivedAt: String?): Unit = withContext(Dispatchers.IO) {
+    override suspend fun setArchived(id: String, archivedAt: String?):Unit = db.write {
         queries.updateSessionArchivedAt(archivedAt, Instant.now().toString(), id)
     }
 
-    override suspend fun setPinned(id: String, pinned: Boolean): Unit = withContext(Dispatchers.IO) {
+    override suspend fun setPinned(id: String, pinned: Boolean):Unit = db.write {
         queries.updateSessionPinned(if (pinned) 1L else 0L, Instant.now().toString(), id)
     }
 
-    override suspend fun updateSubagentConfigs(id: String, configs: Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>): Unit = withContext(Dispatchers.IO) {
+    override suspend fun updateSubagentConfigs(id: String, configs: Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>):Unit = db.write {
         queries.updateSessionSubagentConfigs(json.encodeToString(configs), id)
     }
 
-    override suspend fun updateSubagentMaxConcurrent(id: String, count: Int?): Unit = withContext(Dispatchers.IO) {
+    override suspend fun updateSubagentMaxConcurrent(id: String, count: Int?):Unit = db.write {
         queries.updateSessionSubagentMaxConcurrent(count?.toLong(), id)
+    }
+
+    override suspend fun delete(id: String):Unit = db.write {
+        queries.deleteSession(id)
     }
 
     private fun parseSubagentConfigs(raw: String): Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig> =
         runCatching { json.decodeFromString<Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>>(raw) }.getOrDefault(emptyMap())
-
-    override suspend fun delete(id: String): Unit = withContext(Dispatchers.IO) {
-        queries.deleteSession(id)
-    }
 
     private fun serializeEnv(env: Map<String, String>): String =
         json.encodeToString(envSerializer, env)

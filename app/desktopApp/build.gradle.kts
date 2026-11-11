@@ -12,6 +12,8 @@ dependencies {
     implementation(project(":app:shared"))
     implementation(project(":core"))
     implementation(libs.koog.agents)
+    implementation(libs.ktor.clientCio)
+    implementation(libs.kotlinx.serializationJson)
 
     implementation(compose.desktop.currentOs)
     implementation(libs.kotlinx.coroutinesSwing)
@@ -49,6 +51,7 @@ tasks.named<ProcessResources>("processResources") {
     }
     from(wasmJsProject.layout.buildDirectory.dir("dist/wasmJs/productionExecutable")) {
         into("static")
+        exclude("**/*.map")
     }
 }
 

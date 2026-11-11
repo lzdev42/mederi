@@ -75,6 +75,8 @@ data class ChatMessage(
     /** Core 工作墙钟端点；运行时只有起点，真正结束后固定终点。 */
     val workStartedAt: Long? = null,
     val workCompletedAt: Long? = null,
+    /** 内部系统触发消息（如跨 turn 计划批准指令）：保留在历史与 AI 视图中，UI 不渲染。 */
+    val hiddenFromUi: Boolean = false,
 )
 
 /**

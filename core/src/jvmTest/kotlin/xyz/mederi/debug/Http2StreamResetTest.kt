@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.apache.hc.core5.http2.H2StreamResetException
+import xyz.mederi.provider.infrastructure.koog.retry.ProviderRetrySettings
 import xyz.mederi.provider.infrastructure.koog.retry.RetryableLLMClient
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -95,8 +96,7 @@ class Http2StreamResetTest {
 
         val retryClient = RetryableLLMClient(
             delegate = fakeClient,
-            minDelayMs = 10,
-            maxDelayMs = 20
+            settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 10, maxDelayMs = 20) }
         )
 
         val testPrompt = prompt("test") { user("hello") }
@@ -140,8 +140,7 @@ class Http2StreamResetTest {
 
         val retryClient = RetryableLLMClient(
             delegate = fakeClient,
-            minDelayMs = 10,
-            maxDelayMs = 20
+            settingsProvider = { ProviderRetrySettings(enabled = true, minDelayMs = 10, maxDelayMs = 20) }
         )
 
         val testPrompt = prompt("test") { user("hello") }

@@ -7,6 +7,8 @@ import xyz.mederi.core.contract.dto.ConversationSnapshot
  * - 文件工具（read/write/edit/list）→ 路径（会话目录内显示相对路径，目录外保留绝对路径；读取文件时追加 #L$start-$end 行号）；
  * - 命令工具（bash）→ 命令原文；
  * - apply_patch → 补丁内涉及的文件清单（Add/Update/Delete/Move 去重取前 3）；
+ * - 计划子任务工具（verify_subtask / generate_spec / update_verification）→ 序号 + 子任务标题
+ *   （从计划投影按 planId + subtaskIndex 查出；verify_subtask 只在已记录判定时追加 PASS/FAIL）；
  * - todo 工具 → 返回 null（UI 仅显示“更新待办清单”，不显示内容）；
  * - 其余 → 回退到 path/file/command 等常见键，最后兜底第一个参数值（拦截任何以 [ 或 { 开头的复合 JSON 文本）。
  */
@@ -42,19 +44,10 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
             input["command"]?.takeIf { it.isNotBlank() } ?: input["cmd"]?.takeIf { it.isNotBlank() }
         name == "ask_user" ->
             extractAskUserSummary(input)
-        name == "verify_subtask" -> {
-            val subtaskIndex = input["subtaskIndex"] ?: input["subtask_index"]
-            val status = input["status"]
-            when {
-                subtaskIndex != null && !status.isNullOrBlank() -> "#$subtaskIndex ($status)"
-                subtaskIndex != null -> "#$subtaskIndex"
-                else -> null
-            }
-        }
-        name == "generate_spec" || name == "update_verification" -> {
-            val subtaskIndex = input["subtaskIndex"] ?: input["subtask_index"]
-            if (subtaskIndex != null) "#$subtaskIndex" else null
-        }
+        name == "verify_subtask" ->
+            planSubtaskTarget(input, snapshot, includeRecordedVerdict = true)
+        name == "generate_spec" || name == "update_verification" ->
+            planSubtaskTarget(input, snapshot, includeRecordedVerdict = false)
         name == "write_log" ->
             ".mederi/notebook.md"
         name == "write_plan" || name == "create_plan" ->
@@ -87,6 +80,51 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
         val s = cand.trimStart()
         !s.startsWith("[") && !s.startsWith("{")
     }
+}
+
+/**
+ * 计划子任务的目标摘要（verify_subtask / generate_spec / update_verification 共用）：
+ * 优先输出「序号 + 标题」，序号 1-based——与计划卡 step_label（"步骤 N"）同一口径，
+ * 因为光给 "#4" 用户看不出是哪个子任务。
+ *
+ * 标题从会话快照的计划投影（[ConversationSnapshot.planApprovals] / pendingPlanApproval）按
+ * planId + subtaskIndex 查出：投影既由 PLAN_PROGRESS 事件实时刷新，也会在重开会话时由 Core 水合。
+ *
+ * [includeRecordedVerdict] 为 true 时追加**已记录的验证判定**（COMPLETED→PASS / FAILED→FAIL）；
+ * 入参里的 status 是模型在验证**之前**的声明值，不能当结果显示，因此一律不读。
+ * 计划或子任务查不到时回退为纯序号，绝不编造标题或判定。
+ */
+private fun planSubtaskTarget(
+    input: Map<String, String>,
+    snapshot: ConversationSnapshot?,
+    includeRecordedVerdict: Boolean,
+): String? {
+    val index = (input["subtaskIndex"] ?: input["subtask_index"])?.trim()?.toIntOrNull() ?: return null
+    val planId = input["planId"]?.trim()?.takeIf { it.isNotBlank() }
+    val task = planId?.let { id ->
+        snapshot?.let { snap ->
+            val plan = snap.planApprovals.firstOrNull { it.id == id }
+                ?: snap.pendingPlanApproval?.takeIf { it.id == id }
+            plan?.subtasks?.firstOrNull { it.index == index }
+        }
+    }
+    val taskName = task?.name?.trim()?.takeIf { it.isNotBlank() }
+    val verdict = if (includeRecordedVerdict) recordedVerifyVerdict(task?.status) else null
+    return buildString {
+        append(index + 1)
+        if (taskName != null) append("「").append(taskName).append("」")
+        if (verdict != null) append("(").append(verdict).append(")")
+    }
+}
+
+/**
+ * 计划投影里的子任务状态 → 已记录的验证判定。
+ * 只有 COMPLETED / FAILED 代表验证已跑完；PENDING / IN_PROGRESS 尚无判定，返回 null（不猜）。
+ */
+private fun recordedVerifyVerdict(status: String?): String? = when (status?.trim()?.uppercase()) {
+    "COMPLETED" -> "PASS"
+    "FAILED" -> "FAIL"
+    else -> null
 }
 
 private fun extractReadLineRangeSuffix(input: Map<String, String>, oneBasedOffset: Boolean): String? {

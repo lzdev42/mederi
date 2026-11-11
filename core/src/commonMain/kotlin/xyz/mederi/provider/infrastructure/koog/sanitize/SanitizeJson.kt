@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonNamingStrategy
  * - `ignoreUnknownKeys = true`：忽略 vLLM 内部字段（prompt_logprobs / token_ids / routed_experts 等）
  * - `namingStrategy = SnakeCase`：Kotlin 驼峰属性映射到 JSON snake_case（reasoningContent → reasoning_content）
  * - `explicitNulls = false`：不序列化 null 字段
+ * - `coerceInputValues = true`：显式 null（如 Responses `output_item.added` 的 `"content": null`）回退到默认值
  *
  * [SanitizedStreamDelta.reasoningAlias] / [SanitizedAssistantMessage.reasoningAlias] 用 `@SerialName("reasoning")`
  * 显式指定 JSON 字段名，覆盖 SnakeCase 策略，用于兜底解析 vLLM 的非标准 `reasoning` 字段。
@@ -21,5 +22,6 @@ val sanitizeJson: Json = Json {
     isLenient = true
     encodeDefaults = true
     explicitNulls = false
+    coerceInputValues = true
     namingStrategy = JsonNamingStrategy.SnakeCase
 }

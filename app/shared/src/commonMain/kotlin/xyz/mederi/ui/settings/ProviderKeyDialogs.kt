@@ -1,13 +1,10 @@
 package xyz.mederi.ui.settings
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import compose.icons.FeatherIcons
@@ -16,11 +13,13 @@ import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.API_KEY_ROTATION_ID
 import xyz.mederi.core.contract.models.ReasoningLevels
+import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.ui.components.atoms.ConfirmDialog
 import xyz.mederi.ui.components.atoms.MederiDialog
+import xyz.mederi.ui.components.atoms.MederiMiniSwitch
 import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.ui.components.atoms.WorkspaceActionTone
 
@@ -221,8 +220,13 @@ internal fun ApiKeyManagementContent(
                     horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM)) {
                     Text(defaultToggleLabel, style = WorkspaceStyle.Body,
                         color = colors.textSecondary, modifier = Modifier.weight(1f))
-                    Switch(checked = isNewKeyDefault, onCheckedChange = { isNewKeyDefault = it }, colors = switchColors(colors),
-                        modifier = Modifier.semantics { contentDescription = defaultToggleLabel })
+                    CompositionLocalProvider(LocalMederiColors provides colors) {
+                        MederiMiniSwitch(
+                            checked = isNewKeyDefault,
+                            onCheckedChange = { isNewKeyDefault = it },
+                            contentDescription = defaultToggleLabel,
+                        )
+                    }
                 }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
                     verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {

@@ -378,7 +378,7 @@ object ConversationStateReducer {
                     "voided" -> "VOIDED"
                     "completed" -> "COMPLETED"
                     "approved", "created" -> "APPROVED"
-                    "subtask-started" -> "IN_PROGRESS"
+                    "subtask-started", "spec-generated" -> "IN_PROGRESS"
                     else -> null
                 }
                 val existing = snapshot.planApprovals.find { it.id == planId }
@@ -866,7 +866,7 @@ object ConversationStateReducer {
         val merged = live.toMutableList()
         val knownIds = live.mapTo(mutableSetOf()) { it.id }
         for ((index, input) in persisted.withIndex()) {
-            if (input.role != ChatRole.User || input.pendingSteering ||
+            if (input.role != ChatRole.User || input.pendingSteering || input.hiddenFromUi ||
                 input.blocks.none { it is ChatBlock.Text || it is ChatBlock.File } ||
                 input.id in knownIds) continue
             val previousId = persisted.subList(0, index).lastOrNull { it.id in knownIds }?.id

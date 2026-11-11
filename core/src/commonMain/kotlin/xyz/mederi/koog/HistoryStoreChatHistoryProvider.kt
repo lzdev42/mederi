@@ -92,7 +92,7 @@ internal fun xyz.mederi.domain.model.Message.withAssistantDuration(
  * 按 toolCallId 回填工具执行状态与耗时（ToolResult part）。
  * 没有登记记录（如压缩回写的历史消息）保持原样。
  */
-private fun xyz.mederi.domain.model.Message.withToolTimings(
+internal fun xyz.mederi.domain.model.Message.withToolTimings(
     timings: TurnToolTimings?
 ): xyz.mederi.domain.model.Message {
     if (timings == null) return this
@@ -263,8 +263,8 @@ class HistoryStoreChatHistoryProvider(
         for (part in message.parts) {
             when (part) {
                 is MessagePart.Text -> append("|t:").append(part.text)
-                is MessagePart.ToolCall -> append("|c:").append(part.tool).append(':').append(part.args)
-                is MessagePart.ToolResult -> append("|r:").append(part.tool).append(':').append(part.output)
+                is MessagePart.ToolCall -> append("|c:").append(part.id).append(':').append(part.tool).append(':').append(part.args)
+                is MessagePart.ToolResult -> append("|r:").append(part.id).append(':').append(part.tool).append(':').append(part.output)
                 is MessagePart.Reasoning -> append("|n:").append(part.content.joinToString("\u0001"))
                 is MessagePart.Image -> append("|i:").append(part.url)
                 is MessagePart.File -> Unit

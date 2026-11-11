@@ -1982,7 +1982,7 @@ class WorkspaceViewModel(
         const val DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
     }
 
-    /** 用户粘贴的大段文本附件（吸附在输入框中，发送时拼装在主指令之后、metaNote 之前） */
+    /** 用户粘贴的大段文本附件（吸附在输入框中，发送时拼装在主指令之后） */
     val pendingPastedTexts = mutableStateListOf<PastedTextAttachment>()
 
     /** 待发送图片附件 */
@@ -2167,6 +2167,15 @@ class WorkspaceViewModel(
      */
     val chatItems: List<ChatListItem> by derivedStateOf {
         computeChatItems(messages)
+    }
+
+    /**
+     * 本会话的全部文档（概览"文档"行数据源）：从对话流投影 artifact 文档卡，
+     * 按 artifactId 去重保序——不依赖阅读器是否打开过；计划不在此列（实施计划行单独展示）。
+     */
+    val sessionDocuments: List<ChatListItem.DocumentCard> by derivedStateOf {
+        chatItems.filterIsInstance<ChatListItem.DocumentCard>()
+            .distinctBy { it.artifactId }
     }
 
     /**
@@ -2699,7 +2708,7 @@ class WorkspaceViewModel(
         if (hasImages && !guardImageSupport(model)) return
         val sendFeedback = feedbackPresenter.begin(feedbackOwner)
 
-        // 组装最终提示词：用户主指令在前，粘贴大文本在后；Core 的 TurnExecutor 会追加 metaNote 保证 metaNote 恒在最底部
+        // 组装最终提示词：用户主指令在前，粘贴大文本在后
         val pastedAttachments = pendingPastedTexts.toList()
         val finalPrompt = PromptComposer.compose(trimmed, pastedAttachments)
         val imageAttachments = pendingImages.toList()
@@ -3121,9 +3130,12 @@ private class SessionUiCache {
  * 规则：
  * - 写侧输入设置（modelId / modelProvider / agent / apiKeyId / thinkingLevel / draftText）以 prevSnap 优先，
  *   绝不被 Core 推送的快照冲刷；
- * - **activeDockPanel**：当快照携带 [ConversationState.browserAutomation]（aggregator 归约快照，
- *   显式管理浏览器/dock 状态）时信任其 activeDockPanel——null 也算（BROWSER_TASK_COMPLETED 显式关 dock）；
- *   仅当快照无 browserAutomation（store 初始快照无浏览器上下文）时才回退 prevSnap；
+ * - **activeDockPanel（边缘驱动合并）**：activeDockPanel 是 UI-only 字段——用户点击只写本地
+ *   （prevSnap），聚合器归约状态感知不到本地点击，其快照里的 activeDockPanel 只反映事件流的
+ *   显式意图（jcef BROWSER_TASK_STARTED 置 BROWSER / 终态置 null）。因此只在事件显式改 dock 的
+ *   边沿信任快照（开始边沿开实时浏览器面板、结束边沿关实时浏览器面板），其余一律本地 prevSnap
+ *   优先（无 prevSnap 才用快照值）——否则浏览器任务跑过一次的会话里，任何手动开的 Dock 面板
+ *   都会被聚合器快照里的陈旧值冲掉（点开即折叠 bug）；
  * - browserAutomation 非空优先；subagents的成员以快照为准，同ID按进度序号和终态时间单调合并。
  */
 internal fun mergeLocalUiState(snap: ConversationState, prevSnap: ConversationState?): ConversationState {
@@ -3139,11 +3151,21 @@ internal fun mergeLocalUiState(snap: ConversationState, prevSnap: ConversationSt
     } else {
         snap.conversation
     }
-    // 关键修复：当快照携带 browserAutomation（aggregator 归约快照，显式管理浏览器/dock 状态）
-    // 时信任其 activeDockPanel（null 也算 = COMPLETED 显式关 dock）；仅当快照无 browserAutomation
-    // （store 初始快照无浏览器上下文）时才回退 prevSnap。
-    val dockPanel = if (snap.browserAutomation != null) snap.activeDockPanel
-                    else snap.activeDockPanel ?: prevSnap?.activeDockPanel
+    // activeDockPanel 边缘驱动合并（见函数注释）：只在浏览器任务生命周期边沿信任快照的
+    // dock 意图，其余本地 prevSnap 优先——旧规则按"browserAutomation 非空即信任快照"过宽，
+    // 浏览器任务跑过一次的会话里每个后续事件快照都会用聚合器的陈旧 null 冲掉手动点击。
+    val prevAutomating = prevSnap?.browserAutomation?.isAutomating == true
+    val snapAutomating = snap.browserAutomation?.isAutomating == true
+    val dockPanel = when {
+        // 开始边沿 + 快照携带非空面板（jcef BROWSER_TASK_STARTED → BROWSER）：开实时浏览器面板
+        snapAutomating && !prevAutomating && snap.activeDockPanel != null -> snap.activeDockPanel
+        // 结束边沿 + 前一状态开的是实时浏览器面板（jcef 终态关 BROWSER）：null 生效关面板
+        !snapAutomating && prevAutomating && snap.activeDockPanel == null &&
+                prevSnap?.activeDockPanel == RightDockPanel.BROWSER -> null
+        // 其余：本地 prevSnap 优先（含 null = 用户手动关）；无 prevSnap（首帧）才用快照值
+        prevSnap != null -> prevSnap.activeDockPanel
+        else -> snap.activeDockPanel
+    }
     return snap.copy(
         conversation = effectiveConv,
         activeDockPanel = dockPanel,

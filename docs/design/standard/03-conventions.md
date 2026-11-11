@@ -2,7 +2,6 @@
 
 > 本文件是 Mederi UI 的**约定层**：状态模式规则、Compose 实现约定、GitHub-dark → Radix 迁移注记、取值速查。
 > 色值一律引用 `01-tokens.md` 的语义别名 / 基础色阶 token，不自创；组件规格见 `02-components.md`。
-> 输入依据：原型 `docs/design/mederi_ui_prototype.html` 报告 §8/§9/§10、现有 `theme/Theme.kt`（`MederiColors` 32 字段）调研报告。
 
 ## 1. 状态模式规则表（State Patterns）
 

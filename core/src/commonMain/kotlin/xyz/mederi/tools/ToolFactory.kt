@@ -123,6 +123,9 @@ object ToolFactory {
         val canAskUser = !isSubagent && questionRequester != null
         // todo 工具仅主代理：子代理的进度单是 spec 清单，不养第二份进度
         val canTodo = !isSubagent && sessionStore != null
+        // skill 激活/卸载：主代理 + 执行器可用（执行器按需激活领域 skill；
+        // 依赖 sessionStore 持久化 activeSkills + skills SkillManager）
+        val canManageSkills = sessionStore != null && skills != null
 
         // 文件系统工具
         val fsToolMap = mutableMapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
@@ -165,14 +168,21 @@ object ToolFactory {
 
         val agentToolMap = if (canTodo) {
             mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
-                ToolName.UPDATE_TODO to { agentTools.UpdateTodoTool() },
-                ToolName.LOAD_SKILL to { agentTools.LoadSkillTool() },
-                ToolName.UNLOAD_SKILL to { agentTools.UnloadSkillTool() }
+                ToolName.UPDATE_TODO to { agentTools.UpdateTodoTool() }
             )
         } else {
             // 未开放给 AI：AgentTools 实现保留，恢复时取消注释
             // ToolName.GET_CONTEXT_REMAINING to { agentTools.GetContextRemainingTool() },
             // ToolName.NEW_CONTEXT to { agentTools.NewContextWindowTool() },
+            emptyMap()
+        }
+
+        val skillToolMap = if (canManageSkills) {
+            mapOf<ToolName, () -> ai.koog.agents.core.tools.ToolBase<*, *>>(
+                ToolName.LOAD_SKILL to { agentTools.LoadSkillTool() },
+                ToolName.UNLOAD_SKILL to { agentTools.UnloadSkillTool() }
+            )
+        } else {
             emptyMap()
         }
 
@@ -266,7 +276,7 @@ object ToolFactory {
             emptyMap()
         }
 
-        val allAvailableMaps = fsToolMap + agentToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + browserTaskToolMap + officeToolMap + processToolMap + backgroundToolMap
+        val allAvailableMaps = fsToolMap + agentToolMap + skillToolMap + askUserToolMap + planToolMap + verifyToolMap + subagentToolMap + browserTaskToolMap + officeToolMap + processToolMap + backgroundToolMap
         val requested = if (toolNames.isEmpty()) allAvailableMaps.keys.toList() else toolNames
 
         // 批量入口只包装本角色、本次 toolNames 实际开放的成员，不能借此扩大权限。

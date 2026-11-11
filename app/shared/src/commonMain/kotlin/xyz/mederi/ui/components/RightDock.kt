@@ -40,8 +40,10 @@ fun RightDock(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalMederiColors.current
+    // 2026-11：文件管理器（FILES，项目目录树）顶替原"文件查看器"按钮位；
+    // 文档面板（ARTIFACTS）无 dock 按钮——由 openDocument / 概览"文档"行 / 对话流文档卡触达。
     val items = listOf(DockItemData(RightDockPanel.DIFF, FeatherIcons.GitCommit),
-        DockItemData(RightDockPanel.ARTIFACTS, FeatherIcons.FileText),
+        DockItemData(RightDockPanel.FILES, FeatherIcons.Folder),
         DockItemData(RightDockPanel.TERMINAL, FeatherIcons.Terminal),
         DockItemData(RightDockPanel.BROWSER_AUTOMATION, FeatherIcons.Globe))
     Column(modifier.fillMaxHeight().width(ChatLayout.rightDockWidth)
@@ -50,6 +52,7 @@ fun RightDock(
         items.forEach { item ->
             val label = stringResource(when (item.panel) {
                 RightDockPanel.DIFF -> Res.string.rightdock_diff
+                RightDockPanel.FILES -> Res.string.rightdock_files
                 RightDockPanel.ARTIFACTS -> Res.string.rightdock_artifacts
                 RightDockPanel.TERMINAL -> Res.string.rightdock_terminal
                 RightDockPanel.BROWSER_AUTOMATION -> Res.string.rightdock_browser_automation

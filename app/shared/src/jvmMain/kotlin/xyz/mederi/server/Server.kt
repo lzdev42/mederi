@@ -82,6 +82,7 @@ import xyz.mederi.core.contract.dto.RenameProjectInput
 import xyz.mederi.core.contract.dto.ResolveQuestionInput
 import xyz.mederi.core.contract.dto.ResolvePlanApprovalInput
 import xyz.mederi.core.contract.dto.SetModelEnabledInput
+import xyz.mederi.core.contract.dto.SetProviderRetryInput
 import xyz.mederi.core.contract.dto.UpdateModelInput
 import xyz.mederi.core.contract.models.CoreEvent
 import xyz.mederi.core.contract.models.CoreEventType
@@ -482,6 +483,11 @@ fun Route.v1Routes(aiCore: AiCore) {
     patch("/v1/providers/{id}") {
         val input = call.receive<ProviderUpdateInput>()
         call.respondResult(aiCore.configureProvider(call.parameters["id"]!!, input))
+    }
+    patch("/v1/providers/{id}/retry") {
+        val input = call.receive<SetProviderRetryInput>()
+        call.respondResult(aiCore.setProviderRetrySetting(
+            call.parameters["id"]!!, input.autoRetryEnabled, input.retryMaxDelaySeconds))
     }
     delete("/v1/providers/{id}") {
         call.respondResult(aiCore.deleteProvider(call.parameters["id"]!!))

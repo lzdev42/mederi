@@ -6,10 +6,31 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /**
+ * Todo 结构化详情（工作记忆，跨回合给 AI 参考，UI 不展示）。七字段全可选。
+ */
+@Serializable
+data class TodoDetail(
+    /** 背景上下文 */
+    val background: String? = null,
+    /** 现象或需求描述 */
+    val requirement: String? = null,
+    /** 思路、为什么这么实现、核心逻辑 */
+    val approach: String? = null,
+    /** 作用范围（文件列表、模块、URL等） */
+    val scope: String? = null,
+    /** 完成判断标准（如何确认做完了） */
+    val done: String? = null,
+    /** 用户强调的注意事项与硬性约束 */
+    val notes: String? = null,
+    /** 已试过但失败的路径（防止反复走弯路） */
+    val attempts: String? = null,
+)
+
+/**
  * Todo 条目状态。
  *
- * [FAILED] 预留给 Plan 验证结果语义（verify_subtask 判 FAIL）；update_todo 工具参数不接受它——
- * 模型 todo 没有"失败"语义。
+ * update_todo 与 Plan 子任务投影共用此状态。允许模型标记 [FAILED]（纠错 todo 模式：
+ * 当某项任务无法按预期完成时标记 FAILED，随后新建纠错 todo 继续推进）。
  */
 @Serializable
 enum class TodoStatus {
@@ -25,11 +46,13 @@ enum class TodoStatus {
  *
  * 唯一序列化形状：sessions.todos 列落库与 TODO_UPDATED 事件 payload 共用本类型，
  * payload key 统一为 "todos"。禁止任何其他 JSON 形状（防真理源碎片）。
+ * [content] 充当标题展示，[detail] 是给 AI 的工作记忆（UI 不渲染）。
  */
 @Serializable
 data class TodoItem(
     val content: String,
-    val status: TodoStatus
+    val status: TodoStatus,
+    val detail: TodoDetail? = null,
 )
 
 /**
@@ -37,7 +60,11 @@ data class TodoItem(
  * encode/decode 必须对称。禁止在任何其他地方另行定义 Todo 的 Json 序列化。
  */
 private val todoListSerializer = ListSerializer(TodoItem.serializer())
-private val todoJson = Json { encodeDefaults = true }
+private val todoJson = Json {
+    encodeDefaults = true
+    ignoreUnknownKeys = true
+    explicitNulls = false
+}
 
 fun List<TodoItem>.encodeTodos(): String = todoJson.encodeToString(todoListSerializer, this)
 

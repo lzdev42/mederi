@@ -4,7 +4,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,6 +36,7 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.err_generic
 import mederi.app.shared.generated.resources.remote_unsupported
 import mederi.app.shared.generated.resources.tunnel_not_installed_msg
+import mederi.app.shared.generated.resources.settings_tunnel_token_storage_failed
 
 /** 内嵌遥控 server 启动结果。 */
 sealed interface RemoteStartResult {
@@ -61,6 +66,7 @@ sealed interface TunnelStartResult {
     data object NotInstalled : TunnelStartResult
     /** 启动失败 */
     data class Failed(val reason: String) : TunnelStartResult
+    data class ConfigurationFailed(val reason: UiMessage) : TunnelStartResult
 }
 
 /** Cloudflare 隧道 UI 状态。 */
@@ -90,8 +96,8 @@ interface RemoteControlHooks {
     /** 探测本机是否已安装 cloudflared */
     fun isCloudflaredInstalled(): Boolean
 
-    /** 启动 Cloudflare 隧道（pty 挂 cloudflared，随本进程生命周期）。[port] 为内嵌 server 当前监听端口；[token] 为 cloudflared 连接器 token；[domain] 为用户填的公网域名（仅用于展示 URL，不参与命令参数） */
-    fun startTunnel(port: Int, token: String, domain: String?): TunnelStartResult
+    /** 使用实际监听端口启动隧道。提供 [apiToken] 时按 [domain] 同步 Cloudflare 配置，否则使用连接器 [token]。 */
+    suspend fun startTunnel(port: Int, token: String, domain: String?, apiToken: String?): TunnelStartResult
 
     /** 停止隧道 */
     fun stopTunnel()
@@ -184,7 +190,13 @@ class AppState(
     private val _tunnelToken = MutableStateFlow("")
     val tunnelToken: StateFlow<String> = _tunnelToken.asStateFlow()
 
-    /** 隧道公网域名（用户填写，用于 UI 展示公网地址；不参与 cloudflared 命令参数） */
+    private val _tunnelApiToken = MutableStateFlow("")
+    val tunnelApiToken: StateFlow<String> = _tunnelApiToken.asStateFlow()
+    private val managedTunnelEnabled = MutableStateFlow(false)
+    private var tunnelStartJob: Job? = null
+    private val tunnelStartMutex = Mutex()
+
+    /** 隧道公网域名。 */
     private val _tunnelDomain = MutableStateFlow("")
     val tunnelDomain: StateFlow<String> = _tunnelDomain.asStateFlow()
 
@@ -356,11 +368,15 @@ class AppState(
                     RemoteServerUiState.Failed(UiMessage(Res.string.err_generic, listOf(result.reason)))
                 }
             }
+            if (_remoteControlEnabled.value && managedTunnelEnabled.value && _tunnelApiToken.value.isNotBlank()) {
+                startTunnel()
+            }
         }
     }
 
     /** 停止遥控 server。 */
     fun stopRemoteControl() {
+        pauseTunnel()
         remoteControl?.stop()
         _remoteServerState.value = RemoteServerUiState.Idle
     }
@@ -368,24 +384,58 @@ class AppState(
     /** 启动 Cloudflare 隧道（仅当遥控 server 运行时可启动）；结果回写 [tunnelState]。 */
     fun startTunnel() {
         val hooks = remoteControl ?: return
-        if (remoteServerState.value !is RemoteServerUiState.Running) return
-        _tunnelState.value = TunnelUiState.Starting
-        // 在协程里调：hooks.startTunnel 会阻塞读 cloudflared 输出确认连接（最多 20s），
-        // scope 用 Dispatchers.Default，不卡 UI。
-        scope.launch {
-            val result = hooks.startTunnel(_remotePort.value, _tunnelToken.value, _tunnelDomain.value.takeIf { it.isNotBlank() })
-            _tunnelState.value = when (result) {
-                is TunnelStartResult.Started -> TunnelUiState.Running(result.url)
-                is TunnelStartResult.NotInstalled -> TunnelUiState.Failed(UiMessage(Res.string.tunnel_not_installed_msg), notInstalled = true)
-                is TunnelStartResult.Failed -> TunnelUiState.Failed(UiMessage(Res.string.err_generic, listOf(result.reason)))
+        val server = remoteServerState.value as? RemoteServerUiState.Running ?: return
+        val tunnel = _tunnelState.value
+        if (tunnel is TunnelUiState.Starting || tunnel is TunnelUiState.Running) return
+        val token = _tunnelToken.value
+        val apiToken = _tunnelApiToken.value.trim().takeIf { it.isNotEmpty() }
+        val domain = _tunnelDomain.value.takeIf { it.isNotBlank() }
+        if (!_tunnelState.compareAndSet(tunnel, TunnelUiState.Starting)) return
+        tunnelStartJob = scope.launch {
+            tunnelStartMutex.withLock {
+                val result = try {
+                    if (preferences.getString("tunnel.apiToken") != apiToken) {
+                        if (apiToken == null) preferences.remove("tunnel.apiToken")
+                        else preferences.putString("tunnel.apiToken", apiToken)
+                    }
+                    null
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    TunnelStartResult.ConfigurationFailed(UiMessage(Res.string.settings_tunnel_token_storage_failed))
+                } ?: hooks.startTunnel(server.port, token, domain, apiToken)
+                if (!isActive) return@withLock
+                _tunnelState.value = when (result) {
+                    is TunnelStartResult.Started -> {
+                        if (apiToken != null && !managedTunnelEnabled.value) {
+                            managedTunnelEnabled.value = true
+                            persist("tunnel.managedEnabled", true) { it.toString() }
+                        }
+                        TunnelUiState.Running(result.url)
+                    }
+                    is TunnelStartResult.NotInstalled -> TunnelUiState.Failed(UiMessage(Res.string.tunnel_not_installed_msg), notInstalled = true)
+                    is TunnelStartResult.Failed -> TunnelUiState.Failed(UiMessage(Res.string.err_generic, listOf(result.reason)))
+                    is TunnelStartResult.ConfigurationFailed -> TunnelUiState.Failed(result.reason)
+                }
             }
         }
     }
 
     /** 停止隧道。 */
     fun stopTunnel() {
+        managedTunnelEnabled.value = false
+        persist("tunnel.managedEnabled", false) { it.toString() }
+        pauseTunnel()
+    }
+
+    private fun pauseTunnel() {
+        tunnelStartJob?.cancel()
         remoteControl?.stopTunnel()
         _tunnelState.value = TunnelUiState.Idle
+    }
+
+    fun setTunnelApiToken(token: String) {
+        _tunnelApiToken.value = token
     }
 
     /** 设置隧道 token（写状态 + 持久化；空白清除持久化）。 */
@@ -524,12 +574,20 @@ class AppState(
         _leftSidebarPinned.value = preferences.getBoolean("ui.sidebar.pinned", false)
         _leftSidebarWidth.value = preferences.getString("ui.sidebar.width")?.toIntOrNull() ?: 245
 
-        _remoteControlEnabled.value = preferences.getBoolean("remote.enabled")
         _remoteControlPassword.value = preferences.getString("remote.password")
         _remotePort.value = preferences.getString("remote.port")?.toIntOrNull() ?: 8081
 
         _tunnelToken.value = preferences.getString("tunnel.token") ?: ""
+        try {
+            _tunnelApiToken.value = preferences.getString("tunnel.apiToken").orEmpty()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            _tunnelState.value = TunnelUiState.Failed(UiMessage(Res.string.settings_tunnel_token_storage_failed))
+        }
+        managedTunnelEnabled.value = preferences.getBoolean("tunnel.managedEnabled")
         _tunnelDomain.value = preferences.getString("tunnel.domain") ?: ""
+        _remoteControlEnabled.value = preferences.getBoolean("remote.enabled")
 
         _compactionThresholdPercent.value = preferences.getString("app.compaction.threshold")?.toIntOrNull() ?: 70
 

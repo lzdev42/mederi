@@ -1,7 +1,6 @@
 # 第四轮独立回归资产
 
-七项测试从第三轮审查的真实失败复现原样保存。执行入口是
-`docs/design/worktree-spec/ROUND4-REPAIR.md`，不是继续按历史 RF 表逐条打补丁。
+七项测试从第三轮审查的真实失败复现原样保存。正式验收清单见 [Worktree 验收资产](../worktree-acceptance/README.md)。
 
 ```bash
 ./gradlew -I scripts/worktree-review-round4/init.gradle :core:jvmTest \

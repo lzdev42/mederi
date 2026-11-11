@@ -154,10 +154,25 @@ FROM message_history
 WHERE session_id = ?
 ORDER BY seq ASC;
 
--- 当前最大 seq（追加时计算下一序号用）
-maxSeq:
-SELECT MAX(seq) FROM message_history
-WHERE session_id = ?;
+-- ── 定向写（内存真理源配套） ──
+-- seq 密集不变量：seq = 列表位置（0..n-1 无空洞），append 的 seq = 内存列表长度。
+-- updateHistory 差异化 = 公共前缀不动 + 中段删除 + 尾部平移 + 中段插入。
+
+-- 范围删除 updateHistory 的旧中段（seq ∈ [from, to)）
+deleteRegion:
+DELETE FROM message_history
+WHERE session_id = ? AND seq >= ? AND seq < ?;
+
+-- 两阶段负偏移平移·第一阶段：后缀移入负值区
+-- （SQLite 单语句 PK 上移必然唯一冲突；负值区与正 seq 无冲突）
+shiftToNegative:
+UPDATE message_history SET seq = -(seq + 1)
+WHERE session_id = ? AND seq >= ?;
+
+-- 两阶段负偏移平移·第二阶段：负值区移回原位 + delta
+shiftFromNegative:
+UPDATE message_history SET seq = -seq - 1 + ?
+WHERE session_id = ? AND seq < 0;
 
 -- 追加消息（seq 由调用方在同一事务中计算）
 appendMessage:

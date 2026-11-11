@@ -43,8 +43,8 @@ import xyz.mederi.debug.StreamTrace
 import xyz.mederi.domain.model.AgentCapabilities
 import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.mcp.engine.McpSession
-import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 import xyz.mederi.provider.infrastructure.koog.retry.RetryableLLMClient
+import xyz.mederi.provider.infrastructure.koog.retry.resolveProviderRetrySettings
 import xyz.mederi.provider.infrastructure.koog.sanitize.MederiOpenAILLMClient
 import xyz.mederi.tools.contextUsedTokens
 import xyz.mederi.domain.model.AIModel
@@ -52,7 +52,6 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
-import xyz.mederi.domain.model.UI_HIDDEN_MARKER
 import xyz.mederi.domain.model.MessagePart
 import xyz.mederi.domain.model.MessageRole
 import xyz.mederi.domain.model.MessageStatus
@@ -189,6 +188,9 @@ class TurnExecutor(
         llmClientFactory = llmClientFactory,
         // RF-07：子代理 turn 同样持执行租约——归档的等待窗口覆盖父 turn 与全部活跃子代理。
         leaseManager = leaseManager,
+        // 无持久化会话模式：子代理会话经装饰器路由内存（永不落 data.db），其余转发共享存储
+        sessionStore = xyz.mederi.store.db.EphemeralSessionStore(sessionStore),
+        historyStore = xyz.mederi.store.db.EphemeralHistoryStore(historyStore),
     )
 
     private val subagentManager = SubagentManager(
@@ -464,6 +466,7 @@ class TurnExecutor(
         request: SendMessageRequest,
         subagentRole: SubagentRole? = null,
         resumingWorkspaceInput: Boolean = false,
+        hiddenFromUi: Boolean = false,
     ) {
         val session = sessionStore.get(sessionId)
             ?: throw NoSuchElementException("Session not found: $sessionId")
@@ -510,7 +513,7 @@ class TurnExecutor(
                     request.agentConfig.reasoningLevel ?: session.reasoningLevel, activeApiKeyId)
                 val accepted = historyStore.load(sessionId).firstOrNull { it.id == messageId }
                 if (accepted == null) {
-                    historyStore.append(sessionId, buildUserMessage(sessionId, request.parts).copy(
+                    historyStore.append(sessionId, buildUserMessage(sessionId, request.parts, hiddenFromUi).copy(
                         id = messageId, pendingWorkspaceInput = pending))
                 } else {
                     historyStore.updateMessage(sessionId, messageId) { it.copy(pendingWorkspaceInput = pending) }
@@ -610,7 +613,19 @@ class TurnExecutor(
         // session 实例在 turn 开始时读取，本段按 turn 边界刷新；turn 内模型调 update_todo 后
         // 状态就在对话历史里，无需重建 prompt
         val activeTodoContent = if (activePlan == null && session.todos.isNotEmpty()) buildString {
-            session.todos.forEach { appendLine("- [${it.status.name}] ${it.content}") }
+            session.todos.forEach { item ->
+                appendLine("- [${item.status.name}] ${item.content}")
+                if (item.status == xyz.mederi.domain.model.TodoStatus.IN_PROGRESS && item.detail != null) {
+                    val d = item.detail
+                    d.background?.let { appendLine("    background: $it") }
+                    d.requirement?.let { appendLine("    requirement: $it") }
+                    d.approach?.let { appendLine("    approach: $it") }
+                    d.scope?.let { appendLine("    scope: $it") }
+                    d.done?.let { appendLine("    done: $it") }
+                    d.notes?.let { appendLine("    notes: $it") }
+                    d.attempts?.let { appendLine("    attempts: $it") }
+                }
+            }
             val done = session.todos.count { it.status == xyz.mederi.domain.model.TodoStatus.COMPLETED }
             appendLine("Progress: $done/${session.todos.size} completed.")
         }.trimEnd() else null
@@ -707,17 +722,16 @@ class TurnExecutor(
 
         // ── durable-first：用户消息先落库，再启动 Agent ──
         // 乐观更新的持久化兜底：网络/模型/工具在 turn 任何阶段失败，用户输入都已在
-        // HistoryStore，不会丢失。消息带 UI 隐藏时间戳——存的就是发的，
-        // ChatMemory load 时已落库的消息自然进入 prompt；回写 reconcile 按内容指纹对齐，
-        // 不会重复追加。append 同步执行且先于 SESSION_UPDATED 事件，
-        // 发送时机的监听者（如自动改名）回查快照必然能看到本条消息。
+        // HistoryStore，不会丢失。ChatMemory load 时已落库的消息自然进入 prompt；
+        // 回写 reconcile 按内容指纹对齐，不会重复追加。append 同步执行且先于
+        // SESSION_UPDATED 事件，发送时机的监听者（如自动改名）回查快照必然能看到本条消息。
         // 环境元数据（OS/Shell/沙箱等）已移至系统提示词，不在此落库。
         val turnId = activeTurnIds.computeIfAbsent(sessionId) { "turn_${UUID.randomUUID()}" }
         val workClock = workClocks.compute(sessionId) { _, existing ->
             if (existing?.turnId == turnId) existing else WorkClock(turnId, System.currentTimeMillis())
         }!!
         val existingInput = historyStore.load(sessionId).firstOrNull { it.id == request.messageId }
-        val userMessage = existingInput ?: buildUserMessage(sessionId, request.parts).copy(
+        val userMessage = existingInput ?: buildUserMessage(sessionId, request.parts, hiddenFromUi).copy(
             id = request.messageId, turnId = turnId, workStartedAt = workClock.startedAt)
         if (existingInput == null) historyStore.append(sessionId, userMessage)
         else if (existingInput.workStartedAt == null || existingInput.turnId != turnId) {
@@ -842,46 +856,22 @@ class TurnExecutor(
     }
 
     /**
-     * 构建待落库的用户消息：文本末尾附 UI 隐藏标记 + 时间戳。
-     * 标记后内容存进消息本体但不渲染到 UI（映射层在标记处截断），AI 全量可见。
-     * 环境元数据（OS/Shell/沙箱/项目目录/Java）已移至系统提示词动态后缀（EnvironmentInfoProvider），
-     * 不再随每条消息落库——避免历史膨胀 + 时间戳渐旧。
+     * 构建待落库的用户消息：原文直接入库，不再拼接隐藏文本标记。
+     * 环境元数据（OS/Shell/沙箱/项目目录）由系统提示词动态后缀（EnvironmentInfoProvider）提供。
      */
     private fun buildUserMessage(
         sessionId: String,
-        parts: List<MessagePart>
-    ): Message {
-        val now = Instant.now()
-        val tz = java.time.ZoneId.systemDefault()
-        val utc = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
-            .withZone(java.time.ZoneOffset.UTC).format(now)
-        val utcDow = now.atZone(java.time.ZoneOffset.UTC).dayOfWeek
-            .getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH)
-        val zoned = now.atZone(tz)
-        val local = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX").format(zoned)
-        val localDow = zoned.dayOfWeek
-            .getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH)
-        val metaNote = "\n$UI_HIDDEN_MARKER\n" +
-            "NOTE FOR AI (this section is hidden from the user in the UI):\n" +
-            "UTC: $utc ($utcDow)\n" +
-            "Local: $local (${tz.id}, $localDow)"
-        val lastTextIndex = parts.indexOfLast { it is MessagePart.Text }
-        val partsWithMeta = if (lastTextIndex >= 0) {
-            parts.mapIndexed { index, part ->
-                if (index == lastTextIndex) (part as MessagePart.Text).copy(text = part.text + metaNote) else part
-            }
-        } else {
-            parts + MessagePart.Text(metaNote.trimStart())
-        }
-        return Message(
-            id = "msg_${UUID.randomUUID().toString().take(8)}",
-            sessionId = sessionId,
-            role = MessageRole.USER,
-            parts = partsWithMeta,
-            status = MessageStatus.COMPLETED,
-            createdAt = Instant.now().toString()
-        )
-    }
+        parts: List<MessagePart>,
+        hiddenFromUi: Boolean = false,
+    ): Message = Message(
+        id = "msg_${UUID.randomUUID().toString().take(8)}",
+        sessionId = sessionId,
+        role = MessageRole.USER,
+        parts = parts,
+        status = MessageStatus.COMPLETED,
+        createdAt = Instant.now().toString(),
+        hiddenFromUi = hiddenFromUi,
+    )
 
     /** 推理也是已消费的输出；纯推理断流同样需要续写，不能伪装成完整交付。 */
     private suspend fun hasEmittedTokens(sessionId: String): Boolean {
@@ -1122,12 +1112,11 @@ class TurnExecutor(
 
         DebugLog.event("TurnExec", "cross-turn plan approval (planId=$planId, sessionId=$sessionId)")
 
-        // 内部消息：整条文本以 UI_HIDDEN_MARKER 开头 → UI 渲染 substringBefore 得空串（用户不可见），
+        // 内部消息：以 hiddenFromUi=true 落库，UI 投影清空渲染块（用户不可见），
         // AI 视图看到完整执行指令 + 上下文 Active Plan（APPROVED），据此启动执行。经 sendMessageInternal
         // 落库并启动新 turn（durable-first 由它保证）。
         val internalPrompt =
-            "$UI_HIDDEN_MARKER\n" +
-                "Plan '$approvedPlan.title' (id=$planId) has been approved by the user. " +
+            "Plan '${approvedPlan.title}' (id=$planId) has been approved by the user. " +
                 "Execute it now: for each pending subtask, call generate_spec then subagent(SPAWN, planId=$planId, ...), " +
                 "then verify_subtask. Do not re-create or re-ask for approval."
         val effectiveModel = session.aiModel
@@ -1145,7 +1134,8 @@ class TurnExecutor(
                 parts = listOf(MessagePart.Text(internalPrompt)),
                 // 内部消息轮沿用会话当前模型所属供应商记忆中的选定 key（无记忆则 null → 回落默认 key）
                 apiKeyId = providerId?.let { apiKeyResolver.currentKeyId(it) }
-            )
+            ),
+            hiddenFromUi = true,
         )
         return true
     }
@@ -1320,15 +1310,16 @@ class TurnExecutor(
                         retryWrapped(
                             llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)]),
                             session.id,
+                            provider,
                             retryDelegateProvider = {
                                 llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)])
                             }
                         )
                     } else {
-                        retryWrapped(llmClientFactory(provider, apiKey), session.id)
+                        retryWrapped(llmClientFactory(provider, apiKey), session.id, provider)
                     }
                 } else {
-                    retryWrapped(llmClientFactory(provider, apiKey), session.id)
+                    retryWrapped(llmClientFactory(provider, apiKey), session.id, provider)
                 }
             val executor = PromptExecutorBuilder()
                 .addClient(client)
@@ -1523,15 +1514,16 @@ class TurnExecutor(
                         retryWrapped(
                             llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)]),
                             sessionId,
+                            provider,
                             retryDelegateProvider = {
                                 llmClientFactory(provider, keys[counter.getAndIncrement().mod(keys.size)])
                             }
                         )
                     } else {
-                        retryWrapped(llmClientFactory(provider, apiKey), sessionId)
+                        retryWrapped(llmClientFactory(provider, apiKey), sessionId, provider)
                     }
                 } else {
-                    retryWrapped(llmClientFactory(provider, apiKey), sessionId)
+                    retryWrapped(llmClientFactory(provider, apiKey), sessionId, provider)
                 }
 
             DebugLog.section("TurnExec", "TurnExecutor.runTurn")
@@ -1600,7 +1592,7 @@ class TurnExecutor(
                 leaseManager = leaseManager
             )
 
-            val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics, eventBus,
+            val incrementalPersister = TurnIncrementalPersister(sessionId, historyStore, diagnostics, eventBus, toolTimings,
                 turnId = turnId,
                 includeImages = model.supportsImages,
                 workStartedAt = workClocks[sessionId]?.startedAt,
@@ -1983,17 +1975,29 @@ class TurnExecutor(
 
     /**
      * 限流/临时故障无限重试包装，由用户停止取消。
+     * 按供应商设置（autoRetryEnabled + retryMaxDelaySeconds）实时驱动：
+     * 开关关=不重试；null=全局默认区间；0=无延迟立即重试；N≥1=随机 1~N 秒。
+     * 设置经 settingsProvider 在每次重试决策时从 ProviderManager（唯一真理源）实时读取——
+     * turn 运行中用户改设置立即生效，不等下个 turn 重建 client。
      * [retryDelegateProvider] 非 null 时，重试换 key（用于 API Key 轮询）。
      */
     private fun retryWrapped(
         client: ai.koog.prompt.executor.clients.LLMClient,
         sessionId: String,
+        provider: xyz.mederi.provider.domain.model.Provider,
         retryDelegateProvider: (() -> ai.koog.prompt.executor.clients.LLMClient?)? = null
     ): ai.koog.prompt.executor.clients.LLMClient {
         return RetryableLLMClient(
             delegate = client,
-            minDelayMs = LlmRetryConfig.minDelayMs,
-            maxDelayMs = LlmRetryConfig.maxDelayMs,
+            // 每次重试决策实时读唯一真理源（ProviderManager）：turn 运行中改设置立即生效；
+            // 供应商被删（get 为 null）或读取失败时回退 turn 启动时的快照值。
+            settingsProvider = {
+                val current = runCatching { providerManager.get(provider.id) }.getOrNull()
+                resolveProviderRetrySettings(
+                    autoRetryEnabled = current?.autoRetryEnabled ?: provider.autoRetryEnabled,
+                    retryMaxDelaySeconds = current?.retryMaxDelaySeconds ?: provider.retryMaxDelaySeconds,
+                )
+            },
             statusBus = eventBus,
             sessionIdProvider = { sessionId },
             retryDelegateProvider = retryDelegateProvider

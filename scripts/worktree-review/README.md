@@ -10,4 +10,4 @@
 
 修复者应将此类纳入core/src/jvmTest/kotlin/xyz/mederi/workspace，使常规全量也运行。init.gradle检测该正式文件存在时不会重复注入；不要长期只跑带-I的特殊测试而让正式回归漏掉这6项。源接口变化可适配fixture，断言安全语义保持。
 
-背景、10项审查发现和整改顺序见docs/design/worktree-spec/GLM-REPAIR.md。本目录是正式回归验证资产，不依赖temp中的历史探针。
+正式验收清单见 [Worktree 验收资产](../worktree-acceptance/README.md)。

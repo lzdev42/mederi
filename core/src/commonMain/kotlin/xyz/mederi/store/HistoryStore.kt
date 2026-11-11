@@ -103,6 +103,9 @@ interface HistoryStore {
      * @return 原始 JSON 记录列表，按 seq 升序。
      */
     suspend fun listRaw(sessionId: String): List<RawMessageRecord>
+
+    /** 无持久化会话注册（子代理会话）：注册后该会话纯内存、永不落盘。默认 no-op（实现自选持久化策略）。 */
+    fun registerEphemeral(sessionId: String) {}
 }
 
 /**

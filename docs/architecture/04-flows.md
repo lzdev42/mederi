@@ -114,7 +114,7 @@ sequenceDiagram
         end
         loop 工具循环 (maxAgentIterations=3000)
             K->>K: toAssistantMessageSafe(args 坏 JSON 降级 "{}")
-            K->>HS: TurnIncrementalPersister.persistAssistant（增量落库防崩丢）
+            K->>HS: TurnIncrementalPersister.persistAssistant（增量定向写防崩丢：内存真理源 + B 单写队列，commit 后换内存引用）
             K->>K: nodeExecuteTools: 执行工具<br/>(文件写白名单/沙盒命令/office_read/office_write(pptx 只读)/<br/>list_processes/stop_process/Plan/Verify/ask_user...)
             K-->>EB: TOOL_CALLED / TOOL_RESULT 事件
             K->>K: 工具边界 (nodeSendToolResult) pre-LLM pollSteering 出队<br/>→ SteeringItem 注入工具结果消息 (引导模式插话)<br/>各 LLM 节点 post-LLM pollSteering 出队→注入并再发一轮 LLM
@@ -211,7 +211,7 @@ flowchart TD
     V -- "是" --> PREP["组装上下文: Project/PlanStore/Notebook<br/>activePlanContent(计划+spec指针+活跃spec)<br/>activeTodoContent(仅无活跃Plan)"]
     PREP --> SP["系统提示词装配：静态骨架(build/forSubagent) → withSkills(继承角色) → withProjectRules(AGENTS.md 指令链:<br/>向上 git根→项目目录 + 向下 直接子目录一层, 浅→深) → dynamicSuffix(plan/todo) + EnvironmentInfoProvider(环境信息)<br/>（动态段永远在最后，保证静态前缀连续=OpenAI prefix cache 不变量）<br/>注: 仅主代理(subagentRole==null)注入 AGENTS.md；子代理(executor/researcher)跳过, 项目规则由主代理编入 spec"]
     SP --> CFG["解析 effectiveModel + effectiveReasoningLevel<br/>回写 sessionStore.updateAgentConfig"]
-    CFG --> DF["durable-first: buildUserMessage(注入 NOT_FOR_UI 时间戳)<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
+    CFG --> DF["durable-first: buildUserMessage()<br/>historyStore.append → SESSION_UPDATED → RUNNING"]
     DF --> BG["scope.launch runTurn"]
     BG --> PF{"usedTokens > 70% 窗口?"}
     PF -- "是" --> COMP["compressOnce(mini agent maxAgentIterations=10, compressOnlyStrategy)<br/>失败不阻塞"]
@@ -374,7 +374,7 @@ sequenceDiagram
 1. 审批仅批准技术方案，不修改会话模型与配置；拒绝（approved=false）无存活 turn 可唤醒、无状态变更，直接返回 false（计划保持 PENDING_APPROVAL）；
 2. 从 PlanStore 按 planId `load` 并校验：会话匹配、非终态、PENDING_APPROVAL——不满足则跳过（作废/已完成/他会话计划不可批）；
 3. `updatePlan` 置 APPROVED 落盘 → 发 `PLAN_APPROVAL_RESOLVED` 事件；
-4. 以一条 **UI 隐藏内部消息**（整条文本以 `<<<NOT_FOR_UI>>>` 开头，UI 渲染 `substringBefore` 得空串 → 用户不可见、AI 可见）经 `sendMessageInternal` 启动新执行 turn，AI 读到 Active Plan 已是 APPROVED 后自行走 generate_spec → spawn → verify。
+4. 以一条 **UI 隐藏内部消息**（`hiddenFromUi=true`，`MederiModelMapper` 清空渲染块且 `ChatItemsBuilder` 不渲染气泡 → 用户不可见、AI 可见）经 `sendMessageInternal` 启动新执行 turn，AI 读到 Active Plan 已是 APPROVED 后自行走 generate_spec → spawn → verify。
 
 **重启/翻历史恢复待批准卡片**：`MederiAiCore.initialPlanApproval()`（MederiEventAggregator.observe 初始快照 + getSnapshot 共用）读该会话最新非终态计划投影为契约 `PlanApprovalRequest` 填入 `pendingPlanApproval`——`status` 区分：
 - APPROVAL 模式 + PENDING_APPROVAL → `"PENDING"`（待用户批准）；
@@ -527,6 +527,8 @@ sequenceDiagram
 - **isStreaming 排除 pendingQuestion**：`ChatInputCard.isStreaming` 加 `&& viewModel.pendingQuestion == null`（与 `!isWaitingPlanApproval` 对称），防御性确保挂起提问时不阻塞输入。
 - **用户绕过提问时补写 declined ToolResult**：`TurnExecutor.sendMessageInternal` 中 `hasPendingQuestion` 时，在 `abortAndJoin` 前调 `injectAskUserDeclinedToolResult`（与 `injectNeutralPlanToolResult` 对称），主动落库 "User declined to answer the questions." 结果，确保工具调用不留 Pending、下一轮 AI 视图有完整工具循环、UI 工具行正确显示"已拒绝回答"。
 - **ToolCallsBlock 对 Pending 状态显示"未回答"**：ASK kind 加 `isAskPending` 判断（calls 有 `ToolCallState.Pending`），Pending 时显示 `tool_action_ask_unanswered`（"未回答"/"Unanswered"），覆盖重启后 session 复位 IDLE、工具调用残留 Pending 但无 pendingQuestion 的边界场景。
+- **per-event 异常隔离（2026-11）**：`MederiEventAggregator` observe 的 collect 循环对 `applyWithRefresh` 包 `try/catch`（`CancellationException` 照常上抛）——单个坏事件打 log 后跳过、保留上一好快照，不再杀掉整条 UI 订阅。注意：live 期间**不做** pendingQuestion 水合（水合只发生在 observe 启动重建快照时，保持原始设计）——live 水合会在问题已回答、ToolResult 尚未落库的窗口期重建出幽灵 pendingQuestion（强制 WaitingUser、挡住发送→停止转换），弊大于利。
+- **WaitingUser 不在 StatusBar 显示（原始设计保持）**：ask_user 挂起的指示就是答题卡片本身（QuestionCard），状态条只承载重试过程；不在输入框上方另加"等待回答"提示。
 
 ## 7. 子代理（subagent 工具 action 分流 / 异步管理 / 主动上报）时序
 
@@ -634,7 +636,7 @@ flowchart TD
 
 > 主代理只派发/看状态/停止，浏览器内部对主代理完全透明。BROWSER agent 在后台协程跑
 > Koog AIAgent tool-calling 循环（`agent.run` 驱动 call_llm→execute_tools→send_tool_results），
-> nodePerceive 当步注入 a11y 快照（axtree）、用完即丢，记忆走 update_memory 工具。
+> nodePerceive 当步注入 Obscura 快照（refs 直传、每快照失效）、用完即丢，记忆走 update_memory 工具。
 > 细节经 BROWSER_TASK_* 事件给 UI，用户自己看。
 > 滚动工具有两种模式——空 refid 走页面级 `scrollPage`、非空走元素级 `scroll`。
 > 主代理入口为 `browser` 工具（action=RUN/STATUS/STOP/INFO，委托原 run_browser_task 等四个工具类）。
@@ -648,25 +650,25 @@ sequenceDiagram
     participant BTM as BrowserTaskManager
     participant BO as BrowserOperator(手和眼)
     participant BB as BrowserBrain(大脑)
-    participant BC as 宿主注册的 BrowserControl
+    participant BC as ObscuraBrowserControl(MCP stdio 子进程)
     participant EB as eventBus
     participant WV as WorkspaceViewModel
 
     U->>MA: "搜一下51job的Java开发工作"
-    MA->>RBT: browser(action=RUN, task, browser="host_browser", recipe="job_filter")
+    MA->>RBT: browser(action=RUN, task, browser="obscura", recipe="job_filter")
     RBT->>BTM: runTask(task, model, projectId, sessionId, browser, recipe)
-    BTM->>BTM: resolve(browser)→factory(suspend)→createBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
-    BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="host_browser")
-    RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"host_browser"} (立即返回, 不阻塞)
+    BTM->>BTM: resolve(browser)→factory(suspend)→新建 ObscuraBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
+    BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="obscura")
+    RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"obscura"} (立即返回, 不阻塞)
     MA-->>U: 主代理继续对话(浏览器任务在后台跑)
     Note over WV: 任意 BROWSER_TASK_STARTED：UI 自动展开浏览器面板
     EB-->>WV: BROWSER_TASK_STARTED(任意 browser)
     Note over WV: openDockPanel(BROWSER_AUTOMATION)（任务监控）
     Note over BTM,BC: 后台执行(与主 turn 并行)
-    BTM->>BC: start()
+    BTM->>BC: start() 起 obscura mcp --stealth --allow-private-network stdio 子进程
     BTM->>BO: operator.run(task)
     loop AIAgent tool-calling 循环(每步)
-        BO->>BO: agent.run → call_llm(nodePerceive 注入当步 axtree)
+        BO->>BO: agent.run → call_llm(nodePerceive 注入当步 Obscura 快照，refs 直传)
         BO->>BO: LLM 选 tool (judge→BrowserBrain / collect_info→BrowserCollector / update_memory)
         opt 选到 collect_info (多网站信息检索存入临时存储器)
             BO->>BO: collector.add(BrowserCollectedItem(url, siteName, content))
@@ -676,10 +678,10 @@ sequenceDiagram
             BB-->>BO: BrainResult (参考已收集资料返回结构化判定)
         end
         BO->>BC: execute_tools(navigate/click/type/scroll/done... SimpleTool)
-        BO->>BO: send_tool_results(注入新 axtree) → 循环
+        BO->>BO: send_tool_results(注入新 Obscura 快照，每快照失效) → 循环
         BO->>BTM: onToolEvent(phase, toolName, step, results)
         BTM->>EB: BROWSER_TASK_STEP(taskId, step, thought=自动文案, results, browser, collectedCount)
-        Note over BO: update_memory 工具写记忆; collect_info 暂存条目<br/>axtree 当步注入用完即丢
+        Note over BO: update_memory 工具写记忆; collect_info 暂存条目<br/>Obscura 快照当步注入用完即丢
     end
     BO-->>BTM: BrowserTaskResult(success, rawMessage, collectedItems)
     alt 需要大脑判定 (needsBrainJudgment == true)
@@ -693,7 +695,7 @@ sequenceDiagram
     EB-->>WV: 终态事件 (终态一律关闭 Dock 面板并清空 taskId)
     EB-->>MA: TurnExecutor 监听终态 → 组装 <event_message> 自动唤醒主 turn 汇报！
     Note over BTM,BC: 终态一律 withContext(NonCancellable) control.close()
-    BTM->>BC: control.close() 关闭底层 Tab
+    BTM->>BC: control.close() 销毁进程（SIGTERM→2s→SIGKILL 双保险）
 ```
 
 > **汇报机制与主代理自动唤醒（2026-10）**：任务结束时复用子 Agent 汇报通道：
@@ -701,11 +703,11 @@ sequenceDiagram
 > - **自动唤醒**：任务终态发 `BROWSER_TASK_COMPLETED/ERROR/STOPPED`（携带 `role=BROWSER_OPERATOR`），`TurnExecutor` 订阅并组装 `<event_message type="browser_task_completed">` 放入待发队列，自动唤醒主 Agent 开启新 turn 向用户汇报，无需主代理主动轮询。
 > - **用户停止链路（真停）**：UI 浮条「停止」→ `WorkspaceViewModel.stopBrowserAutomation()` 读 `browserAutomationState.taskId` → `AiCore.stopBrowserTask(taskId)` → `MederiAiCore` → `SessionApi.stopBrowserTask` → `BrowserTaskManager.stopTask`：同步置 STOPPED + 发 `BROWSER_TASK_STOPPED` + `cancel(job)`，协程 `finally` 在 `NonCancellable` 上下文 `control.close()` 真正关闭浏览器。UI 不再 `abort()` 主 turn（浏览器任务与主 turn 无生命周期绑定）。
 > - **生命周期（终态一律关闭）**：任务终态（完成/失败/停止）一律 `control.close()` 真正关闭浏览器并折叠 UI Dock 面板；已删除基于 isTest 关键词保留现场的旧逻辑。
-> 浏览器任务依赖宿主通过 `BrowserRegistry` 注册 `BrowserControl`。主代理只有在有可用后端时才收到 `browser` 工具。应用发行入口仅装配桌面渲染，Core 扩展接口保留供宿主注册浏览器。
+> 浏览器任务依赖 `BrowserRegistry` 注册的 `BrowserControl`（每任务经工厂新建 ObscuraBrowserControl → `start()` 起 `obscura mcp --stealth --allow-private-network` stdio 子进程 → 任务终态 `close()` 销毁进程（SIGTERM→2s→SIGKILL 双保险））。主代理只有在有可用后端时才收到 `browser` 工具。
 > 任意 BROWSER_TASK_STARTED 都会把浏览器自动化监控面板展开，遥控端同样可以查看任务事件。
 
 > 执行模型（2026-10 重构）：BrowserOperator 遵循 4-phase 循环（perceive → decide → execute → postprocess）。
-> 感知层统一走 **纯 axtree 快照**（`SnapshotMode.CLEAN` YAML，暂时不传截图），单步重建 prompt，杜绝上下文累积与 a11y 快照爆炸；采用 Koog 原生 tool-calling（原生 tool-calling 为唯一路径），页面物理工具
+> 感知层统一走 **Obscura 快照**（refs 直传、每快照失效），单步重建 prompt，杜绝上下文累积与快照爆炸；采用 Koog 原生 tool-calling（原生 tool-calling 为唯一路径），页面物理工具
 > 由通用工具集 `buildBrowserOperatorTools(control)` 装配（基于 BrowserControl 抽象，适配宿主注册的实现），Core 注册内部工具
 > （done/update_memory/collect_info/judge/execute_drill），删除无用工具（sleep/back/noop/close/screenshot）；
 > 配备 `BrowserCollector` 临时存储器，支持在多网站查找时调用 `collect_info` 暂存 Markdown 内容（含图片链接），解耦上下文避免 Token 膨胀，并在终态由 Brain / 操作员统一汇总；
@@ -723,7 +725,6 @@ sequenceDiagram
 > 浏览器实现由 browser(RUN) 的 browser 参数选择，与角色配置无关。
 
 > `BrowserTaskManager` 把父会话 ID 和任务 ID 传给注册的浏览器工厂，终态关闭控制器。
-> 桌面浏览器宿主组件按会话管理 KBPage，AppState 在会话或项目删除时回收已挂载宿主的页面资源。
 
 ## 9. 会话自动改名（SessionTitleService）
 
@@ -767,11 +768,15 @@ flowchart TD
         D3 -- "是" --> D4["Running(port)"]
         D3 -- "否(被占)" --> D5["port=0 OS 挑空闲 → Running(actualPort, portFallback)"]
         D4 & D5 --> D6["AppState 回写 remote.port 实际端口"]
-        D7["startTunnel(port, token, domain)"] --> D8{"token 非空?"}
-        D8 -- "否" --> D9["Failed(请先填写隧道 token)"]
-        D8 -- "是" --> D10{"cloudflared 已装?"}
+        D6 --> D7["手动启动隧道，或恢复已启用的自动模式<br/>使用 Running.port"]
+        D7 --> D10{"cloudflared 已装?"}
         D10 -- "否" --> D11["UI 提示自行安装"]
-        D10 -- "是" --> D12["pty4j 真实 pty 拉起 cloudflared tunnel run --token<br/>进程退出→OS关pty→SIGHUP→cloudflared 退出<br/>URL = formatTunnelUrl(domain)"]
+        D10 -- "是" --> D8{"有 API Token?"}
+        D8 -- "否" --> D12["用手动连接器 Token 启动 cloudflared"]
+        D8 -- "是" --> D13["按域名查 Zone 与 CNAME，复用或创建隧道"]
+        D13 --> D14["比对并按需更新 Service URL<br/>首次补建 CNAME，读取连接器 Token"]
+        D14 --> D15["启动 cloudflared，验证公网 /v1/ready"]
+        D15 --> D16["Running(url)，保存自动恢复状态"]
     end
     subgraph host2["server: Application.kt"]
         S1["读环境变量(PORT/CONFIG_DIR/PASSWORD/WEBAPP_DIR/RETRY)"] --> S2["MederiAiCore(configDir) + runBlocking initialize()"] --> S3["embeddedServer(Netty){ serverModule(...) }.start(wait=true)"]
@@ -885,7 +890,7 @@ flowchart LR
 
 **ToolCallState（契约层）**：`Pending → Running → Completed / Failed`。
 
-**RemoteServerUiState**：`Idle → Starting → Running(port, portFallback?) / Failed`；**TunnelUiState**：`Idle → Starting → Running(url) / Failed(reason, notInstalled)`（`url` = `formatTunnelUrl(domain)` 用户填域名拼 `https://` 的结果；`notInstalled=true` = 本机未装 cloudflared，AppState.kt L72-73）。
+**RemoteServerUiState**：`Idle → Starting → Running(port, portFallback?) / Failed`；**TunnelUiState**：`Idle → Starting → Running(url) / Failed(reason, notInstalled)`（`url` 为公网 HTTPS 地址；`notInstalled=true` 表示本机未装 cloudflared）。
 
 
 ### 工作反馈投影（2026-10-28）
@@ -1073,7 +1078,7 @@ flowchart TD
     Content -->|页面隐藏/切换| None[仅释放表现，无服务动作]
 ```
 
-沙盒设置已迁移AiCore，遥控端读写执行宿主，读取失败不伪造设置或乐观放权；RemoteControlHooks仍是遥控宿主能力。遥控缺LAN地址只说明，不构造假LAN；隧道没有URL但已运行时仍允许原停止动作。密码显隐不保存/重启，密码编辑仍需关闭再开启生效；Token与域名仍按原立即保存。内嵌server端口回退/密码门、cloudflared命令、服务/隧道互相依赖与真实启停规则均未改变。设置View验证使用fake AiCore/callbacks，不启动产品server。
+沙盒设置已迁移AiCore，遥控端读写执行宿主，读取失败不伪造设置或乐观放权；RemoteControlHooks仍是遥控宿主能力。遥控缺LAN地址只说明，不构造假LAN；隧道没有URL但已运行时仍允许原停止动作。密码显隐不保存/重启，密码编辑仍需关闭再开启生效；连接器 Token 和域名即时保存，API Token 在启动隧道时单独保存。内嵌 server 端口回退和密码门沿用原机制，隧道配置和自动恢复见 §10。设置View验证使用fake AiCore/callbacks，不启动产品server。
 
 
 ### R03a：一次性效果路由（2026-10-30）
@@ -1524,3 +1529,31 @@ flowchart LR
 ```
 
 任务完成以批准用例的逐条实测为依据，整体用例等待前序任务完成。失败后可按原契约重试，替换已批准版本须经用户重新批准。报告可在进行中读取，输出按任务、用例及运行记录关联。Desktop 与 Server 共用 Core 逻辑。
+
+## 16. 关闭时序（手动关闭 + SIGTERM 兜底，2026-11 存储层重构）
+
+```mermaid
+sequenceDiagram
+    participant U as 用户/系统
+    participant UI as main.kt requestClose
+    participant AC as MederiAiCore
+    participant TE as TurnExecutor 在飞 turn
+    participant B as DatabaseManager（单写队列）
+
+    alt 手动关闭（窗口关闭 / Cmd+Q → QuitHandler → requestClose）
+        U->>UI: 关闭
+        UI->>UI: stopRemoteControl / terminal / browser shutdown
+        UI->>UI: flushAll（草稿/compose state）
+        UI->>AC: (aiCore as? MederiAiCore)?.shutdown()
+    else SIGTERM（kill 无 -9 / Ctrl+C）
+        U->>AC: JVM 退出
+        Note over AC: Runtime.addShutdownHook（initialize() 注册，desktop/独立 server 两宿主都生效）
+        AC->>AC: shutdown()
+    end
+    AC->>AC: shutdownOnce CAS（幂等，双触发只执行一次）
+    AC->>TE: abortAndJoin 全部 RUNNING 会话
+    Note over TE: 流式取消路径先落半截正文<br/>（collectAssistantPreservingPartial persist-then-rethrow）
+    AC->>B: drainAndClose(2000)——排干单写队列 + 幂等拒绝后续写
+```
+
+**语义**：写穿透（每次写 commit 成功才确认）+ WAL busy_timeout——已提交数据在 kill -9 / 断电下都存活；关闭钩子只做善后（abort 在飞 turn + drain 写队列），不承担"保存"。流式中的半截正文由取消路径的 persist-then-rethrow 落库（"手动关闭一定保存"）。SIGTERM 下 UI 草稿 flush 不经此路径（AppState 层持有，手动关闭已覆盖）。

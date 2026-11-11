@@ -3,12 +3,11 @@ package xyz.mederi.browser
 import xyz.mederi.browser.bidi.KeyboardKey
 import xyz.mederi.browser.bidi.OperationResult
 
-/** 页面快照：a11y tree 的紧凑 YAML + 原始树（rawTree 仅用于同批内 refid 重映射，用完即丢）。 */
+/** 页面快照：后端快照文本（Obscura snapshot）。 */
 data class PageSnapshot(
     val url: String,
     val title: String,
-    val yaml: String,
-    val rawTree: Any?
+    val yaml: String
 )
 
 /** 语义定位方式（对齐 Playwright locator 家族；Drill 的 playwright_api 映射到此）。 */

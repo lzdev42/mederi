@@ -67,6 +67,12 @@ import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.SubagentReportDto
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
+import xyz.mederi.browser.BrowserConstants
+import xyz.mederi.browser.BrowserKind
+import xyz.mederi.browser.BrowserRegistry
+import xyz.mederi.browser.obscura.ObscuraBinaryLocator
+import xyz.mederi.browser.obscura.ObscuraBrowserControl
+import xyz.mederi.browser.obscura.ObscuraMcpClient
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.Session
 import xyz.mederi.debug.DebugLog
@@ -185,6 +191,34 @@ class MederiAiCore(
 
     private lateinit var mederi: Mederi
 
+    /** shutdown 幂等门闩（requestClose 与 JVM shutdown hook 共用，双触发只执行一次）。 */
+    private val shutdownOnce = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 可注入的 Obscura 二进制解析器；null = 未找到（不注册，不报错）。internal 供 jvmTest 注入假值。 */
+    internal var obscuraBinaryResolver: () -> String? = { ObscuraBinaryLocator.resolve() }
+
+    /**
+     * 注册 Obscura 浏览器后端（§1.5 合规：挂 initialize()）。
+     * 幂等——Registry.register 同名覆盖。factory 不起进程：每任务由
+     * BrowserTaskManager 调 factory 新建轻量 control，start() 才 spawn obscura mcp --stealth。
+     * internal 供 jvmTest 直调（真实 initialize() 需完整运行环境，见 ObscuraRegistrationTest 注释）。
+     */
+    internal fun registerObscuraBackend(resolver: () -> String? = obscuraBinaryResolver) {
+        runCatching {
+            val binary = resolver()
+            if (binary == null) {
+                DebugLog.info("AiCore", "Obscura binary not found; browser backend not registered.")
+            } else {
+                BrowserRegistry.register(
+                    BrowserConstants.DEFAULT_BROWSER_OBSCURA,
+                    BrowserKind.OBSCURA,
+                    factory = { _, _ -> ObscuraBrowserControl(ObscuraMcpClient(binary), sessionLifecycleOwner = true) }
+                )
+                BrowserRegistry.defaultName = BrowserConstants.DEFAULT_BROWSER_OBSCURA
+            }
+        }.onFailure { DebugLog.error("AiCore", "Obscura backend registration failed: ${it.message}", it) }
+    }
+
     override suspend fun getSandboxSettings(projectId: String): Result<SandboxSettings> = runCatching {
         mederi.sandbox.getSettings(projectId).toContract()
     }
@@ -276,6 +310,29 @@ class MederiAiCore(
             // 共用同一桥实现，谁初始化谁生效，宿主无需各自接线。
             autotitleService.start()
             startSessionStatusSync()
+            // Obscura 后端注册：未命中 resolver 时只记日志，不注册不报错
+            registerObscuraBackend()
+            // SIGTERM（kill 无 -9）/ Ctrl+C 兜底：JVM 退出前 abort 在飞 turn + drain 写队列。
+            // 手动关闭（requestClose）走同一 [shutdown]；幂等。
+            Runtime.getRuntime().addShutdownHook(Thread {
+                runCatching { shutdown() }
+                    .onFailure { DebugLog.error("AiCore", "shutdown hook failed: ${it.message}") }
+            })
+        }
+    }
+
+    /**
+     * 幂等关闭：abortAndJoin 全部 RUNNING 会话 → drain data.db 写队列（限时 2s）。
+     * 关闭时的半截正文由流式取消路径落库（collectAssistantPreservingPartial 的
+     * persist-then-rethrow），此处只做 turn 善后与写队列排干。
+     */
+    fun shutdown() {
+        if (!shutdownOnce.compareAndSet(false, true)) return
+        kotlinx.coroutines.runBlocking {
+            runCatching { cleanupStaleRunningSessions() }
+                .onFailure { DebugLog.error("AiCore", "shutdown abort failed: ${it.message}") }
+            runCatching { mederi.dataDatabaseManager?.drainAndClose(2000) }
+                .onFailure { DebugLog.error("AiCore", "shutdown drain failed: ${it.message}") }
         }
     }
 
@@ -891,6 +948,15 @@ class MederiAiCore(
                 )
             )
         }
+        refreshProvidersAndAgents()
+    }
+
+    override suspend fun setProviderRetrySetting(
+        providerId: String,
+        autoRetryEnabled: Boolean,
+        retryMaxDelaySeconds: Int?
+    ): Result<Unit> = runCatching {
+        mederi.providers.setRetrySettings(providerId, autoRetryEnabled, retryMaxDelaySeconds)
         refreshProvidersAndAgents()
     }
 

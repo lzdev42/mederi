@@ -103,8 +103,7 @@ internal class JcefSessionBrowserControl(
         return PageSnapshot(
             url = getCurrentUrl(),
             title = getTitle(),
-            yaml = result.yaml,
-            rawTree = result.rawTree
+            yaml = result.yaml
         )
     }
 

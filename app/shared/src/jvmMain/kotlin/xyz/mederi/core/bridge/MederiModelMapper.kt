@@ -111,6 +111,8 @@ object MederiModelMapper {
             // 完整回显每档配置（含 NONE 档），供编辑对话框回显
             reasoningLevels = rp?.levels?.mapKeys { it.key.name } ?: emptyMap(),
             responseSanitization = provider.responseSanitization,
+            autoRetryEnabled = provider.autoRetryEnabled,
+            retryMaxDelaySeconds = provider.retryMaxDelaySeconds,
             isChatGptOAuth = oauth
         )
     }
@@ -218,9 +220,13 @@ object MederiModelMapper {
             .filterNot { it.id.isNullOrBlank() }
             .associateBy { it.id!! }
 
-        val mergedParts = message.parts.mergeAdjacentParts()
-        val blocks = mergedParts.mapIndexedNotNull { index, part ->
-            toChatBlock(part, index, message, results)
+        val blocks = if (message.hiddenFromUi) {
+            emptyList()
+        } else {
+            val mergedParts = message.parts.mergeAdjacentParts()
+            mergedParts.mapIndexedNotNull { index, part ->
+                toChatBlock(part, index, message, results)
+            }
         }
 
         return ChatMessage(
@@ -248,6 +254,7 @@ object MederiModelMapper {
             pendingSteering = message.pendingSteering,
             workStartedAt = message.workStartedAt,
             workCompletedAt = message.workCompletedAt,
+            hiddenFromUi = message.hiddenFromUi,
             turnDiffSummary = message.turnDiffSummary?.let { summary ->
                 xyz.mederi.core.contract.models.TurnDiffSummaryUi(
                     files = summary.files.map { f ->
@@ -320,10 +327,8 @@ object MederiModelMapper {
     ): ChatBlock? = when (part) {
         is CoreMessagePart.Text -> ChatBlock.Text(
             id = blockId(message, index),
-            // `<<<NOT_FOR_UI>>>` 环境标记与 `<user_intervention>` 系统干预包装只注入进 USER 角色消息
-            //（环境元数据附在用户消息尾部、内部指令消息以标记开头、工具边界插话用 user_intervention 包装），
-            // 故只在 USER 消息上剥离；ASSISTANT 等角色原文渲染——否则 AI 在回复里字面提及标记时会被
-            // substringBefore 从该处截断（连同闭合反引号及后续正文一并丢失）。
+            // `<user_intervention>` 系统干预包装只注入进 USER 角色消息，故只在 USER 消息上剥离；
+            // ASSISTANT 等角色原文渲染，避免正文里字面提及包装标签时被误洗。
             text = (if (message.role == CoreMessageRole.USER)
                 xyz.mederi.util.PromptComposer.sanitizeUserVisibleText(part.text)
             else part.text).removeSuffix("\n")

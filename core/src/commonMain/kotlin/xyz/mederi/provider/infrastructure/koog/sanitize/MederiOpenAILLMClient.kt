@@ -7,12 +7,14 @@ import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
+import ai.koog.prompt.executor.clients.openai.base.models.OpenAIUsage
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.ResponseMetaInfo
+import ai.koog.prompt.params.LLMParams
 import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.prompt.streaming.StreamFrameFlowBuilder
 import ai.koog.prompt.streaming.buildStreamFrameFlow
@@ -93,6 +95,11 @@ class MederiOpenAILLMClient(
     private fun promptCacheKey(prompt: Prompt): String? =
         prompt.id.takeIf { it.isNotBlank() }
 
+    private fun withChatPromptCacheKey(prompt: Prompt): LLMParams =
+        (prompt.params as? OpenAIChatParams)
+            ?.let { p -> promptCacheKey(prompt)?.let { p.copy(promptCacheKey = it) } }
+            ?: prompt.params
+
     companion object {
         /**
          * SSE 空闲超时：连续这么久没收到**任何一行**（含 keep-alive 注释行 `: ping` /
@@ -143,32 +150,17 @@ class MederiOpenAILLMClient(
         val messages = convertPromptToMessages(prompt, model)
         val llmTools = tools.map { it.toOpenAIChatTool() }
         val toolChoice = prompt.params.toolChoice?.toOpenAIToolChoice()
-        val cacheKeyParams = (prompt.params as? OpenAIChatParams)
-            ?.let { p -> promptCacheKey(prompt)?.let { p.copy(promptCacheKey = it) } }
-            ?: prompt.params
         val requestJson = super.serializeProviderChatRequest(
             messages = messages,
             model = model,
             tools = llmTools.takeIf { it.isNotEmpty() },
             toolChoice = toolChoice,
-            params = cacheKeyParams,
+            params = withChatPromptCacheKey(prompt),
             stream = false
         )
         DebugLog.event("SSE", "POST $chatCompletionsPath (stream=false)")
 
-        val rawResponse = try {
-            httpClient.post<String, String>(
-                path = chatCompletionsPath,
-                requestBody = requestJson,
-                requestBodyType = String::class,
-                responseType = String::class
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            DebugLog.error("SSE", "HTTP POST failed: ${e.message}", e)
-            throw LLMClientException(clientName, e.message, e)
-        }
+        val rawResponse = postJson(chatCompletionsPath, requestJson, "HTTP POST failed")
         DebugLog.data("SSE", "response length", rawResponse.length)
 
         checkChatResponseError(rawResponse)
@@ -197,7 +189,7 @@ class MederiOpenAILLMClient(
 
         return Message.Assistant(
             parts = parts,
-            metaInfo = createMetaInfoInternal(response.usage),
+            metaInfo = chatMetaInfo(response.usage),
             finishReason = choice.finishReason
         )
     }
@@ -225,136 +217,34 @@ class MederiOpenAILLMClient(
             return executeStreamingResponsesAPI(prompt, model, tools)
         }
 
-        // Chat Completions - SanitizedModels 解析 + lines()/takeWhile 修复 SSE 挂起
+        // Chat Completions - SanitizedModels 解析 + 共享 SSE 管线
         val messages = convertPromptToMessages(prompt, model)
         val llmTools = tools.map { it.toOpenAIChatTool() }
         val toolChoice = prompt.params.toolChoice?.toOpenAIToolChoice()
-        val cacheKeyParams = (prompt.params as? OpenAIChatParams)
-            ?.let { p -> promptCacheKey(prompt)?.let { p.copy(promptCacheKey = it) } }
-            ?: prompt.params
         val requestJson = super.serializeProviderChatRequest(
             messages = messages,
             model = model,
             tools = llmTools.takeIf { it.isNotEmpty() },
             toolChoice = toolChoice,
-            params = cacheKeyParams,
+            params = withChatPromptCacheKey(prompt),
             stream = true
         )
         DebugLog.event("SSE", "POST $chatCompletionsPath (stream=true)")
 
-        return flow {
-            val timing = StreamTimingLog("SSE-Timing", "chat lines")
-            var sawDone = false
-            var bytesReceived = 0L
-            var linesReceived = 0
-            // 原始 SSE 行 ring buffer（data: 过滤前）+ 非 data: 错误信号行——供断流诊断
-            val lastRawLines = ArrayDeque<String>()
-            val errorSseLines = mutableListOf<String>()
-            try {
-                emitAll(
-                    httpClient.lines(
-                        path = chatCompletionsPath,
-                        requestBody = requestJson,
-                        requestBodyType = String::class,
-                        headers = mapOf(
-                            "Accept" to "text/event-stream",
-                            "Cache-Control" to "no-cache",
-                            "Content-Type" to "application/json"
-                        )
-                    )
-                        .timeout(SSE_IDLE_TIMEOUT)
-                        .catch { e ->
-                            if (e is TimeoutCancellationException) {
-                                DebugLog.error(
-                                    "SSE",
-                                    "SSE idle timeout triggered: no lines received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s (lines=$linesReceived, bytes=$bytesReceived)"
-                                )
-                                throw SseIdleTimeoutException(
-                                    "SSE idle timeout: no data received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s"
-                                )
-                            } else {
-                                throw e
-                            }
-                        }
-                        .onEach {
-                            timing.sample(it.length)
-                            bytesReceived += it.length
-                            linesReceived++
-                            // 截获最后 5 条原始行（含注释/event 行，data: 过滤前）
-                            lastRawLines.addLast(it)
-                            while (lastRawLines.size > 5) lastRawLines.removeFirst()
-                            // 非 data: 行中疑似错误信号（event: 前缀 / 含 "error" 关键词）
-                            if (!it.startsWith("data:") && it.isNotBlank()) {
-                                val lower = it.lowercase()
-                                if (lower.contains("error") || it.startsWith("event:")) {
-                                    if (errorSseLines.size < 10) errorSseLines.add(it)
-                                }
-                            }
-                        }
-                        // SSE 注释行（`: ping` / `: OPENROUTER PROCESSING` 等 keep-alive）与
-                        // event:/id:/retry: 行不是 JSON——不过滤直接解码会抛异常炸断整条流。
-                        // 长推理的静默期正是端点发注释行的窗口，症状 = 推理中途断流。
-                        // 与 Responses 路径（executeStreamingResponsesAPI）对齐。
-                        .filter { it.startsWith("data:") }
-                        .map { line -> line.removePrefix("data:").trim() }
-                        .onEach { if (it == "[DONE]") sawDone = true }
-                        .takeWhile { data -> data != "[DONE]" }
-                        .onCompletion { error ->
-                            // 区分三种结束模式：正常([DONE]) / 提前断连(无[DONE]无异常) / 异常断连
-                            val mode = when {
-                                error != null -> "exception"
-                                sawDone -> "done"
-                                else -> "premature-close"
-                            }
-                            DebugLog.event(
-                                "SSE",
-                                "chat lines flow closed: mode=$mode, lines=$linesReceived, bytes=$bytesReceived, " +
-                                    "sawDone=$sawDone, cause=${error?.message?.take(120) ?: "none"}"
-                            )
-                            StreamTrace.record("Stream.Summary", mapOf(
-                                "event" to "flow-completion",
-                                "mode" to mode,
-                                "lines" to linesReceived.toString(),
-                                "bytes" to bytesReceived.toString(),
-                                "cause" to (error?.message?.take(120) ?: "none")
-                            ))
-                            // 结构化诊断——TurnExecutor 断流警告时读取
-                            val ts = timing.snapshot()
-                            lastStreamDiagnostics = StreamCloseDiagnostics(
-                                mode = mode,
-                                linesReceived = linesReceived,
-                                bytesReceived = bytesReceived,
-                                durationMs = ts.durationMs,
-                                maxGapMs = ts.maxGapMs,
-                                ttfbMs = ts.ttfbMs,
-                                lastRawLines = lastRawLines.toList(),
-                                errorSseLines = errorSseLines.toList(),
-                                errorType = error?.let { it::class.simpleName },
-                                errorMessage = error?.message?.lineSequence()?.firstOrNull()?.take(120)
-                            )
-                        }
-                        .map { data ->
-                            checkChatResponseError(data)
-                            sanitizeJson.decodeFromString<SanitizedStreamResponse>(data)
-                        }
-                        .let { processStreamingFlow(it) }
-                        .requireEndFrame()
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // 原始异常随 LLMClientException 的 cause 链上抛，外层 ErrorCollector 统一收集完整诊断。
-                // 此处只留一行轻量日志：限流重试期间失败的是尝试，最终错误才进 ErrorCollector 历史
-                DebugLog.error(
-                    "SSE",
-                    "chat streaming failed: lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
-                        "cause=${e.message?.take(120)}",
-                    e
-                )
-                throw LLMClientException(clientName, e.message, e)
-            } finally {
-                timing.close()
-            }
+        return streamSseFrames(
+            path = chatCompletionsPath,
+            requestBody = requestJson,
+            timingLabel = "chat lines",
+            logPrefix = "chat",
+            stopOnEmptyData = false,
+        ) { dataLines ->
+            dataLines
+                .map { data ->
+                    checkChatResponseError(data)
+                    sanitizeJson.decodeFromString<SanitizedStreamResponse>(data)
+                }
+                .let { processStreamingFlow(it) }
+                .requireEndFrame()
         }
     }
 
@@ -371,19 +261,7 @@ class MederiOpenAILLMClient(
         DebugLog.event("SSE", "POST $responsesAPIPath (Responses API, stream=false)")
         DebugLog.data("SSE", "request size", requestJson.length)
 
-        val rawResponse = try {
-            httpClient.post<String, String>(
-                path = responsesAPIPath,
-                requestBody = requestJson,
-                requestBodyType = String::class,
-                responseType = String::class
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            DebugLog.error("SSE", "Responses API POST failed: ${e.message}", e)
-            throw LLMClientException(clientName, e.message, e)
-        }
+        val rawResponse = postJson(responsesAPIPath, requestJson, "Responses API POST failed")
         DebugLog.data("SSE", "response length", rawResponse.length)
 
         checkResponsesResponseError(rawResponse)
@@ -431,6 +309,9 @@ class MederiOpenAILLMClient(
                     )
                 }
             }
+        }
+        if (response.status == "incomplete") {
+            finishReason = "incomplete"
         }
 
         val metaInfo = responsesMetaInfo(response.usage) ?: ResponseMetaInfo.Empty
@@ -611,119 +492,27 @@ class MederiOpenAILLMClient(
         val requestJson = buildResponsesRequestJson(prompt, model, tools, stream = true)
         DebugLog.event("SSE", "POST $responsesAPIPath (Responses API, stream=true)")
 
-        return flow {
-            val timing = StreamTimingLog("SSE-Timing", "responses events")
-            var sawDone = false
-            var bytesReceived = 0L
-            var linesReceived = 0
-            // 原始 SSE 行 ring buffer + 非 data: 错误信号行——供断流诊断
-            val lastRawLines = ArrayDeque<String>()
-            val errorSseLines = mutableListOf<String>()
-            try {
+        return streamSseFrames(
+            path = responsesAPIPath,
+            requestBody = requestJson,
+            timingLabel = "responses events",
+            logPrefix = "responses",
+            extraHeaders = {
                 // 每次实际收集（包括重试）重新获取凭据；不能把首次 access token
                 // 固定在 client 的默认头里让长任务过期后仍反复发送旧值。
-                val authorization = if (chatGptPlan) accessTokenProvider?.invoke()?.let {
+                if (chatGptPlan) accessTokenProvider?.invoke()?.let {
                     mapOf("Authorization" to "Bearer $it")
                 }.orEmpty() else emptyMap()
-                emitAll(
-                    httpClient.lines(
-                        path = responsesAPIPath,
-                        requestBody = requestJson,
-                        requestBodyType = String::class,
-                        headers = authorization + mapOf(
-                            "Accept" to "text/event-stream",
-                            "Cache-Control" to "no-cache",
-                            "Content-Type" to "application/json"
-                        )
-                    )
-                        .timeout(SSE_IDLE_TIMEOUT)
-                        .catch { e ->
-                            if (e is TimeoutCancellationException) {
-                                DebugLog.error(
-                                    "SSE",
-                                    "SSE responses idle timeout triggered: no lines received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s (lines=$linesReceived, bytes=$bytesReceived)"
-                                )
-                                throw SseIdleTimeoutException(
-                                    "SSE idle timeout: no data received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s"
-                                )
-                            } else {
-                                throw e
-                            }
-                        }
-                        .onEach {
-                            timing.sample(it.length)
-                            bytesReceived += it.length
-                            linesReceived++
-                            // 截获最后 5 条原始行（含 event 行，data: 过滤前）
-                            lastRawLines.addLast(it)
-                            while (lastRawLines.size > 5) lastRawLines.removeFirst()
-                            // 非 data: 行中疑似错误信号
-                            if (!it.startsWith("data:") && it.isNotBlank()) {
-                                val lower = it.lowercase()
-                                if (lower.contains("error") || it.startsWith("event:")) {
-                                    if (errorSseLines.size < 10) errorSseLines.add(it)
-                                }
-                            }
-                        }
-                        // SSE 行有两类：`event: xxx`（事件名，JSON 里也有 type，忽略）和 `data: {...}`
-                        .filter { it.startsWith("data:") }
-                        .map { line -> line.removePrefix("data:").trim() }
-                        .onEach { if (it == "[DONE]" || it.isEmpty()) sawDone = true }
-                        .takeWhile { data -> data.isNotEmpty() && data != "[DONE]" }
-                        .onCompletion { error ->
-                            val mode = when {
-                                error != null -> "exception"
-                                sawDone -> "done"
-                                else -> "premature-close"
-                            }
-                            DebugLog.event(
-                                "SSE",
-                                "responses lines flow closed: mode=$mode, lines=$linesReceived, bytes=$bytesReceived, " +
-                                    "sawDone=$sawDone, cause=${error?.message?.take(120) ?: "none"}"
-                            )
-                            StreamTrace.record("Stream.Summary", mapOf(
-                                "event" to "flow-completion",
-                                "mode" to mode,
-                                "lines" to linesReceived.toString(),
-                                "bytes" to bytesReceived.toString(),
-                                "cause" to (error?.message?.take(120) ?: "none")
-                            ))
-                            // 结构化诊断——TurnExecutor 断流警告时读取
-                            val ts = timing.snapshot()
-                            lastStreamDiagnostics = StreamCloseDiagnostics(
-                                mode = mode,
-                                linesReceived = linesReceived,
-                                bytesReceived = bytesReceived,
-                                durationMs = ts.durationMs,
-                                maxGapMs = ts.maxGapMs,
-                                ttfbMs = ts.ttfbMs,
-                                lastRawLines = lastRawLines.toList(),
-                                errorSseLines = errorSseLines.toList(),
-                                errorType = error?.let { it::class.simpleName },
-                                errorMessage = error?.message?.lineSequence()?.firstOrNull()?.take(120)
-                            )
-                        }
-                        .map { data ->
-                            checkResponsesResponseError(data)
-                            sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(data)
-                        }
-                        .let { processResponsesStreamingFlow(it) }
-                        .requireEndFrame()
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // 原始异常随 cause 链上抛，外层 ErrorCollector 统一收集；此处只留轻量日志记录失败尝试
-                DebugLog.error(
-                    "SSE",
-                    "responses streaming failed: lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
-                        "cause=${e.message?.take(120)}",
-                    e
-                )
-                throw LLMClientException(clientName, e.message, e)
-            } finally {
-                timing.close()
-            }
+            },
+            stopOnEmptyData = true,
+        ) { dataLines ->
+            dataLines
+                .map { data ->
+                    checkResponsesResponseError(data)
+                    sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(data)
+                }
+                .let { processResponsesStreamingFlow(it) }
+                .requireEndFrame()
         }
     }
 
@@ -853,8 +642,12 @@ class MederiOpenAILLMClient(
                             completeTool(index, finalItem)
                         }
                     }
-                    val finishReason = response?.output?.lastOrNull { it.type == "message" }?.status
-                        ?: if (event.type == "response.completed") "completed" else "incomplete"
+                    val finishReason = if (response?.status == "incomplete") {
+                        "incomplete"
+                    } else {
+                        response?.output?.lastOrNull { it.type == "message" }?.status
+                            ?: if (event.type == "response.completed") "completed" else "incomplete"
+                    }
                     frames.emitEnd(finishReason, responsesMetaInfo(response?.usage))
                 }
                 "response.failed" -> {
@@ -873,11 +666,11 @@ class MederiOpenAILLMClient(
 
     private fun responsesMetaInfo(usage: SanitizedResponsesUsage?): ResponseMetaInfo? =
         usage?.let {
-            ResponseMetaInfo.create(
-                clock,
-                totalTokensCount = it.totalTokens,
-                inputTokensCount = it.inputTokens ?: it.promptTokens,
-                outputTokensCount = it.outputTokens ?: it.completionTokens
+            buildUsageMetaInfo(
+                totalTokens = it.totalTokens,
+                inputTokens = it.effectiveInputTokens,
+                outputTokens = it.effectiveOutputTokens,
+                cachedTokens = it.effectiveCachedTokens,
             )
         }
 
@@ -955,7 +748,7 @@ class MederiOpenAILLMClient(
                         DebugLog.event("SSE-Frame", "chat finishReason=$it")
                     }
                 }
-                chunk.usage?.let { metaInfo = createMetaInfoInternal(it) }
+                chunk.usage?.let { metaInfo = chatMetaInfo(it) }
             }
 
             DebugLog.event("SSE-Frame", "chat emitEnd: finishReason=$finishReason, toolCallDeltas=$toolCallDeltaCount, usage=${metaInfo != null}")
@@ -963,17 +756,160 @@ class MederiOpenAILLMClient(
         }
 
     // ------------------------------------------------------------------
-    // 辅助
+    // 辅助（Chat / Responses 共享传输与用量清洗）
     // ------------------------------------------------------------------
 
-    private fun createMetaInfoInternal(usage: ai.koog.prompt.executor.clients.openai.base.models.OpenAIUsage?): ResponseMetaInfo =
-        ResponseMetaInfo.create(
-            clock,
-            totalTokensCount = usage?.totalTokens,
-            inputTokensCount = usage?.promptTokens,
-            outputTokensCount = usage?.completionTokens,
-            metadata = usage?.promptTokensDetails?.cachedTokens?.let {
-                buildJsonObject { put("cachedTokens", it) }
-            }
+    private suspend fun postJson(
+        path: String,
+        requestJson: String,
+        failureLabel: String,
+    ): String = try {
+        httpClient.post(
+            path = path,
+            requestBody = requestJson,
+            requestBodyType = String::class,
+            responseType = String::class
         )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        DebugLog.error("SSE", "$failureLabel: ${e.message}", e)
+        throw LLMClientException(clientName, e.message, e)
+    }
+
+    private fun streamSseFrames(
+        path: String,
+        requestBody: String,
+        timingLabel: String,
+        logPrefix: String,
+        extraHeaders: suspend () -> Map<String, String> = { emptyMap() },
+        stopOnEmptyData: Boolean,
+        transformDataLines: (Flow<String>) -> Flow<StreamFrame>,
+    ): Flow<StreamFrame> = flow {
+        val timing = StreamTimingLog("SSE-Timing", timingLabel)
+        var sawDone = false
+        var bytesReceived = 0L
+        var linesReceived = 0
+        // 原始 SSE 行 ring buffer（data: 过滤前）+ 非 data: 错误信号行——供断流诊断
+        val lastRawLines = ArrayDeque<String>()
+        val errorSseLines = mutableListOf<String>()
+        try {
+            val authHeaders = extraHeaders()
+            emitAll(
+                httpClient.lines(
+                    path = path,
+                    requestBody = requestBody,
+                    requestBodyType = String::class,
+                    headers = authHeaders + mapOf(
+                        "Accept" to "text/event-stream",
+                        "Cache-Control" to "no-cache",
+                        "Content-Type" to "application/json"
+                    )
+                )
+                    .timeout(SSE_IDLE_TIMEOUT)
+                    .catch { e ->
+                        if (e is TimeoutCancellationException) {
+                            DebugLog.error(
+                                "SSE",
+                                "SSE $logPrefix idle timeout triggered: no lines received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s (lines=$linesReceived, bytes=$bytesReceived)"
+                            )
+                            throw SseIdleTimeoutException(
+                                "SSE idle timeout: no data received for ${SSE_IDLE_TIMEOUT.inWholeSeconds}s"
+                            )
+                        } else {
+                            throw e
+                        }
+                    }
+                    .onEach {
+                        timing.sample(it.length)
+                        bytesReceived += it.length
+                        linesReceived++
+                        lastRawLines.addLast(it)
+                        while (lastRawLines.size > 5) lastRawLines.removeFirst()
+                        if (!it.startsWith("data:") && it.isNotBlank()) {
+                            val lower = it.lowercase()
+                            if (lower.contains("error") || it.startsWith("event:")) {
+                                if (errorSseLines.size < 10) errorSseLines.add(it)
+                            }
+                        }
+                    }
+                    // SSE 注释行（`: ping` / `: OPENROUTER PROCESSING` 等 keep-alive）与
+                    // event:/id:/retry: 行不是 JSON——不过滤直接解码会抛异常炸断整条流。
+                    .filter { it.startsWith("data:") }
+                    .map { line -> line.removePrefix("data:").trim() }
+                    .onEach { data ->
+                        if (data == "[DONE]" || (stopOnEmptyData && data.isEmpty())) sawDone = true
+                    }
+                    .takeWhile { data -> data != "[DONE]" && (!stopOnEmptyData || data.isNotEmpty()) }
+                    .onCompletion { error ->
+                        val mode = when {
+                            error != null -> "exception"
+                            sawDone -> "done"
+                            else -> "premature-close"
+                        }
+                        DebugLog.event(
+                            "SSE",
+                            "$logPrefix lines flow closed: mode=$mode, lines=$linesReceived, bytes=$bytesReceived, " +
+                                "sawDone=$sawDone, cause=${error?.message?.take(120) ?: "none"}"
+                        )
+                        StreamTrace.record("Stream.Summary", mapOf(
+                            "event" to "flow-completion",
+                            "mode" to mode,
+                            "lines" to linesReceived.toString(),
+                            "bytes" to bytesReceived.toString(),
+                            "cause" to (error?.message?.take(120) ?: "none")
+                        ))
+                        val ts = timing.snapshot()
+                        lastStreamDiagnostics = StreamCloseDiagnostics(
+                            mode = mode,
+                            linesReceived = linesReceived,
+                            bytesReceived = bytesReceived,
+                            durationMs = ts.durationMs,
+                            maxGapMs = ts.maxGapMs,
+                            ttfbMs = ts.ttfbMs,
+                            lastRawLines = lastRawLines.toList(),
+                            errorSseLines = errorSseLines.toList(),
+                            errorType = error?.let { it::class.simpleName },
+                            errorMessage = error?.message?.lineSequence()?.firstOrNull()?.take(120)
+                        )
+                    }
+                    .let(transformDataLines)
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            DebugLog.error(
+                "SSE",
+                "$logPrefix streaming failed: lines=$linesReceived, bytes=$bytesReceived, sawDone=$sawDone, " +
+                    "cause=${e.message?.take(120)}",
+                e
+            )
+            throw LLMClientException(clientName, e.message, e)
+        } finally {
+            timing.close()
+        }
+    }
+
+    private fun chatMetaInfo(usage: OpenAIUsage?): ResponseMetaInfo =
+        buildUsageMetaInfo(
+            totalTokens = usage?.totalTokens,
+            inputTokens = usage?.promptTokens,
+            outputTokens = usage?.completionTokens,
+            cachedTokens = usage?.promptTokensDetails?.cachedTokens,
+        )
+
+    private fun buildUsageMetaInfo(
+        totalTokens: Int?,
+        inputTokens: Int?,
+        outputTokens: Int?,
+        cachedTokens: Int?,
+    ): ResponseMetaInfo = ResponseMetaInfo.create(
+        clock,
+        totalTokensCount = totalTokens,
+        inputTokensCount = inputTokens,
+        outputTokensCount = outputTokens,
+        metadata = cachedTokens?.let {
+            buildJsonObject { put("cachedTokens", it) }
+        }
+    )
 }

@@ -169,13 +169,26 @@ data class SanitizedResponsesContentPart(
 )
 
 @Serializable
+data class SanitizedResponsesInputTokensDetails(
+    @SerialName("cached_tokens") val cachedTokens: Int? = null,
+)
+
+@Serializable
 data class SanitizedResponsesUsage(
     @SerialName("total_tokens") val totalTokens: Int? = null,
     @SerialName("input_tokens") val inputTokens: Int? = null,
     @SerialName("prompt_tokens") val promptTokens: Int? = null,
     @SerialName("output_tokens") val outputTokens: Int? = null,
-    @SerialName("completion_tokens") val completionTokens: Int? = null
-)
+    @SerialName("completion_tokens") val completionTokens: Int? = null,
+    @SerialName("input_tokens_details") val inputTokensDetails: SanitizedResponsesInputTokensDetails? = null,
+    @SerialName("prompt_tokens_details") val promptTokensDetails: SanitizedResponsesInputTokensDetails? = null,
+    @SerialName("cached_tokens") val cachedTokens: Int? = null,
+) {
+    val effectiveInputTokens: Int? get() = inputTokens ?: promptTokens
+    val effectiveOutputTokens: Int? get() = outputTokens ?: completionTokens
+    val effectiveCachedTokens: Int?
+        get() = inputTokensDetails?.cachedTokens ?: promptTokensDetails?.cachedTokens ?: cachedTokens
+}
 
 /** 错误帧独立于成功响应解码：HTTP 200 也可能包含供应商错误，保留未知错误字段。 */
 @Serializable

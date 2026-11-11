@@ -102,6 +102,13 @@ data class AddApiKeyInput(
     val isDefault: Boolean = false,
 )
 
+/** setProviderRetrySetting：PATCH /v1/providers/{id}/retry */
+@Serializable
+data class SetProviderRetryInput(
+    val autoRetryEnabled: Boolean = true,
+    val retryMaxDelaySeconds: Int? = null,
+)
+
 /** resolveQuestion：POST /v1/sessions/{id}/questions/{questionId} */
 @Serializable
 data class ResolveQuestionInput(val answers: List<List<String>>)

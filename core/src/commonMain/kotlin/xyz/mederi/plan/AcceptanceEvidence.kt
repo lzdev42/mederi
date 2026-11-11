@@ -10,19 +10,40 @@ import java.util.UUID
 /** One named observation, compared by Core to the value approved for this case. */
 @Serializable
 data class AcceptanceCase(
-    val id: String,
-    val objective: String,
-    val setup: String,
-    val input: String,
-    val steps: String,
-    val observationSource: String,
-    val expected: String,
-    val detects: String,
+    val id: String = "",
+    val objective: String = "",
+    val setup: String = "",
+    val input: String = "",
+    val steps: String = "",
+    val observationSource: String = "",
+    val expected: String = "",
+    val detects: String = "",
     val manual: Boolean = false
 ) {
-    internal fun isValid() = id.matches(Regex("[A-Za-z][A-Za-z0-9_-]{0,63}")) &&
-        expected.trim().uppercase() !in setOf("PASS", "ALL PASS", "BUILD SUCCESSFUL", "CHECK_PASS", "BEHAVIOR_CHECK_PASS") &&
-        listOf(objective, setup, input, steps, observationSource, expected, detects).all { it.isNotBlank() && it.length <= 4000 }
+    internal fun isValid() = validationError() == null
+
+    /**
+     * 校验失败的具体原因（null = 合法）。
+     * 逐字段点名而非整体匿名拒绝：模型一轮就能改对，不用猜哪条违规
+     * （2026-11 实测：匿名整体拒绝导致同一份计划被拒 6 次仍未定位规则）。
+     */
+    internal fun validationError(): String? {
+        if (!id.matches(Regex("[A-Za-z][A-Za-z0-9_-]{0,63}")))
+            return "acceptance case id '$id' must match [A-Za-z][A-Za-z0-9_-]{0,63} (letter first, <= 64 chars)"
+        val banned = setOf("PASS", "ALL PASS", "BUILD SUCCESSFUL", "CHECK_PASS", "BEHAVIOR_CHECK_PASS")
+        if (expected.trim().uppercase() in banned)
+            return "acceptance case '$id': expected='$expected' is a content-free literal " +
+                "(banned: PASS / ALL PASS / BUILD SUCCESSFUL / CHECK_PASS / BEHAVIOR_CHECK_PASS) — " +
+                "state the concrete observed value that proves the requirement, not a pass marker"
+        listOf(
+            "objective" to objective, "setup" to setup, "input" to input, "steps" to steps,
+            "observationSource" to observationSource, "expected" to expected, "detects" to detects
+        ).forEach { (field, value) ->
+            if (value.isBlank()) return "acceptance case '$id': field '$field' is blank"
+            if (value.length > 4000) return "acceptance case '$id': field '$field' exceeds 4000 chars"
+        }
+        return null
+    }
 }
 
 @Serializable

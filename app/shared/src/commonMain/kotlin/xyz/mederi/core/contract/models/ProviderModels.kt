@@ -78,5 +78,10 @@ data class ProviderConfig(
     /** 推理参数配置（v6）：级别名（NONE/LOW/MEDIUM/HIGH/MAX）→ 请求体 JSON 片段/null，空 map 表示未配置 */
     val reasoningLevels: Map<String, String?> = emptyMap(),
     val responseSanitization: Boolean = false,
+    /** LLM 重试最大退避延迟（秒）；null=未覆盖，走全局默认 */
+    /** 自动重试开关；false = 临时故障立即上抛不重试 */
+    val autoRetryEnabled: Boolean = true,
+    /** 重试随机退避上限秒数；null = 全局默认区间；0 = 无延迟立即重试；N≥1 = 随机 1~N 秒（服务端 Retry-After 优先） */
+    val retryMaxDelaySeconds: Int? = null,
     val isChatGptOAuth: Boolean = false,
 )

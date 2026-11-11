@@ -21,8 +21,8 @@ import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs/design/worktree-spec"
-MANIFEST = SPEC / "acceptance.json"
+ASSETS = ROOT / "scripts/worktree-acceptance"
+MANIFEST = ASSETS / "acceptance.json"
 VERSION = "WT-2026-11-02.1"
 
 
@@ -57,9 +57,6 @@ def fingerprint():
     value = hashlib.sha256()
     for raw in sorted(set(names) - {b""}):
         name = os.fsdecode(raw)
-        # Delivery notes may be completed after testing without invalidating code.
-        if name == "docs/design/worktree-spec/delivery.md":
-            continue
         path = ROOT / name
         value.update(raw + b"\0")
         if path.is_symlink():
@@ -156,11 +153,13 @@ def checked_reports(directory, receipt, source):
     return cases_in(paths)
 
 
-def docs_check(manifest):
+def manifest_check(manifest):
     require(manifest["specVersion"] == VERSION, "Manifest version mismatch")
-    for name in manifest["specFiles"]:
-        require((SPEC / name).is_file(), f"Missing spec: {name}")
-        require(VERSION in (SPEC / name).read_text(), f"Missing version in {name}")
+    manual = read_json(ASSETS / "manual-template.json")
+    require(manual["specVersion"] == VERSION, "Manual template version mismatch")
+    require([(item["id"], item["requirement"]) for item in manual["scenarios"]] ==
+            [(item["id"], item["requirement"]) for item in manifest["manualScenarios"]],
+            "Manual template scenarios differ from the acceptance manifest")
     keys = []
     for suite in manifest["suites"]:
         require(suite["platform"] in ("any", "macos", "linux"), "Unknown suite platform")
@@ -168,10 +167,7 @@ def docs_check(manifest):
         require(suite["tests"], f"Empty suite {suite['className']}")
         keys.extend(suite["className"] + "." + method for method in suite["tests"])
     require(len(keys) == len(set(keys)), "Duplicate required test cases")
-    tasks = (SPEC / "04-tasks.md").read_text()
-    for number in range(1, 19):
-        require(f"## WT-{number:02}" in tasks, f"Missing WT-{number:02} task")
-    print(f"Spec valid: {len(manifest['suites'])} suites, {len(keys)} required cases, 18 tasks")
+    print(f"Manifest valid: {len(manifest['suites'])} suites, {len(keys)} required cases")
 
 
 def record_baseline(directory, source):
@@ -301,7 +297,9 @@ def final_check(directory, manifest, source):
             for relative in item["artifacts"]:
                 path = inside_evidence(directory, relative)
                 require(path.is_file() and path.stat().st_size > 0, f"Missing manual artifact {relative}")
-    require((SPEC / "delivery.md").is_file(), "Missing implementation delivery.md")
+    delivery_path = directory / "delivery.md"
+    if not delivery_path.is_file() or not delivery_path.read_text(encoding="utf-8").strip():
+        errors.append("Missing nonempty delivery.md in the evidence directory")
     require(not errors, "\n".join(errors))
     print("PASS: required behavior, regressions, platforms and manual parity evidence are complete.")
     print("Retained baseline failures:", receipt.get("existingFailures", []))
@@ -310,15 +308,15 @@ def final_check(directory, manifest, source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--docs-only", action="store_true")
+    modes.add_argument("--manifest-only", "--docs-only", action="store_true")
     modes.add_argument("--baseline", action="store_true")
     modes.add_argument("--run", action="store_true")
     modes.add_argument("--native", choices=["macos", "linux"])
     parser.add_argument("--evidence-dir", default="temp/worktree-evidence/delivery")
     args = parser.parse_args()
     manifest = read_json(MANIFEST)
-    docs_check(manifest)
-    if args.docs_only:
+    manifest_check(manifest)
+    if args.manifest_only:
         return
     directory = (ROOT / args.evidence_dir).resolve()
     allowed = (ROOT / "temp/worktree-evidence").resolve()

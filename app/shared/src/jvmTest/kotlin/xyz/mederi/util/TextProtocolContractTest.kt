@@ -2,7 +2,6 @@ package xyz.mederi.util
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * 跨层文本协议的**契约锁**（core ↔ app/shared）。
@@ -10,9 +9,8 @@ import kotlin.test.assertTrue
  * core 与 app/shared commonMain 无法共享常量（模块边界），故两侧各持一份：
  * - 生成侧 = `xyz.mederi.prompt.SteeringPrompt.wrap(text)`（core，工具边界 steering 注入文本）
  * - 剥离侧 = `PromptComposer.sanitizeUserVisibleText(...)`（app/shared，UI 渲染/回退编辑前清洗）
- * - 环境注入标记 = core `xyz.mederi.domain.model.UI_HIDDEN_MARKER` ↔ `PromptComposer.UI_HIDDEN_MARKER`
  *
- * 本测试把「core 生成 → shared 剥离 → 还原为原文」与「标记同值」固化为机器校验：
+ * 本测试把「core 生成 → shared 剥离 → 还原为原文」固化为机器校验：
  * core 改包装话术而剥离侧没跟上时，测试必须失败（而不是运行期 UI 漏出系统提示）。
  */
 class TextProtocolContractTest {
@@ -23,22 +21,6 @@ class TextProtocolContractTest {
     fun coreWrappedTextIsStrippedBackToOriginalBySanitizer() {
         val wrapped = xyz.mederi.prompt.SteeringPrompt.wrap(sampleText)
         assertEquals(sampleText, PromptComposer.sanitizeUserVisibleText(wrapped), "生成→剥离闭环必须还原为原文")
-    }
-
-    @Test
-    fun sanitizerRemovesWrappedTextAndHiddenBlockTogether() {
-        val combined = xyz.mederi.prompt.SteeringPrompt.wrap(sampleText) +
-            "\n" + PromptComposer.UI_HIDDEN_MARKER + "\n[2026-10-02 11:00:00 UTC]"
-        assertEquals(sampleText, PromptComposer.sanitizeUserVisibleText(combined))
-    }
-
-    @Test
-    fun hiddenMarkerMatchesAcrossLayers() {
-        assertEquals(
-            xyz.mederi.domain.model.UI_HIDDEN_MARKER,
-            PromptComposer.UI_HIDDEN_MARKER,
-            "环境注入标记两侧必须同值（core 改动而 shared 没跟上时此测试失败）"
-        )
     }
 
     @Test
