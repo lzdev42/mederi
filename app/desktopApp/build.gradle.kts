@@ -43,10 +43,45 @@ evaluationDependsOn(":app:webApp")
 val wasmJsProject = project(":app:webApp")
 val wasmJsDistTask = wasmJsProject.tasks.named("wasmJsBrowserDistribution")
 
+val checkout = rootProject.layout.projectDirectory.asFile
+val checkoutRuntimeRevision = if (checkout.resolve(".git").exists()) {
+    val revision = providers.exec {
+        workingDir(checkout)
+        commandLine("git", "rev-parse", "--verify", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText
+    val scriptsMatchRevision = providers.exec {
+        workingDir(checkout)
+        commandLine("git", "diff", "--quiet", "HEAD", "--", "scripts/runtime/install.sh", "scripts/runtime/install.ps1")
+        isIgnoreExitValue = true
+    }.result
+    revision.zip(scriptsMatchRevision) { hash, diff ->
+        if (diff.exitValue == 0) hash.trim() else ""
+    }
+} else providers.provider { "" }
+
+// Only ship the revision. Both the app and the terminal retrieve the public scripts at that revision.
+val runtimeScriptRevision = providers.gradleProperty("mederi.runtimeScriptRevision").map { hash ->
+    require(hash.matches(Regex("[0-9a-f]{40}"))) { "mederi.runtimeScriptRevision must be a full Git commit SHA." }
+    hash
+}.orElse(checkoutRuntimeRevision)
+val runtimeRevisionFile = layout.buildDirectory.file("generated/runtime-revision/revision.txt")
+val generateRuntimeRevision = tasks.register("generateRuntimeRevision") {
+    val revision = runtimeScriptRevision
+    val output = runtimeRevisionFile
+    inputs.property("revision", revision)
+    outputs.file(output)
+    doLast {
+        output.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText(revision.get())
+        }
+    }
+}
+
 tasks.named<ProcessResources>("processResources") {
-    dependsOn(wasmJsDistTask)
-    from(rootProject.layout.projectDirectory.dir("scripts/runtime")) {
-        include("install.sh", "install.ps1")
+    dependsOn(wasmJsDistTask, generateRuntimeRevision)
+    from(runtimeRevisionFile) {
         into("runtime")
     }
     from(wasmJsProject.layout.buildDirectory.dir("dist/wasmJs/productionExecutable")) {

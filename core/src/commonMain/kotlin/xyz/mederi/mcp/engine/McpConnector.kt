@@ -16,9 +16,11 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.sse.SSE
 import io.ktor.client.request.headers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import xyz.mederi.api.exception.MederiException
 import xyz.mederi.config.MederiIdentity
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.mcp.servers.domain.McpConnection
@@ -111,7 +113,7 @@ class McpConnector(
 
     /**
      * 打开一个长连接会话：连接全部已启用的 server，收集它们的工具。
-     * 单个 server 失败只记日志跳过（不拖垮整个 turn）；返回的 [McpSession] 由调用方负责 [McpSession.close]。
+     * 单个 server 失败记录诊断并跳过；返回的 [McpSession] 由调用方负责 [McpSession.close]。
      */
     suspend fun openSession(): McpSession {
         val configs = store.list().filter { it.enabled }
@@ -121,20 +123,32 @@ class McpConnector(
             configs.map { config ->
                 async {
                     try {
-                        connect(config.connection, config.name)
+                        config.name to Result.success(connect(config.connection, config.name))
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         DebugLog.error("McpConnector", "连接 MCP server ${config.name} 失败: ${describe(config, e)}", e)
-                        null
+                        config.name to Result.failure(e)
                     }
                 }
             }.awaitAll()
         }
 
-        val servers = results.filterNotNull()
+        val servers = results.mapNotNull { (_, result) -> result.getOrNull() }
+        val failures = results.mapNotNull { (name, result) ->
+            result.exceptionOrNull()?.let { error ->
+                val reason = if (error is McpRuntimeUnavailableException) {
+                    error.message.orEmpty()
+                } else {
+                    "Connection or tool discovery failed (${error.javaClass.simpleName}). See MCP settings for details."
+                }
+                McpConnectionFailure(name, reason)
+            }
+        }
         val tools = servers.flatMap { it.tools }
         if (servers.isEmpty()) DebugLog.event("McpConnector", "openSession: 无可用 MCP server")
         else DebugLog.event("McpConnector", "openSession: ${servers.size} server, ${tools.size} tools")
-        return McpSession(tools, servers.map { server -> { server.close() } })
+        return McpSession(tools, servers.map { server -> { server.close() } }, failures)
     }
 
     // ==================== 连接 ====================
@@ -234,10 +248,15 @@ class McpConnector(
  */
 class McpSession internal constructor(
     val tools: List<ToolBase<*, *>>,
-    private val closeActions: List<suspend () -> Unit>
+    private val closeActions: List<suspend () -> Unit>,
+    internal val connectionFailures: List<McpConnectionFailure> = emptyList(),
 ) {
     suspend fun close() = closeActions.forEach { it() }
 }
+
+internal data class McpConnectionFailure(val serverName: String, val reason: String)
+
+internal class McpRuntimeUnavailableException(message: String) : MederiException(message)
 
 /**
  * 给 MCP 工具名加 server 前缀的解析器（`serverName_toolName`），避免与 mederi 内置工具

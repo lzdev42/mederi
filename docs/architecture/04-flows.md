@@ -53,16 +53,18 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[启动桌面端] --> B[McpRuntime 探测本地命令]
-    B -->|全部可用| C[挂载 MederiApp]
-    B -->|有缺项| D[显示运行时引导]
-    D -->|关闭窗口或系统退出| D
-    D -->|一键安装| E[运行内置脚本]
-    E -->|完成或失败| B
-    D -->|手动安装后点重新检查| B
+    A[启动桌面端] --> B[探测 Node.js、Python 3 和 Git]
+    B -->|全部可用| C[加载工作台]
+    B -->|有缺项| D[显示引导并自动尝试安装]
+    D -->|最小化 / 恢复| D
+    D --> E[复检必需组件]
+    E -->|全部可用| C
+    E -->|仍有缺项| F[显示重试和终端备用入口]
+    F -->|重试| D
+    F -->|终端安装完成后复检| E
 ```
 
-每次启动都重新探测。只有全部通过后才允许进入工作台和正常关闭窗口。安装失败时，引导页保留剩余缺项并展开当前平台的四步终端说明，复制的命令使用随应用打包的脚本。脚本把 Node.js 24 LTS、Python 3.13 和 uv 装到当前用户的 `~/.mederi/runtime`，无需管理员权限。桌面发行包已经带有 JBR。Docker、.NET 等由选择它们的 MCP 服务各自要求。
+引导和工作台共用原生窗口。关闭引导窗口会最小化，安装继续运行；点击 Dock 或任务栏可恢复。安装完成时切换到工作台。macOS 在后台完成时会移除 Dock 中最小化的引导窗口入口，用户点击 Mederi 图标时再显示工作台。macOS 自动使用已有 Homebrew，缺少时在终端备用入口提供官方安装命令。Linux 使用非交互 sudo，要求密码时改在终端执行。Windows 通过 WinGet 安装，按需请求 UAC。Linux 和 Windows 的脚本从 jsDelivr 下载。安装一并提供 uv/uvx，启动检查只要求 Node.js（含 npm/npx）、Python 3 和 Git。
 
 ## 1. 发送消息全链路（sendMessage 端到端时序图）
 
@@ -103,6 +105,7 @@ sequenceDiagram
         TE->>TE: ApiKeyResolver.resolve(provider, activeApiKeyId)<br/>命中轮询哨兵(API_KEY_ROTATION_ID="__rotate__")?<br/>→ listKeys 全量明文建 RotatingLLMClient(getCounter(rotationSessionId))<br/>→ retryWrapped 包 RetryableLLMClient<br/>未命中 → 单 key client + RetryableLLMClient<br/>(哨兵不校验归属: 记忆/默认 key 兜底链另见 01-core §9.1;<br/>compressOnce 同源哨兵感知, 与 runTurn 共用同一计数器)
         TE->>TE: preflightCompressionIfNeeded<br/>(contextUsedTokens > 70% 窗口 → compressOnce，带 apiKeyId)
         TE->>TE: CustomToolRegistry.buildAll() 收集 UI 层注册的自定义工具
+        TE->>TE: 连接已启用的 MCP 并发现工具，失败原因随本轮系统提示传给模型
         TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪, customTools+mcpTools旁路合并)<br/>透传 AgentsSubtreeDiscovery: read/list 工具访问路径上<br/>发现未注入过的 AGENTS.md 时追加进工具返回文本(会话级去重)
         TE->>TE: buildTurnAgent: KoogClientFactory(+RetryableLLMClient)<br/>+ KoogModelBuilder + KoogParamsBuilder<br/>+ ChatMemory(HistoryStoreChatHistoryProvider)<br/>+ graphStrategy(+Compression) + EventHandler
         K->>HS: load → aiViewWindow(最后 SUMMARY 之后) → KoogMessageMapper

@@ -82,26 +82,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap libgtk-3-0t64 libgbm1 libnss3 libasound2t64 libgl1 libegl1 libfontconfig1
 
+      - name: Verify Runtime Scripts Are Available on jsDelivr
+        if: github.repository == 'lzdev42/mederi' && matrix.platform == 'linux' && matrix.arch == 'x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref=$(git rev-parse HEAD)
+          bash -n scripts/runtime/install.sh
+          for script in scripts/runtime/install.sh scripts/runtime/install.ps1; do
+            curl --fail --silent --show-error --location --proto '=https' \
+              --max-time 30 --retry 3 --retry-all-errors \
+              "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${ref}/${script}" | cmp "$script" -
+          done
+
       - name: Run Tests on Target Platform
         if: matrix.platform != 'macos' || matrix.arch != 'x64'
         id: platform_tests
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p temp
-          work=$(mktemp -d "$PWD/temp/runtime-smoke.XXXXXXXX")
-          trap 'rm -rf "$work"' EXIT
-          export MEDERI_RUNTIME_HOME="$work/runtime" UV_CACHE_DIR="$work/uv-cache"
-          if [[ "${{ matrix.platform }}" == windows ]]; then
-            export MEDERI_RUNTIME_HOME="$(cygpath -w "$MEDERI_RUNTIME_HOME")"
-            export UV_CACHE_DIR="$(cygpath -w "$UV_CACHE_DIR")"
-            powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$PWD/scripts/runtime/install.ps1")"
-          elif [[ "${{ matrix.platform }}-${{ matrix.arch }}" == macos-x64 ]]; then
-            /usr/bin/arch -x86_64 /bin/bash scripts/runtime/install.sh
-          else
-            /bin/bash scripts/runtime/install.sh
-          fi
-          export MEDERI_TEST_RUNTIME_HOME="$MEDERI_RUNTIME_HOME"
+          export MEDERI_TEST_SYSTEM_RUNTIME=1
 
           test_args=(jvmTest test -x :app:androidApp:test --continue --no-configuration-cache)
           case "${{ matrix.platform }}-${{ matrix.arch }}" in

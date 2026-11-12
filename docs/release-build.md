@@ -59,11 +59,29 @@ JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自�
 
 Desktop：macOS 打开 `.app`；Linux 执行解压目录的 `bin/` 下启动器；Windows 打开目录内 `.exe`。
 
-桌面端每次启动时检查 Node.js（22+，含 npm 和 npx）、Python（3.10+）和 uv（含 uvx）。缺少组件时点击「一键安装」，
-当前用户的运行时装在 `~/.mederi/runtime`（Windows 为 `%USERPROFILE%\.mederi\runtime`）。
-Windows 由应用直接调用 PowerShell。三个平台都可以按引导页步骤复制命令，在终端运行应用内置的脚本。
-所有组件通过检查前，引导页保持开启，工作台不会加载。
-Linux 上脚本需要 Bash、curl 或 wget、tar 和 SHA-256 校验工具。
+桌面端每次启动时从 PATH 和常见系统目录检查 Node.js（含 npm 和 npx）、Python 3 和 Git。
+三项均可用后才加载工作台。这是本地 MCP、Git 和 Python 工作任务的基础环境；桌面应用本身使用发布包内的 JBR。有缺项时自动尝试安装，可以最小化窗口，让安装继续运行。安装引导也会安装 PyPI MCP 使用的 `uv` 和 `uvx`，这两项不参加启动检查。下面的终端命令适用于需要手动安装的情况。
+
+- macOS：已有 Homebrew 时由应用直接安装。需要安装 Homebrew 时，在终端运行 [Homebrew 官方安装命令](https://brew.sh/)（已装 Homebrew 可跳过）。按提示输入管理员密码，再按 Homebrew 的 Next steps 设置 PATH。然后运行 `brew install node python git uv`，也可以只指定需要的包。
+
+  ```sh
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  ```
+
+- Linux：在引导页复制命令，或用下面的命令下载安装脚本。脚本优先用发行版仓库；没有 Node.js 或 Python 的包时使用官方发布的二进制或源码。若一键安装遇到 sudo 密码提示，改在终端执行。
+
+  ```sh
+  curl -fsSL 'https://cdn.jsdelivr.net/gh/lzdev42/mederi@main/scripts/runtime/install.sh' -o install.sh && sudo /bin/bash install.sh
+  ```
+
+- Windows：在引导页复制 PowerShell 命令，或在 PowerShell 运行下面两行。脚本使用 Microsoft App Installer 提供的 [WinGet](https://learn.microsoft.com/windows/package-manager/winget/install)，需要时弹出 UAC，并验证机器 PATH。
+
+  ```powershell
+  curl.exe -fsSL 'https://cdn.jsdelivr.net/gh/lzdev42/mederi@main/scripts/runtime/install.ps1' -o install.ps1
+  if ($LASTEXITCODE -eq 0) { powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 }
+  ```
+
+Linux 和 Windows 的脚本只保存在仓库中。应用内一键安装和引导页的复制命令都从 jsDelivr 取构建所对应的 Git 提交。发布前须先推送该提交。两个脚本都接受 `node`、`python`、`git`、`uv`，省略时安装全部。
 
 两种 Server：Unix 执行根目录 `./run.sh`；Windows 执行 `run.bat`。
 完整版启动器使用 `runtime/` 下的 Java 25，API 版使用系统 `JAVA_HOME`/`PATH` 的 Java **25 或更高版本**。

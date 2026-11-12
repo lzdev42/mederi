@@ -1484,19 +1484,21 @@ class TurnExecutor(
             HistoryStoreChatHistoryProvider(historyStore, diagnostics, toolTimings, includeImages = model.supportsImages)
         )
 
-        // MCP：连接已启用的 MCP server，把工具合并进 agent。是否开启由中心化
-        // AgentCapabilities 表决定（主代理 + 两种子代理都继承 MCP）。失败只记日志不拖垮
-        // turn；turn 结束统一 close。声明在 try 外，finally 里才能访问。
-        val mcpSession: McpSession? = if (AgentCapabilities.of(subagentRole).inheritMcp) {
-            try {
-                mcpConnector?.openSession()
-            } catch (e: Exception) {
-                DebugLog.error("TurnExec", "openSession MCP 失败: ${e.message}", e)
-                null
-            }
-        } else null
-
+        var mcpSession: McpSession? = null
         try {
+            // 单个 MCP 服务的失败反馈给模型，已建立的连接由 finally 统一关闭。
+            if (AgentCapabilities.of(subagentRole).inheritMcp) {
+                mcpSession = try {
+                    mcpConnector?.openSession()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    DebugLog.error("TurnExec", "openSession MCP 失败: ${e.message}", e)
+                    null
+                }
+            }
+            val turnSystemPrompt = SystemPrompts.withMcpConnectionFailures(systemPrompt, mcpSession?.connectionFailures.orEmpty())
+
             // 统一经 ApiKeyResolver 解析（显式归属命中→写记忆 / 记忆 / 默认 key 三级兜底；
             // 全无则抛 IllegalStateException，不静默伪装成功）
             val resolvedKey = apiKeyResolver.resolve(provider.id, apiKeyId)
@@ -1608,7 +1610,7 @@ class TurnExecutor(
                 llmClient = llmClient,
                 model = model,
                 reasoningLevel = reasoningLevel,
-                systemPrompt = systemPrompt,
+                systemPrompt = turnSystemPrompt,
                 toolRegistry = toolRegistry,
                 historyProvider = historyProvider,
                 toolTimings = toolTimings,

@@ -14,7 +14,7 @@ import xyz.mederi.mcp.runtime.McpRuntime
  */
 internal actual fun mcpStdioTransport(command: String, args: List<String>, env: Map<String, String>): Transport {
     val environment = McpRuntime.environment(env)
-    val process = ProcessBuilder(McpRuntime.commandLine(command, args, environment))
+    val process = ProcessBuilder(McpRuntime.stdioCommandLine(command, args, environment))
         .apply {
             environment().clear()
             environment().putAll(environment)

@@ -2,6 +2,7 @@ package xyz.mederi.prompt
 
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.SubagentRole
+import xyz.mederi.mcp.engine.McpConnectionFailure
 import xyz.mederi.skills.domain.SkillInfo
 
 /**
@@ -20,6 +21,20 @@ import xyz.mederi.skills.domain.SkillInfo
  * 提示词用英文以减少 token 消耗。
  */
 object SystemPrompts {
+
+    internal fun withMcpConnectionFailures(prompt: String, failures: List<McpConnectionFailure>): String {
+        if (failures.isEmpty()) return prompt
+        return buildString {
+            append(prompt)
+            append("\n\n# MCP servers unavailable for this turn\n")
+            appendLine("Use these diagnostics if a task needs an unavailable server. Dependency installation follows the normal execution permissions.")
+            for ((serverName, reason) in failures) {
+                val label = serverName.take(120).map { if (it.isLetterOrDigit() || it in " ._-") it else '_' }
+                    .joinToString("")
+                appendLine("- $label: $reason")
+            }
+        }
+    }
 
     // ============================ 通用部分 ============================
 

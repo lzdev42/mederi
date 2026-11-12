@@ -592,7 +592,7 @@ flowchart TD
 
 ### 9.3 desktopApp（`app/desktopApp/src/main/kotlin/xyz/mederi/`）
 
-- **启动运行时引导**：`main.kt` 在每次启动时先调用 `McpRuntime.missing()`，全部通过后才挂载 `MederiApp`。有缺项时展示 `runtime/RuntimeSetupPage.kt`；窗口关闭请求和 macOS 系统退出请求在通过检查前不会结束应用。`runtime/RuntimeInstaller.kt` 调用随桌面包内置的 `scripts/runtime/install.sh`（macOS/Linux）或 `install.ps1`（Windows），安装后重新探测并自动进入工作台。终端备用命令也调用内置脚本，页面按平台提供复制、打开终端、粘贴执行和复检四步。此入口仅属于桌面宿主。
+- **启动运行时引导**：`main.kt` 在每次启动时先调用 `McpRuntime.missing()`，确认 Node.js、Python 3 和 Git 都可用后挂载 `MederiApp`。有缺项时，`runtime/RuntimeSetupPage.kt` 自动尝试安装一次，完成后复检。macOS 使用已安装的 Homebrew。Linux 与 Windows 由 `RuntimeInstaller.kt` 从 jsDelivr 下载同一 Git 提交的仓库脚本。需要交互或安装失败时，提供精简的终端备用入口。安装包含 uv/uvx。安装引导与工作台共用原生窗口，安装期间可以最小化到 Dock 或任务栏，恢复后继续查看状态。macOS 复检通过后会移除最小化的引导窗口入口，点击 Mederi 的 Dock 图标打开工作台。
 
 - `main.kt` 注入进程级 `PtyTerminalHub`、文件树和遥控 hooks。就绪后桌面宿主调用 `KBrowserRuntime.ensureInitialized()`，成功时经 `SingleMermaidWorker.attachBrowser(kb)` 和 `MarkdownExporter.setBrowser(kb)` 装配 InkCompose Mermaid 与 PDF 渲染。桌面保留 `JcefBrowserHost` 的会话级多标签页实现，当前入口不挂载该宿主。
 - **`KBrowserRuntime`**（core JVM `browser/KBrowserRuntime.kt`）：进程单例，`ensureInitialized()` 检查 JCEF 可用性并以 `useOsr=true` 初始化 KBrowser，初始化失败返回 null。桌面退出调用 `shutdown()` 释放资源。

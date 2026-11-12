@@ -17,6 +17,8 @@ import xyz.mederi.tools.sandbox.ProcessRegistry
  */
 private const val BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+internal expect fun ProcessBuilder.withSystemRuntimePath(): ProcessBuilder
+
 /**
  * Shell 命令执行工具集。
  *
@@ -99,7 +101,8 @@ class ShellTools(
         catch (failure: Exception) { return CommandResult("[sandbox] ${failure.message}", -1) }
         val wrapped = prepared.wrapped
         prepared.grant?.let { executionPermissions!!.checkGrant(it) }
-        val process = ProcessBuilder(wrapped.argv).directory(prepared.workDir).redirectErrorStream(true).start()
+        val process = ProcessBuilder(wrapped.argv).withSystemRuntimePath()
+            .directory(prepared.workDir).redirectErrorStream(true).start()
         ProcessRegistry.register(process.pid(), if (wrapped.processGroupLeader) process.pid() else null, command, prepared.workDir.path)
         val output = java.util.concurrent.FutureTask {
             process.inputStream.bufferedReader().use { reader ->
@@ -177,7 +180,7 @@ class ShellTools(
             var process: Process? = null
             var leaseReleased = false
             try {
-                val builder = ProcessBuilder(wrapped.argv)
+                val builder = ProcessBuilder(wrapped.argv).withSystemRuntimePath()
                 builder.directory(workDir)
                 builder.redirectErrorStream(true)
 

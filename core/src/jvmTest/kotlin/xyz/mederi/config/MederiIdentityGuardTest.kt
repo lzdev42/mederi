@@ -86,7 +86,10 @@ class MederiIdentityGuardTest {
             .filter { it.isFile && it.name.endsWith(".kt") }
             .filterNot { it.name == "MederiIdentity.kt" }
             .forEach { file ->
-                val rel = file.absolutePath.removePrefix(root.absolutePath).trimStart('/', '\\')
+                // 统一归一化为 '/'：Windows 上 absolutePath 是 '\' 分隔，会导致豁免 key 查不到而误报
+                val rel = file.absolutePath.removePrefix(root.absolutePath)
+                    .trimStart('/', '\\')
+                    .replace('\\', '/')
                 val lines = file.readLines()
                 lines.forEachIndexed { index, line ->
                     if (productNamePrefixes.any { line.contains(it) }) {

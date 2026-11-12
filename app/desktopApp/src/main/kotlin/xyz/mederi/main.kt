@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -22,13 +23,18 @@ import xyz.mederi.ui.appstate.AppState
 import xyz.mederi.ui.host.LocalProjectFileTreeProvider
 import xyz.mederi.ui.host.ProjectFileTreeProviderJvm
 import java.awt.Desktop
+import java.awt.desktop.AppReopenedListener
 import java.io.File
 
 /** 终端会话注册表（desktop 全局单例，随进程生命周期）。 */
 private val terminalHub = PtyTerminalHub()
 
 fun main() = application {
+    val windowState = rememberWindowState()
     val missingRuntimes = remember { mutableStateOf<Set<McpRuntime.Component>?>(null) }
+    val waitingForDockReopen = remember { mutableStateOf(false) }
+    val desktop = remember { if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null }
+    val reopenDesktop = desktop?.takeIf { it.isSupported(Desktop.Action.APP_EVENT_REOPENED) }
     LaunchedEffect(Unit) {
         missingRuntimes.value = withContext(Dispatchers.IO) { McpRuntime.missing() }
     }
@@ -70,23 +76,43 @@ fun main() = application {
 
     DisposableEffect(Unit) {
         // macOS Command-Q and the system Quit menu can bypass the window close event.
-        val desktop = if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null
         val quitDesktop = desktop?.takeIf { it.isSupported(Desktop.Action.APP_QUIT_HANDLER) }
+        val reopenListener = AppReopenedListener {
+            windowState.isMinimized = false
+            waitingForDockReopen.value = false
+        }
         quitDesktop?.setQuitHandler { _, response ->
             response.cancelQuit()
             requestClose()
         }
-        onDispose { quitDesktop?.setQuitHandler(null) }
+        reopenDesktop?.addAppEventListener(reopenListener)
+        onDispose {
+            quitDesktop?.setQuitHandler(null)
+            reopenDesktop?.removeAppEventListener(reopenListener)
+        }
     }
 
     Window(
-        onCloseRequest = ::requestClose,
+        onCloseRequest = {
+            if (missingRuntimes.value?.isEmpty() == true) requestClose()
+            else windowState.isMinimized = true
+        },
+        state = windowState,
         title = "Mederi",
-        visible = missingRuntimes.value != null,
+        visible = missingRuntimes.value != null && !waitingForDockReopen.value,
     ) {
         val missing = missingRuntimes.value ?: return@Window
         if (missing.isNotEmpty()) {
-            RuntimeSetupPage(missing) { missingRuntimes.value = it }
+            RuntimeSetupPage(
+                missing = missing,
+                onMinimize = { windowState.isMinimized = true },
+            ) { remaining ->
+                if (remaining.isEmpty() && windowState.isMinimized && reopenDesktop != null) {
+                    // Remove the minimized setup window from the Dock without bringing the workspace forward.
+                    waitingForDockReopen.value = true
+                }
+                missingRuntimes.value = remaining
+            }
             return@Window
         }
 

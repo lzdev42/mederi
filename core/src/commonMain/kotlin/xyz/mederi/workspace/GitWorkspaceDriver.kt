@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
+internal expect fun systemGitExecutable(): String
+
 /**
  * Git 执行输出结果。
  */
@@ -202,7 +204,7 @@ class GitWorkspaceDriver(
     ): GitExecutionResult = withContext(Dispatchers.IO) {
         val workDirFile = File(workingDir)
         val fullArgv = mutableListOf<String>()
-        fullArgv.add("git")
+        fullArgv.add(systemGitExecutable())
         fullArgv.add("--no-pager")
         fullArgv.add("-c")
         fullArgv.add("core.hooksPath=${emptyHooksDir.absolutePath}")
