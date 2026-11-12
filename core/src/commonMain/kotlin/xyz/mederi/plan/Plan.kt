@@ -158,14 +158,22 @@ object VerificationSpecSerializer : KSerializer<VerificationSpec> {
             ?: throw SerializationException("VerificationSpec requires Json format")
         return when (val element = jsonDecoder.decodeJsonElement()) {
             is JsonPrimitive -> VerificationSpec(command = element.content)
-            is JsonObject -> VerificationSpec(
-                command = element["command"]?.jsonPrimitive?.contentOrNull ?: "",
-                cwd = element["cwd"]?.jsonPrimitive?.contentOrNull,
-                timeoutSeconds = element["timeoutSeconds"]?.jsonPrimitive?.intOrNull,
-                expected = element["expected"]?.jsonPrimitive?.contentOrNull ?: "",
-                expectStdoutContains = element.stringList("expectStdoutContains"),
-                expectStdoutNotContains = element.stringList("expectStdoutNotContains"),
-            )
+            is JsonObject -> {
+                // command 是唯一"缺失会被伪装成合法值"的字段：空命令 exit 0 会假 PASS。
+                // 对象形态必须有字符串 command（缺失 / null / 非字符串一律报错，不兜底空串）。
+                val command = element["command"]
+                if (command !is JsonPrimitive || !command.isString) {
+                    throw SerializationException("VerificationSpec object is missing required 'command' field")
+                }
+                VerificationSpec(
+                    command = command.content,
+                    cwd = element["cwd"]?.jsonPrimitive?.contentOrNull,
+                    timeoutSeconds = element["timeoutSeconds"]?.jsonPrimitive?.intOrNull,
+                    expected = element["expected"]?.jsonPrimitive?.contentOrNull ?: "",
+                    expectStdoutContains = element.stringList("expectStdoutContains"),
+                    expectStdoutNotContains = element.stringList("expectStdoutNotContains"),
+                )
+            }
             else -> throw SerializationException("VerificationSpec must be a JSON string or object")
         }
     }

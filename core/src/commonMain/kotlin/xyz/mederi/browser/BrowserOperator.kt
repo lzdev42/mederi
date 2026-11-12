@@ -204,7 +204,8 @@ class BrowserOperator(
             } else {
                 Json.parseToJsonElement(argsJson)
             }
-            val koogJson = (jsonElement.toKoogJSONElement() as? JSONObject) ?: JSONObject(emptyMap())
+            val koogJson = jsonElement.toKoogJSONElement() as? JSONObject
+                ?: throw IllegalArgumentException("tool args must be a JSON object, got: $argsJson")
             val decodedArgs = tool.decodeArgs(koogJson, serializer)
             @Suppress("UNCHECKED_CAST")
             val result = (tool as ToolBase<Any?, Any?>).execute(decodedArgs, ToolCallMetadata.EMPTY)

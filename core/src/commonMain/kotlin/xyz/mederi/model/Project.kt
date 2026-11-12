@@ -1,6 +1,7 @@
 package xyz.mederi.domain.model
 
 import kotlinx.serialization.Serializable
+import xyz.mederi.config.MederiIdentity
 
 /**
  * 项目（Project）。
@@ -27,8 +28,8 @@ data class Project(
     val createdAt: String,
     val updatedAt: String
 ) {
-    /** core 布局约定：项目工作目录 = directory + "/.mederi"。 */
-    val workDir: String get() = directory + "/.mederi"
+    /** core 布局约定：项目工作目录 = directory + "/" + 目录名；目录名单一真理源见 [MederiIdentity]。 */
+    val workDir: String get() = directory + "/" + MederiIdentity.projectWorkdirName
 
     init {
         require(directory.isNotBlank()) {

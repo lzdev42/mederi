@@ -4,6 +4,7 @@ import java.io.File
 import java.time.Instant
 import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.api.exception.MederiWorkspaceException
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.store.ProjectStore
 import xyz.mederi.store.SessionStore
 import xyz.mederi.store.WorkspaceStore
@@ -27,7 +28,7 @@ class ExecutionWorkspaceResolver(
             ?: throw MederiNotFoundException("Session $sessionId not found")
         val project = projectStore.get(session.projectId)
             ?: throw MederiNotFoundException("Project ${session.projectId} not found")
-        val artifactDir = File(project.directory, ".mederi").absolutePath
+        val artifactDir = File(project.directory, MederiIdentity.projectWorkdirName).absolutePath
 
         val wsId = session.workspaceId
         if (wsId == null) {

@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.api.exception.MederiValidationException
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.skills.domain.SkillInfo
 import xyz.mederi.store.SettingsStore
 import java.io.File
@@ -84,7 +85,7 @@ class SkillManagerImpl(
         val zipBytes = download(trimmed)
 
         // 解压到临时目录，扫描验证内容，再逐个移入根目录
-        val tempDir = createTempDirectory("mederi-skill-install")
+        val tempDir = createTempDirectory(MederiIdentity.PRODUCT_NAME + "-skill-install")
         try {
             unzip(zipBytes, tempDir)
             val discovered = SkillDiscovery.discover(tempDir.absolutePath)

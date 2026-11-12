@@ -485,7 +485,7 @@ fun parseAskItems(input: Map<String, String>, output: String?): List<ParsedAskIt
             isDeclined = true
         } else {
             try {
-                val json = Json { ignoreUnknownKeys = true; isLenient = true }
+                val json = Json { ignoreUnknownKeys = true }
                 val root = json.parseToJsonElement(trimmed)
                 // 兼容 `{"answers":[...]}` 对象形态与裸数组形态
                 val answersArray: JsonArray? = when (root) {
@@ -529,21 +529,16 @@ fun parseAskItems(input: Map<String, String>, output: String?): List<ParsedAskIt
     val questions = mutableListOf<ParsedAskItem>()
     val rawQuestions = input["questions"]
     if (!rawQuestions.isNullOrBlank()) {
+        // 严格解析：只接受规范 JsonArray（每项含 prompt）。不再解包双层编码字符串、不再兼容
+        // `question` 别名——旧会话脏数据走下方占位回退（纯显示，不崩）。
         try {
-            val json = Json { ignoreUnknownKeys = true; isLenient = true }
-            var elem = json.parseToJsonElement(rawQuestions)
-            if (elem is JsonPrimitive && elem.isString) {
-                try {
-                    elem = json.parseToJsonElement(elem.content)
-                } catch (_: Exception) {}
-            }
+            val json = Json { ignoreUnknownKeys = true }
+            val elem = json.parseToJsonElement(rawQuestions)
             if (elem is JsonArray) {
                 elem.forEachIndexed { idx, item ->
                     if (item is JsonObject) {
                         val id = (item["id"] as? JsonPrimitive)?.contentOrNull ?: "q_$idx"
-                        val prompt = (item["prompt"] as? JsonPrimitive)?.contentOrNull
-                            ?: (item["question"] as? JsonPrimitive)?.contentOrNull
-                            ?: ""
+                        val prompt = (item["prompt"] as? JsonPrimitive)?.contentOrNull ?: ""
                         val options = (item["options"] as? JsonArray)?.mapNotNull {
                             (it as? JsonPrimitive)?.contentOrNull
                         } ?: emptyList()

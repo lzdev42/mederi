@@ -20,6 +20,7 @@ import ai.koog.prompt.streaming.toMessageResponse
 import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import xyz.mederi.config.MederiIdentity
 
 /**
  * 把流式帧重建为 Assistant 消息，带 ToolCallComplete args 解析容错。
@@ -27,8 +28,9 @@ import kotlinx.coroutines.flow.collect
  * Koog 的 toMessageResponse 对 ToolCallComplete.content 直接
  * `Json.parseToJsonElement(...)` 且无 try-catch——兼容端点返回截断/非法 JSON 参数时
  * 抛 SerializationException 杀死整个流（症状=正文到一半戛然而止）。
- * 这里对解析失败的调用降级为 args="{}" 的 Tool.Call，执行层会报
- * "invalid arguments" 给模型自纠，turn 不中断。
+ * salvage 分支保留全部 ToolCallComplete（含非法 args）与全部 TextComplete：
+ * 坏调用的 args 原样保留，下游 GenericAgentEnvironment 解析 argsJson 抛错并把
+ * 原始错误回喂模型自纠，turn 不中断；合法调用不再被坏 JSON 连累丢弃。
  */
 /**
  * 合并被流式协议切碎的工具调用碎片。
@@ -144,11 +146,10 @@ internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
         val salvaged = filterIsInstance<StreamFrame.TextComplete>()
             .map { MessagePart.Text(it.text) } +
             filterIsInstance<StreamFrame.ToolCallComplete>()
-                .filter { frame ->
-                    runCatching { kotlinx.serialization.json.Json.parseToJsonElement(frame.content) }.isFailure
-                }
                 .map {
-                    MessagePart.Tool.Call(id = it.id, tool = it.name ?: "", args = kotlinx.serialization.json.buildJsonObject { })
+                    // args 保留原始字符串：坏 JSON 会在此处原样进入 Tool.Call，
+                    // 下游 GenericAgentEnvironment 访问 argsJson 抛错并回喂模型自纠。
+                    MessagePart.Tool.Call(id = it.id, tool = it.name, args = it.content)
                 }
         if (salvaged.isEmpty()) throw e
         Message.Assistant(
@@ -215,7 +216,7 @@ internal suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
  * ChatMemory load 时它会随历史恢复进 prompt。LLM 节点检测到哨兵时
  * 不再 append user()——否则 LLM 会收到重复的用户消息。
  */
-const val MEDERI_INPUT_PERSISTED = "\u0000mederi_input_persisted\u0000"
+val MEDERI_INPUT_PERSISTED: String get() = "\u0000" + MederiIdentity.PRODUCT_NAME + "_input_persisted\u0000"
 
 /**
  * Mederi 自定义单轮 Agent 策略（流式版）。
@@ -225,8 +226,8 @@ const val MEDERI_INPUT_PERSISTED = "\u0000mederi_input_persisted\u0000"
  *    - 逐帧消费产生 MESSAGE_DELTA 的输入，UI 实时可见；
  *    - 完整帧通过 [toAssistantMessageSafe] 重建 [Message.Assistant]，继续工具循环。
  * 2. ToolCallComplete args 解析容错：Koog 原版对非法 JSON 参数整条流直接炸
- *    （症状=正文播到一半戛然而止、无任何错误）。解析失败的调用转为 args="{}"，
- *    让工具执行报 "invalid arguments" 给模型自纠，而不是杀死整个 turn。
+ *    （症状=正文播到一半戛然而止、无任何错误）。salvage 保留全部调用与原始 args，
+ *    坏 JSON 由下游 GenericAgentEnvironment 解析抛错并回喂模型自纠，而不是杀死整个 turn。
  *
  * 输入为 [MEDERI_INPUT_PERSISTED] 时跳过 user() 追加（消息已落库、随历史恢复）。
  */
@@ -317,7 +318,7 @@ fun mederiSingleRunStrategy(
     persister: TurnIncrementalPersister? = null,
     pollSteering: (() -> SteeringItem?)? = null
 ): AIAgentGraphStrategy<String, String> =
-    strategy<String, String>("mederi_single_run") {
+    strategy<String, String>(MederiIdentity.PRODUCT_NAME + "_single_run") {
         val nodeCallLLM by node<String, Message.Assistant>("call_llm_streaming") { message ->
             llm.writeSession {
                 if (message != MEDERI_INPUT_PERSISTED) appendPrompt { user(message) }
@@ -383,7 +384,7 @@ fun mederiSingleRunStrategyWithCompression(
     persister: TurnIncrementalPersister? = null,
     pollSteering: (() -> SteeringItem?)? = null
 ): AIAgentGraphStrategy<String, String> =
-    strategy<String, String>("mederi_single_run_with_compression") {
+    strategy<String, String>(MederiIdentity.PRODUCT_NAME + "_single_run_with_compression") {
         // 流式 LLM 节点
         val nodeCallLLM by node<String, Message.Assistant>("call_llm_streaming") { message ->
             llm.writeSession {

@@ -38,6 +38,7 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.core.contract.models.UpdateSubagentConfigInput
 import xyz.mederi.core.contract.models.UpdateSubagentGlobalSettingsInput
 import xyz.mederi.core.contract.models.*
@@ -128,7 +129,7 @@ object Server {
             }
             return RemoteStartResult.Started(actual)
         }
-        val ready = ReadyInfo(ready = true, configDir = "~/.mederi")
+        val ready = ReadyInfo(ready = true, configDir = "~/" + MederiIdentity.homeConfigRootName)
 
         suspend fun tryBind(port: Int): Result<Int> = try {
             val srv = embeddedServer(Netty, port = port, host = "0.0.0.0") {
@@ -423,6 +424,17 @@ fun Route.v1Routes(aiCore: AiCore) {
     }
     get("/v1/sessions/{id}/plans/{planId}/acceptance-report") {
         aiCore.getPlanAcceptanceReport(call.parameters["id"]!!, call.parameters["planId"]!!).fold(
+            onSuccess = { call.respondText(it, ContentType.parse("text/markdown")) },
+            onFailure = { call.respondError(it) },
+        )
+    }
+    get("/v1/sessions/{id}/plans/{planId}/document") {
+        val subtask = call.parameters["subtask"]?.let { raw ->
+            raw.toIntOrNull() ?: return@get call.respondError(
+                xyz.mederi.api.exception.MederiValidationException("Invalid subtask index: $raw")
+            )
+        }
+        aiCore.getPlanDocument(call.parameters["id"]!!, call.parameters["planId"]!!, subtask).fold(
             onSuccess = { call.respondText(it, ContentType.parse("text/markdown")) },
             onFailure = { call.respondError(it) },
         )

@@ -2,6 +2,7 @@ package xyz.mederi.provider
 
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.ModelOrigin
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.metadata.ModelMetadata
 import xyz.mederi.provider.domain.model.Provider
 import xyz.mederi.provider.domain.model.ProviderAuthentication
@@ -345,7 +346,7 @@ class ProviderManagerImpl(
         return when (provider.type) {
             ProviderType.GOOGLE -> {
                 val httpClient = MederiHttpClientFactory.create(
-                    clientName = "mederi-models-fetch-google",
+                    clientName = MederiIdentity.PRODUCT_NAME + "-models-fetch-google",
                     baseUrl = normalized.base,
                     headers = mapOf("x-goog-api-key" to apiKey)
                 )
@@ -357,7 +358,7 @@ class ProviderManagerImpl(
             }
             else -> {
                 val httpClient = MederiHttpClientFactory.create(
-                    clientName = "mederi-models-fetch",
+                    clientName = MederiIdentity.PRODUCT_NAME + "-models-fetch",
                     baseUrl = normalized.base,
                     headers = mapOf(
                         "Authorization" to "Bearer $apiKey",

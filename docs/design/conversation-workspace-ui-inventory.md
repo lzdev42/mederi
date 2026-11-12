@@ -27,6 +27,7 @@
 | C17 | `ErrorBoard.kt`、`ErrorDetailDialog.kt` | 简报/详情/继续/关闭；红底红框红字叠加；关闭小热区；恢复入口必须保留 | ActionNotice + Dialog，R09 |
 | C18 | `ChatInputCard.kt` | 输入/键盘/剪贴板/popup/能力提示/effect收集混合；与MainScreen竞争effect | Composer + Route，R03a/R08 |
 | C19 | `ChatInputAttachments.kt` | 图片缩略图、大文本卡、预算、删除；多层框，删除/点击语义需统一 | Attachment，R08 |
+| C25 | `ui/chat/ChatListSkeleton.kt`（2026-11-12 新增） | 会话首帧快照未到（`conversationId != null && !isAttached`）时替代欢迎页的骨架占位；复用 `workspaceTaskPulseAlpha` 单色呼吸（减弱模式静态），无文本无 i18n | Placeholder，跟随现有运动语言 |
 | C20 | `ChatInputControls.kt` | 审批模式帮助/开关/Chip；有遗留无效参数；自绘开关语义/热区需补 | ComposerControl，R08 |
 | C21 | `ChatInputSelectors.kt` 模型/Key/档位/项目菜单 | popup圆角10/8/6、选中粗体/图标/背景各一套，移动sheet另写；直接收VM | SelectionMenu，R08 |
 | C22 | ChatInputCard SlashMenuPopupContent、`ui/command/` | 上下/Enter/Tab/Esc、token删除、粘贴、IME是行为，不可视觉迁移时损坏 | ComposerAutocomplete，R08 |
@@ -194,4 +195,4 @@ WorkspaceFeedbackPresenter按Session/Draft分离Core投影、本地失败、关�
 
 ### 2026-11 文件管理器 / 文档面板 / 概览文档行定稿
 
-dock rail 定稿四入口：代码变更(DIFF=DiffPanelContent 直接挂接，TurnDiffSummaryCard 点文件行直达该文件 diff、超5文件默认折叠) / 文件(FILES=文件管理器，TreePanelContent 全宽项目目录树，点文件 openDocument(Path) 在文档面板打开) / 终端 / 网页。文档面板(ARTIFACTS=阅读器)无 dock 按钮——由 openDocument / 概览"文档"行 / 对话流文档卡触达打开。FilesPanel 双 Tab 包装层(FilesPanelContent/FilesTab/FilesPanelTabs)删除，其两个 tab 测试随之下线。概览新增 OverviewDocumentsRow（索引4，紧随实施计划）：数据=WorkspaceViewModel.sessionDocuments（chatItems 的 DocumentCard 按 artifactId 去重投影），空整行不渲染，点击 openDocument(Content) 打开文档面板；测试 OverviewDocumentsRowTest。
+dock rail 定稿四入口：代码变更(DIFF=DiffPanelContent 直接挂接，TurnDiffSummaryCard 点文件行直达该文件 diff、全部文件数默认折叠为单栏摘要并带边框 Review 按钮) / 文件(FILES=文件管理器，TreePanelContent 全宽项目目录树，点文件 openDocument(Path) 在文档面板打开) / 终端 / 网页。文档面板(ARTIFACTS=阅读器)无 dock 按钮——由 openDocument / 概览"文档"行 / 对话流文档卡触达打开。FilesPanel 双 Tab 包装层(FilesPanelContent/FilesTab/FilesPanelTabs)删除，其两个 tab 测试随之下线。概览新增 OverviewDocumentsRow（索引4，紧随实施计划）：数据=WorkspaceViewModel.sessionDocuments（chatItems 的 DocumentCard 按 artifactId 去重投影），空整行不渲染，点击 openDocument(Content) 打开文档面板；测试 OverviewDocumentsRowTest。

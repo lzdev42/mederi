@@ -7,6 +7,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.Tool
 import kotlinx.serialization.json.JsonObject
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.mcp.runtime.McpRuntime
 import java.util.concurrent.TimeUnit
 
@@ -52,7 +53,7 @@ class ObscuraMcpClient(private val binary: String) : ObscuraMcpSession {
         process = p
         val transport = McpToolRegistryProvider.defaultStdioTransport(p)
         transport.onClose { reap(p) }
-        val c = Client(clientInfo = Implementation("mederi", "1.0.0"))
+        val c = Client(clientInfo = Implementation(MederiIdentity.PRODUCT_NAME, "1.0.0"))
         c.connect(transport)
         client = c
     }

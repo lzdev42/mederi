@@ -125,6 +125,10 @@ interface AiCore {
     /** 当前或归档计划的验收报告，按所属会话和计划定位。 */
     suspend fun getPlanAcceptanceReport(conversationId: String, planId: String): Result<String>
 
+    /** 按需读取计划文档：subtaskIndex=null 返回计划全文（planMarkdown），非 null 返回该子任务 Spec 原文。 */
+    suspend fun getPlanDocument(conversationId: String, planId: String, subtaskIndex: Int? = null): Result<String> =
+        Result.failure(UnsupportedOperationException("Plan document unavailable"))
+
     suspend fun recordPlanManualAcceptance(
         conversationId: String, planId: String, input: ManualPlanAcceptanceInput
     ): Result<Unit>

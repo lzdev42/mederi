@@ -441,7 +441,6 @@ class SharedLogicDesktopTest {
                     title = "Test Plan",
                     summary = "summary",
                     subtaskCount = 3,
-                    planContent = null,
                     status = "APPROVED",
                     subtasks = emptyList()
                 )
@@ -3112,15 +3111,13 @@ class SharedLogicDesktopTest {
                     index = 0,
                     name = "分析当前依赖",
                     status = "PENDING",
-                    spec = "#### 执行步骤\n1. 扫描所有 gradle 依赖\n2. 输出依赖报告",
-                    planDetail = "分析依赖"
+                    hasSpec = true
                 ),
                 xyz.mederi.core.contract.models.PlanSubtaskItem(
                     index = 1,
                     name = "移除废弃模块",
                     status = "PENDING",
-                    spec = null,
-                    planDetail = "移除模块"
+                    hasSpec = false
                 )
             )
         )
@@ -3137,8 +3134,7 @@ class SharedLogicDesktopTest {
                     index = 0,
                     name = "迁移文件",
                     status = "COMPLETED",
-                    spec = "#### 执行步骤\n1. 移动目录",
-                    planDetail = "迁移完成"
+                    hasSpec = true
                 )
             )
         )
@@ -3185,8 +3181,8 @@ class SharedLogicDesktopTest {
         assertEquals(xyz.mederi.ui.PlanOverviewStatus.PendingApproval, p1.status)
         assertEquals(2, p1.subtasks.size)
         assertEquals("分析当前依赖", p1.subtasks[0].name)
-        assertNotNull(p1.subtasks[0].spec)
-        assertNull(p1.subtasks[1].spec)
+        assertTrue(p1.subtasks[0].hasSpec)
+        assertFalse(p1.subtasks[1].hasSpec)
 
         val p2 = overviewList.find { it.id == "plan_done" }
         assertNotNull(p2)
@@ -3202,7 +3198,7 @@ class SharedLogicDesktopTest {
             planTitle = p1.title,
             subtaskIndex = p1.subtasks[0].index,
             subtaskName = p1.subtasks[0].name,
-            specContent = p1.subtasks[0].spec
+            specContent = "#### 执行步骤\n1. 扫描所有 gradle 依赖\n2. 输出依赖报告"
         )
         assertEquals(xyz.mederi.ui.RightDockPanel.ARTIFACTS, viewModel.activeDockPanel)
         assertNotNull(viewModel.currentPlan)

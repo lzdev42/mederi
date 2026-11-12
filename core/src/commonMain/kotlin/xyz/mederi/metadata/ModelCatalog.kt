@@ -1,6 +1,7 @@
 package xyz.mederi.metadata
 
 import xyz.mederi.http.MederiHttpClientFactory
+import xyz.mederi.config.MederiIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -113,7 +114,7 @@ class ModelCatalog(
 
     private suspend fun fetch(): CatalogIndex {
         val httpClient = MederiHttpClientFactory.create(
-            clientName = "mederi-model-catalog",
+            clientName = MederiIdentity.PRODUCT_NAME + "-model-catalog",
             baseUrl = CATALOG_BASE_URL,
         )
         try {

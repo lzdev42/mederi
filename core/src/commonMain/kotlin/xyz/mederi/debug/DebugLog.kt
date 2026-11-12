@@ -1,5 +1,7 @@
 package xyz.mederi.debug
 
+import xyz.mederi.config.MederiIdentity
+
 /**
  * 统一调试日志工具：总开关 + 分级（DEBUG/INFO/ERROR）+ 调用点位置。
  *
@@ -30,7 +32,7 @@ object DebugLog {
 
     /** 总开关：false 时任何等级都不输出 */
     @Volatile
-    var enabled: Boolean = System.getProperty("mederi.debug")?.toBoolean() ?: true
+    var enabled: Boolean = System.getProperty(MederiIdentity.PRODUCT_NAME + ".debug")?.toBoolean() ?: true
 
     /** 最低输出等级，低于它的不打印。DEBUG=全量、INFO=业务事件、ERROR=只看错误 */
     @Volatile

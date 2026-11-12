@@ -33,6 +33,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.SendMessageRequest
 import xyz.mederi.api.exception.MederiWorkspaceException
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.debug.ErrorCollector
 import xyz.mederi.debug.ErrorContext
@@ -97,13 +98,16 @@ import java.util.concurrent.atomic.AtomicReference
  * KotlinModule，无法反序列化 Kotlin data class（症状："no Creators, like default
  * constructor, exist"，所有带嵌套参数的工具调用必炸，如 write_plan）。
  * 显式换 KotlinxSerializer：与工具 Args 的 kotlinx @Serializable 同源，且
- * ignoreUnknownKeys/coerceInputValues/explicitNulls=false 对 LLM 生成的参数健壮
- * （多传字段忽略、null 当缺省、非法枚举回退默认）。
+ * ignoreUnknownKeys=true / explicitNulls=false 对 LLM 生成的参数宽容
+ * （多传字段忽略、缺省字段落到默认值）。
+ *
+ * 不开 coerceInputValues：非法枚举字面量、null 传给非可空字段必须抛 kotlinx
+ * SerializationException，由 Koog GenericAgentEnvironment 把原始错误回喂模型自纠——
+ * 静默回退字段默认值会让模型永远不知道自己错了。
  */
 internal val mederiToolSerializer = ai.koog.serialization.kotlinx.KotlinxSerializer(
     kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true
-        coerceInputValues = true
         explicitNulls = false
     }
 )
@@ -526,7 +530,7 @@ class TurnExecutor(
             }
         }
         val workingDir = execWs?.workingDirectory ?: project.directory
-        val artifactDir = execWs?.artifactDirectory ?: java.io.File(project.directory, ".mederi").absolutePath
+        val artifactDir = execWs?.artifactDirectory ?: java.io.File(project.directory, MederiIdentity.projectWorkdirName).absolutePath
         val projectDirs = listOf(workingDir)
         // RF-02/R03：从 Store 重新读取当前工作区代次构建 VerifiedWorkspaceRoot 凭证。
         // 不捕获发送时的不可变 execWs——工作区可能在 turn 期间被归档/迁移导致 generation 变化。
@@ -1042,9 +1046,7 @@ class TurnExecutor(
             payload = mapOf(
                 "planId" to planId,
                 "action" to if (completed) "completed" else "verified",
-                "subtasks" to kotlinx.serialization.json.Json.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(xyz.mederi.plan.Subtask.serializer()), result.subtasks
-                ),
+                "subtasks" to xyz.mederi.plan.encodeSubtasksWire(result.subtasks),
                 "passed" to result.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.COMPLETED }.toString(),
                 "failed" to result.subtasks.count { it.status == xyz.mederi.plan.SubtaskStatus.FAILED }.toString()
             ),
@@ -1086,7 +1088,7 @@ class TurnExecutor(
         val project = projectManager.get(session.projectId) ?: return false
         val execWs = inheritedWorkspace ?: workspaceResolver?.resolve(sessionId)
         val workingDir = execWs?.workingDirectory ?: project.directory
-        val artifactDir = execWs?.artifactDirectory ?: java.io.File(project.directory, ".mederi").absolutePath
+        val artifactDir = execWs?.artifactDirectory ?: java.io.File(project.directory, MederiIdentity.projectWorkdirName).absolutePath
         val planStore = xyz.mederi.plan.PlanStore(listOf(workingDir), artifactRoot = artifactDir, authorityRoot = sandboxManager.protectedDirectories.firstOrNull())
         val plan = planStore.load(planId) ?: return false
         if (plan.sessionId != sessionId || plan.isTerminal ||

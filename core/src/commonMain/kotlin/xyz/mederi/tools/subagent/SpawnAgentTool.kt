@@ -179,10 +179,7 @@ class SpawnAgentTool(
         } ?: return "Error: Plan not found: ${args.planId}"
 
         // 派工后发 PLAN_PROGRESS 驱动 UI planApprovals 投影表（真理源仍是 PlanStore）
-        val subtasksJson = kotlinx.serialization.json.Json.encodeToString(
-            kotlinx.serialization.builtins.ListSerializer(xyz.mederi.plan.Subtask.serializer()),
-            startedPlan.subtasks
-        )
+        val subtasksJson = xyz.mederi.plan.encodeSubtasksWire(startedPlan.subtasks)
         eventBus?.emit(MederiEvent(
             type = EventType.PLAN_PROGRESS,
             sessionId = parentSessionId,

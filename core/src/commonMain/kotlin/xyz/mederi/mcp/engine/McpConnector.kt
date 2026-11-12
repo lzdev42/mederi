@@ -19,6 +19,7 @@ import io.ktor.client.request.headers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.mcp.servers.domain.McpConnection
 import xyz.mederi.mcp.servers.domain.McpDiscoveryResult
@@ -46,7 +47,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 class McpConnector(
     private val store: McpServersStore,
-    private val clientName: String = "mederi",
+    private val clientName: String = MederiIdentity.PRODUCT_NAME,
     private val clientVersion: String = "1.0.0",
     private val timeout: Duration = 20.seconds
 ) {

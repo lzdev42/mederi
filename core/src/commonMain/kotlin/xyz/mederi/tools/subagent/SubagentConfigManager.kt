@@ -67,9 +67,13 @@ class SubagentConfigManager(
     suspend fun get(role: SubagentRole, sessionId: String? = null): SubagentModelConfig {
         if (sessionId != null && sessionRole(role)) session(sessionId).subagentConfigs[role]?.let { return it }
         val raw = settingsStore.get(settingKey(role)) ?: return SubagentModelConfig()
-        return runCatching {
+        return try {
             json.decodeFromString<SubagentModelConfig>(raw)
-        }.getOrDefault(SubagentModelConfig())
+        } catch (failure: Exception) {
+            // 配置损坏时不得静默回退默认配置（子代理模型/并发会悄悄变成系统默认）——
+            // 与 SandboxManager.loadSettings 一致：如实报错，让用户在设置里修复配置。
+            throw MederiValidationException("子代理配置无法解析（role=$role），请修复设置中的配置 JSON", failure)
+        }
     }
 
     /**

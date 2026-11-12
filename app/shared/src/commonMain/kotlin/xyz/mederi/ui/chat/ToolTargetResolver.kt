@@ -1,6 +1,11 @@
 package xyz.mederi.ui
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import xyz.mederi.core.contract.dto.ConversationSnapshot
+import xyz.mederi.util.MederiProductNames
 
 /**
  * 按工具名探测目标摘要：
@@ -49,7 +54,7 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
         name == "generate_spec" || name == "update_verification" ->
             planSubtaskTarget(input, snapshot, includeRecordedVerdict = false)
         name == "write_log" ->
-            ".mederi/notebook.md"
+            "${MederiProductNames.projectWorkdirName}/notebook.md"
         name == "write_plan" || name == "create_plan" ->
             input["title"]?.takeIf { it.isNotBlank() }
         searchQuery != null ->
@@ -156,8 +161,19 @@ private fun extractReadLineRangeSuffix(input: Map<String, String>, oneBasedOffse
 private fun extractAskUserSummary(input: Map<String, String>): String? {
     input["prompt"]?.takeIf { it.isNotBlank() }?.let { return it }
     val rawQuestions = input["questions"] ?: return null
-    val match = Regex("\"prompt\"\\s*:\\s*\"([^\"]+)\"").find(rawQuestions)
-    return match?.groupValues?.get(1) ?: rawQuestions.take(50)
+    val firstPrompt = try {
+        val elem = Json.parseToJsonElement(rawQuestions)
+        if (elem is JsonArray) {
+            val first = elem.firstOrNull() as? JsonObject
+            val prompt = first?.get("prompt")
+            if (prompt is JsonPrimitive && prompt.isString) prompt.content else null
+        } else {
+            null
+        }
+    } catch (_: Exception) {
+        null
+    }
+    return firstPrompt?.takeIf { it.isNotBlank() } ?: rawQuestions.take(50)
 }
 
 /**

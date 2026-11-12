@@ -48,6 +48,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
@@ -378,8 +379,8 @@ class MederiOpenAILLMClient(
             put("tools", if (chatGptPlan) buildJsonArray {
                 add(buildJsonObject {
                     put("type", "namespace")
-                    put("name", "mederi")
-                    put("description", "Mederi tools")
+                    put("name", MederiIdentity.PRODUCT_NAME)
+                    put("description", "${MederiIdentity.displayName} tools")
                     put("tools", declaredTools)
                 })
             } else declaredTools)
@@ -450,7 +451,7 @@ class MederiOpenAILLMClient(
                                         put("type", if (custom) "custom_tool_call" else "function_call")
                                         put("call_id", part.id ?: "")
                                         put("name", part.tool)
-                                        if (chatGptPlan) put("namespace", "mederi")
+                                        if (chatGptPlan) put("namespace", MederiIdentity.PRODUCT_NAME)
                                         if (custom) put("input", ApplyPatchProtocol.decodeArguments(part.args))
                                         else put("arguments", part.args)
                                     })

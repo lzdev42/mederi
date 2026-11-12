@@ -38,7 +38,6 @@ class PlanSubtaskToolTargetTest {
                 title = "标题计划",
                 summary = "",
                 subtaskCount = 6,
-                planContent = null,
                 status = "IN_PROGRESS",
                 subtasks = listOf(
                     PlanSubtaskItem(index = 0, name = "初始化骨架", status = "COMPLETED"),

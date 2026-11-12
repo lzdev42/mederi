@@ -7,6 +7,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import xyz.mederi.api.exception.MederiValidationException
 import xyz.mederi.api.exception.MederiWorkspaceException
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.tools.sandbox.ProcessRegistry
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -186,7 +187,7 @@ class GitWorkspaceDriver(
     val leaseManager: WorkspaceLeaseManager = WorkspaceLeaseManager()
 ) {
     private val emptyHooksDir: File by lazy {
-        val dir = File(System.getProperty("java.io.tmpdir"), "mederi_empty_git_hooks")
+        val dir = File(System.getProperty("java.io.tmpdir"), MederiIdentity.PRODUCT_NAME + "_empty_git_hooks")
         if (!dir.exists()) dir.mkdirs()
         dir
     }

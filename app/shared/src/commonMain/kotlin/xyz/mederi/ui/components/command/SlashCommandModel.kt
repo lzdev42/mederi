@@ -109,7 +109,6 @@ object SlashCommandRegistry {
             group = CommandGroup.COMMAND,
             description = "清空当前输入框草稿与暂存附件",
             icon = FeatherIcons.Trash2,
-            iconTint = Color(0xFFE5534B),
             insertText = "/clear ",
             keywords = listOf("clear", "清空", "qk", "clean", "c")
         ),
@@ -119,7 +118,6 @@ object SlashCommandRegistry {
             group = CommandGroup.COMMAND,
             description = "手动压缩当前会话历史上下文，释放 Token 空间",
             icon = FeatherIcons.Minimize2,
-            iconTint = Color(0xFFE69F00),
             insertText = "/compact ",
             keywords = listOf("compact", "压缩", "yasuo", "token", "c")
         ),
@@ -129,7 +127,6 @@ object SlashCommandRegistry {
             group = CommandGroup.COMMAND,
             description = "优先规划任务的执行方案，用户确认后再执行",
             icon = FeatherIcons.GitBranch,
-            iconTint = Color(0xFF9D67EA),
             insertText = "/plan ",
             keywords = listOf("plan", "计划", "规划", "guihua", "jihua", "p")
         ),
@@ -139,7 +136,6 @@ object SlashCommandRegistry {
             group = CommandGroup.COMMAND,
             description = "调用已安装的扩展技能（SKILL.md）",
             icon = FeatherIcons.Zap,
-            iconTint = Color(0xFF10B981),
             insertText = "/skill ",
             keywords = listOf("skill", "技能", "插件", "jn", "s")
         )
@@ -156,7 +152,6 @@ object SlashCommandRegistry {
                 group = CommandGroup.PLUGIN,
                 description = skill.description,
                 icon = FeatherIcons.Zap,
-                iconTint = Color(0xFF10B981),
                 insertText = "/skill ${skill.name} ",
                 keywords = listOf(skill.name, "skill")
             )

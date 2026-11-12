@@ -17,6 +17,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 internal class SlashCommandTransformation(
     private val highlightColor: Color,
     private val hintColor: Color,
+    private val hintText: String = " 输入搜索...",
 ) : VisualTransformation {
     private val commandRegex = Regex("""(?:^|(?<=\s))(/skill\s+\S+|/[a-zA-Z0-9_\-\u4e00-\u9fa5]+)""", RegexOption.IGNORE_CASE)
 
@@ -24,9 +25,9 @@ internal class SlashCommandTransformation(
         if (text.text == "/") {
             val annotated = buildAnnotatedString {
                 append("/")
-                addStyle(SpanStyle(color = highlightColor, fontWeight = FontWeight.SemiBold), 0, 1)
+                addStyle(SpanStyle(color = highlightColor, fontWeight = FontWeight.Medium), 0, 1)
                 pushStyle(SpanStyle(color = hintColor))
-                append(" 输入搜索...")
+                append(hintText)
                 pop()
             }
             val offsetMapping = object : OffsetMapping {
@@ -45,7 +46,7 @@ internal class SlashCommandTransformation(
                     continue
                 }
                 addStyle(
-                    style = SpanStyle(color = highlightColor, fontWeight = FontWeight.SemiBold),
+                    style = SpanStyle(color = highlightColor, fontWeight = FontWeight.Medium),
                     start = start,
                     end = match.range.last + 1
                 )

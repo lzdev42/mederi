@@ -115,7 +115,7 @@ class MederiConfig {
      * 装配层（app/shared 的 MederiAiCore / server）从 `AppInfo.userAgent` 注入；
      * 注入后统一经 [xyz.mederi.http.MederiHttpClientFactory] 应用到所有 Koog 链路请求。
      */
-    var userAgent: String = "Mederi/dev"
+    var userAgent: String = MederiIdentity.displayName + "/dev"
 
     /**
      * 工作区与操作存储。

@@ -22,9 +22,11 @@ import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.models.ChatBlock
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.ConversationStatus
+import xyz.mederi.core.contract.models.ConversationWorkspaceInfo
 import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.core.contract.models.QuestionRequest
+import xyz.mederi.core.contract.models.SubagentState
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.Message
@@ -37,7 +39,8 @@ import xyz.mederi.tools.estimateTokens
  * 把 core 的会话事件流聚合成 UI 需要的 [ConversationSnapshot]。
  *
  * 职责仅剩两件 JVM 特有的事：
- * - 首次订阅时拉取 Session + 历史 Message 构建初始快照（core 领域模型 → contract 模型转换）
+ * - 首次订阅时由 [initialSnapshot] 构建首帧（生产装配 = [buildInitialSnapshot]，
+ *   jvmTest 可注入固定/计数 fake 快照验证时序与归约）
  * - 提供 core 落库数据的回查（MESSAGE_COMPLETED / MESSAGE_ERROR 对齐）
  *
  * 事件 → 快照的应用逻辑已抽取到 commonMain 的 [SnapshotReducer]，
@@ -46,73 +49,32 @@ import xyz.mederi.tools.estimateTokens
 object MederiEventAggregator {
 
     /**
-     * @param planApproval 会话重开时的计划审批展示项 hydration（重启/翻历史恢复待批准卡片）。
-     * 仅决定"填进快照的数据"，不决定卡片渲染位置（UI 层自决）。
+     * @param initialSnapshot 首帧快照（observe 启动时恰好计算一次并先于任何事件发射）。
+     * 生产装配见 [buildInitialSnapshot]（getSnapshot 共用同一实现）。
      */
     fun observe(
         conversationId: String,
         sessions: SessionApi,
+        initialSnapshot: suspend () -> ConversationState,
         modelToProvider: (String) -> String?,
-        planApproval: suspend (String) -> PlanApprovalRequest? = { null },
-        planApprovals: suspend (String) -> List<PlanApprovalRequest> = { emptyList() },
-        executionApprovals: (String) -> List<ExecutionApprovalRequest> = { emptyList() },
-        lastError: (String) -> LastSessionError? = { null },
-        // T09：会话重连/首次订阅时水合当前绑定工作区与活跃操作（与 getSnapshot 同源），
-        // 避免冷启动快照丢失工作区投影。仅决定"填进快照的数据"，不决定渲染位置。
-        workspaceInfo: suspend (String) -> xyz.mederi.core.contract.models.ConversationWorkspaceInfo? = { null }
     ): Flow<ConversationSnapshot> = flow {
         DebugLog.section("Aggregator", "MederiEventAggregator.observe start")
         DebugLog.data("Aggregator", "conversationId", conversationId)
 
-        val session = sessions.get(conversationId)
-        val includeImages = session.aiModel?.supportsImages ?: true
-        val messages = sessions.listMessages(conversationId)
-        val toolResults = MederiModelMapper.buildToolResultsById(messages)
-        DebugLog.data("Aggregator", "initial messages", messages.size)
-
-        val backfill = MederiModelMapper.toUsageBackfill(messages)
-        val mappedMessages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) }
-        // store 重建快照时 hydrate pendingQuestion：session 为 RUNNING 且有 ask_user Pending → 恢复挂起的提问
-        val hydratedQuestion = if (session.status == xyz.mederi.domain.model.SessionStatus.RUNNING) {
-            hydratePendingQuestion(mappedMessages, conversationId)
-        } else null
-        // T09：初始快照水合工作区投影（active/associated + 活跃操作），与 getSnapshot 保持一致。
-        val hydratedWsInfo = workspaceInfo(conversationId)
-        val base = ConversationSnapshot(
-            conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let(modelToProvider)).let { conv ->
-                if (hydratedQuestion != null) conv.copy(status = ConversationStatus.WaitingUser) else conv
-            },
-            messages = mappedMessages,
-            tokenUsage = MederiModelMapper.toTokenUsage(messages),
-            contextUsedTokens = sessions.contextUsedTokens(conversationId).toLong(),
-            cost = MederiModelMapper.toCostSummary(),
-            todos = MederiModelMapper.toTodos(session.todos),
-            pendingPlanApproval = planApproval(conversationId),
-            pendingExecutionApprovals = executionApprovals(conversationId),
-            planApprovals = planApprovals(conversationId),
-            subagents = sessions.listSubagentsForSession(conversationId).map { bg ->
-                xyz.mederi.core.contract.models.SubagentState(
-                    agentId = bg.agentId,
-                    parentSessionId = bg.parentSessionId,
-                    role = bg.role.name,
-                    modelId = bg.aiModel?.id ?: "",
-                    modelName = bg.aiModel?.name ?: "",
-                    reasoningLevel = bg.reasoningLevel?.name,
-                    task = bg.task,
-                    briefing = bg.briefing,
-                    status = bg.status.name,
-                    startedAt = bg.startedAt
-                )
-            },
-            pendingQuestion = hydratedQuestion,
-            requestCount = backfill.requestCount,
-            lastRequestUsage = backfill.lastRequestUsage,
-            workspaceInfo = hydratedWsInfo,
-            activeWorkspaceOperation = hydratedWsInfo?.operation
-        )
-        var snapshot = hydrateLastError(base, lastError(conversationId)).withPendingInteractionStatus()
+        var snapshot = initialSnapshot()
         DebugLog.event("Aggregator", "initial snapshot built: status=${snapshot.conversation.status}, messages=${snapshot.messages.size}")
         emit(snapshot)
+
+        // refreshPage 的估算路径按 session.aiModel.supportsImages 决定是否计入图片 token；
+        // 首帧构建（initialSnapshot）已读一次 session，此处再读同主键 session 仅为取该标志
+        //（SQLite 主键读，开销可忽略；与 MESSAGE_COMPLETED 处理中的 re-read 同一模式）。
+        val includeImages = runCatching { sessions.get(conversationId) }.getOrNull()?.aiModel?.supportsImages ?: true
+
+        // 消息映射缓存（per-observation）：refreshPage 每次回查都对全量历史重跑 toChatMessage，
+        // 本缓存让未变化消息的映射只算一次（IdentityHashMap + 工具结果版本号失效，见类注释）。
+        // 注意：initialSnapshot lambda 在 observe 之外构建首帧（不改 observe 签名），无法共享本实例，
+        // 首帧映射为一次性；首次 refreshPage 会做一次全量映射后进入缓存复用。
+        val mappingCache = ChatMessageMappingCache()
 
         /** core 落库数据回查：拉全量消息 + token 统计，转成契约层 [MessagesPage] */
         suspend fun refreshPage(): MessagesPage? {
@@ -123,7 +85,7 @@ object MederiEventAggregator {
             // 从已加载的 domain messages 直接算 contextUsedTokens，避免第二次全量 DB 加载 + Koog 转换
             val contextTokens = computeContextUsedTokens(refreshed, includeImages)
             return MessagesPage(
-                messages = refreshed.map { MederiModelMapper.toChatMessage(it, refreshedToolResults) },
+                messages = mappingCache.mapAll(refreshed, refreshedToolResults),
                 tokenUsage = MederiModelMapper.toTokenUsage(refreshed),
                 contextUsedTokens = contextTokens.toLong(),
                 requestCount = refreshedBackfill.requestCount,
@@ -139,11 +101,10 @@ object MederiEventAggregator {
             // 改为在快照里数 block——blocks 数远超消息数 = "一字母一行"的直接证据
 
             if (event.type == CoreEventType.PLAN_APPROVAL_REQUESTED) {
-                val planContent = event.payload["planContent"] ?: ""
                 DebugLog.data(
                     "Aggregator",
                     "PLAN_APPROVAL_REQUESTED",
-                    "planId=${event.payload["planId"]}, summary='${event.payload["summary"]}', planPath='${event.payload["planPath"]}', planContentLen=${planContent.length}"
+                    "planId=${event.payload["planId"]}, summary='${event.payload["summary"]}', planPath='${event.payload["planPath"]}'"
                 )
             }
             if (event.type == CoreEventType.MESSAGE_COMPLETED || event.type == CoreEventType.MESSAGE_ERROR) {
@@ -196,6 +157,85 @@ object MederiEventAggregator {
     }
 
     /**
+     * 计划水合单次扫描的产物：pending（审批卡片）+ 全量列表（活跃/历史/作废同源）。
+     * 生产装配（[xyz.mederi.core.bridge.MederiAiCore.initialPlanHydration]）在一次
+     * [xyz.mederi.plan.PlanStore.listBySession] 扫描内同时推导两者。
+     */
+    internal data class PlanApprovalHydration(
+        val pending: PlanApprovalRequest?,
+        val all: List<PlanApprovalRequest>,
+    )
+
+    /**
+     * 构建会话当前完整快照（不订阅事件流）。observe 首帧与 getSnapshot 的唯一实现
+     * （此前两份 ~70 行重复代码已漂移，本函数取较全版本统一之）。
+     *
+     * 内存访问顺序（有意为之，避免重复扫描/二次加载）：
+     * - [sessions.get] + [sessions.listMessages] 各一次；contextUsedTokens 复用已加载消息
+     *   计算（[computeContextUsedTokens]），不再走 sessions.contextUsedTokens 二次 DB 加载；
+     * - [planHydration] 恰好调用一次：pending + 全量列表来自同一次计划目录扫描；
+     * - [subagents] 直接取注入的最终列表（生产装配含 progressEvents 回放）。
+     *
+     * @param workspaceInfo 工作区投影（active/associated + 活跃操作），与 getSnapshot 同源。
+     * @param mappingCache 可选消息映射缓存：非 null 时首帧映射走缓存（与 refreshPage 共享实例
+     *   时，首帧映射结果可被第一次 refreshPage 复用）。生产 observe 经 initialSnapshot lambda
+     *   调用本函数、无法传入 flow 内实例（observe 签名不改），因此默认为 null（首帧一次性映射）。
+     */
+    internal suspend fun buildInitialSnapshot(
+        conversationId: String,
+        sessions: SessionApi,
+        modelToProvider: (String) -> String?,
+        planHydration: suspend () -> PlanApprovalHydration,
+        executionApprovals: () -> List<ExecutionApprovalRequest>,
+        subagents: () -> List<SubagentState>,
+        lastError: () -> LastSessionError?,
+        workspaceInfo: suspend () -> ConversationWorkspaceInfo?,
+        mappingCache: ChatMessageMappingCache? = null,
+    ): ConversationSnapshot {
+        val session = sessions.get(conversationId)
+        val includeImages = session.aiModel?.supportsImages ?: true
+        val messages = sessions.listMessages(conversationId)
+        val toolResults = MederiModelMapper.buildToolResultsById(messages)
+        DebugLog.data("Aggregator", "initial messages", messages.size)
+
+        val backfill = MederiModelMapper.toUsageBackfill(messages)
+        val mappedMessages = if (mappingCache != null) {
+            mappingCache.mapAll(messages, toolResults)
+        } else {
+            messages.map { MederiModelMapper.toChatMessage(it, toolResults) }
+        }
+        // store 重建快照时 hydrate pendingQuestion：session 为 RUNNING 且有 ask_user Pending → 恢复挂起的提问
+        val hydratedQuestion = if (session.status == xyz.mederi.domain.model.SessionStatus.RUNNING) {
+            hydratePendingQuestion(mappedMessages, conversationId)
+        } else null
+        // T09：初始快照水合工作区投影（active/associated + 活跃操作），与 getSnapshot 保持一致。
+        val hydratedWsInfo = workspaceInfo()
+        // 单次计划扫描：pending + 全量列表同源（避免 planApproval/planApprovals 各自扫一遍计划目录）
+        val hydratedPlans = planHydration()
+        val base = ConversationSnapshot(
+            conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let(modelToProvider)).let { conv ->
+                if (hydratedQuestion != null) conv.copy(status = ConversationStatus.WaitingUser) else conv
+            },
+            messages = mappedMessages,
+            tokenUsage = MederiModelMapper.toTokenUsage(messages),
+            // 复用已加载消息直接计算，不再调 sessions.contextUsedTokens 做二次 DB 加载 + Koog 转换
+            contextUsedTokens = computeContextUsedTokens(messages, includeImages).toLong(),
+            cost = MederiModelMapper.toCostSummary(),
+            todos = MederiModelMapper.toTodos(session.todos),
+            pendingPlanApproval = hydratedPlans.pending,
+            pendingExecutionApprovals = executionApprovals(),
+            planApprovals = hydratedPlans.all,
+            subagents = subagents(),
+            pendingQuestion = hydratedQuestion,
+            requestCount = backfill.requestCount,
+            lastRequestUsage = backfill.lastRequestUsage,
+            workspaceInfo = hydratedWsInfo,
+            activeWorkspaceOperation = hydratedWsInfo?.operation
+        )
+        return hydrateLastError(base, lastError()).withPendingInteractionStatus()
+    }
+
+    /**
      * 从已加载的 domain messages 直接算 contextUsedTokens（不重新加载 DB、不转 Koog）。
      *
      * 口径与 [xyz.mederi.infrastructure.koog.aiViewContextUsedTokens] 完全一致：
@@ -206,7 +246,7 @@ object MederiEventAggregator {
      * @param messages 已从 DB 加载的全量 domain Message 列表
      * @param includeImages 估算路径是否计入图片 token（与 session.aiModel.supportsImages 一致）
      */
-    private fun computeContextUsedTokens(
+    internal fun computeContextUsedTokens(
         messages: List<Message>,
         includeImages: Boolean
     ): Int {
@@ -250,17 +290,13 @@ object MederiEventAggregator {
         val questionsJson = input["questions"] ?: return null
 
         val questions = runCatching {
-            val json = Json { ignoreUnknownKeys = true; isLenient = true }
-            var elem = json.parseToJsonElement(questionsJson)
-            if (elem is JsonPrimitive && elem.isString) {
-                elem = json.parseToJsonElement(elem.content)
-            }
+            val json = Json { ignoreUnknownKeys = true }
+            val elem = json.parseToJsonElement(questionsJson)
             if (elem is JsonArray) {
                 elem.mapNotNull { item ->
                     if (item is JsonObject) {
                         val id = (item["id"] as? JsonPrimitive)?.contentOrNull ?: "q_0"
                         val prompt = (item["prompt"] as? JsonPrimitive)?.contentOrNull
-                            ?: (item["question"] as? JsonPrimitive)?.contentOrNull
                             ?: return@mapNotNull null
                         val options = (item["options"] as? JsonArray)?.mapNotNull {
                             (it as? JsonPrimitive)?.contentOrNull

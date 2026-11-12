@@ -161,6 +161,7 @@ Store 层（纯持久化，可注入）   ProviderStore / ProjectStore / Session
 - **i18n（2026-09 起）**：UI 用户可见文案一律走 composeResources（app/shared/src/commonMain/composeResources/），
   默认 values/（中文）+ values-en/（英文），新增文案必须同时进两份，禁止在 Composable 硬编码用户可见文案
   （内容性数据如 AgentOption.name 除外）；未来语言预留：拉丁化满语 values-mnc-Latn/（暂不启用；传统满文竖排不适合软件 UI，不做）
+- **线程边界（AiCore 实现层，2026-11）**：core/UI 分离是模块+契约分离，协程上下文会穿透契约边界——桥层（MederiAiCore / ServerAiCore）对外返回的 Flow 一律 `flowOn(非 Main)`（JVM 源集用 `Dispatchers.IO`，commonMain 用 `Dispatchers.Default`）；suspend API 内做 O(N) 映射、JSON 编解码、文件遍历、子进程调用的一律 `withContext(非 Main)` 包裹；core 层禁止新增「非 suspend 的阻塞 IO」公开函数（文件/子进程遍历要么 suspend+IO，要么只在受控上下文内部调用）；UI 线程只做 Compose 状态写入与组合，不做数据加工。
 
 ## 5.5 执行沙盒与审批模式
 
@@ -287,6 +288,8 @@ create_plan 必须把需求拆成**多个小的、可独立验证的子任务**�
 ## 5.7 存储架构（双库 + 设备本地偏好）
 
 **双库 + 设备本地偏好三分法**（根目录 `~/.mederi/`）：
+
+产品名目录/标识符（`.mederi` 工作目录、`~/.mederi` 配置根、`MEDERI_CONFIG_DIR`、User-Agent 等）一律经 core `MederiIdentity.PRODUCT_NAME`（改名唯一改动点）派生；app/shared 走 `MederiProductNames` 镜像 + 契约测试；core 有守卫测试拦截字面量回归——新增代码禁止再写 `.mederi` 字面量。
 
 | 存储 | 内容 | 特性 |
 |---|---|---|

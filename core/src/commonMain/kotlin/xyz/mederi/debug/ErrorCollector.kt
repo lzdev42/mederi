@@ -2,6 +2,7 @@ package xyz.mederi.debug
 
 import ai.koog.http.client.KoogHttpClientException
 import ai.koog.prompt.streaming.IncompleteStreamException
+import xyz.mederi.config.MederiIdentity
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.ConnectException
@@ -510,9 +511,9 @@ object ErrorCollector {
         ErrorCategory.RATE_LIMIT -> "供应商限流/配额用尽。请稍后重试，或切换到其他供应商/模型。"
         ErrorCategory.NETWORK -> when (diag.networkErrorType) {
             "SseIdleTimeout" ->
-                "Mederi 因 SSE 空闲超过等待阈值而停止本次请求，这不证明网络断开。自动续写未恢复时，可发送 Continue。"
+                "${MederiIdentity.displayName} 因 SSE 空闲超过等待阈值而停止本次请求，这不证明网络断开。自动续写未恢复时，可发送 Continue。"
             IncompleteStreamException::class.simpleName ->
-                "Mederi 未收到流式响应的结束帧。自动续写未恢复时，可发送 Continue。"
+                "${MederiIdentity.displayName} 未收到流式响应的结束帧。自动续写未恢复时，可发送 Continue。"
             else -> "网络连接异常（${diag.networkErrorType ?: "未知"}）。请检查网络/代理/VPN 后重试。"
         }
         ErrorCategory.CONFIG -> "配置错误：${throwable.message ?: "未知"}。请检查模型/供应商设置。"

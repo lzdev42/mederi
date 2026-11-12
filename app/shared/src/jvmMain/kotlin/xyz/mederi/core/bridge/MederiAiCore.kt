@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -26,6 +27,8 @@ import xyz.mederi.api.AgentConfig
 import xyz.mederi.api.CreateSessionRequest
 import xyz.mederi.api.RenameSessionRequest
 import xyz.mederi.api.SendMessageRequest
+import xyz.mederi.api.SessionApi
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.core.autotitle.SessionTitleService
 import xyz.mederi.core.contract.models.ChatGptAuthState
 import xyz.mederi.core.contract.models.ChatGptUsage
@@ -39,6 +42,7 @@ import xyz.mederi.core.contract.models.ExecutionPermissionMode
 import xyz.mederi.core.contract.models.SandboxSettings
 import xyz.mederi.core.contract.dto.ChatPromptInput
 import xyz.mederi.core.contract.dto.ConversationSnapshot
+import xyz.mederi.core.contract.dto.ConversationState
 import xyz.mederi.core.contract.dto.UpdateConversationSettingsInput
 import xyz.mederi.core.contract.dto.CreateCustomProviderInput
 import xyz.mederi.core.contract.dto.MessagesPage
@@ -634,7 +638,7 @@ class MederiAiCore(
         runCatching {
             val project = mederi.projects.get(projectId)
             project.directory.let { dirPath ->
-                val mermaidDir = File(dirPath, ".mederi/mermaid")
+                val mermaidDir = File(dirPath, MederiIdentity.projectWorkdirName + "/mermaid")
                 if (mermaidDir.exists()) {
                     mermaidDir.deleteRecursively()
                     DebugLog.event("AiCore", "Cleaned up mermaid cache for deleted project: $dirPath")
@@ -688,7 +692,7 @@ class MederiAiCore(
             val session = mederi.sessions.get(conversationId)
             val project = mederi.projects.get(session.projectId)
             project.directory.let { dirPath ->
-                val mermaidDir = File(dirPath, ".mederi/mermaid")
+                val mermaidDir = File(dirPath, MederiIdentity.projectWorkdirName + "/mermaid")
                 if (mermaidDir.exists() && mermaidDir.isDirectory) {
                     val sanitized = conversationId.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32)
                     val prefix = "${sanitized}_"
@@ -713,19 +717,29 @@ class MederiAiCore(
         refreshProjects()
     }
 
-    override fun observeConversation(conversationId: String): Flow<ConversationSnapshot> {
-        return MederiEventAggregator.observe(
-            conversationId = conversationId,
-            sessions = mederi.sessions,
-            modelToProvider = { modelToProvider[it] },
-            planApproval = { id -> initialPlanApproval(id) },
-            planApprovals = { id -> initialPlanApprovals(id) },
-            executionApprovals = ::liveExecutionApprovals,
-            lastError = { lastErrorBySessionId[it] },
-            // T09：初始快照水合工作区投影（与 getSnapshot 同源）。
-            workspaceInfo = { id -> runCatching { mederi.workspaceManager.getConversationWorkspace(id).toContract() }.getOrNull() }
-        )
-    }
+    override fun observeConversation(conversationId: String): Flow<ConversationSnapshot> = conversationFlow(
+        conversationId = conversationId,
+        sessions = mederi.sessions,
+        modelToProvider = { modelToProvider[it] },
+        initialSnapshot = { buildInitialSnapshot(conversationId) },
+    )
+
+    /**
+     * 会话流装配（internal 供 jvmTest 注入 fake 依赖验证线程边界）。
+     * 线程边界强制点：flow body（initialSnapshot 首帧构建、计划文件扫描、落库回查）一律由 flowOn
+     * 移到 [Dispatchers.IO]，收集者（UI 主线程）只接收已算好的快照，不做数据加工。
+     */
+    internal fun conversationFlow(
+        conversationId: String,
+        sessions: SessionApi,
+        modelToProvider: (String) -> String?,
+        initialSnapshot: suspend () -> ConversationState,
+    ): Flow<ConversationSnapshot> = MederiEventAggregator.observe(
+        conversationId = conversationId,
+        sessions = sessions,
+        initialSnapshot = initialSnapshot,
+        modelToProvider = modelToProvider,
+    ).flowOn(Dispatchers.IO)
 
     private suspend fun planStoreForSession(conversationId: String): xyz.mederi.plan.PlanStore {
         val session = mederi.sessions.get(conversationId)
@@ -744,15 +758,13 @@ class MederiAiCore(
             title = title,
             summary = summary,
             subtaskCount = subtasks.size,
-            planContent = store.planMarkdown(this),
             status = if (status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL) "PENDING" else status.name,
             subtasks = subtasks.map { task ->
                 xyz.mederi.core.contract.models.PlanSubtaskItem(
                     index = task.index,
                     name = task.name,
                     status = task.status.name,
-                    spec = task.spec,
-                    planDetail = task.planDetail,
+                    hasSpec = !task.spec.isNullOrBlank(),
                     acceptanceCases = task.acceptanceCases.map { case ->
                         xyz.mederi.core.contract.models.PlanAcceptanceCaseSummary(case.id, case.manual)
                     }
@@ -760,77 +772,62 @@ class MederiAiCore(
             }
         )
 
-    /** 重开会话时还原待审批计划，包括自主模式下需要用户批准的替代计划。 */
-    private suspend fun initialPlanApproval(conversationId: String): xyz.mederi.core.contract.models.PlanApprovalRequest? =
-        runCatching {
-            val store = planStoreForSession(conversationId)
-            store.loadBySession(conversationId)
-                ?.takeIf { it.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL }
-                ?.toApprovalRequest(store)
-        }.getOrNull()
+    /**
+     * 单次计划扫描装配：pending + 全量列表同源（[PlanApprovalHydration] 恰好承载一次扫描）。
+     * 保持旧语义：loadBySession = listBySession.firstOrNull { !isTerminal }（PlanStore.kt:150-151），
+     * 且仅 PENDING_APPROVAL 计划才上审批卡片（不可简化成"列表里第一个 PENDING"）。
+     */
+    private suspend fun initialPlanHydration(conversationId: String): MederiEventAggregator.PlanApprovalHydration {
+        val store = planStoreForSession(conversationId)
+        val plans = store.listBySession(conversationId)
+        val pending = plans.firstOrNull { !it.isTerminal }
+            ?.takeIf { it.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL }
+            ?.toApprovalRequest(store)
+        return MederiEventAggregator.PlanApprovalHydration(pending, plans.map { it.toApprovalRequest(store) })
+    }
 
-    /** 使用 Core 的权威计划内容还原活跃、已完成和已作废计划。 */
-    private suspend fun initialPlanApprovals(conversationId: String): List<xyz.mederi.core.contract.models.PlanApprovalRequest> =
-        runCatching {
-            val store = planStoreForSession(conversationId)
-            store.listBySession(conversationId).map { it.toApprovalRequest(store) }
-        }.getOrDefault(emptyList())
+    /** 生产装配 [MederiEventAggregator.buildInitialSnapshot]：observe 首帧与 getSnapshot 共用同一实现。 */
+    private suspend fun buildInitialSnapshot(conversationId: String): ConversationSnapshot {
+        // 子代理映射含 progressEvents 回放；buildInitialSnapshot 的 subagents 参数是非挂起 lambda，
+        // 须先在协程体内取最终列表再注入（逻辑与旧 getSnapshot :836-852 完全一致）。
+        val subagents = mederi.sessions.listSubagentsForSession(conversationId).map { bg ->
+            val metadata = xyz.mederi.core.contract.models.SubagentState(
+                agentId = bg.agentId,
+                parentSessionId = bg.parentSessionId,
+                role = bg.role.name,
+                modelId = bg.aiModel?.id ?: "",
+                modelName = bg.aiModel?.name ?: "",
+                reasoningLevel = bg.reasoningLevel?.name,
+                task = bg.task,
+                briefing = bg.briefing,
+                status = bg.status.name,
+                startedAt = bg.startedAt,
+                completedAt = bg.completedAt,
+            )
+            val events = synchronized(bg.progressEvents) { bg.progressEvents.toList() }
+            xyz.mederi.core.contract.SubagentTracker.replay(metadata, events.map(MederiModelMapper::toCoreEvent))
+        }
+        return MederiEventAggregator.buildInitialSnapshot(
+            conversationId = conversationId,
+            sessions = mederi.sessions,
+            modelToProvider = { modelToProvider[it] },
+            planHydration = { initialPlanHydration(conversationId) },
+            executionApprovals = { liveExecutionApprovals(conversationId) },
+            // 切换/重连重放与实时相同的标准子事件，不能只水合元数据而丢失推理/工具结果
+            // （observe 首帧与 getSnapshot 合一后，两条路径都带 progressEvents 回放）。
+            subagents = { subagents },
+            lastError = { lastErrorBySessionId[conversationId] },
+            // T09：初始快照水合工作区投影（active/associated + 活跃操作）；未绑定工作区的会话返回 null（runCatching 吞未找到异常）。
+            workspaceInfo = { runCatching { mederi.workspaceManager.getConversationWorkspace(conversationId).toContract() }.getOrNull() },
+        )
+    }
 
     /**
      * 构建会话当前完整快照（不订阅事件流）。
      * server 模式下由 GET /v1/sessions/{id}/snapshot 暴露给 wasmJs 客户端作初始状态。
      */
-    override suspend fun getSnapshot(conversationId: String): Result<ConversationSnapshot> = runCatching {
-        val session = mederi.sessions.get(conversationId)
-        val messages = mederi.sessions.listMessages(conversationId)
-        val toolResults = MederiModelMapper.buildToolResultsById(messages)
-
-        val backfill = MederiModelMapper.toUsageBackfill(messages)
-        val mappedMessages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) }
-        // store 重建快照时 hydrate pendingQuestion：session 为 RUNNING 且有 ask_user Pending → 恢复挂起的提问
-        val hydratedQuestion = if (session.status == xyz.mederi.domain.model.SessionStatus.RUNNING) {
-            MederiEventAggregator.hydratePendingQuestion(mappedMessages, conversationId)
-        } else null
-        // T09：快照水合工作区投影（active/associated + 活跃操作）；未绑定工作区的会话返回 null（runCatching 吞未找到异常）。
-        val hydratedWsInfo = runCatching { mederi.workspaceManager.getConversationWorkspace(conversationId).toContract() }.getOrNull()
-        val base = ConversationSnapshot(
-            conversation = MederiModelMapper.toConversation(session, session.aiModel?.id?.let { modelToProvider[it] }).let { conv ->
-                if (hydratedQuestion != null) conv.copy(status = ConversationStatus.WaitingUser) else conv
-            },
-            messages = mappedMessages,
-            tokenUsage = MederiModelMapper.toTokenUsage(messages),
-            contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong(),
-            cost = MederiModelMapper.toCostSummary(),
-            todos = MederiModelMapper.toTodos(session.todos),
-            // 重启/翻历史恢复：当前活跃计划（审批模式待批准 / 自动模式已自动审批），UI 自由决定卡片渲染位置
-            pendingPlanApproval = initialPlanApproval(conversationId),
-            pendingExecutionApprovals = liveExecutionApprovals(conversationId),
-            planApprovals = initialPlanApprovals(conversationId),
-            // 切换/重连重放与实时相同的标准子事件，不能只水合元数据而丢失推理/工具结果。
-            subagents = mederi.sessions.listSubagentsForSession(conversationId).map { bg ->
-                val metadata = xyz.mederi.core.contract.models.SubagentState(
-                    agentId = bg.agentId,
-                    parentSessionId = bg.parentSessionId,
-                    role = bg.role.name,
-                    modelId = bg.aiModel?.id ?: "",
-                    modelName = bg.aiModel?.name ?: "",
-                    reasoningLevel = bg.reasoningLevel?.name,
-                    task = bg.task,
-                    briefing = bg.briefing,
-                    status = bg.status.name,
-                    startedAt = bg.startedAt,
-                    completedAt = bg.completedAt,
-                )
-                val events = synchronized(bg.progressEvents) { bg.progressEvents.toList() }
-                xyz.mederi.core.contract.SubagentTracker.replay(metadata, events.map(MederiModelMapper::toCoreEvent))
-            },
-            pendingQuestion = hydratedQuestion,
-            requestCount = backfill.requestCount,
-            lastRequestUsage = backfill.lastRequestUsage,
-            workspaceInfo = hydratedWsInfo,
-            activeWorkspaceOperation = hydratedWsInfo?.operation
-        )
-        hydrateLastError(base, lastErrorBySessionId[conversationId]).withPendingInteractionStatus()
+    override suspend fun getSnapshot(conversationId: String): Result<ConversationSnapshot> = withContext(Dispatchers.IO) {
+        runCatching { buildInitialSnapshot(conversationId) }
     }
 
     // ------------------------------------------------------------------
@@ -1160,6 +1157,28 @@ class MederiAiCore(
 
     override suspend fun getPlanAcceptanceReport(conversationId: String, planId: String): Result<String> = runCatching {
         mederi.sessions.getPlanAcceptanceReport(conversationId, planId)
+    }
+
+    /**
+     * 按需读盘计划文档：subtaskIndex=null → planMarkdown 全文；非 null → 该子任务 Spec 原文。
+     * 空/越界子任务与计划不存在同样按 Not Found 语义失败。
+     */
+    override suspend fun getPlanDocument(
+        conversationId: String, planId: String, subtaskIndex: Int?
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val store = planStoreForSession(conversationId)
+            val plan = store.load(planId)
+                ?: throw xyz.mederi.api.exception.MederiNotFoundException("Plan not found: $planId")
+            if (subtaskIndex == null) {
+                store.planMarkdown(plan)
+            } else {
+                plan.subtasks.getOrNull(subtaskIndex)?.spec?.takeIf { it.isNotBlank() }
+                    ?: throw xyz.mederi.api.exception.MederiNotFoundException(
+                        "Spec not found for subtask $subtaskIndex of plan: $planId"
+                    )
+            }
+        }
     }
 
     override suspend fun resolvePlanApproval(

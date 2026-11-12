@@ -6,6 +6,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import xyz.mederi.config.MederiIdentity
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.URLDecoder
@@ -29,7 +30,7 @@ class ChatGptOAuthManager internal constructor(
     private val attempts = ConcurrentHashMap<String, Attempt>()
     private val failures = ConcurrentHashMap<String, String>()
     private val executor = Executors.newCachedThreadPool { runnable ->
-        Thread(runnable, "mederi-oauth-callback").apply { isDaemon = true }
+        Thread(runnable, MederiIdentity.PRODUCT_NAME + "-oauth-callback").apply { isDaemon = true }
     }
     @Volatile private var closed = false
 
@@ -69,7 +70,7 @@ class ChatGptOAuthManager internal constructor(
             "code_challenge" to Base64.getUrlEncoder().withoutPadding().encodeToString(
                 MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))),
         )
-        if (previous == null) parameters["agent_name_hint"] = "Mederi"
+        if (previous == null) parameters["agent_name_hint"] = MederiIdentity.displayName
         previous?.email?.let { parameters["login_hint"] = it }
         // Deliberately omit id_token_hint: authorization URLs cross the UI boundary and must contain no token.
         val attempt = Attempt(state, nonce, verifier, redirect, previous, server,

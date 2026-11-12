@@ -80,10 +80,10 @@ class RunBrowserTaskTool(
         )
 
         val recipeObj = if (args.recipe.isNotBlank()) {
-            runCatching {
+            try {
                 Json { ignoreUnknownKeys = true }.decodeFromString<BrowserRecipe>(args.recipe)
-            }.getOrElse {
-                BrowserRecipe(name = args.recipe, description = args.recipe)
+            } catch (e: Exception) {
+                return "Error: recipe must be valid BrowserRecipe JSON: ${e.message}"
             }
         } else null
         val taskId = service.runTask(
@@ -103,6 +103,14 @@ class RunBrowserTaskTool(
     }
 
     companion object {
+        /** recipe 参数的完整 JSON 结构说明（recipe 非空时必须能解析为 BrowserRecipe）。 */
+        private const val RECIPE_STRUCTURE_HINT =
+            " Optional 'recipe' must be valid BrowserRecipe JSON when provided: " +
+                "{\"name\":\"string\",\"description\":\"string\",\"operatorContent\":\"string\"," +
+                "\"judgeRules\":\"string\",\"drillScript\":\"string or null\"}. " +
+                "All fields are optional (empty string / null defaults); provide only what the task needs. " +
+                "Invalid recipe JSON is rejected with an error."
+
         /** 动态生成工具描述：列出当前已注册浏览器 + 选择指引。 */
         fun buildDescription(service: BrowserTaskService): String {
             val available = service.availableBrowsers()
@@ -122,7 +130,8 @@ class RunBrowserTaskTool(
                 "Do not pick a specific browser arbitrarily. " +
                 "IMPORTANT: Give ONLY the goal and desired outcome in 'task'. Do NOT prescribe how — " +
                 "no search engine, no navigation/click sequence, no low-level steps; the sub-agent autonomously " +
-                "plans and executes the entire task itself."
+                "plans and executes the entire task itself." +
+                RECIPE_STRUCTURE_HINT
         }
     }
 }

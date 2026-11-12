@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import xyz.mederi.api.exception.MederiStateException
 import xyz.mederi.api.exception.MederiValidationException
 import xyz.mederi.api.exception.MederiWorkspaceException
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.store.WorkspaceStore
 import xyz.mederi.tools.ShellTools
 import xyz.mederi.tools.sandbox.CommandSandbox
@@ -262,7 +263,7 @@ class WorkspaceEnvironmentService(
      * 列出工作区环境配置。
      */
     fun listEnvironments(workingDirectory: File): List<ProjectEnvironment> {
-        val envDir = File(workingDirectory, ".mederi/environments")
+        val envDir = File(workingDirectory, "${MederiIdentity.projectWorkdirName}/environments")
         if (!envDir.exists() || !envDir.isDirectory) return emptyList()
         return envDir.listFiles { f -> f.isFile && f.extension == "json" }
             ?.mapNotNull { f ->
@@ -278,7 +279,7 @@ class WorkspaceEnvironmentService(
      * 读取指定环境配置。
      */
     fun getEnvironment(workingDirectory: File, environmentId: String): ProjectEnvironment? {
-        val envFile = File(workingDirectory, ".mederi/environments/$environmentId.json")
+        val envFile = File(workingDirectory, "${MederiIdentity.projectWorkdirName}/environments/$environmentId.json")
         if (!envFile.exists() || !envFile.isFile) return null
         return try {
             json.decodeFromString(ProjectEnvironment.serializer(), envFile.readText())
@@ -295,7 +296,7 @@ class WorkspaceEnvironmentService(
         environment: ProjectEnvironment,
         expectedVersion: Long?
     ): ProjectEnvironment {
-        val envDir = File(workingDirectory, ".mederi/environments")
+        val envDir = File(workingDirectory, "${MederiIdentity.projectWorkdirName}/environments")
         envDir.mkdirs()
         val envFile = File(envDir, "${environment.id}.json")
 

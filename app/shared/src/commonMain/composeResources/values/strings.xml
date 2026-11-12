@@ -671,11 +671,10 @@
     <string name="skill_refresh_failed">刷新 Skill 列表失败</string>
     <string name="skill_set_dir_failed">设置目录失败</string>
     <string name="skill_uninstall_failed">卸载 Skill 失败</string>
-    <!-- 变更摘要卡片（ChatCards.kt） -->
-    <string name="diff_files_changed">%1$d 个文件变更 +%2$d -%3$d</string>
+    <!-- 变更摘要卡片（DiffCards.kt） -->
+    <string name="diff_files_changed_one">%1$d 个文件变更</string>
+    <string name="diff_files_changed_many">%1$d 个文件变更</string>
     <string name="diff_review">Review</string>
-    <string name="diff_expand_all">展开全部 (%1$d)</string>
-    <string name="diff_collapse">收起</string>
     <!-- 右侧扩展面板（RightExtensionPanel.kt） -->
     <string name="rp_todo_list_title">TODO-LIST</string>
     <string name="rp_documents_title">文档</string>
@@ -760,6 +759,7 @@
     <string name="plan_open_acceptance_report">查看验收报告</string>
     <string name="plan_acceptance_report_title">验收报告：%1$s</string>
     <string name="plan_read_full">阅读 plan.md 全文</string>
+    <string name="plan_document_read_failed">计划文档读取失败：%1$s</string>
     <string name="overview_approve_btn">批准实施 ⌘↵</string>
     <string name="step_label">步骤 %1$d</string>
     <string name="step_spec">Spec ↗</string>
@@ -815,6 +815,14 @@
     <string name="disclosure_collapsed">已折叠</string>
     <string name="input_attach_text">添加文本附件</string>
     <string name="input_attach_image">添加图片</string>
+    <string name="slash_group_commands">命令</string>
+    <string name="slash_group_plugins">插件</string>
+    <string name="slash_hint_confirm_keys">Enter / Tab</string>
+    <string name="slash_hint_confirm">确认补全</string>
+    <string name="slash_hint_cancel_keys">Esc</string>
+    <string name="slash_hint_cancel">取消联想</string>
+    <string name="slash_select_indicator">确认选择</string>
+    <string name="slash_input_search_hint"> 输入搜索...</string>
     <string name="plan_approval_rejected">已拒绝</string>
     <string name="plan_approval_status_other">计划状态：%1$s</string>
     <string name="term_unread">有新输出</string>

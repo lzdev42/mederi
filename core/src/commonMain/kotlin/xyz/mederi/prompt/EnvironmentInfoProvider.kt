@@ -1,5 +1,6 @@
 package xyz.mederi.prompt
 
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.tools.background.BackgroundTaskManager
 import xyz.mederi.tools.sandbox.CommandSandbox
 import xyz.mederi.tools.sandbox.SandboxSettings
@@ -39,7 +40,7 @@ object EnvironmentInfoProvider {
         val localDow = zoned.dayOfWeek
             .getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
 
-        val mederiWorkdir = artifactDirectory ?: File(directories.first(), ".mederi").absolutePath
+        val mederiWorkdir = artifactDirectory ?: File(directories.first(), MederiIdentity.projectWorkdirName).absolutePath
 
         return buildString {
             append("\n\n# Runtime Environment\n")
@@ -61,7 +62,7 @@ object EnvironmentInfoProvider {
                 if (settings.allowedCommands.isNotEmpty()) appendLine("Allowed static command prefixes: ${settings.allowedCommands.joinToString("; ")}")
                 if (settings.deniedCommands.isNotEmpty()) appendLine("Denied static command prefixes: ${settings.deniedCommands.joinToString("; ")}")
             }
-            appendLine("Mederi workdir: $mederiWorkdir")
+            appendLine("${MederiIdentity.displayName} workdir: $mederiWorkdir")
             // 用户停止的后台任务（consumeStoppedForSession 取出即消费，下轮不再显示）
             if (stoppedBackgroundTasks.isNotEmpty()) {
                 appendLine("Recently stopped background tasks:")

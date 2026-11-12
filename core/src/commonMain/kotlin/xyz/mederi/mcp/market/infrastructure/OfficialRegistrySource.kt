@@ -1,6 +1,7 @@
 package xyz.mederi.mcp.market.infrastructure
 
 import xyz.mederi.http.MederiHttpClientFactory
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.mcp.market.domain.McpSearchResult
 import xyz.mederi.mcp.market.domain.McpServerDetail
 import java.net.URLEncoder
@@ -27,7 +28,7 @@ class OfficialRegistrySource(
     }
 
     override suspend fun search(query: String?, cursor: String?, pageSize: Int): McpSearchResult =
-        withClient("mederi-mcp-market") { client ->
+        withClient(MederiIdentity.PRODUCT_NAME + "-mcp-market") { client ->
             val parameters = buildMap<String, String> {
                 put("limit", pageSize.coerceIn(1, MAX_PAGE_SIZE).toString())
                 put("version", "latest")
@@ -40,7 +41,7 @@ class OfficialRegistrySource(
         }
 
     override suspend fun detail(id: String): McpServerDetail =
-        withClient("mederi-mcp-market-detail") { client ->
+        withClient(MederiIdentity.PRODUCT_NAME + "-mcp-market-detail") { client ->
             // name 含 "/"（io.github.user/xxx），路径参数需整体 URL 编码
             val encoded = URLEncoder.encode(id, StandardCharsets.UTF_8)
             OfficialRegistryParsing.parseDetailResponse(

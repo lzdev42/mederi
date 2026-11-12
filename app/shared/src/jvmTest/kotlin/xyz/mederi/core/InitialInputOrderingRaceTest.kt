@@ -39,11 +39,25 @@ class InitialInputOrderingRaceTest {
         val finishHydration = CompletableDeferred<Unit>()
         val snapshots = mutableListOf<ConversationState>()
         val observer = backgroundScope.launch {
-            MederiEventAggregator.observe("s", api, { null }, workspaceInfo = {
-                hydrating.complete(Unit)
-                finishHydration.await()
-                null
-            }).collect { snapshots.add(it) }
+            MederiEventAggregator.observe("s", api, initialSnapshot = {
+                // 与生产装配一致：observe 首帧 = MederiAiCore.buildInitialSnapshot 的同一共享构建。
+                // workspaceInfo 用作时序闸门：首帧数据读取完成、事件订阅之前挂起，
+                // 精确复现「快照已读、订阅未就绪」窗口内的丢事件行为。
+                MederiEventAggregator.buildInitialSnapshot(
+                    conversationId = "s",
+                    sessions = api,
+                    modelToProvider = { null },
+                    planHydration = { MederiEventAggregator.PlanApprovalHydration(null, emptyList()) },
+                    executionApprovals = { emptyList() },
+                    subagents = { emptyList() },
+                    lastError = { null },
+                    workspaceInfo = {
+                        hydrating.complete(Unit)
+                        finishHydration.await()
+                        null
+                    },
+                )
+            }, modelToProvider = { null }).collect { snapshots.add(it) }
         }
         hydrating.await()
         history = listOf(Message("input", "s", MessageRole.USER, listOf(MessagePart.Text("request")),

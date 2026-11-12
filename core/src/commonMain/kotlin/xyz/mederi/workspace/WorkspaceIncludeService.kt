@@ -1,5 +1,6 @@
 package xyz.mederi.workspace
 
+import xyz.mederi.config.MederiIdentity
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -203,11 +204,12 @@ class WorkspaceIncludeService(
 
     private fun isD09Artifact(relPath: String): Boolean {
         val norm = relPath.replace('\\', '/')
-        return norm == ".mederi/notebook.md" ||
-                norm.startsWith(".mederi/plans/") ||
-                norm.startsWith(".mederi/plans-done/") ||
-                norm.startsWith(".mederi/plans-voided/") ||
-                norm.startsWith(".mederi/research/")
+        val wd = MederiIdentity.projectWorkdirName
+        return norm == "$wd/notebook.md" ||
+                norm.startsWith("$wd/plans/") ||
+                norm.startsWith("$wd/plans-done/") ||
+                norm.startsWith("$wd/plans-voided/") ||
+                norm.startsWith("$wd/research/")
     }
 
     private fun parseNulStrings(bytes: ByteArray): List<String> {

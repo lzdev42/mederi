@@ -63,7 +63,13 @@ fun OverviewPlanRow(
         onManualAcceptance = { manualPlanId = it.id },
         onOpenAcceptanceReport = { plan, title -> viewModel.openPlanAcceptanceReport(plan.id, title) },
         onOpenSpec = { plan, step ->
-            viewModel.openSpecInExtension(plan.id, plan.title, step.index, step.name, step.spec)
+            // 按钮显隐由 if (step.hasSpec) 保证（OverviewPlanStep）；打开走统一异步读盘入口，spec 原文由契约按需返回
+            viewModel.openPlanDocument(
+                planId = plan.id,
+                title = plan.title,
+                subtaskIndex = step.index,
+                subtaskName = step.name,
+            )
         },
         modifier = modifier,
     )
@@ -211,7 +217,7 @@ private fun OverviewPlanStep(
         state = state,
         colors = colors,
     ) {
-        if (!step.spec.isNullOrBlank()) {
+        if (step.hasSpec) {
             WorkspaceActionButton(stringResource(Res.string.step_spec), { onOpenSpec(step) }, colors = colors)
         }
     }

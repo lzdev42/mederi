@@ -4,19 +4,13 @@ import ai.koog.agents.core.tools.SimpleTool
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonTransformingSerializer
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.plan.AcceptanceCase
 import xyz.mederi.plan.Decision
+import xyz.mederi.plan.encodeSubtasksWire
 import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.Plan
 import xyz.mederi.plan.PlanApprovalRequester
@@ -34,71 +28,67 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import xyz.mederi.debug.DebugLog
 
-private val json = Json { ignoreUnknownKeys = true }
-
 /**
- * 宽松列表反序列化（List<String> 字段容错，实测两种失败形态）：
- * - 模型把列表写成单个字符串（`"outScope": "xxx"`）→ 包成单元素数组；
- * - 模型给"备选项"这类天然列表语义的字段传 JsonArray，而字段声明为 String → 改为 List<String> 后原样收下。
- * 映射进领域模型处统一 joinToString，领域类型不动。
- */
-private object LenientStringList :
-    JsonTransformingSerializer<List<String>>(ListSerializer(String.serializer())) {
-    override fun transformDeserialize(element: JsonElement): JsonElement =
-        if (element is JsonArray) element else JsonArray(listOf(element))
-}
-
-/**
- * 复合对象列表字段形状矫正（List<DecisionArg>/List<PlannedChangeArg> 容错）。
+ * write_plan 参数完整 JSON 结构（全字段 + 空值/类型说明，无示例数据）。
  *
- * 实测两种崩溃形态（sess_f01ec14e）：
- * - 模型把对象列表序列化成 JSON 字符串（`"keyDecisions": "[{...}]"`）→ Expected JsonArray but had JsonLiteral
- * - 模型把单个对象直接当列表（`"decisions": {...}`）→ Expected JsonArray but had JsonObject
- *
- * 做成按字段名单变换的顶层工具函数，供 args 类级别的 JsonTransformingSerializer 调用——
- * 模型错形出现在哪个字段不可预测，类级变换一次覆盖全部复合列表字段。
+ * 挂在 write_plan 工具描述里防「模型不知道格式」（AGENTS.md §5 不兜底原则：解码层不做
+ * 错形矫正，错形由 kotlinx 原生 SerializationException 报错回喂模型自纠；能在源头减少
+ * 错形的唯一位置是工具描述）。字段较多、嵌套较深，给一份字段穷尽的结构让模型照抄形状。
  */
-
-/** 复合列表字段名（SubtaskArg + WritePlanArgs，形状矫正目标） */
-private val OBJECT_LIST_FIELDS = listOf("decisions", "keyDecisions", "changes")
-
-/** write_plan 参数整体形状矫正：先矫正子任务列表里每个 subtask，再矫正顶层字段 */
-private object LenientWritePlanArgs :
-    JsonTransformingSerializer<PlanTools.WritePlanArgs>(PlanTools.WritePlanArgs.generatedSerializer()) {
-    override fun transformDeserialize(element: JsonElement): JsonElement {
-        var result = element
-        // subtasks[*].decisions / targetFiles 内层矫正
-        val subtasks = result.subelement("subtasks")
-        if (subtasks is JsonArray) {
-            val fixed = JsonArray(subtasks.map { sub ->
-                OBJECT_LIST_FIELDS.fold(sub) { acc, f -> coerceObjectListField(acc, f) }
-            })
-            result = kotlinx.serialization.json.JsonObject(
-                (result as? kotlinx.serialization.json.JsonObject)?.toMutableMap()?.apply { put("subtasks", fixed) }
-                    ?: mutableMapOf("subtasks" to fixed)
-            )
-        }
-        // 顶层 keyDecisions / changes 矫正
-        return OBJECT_LIST_FIELDS.fold(result) { acc, f -> coerceObjectListField(acc, f) }
+internal val WRITE_PLAN_ARGS_STRUCTURE: String = """
+{
+  "planId": "",
+  "title": "",
+  "summary": "",
+  "projectContext": "",
+  "languageStack": "",
+  "businessLogic": "",
+  "background": "",
+  "problemAnalysis": "",
+  "approach": "",
+  "expectedOutcome": "",
+  "testMethod": "",
+  "inScope": [],
+  "outScope": [],
+  "openQuestions": [],
+  "keyDecisions": [
+    {"question": "", "choice": "", "rationale": "", "alternatives": []}
+  ],
+  "changes": [
+    {"module": "", "action": "", "filePath": "", "description": "", "rationale": ""}
+  ],
+  "dataAndParams": [],
+  "risks": [],
+  "successCriteria": [],
+  "architecture": null,
+  "researchNotes": "",
+  "appendix": null,
+  "subtasks": [
+    {
+      "name": "",
+      "planDetail": "",
+      "targetFiles": [],
+      "decisions": [
+        {"question": "", "choice": "", "rationale": "", "alternatives": []}
+      ],
+      "verification": "",
+      "verificationCwd": null,
+      "verificationTimeoutSeconds": null,
+      "verificationExpected": "",
+      "verificationExpectStdoutContains": [],
+      "verificationExpectStdoutNotContains": [],
+      "dependsOn": [],
+      "parallelizable": false,
+      "appendix": null,
+      "acceptanceCases": [
+        {"id": "", "objective": "", "setup": "", "input": "", "steps": "", "observationSource": "", "expected": "", "detects": "", "manual": false}
+      ],
+      "acceptanceFiles": [],
+      "overallAcceptance": false
     }
+  ]
 }
-
-/** generate_spec/子任务级参数形状矫正 */
-private object LenientSubtaskArg :
-    JsonTransformingSerializer<PlanTools.SubtaskArg>(PlanTools.SubtaskArg.generatedSerializer()) {
-    override fun transformDeserialize(element: JsonElement): JsonElement =
-        OBJECT_LIST_FIELDS.fold(element) { acc, f -> coerceObjectListField(acc, f) }
-}
-
-/** generate_spec 参数形状矫正（appendix 已删除，目前为 no-op fold，保留为扩展预留） */
-private object LenientGenerateSpecArgs :
-    JsonTransformingSerializer<PlanTools.GenerateSpecArgs>(PlanTools.GenerateSpecArgs.generatedSerializer()) {
-    override fun transformDeserialize(element: JsonElement): JsonElement =
-        OBJECT_LIST_FIELDS.fold(element) { acc, f -> coerceObjectListField(acc, f) }
-}
-
-private fun JsonElement.subelement(name: String): JsonElement? =
-    (this as? kotlinx.serialization.json.JsonObject)?.get(name)
+""".trimIndent()
 
 class PlanTools(
     private val sessionId: String,
@@ -118,7 +108,6 @@ class PlanTools(
         @LLMDescription("Why this choice was made.")
         val rationale: String = "",
         @LLMDescription("Other options that were considered (list them as an array).")
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val alternatives: List<String> = emptyList()
     )
 
@@ -136,8 +125,7 @@ class PlanTools(
         val rationale: String = ""
     )
 
-    @KeepGeneratedSerializer
-    @Serializable(with = LenientSubtaskArg::class)
+    @Serializable
     data class SubtaskArg(
         @LLMDescription("Subtask name (concise action-noun). Required.")
         val name: String = "",
@@ -149,7 +137,6 @@ class PlanTools(
         )
         val planDetail: String = "",
         @LLMDescription("Exact file paths that will be created or modified (list them as an array).")
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val targetFiles: List<String> = emptyList(),
         @LLMDescription("Design decisions resolved during planning this subtask.")
         val decisions: List<DecisionArg> = emptyList(),
@@ -171,13 +158,11 @@ class PlanTools(
                 "output, verification is mechanically judged FAIL. Pin the actual expectation " +
                 "(e.g. [\"3 passed\", \"BEHAVIOR_CHECK_PASS\"]) so a partially-passing command cannot slip through."
         )
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val verificationExpectStdoutContains: List<String> = emptyList(),
         @LLMDescription(
             "Optional. Literal strings the command's output MUST NOT contain — MACHINE-CHECKED " +
                 "(e.g. [\"FAILED\", \"Traceback\"])."
         )
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val verificationExpectStdoutNotContains: List<String> = emptyList(),
         @LLMDescription("Indices of subtasks this depends on (0-based).")
         val dependsOn: List<Int> = emptyList(),
@@ -193,8 +178,7 @@ class PlanTools(
         val overallAcceptance: Boolean = false,
     )
 
-    @KeepGeneratedSerializer
-    @Serializable(with = LenientWritePlanArgs::class)
+    @Serializable
     data class WritePlanArgs(
         @LLMDescription("Optional. Empty = create a new plan. Non-empty = update an existing PENDING_APPROVAL plan in place — only provide fields you want to change, blank/empty fields keep their existing values.")
         val planId: String = "",
@@ -231,13 +215,10 @@ class PlanTools(
         @LLMDescription("Optional. Verification approach; rendered as '验证计划（Verification Plan）'. Omit for tasks with no verification needs.")
         val testMethod: String = "",
         @LLMDescription("Optional. What this plan will do; omit when scope is obvious from the Goal.")
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val inScope: List<String> = emptyList(),
         @LLMDescription("Out of scope: what this plan will NOT do.")
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val outScope: List<String> = emptyList(),
         @LLMDescription("Legacy compatibility field. Leave empty: resolve all substantive decisions with the user via ask_user before writing a plan.")
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val openQuestions: List<String> = emptyList(),
         @LLMDescription("Key decisions: trade-offs, breaking changes, and rationale.")
         val keyDecisions: List<DecisionArg> = emptyList(),
@@ -247,13 +228,10 @@ class PlanTools(
             "Optional: data sources read or written (tables, files, endpoints, formats) and new or changed " +
                 "parameters with their defaults. Omit entirely if the task touches no data or parameters."
         )
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val dataAndParams: List<String> = emptyList(),
         @LLMDescription("Risks and rollback strategy.")
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val risks: List<String> = emptyList(),
         @LLMDescription("Optional. How to know the whole task is done; completion criteria is primarily carried by Approach + per-subtask verification contracts.")
-        @kotlinx.serialization.Serializable(with = LenientStringList::class)
         val successCriteria: List<String> = emptyList(),
         @LLMDescription("Optional: Mermaid diagram code (without fence) for architecture visualization. Mermaid is the only diagram format the UI renders; do not use PlantUML/DOT or other DSLs.")
         val architecture: String? = null,
@@ -270,8 +248,7 @@ class PlanTools(
         val subtasks: List<SubtaskArg> = emptyList()
     )
 
-    @KeepGeneratedSerializer
-    @Serializable(with = LenientGenerateSpecArgs::class)
+    @Serializable
     data class GenerateSpecArgs(
         @LLMDescription("Plan ID from the approved plan.")
         val planId: String,
@@ -309,7 +286,8 @@ class PlanTools(
             "plan in place — only provide fields you want to change, blank/empty fields keep their existing " +
             "values. Only a legacy PENDING_APPROVAL draft can be edited in place. Structured drafts use a " +
             "fresh ID for each revision. Replacing an approved active plan requires explicit user approval. " +
-            "Autonomous mode auto-approves initial plans."
+            "Autonomous mode auto-approves initial plans. " +
+            "Arguments format: " + WRITE_PLAN_ARGS_STRUCTURE
     ) {
         override suspend fun execute(args: WritePlanArgs): String {
             if (args.planId.isBlank()) validatePlan(args)?.let { return "Error: $it" }
@@ -371,8 +349,7 @@ class PlanTools(
 
                 val planPath = planStore.getPlanAbsolutePath(updated.id)
                     ?: return "Error: plan was updated but plan.md could not be read."
-                val planContent = planStore.planMarkdown(updated)
-                val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), updated.subtasks)
+                val subtasksJson = encodeSubtasksWire(updated.subtasks)
 
                 return if (updated.status == PlanStatus.PENDING_APPROVAL) {
                     val result = planApprovalRequester.request(
@@ -380,7 +357,6 @@ class PlanTools(
                         planPath = planPath,
                         title = updated.title,
                         summary = updated.summary,
-                        planContent = planContent,
                         subtaskCount = updated.subtasks.size,
                         subtasksJson = subtasksJson
                     )
@@ -494,13 +470,12 @@ class PlanTools(
             )
 
             return if (needsUserApproval) {
-                val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), plan.subtasks)
+                val subtasksJson = encodeSubtasksWire(plan.subtasks)
                 val result = planApprovalRequester.request(
                     planId = plan.id,
                     planPath = planPath,
                     title = plan.title,
                     summary = plan.summary,
-                    planContent = planContent,
                     subtaskCount = plan.subtasks.size,
                     subtasksJson = subtasksJson
                 )
@@ -535,7 +510,7 @@ class PlanTools(
          * 四类发射点（create/spawn/verify/converge）经由本函数统一发出，不发各自手拼 payload。
          */
         private suspend fun emitPlanProgress(plan: Plan, action: String) {
-            val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), plan.subtasks)
+            val subtasksJson = encodeSubtasksWire(plan.subtasks)
             eventBus.emit(MederiEvent(
                 type = EventType.PLAN_PROGRESS,
                 sessionId = sessionId,
@@ -546,8 +521,7 @@ class PlanTools(
                 ) + if (action == "created") mapOf(
                     "title" to plan.title,
                     "summary" to plan.summary,
-                    "planPath" to planStore.getPlanAbsolutePath(plan.id).orEmpty(),
-                    "planContent" to planStore.planMarkdown(plan)
+                    "planPath" to planStore.getPlanAbsolutePath(plan.id).orEmpty()
                 ) else emptyMap(),
                 timestamp = Instant.now().toString()
             ))
@@ -717,7 +691,7 @@ class PlanTools(
             notebook.append(
                 "## ${Instant.now()} — Spec generated: Subtask ${args.subtaskIndex} (${st.name})\n"
             )
-            val subtasksJson = json.encodeToString(ListSerializer(Subtask.serializer()), updated.subtasks)
+            val subtasksJson = encodeSubtasksWire(updated.subtasks)
             eventBus.emit(xyz.mederi.domain.model.MederiEvent(
                 type = EventType.PLAN_PROGRESS,
                 sessionId = sessionId,

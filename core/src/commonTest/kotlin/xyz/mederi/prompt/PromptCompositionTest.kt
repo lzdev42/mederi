@@ -44,6 +44,48 @@ class PromptCompositionTest {
     }
 
     @Test
+    fun codeChangeTasksRequireSystematicReportArtifactWithScreenshots() {
+        // 代码改动任务完成 → 必须产出系统性汇报 artifact（reader 可打开），chat 只留简短结论
+        AgentMode.entries.forEach { mode ->
+            val prompt = SystemPrompts.build(mode)
+            assertTrue(
+                prompt.contains("## Systematic task report (code changes)"),
+                "主代理提示词应要求代码改动任务产出系统性汇报 artifact"
+            )
+            assertTrue(
+                prompt.contains("reader-openable"),
+                "系统性汇报必须是 reader 可打开的 artifact"
+            )
+            assertTrue(
+                prompt.contains("the delivery unit is chat text plus the systematic report artifact"),
+                "代码改动任务的交付单元 = chat 简短结论 + 系统性汇报 artifact"
+            )
+            assertTrue(
+                prompt.contains("collapsible work record"),
+                "汇报 artifact 属交付内容，不算可折叠工作记录（解 self-contained 冲突）"
+            )
+            assertTrue(
+                prompt.contains("expected vs observed value"),
+                "汇报须含期望值 vs 实际观察值的验证证据"
+            )
+            assertTrue(
+                prompt.contains("when the change involves UI and the target project can capture screenshots via test"),
+                "UI 截图规则应保留在系统性汇报要求中"
+            )
+            assertTrue(prompt.contains("why if they cannot be produced"), "截图无法产出须说明原因")
+        }
+        val executor = SystemPrompts.forSubagent(SubagentRole.EXECUTOR)
+        assertTrue(
+            executor.contains("the change involves UI and\nthe project can capture screenshots via test code"),
+            "EXECUTOR 汇报行应要求 UI 改动附带截图"
+        )
+        assertTrue(
+            executor.contains("exempt from the plan path's no-test rule"),
+            "截图要求须显式豁免计划路径的 no-test 禁令，解规则冲突"
+        )
+    }
+
+    @Test
     fun everyMainModeIncludesPlanApproachAndPreDispatchReview() {
         AgentMode.entries.forEach { mode ->
             val prompt = SystemPrompts.build(mode)

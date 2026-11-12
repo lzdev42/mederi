@@ -17,9 +17,10 @@ import java.nio.file.attribute.AclFileAttributeView
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.EnumSet
+import xyz.mederi.config.MederiIdentity
 
 actual fun defaultPreferencesStore(): PreferencesStore {
-    val directory = Path.of(System.getProperty("user.home"), ".mederi")
+    val directory = Path.of(System.getProperty("user.home"), MederiIdentity.homeConfigRootName)
     val preferences = JsonFilePreferencesStore(directory.resolve("preferences.json").toString().toPath(), FileSystem.SYSTEM)
     return DesktopPreferencesStore(preferences, directory.resolve("cloudflare-api-token"))
 }

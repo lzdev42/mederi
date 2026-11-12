@@ -22,8 +22,7 @@ data class PlanSubtaskItem(
     val index: Int,
     val name: String,
     val status: String = "PENDING",
-    val spec: String? = null,
-    val planDetail: String = "",
+    val hasSpec: Boolean = false,
     val acceptanceCases: List<PlanAcceptanceCaseSummary> = emptyList()
 )
 
@@ -42,6 +41,7 @@ data class ManualPlanAcceptanceInput(
  * 计划审批请求(APPROVAL 模式下 AI 调 create_plan 后产生)。
  * 卡片只展示标题 + 子任务数 + [查看详细计划]按钮——摘要由 AI 在调 create_plan 前的聊天消息提供，
  * 不从 plan 里提取。planPath 是计划 Markdown 文件路径，用户点"查看详细计划"时打开。
+ * 计划正文不随快照搬运（真理源在盘上），UI 需要时经 [xyz.mederi.core.contract.AiCore.getPlanDocument] 按需读取。
  */
 @Serializable
 data class PlanApprovalRequest(
@@ -51,7 +51,6 @@ data class PlanApprovalRequest(
     val title: String,
     val summary: String = "",
     val subtaskCount: Int = 0,
-    val planContent: String? = null,
     val status: String = "PENDING",
     val subtasks: List<PlanSubtaskItem> = emptyList(),
 )

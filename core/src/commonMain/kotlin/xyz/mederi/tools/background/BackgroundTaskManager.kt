@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.tools.sandbox.ProcessRegistry
@@ -140,7 +141,7 @@ class BackgroundTaskManager(
                 val outputFuture = FutureTask {
                     process.inputStream.bufferedReader().use { it.readText() }
                 }
-                Thread(outputFuture, "mederi-background-command-output").apply { isDaemon = true; start() }
+                Thread(outputFuture, MederiIdentity.PRODUCT_NAME + "-background-command-output").apply { isDaemon = true; start() }
 
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds.toLong())
                 val shellExited = runInterruptible(Dispatchers.IO) {

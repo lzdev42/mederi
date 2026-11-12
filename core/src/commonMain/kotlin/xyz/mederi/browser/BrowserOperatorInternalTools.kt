@@ -5,6 +5,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.serialization.typeToken
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
@@ -143,23 +144,21 @@ object LenientJsonStringSerializer : KSerializer<String> {
     }
 
     override fun deserialize(decoder: Decoder): String {
-        return if (decoder is JsonDecoder) {
-            val element = decoder.decodeJsonElement()
-            if (element is JsonPrimitive && element.isString) {
-                element.content
-            } else {
-                element.toString()
-            }
-        } else {
-            decoder.decodeString()
+        if (decoder !is JsonDecoder) {
+            return decoder.decodeString()
         }
+        val element = decoder.decodeJsonElement()
+        if (element is JsonPrimitive && element.isString) {
+            return element.content
+        }
+        throw SerializationException("'script' 必须是 JSON 字符串（内容为 DrillScript 对象），收到: $element")
     }
 }
 
 @Serializable
 data class DrillArgs(
     @Serializable(with = LenientJsonStringSerializer::class)
-    @LLMDescription("Drill script JSON string or task name")
+    @LLMDescription("Drill script JSON string: the content must be a DrillScript object (see tool description for the schema)")
     val script: String = ""
 )
 
@@ -181,8 +180,11 @@ class ExecuteDrillTool(
         val rawScript = args.script.takeIf { it.isNotBlank() }
             ?: mountedScript?.takeIf { it.isNotBlank() }
             ?: return "drill=FAIL: no drill script provided and none mounted"
-        val scriptElement = runCatching { Json.parseToJsonElement(rawScript) }
-            .getOrElse { JsonPrimitive(rawScript) }
+        val scriptElement = try {
+            Json.parseToJsonElement(rawScript)
+        } catch (e: Exception) {
+            return "drill=FAIL: script is not valid JSON: ${e.message}"
+        }
         return try {
             val r = executor.executeScript(scriptElement, onJudgeContent)
             "drill=${if (r.success) "ok" else "FAIL"}: ${r.drill_results.joinToString(";") { it.toString() }.take(200)}"
@@ -202,7 +204,26 @@ class ExecuteDrillTool(
             if (!mountedScript.isNullOrBlank()) {
                 append("A drill script is MOUNTED for the current task: call this tool with an EMPTY 'script' argument to run the mounted script. ")
             }
-            append("Pass a JSON drill script in 'script' to override the mounted script.")
+            append("To override, pass the DrillScript as a JSON *string* in 'script' (the object must NOT be passed directly). ")
+            append(
+                "DrillScript fields: task_name:string, loop_count:number=1, repeat_interval_ms:number=0, " +
+                    "image_assets:{\"name\":{\"path\":string,\"desc\":string}}|null, " +
+                    "steps:[DrillStep], item_steps:[DrillStep]|null. "
+            )
+            append(
+                "DrillStep fields: step_name:string, playwright_api:string|null, selector_type:string|null, " +
+                    "selector_value:string|null, selector_options:{string:scalar}|null, filter_has_text:string|null, " +
+                    "first:boolean|null, last:boolean|null, action:string, action_value:string|null, " +
+                    "record_result:boolean=false, record_fields:{string:string}|null, url:string|null, url_from:string|null, " +
+                    "url_prefix:string|null, selector_fallbacks:[string]|null, store_as:string|null, instruction:string|null, " +
+                    "content_from:string|[string]|null, ai_result_key:string|null, condition:string|null, then:string|null, " +
+                    "file_path:string|null, branches:[{condition:string, steps:[DrillStep]}]|null, " +
+                    "default_steps:[DrillStep]|null, timeout_ms:number|null, poll_interval_ms:number|null. "
+            )
+            append(
+                "selector_options values must be scalars (string/number/boolean); " +
+                    "nested objects or arrays in selector_options are invalid."
+            )
         }
     }
 }

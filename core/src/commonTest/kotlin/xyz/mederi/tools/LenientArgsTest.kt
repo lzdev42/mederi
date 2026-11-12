@@ -8,42 +8,19 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * 工具入参「对象列表字段」形状矫正回归测试（LenientArgs.coerceObjectListField）。
+ * ask_user 参数标准解析测试 + plan 工具参数严格解码回归测试。
  *
- * 事故样本（glm-5.3，sess_e5a60397 seq119 原文）：question 文本内嵌 ASCII 引号时，
- * 模型把 questions 整个数组序列化成 JSON 字符串（双层编码）→ kotlinx 抛
- * "Expected JsonArray, but had JsonLiteral as the serialized body of kotlin.collections.ArrayList at path: $.questions"。
+ * ask_user 不做兜底：格式错即报错，让模型根据错误信息自纠。
+ * plan 工具同样不做兜底（宽松 serializer 已删除）：错形抛 kotlinx SerializationException 回喂。
  */
 class LenientArgsTest {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** 事故原文（sess_e5a60397 seq119，verbatim：双层编码 + 文本内嵌转义引号） */
-    private val incidentArgs =
-        """{"questions":"[{\"id\": \"db_scope\", \"prompt\": \"讨论中说过\\\"config.db 与 data.db 各一条队列\\\"，本计划接管哪些？\", \"options\": [\"仅 data.db（推荐）\", \"实现\\\"driver 唯一所有权\\\"\"]}]"}"""
+    // ── ask_user：标准解析，格式正确就过，错了就报错 ──
 
     @Test
-    fun `questions as stringified JSON array is repaired`() {
-        val args = json.decodeFromString<AgentTools.AskUserArgs>(incidentArgs)
-        assertEquals(1, args.questions.size)
-        val q = args.questions[0]
-        assertEquals("db_scope", q.id)
-        // 内嵌引号必须原样保留（矫正只剥掉双层编码的一层）
-        assertEquals("讨论中说过\"config.db 与 data.db 各一条队列\"，本计划接管哪些？", q.prompt)
-        assertEquals("实现\"driver 唯一所有权\"", q.options[1])
-    }
-
-    @Test
-    fun `questions as single object is wrapped into list`() {
-        val args = json.decodeFromString<AgentTools.AskUserArgs>(
-            """{"questions":{"id":"q1","prompt":"p","options":[]}}"""
-        )
-        assertEquals(1, args.questions.size)
-        assertEquals("q1", args.questions[0].id)
-    }
-
-    @Test
-    fun `questions as proper array passes through`() {
+    fun `ask_user - proper array passes through`() {
         val args = json.decodeFromString<AgentTools.AskUserArgs>(
             """{"questions":[{"id":"q1","prompt":"p","options":["a","b"],"multiSelect":true},{"id":"q2","prompt":"p2"}]}"""
         )
@@ -54,44 +31,53 @@ class LenientArgsTest {
     }
 
     @Test
-    fun `unparseable questions string keeps original decode error`() {
-        // 不兜底空数组：解析失败必须让原始错误浮出（回喂后模型一轮可自纠）
+    fun `ask_user - stringified JSON array is rejected`() {
+        // 双层编码（模型把数组包成字符串）：不兜底，直接报错
+        val incidentArgs =
+            """{"questions":"[{\"id\": \"db_scope\", \"prompt\": \"讨论中说过\\\"config.db 与 data.db 各一条队列\\\"，本计划接管哪些？\", \"options\": [\"仅 data.db（推荐）\", \"实现\\\"driver 唯一所有权\\\"\"]}]"}"""
+        val e = assertFailsWith<SerializationException> {
+            json.decodeFromString<AgentTools.AskUserArgs>(incidentArgs)
+        }
+        // 标准 kotlinx 报 "Expected start of the array '[', but had '\"'"
+        assertTrue(e.message!!.contains("questions"), e.message)
+    }
+
+    @Test
+    fun `ask_user - single object instead of array is rejected`() {
+        val e = assertFailsWith<SerializationException> {
+            json.decodeFromString<AgentTools.AskUserArgs>(
+                """{"questions":{"id":"q1","prompt":"p","options":[]}}"""
+            )
+        }
+        assertTrue(e.message!!.contains("questions"), e.message)
+    }
+
+    @Test
+    fun `ask_user - unparseable string is rejected`() {
         val e = assertFailsWith<SerializationException> {
             json.decodeFromString<AgentTools.AskUserArgs>("""{"questions":"not a json ["}""")
         }
-        assertTrue(e.message!!.contains("Expected JsonArray"), e.message)
+        assertTrue(e.message!!.contains("questions"), e.message)
     }
 
     @Test
-    fun `non-string questions literal keeps original decode error`() {
+    fun `ask_user - numeric literal is rejected`() {
         val e = assertFailsWith<SerializationException> {
             json.decodeFromString<AgentTools.AskUserArgs>("""{"questions":42}""")
         }
-        assertTrue(e.message!!.contains("Expected JsonArray"), e.message)
+        assertTrue(e.message!!.contains("questions"), e.message)
     }
 
-    @Test
-    fun `inner keyless-object options in string-wrapped array degrades safely`() {
-        // ask_user#1 故障（sess_e5a60397 2026-11-10）：双层错形——
-        // 外层 questions=字符串（宽容层能修），内层 options=[{"A","B"}] keyless-object（非法 JSON、parse 失败）。
-        // 宽容层 parseToJsonElement(字符串内容) 失败 → 保留原值 → 下游报错（安全降级，不字符串手术挽救，per AGENTS.md §5）。
-        // 模型一轮自纠（重试用 \u 转义）。
-        val innerInvalid =
-            """{"questions":"[{\"id\":\"q\",\"prompt\":\"p\",\"options\":[{\"A\",\"B\"}]}]"}"""
-        val e = assertFailsWith<SerializationException> {
-            json.decodeFromString<AgentTools.AskUserArgs>(innerInvalid)
-        }
-        assertTrue(e.message!!.contains("Expected JsonArray"), e.message)
-    }
+    // ── plan 工具：严格解码（错形不矫正，直接报错回喂）──
 
     @Test
-    fun `plan args unparseable object-list string also fails fast now`() {
-        // 共享严格语义回归：write_plan 的 keyDecisions 解析不出时不再静默兜底空数组
+    fun `plan args unparseable object-list string fails fast`() {
         val e = assertFailsWith<SerializationException> {
             json.decodeFromString<PlanTools.WritePlanArgs>(
                 """{"title":"t","subtasks":[],"keyDecisions":"garbage ["}"""
             )
         }
-        assertTrue(e.message!!.contains("Expected JsonArray"), e.message)
+        // kotlinx 原生报错，错误含字段路径：Expected start of the array '[', but had '"' instead at path: $.keyDecisions
+        assertTrue(e.message!!.contains("keyDecisions"), e.message)
     }
 }

@@ -28,17 +28,6 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * ask_user 参数形状矫正：questions 被模型序列化成 JSON 字符串 / 单对象时矫正（LenientArgs.kt）。
- * glm-5.3 实测复现（sess_e5a60397 seq119、sess_be789501 seq95）：question 文本内嵌
- * ASCII 引号时，模型把整个 questions 数组包成字符串 →
- * "Expected JsonArray, but had JsonLiteral ... at path: $.questions"，回喂重试虽可自纠但浪费一轮。
- */
-private object LenientAskUserArgs :
-    JsonTransformingSerializer<AgentTools.AskUserArgs>(AgentTools.AskUserArgs.generatedSerializer()) {
-    override fun transformDeserialize(element: JsonElement): JsonElement =
-        coerceObjectListField(element, "questions")
-}
 
 /**
  * Agent 自管理工具集。
@@ -305,8 +294,7 @@ class AgentTools(
         val multiSelect: Boolean = false
     )
 
-    @KeepGeneratedSerializer
-    @Serializable(with = LenientAskUserArgs::class)
+    @Serializable
     data class AskUserArgs(
         @LLMDescription("Questions to ask the user. May contain multiple.")
         val questions: List<AskUserQuestionArg>
@@ -317,7 +305,8 @@ class AgentTools(
         name = ToolName.ASK_USER.value,
         description = "Ask the user one or more questions. Use this when you need clarification, " +
             "confirmation, or a decision from the user. Supports multiple questions, " +
-            "multiple choice, and multi-select."
+            "multiple choice, and multi-select. " +
+            "Arguments format: {\"questions\": [{\"id\": \"\", \"prompt\": \"\", \"options\": [], \"multiSelect\": false}]}"
     ) {
         override suspend fun execute(args: AskUserArgs): String {
             if (questionRequester == null) {

@@ -1,6 +1,9 @@
 package xyz.mederi.plan
 
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import xyz.mederi.config.MederiIdentity
+import xyz.mederi.debug.DebugLog
 import java.io.File
 /**
  * 从项目目录列表中查找 `.mederi/` 工作目录。
@@ -9,7 +12,7 @@ import java.io.File
  */
 internal fun findMederiDir(projectDirectories: List<String>): File? =
     projectDirectories.firstNotNullOfOrNull { dir ->
-        val d = File(dir, ".mederi")
+        val d = File(dir, MederiIdentity.projectWorkdirName)
         if (d.isDirectory) d else null
     }
 
@@ -19,7 +22,7 @@ internal fun findMederiDir(projectDirectories: List<String>): File? =
 internal fun ensureMederiDir(projectDirectories: List<String>): File? {
     findMederiDir(projectDirectories)?.let { return it }
     val main = projectDirectories.firstOrNull() ?: return null
-    val mederi = File(main, ".mederi")
+    val mederi = File(main, MederiIdentity.projectWorkdirName)
     File(mederi, "plans").mkdirs()
     File(mederi, "plans-done").mkdirs()
     val notebook = File(mederi, "notebook.md")
@@ -44,7 +47,7 @@ class PlanStore(
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
     private val authorityDirectory: File? get() = authorityRoot?.let { root ->
-        val artifactDirectory = artifactRoot?.let(::File) ?: File(projectDirectories.first(), ".mederi")
+        val artifactDirectory = artifactRoot?.let(::File) ?: File(projectDirectories.first(), MederiIdentity.projectWorkdirName)
         val logicalRoot = File(artifactDirectory.absoluteFile.parentFile.canonicalFile, artifactDirectory.name)
         val workspaceKey = sha256(logicalRoot.path.toByteArray())
         File(root, "plan-evidence/$workspaceKey")
@@ -53,13 +56,19 @@ class PlanStore(
     private fun sha256(bytes: ByteArray): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
-    private fun decodePlan(file: File): Plan? =
-        runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }.getOrNull()
+    private fun decodePlan(file: File): Plan =
+        try {
+            json.decodeFromString(Plan.serializer(), file.readText())
+        } catch (failure: Exception) {
+            // 损坏计划不得静默变 null（调用方只会误报 "Plan not found"，真实损坏原因丢失）
+            // —— 抛出带文件路径上下文的 SerializationException，沿统一异常体系如实报错。
+            throw SerializationException("无法解析计划文件 ${file.path}：${failure.message}", failure)
+        }
 
     private fun authoritativePlan(planId: String): File? =
         authorityDirectory?.takeIf { planId.matches(Regex("[A-Za-z0-9_-]+")) }?.resolve("$planId.json")
 
-    private fun readProjection(file: File): Plan? = decodePlan(file)?.takeUnless {
+    private fun readProjection(file: File): Plan? = decodePlan(file).takeUnless {
         authorityRoot != null && it.subtasks.any { task -> task.acceptanceCases.isNotEmpty() }
     }
 
@@ -121,7 +130,7 @@ class PlanStore(
         val payload = json.encodeToString(Plan.serializer(), plan)
         val authority = if (plan.subtasks.any { it.acceptanceCases.isNotEmpty() }) authoritativePlan(plan.id) else null
         if (authority != null) {
-            val artifactDirectory = artifactRoot?.let(::File) ?: File(projectDirectories.first(), ".mederi")
+            val artifactDirectory = artifactRoot?.let(::File) ?: File(projectDirectories.first(), MederiIdentity.projectWorkdirName)
             val expectedRoot = File(artifactDirectory.absoluteFile.parentFile.canonicalFile, artifactDirectory.name)
             val expectedDir = File(expectedRoot, "plans/${plan.id}")
             require(expectedDir.canonicalFile == expectedDir) { "Plan projection directory must not traverse symlinks." }
@@ -156,7 +165,15 @@ class PlanStore(
      */
     fun listBySession(sessionId: String): List<Plan> {
         val authoritative = authorityDirectory?.listFiles { file -> file.extension == "json" }
-            ?.mapNotNull(::decodePlan).orEmpty()
+            ?.mapNotNull { file ->
+                try {
+                    decodePlan(file)
+                } catch (failure: Exception) {
+                    // 列表读取容忍单个坏文件：记日志并跳过，其余计划照常返回（与 allPlans 同语义）。
+                    DebugLog.error("PlanStore", "authoritative plan.json 无法解析，跳过: ${file.path}: ${failure.message}", failure)
+                    null
+                }
+            }.orEmpty()
         val authoritativeIds = authoritative.mapTo(mutableSetOf()) { it.id }
         val all = authoritative.filter { it.sessionId == sessionId }.toMutableList()
         val mederi = getMederiDir() ?: return all.sortedByDescending { it.createdAt }
@@ -166,7 +183,14 @@ class PlanStore(
             dir.listFiles { f -> f.isDirectory }?.forEach { subDir ->
                 val file = File(subDir, "plan.json")
                 if (file.exists()) {
-                    readProjection(file)?.let {
+                    val projected = try {
+                        readProjection(file)
+                    } catch (failure: Exception) {
+                        // 列表读取容忍单个坏文件：记日志并跳过，其余计划照常返回（与 allPlans 同语义）。
+                        DebugLog.error("PlanStore", "plan.json 无法解析，跳过: ${file.path}: ${failure.message}", failure)
+                        null
+                    }
+                    projected?.let {
                         if (it.id !in authoritativeIds && it.sessionId == sessionId) all.add(it)
                     }
                 }
@@ -218,7 +242,7 @@ class PlanStore(
         return paths.associateWith { path ->
             val requested = File(path)
             require(path.isNotBlank() && !requested.isAbsolute &&
-                requested.toPath().none { it.toString() in setOf("..", ".git", ".mederi", ".codex", ".agents", ".aws") }) {
+                requested.toPath().none { it.toString() in setOf("..", ".git", MederiIdentity.projectWorkdirName, ".codex", ".agents", ".aws") }) {
                 "Acceptance file must be a project-relative collector, assertion or fixture: $path"
             }
             val file = File(project, path).canonicalFile
@@ -275,7 +299,13 @@ class PlanStore(
             ?.mapNotNull { subDir ->
                 val file = File(subDir, "plan.json")
                 if (!file.exists()) return@mapNotNull null
-                runCatching { json.decodeFromString(Plan.serializer(), file.readText()) }.getOrNull()
+                try {
+                    decodePlan(file)
+                } catch (failure: Exception) {
+                    // 列表读取容忍单个坏目录：记日志并跳过该计划，其余计划照常返回。
+                    DebugLog.error("PlanStore", "plan.json 无法解析，跳过: ${file.path}: ${failure.message}", failure)
+                    null
+                }
             }
             ?: emptyList()
     }
@@ -309,13 +339,13 @@ class PlanStore(
     }
 
     /**
-     * 返回 plan 文件相对项目目录的路径，如 ".mederi/plans/plan_abc/plan.md"。
+     * 返回 plan 文件相对项目目录的路径，如 `.mederi/plans/plan_abc/plan.md`。
      */
     fun getPlanRelativePath(planId: String): String? {
         val mederi = getMederiDir() ?: return null
         for (sub in listOf("plans", "plans-done", "plans-voided")) {
             val file = File(File(mederi, sub), "$planId/plan.md")
-            if (file.exists()) return ".mederi/$sub/$planId/plan.md"
+            if (file.exists()) return "${MederiIdentity.projectWorkdirName}/$sub/$planId/plan.md"
         }
         return null
     }

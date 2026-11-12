@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
@@ -1490,9 +1491,8 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 计划全文打开路由（平台分流）：桌面端（有本地文件树 provider 且 planPath 在盘上）
-     * 走 [openFile]（md → INTERNAL_TEXT → ARTIFACTS 阅读器）；遥控端/wasm 文件在 server 机器上，
-     * 盲走 openFile 只会弹无用的「打开所在目录」，故保留 [openPlanFile] 走内存 planContent 兜底。
+     * 计划全文打开路由：全平台统一经 [openPlanDocument] 按需读盘——文件真理源在 server 机器上，
+     * 本地 fileTreeProvider（桌面端）不参与拼接，四个平台同一链路，不再有"遥控端只见标题摘要占位"的降级。
      */
     /**
      * 统一定义需要阅读或打开的文档目标载体。
@@ -1615,15 +1615,42 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 打开并阅读计划文件全文
+     * 计划/Spec 按需读盘统一入口（四平台同链路）：经 [AiCore.getPlanDocument] 异步读盘，
+     * 成功后按 [subtaskIndex] 区分打开计划全文（null）或该子任务的 Spec（非 null）；
+     * 失败只置一次性轻提示 [planReadErrorNotice]，不打开阅读器、不用降级内容伪装成功。
+     */
+    fun openPlanDocument(
+        planId: String,
+        title: String,
+        subtaskIndex: Int? = null,
+        subtaskName: String = "",
+    ) {
+        val convId = conversationId ?: return
+        viewModelScope.launch {
+            appState.aiCore.getPlanDocument(convId, planId, subtaskIndex)
+                .onSuccess { content ->
+                    if (subtaskIndex == null) {
+                        openPlanInExtension(planId, title, content)
+                    } else {
+                        openSpecInExtension(planId, title, subtaskIndex, subtaskName, content)
+                    }
+                }
+                .onFailure { e ->
+                    DebugLog.error("UI", "open plan document failed: planId=$planId, subtask=$subtaskIndex: ${e.message}", e)
+                    planReadErrorNotice = title
+                    viewModelScope.launch {
+                        delay(5000)
+                        planReadErrorNotice = null
+                    }
+                }
+        }
+    }
+
+    /**
+     * 概览「阅读 plan.md 全文」：薄转发到按需读盘统一入口（不再读本地 fileTreeProvider / planPath）。
      */
     fun openPlanFile(item: PlanOverviewItem) {
-        val content = item.planContent?.takeIf { it.isNotBlank() }
-            ?: runCatching {
-                if (item.planPath.isNotBlank()) appState.fileTreeProvider?.readText(item.planPath) else null
-            }.getOrNull()
-            ?: "# ${item.title}\n\n${item.summary}"
-        openPlanInExtension(item.id, item.title, content)
+        openPlanDocument(planId = item.id, title = item.title)
     }
 
     /**
@@ -1684,15 +1711,13 @@ class WorkspaceViewModel(
                     title = req.title.ifBlank { "未命名计划" },
                     summary = req.summary,
                     planPath = req.planPath,
-                    planContent = req.planContent,
                     status = status,
                     subtasks = req.subtasks.map {
                         PlanSubtaskOverview(
                             index = it.index,
                             name = it.name,
                             status = it.status,
-                            spec = it.spec,
-                            planDetail = it.planDetail
+                            hasSpec = it.hasSpec
                         )
                     },
                     manualCaseIds = req.subtasks.flatMap { task ->
@@ -2060,7 +2085,8 @@ class WorkspaceViewModel(
         val opts = conversationId?.let { sessionCache.pendingUserMessages[it] }?.toList() ?: emptyList()
         if (opts.isEmpty()) return base
         // 本地只补充尚未被 Core 确认的输入，接纳与执行时序由 Core 快照决定。
-        return base + opts.filter { pending -> base.none { it.id == pending.id } }
+        val baseIds = base.mapTo(HashSet()) { it.id } // O(n) 一次建集，避免逐条 O(n) 线性扫描
+        return base + opts.filter { it.id !in baseIds }
     }
     val pendingQuestion: QuestionRequest? get() = snapshot?.pendingQuestion
     val tokenUsage: TokenUsage get() = snapshot?.tokenUsage ?: TokenUsage()
@@ -2200,6 +2226,14 @@ class WorkspaceViewModel(
      * 用户点「打开」毫无反应）。
      */
     var fileOpenErrorNotice by mutableStateOf(false)
+        private set
+
+    /**
+     * 「计划/Spec 按需读盘失败」的一次性轻提示（值为读盘失败的计划标题，5 秒自动消失）。
+     * null = 不显示；[openPlanDocument] 读盘失败时置位——失败不静默、不打开阅读器、
+     * 不用降级占位内容伪装成功（历史问题：遥控端 fileTreeProvider=null 时只见标题摘要占位）。
+     */
+    var planReadErrorNotice by mutableStateOf<String?>(null)
         private set
 
     /**
@@ -2358,7 +2392,8 @@ class WorkspaceViewModel(
     // 切走不 cancel、切回不重建。** SSE 事件来了 → observeConversation 流 emit →
     // applySnapshot 写入缓存 → 当前会话时同步渲染。切换会话只是把 [conversationId]
     // 指向另一个缓存的键，UI 立即渲染最新状态机（零闪烁、不丢 streaming 增量、保持子代理与扩展面板）。
-    // 生命周期：随 viewModelScope 销毁；会话观察抛异常（如会话被删除）时移除并清缓存。
+    // 生命周期：随 viewModelScope 销毁；会话观察抛异常（如会话被删除）时按 1s→30s 封顶无限退避自动重试，不清缓存。
+    // 仅 Job 正常结束/取消（含 viewModelScope 销毁）时移除 observeJobs 条目，下次 attach 重建。
     // 乐观消息对账日志去重：同一会话的 matched/unmatched 结论只打一次（状态翻转时重置）
     private val pendingOptReconciled = mutableSetOf<String>()
 
@@ -2500,20 +2535,35 @@ class WorkspaceViewModel(
      * 观察流 = [AiCore.observeConversation]（从 store 构建初始快照 + 订阅该会话事件聚合）。
      * 它持续把最新状态机写入 [sessionCache.conversationStates]（及当前会话的渲染状态）——即使 UI 已切到别的会话，
      * 这条流也不会被取消，所以该会话的流式增量（推理/正文/tool delta）始终完整、始终最新。
+     *
+     * 失败语义：观察流任意异常（会话被删的 NotFound、跨进程 DB busy、HTTP/SSE 抖动等）都按
+     * 1s 起倍增、封顶 30s 的无限退避自动重试（[CancellationException] 除外，直接透传不重试）；
+     * 失败期间**不删除** [sessionCache.conversationStates] 缓存条目（该条目只允许 attach 流程与
+     * 会话删除清理等既有路径删除）。Job 结束（flow 正常完成/取消）时移除 [sessionCache.observeJobs]
+     * 条目，下次 attach 可重建。
      */
     private fun ensureObserving(id: String) {
         if (sessionCache.observeJobs[id]?.isActive == true) return
         sessionCache.observeJobs[id] = viewModelScope.launch {
+            var attempt = 0
             try {
-                appState.aiCore.observeConversation(id).collect { snap ->
-                    applySnapshot(id, snap)
-                }
+                appState.aiCore.observeConversation(id)
+                    .retryWhen { e, _ ->
+                        if (e is CancellationException) return@retryWhen false
+                        attempt++
+                        val delayMs = (1000L shl (attempt - 1).coerceAtMost(5)).coerceAtMost(30_000L)
+                        DebugLog.error("UI", "observe conversation $id failed (attempt=$attempt): ${e.message}, retry in ${delayMs}ms", e)
+                        delay(delayMs)
+                        true
+                    }
+                    .collect { snap -> applySnapshot(id, snap) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                DebugLog.error("UI", "observe conversation $id failed: ${e.message}", e)
+                // 无限重试下正常不可达；仅为防御性兜底
+                DebugLog.error("UI", "observe conversation $id terminated: ${e.message}", e)
+            } finally {
                 sessionCache.observeJobs.remove(id)
-                sessionCache.conversationStates.remove(id)
             }
         }
     }
@@ -2957,6 +3007,11 @@ class WorkspaceViewModel(
         imageStrippedNotice = null
     }
 
+    /** 关闭"计划文档读取失败"轻提示（右上角 × 按钮入口）。 */
+    fun dismissPlanReadErrorNotice() {
+        planReadErrorNotice = null
+    }
+
     /** 设置遥控端剪贴板能力不可用轻提示（ChatInputCard 剪贴板调用点非 desktop 时调用）。 */
     fun showRemoteCapabilityNotice(notice: RemoteCapabilityNotice) {
         remoteCapabilityNotice = notice
@@ -3091,7 +3146,8 @@ class WorkspaceViewModel(
  *   解决会话切换闪烁问题（Bug 1 根因，详见 [WorkspaceViewModel] 顶部说明）。
  * - [observeJobs]：各会话的后台观察 Job（conversationId → Job）。会话一旦被 attach 过就
  *   常驻一条观察流持续更新 [snapshotCache]，切走不 cancel、切回不重建；随 viewModelScope
- *   销毁，观察流抛异常时移除并清缓存。
+ *   销毁。观察流抛异常时按 1s→30s 封顶无限退避自动重试（CancellationException 透传）、
+ *   不再删缓存；Job 结束（正常完成/取消）时移除条目，下次 attach 可重建。
  */
 private class SessionUiCache {
     /** 乐观用户消息列表（按会话归档，支持常规发送与运行中 Steering 插入多条插话） */

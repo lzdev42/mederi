@@ -21,6 +21,7 @@ import xyz.mederi.api.impl.SubagentConfigApiImpl
 import xyz.mederi.tools.subagent.SubagentConfigManager
 import xyz.mederi.config.ConfigMigrationRequester
 import xyz.mederi.config.MederiConfig
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.config.MederiPaths
 import xyz.mederi.mcp.market.McpMarketManagerImpl
 import xyz.mederi.mcp.market.infrastructure.OfficialRegistrySource
@@ -272,7 +273,7 @@ class Mederi private constructor(
                 settingsStore = settingsStore,
                 // 无 configDir（纯内存模式）时仍指向 ~/.mederi/skills，避免扫描整个 home 目录
                 defaultSkillsRoot = paths?.skillsDir?.absolutePath
-                    ?: java.io.File(System.getProperty("user.home"), ".mederi/skills").absolutePath
+                    ?: java.io.File(System.getProperty("user.home"), "${MederiIdentity.homeConfigRootName}/skills").absolutePath
             )
 
             // 同一宿主的所有会话/子代理共用配置与授权表，事件沿现有 session 总线外显。
@@ -283,7 +284,7 @@ class Mederi private constructor(
             val sandboxManager = xyz.mederi.tools.sandbox.SandboxManager(settingsStore, sessionEvents,
                 protectedDirectories = listOfNotNull(paths?.root?.canonicalPath), projectManager = projectManager)
             val worktreesRoot = paths?.dataDir?.resolve("worktrees")?.absolutePath
-                ?: java.io.File(System.getProperty("java.io.tmpdir"), "mederi-worktrees").absolutePath
+                ?: java.io.File(System.getProperty("java.io.tmpdir"), MederiIdentity.PRODUCT_NAME + "-worktrees").absolutePath
             // 文件 API 必须能查询当前有效项目黑名单并过滤拒绝条目，故装配层把同一 SandboxManager 注入 WorkspaceManager。
             val workspaceManager = xyz.mederi.workspace.WorkspaceManager(
                 workspaceStore = workspaceStore,
@@ -430,7 +431,7 @@ class Mederi private constructor(
                     } catch (e: Exception) {
                         val msg = e.message.orEmpty().lowercase()
                         if (msg.contains("duplicate column name") || msg.contains("already exists")) {
-                            xyz.mederi.debug.DebugLog.info("Mederi", "data.db 迁移 v$v 已存在跳过: ${e.message}")
+                            xyz.mederi.debug.DebugLog.info(MederiIdentity.displayName, "data.db 迁移 v$v 已存在跳过: ${e.message}")
                         } else {
                             throw e
                         }
@@ -442,7 +443,7 @@ class Mederi private constructor(
                 driver.execute(null, "PRAGMA user_version = $v", 0)
             }
 
-            xyz.mederi.debug.DebugLog.event("Mederi", "data.db 迁移完成: v$currentVersion → v$DATA_DB_VERSION")
+            xyz.mederi.debug.DebugLog.event(MederiIdentity.displayName, "data.db 迁移完成: v$currentVersion → v$DATA_DB_VERSION")
         }
 
         private fun verifyV4Schema(driver: app.cash.sqldelight.db.SqlDriver) {
@@ -490,9 +491,9 @@ class Mederi private constructor(
                 java.io.File(paths.root, "config/projects.json"),
                 java.io.File(paths.root, "config/mcp-servers.json"),
                 java.io.File(paths.root, "config/providers.json"),
-                java.io.File(paths.dataDir, "mederi.db"),
-                java.io.File(paths.dataDir, "mederi.db-wal"),
-                java.io.File(paths.dataDir, "mederi.db-shm")
+                java.io.File(paths.dataDir, MederiIdentity.PRODUCT_NAME + ".db"),
+                java.io.File(paths.dataDir, MederiIdentity.PRODUCT_NAME + ".db-wal"),
+                java.io.File(paths.dataDir, MederiIdentity.PRODUCT_NAME + ".db-shm")
             ).filter { it.exists() }
             if (candidates.isEmpty()) return
 

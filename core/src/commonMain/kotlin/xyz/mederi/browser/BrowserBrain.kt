@@ -1,9 +1,10 @@
 package xyz.mederi.browser
 
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -29,8 +30,6 @@ class BrowserBrain(
 
     private val json = Json {
         ignoreUnknownKeys = true
-        coerceInputValues = true
-        isLenient = true
     }
 
     /**
@@ -128,24 +127,27 @@ class BrowserBrain(
         }.getOrNull()
     }
 
+    /**
+     * 严格解析 LLM 输出为键值 Map：仅接受完整 JSON 对象（可带 markdown 代码围栏），
+     * 解析失败或出现非标量值（嵌套对象/数组）直接抛异常，由调用方走 success=false 通道。
+     */
     private fun parseJsonToMap(text: String): Map<String, String> {
-        return runCatching {
-            val cleanJson = extractJsonSubstring(text)
-            val element = json.parseToJsonElement(cleanJson).jsonObject
-            element.entries.associate { (k, v) ->
-                k to (v.jsonPrimitive.contentOrNull ?: v.toString())
+        val cleanJson = stripCodeFences(text.trim())
+        val element = json.parseToJsonElement(cleanJson).jsonObject
+        return element.entries.associate { (k, v) ->
+            if (v !is JsonPrimitive) {
+                throw SerializationException(
+                    "Expected a scalar JSON value for key '$k' but got ${v::class.simpleName}"
+                )
             }
-        }.getOrElse { emptyMap() }
+            k to (v.contentOrNull ?: v.toString())
+        }
     }
 
-    private fun extractJsonSubstring(text: String): String {
-        val trimmed = text.trim()
-        val start = trimmed.indexOf('{')
-        val end = trimmed.lastIndexOf('}')
-        return if (start != -1 && end != -1 && end > start) {
-            trimmed.substring(start, end + 1)
-        } else {
-            trimmed
-        }
+    /** 若 trim 后文本被 markdown 代码围栏（```...```）包裹，剥掉围栏与语言标记；否则原样返回。 */
+    private fun stripCodeFences(trimmed: String): String {
+        if (!trimmed.startsWith("```") || !trimmed.endsWith("```")) return trimmed
+        val body = trimmed.removePrefix("```").removeSuffix("```").trim()
+        return if (body.startsWith("json", ignoreCase = true)) body.drop(4).trim() else body
     }
 }

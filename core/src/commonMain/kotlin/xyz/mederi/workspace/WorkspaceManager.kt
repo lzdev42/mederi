@@ -13,6 +13,7 @@ import kotlinx.serialization.json.Json
 import xyz.mederi.api.exception.MederiNotFoundException
 import xyz.mederi.api.exception.MederiStateException
 import xyz.mederi.api.exception.MederiWorkspaceException
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
@@ -584,7 +585,7 @@ class WorkspaceManager(
         val candidates = includeService.computeCandidates(
             repoRoot = srcRoot.absolutePath,
             includeRulesContent = includeRules,
-            selectedEnvironmentFileRel = selection.environmentId?.let { ".mederi/environments/$it.json" }
+            selectedEnvironmentFileRel = selection.environmentId?.let { "${MederiIdentity.projectWorkdirName}/environments/$it.json" }
         )
         if (candidates.isNotEmpty()) {
             logBuffer.append("[prepare] Copying ${candidates.size} included candidate files...\n")
@@ -594,8 +595,8 @@ class WorkspaceManager(
         // 阶段 5: SETUP (恢复时不重复执行已完成的 setup)
         var setupExecuted = existingOp?.phaseRecords?.any { it.phase == WorkspacePhase.SETUP && it.finishedAt != null } ?: false
         if (!setupExecuted && selection.environmentId != null) {
-            val targetEnvFile = File(checkoutDir, ".mederi/environments/${selection.environmentId}.json")
-            val srcEnvFile = File(srcRoot, ".mederi/environments/${selection.environmentId}.json")
+            val targetEnvFile = File(checkoutDir, "${MederiIdentity.projectWorkdirName}/environments/${selection.environmentId}.json")
+            val srcEnvFile = File(srcRoot, "${MederiIdentity.projectWorkdirName}/environments/${selection.environmentId}.json")
             if (!targetEnvFile.exists() && srcEnvFile.exists() && srcEnvFile.isFile) {
                 targetEnvFile.parentFile?.mkdirs()
                 srcEnvFile.copyTo(targetEnvFile, overwrite = true)
@@ -1139,8 +1140,8 @@ class WorkspaceManager(
             val envId = tgtWs.pendingSelection?.selection?.environmentId
                 ?: srcWs.pendingSelection?.selection?.environmentId
             if (envId != null) {
-                val srcEnvDir = File(srcWs.checkoutRoot, ".mederi/environments")
-                val tgtEnvDir = File(tgtWs.checkoutRoot, ".mederi/environments")
+                val srcEnvDir = File(srcWs.checkoutRoot, "${MederiIdentity.projectWorkdirName}/environments")
+                val tgtEnvDir = File(tgtWs.checkoutRoot, "${MederiIdentity.projectWorkdirName}/environments")
                 if (srcEnvDir.exists() && !tgtEnvDir.exists()) {
                     srcEnvDir.copyRecursively(tgtEnvDir, overwrite = true)
                 }
@@ -2965,9 +2966,9 @@ class WorkspaceManager(
         } else {
             val proj = projectStore?.get(ws.projectId)
             if (proj != null) {
-                File(proj.directory, ".mederi").canonicalFile
+                File(proj.directory, MederiIdentity.projectWorkdirName).canonicalFile
             } else {
-                File(ws.checkoutRoot, ".mederi").canonicalFile
+                File(ws.checkoutRoot, MederiIdentity.projectWorkdirName).canonicalFile
             }
         }
 
@@ -3019,9 +3020,9 @@ class WorkspaceManager(
         } else {
             val proj = projectStore?.get(ws.projectId)
             if (proj != null) {
-                File(proj.directory, ".mederi").canonicalFile
+                File(proj.directory, MederiIdentity.projectWorkdirName).canonicalFile
             } else {
-                File(ws.checkoutRoot, ".mederi").canonicalFile
+                File(ws.checkoutRoot, MederiIdentity.projectWorkdirName).canonicalFile
             }
         }
 
@@ -3082,7 +3083,7 @@ class WorkspaceManager(
             File(proj.directory)
         }
 
-        val envDir = File(root, ".mederi/environments")
+        val envDir = File(root, "${MederiIdentity.projectWorkdirName}/environments")
         if (!envDir.exists() || !envDir.isDirectory) return emptyList()
 
         return envDir.listFiles { f -> f.isFile && f.name.endsWith(".json") }
@@ -3113,7 +3114,7 @@ class WorkspaceManager(
             File(proj.directory)
         }
 
-        val envDir = File(root, ".mederi/environments").apply { mkdirs() }
+        val envDir = File(root, "${MederiIdentity.projectWorkdirName}/environments").apply { mkdirs() }
         val targetFile = File(envDir, "${environment.id}.json")
         if (targetFile.exists()) {
             val old = runCatching { json.decodeFromString(ProjectEnvironment.serializer(), targetFile.readText()) }.getOrNull()
@@ -3137,7 +3138,7 @@ class WorkspaceManager(
     private suspend fun buildWorkspacePermissions(ws: Workspace, explicitConversationId: String? = null): xyz.mederi.tools.sandbox.ExecutionPermissions? {
         val manager = sandboxManager ?: return null
         val projectDir = projectStore?.get(ws.projectId)?.directory ?: ws.checkoutRoot
-        val artifactDir = java.io.File(projectDir, ".mederi").canonicalPath
+        val artifactDir = java.io.File(projectDir, MederiIdentity.projectWorkdirName).canonicalPath
         val verifiedRoot = VerifiedWorkspaceRoot.create(
             workspaceId = ws.id,
             projectId = ws.projectId,

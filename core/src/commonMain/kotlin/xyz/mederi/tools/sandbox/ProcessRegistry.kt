@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap
  * 注册只发生在 ShellTools.runCommand 的进程启动点（宿主侧）。注册表查不到 pid → 拒绝，
  * AI 无法用它去杀任何非 mederi 启动的进程。
  *
- * 语义：注册表 = "mederi 当前管理中的进程组"。list() 惰性剔除已死的组；正常退出、
+ * 语义：注册表 = 「mederi 当前管理中的进程组」。list() 惰性剔除已死的组；正常退出、
  * 超时回收、stop_process 后都从表里消失（惰性或显式 remove）。
  */
 object ProcessRegistry {

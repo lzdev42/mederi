@@ -79,20 +79,94 @@ class WorkspaceThirdDeliveryTest {
         val opened = mutableListOf<String>()
         var reviews = 0
         var review = ""
+        var headerLabel = ""
         setContent {
             AppTheme {
                 review = stringResource(Res.string.diff_review)
+                headerLabel = stringResource(Res.string.diff_files_changed_one, summary.files.size)
                 Box(Modifier.width(280.dp)) {
                     TurnDiffSummaryCard(summary, onReviewClick = { reviews++ }, onFileClick = { opened += it })
                 }
             }
         }
+        onNodeWithText(headerLabel).assertIsDisplayed()
         onNodeWithText("+1234", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithText("-567", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithText(longPath.substringAfterLast('/')).performClick()
-        runOnIdle { assertEquals(listOf(longPath), opened); assertEquals(0, reviews) }
+        onNodeWithText(longPath.substringAfterLast('/')).assertDoesNotExist()
         onNodeWithText(review).assertIsDisplayed().performClick()
+        runOnIdle { assertTrue(opened.isEmpty()); assertEquals(1, reviews) }
+        onNodeWithText(longPath.substringAfterLast('/')).assertDoesNotExist()
+        onNodeWithText(headerLabel).performClick()
+        onNodeWithText(longPath.substringAfterLast('/')).assertIsDisplayed().performClick()
         runOnIdle { assertEquals(listOf(longPath), opened); assertEquals(1, reviews) }
+        onNodeWithText(review).assertIsDisplayed().performClick()
+        runOnIdle { assertEquals(listOf(longPath), opened); assertEquals(2, reviews) }
+        onNodeWithText(longPath.substringAfterLast('/')).assertIsDisplayed()
+        onNodeWithText(headerLabel).performClick()
+        onNodeWithText(longPath.substringAfterLast('/')).assertDoesNotExist()
+    }
+
+    @Test
+    fun turnDiffSummaryCardDefaultsCollapsedAcrossFileCountsAndFitsWithinNarrowWidth() = runComposeUiTest {
+        val twoFileSummary = TurnDiffSummaryUi(
+            files = listOf(
+                FileDiffSummaryUi("core/src/commonMain/kotlin/xyz/mederi/plan/PlanStore.kt", "modified", 17, 2),
+                FileDiffSummaryUi("core/src/jvmTest/kotlin/xyz/mederi/plan/PlanStoreCorruptionTest.kt", "modified", 16, 1),
+            ),
+            totalAdditions = 33,
+            totalDeletions = 3,
+        )
+        val sixFileSummary = TurnDiffSummaryUi(
+            files = (1..6).map { FileDiffSummaryUi("src/File$it.kt", "modified", 10, 1) },
+            totalAdditions = 60,
+            totalDeletions = 6,
+        )
+        var twoFilesLabel = ""
+        var sixFilesLabel = ""
+        var review = ""
+        var reviewClicks = 0
+        setContent {
+            AppTheme {
+                twoFilesLabel = stringResource(Res.string.diff_files_changed_many, 2)
+                sixFilesLabel = stringResource(Res.string.diff_files_changed_many, 6)
+                review = stringResource(Res.string.diff_review)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TurnDiffSummaryCard(twoFileSummary, { reviewClicks++ }, {},
+                        Modifier.width(280.dp).testTag("narrowTwoDiff"))
+                    TurnDiffSummaryCard(sixFileSummary, { reviewClicks++ }, {},
+                        Modifier.width(560.dp).testTag("wideSixDiff"))
+                }
+            }
+        }
+        onNodeWithText("PlanStore.kt").assertDoesNotExist()
+        onNodeWithText("File1.kt").assertDoesNotExist()
+        onNodeWithText(twoFilesLabel).assertIsDisplayed()
+        onNodeWithText("+33", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("-3", useUnmergedTree = true).assertIsDisplayed()
+        val narrowBounds = onNodeWithTag("narrowTwoDiff").fetchSemanticsNode().boundsInRoot
+        for (node in onAllNodesWithText(review, useUnmergedTree = true).fetchSemanticsNodes()) {
+            assertTrue(node.boundsInRoot.right <= 560f + 1f)
+        }
+        val firstReviewBounds = onAllNodesWithText(review)[0].fetchSemanticsNode().boundsInRoot
+        assertTrue(firstReviewBounds.left >= narrowBounds.left && firstReviewBounds.right <= narrowBounds.right,
+            "Review button must stay inside 280dp card")
+        for (stat in listOf("+33", "-3")) {
+            val bounds = onNodeWithText(stat, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            assertTrue(bounds.left >= narrowBounds.left && bounds.right <= narrowBounds.right,
+                "$stat must stay inside 280dp card")
+        }
+        onAllNodesWithText(review)[0].performClick()
+        runOnIdle { assertEquals(1, reviewClicks) }
+        onNodeWithText("PlanStore.kt").assertDoesNotExist()
+        onNodeWithText(twoFilesLabel).performSemanticsAction(SemanticsActions.Expand) { it() }
+        onNodeWithText("PlanStore.kt").assertIsDisplayed()
+        onNodeWithText("PlanStoreCorruptionTest.kt").assertIsDisplayed()
+        onNodeWithText("File1.kt").assertDoesNotExist()
+        onNodeWithText(twoFilesLabel).performSemanticsAction(SemanticsActions.Collapse) { it() }
+        onNodeWithText("PlanStore.kt").assertDoesNotExist()
+        onNodeWithText(sixFilesLabel).performSemanticsAction(SemanticsActions.Expand) { it() }
+        onNodeWithText("File1.kt").assertIsDisplayed()
+        onNodeWithText("File6.kt").assertIsDisplayed()
     }
 
     @Test
@@ -210,13 +284,17 @@ class WorkspaceThirdDeliveryTest {
     fun windowsPathIsPresentedAsFilenameButCallbackKeepsOriginalPath() = runComposeUiTest {
         val path = "C:\\workspace\\mederi\\src\\ConversationWorkspacePresentation.kt"
         val opened = mutableListOf<String>()
+        var headerLabel = ""
         setContent {
             AppTheme {
+                headerLabel = stringResource(Res.string.diff_files_changed_one, 1)
                 TurnDiffSummaryCard(TurnDiffSummaryUi(listOf(FileDiffSummaryUi(path, "modified", 8, 2)), 8, 2),
                     {}, { opened += it }, Modifier.width(280.dp))
             }
         }
-        onNodeWithText("ConversationWorkspacePresentation.kt").performClick()
+        onNodeWithText("ConversationWorkspacePresentation.kt").assertDoesNotExist()
+        onNodeWithText(headerLabel).performClick()
+        onNodeWithText("ConversationWorkspacePresentation.kt").assertIsDisplayed().performClick()
         runOnIdle { assertEquals(listOf(path), opened) }
     }
 
@@ -347,10 +425,22 @@ class WorkspaceThirdDeliveryTest {
                     }
                     Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                         Text("Changes", style = WorkspaceStyle.Title, color = LocalMederiColors.current.textPrimary)
-                        TurnDiffSummaryCard(summary, {}, {})
+                        TurnDiffSummaryCard(
+                            TurnDiffSummaryUi(
+                                files = listOf(
+                                    FileDiffSummaryUi("core/src/commonMain/kotlin/xyz/mederi/plan/PlanStore.kt", "modified", 17, 2),
+                                    FileDiffSummaryUi("core/src/jvmTest/kotlin/xyz/mederi/plan/PlanStoreCorruptionTest.kt", "modified", 16, 1),
+                                ),
+                                totalAdditions = 33,
+                                totalDeletions = 3,
+                            ),
+                            {}, {}, Modifier.testTag("collapsedDiffPreview"),
+                        )
                         Text("Narrow layout · 280 dp", color = LocalMederiColors.current.textSecondary,
                             style = WorkspaceStyle.Caption)
-                        Box(Modifier.width(280.dp)) { TurnDiffSummaryCard(summary, {}, {}) }
+                        Box(Modifier.width(280.dp)) {
+                            TurnDiffSummaryCard(summary, {}, {}, Modifier.testTag("expandedDiffPreview"))
+                        }
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                         ArtifactTabs(listOf(ArtifactItem.Text("report", "Report", ""),
@@ -362,11 +452,24 @@ class WorkspaceThirdDeliveryTest {
                         Text("The main conversation remains available while independent tasks run.",
                             style = WorkspaceStyle.Body, color = LocalMederiColors.current.textSecondary)
                         ImageReaderToolbar("Architecture diagram", false, {}, LocalMederiColors.current)
+                        TurnDiffSummaryCard(
+                            TurnDiffSummaryUi(
+                                files = listOf(
+                                    FileDiffSummaryUi("a/One.kt", "modified", 1200, 0),
+                                    FileDiffSummaryUi("b/Two.kt", "added", 753, 0),
+                                    FileDiffSummaryUi("c/Three.kt", "modified", 0, 0),
+                                ),
+                                totalAdditions = 1953,
+                                totalDeletions = 0,
+                            ),
+                            {}, {}, Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             }
         }
         onNode(hasText("source") and hasClickAction() and !hasSetTextAction()).performClick()
+        onNode(isPopup().not().and(hasText("1 个文件变更") or hasText("1 file changed"))).performClick()
         for (theme in listOf(AppThemeMode.DARK, AppThemeMode.LIGHT)) {
             runOnIdle { mode.value = theme }
             onNodeWithText("Target.kt").assertIsDisplayed()

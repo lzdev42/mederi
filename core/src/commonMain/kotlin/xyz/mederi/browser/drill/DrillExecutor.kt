@@ -52,7 +52,6 @@ class DrillExecutor(
 
     private val jsonHelper = Json {
         ignoreUnknownKeys = true
-        coerceInputValues = true
     }
 
     /**
@@ -893,7 +892,9 @@ $assetLines"""
 
         val element = try {
             Json.parseToJsonElement(actualJsonStr)
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            throw Exception("extract_list JS 返回内容无法解析为 JSON: ${e.message}, 原始: ${actualJsonStr.take(200)}")
+        }
 
         if (element is JsonObject && element.containsKey("error")) {
             throw Exception("JS 批量提取失败: ${element["error"]}")
@@ -902,8 +903,7 @@ $assetLines"""
         val parsedList = try {
             Json.decodeFromString<List<Map<String, String>>>(actualJsonStr)
         } catch (e: Exception) {
-            DebugLog.info("drill", "extract_list 解析结果失败: ${e.message}")
-            emptyList()
+            throw Exception("extract_list 解析结果失败: ${e.message}, 原始: ${actualJsonStr.take(200)}")
         }
 
         extractedItems.addAll(parsedList)

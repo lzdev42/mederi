@@ -429,6 +429,10 @@ class MockAiCore(
     override suspend fun getPlanAcceptanceReport(conversationId: String, planId: String): Result<String> =
         Result.failure(NoSuchElementException(planId))
 
+    override suspend fun getPlanDocument(
+        conversationId: String, planId: String, subtaskIndex: Int?
+    ): Result<String> = Result.failure(NoSuchElementException(planId))
+
     override suspend fun resolvePlanApproval(
         conversationId: String,
         planId: String,

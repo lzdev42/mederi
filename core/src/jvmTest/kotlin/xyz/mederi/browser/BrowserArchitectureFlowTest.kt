@@ -76,7 +76,8 @@ class BrowserArchitectureFlowTest {
             BrowserToolCall(
                 id = "drill-1",
                 name = BrowserConstants.ToolNames.DRILL,
-                argsJson = """{"script":{"task_name":"skill1-drill","loop_count":1,"steps":[{"step_name":"extract","action":"extract_list","selector_value":".item","record_fields":{"title":".title"}}],"item_steps":[{"step_name":"go","action":"navigate","url":"https://drill-target.example"}]}}"""
+                // script 唯一规范形态 = JSON 字符串（内容为 DrillScript 对象），对象形会被严格拒绝
+                argsJson = """{"script": "{\"task_name\":\"skill1-drill\",\"loop_count\":1,\"steps\":[{\"step_name\":\"extract\",\"action\":\"extract_list\",\"selector_value\":\".item\",\"record_fields\":{\"title\":\".title\"}}],\"item_steps\":[{\"step_name\":\"go\",\"action\":\"navigate\",\"url\":\"https://drill-target.example\"}]}"}"""
             )
         )
     )

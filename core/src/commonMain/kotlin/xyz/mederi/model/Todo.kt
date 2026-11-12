@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import xyz.mederi.debug.DebugLog
 
 /**
  * Todo 结构化详情（工作记忆，跨回合给 AI 参考，UI 不展示）。七字段全可选。
@@ -68,6 +69,8 @@ private val todoJson = Json {
 
 fun List<TodoItem>.encodeTodos(): String = todoJson.encodeToString(todoListSerializer, this)
 
-/** 解析失败返回 null（调用方安全降级），空列表是合法值（= 清空）。 */
+/** 解析失败返回 null（调用方安全降级），空列表是合法值（= 清空）；损坏必须进 DebugLog.error（有声，不再静默）。 */
 fun decodeTodos(raw: String): List<TodoItem>? =
-    runCatching { todoJson.decodeFromString(todoListSerializer, raw) }.getOrNull()
+    runCatching { todoJson.decodeFromString(todoListSerializer, raw) }
+        .onFailure { e -> DebugLog.error("Todo", "todos JSON 解码失败，已按 null 处理: ${e.message}", e) }
+        .getOrNull()

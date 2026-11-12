@@ -113,7 +113,7 @@ sequenceDiagram
             EB-->>UI: SSE 或进程内 → SnapshotReducer 更新快照
         end
         loop 工具循环 (maxAgentIterations=3000)
-            K->>K: toAssistantMessageSafe(args 坏 JSON 降级 "{}")
+            K->>K: toAssistantMessageSafe(坏 JSON args 原样保留，回喂模型自纠)
             K->>HS: TurnIncrementalPersister.persistAssistant（增量定向写防崩丢：内存真理源 + B 单写队列，commit 后换内存引用）
             K->>K: nodeExecuteTools: 执行工具<br/>(文件写白名单/沙盒命令/office_read/office_write(pptx 只读)/<br/>list_processes/stop_process/Plan/Verify/ask_user...)
             K-->>EB: TOOL_CALLED / TOOL_RESULT 事件
@@ -276,7 +276,7 @@ flowchart TD
     MAP --> CH2["GET /v1/events SSE<br/>(15s 心跳注释帧, Bearer 鉴权)"]
     CH1 & CH2 --> CLIENT["客户端 (commonMain)"]
     CLIENT --> OB["observeConversation(id)"]
-    OB --> INIT["初始: getSnapshot 构建完整状态机<br/>(Aggregator: Session+历史Message+initialTodos+subagents hydration)"]
+    OB --> INIT["初始: buildInitialSnapshot 单一实现构建完整状态机<br/>(getSnapshot/observe 共用: Session+历史Message+todos+subagents hydration;<br/>token 复用已加载消息 + 计划目录单次扫描)"]
     INIT --> LOOP
     LOOP["事件循环"] --> SR["ConversationStateReducer.applyWithRefresh(state, event, refreshPage)"]
     SR --> SW{"event type"}
@@ -296,6 +296,8 @@ flowchart TD
     SW -- "SESSION_UPDATED(inputAccepted=true)" --> SIG["输入接收/消费确认回查<br/>保留挂起交互与未落库实时响应"]
     D & C2 & ER & TO & PE & TD & SA & BA & ST & SU --> UI["WorkspaceViewModel.conversationState<br/>→ chatItems(derivedStateOf 展平渲染)"]
 ```
+
+**桥层线程边界（2026-11，AGENTS.md §5 固化为规则）**：`MederiAiCore.observeConversation` 返回流尾接 `flowOn(Dispatchers.IO)`、`getSnapshot` 包 `withContext(Dispatchers.IO)`、`ServerAiCore.observeConversation` 尾接 `flowOn(Dispatchers.Default)`（commonMain 无 IO）——首帧构建、事件归约与 refreshPage 全量映射全部离开 UI 线程；emit 顺序与订阅时序不变，`applySnapshot` 写 Compose 状态仍在 Main。观察流失败由 `WorkspaceViewModel.ensureObserving` 的 `retryWhen` 指数退避（1s 起倍增、封顶 30s、无限重试；CancellationException 透传）自动恢复，失败不再删除状态机池缓存条目（「切走再切回才显示」的载体消除）。
 
 **`contextUsedTokens` 口径（与自动压缩同源）**：refreshPage 回查落库的 `contextUsedTokens` 现走 `SessionManager.contextUsedTokens`（→ `aiViewContextUsedTokens`），口径 = AI 视图窗口（首条 SUMMARY 走估算、否则最近一条 Assistant inputTokens 真值）——故手动压缩结尾的 MESSAGE_COMPLETED 触发 refreshPage 时，界面当场拿到压缩后的小值，不再滞后一轮。
 
@@ -352,9 +354,9 @@ sequenceDiagram
     participant PS as PlanStore(.mederi/plans/)
 
     M->>PS: PlanStore.save(plan)
-    M->>PAR: request(planId, planPath, title, summary, planContent, subtaskCount)
+    M->>PAR: request(planId, planPath, title, summary, subtaskCount, subtasksJson=encodeSubtasksWire(...))
     PAR->>PAR: 取消当前 pending(superseded)
-    PAR->>EB: PLAN_APPROVAL_REQUESTED(payload 含 planContent)
+    PAR->>EB: PLAN_APPROVAL_REQUESTED(payload 不携 planContent；spec/planDetail 全文在盘上，UI 按需 getPlanDocument)
     EB-->>UI: SnapshotReducer → pendingPlanApproval + planApprovals
     UI->>TE: resolvePlanApproval(convId, planId, approved)
     TE->>PAR: resolve(planId, approved) → deferred.complete
@@ -376,7 +378,7 @@ sequenceDiagram
 3. `updatePlan` 置 APPROVED 落盘 → 发 `PLAN_APPROVAL_RESOLVED` 事件；
 4. 以一条 **UI 隐藏内部消息**（`hiddenFromUi=true`，`MederiModelMapper` 清空渲染块且 `ChatItemsBuilder` 不渲染气泡 → 用户不可见、AI 可见）经 `sendMessageInternal` 启动新执行 turn，AI 读到 Active Plan 已是 APPROVED 后自行走 generate_spec → spawn → verify。
 
-**重启/翻历史恢复待批准卡片**：`MederiAiCore.initialPlanApproval()`（MederiEventAggregator.observe 初始快照 + getSnapshot 共用）读该会话最新非终态计划投影为契约 `PlanApprovalRequest` 填入 `pendingPlanApproval`——`status` 区分：
+**重启/翻历史恢复待批准卡片**：`MederiAiCore.initialPlanHydration()`（buildInitialSnapshot 单一实现，getSnapshot 与 observe 共用；计划目录单次扫描同时产出 pending 与全量列表）读该会话最新非终态计划投影为契约 `PlanApprovalRequest` 填入 `pendingPlanApproval`——`status` 区分：
 - APPROVAL 模式 + PENDING_APPROVAL → `"PENDING"`（待用户批准）；
 - 自动模式已 APPROVED / 执行中 IN_PROGRESS → `"AUTO_APPROVED"`（已自动审批，UI 可展示而非完全不展示）。
 职能边界：core **只把计划状态作为数据给 UI**，不判定卡片必须在对话内/外——UI 层自决渲染位置。
@@ -521,7 +523,7 @@ sequenceDiagram
 ```
 
 **ask_user 状态恢复与 ToolResult 补写（2026-10）**：
-- **store 重建快照 hydrate pendingQuestion**：`MederiAiCore.getSnapshot` / `MederiEventAggregator.observe` 初始快照构建时，若 session 为 RUNNING 且最后 assistant 轮次有 ask_user 工具调用处于 `Pending`（无 ToolResult），则从工具入参解析 questions 构造 `QuestionRequest`（`MederiEventAggregator.hydratePendingQuestion`），并设会话状态为 `WaitingUser`。重启后 session 被 `cleanupStaleRunningSessions` 复位为 IDLE → 不触发（工具行走"未回答"显示）；用户绕过提问发消息后 session 被 `abortAndJoin` 复位 → 不触发；仅在"切走再切回"（app 仍运行、QuestionRequester 仍在内存）时恢复可交互卡片。
+- **store 重建快照 hydrate pendingQuestion**：`MederiAiCore.buildInitialSnapshot`（getSnapshot / observe 共用）初始快照构建时，若 session 为 RUNNING 且最后 assistant 轮次有 ask_user 工具调用处于 `Pending`（无 ToolResult），则从工具入参解析 questions 构造 `QuestionRequest`（`MederiEventAggregator.hydratePendingQuestion`），并设会话状态为 `WaitingUser`。重启后 session 被 `cleanupStaleRunningSessions` 复位为 IDLE → 不触发（工具行走"未回答"显示）；用户绕过提问发消息后 session 被 `abortAndJoin` 复位 → 不触发；仅在"切走再切回"（app 仍运行、QuestionRequester 仍在内存）时恢复可交互卡片。
 - **ChatItemsBuilder 对 Pending 状态渲染 QuestionCard**：ask_user 内联 `QuestionCard` 条件从 `is Running` 扩展为 `is Running || is Pending`，使 store 重建（Pending）时也能渲染卡片。
 - **applySnapshot 缓存清除排除 WaitingUser**：`WaitingUser`（ask_user 挂起 / 计划待批准）是交互挂起态 ≠ turn 结束，缓存保留。
 - **isStreaming 排除 pendingQuestion**：`ChatInputCard.isStreaming` 加 `&& viewModel.pendingQuestion == null`（与 `!isWaitingPlanApproval` 对称），防御性确保挂起提问时不阻塞输入。
@@ -655,7 +657,7 @@ sequenceDiagram
     participant WV as WorkspaceViewModel
 
     U->>MA: "搜一下51job的Java开发工作"
-    MA->>RBT: browser(action=RUN, task, browser="obscura", recipe="job_filter")
+    MA->>RBT: browser(action=RUN, task, browser="obscura", recipe='{"name":"job_filter","description":"Java岗位筛选"}')
     RBT->>BTM: runTask(task, model, projectId, sessionId, browser, recipe)
     BTM->>BTM: resolve(browser)→factory(suspend)→新建 ObscuraBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
     BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="obscura")

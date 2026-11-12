@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -475,6 +476,8 @@ class ServerAiCore(
         httpCall("/v1/sessions/$conversationId/settings", HttpMethod.Patch, input)
     }
 
+    // 线程边界：wasmJs/ios/android 收集者在 UI 主线程，flow body（HTTP 拉取 + reducer 映射）
+    // 由 flowOn 移到 Dispatchers.Default（commonMain 无 Dispatchers.IO）。
     override fun observeConversation(conversationId: String): Flow<ConversationSnapshot> = flow {
         var snapshot = httpGet<ConversationSnapshot>("/v1/sessions/$conversationId/snapshot")
         emit(snapshot)
@@ -485,7 +488,7 @@ class ServerAiCore(
             emissions.forEach { emit(it) }
             snapshot = emissions.last()
         }
-    }
+    }.flowOn(Dispatchers.Default)
 
     override suspend fun getSnapshot(conversationId: String): Result<ConversationSnapshot> = runCatching {
         httpGet("/v1/sessions/$conversationId/snapshot")
@@ -680,6 +683,14 @@ class ServerAiCore(
 
     override suspend fun getPlanAcceptanceReport(conversationId: String, planId: String): Result<String> = runCatching {
         httpGet("/v1/sessions/${conversationId.encodeURLParameter()}/plans/${planId.encodeURLParameter()}/acceptance-report")
+    }
+
+    override suspend fun getPlanDocument(
+        conversationId: String, planId: String, subtaskIndex: Int?
+    ): Result<String> = runCatching {
+        val path = "/v1/sessions/${conversationId.encodeURLParameter()}/plans/${planId.encodeURLParameter()}/document" +
+            if (subtaskIndex != null) "?subtask=$subtaskIndex" else ""
+        httpGet(path)
     }
 
     override suspend fun compressHistory(conversationId: String): Result<Unit> = runCatching {

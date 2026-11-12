@@ -69,12 +69,18 @@ class BrowserToolTest {
     fun `run delegates with task and browser and recipe`() = runBlocking {
         val svc = FakeService()
         val result = newTool(svc).execute(
-            BrowserArgs(action = BrowserTaskAction.RUN, task = "search jobs", browser = "custom-browser", recipe = "job_filter")
+            BrowserArgs(
+                action = BrowserTaskAction.RUN,
+                task = "search jobs",
+                browser = "custom-browser",
+                recipe = """{"name":"job_filter","judgeRules":"筛选"}"""
+            )
         )
 
         assertEquals("search jobs", svc.lastRunTask)
         assertEquals("custom-browser", svc.lastBrowser)
         assertEquals("job_filter", svc.lastRecipe?.name)
+        assertEquals("筛选", svc.lastRecipe?.judgeRules)
         assertTrue(result.contains("\"taskId\":\"task_1\""), "RUN 应返回 taskId JSON: $result")
         assertTrue(result.contains("\"browser\":\"custom-browser\""), "RUN 应返回所选 browser: $result")
     }

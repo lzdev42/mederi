@@ -2,6 +2,7 @@ package xyz.mederi.browser.drill.models
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.encoding.Decoder
@@ -18,12 +19,15 @@ object LooseMapStringSerializer : KSerializer<Map<String, String>> {
     }
 
     override fun deserialize(decoder: Decoder): Map<String, String> {
-        val input = decoder as? JsonDecoder ?: return emptyMap()
-        val jsonMap = input.decodeJsonElement() as? JsonObject ?: return emptyMap()
+        val input = decoder as? JsonDecoder
+            ?: throw SerializationException("selector_options 需要 JsonDecoder 反序列化")
+        val element = input.decodeJsonElement()
+        val jsonMap = element as? JsonObject
+            ?: throw SerializationException("selector_options 必须是 JSON 对象，收到: $element")
         return jsonMap.mapValues { (_, value) ->
             when (value) {
                 is JsonPrimitive -> value.content
-                else -> value.toString()
+                else -> throw SerializationException("selector_options 的取值必须是标量(string/number/boolean)，收到: $value")
             }
         }
     }
@@ -54,12 +58,20 @@ object ContentFromSerializer : KSerializer<List<String>?> {
     }
 
     override fun deserialize(decoder: Decoder): List<String>? {
-        val input = decoder as? JsonDecoder ?: return null
+        val input = decoder as? JsonDecoder
+            ?: throw SerializationException("content_from 需要 JsonDecoder 反序列化")
         return when (val element = input.decodeJsonElement()) {
             is JsonNull -> null
-            is JsonPrimitive -> if (element.isString) listOf(element.content) else null
-            is JsonArray -> element.map { (it as? JsonPrimitive)?.content ?: it.toString() }
-            else -> null
+            is JsonPrimitive -> if (element.isString) {
+                listOf(element.content)
+            } else {
+                throw SerializationException("content_from 必须是字符串或字符串数组，收到: $element")
+            }
+            is JsonArray -> element.map { value ->
+                (value as? JsonPrimitive)?.content
+                    ?: throw SerializationException("content_from 数组元素必须是标量(string/number/boolean)，收到: $value")
+            }
+            else -> throw SerializationException("content_from 必须是字符串或字符串数组，收到: $element")
         }
     }
 }

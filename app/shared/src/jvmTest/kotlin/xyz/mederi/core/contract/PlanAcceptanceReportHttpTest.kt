@@ -50,7 +50,7 @@ class PlanAcceptanceReportHttpTest {
             tokenUsage = TokenUsage(),
             cost = CostSummary(),
         )
-        val payload = mapOf("planId" to "plan-a", "title" to "Plan A", "planContent" to markdown)
+        val payload = mapOf("planId" to "plan-a", "title" to "Plan A")
         val created = ConversationStateReducer.apply(
             initial, CoreEvent(CoreEventType.PLAN_PROGRESS, "conversation-a", payload = payload + ("action" to "created"))
         )
@@ -60,7 +60,6 @@ class PlanAcceptanceReportHttpTest {
         )
         assertEquals("plan-a", completed.planApprovals.single().id)
         assertEquals("COMPLETED", completed.planApprovals.single().status)
-        assertEquals(markdown, completed.planApprovals.single().planContent)
     }
 
     @Test

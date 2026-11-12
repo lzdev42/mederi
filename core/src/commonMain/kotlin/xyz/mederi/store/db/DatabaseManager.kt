@@ -6,6 +6,7 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.db.data.MederiDataDatabase
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,7 +34,7 @@ class DatabaseManager(val driver: SqlDriver) {
     val database: MederiDataDatabase = MederiDataDatabase(driver)
 
     private val writeDispatcher = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "mederi-data-writer").apply { isDaemon = true }
+        Thread(runnable, MederiIdentity.PRODUCT_NAME + "-data-writer").apply { isDaemon = true }
     }.asCoroutineDispatcher()
 
     private val closed = AtomicBoolean(false)

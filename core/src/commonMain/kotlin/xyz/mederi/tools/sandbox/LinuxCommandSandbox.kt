@@ -1,6 +1,7 @@
 package xyz.mederi.tools.sandbox
 
 import xyz.mederi.api.exception.MederiStateException
+import xyz.mederi.config.MederiIdentity
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.FutureTask
@@ -137,12 +138,12 @@ internal class LinuxCommandSandbox(
             val bash = listOf("/bin/bash", "/usr/bin/bash").firstOrNull { Files.isExecutable(java.nio.file.Path.of(it)) }
                 ?: throw IllegalArgumentException("Linux file deny masks require Bash 4.1 or newer; command blocked")
             // -p 禁止BASH_ENV/导入函数等宿主环境影响可信FD准备；路径与命令仍只按argv传递。
-            listOf(bash, "--noprofile", "--norc", "-p", "-c", MASK_FD_LAUNCHER, "mederi-deny-mask") + bwrap
+            listOf(bash, "--noprofile", "--norc", "-p", "-c", MASK_FD_LAUNCHER, MederiIdentity.PRODUCT_NAME + "-deny-mask") + bwrap
         } else bwrap
         if (networkAccess) return launcher
         // BPF 通过新建匿名 pipe 传递，既无可篡改的缓存文件，也不占 payload 的 stdin。
         // 参数始终按 argv 传入；固定脚本从不解释命令、路径或策略数据为 shell 代码。
-        return listOf("/bin/sh", "-c", SECCOMP_LAUNCHER, "mederi-seccomp", seccompProgram()) + launcher
+        return listOf("/bin/sh", "-c", SECCOMP_LAUNCHER, MederiIdentity.PRODUCT_NAME + "-seccomp", seccompProgram()) + launcher
     }
 
     companion object {
@@ -194,7 +195,7 @@ internal class LinuxCommandSandbox(
                     captured.toString().trim()
                 }
             }
-            Thread(output, "mederi-bwrap-probe").apply { isDaemon = true; start() }
+            Thread(output, MederiIdentity.PRODUCT_NAME + "-bwrap-probe").apply { isDaemon = true; start() }
             try {
                 process.outputStream.close()
                 if (!process.waitFor(10, TimeUnit.SECONDS)) {

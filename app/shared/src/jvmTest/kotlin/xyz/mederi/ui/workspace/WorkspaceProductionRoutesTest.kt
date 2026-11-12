@@ -139,6 +139,25 @@ class WorkspaceProductionRoutesTest {
         )
     }
 
+    /** observe 首帧装配：与生产 [MederiAiCore.buildInitialSnapshot] 共用同一共享构建；注入 workspaceInfo 水合。 */
+    private fun observeInitialSnapshot(
+        mederi: Mederi,
+        conversationId: String,
+    ): suspend () -> xyz.mederi.core.contract.dto.ConversationState = {
+        MederiEventAggregator.buildInitialSnapshot(
+            conversationId = conversationId,
+            sessions = mederi.sessions,
+            modelToProvider = { null },
+            planHydration = { MederiEventAggregator.PlanApprovalHydration(null, emptyList()) },
+            executionApprovals = { emptyList() },
+            subagents = { emptyList() },
+            lastError = { null },
+            workspaceInfo = {
+                runCatching { mederi.workspaceManager.getConversationWorkspace(conversationId).toContract() }.getOrNull()
+            },
+        )
+    }
+
     @Test
     fun realBridgeHydratesWorkspaceAndOperationForSnapshotAndEvents() = mederiFixture { mederi, projectId, projectDir ->
         // 真实创建 + 准备 MANAGED_WORKTREE 工作区到 READY（active 工作区存在且 git 有效）
@@ -193,10 +212,8 @@ class WorkspaceProductionRoutesTest {
         val first = MederiEventAggregator.observe(
             conversationId = convId,
             sessions = mederi.sessions,
+            initialSnapshot = observeInitialSnapshot(mederi, convId),
             modelToProvider = { null },
-            workspaceInfo = { id ->
-                runCatching { mederi.workspaceManager.getConversationWorkspace(id).toContract() }.getOrNull()
-            }
         ).first()
 
         assertNotNull(first.workspaceInfo, "observe 首快照必须水合 workspaceInfo")
@@ -271,10 +288,8 @@ class WorkspaceProductionRoutesTest {
         val first = MederiEventAggregator.observe(
             conversationId = convId,
             sessions = mederi.sessions,
+            initialSnapshot = observeInitialSnapshot(mederi, convId),
             modelToProvider = { null },
-            workspaceInfo = { id ->
-                runCatching { mederi.workspaceManager.getConversationWorkspace(id).toContract() }.getOrNull()
-            }
         ).first()
         assertEquals(xyz.mederi.core.contract.models.WorkspaceOperationState.RECOVERY_REQUIRED, first.activeWorkspaceOperation?.state)
         assertEquals("op_crashed_handoff", first.activeWorkspaceOperation?.id)

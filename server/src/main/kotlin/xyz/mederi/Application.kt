@@ -3,6 +3,7 @@ package xyz.mederi
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import kotlinx.coroutines.runBlocking
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.core.contract.dto.ReadyInfo
 import xyz.mederi.server.serverModule
@@ -24,7 +25,7 @@ import java.io.File
  */
 fun main() {
     val port = System.getenv("MEDERI_SERVER_PORT")?.toIntOrNull() ?: 8081
-    val configDir = System.getenv("MEDERI_CONFIG_DIR") ?: "~/.mederi"
+    val configDir = System.getenv(MederiIdentity.configDirEnvVar) ?: "~/" + MederiIdentity.homeConfigRootName
     val password = System.getenv("MEDERI_SERVER_PASSWORD")?.takeIf { it.isNotBlank() }
     val webappDir = System.getenv("MEDERI_WEBAPP_DIR")?.takeIf { it.isNotBlank() && File(it).isDirectory }
 

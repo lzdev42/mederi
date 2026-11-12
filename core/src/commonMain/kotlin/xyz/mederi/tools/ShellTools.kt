@@ -6,6 +6,7 @@ import ai.koog.serialization.typeToken
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.net.URLEncoder
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.tools.background.BackgroundTaskManager
 import xyz.mederi.tools.sandbox.CommandSandbox
 import xyz.mederi.tools.sandbox.ProcessRegistry
@@ -112,7 +113,7 @@ class ShellTools(
                 captured.toString()
             }
         }
-        Thread(output, "mederi-command-output").apply { isDaemon = true; start() }
+        Thread(output, MederiIdentity.PRODUCT_NAME + "-command-output").apply { isDaemon = true; start() }
         var keepRegisteredGroup = false
         try {
             val completed = kotlinx.coroutines.runInterruptible(kotlinx.coroutines.Dispatchers.IO) {

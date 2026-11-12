@@ -1,6 +1,7 @@
 package xyz.mederi.tools
 
 import kotlinx.coroutines.CancellationException
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.tools.diff.FileChangeStatus
 import xyz.mederi.tools.diff.PatchChange
 import xyz.mederi.tools.patch.PatchApplier
@@ -262,9 +263,9 @@ internal class PatchFileTransaction(
         checkPath(path)
         val staging = if (Files.getFileStore(path.parent).supportsFileAttributeView("posix")) {
             // Use ordinary file creation permissions (filtered by umask), rather than temp-file 0600.
-            Files.createTempFile(path.parent, ".mederi-patch-", ".tmp",
+            Files.createTempFile(path.parent, "${MederiIdentity.projectWorkdirName}-patch-", ".tmp",
                 PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-rw-rw-")))
-        } else Files.createTempFile(path.parent, ".mederi-patch-", ".tmp")
+        } else Files.createTempFile(path.parent, "${MederiIdentity.projectWorkdirName}-patch-", ".tmp")
         try {
             Files.write(staging, bytes)
             if (permissions != null) Files.setPosixFilePermissions(staging, permissions)

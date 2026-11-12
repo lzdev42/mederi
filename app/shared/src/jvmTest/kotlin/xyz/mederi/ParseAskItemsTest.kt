@@ -3,6 +3,7 @@ package xyz.mederi
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import xyz.mederi.core.contract.ToolArgParser
@@ -116,5 +117,36 @@ class ParseAskItemsTest {
             assertTrue(it.isDeclined)
             assertNull(it.answer)
         }
+    }
+
+    @Test
+    fun `canonical questions array parses question items`() {
+        val items = parseAskItems(
+            mapOf("questions" to """[{"id":"q1","prompt":"主语言","options":["Kotlin","Java"]},{"id":"q2","prompt":"模块","options":[]}]"""),
+            null
+        )
+
+        assertEquals(2, items.size)
+        assertEquals("q1", items[0].id)
+        assertEquals("主语言", items[0].prompt)
+        assertEquals(listOf("Kotlin", "Java"), items[0].options)
+        assertEquals("q2", items[1].id)
+        assertEquals("模块", items[1].prompt)
+        assertEquals(emptyList(), items[1].options)
+    }
+
+    @Test
+    fun `legacy double-encoded questions degrade to placeholder without unpacking`() {
+        // 旧会话双层编码脏数据：questions 的值是"包了引号的数组文本"（JSON 字符串字面量）。
+        // 源头修复后 UI 侧不再解包——必须退化为最终占位回退，绝不成功拆出问题项。
+        val inner = """[{"id":"q1","prompt":"选择语言","options":["Kotlin","Java"]}]""".replace("\"", "\\\"")
+        val doubleEncoded = "\"$inner\""
+
+        val items = parseAskItems(mapOf("questions" to doubleEncoded), null)
+
+        assertEquals(1, items.size, "双层编码不再解包，必须退化为单个占位项")
+        assertNotEquals("选择语言", items[0].prompt, "不得从双层编码中成功拆出问题")
+        assertEquals(doubleEncoded, items[0].prompt, "占位回退显示原始脏字符串（纯显示）")
+        assertNull(items[0].answer)
     }
 }

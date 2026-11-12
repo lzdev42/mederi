@@ -36,6 +36,7 @@ import mederi.app.shared.generated.resources.input_remove_text
 import mederi.app.shared.generated.resources.input_select_model
 import mederi.app.shared.generated.resources.input_text_meta
 import mederi.app.shared.generated.resources.input_text_n
+import mederi.app.shared.generated.resources.plan_document_read_failed
 import mederi.app.shared.generated.resources.reasoning_level_high
 import mederi.app.shared.generated.resources.remote_clipboard_image_unavailable
 import mederi.app.shared.generated.resources.remote_clipboard_text_unavailable
@@ -106,6 +107,7 @@ import xyz.mederi.isDomTextInput
 import xyz.mederi.theme.LocalMederiColors
 import mederi.app.shared.generated.resources.input_attach_text
 import mederi.app.shared.generated.resources.input_attach_image
+import mederi.app.shared.generated.resources.slash_input_search_hint
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiRadius
 import androidx.compose.ui.focus.onFocusChanged
@@ -227,6 +229,9 @@ fun ChatInputCard(
     // 斜杠菜单 Popup 锚点：输入卡片外层 Box（含聚焦 ring）在窗口中的坐标，供 PopupPositionProvider 定位
     var cardCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
+    LaunchedEffect(slashQuery, isSlashMode) {
+        slashSelectedIndex = 0
+    }
     LaunchedEffect(filteredSlashCommands.size) {
         if (slashSelectedIndex >= filteredSlashCommands.size) {
             slashSelectedIndex = 0
@@ -279,6 +284,8 @@ fun ChatInputCard(
     val placeholderText = stringResource(Res.string.input_placeholder)
     // 一次性轻提示：发送时图片被剔除放行（值为模型名，null=不显示），非错误走 error
     val imageStrippedNotice = viewModel.imageStrippedNotice
+    // 一次性轻提示：计划/Spec 按需读盘失败（值为计划标题，null=不显示，5 秒自动消失）
+    val planReadErrorNotice = viewModel.planReadErrorNotice
     val remoteCapabilityNotice = viewModel.remoteCapabilityNotice
     val hasContent = textValue.text.trim().isNotEmpty() || pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()
     val canSend = hasContent && !isOverBudget
@@ -486,6 +493,40 @@ fun ChatInputCard(
                     }
                 }
 
+                // 计划文档读取失败轻提示（错误样式，非阻塞）：概览/Spec/审批卡按需读盘失败时
+                // 显示一次，5 秒自动消失或点右上角 × （VM planReadErrorNotice 一次性语义）；
+                // 失败不打开阅读器、不用降级占位内容伪装成功。
+                planReadErrorNotice?.let { planTitle ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(colors.accentDanger.copy(alpha = 0.12f))
+                            .padding(start = 10.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.plan_document_read_failed, planTitle),
+                            color = colors.accentDanger,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = FeatherIcons.X,
+                            contentDescription = stringResource(Res.string.close),
+                            tint = colors.textSecondary,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .clickable { viewModel.dismissPlanReadErrorNotice() }
+                                .padding(2.dp)
+                        )
+                    }
+                }
+
                 // 遥控端剪贴板不可用轻提示（非错误样式）：点附件按钮/粘贴文本时剪贴板无权限；
                 // 下次输入或点右上角 × 后消失（VM remoteCapabilityNotice 一次性语义）
                 remoteCapabilityNotice?.let { notice ->
@@ -526,14 +567,16 @@ fun ChatInputCard(
                 }
 
                 // 第二层：输入文本区域（最小高度 44dp）
+                val slashSearchHint = stringResource(Res.string.slash_input_search_hint)
                 TextField(
                     value = textValue,
                     onValueChange = onSlashCommandTextChange,
                     enabled = true,
-                    visualTransformation = remember(colors) {
+                    visualTransformation = remember(colors, slashSearchHint) {
                         SlashCommandTransformation(
                             highlightColor = colors.accentPrimary,
-                            hintColor = colors.textMuted
+                            hintColor = colors.textMuted,
+                            hintText = slashSearchHint
                         )
                     },
                     textStyle = TextStyle(
@@ -750,12 +793,13 @@ fun ChatInputCard(
             }
             }
             // 斜杠菜单 Popup 浮层（不参与布局测量；锚定输入卡片正上方，上方空间不足翻转到下方）
-            if (slashMenuOpen && cardCoords != null) {
+            val anchoredCoords = cardCoords?.takeIf { it.isAttached }
+            if (slashMenuOpen && anchoredCoords != null) {
                 // 菜单宽度对齐输入卡片：Popup 内容默认受窗口宽度约束，SlashCommandMenu 内部
                 // fillMaxWidth 会撑满整窗；用卡片实际宽度收口，使菜单与输入框同宽（左缘对齐卡片）。
-                val cardWidthDp = with(LocalDensity.current) { cardCoords!!.size.width.toDp() }
+                val cardWidthDp = with(LocalDensity.current) { anchoredCoords.size.width.toDp() }
                 Popup(
-                    popupPositionProvider = SlashMenuPopupPositionProvider(cardCoords, LocalDensity.current),
+                    popupPositionProvider = SlashMenuPopupPositionProvider(anchoredCoords, LocalDensity.current),
                     onDismissRequest = { slashMenuDismissed = true },
                     properties = PopupProperties(focusable = false)
                 ) {
@@ -774,7 +818,7 @@ fun ChatInputCard(
 /**
  * 斜杠菜单 Popup 定位器：把菜单锚定在输入卡片正上方（gap 8.dp），
  * 上方空间不足时翻转到卡片下方；横向超宽时贴窗口右缘裁剪。
- * coords 为 null（锚点尚未捕获）时退化为 anchorBounds.topLeft（与 DropdownMenu 一致）。
+ * coords 为 null 或已脱离（锚点尚未捕获/正切换布局）时退化为 anchorBounds.topLeft（与 DropdownMenu 一致）。
  */
 private class SlashMenuPopupPositionProvider(
     val coords: LayoutCoordinates?,
@@ -786,7 +830,7 @@ private class SlashMenuPopupPositionProvider(
         layoutDirection: LayoutDirection,
         popupContentSize: IntSize
     ): IntOffset {
-        val anchor = coords ?: return anchorBounds.topLeft
+        val anchor = coords?.takeIf { it.isAttached } ?: return anchorBounds.topLeft
         val gap = with(density) { 8.dp.toPx() }.roundToInt()
         val pos = anchor.positionInWindow()
         val x = pos.x.roundToInt()

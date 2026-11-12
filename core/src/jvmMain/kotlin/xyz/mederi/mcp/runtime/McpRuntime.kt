@@ -1,5 +1,6 @@
 package xyz.mederi.mcp.runtime
 
+import xyz.mederi.config.MederiIdentity
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -9,7 +10,7 @@ object McpRuntime {
     enum class Component { NODE, PYTHON, UV }
 
     private val home = File(System.getProperty("user.home"))
-    val directory: File = home.resolve(".mederi/runtime")
+    val directory: File = home.resolve("${MederiIdentity.homeConfigRootName}/runtime")
     private val os = System.getProperty("os.name")
     private val windows = os.startsWith("Windows", ignoreCase = true)
     private val mac = os.startsWith("Mac", ignoreCase = true)

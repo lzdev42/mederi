@@ -1,11 +1,17 @@
 package xyz.mederi.browser
 
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BrowserBrainTest {
+
+    /** 固定返回给定文本的 LLM caller（callWithTools / callWithToolsStreaming 走接口默认实现）。 */
+    private class StubLLMCaller(private val response: String) : BrowserLLMCaller {
+        override suspend fun call(systemPrompt: String, userPrompt: String, image: ByteArray?): String = response
+    }
 
     @Test
     fun `test judge prompt building with recipe`() {
@@ -83,5 +89,69 @@ class BrowserBrainTest {
         assertEquals("", recipe.description)
         assertEquals("", recipe.judgeRules)
         assertEquals(null, recipe.drillScript)
+    }
+
+    @Test
+    fun `judge parses markdown fenced json`() = runBlocking {
+        val brain = BrowserBrain(
+            llmCaller = StubLLMCaller(
+                """
+                ```json
+                {"match":"true","reason":"ok"}
+                ```
+                """.trimIndent()
+            )
+        )
+
+        val result = brain.judge(content = "page text", instruction = "check")
+
+        assertTrue(result.success, "围栏包裹的 JSON 应正常解析: ${result.text}")
+        assertEquals("true", result.data["match"])
+        assertEquals("ok", result.data["reason"])
+    }
+
+    @Test
+    fun `judge with prose output fails with raw parse error`() = runBlocking {
+        val brain = BrowserBrain(llmCaller = StubLLMCaller("The job is remote and pays 100k."))
+
+        val result = brain.judge(content = "page text", instruction = "check")
+
+        assertFalse(result.success, "纯散文输出必须判为失败: ${result.text}")
+        assertTrue(result.data.isEmpty(), "失败时不得产出空判定数据: $result")
+        assertTrue(
+            result.text.startsWith("BrowserBrain judge error:"),
+            "应带原始解析错误: ${result.text}"
+        )
+        assertTrue(
+            result.text.length > "BrowserBrain judge error:".length,
+            "错误信息不得为空: ${result.text}"
+        )
+    }
+
+    @Test
+    fun `judge with nested object value fails instead of toString coercion`() = runBlocking {
+        val brain = BrowserBrain(llmCaller = StubLLMCaller("""{"match":"true","details":{"a":1}}"""))
+
+        val result = brain.judge(content = "page text", instruction = "check")
+
+        assertFalse(result.success, "嵌套对象值必须判为失败: ${result.text}")
+        assertTrue(result.text.contains("scalar"), "错误应说明非标量值: ${result.text}")
+    }
+
+    @Test
+    fun `generateFinalReport with prose output fails with raw parse error`() = runBlocking {
+        val brain = BrowserBrain(llmCaller = StubLLMCaller("任务已经完成了，没有任何结构化输出"))
+
+        val result = brain.generateFinalReport(
+            taskHistory = "step 1",
+            goal = "goal",
+            rawOperatorMessage = "done"
+        )
+
+        assertFalse(result.success, "纯散文输出必须判为失败: ${result.text}")
+        assertTrue(
+            result.text.startsWith("BrowserBrain report error:"),
+            "应带原始解析错误: ${result.text}"
+        )
     }
 }

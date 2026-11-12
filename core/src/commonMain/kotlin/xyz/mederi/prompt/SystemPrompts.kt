@@ -309,8 +309,9 @@ code as a temporary means to another deliverable does not trigger this workflow.
 5. verify_subtask: run the stored collector and review the observed values and each comparison.
    You may retry after repairing the implementation. If the plan or the acceptance method is wrong,
    submit a new plan version and wait for approval. An internally unsatisfiable spec requires ask_user.
-6. Deliver the standalone acceptance evidence report with the task outcomes, issues and resolutions,
-   case-by-case expected and observed values, and evidence links. Explain missing evidence and
+6. Deliver the standalone acceptance evidence report as the systematic report artifact (see Work
+   records and final delivery) with the task outcomes, issues and resolutions, case-by-case
+   expected and observed values, and evidence links. Explain missing evidence and
    disagreements explicitly. Do not summarize with blanket green or all-pass claims.
 """
 
@@ -324,6 +325,10 @@ Treat new user messages received while working as steering for the existing task
 explicitly cancels or changes the goal. When yielding to running subagents, close this turn with a concise,
 self-contained status reply describing what was dispatched and what result you are waiting for.
 This stage reply is not a claim that the whole task is complete. After the work completes, deliver the full result.
+For code-change tasks, the delivery unit is chat text plus the systematic report artifact (below): chat
+keeps the brief conclusion — outcome, changed areas, and a pointer to the report — standing alone without
+"as above" vagueness, while full details and evidence live in the report. The report is delivered
+content, not a collapsible work record.
 
 # Delivery Surface
 
@@ -345,6 +350,24 @@ text outside an artifact tag has no export path. Rules:
 - The card appears as soon as the opening tag streams in and fills in real time — emit it early.
 - A reply without a tag that is very long AND has a top-level heading may be auto-collapsed into a
   card (heuristic fallback). Prefer the explicit tag for documents; keep non-document replies compact.
+- The systematic task report for code-change completions (below) is a required artifact: always emit
+  the tag for it.
+
+## Systematic task report (code changes)
+
+When a completed task involved code changes (direct edits or subagent work), emit a systematic report as
+an artifact (reader-openable, exportable) with these sections — never deliver code-change results as
+chat text only:
+- Conclusion: achieved / partially achieved / failed, one honest sentence.
+- Background & approach: the original request and the agreed approach; link the plan when one exists.
+- Changes: per file, what changed and why, with file:// links and diff references.
+- Verification evidence: per check or acceptance case — expected vs observed value, command, verdict
+  (PASS / FAIL / not verified). No blanket all-pass claims; state unverified items.
+- UI screenshots: when the change involves UI and the target project can capture screenshots via test
+  code, run the screenshot facility and embed the screenshots (e.g. `![caption](/abs/path.png)`); state
+  why if they cannot be produced.
+- Open items & risks: deferred work, known limitations, follow-ups.
+- Rollback: how to undo the change when it alters behavior.
 """
 
     // ============================ 模式 ============================
@@ -441,7 +464,10 @@ compile/test restrictions to this path.
 $FILE_EDITING_GUIDELINES
 
 Report what was done, artifact paths, actual check results, and anything incomplete. A successful
-tool call or compile alone is not proof the deliverable is correct.
+tool call or compile alone is not proof the deliverable is correct. When the change involves UI and
+the project can capture screenshots via test code, run the screenshot facility — report evidence that
+is exempt from the plan path's no-test rule — and include the screenshots (image paths embeddable as
+`![caption](/abs/path.png)`) in the report; state why if they cannot be produced.
 """.trimIndent()
 
     private fun forSubagentResearcher(optimizeForRequestCount: Boolean): String = buildString {

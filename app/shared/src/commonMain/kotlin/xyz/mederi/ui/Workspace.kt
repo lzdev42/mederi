@@ -349,7 +349,8 @@ fun Workspace(
                         val contentMaxWidth = ChatLayout.contentMaxWidth
                         when {
                             viewModel.messages.isEmpty() && !viewModel.isWorking -> {
-                                // 空状态：居中欢迎页
+                                // 空状态：首帧快照未到（会话已选中但尚未 attach）时骨架占位，否则居中欢迎页
+                                val awaitingFirstSnapshot = viewModel.conversationId != null && !viewModel.isAttached
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -359,16 +360,24 @@ fun Workspace(
                                             end = if (isCompact) 12.dp else 24.dp
                                         ),
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
+                                    verticalArrangement = if (awaitingFirstSnapshot) Arrangement.Top else Arrangement.Center
                                 ) {
-                                    Text(
-                                        text = "mederi",
-                                        color = colors.textPrimary,
-                                        fontSize = if (isCompact) 24.sp else 28.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = (-0.5).sp
-                                    )
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                    if (awaitingFirstSnapshot) {
+                                        ChatListSkeleton(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentMaxWidth = contentMaxWidth,
+                                            horizontalPadding = if (isCompact) 8.dp else 24.dp
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "mederi",
+                                            color = colors.textPrimary,
+                                            fontSize = if (isCompact) 24.sp else 28.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = (-0.5).sp
+                                        )
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                    }
                                     Column(
                                         modifier = Modifier
                                             .widthIn(max = if (isCompact) Dp.Unspecified else 700.dp)

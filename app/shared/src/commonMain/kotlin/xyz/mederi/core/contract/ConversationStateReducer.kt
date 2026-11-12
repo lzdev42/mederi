@@ -343,7 +343,6 @@ object ConversationStateReducer {
                 title = event.payload["title"] ?: "",
                 summary = event.payload["summary"].orEmpty(),
                 subtaskCount = event.payload["subtaskCount"]?.toIntOrNull() ?: subtasks.size,
-                planContent = event.payload["planContent"],
                 status = "PENDING",
                 subtasks = subtasks
             )
@@ -397,7 +396,6 @@ object ConversationStateReducer {
                         title = event.payload["title"].orEmpty(),
                         summary = event.payload["summary"].orEmpty(),
                         subtaskCount = newSubtasks?.size ?: 0,
-                        planContent = event.payload["planContent"],
                         status = "APPROVED",
                         subtasks = newSubtasks.orEmpty()
                     )
@@ -625,8 +623,6 @@ object ConversationStateReducer {
 
     private val questionWireJson = Json {
         ignoreUnknownKeys = true
-        isLenient = true
-        coerceInputValues = true
     }
     private val questionListSerializer = ListSerializer(QuestionRequest.Question.serializer())
 

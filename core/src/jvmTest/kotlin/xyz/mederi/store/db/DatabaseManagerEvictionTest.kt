@@ -15,9 +15,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ST3：淘汰定时器三断言（fake clock）：
- * ① 闲置超时会话被淘汰且重读完整重水合（零数据丢失）
- * ② 写计入 touch——持续写入的会话不被淘汰（活跃 turn 保护）
+ * ST3：淘汰语义（自旧"闲置定时器"改写为 LRU 容量淘汰，capacity=2 注入）：
+ * ① 打开超容量会话 → 最久未访问被淘汰且重读完整重水合（DB 是 checkpoint，零数据丢失）
+ * ② 写计入 touch——最近写过的会话不被淘汰（活跃 turn 保护）
  * ③ 淘汰后的写 = 惰性重水合 + 定向写，结果正确
  */
 class DatabaseManagerEvictionTest {
@@ -30,53 +30,50 @@ class DatabaseManagerEvictionTest {
         createdAt = "2026-11-09T00:00:00Z"
     )
 
-    /** 建库 + store（淘汰循环关闭、fake clock 可控）。 */
-    private fun newStore(dbFile: File, clock: () -> Long): SqliteHistoryStore {
+    /** 建库 + store（LRU 容量注入：测试可观测的淘汰行为）。 */
+    private fun newStore(dbFile: File, capacity: Int = 2): SqliteHistoryStore {
         val driver = JdbcSqliteDriver("jdbc:sqlite:${dbFile.absolutePath}")
         MederiDataDatabase.Schema.create(driver)
         Mederi.migrateDataDb(driver)
         val db = DatabaseManager(driver)
-        return SqliteHistoryStore(db = db, clock = clock, evictionEnabled = false)
+        return SqliteHistoryStore(db = db, capacity = capacity)
     }
 
     @Test
-    fun idleSessionEvictedThenRehydratesComplete() = runBlocking {
+    fun evictedSessionRehydratesCompletely() = runBlocking {
         val dbFile = File.createTempFile("mederi-dbm-st3a", ".db")
         dbFile.deleteOnExit()
-        var now = 1_000_000L
-        val store = newStore(dbFile) { now }
+        val store = newStore(dbFile)
         val sid = "sess_evict"
 
         repeat(50) { i -> store.append(sid, message("m_$i")) }
-
-        // 闲置 11 分钟 → 淘汰
-        now += 11 * 60_000L
-        store.evictIdleOnce()
-        assertFalse(store.isCached(sid), "闲置超时会话必须被淘汰出缓存")
+        // 打开另外 2 个会话（capacity=2）→ 最久未访问（sid）被淘汰
+        store.load("other_1")
+        store.load("other_2")
+        assertFalse(store.isCached(sid), "最久未访问会话必须被淘汰出缓存")
 
         // 重读 → 完整重水合（DB 是 checkpoint，零丢失）
         val reloaded = store.load(sid)
         assertEquals(50, reloaded.size, "淘汰后 load 必须重水合全部 50 条")
         assertTrue(store.isCached(sid), "load 后重新驻留缓存")
 
-        TestObservations.record("DBM_EVICTION_IDLE", "idle_evicted_then_hydrated_${reloaded.size}")
+        TestObservations.record("DBM_EVICTION_IDLE", "lru_evicted_then_hydrated_${reloaded.size}")
     }
 
     @Test
     fun writeTouchesSoActiveSessionNotEvicted() = runBlocking {
         val dbFile = File.createTempFile("mederi-dbm-st3b", ".db")
         dbFile.deleteOnExit()
-        var now = 1_000_000L
-        val store = newStore(dbFile) { now }
+        val store = newStore(dbFile)
         val sid = "sess_touch"
 
-        store.append(sid, message("m_0"))          // t0 写入
-        now += 5 * 60_000L
-        store.append(sid, message("m_1"))          // t0+5min 写入（写刷新 touch）
-        now += 6 * 60_000L                          // now = t0+11min，最后 touch 距今 6min < 10min
-        store.evictIdleOnce()
+        store.append(sid, message("m_0"))   // 写入并驻留
+        store.load("other_1")                // 第 2 个驻留
+        store.append(sid, message("m_1"))    // 再写 sid（hydrate/swap 均计入 LRU touch）
+        store.load("other_2")                // 第 3 个 → 超容量：被淘汰的是介入最旧的 other_1
 
         assertTrue(store.isCached(sid), "持续写入的会话不得被淘汰（写计入 touch）")
+        assertFalse(store.isCached("other_1"), "被淘汰的是介入最旧的 other_1")
 
         TestObservations.record("DBM_EVICTION_WRITE_TOUCH", "write_touch_not_evicted_${store.isCached(sid)}")
     }
@@ -85,13 +82,12 @@ class DatabaseManagerEvictionTest {
     fun writeAfterEvictRehydratesAndInsertsCorrectly() = runBlocking {
         val dbFile = File.createTempFile("mederi-dbm-st3c", ".db")
         dbFile.deleteOnExit()
-        var now = 1_000_000L
-        val store = newStore(dbFile) { now }
+        val store = newStore(dbFile)
         val sid = "sess_rehydrate"
 
         repeat(20) { i -> store.append(sid, message("m_$i")) }
-        now += 11 * 60_000L
-        store.evictIdleOnce()
+        store.load("other_1")
+        store.load("other_2")
         assertFalse(store.isCached(sid), "预置淘汰")
 
         // 淘汰后写：惰性重水合 + 定向写（中部插入）

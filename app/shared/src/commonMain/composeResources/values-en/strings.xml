@@ -660,11 +660,10 @@
     <string name="skill_refresh_failed">Failed to refresh skills</string>
     <string name="skill_set_dir_failed">Failed to set directory</string>
     <string name="skill_uninstall_failed">Failed to uninstall skill</string>
-    <!-- Diff summary card (ChatCards.kt) -->
-    <string name="diff_files_changed">%1$d file(s) changed +%2$d -%3$d</string>
+    <!-- Diff summary card (DiffCards.kt) -->
+    <string name="diff_files_changed_one">%1$d file changed</string>
+    <string name="diff_files_changed_many">%1$d files changed</string>
     <string name="diff_review">Review</string>
-    <string name="diff_expand_all">Expand all (%1$d)</string>
-    <string name="diff_collapse">Collapse</string>
     <!-- Right extension panel (RightExtensionPanel.kt) -->
     <string name="rp_todo_list_title">TODO-LIST</string>
     <string name="rp_documents_title">Documents</string>
@@ -749,6 +748,7 @@
     <string name="plan_open_acceptance_report">View acceptance report</string>
     <string name="plan_acceptance_report_title">Acceptance report · %1$s</string>
     <string name="plan_read_full">Read plan.md</string>
+    <string name="plan_document_read_failed">Failed to read plan document: %1$s</string>
     <string name="overview_approve_btn">Approve ⌘↵</string>
     <string name="step_label">Step %1$d</string>
     <string name="step_spec">Spec ↗</string>
@@ -804,6 +804,14 @@
     <string name="disclosure_collapsed">Collapsed</string>
     <string name="input_attach_text">Add text attachment</string>
     <string name="input_attach_image">Add image</string>
+    <string name="slash_group_commands">Commands</string>
+    <string name="slash_group_plugins">Plugins</string>
+    <string name="slash_hint_confirm_keys">Enter / Tab</string>
+    <string name="slash_hint_confirm">Autocomplete</string>
+    <string name="slash_hint_cancel_keys">Esc</string>
+    <string name="slash_hint_cancel">Dismiss</string>
+    <string name="slash_select_indicator">Select command</string>
+    <string name="slash_input_search_hint"> Type to search...</string>
     <string name="plan_approval_rejected">Rejected</string>
     <string name="plan_approval_status_other">Plan status: %1$s</string>
     <string name="term_unread">New output</string>

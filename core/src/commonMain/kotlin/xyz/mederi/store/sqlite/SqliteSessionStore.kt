@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.AIModel
 import xyz.mederi.domain.model.Session
@@ -46,9 +47,9 @@ class SqliteSessionStore(private val db: DatabaseManager) : SessionStore {
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
                 apiKeyId = row.api_key_id,
-                env = parseEnv(row.env),
+                env = parseEnv(row.id, row.env),
                 todos = parseTodos(row.todos),
-                activeSkills = parseActiveSkills(row.active_skills),
+                activeSkills = parseActiveSkills(row.id, row.active_skills),
                 draftText = row.draft_text,
                 createdAt = row.created_at,
                 updatedAt = row.updated_at,
@@ -56,7 +57,7 @@ class SqliteSessionStore(private val db: DatabaseManager) : SessionStore {
                 associatedWorktreeId = row.associated_worktree_id,
                 archivedAt = row.archived_at,
                 pinned = row.pinned != 0L,
-                subagentConfigs = parseSubagentConfigs(row.subagent_configs),
+                subagentConfigs = parseSubagentConfigs(row.id, row.subagent_configs),
                 subagentMaxConcurrent = row.subagent_max_concurrent?.toInt()
             )
         }
@@ -73,9 +74,9 @@ class SqliteSessionStore(private val db: DatabaseManager) : SessionStore {
                 aiModel = row.ai_model?.let { parseAIModel(it) },
                 reasoningLevel = row.reasoning_level?.let { ReasoningLevel.valueOf(it) },
                 apiKeyId = row.api_key_id,
-                env = parseEnv(row.env),
+                env = parseEnv(row.id, row.env),
                 todos = parseTodos(row.todos),
-                activeSkills = parseActiveSkills(row.active_skills),
+                activeSkills = parseActiveSkills(row.id, row.active_skills),
                 draftText = row.draft_text,
                 createdAt = row.created_at,
                 updatedAt = row.updated_at,
@@ -83,7 +84,7 @@ class SqliteSessionStore(private val db: DatabaseManager) : SessionStore {
                 associatedWorktreeId = row.associated_worktree_id,
                 archivedAt = row.archived_at,
                 pinned = row.pinned != 0L,
-                subagentConfigs = parseSubagentConfigs(row.subagent_configs),
+                subagentConfigs = parseSubagentConfigs(row.id, row.subagent_configs),
                 subagentMaxConcurrent = row.subagent_max_concurrent?.toInt()
             )
         }
@@ -193,22 +194,28 @@ class SqliteSessionStore(private val db: DatabaseManager) : SessionStore {
         queries.deleteSession(id)
     }
 
-    private fun parseSubagentConfigs(raw: String): Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig> =
-        runCatching { json.decodeFromString<Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>>(raw) }.getOrDefault(emptyMap())
+    private fun parseSubagentConfigs(id: String, raw: String): Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig> =
+        runCatching { json.decodeFromString<Map<xyz.mederi.domain.model.SubagentRole, xyz.mederi.domain.model.SubagentModelConfig>>(raw) }
+            .onFailure { e -> DebugLog.error("SessionStore", "Session $id subagentConfigs 列损坏，已按空处理: ${e.message}", e) }
+            .getOrDefault(emptyMap())
 
     private fun serializeEnv(env: Map<String, String>): String =
         json.encodeToString(envSerializer, env)
 
-    private fun parseEnv(jsonStr: String): Map<String, String> {
+    private fun parseEnv(id: String, jsonStr: String): Map<String, String> {
         if (jsonStr.isBlank()) return emptyMap()
-        return runCatching { json.decodeFromString(envSerializer, jsonStr) }.getOrDefault(emptyMap())
+        return runCatching { json.decodeFromString(envSerializer, jsonStr) }
+            .onFailure { e -> DebugLog.error("SessionStore", "Session $id env 列损坏，已按空处理: ${e.message}", e) }
+            .getOrDefault(emptyMap())
     }
 
     private fun parseTodos(jsonStr: String): List<TodoItem> =
         decodeTodos(jsonStr).orEmpty()
 
-    private fun parseActiveSkills(jsonStr: String): List<String> =
-        runCatching { json.decodeFromString<List<String>>(jsonStr) }.getOrDefault(emptyList())
+    private fun parseActiveSkills(id: String, jsonStr: String): List<String> =
+        runCatching { json.decodeFromString<List<String>>(jsonStr) }
+            .onFailure { e -> DebugLog.error("SessionStore", "Session $id activeSkills 列损坏，已按空处理: ${e.message}", e) }
+            .getOrDefault(emptyList())
 
     private fun List<String>.encodeActiveSkills(): String =
         json.encodeToString(this)

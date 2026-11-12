@@ -8,6 +8,7 @@ import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.utils.io.InternalAPI
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readString
+import xyz.mederi.config.MederiIdentity
 import xyz.mederi.debug.DebugLog
 import kotlinx.serialization.json.Json
 
@@ -29,7 +30,7 @@ object MederiHttpClientFactory : KoogHttpClient.Factory {
 
     /** 出站 User-Agent 值：由 Mederi 装配层（MederiAiCore / server）初始化时注入。 */
     @Volatile
-    var userAgent: String = "Mederi/dev"
+    var userAgent: String = MederiIdentity.displayName + "/dev"
 
     // Koog 的异常不保留响应头；在它转换异常之前统一保留服务器的重试指令。
     // 使用与上游默认工厂相同的 HttpClient() 引擎选择，不替换传输引擎或流式解析器。

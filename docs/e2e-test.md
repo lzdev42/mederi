@@ -319,7 +319,7 @@ EXPECT_TOOLS="create_plan,generate_spec,spawn_agent,verify_subtask" TIMEOUT=300 
 
 | # | 问题 | 严重度 | 状态 |
 |---|---|---|---|
-| 1 | `List<DecisionArg>` / `List<PlannedChangeArg>` 无宽松化：模型把对象列表发成 JSON 字符串或裸对象时，kotlinx 解析直接崩（`Expected JsonArray, but had JsonLiteral`），模型通常自愈但浪费 1-2 轮。根治方案 = 描述符驱动的参数整形（在 decodeArgs 前按序列化器描述符把字符串/裸对象 coerce 成数组），改动面较大 | 中 | 待办 |
+| 1 | **已解决（2026-11-11 方向反转）**：原"`List<DecisionArg>` / `List<PlannedChangeArg>` 无宽松化待办"已按 AGENTS.md §5 不兜底原则废除——宽松容错 serializer（LenientStringList/coerceObjectListField 等）全部删除，错形交 kotlinx 原生报错，Koog GenericAgentEnvironment 把原始错误（含字段路径）回喂模型自纠；防错于源头 = 工具描述挂全字段空值 JSON 结构（WRITE_PLAN_ARGS_STRUCTURE）。"描述符驱动参数整形"方案不再采用 | 中 | 已解决 |
 | 2 | 子代理写文件不回滚到父会话 diffTracker——报告"流程记录 diff"为空（改动走了子代理），UI 差异面板对计划路径的改动不可见 | 中 | 设计取舍待定 |
 | 3 | `bash`/shell 直改文件不经 diffTracker（与 #2 同根）：diff 面板只覆盖文件工具路径 | 中 | 设计取舍待定 |
 | 4 | 模型收尾纪律弱（agnes-2.5-flash）：计划没全 PASS 就 write_log 收工；首调参数形状错后自愈。harness 可加"结束前计划必须收敛"的软门禁提示词 | 低 | 观察中 |

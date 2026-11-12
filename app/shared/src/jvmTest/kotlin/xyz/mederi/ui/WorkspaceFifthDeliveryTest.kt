@@ -169,9 +169,9 @@ class WorkspaceFifthDeliveryTest {
     }
 
     private fun plan(id: String = "plan-a", status: PlanOverviewStatus = PlanOverviewStatus.PendingApproval) = PlanOverviewItem(
-        id, "A plan with a long title that can wrap without hiding the actions", "", "/plan.md", "Plan document", status,
+        id, "A plan with a long title that can wrap without hiding the actions", "", "/plan.md", status,
         (0..3).map { PlanSubtaskOverview(it, "Step ${it + 1}", if (it == 0) "CUSTOM_STATE" else "PENDING",
-            if (it == 0) "Specification" else null, "") })
+            it == 0) })
 
     @Test
     fun todoShowsFiveRealStatesAndDisappearsWhenEmpty() = runComposeUiTest {

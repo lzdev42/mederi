@@ -93,15 +93,7 @@ fun ChatListContent(
                             request = item.request,
                             onApprove = { viewModel.approvePlan(item.request.id) },
                             onOpenInExtension = {
-                                val content = item.request.planContent
-                                    ?: "# ${item.request.title}\n\n${item.request.summary}"
-                                viewModel.openDocument(
-                                    DocumentTarget.Content(
-                                        id = "plan_${item.request.id}",
-                                        title = item.request.title,
-                                        content = content
-                                    )
-                                )
+                                viewModel.openPlanDocument(planId = item.request.id, title = item.request.title)
                             },
                             modifier = Modifier
                                 .widthIn(max = ChatLayout.actionCardMaxWidth)

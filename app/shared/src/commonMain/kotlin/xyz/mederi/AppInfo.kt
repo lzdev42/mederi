@@ -1,5 +1,7 @@
 package xyz.mederi
 
+import xyz.mederi.util.MederiProductNames
+
 /**
  * 应用级常量与身份信息。唯一真理源，避免版本号 / 平台信息等值散落在各处。
  *
@@ -19,7 +21,7 @@ object AppInfo {
     val userAgent: String by lazy {
         val info = platformInfo()
         val version = VERSION.removePrefix("v").ifBlank { "dev" }
-        "Mederi/$version (${info.osName} ${info.osVersion}; ${info.arch})"
+        "${MederiProductNames.displayName}/$version (${info.osName} ${info.osVersion}; ${info.arch})"
     }
 }
 

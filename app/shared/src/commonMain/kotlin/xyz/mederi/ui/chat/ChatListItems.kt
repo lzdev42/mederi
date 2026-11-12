@@ -185,8 +185,7 @@ data class PlanSubtaskOverview(
     val index: Int,
     val name: String,
     val status: String,
-    val spec: String?,
-    val planDetail: String
+    val hasSpec: Boolean,
 )
 
 data class PlanOverviewItem(
@@ -194,7 +193,6 @@ data class PlanOverviewItem(
     val title: String,
     val summary: String,
     val planPath: String,
-    val planContent: String?,
     val status: PlanOverviewStatus,
     val subtasks: List<PlanSubtaskOverview>,
     val manualCaseIds: List<String> = emptyList(),

@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.mederi.api.exception.MederiValidationException
 import xyz.mederi.api.exception.MederiWorkspaceException
+import xyz.mederi.config.MederiIdentity
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -140,7 +141,7 @@ open class WorkspaceSnapshotService(
             digest.update((value ?: "").toByteArray(StandardCharsets.UTF_8))
             digest.update(0.toByte())
         }
-        add("mederi-preimage-v2")
+        add(MederiIdentity.PRODUCT_NAME + "-preimage-v2")
         add(headOid)
         add(headRef)
         add(indexSha)
@@ -864,7 +865,7 @@ open class WorkspaceSnapshotService(
         }
         dest.parentFile?.mkdirs()
         if (Files.isDirectory(dest.toPath(), NOFOLLOW_LINKS)) safeDeleteEntry(dest, root)
-        val staging = Files.createTempFile(dest.parentFile.toPath(), ".mederi-write-", ".tmp")
+        val staging = Files.createTempFile(dest.parentFile.toPath(), "${MederiIdentity.projectWorkdirName}-write-", ".tmp")
         try {
             Files.write(staging, bytes)
             if (unixMode != null) staging.toFile().setExecutable((unixMode and 73) != 0, false)
@@ -985,11 +986,12 @@ open class WorkspaceSnapshotService(
     companion object {
         fun isD09ArtifactPath(relPath: String): Boolean {
             val norm = relPath.replace('\\', '/')
-            return norm == ".mederi/notebook.md" ||
-                    norm.startsWith(".mederi/plans/") ||
-                    norm.startsWith(".mederi/plans-done/") ||
-                    norm.startsWith(".mederi/plans-voided/") ||
-                    norm.startsWith(".mederi/research/")
+            val wd = MederiIdentity.projectWorkdirName
+            return norm == "$wd/notebook.md" ||
+                    norm.startsWith("$wd/plans/") ||
+                    norm.startsWith("$wd/plans-done/") ||
+                    norm.startsWith("$wd/plans-voided/") ||
+                    norm.startsWith("$wd/research/")
         }
     }
 

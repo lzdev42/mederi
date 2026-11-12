@@ -13,6 +13,7 @@ import xyz.mederi.plan.PlanStore
 import xyz.mederi.plan.RootCause
 import xyz.mederi.plan.Subtask
 import xyz.mederi.plan.SubtaskStatus
+import xyz.mederi.plan.encodeSubtasksWire
 import xyz.mederi.plan.VerifyStatus
 import xyz.mederi.plan.VerificationResult
 import xyz.mederi.plan.VerificationSpec
@@ -313,10 +314,7 @@ class VerifyTools(
             val passed = finalizedPlan.subtasks.count { it.status == SubtaskStatus.COMPLETED }
             val failed = finalizedPlan.subtasks.count { it.status == SubtaskStatus.FAILED }
             val pending = finalizedPlan.subtasks.count { it.status == SubtaskStatus.PENDING }
-            val subtasksJson = kotlinx.serialization.json.Json.encodeToString(
-                kotlinx.serialization.builtins.ListSerializer(Subtask.serializer()),
-                finalizedPlan.subtasks
-            )
+            val subtasksJson = encodeSubtasksWire(finalizedPlan.subtasks)
 
             eventBus.emit(MederiEvent(
                 type = EventType.PLAN_PROGRESS,

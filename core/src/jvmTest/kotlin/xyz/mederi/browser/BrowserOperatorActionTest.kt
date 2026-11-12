@@ -92,7 +92,8 @@ class BrowserOperatorActionTest {
                         BrowserToolCall(
                             id = "tc1",
                             name = BrowserConstants.ToolNames.DRILL,
-                            argsJson = """{"script":{"task_name":"t","steps":[{"step_name":"extract","action":"extract_list","selector_value":".card","record_fields":{"title":".title"}}],"item_steps":[{"step_name":"go","action":"navigate","url":"https://x"}]}}"""
+                            // script 唯一规范形态 = JSON 字符串（内容为 DrillScript 对象），对象形会被严格拒绝
+                            argsJson = """{"script": "{\"task_name\":\"t\",\"steps\":[{\"step_name\":\"extract\",\"action\":\"extract_list\",\"selector_value\":\".card\",\"record_fields\":{\"title\":\".title\"}}],\"item_steps\":[{\"step_name\":\"go\",\"action\":\"navigate\",\"url\":\"https://x\"}]}"}"""
                         )
                     )
                 ),
@@ -255,5 +256,67 @@ class BrowserOperatorActionTest {
         assertEquals(2, stepResults.size, "应产出 2 步的结果")
         assertEquals("navigate", stepResults[0].last().action)
         assertTrue(stepResults[0].last().success)
+    }
+
+    // ── 5. executeTool args 严格化：非对象 argsJson 显式失败；空 argsJson 正常解码为空对象 ──
+
+    @Test
+    fun `non-object argsJson becomes ActionResult failure`() = runBlocking {
+        val control = FakeBrowserControl()
+        val caller = NativeToolLLMCaller(
+            listOf(
+                BrowserLLMResponse(
+                    toolCalls = listOf(
+                        BrowserToolCall(id = "tc1", name = BrowserConstants.ToolNames.DRILL, argsJson = """[1,2]""")
+                    )
+                )
+            )
+        )
+        val stepResults = mutableListOf<List<ActionResult>>()
+        val operator = BrowserOperator(
+            control = control,
+            aiModel = visionModel,
+            llmCaller = caller,
+            drillExecutor = DrillExecutor(control),
+            onStep = { _, _, results -> stepResults += results }
+        )
+
+        val result = operator.run("run drill")
+
+        assertTrue(result.success, "drill 失败不应中断 Operator 主循环: ${result.message}")
+        val drill = stepResults[0].first { it.action == "drill" }
+        assertTrue(!drill.success, "非对象 args 应转为 ActionResult failure: ${drill.detail}")
+        assertEquals("tool args must be a JSON object, got: [1,2]", drill.detail)
+    }
+
+    @Test
+    fun `blank argsJson decodes as empty object normally`() = runBlocking {
+        val control = FakeBrowserControl()
+        val caller = NativeToolLLMCaller(
+            listOf(
+                BrowserLLMResponse(
+                    toolCalls = listOf(
+                        BrowserToolCall(id = "tc1", name = BrowserConstants.ToolNames.DRILL, argsJson = "")
+                    )
+                )
+            )
+        )
+        val stepResults = mutableListOf<List<ActionResult>>()
+        val operator = BrowserOperator(
+            control = control,
+            aiModel = visionModel,
+            llmCaller = caller,
+            drillExecutor = DrillExecutor(control),
+            onStep = { _, _, results -> stepResults += results }
+        )
+
+        val result = operator.run("run drill")
+
+        assertTrue(result.success, "任务应正常完成: ${result.message}")
+        val drill = stepResults[0].first { it.action == "drill" }
+        // 空 argsJson → 空对象 → DrillArgs() 默认值，工具按无参调用正常处理（明确失败而非解码异常）
+        assertEquals("drill=FAIL: no drill script provided and none mounted", drill.detail)
+        assertTrue(!drill.success)
+        assertTrue(drill.detail.startsWith("drill=FAIL"), "应是无参调用的正常 FAIL 语义: ${drill.detail}")
     }
 }
