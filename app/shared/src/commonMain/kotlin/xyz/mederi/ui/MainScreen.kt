@@ -237,9 +237,6 @@ fun MainScreen() {
                         viewModel = sidebarViewModel,
                         isCompact = false,
                         isDrawer = false,
-                        isPinned = true,
-                        onTogglePin = { appState.setLeftSidebarPinned(false) },
-                        onRequestClose = { appState.setLeftSidebarPinned(false) },
                         onOpenSettings = { workspaceViewModel.openSettings() },
                         onOpenProjectSettings = workspaceViewModel::openProjectSettings,
                         onOpenProjectPicker = openProjectPicker
@@ -271,7 +268,7 @@ fun MainScreen() {
                         modifier = Modifier.fillMaxSize(),
                         viewModel = workspaceViewModel,
                         isCompact = false,
-                        isLeftSidebarOpen = isHoverRevealed,
+                        isLeftSidebarOpen = false,
                         onToggleLeftSidebar = { appState.setLeftSidebarPinned(true) },
                         onOpenProjectPicker = openProjectPicker,
                         imeOverlayActive = isSettingsVisible || compactionNotice != null,
@@ -327,12 +324,7 @@ fun MainScreen() {
                                 viewModel = sidebarViewModel,
                                 isCompact = false,
                                 isDrawer = true,
-                                isPinned = false,
                                 onActiveInteractionChange = { isSidebarInteracting = it },
-                                onTogglePin = {
-                                    appState.setLeftSidebarPinned(true)
-                                    isHoverRevealed = false
-                                },
                                 onRequestClose = { closeDrawer() },
                                 onOpenSettings = {
                                     workspaceViewModel.openSettings()

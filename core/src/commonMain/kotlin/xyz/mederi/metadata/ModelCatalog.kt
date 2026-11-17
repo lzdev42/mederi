@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import xyz.mederi.debug.DebugLog
+import java.net.URI
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 
@@ -112,6 +113,26 @@ class ModelCatalog(
         return get(baseUrl, modelId)
     }
 
+    /** 只读已加载目录，优先使用 OpenRouter 上同一模型的标准目录价。 */
+    fun referencePricing(
+        modelId: String,
+        providerKey: String? = null,
+        baseUrl: String? = null,
+    ): ModelReferencePricing? = index.referencePricing(modelId, providerKey, baseUrl)
+
+    /**
+     * 只读已加载目录，查**该供应商自己目录条目**的价格（与 [referencePricing] 的标准价并列）。
+     *
+     * 优先级：providerKey 直查 → baseUrl 直查 → 命中条目的 canonicalModelId 在**同供应商**内反查。
+     * 诚实原则：只查配置的供应商自己，绝不查 OpenRouter、绝不跨供应商兜底——
+     * 该供应商目录没有就是 null（目录无价 ≠ OpenRouter 价）。
+     */
+    fun providerPricing(
+        modelId: String,
+        providerKey: String? = null,
+        baseUrl: String? = null,
+    ): ModelReferencePricing? = index.providerPricing(modelId, providerKey, baseUrl)
+
     private suspend fun fetch(): CatalogIndex {
         val httpClient = MederiHttpClientFactory.create(
             clientName = MederiIdentity.PRODUCT_NAME + "-model-catalog",
@@ -124,4 +145,58 @@ class ModelCatalog(
             httpClient.close()
         }
     }
+}
+
+internal fun CatalogIndex.referencePricing(
+    modelId: String,
+    providerKey: String?,
+    baseUrl: String?,
+): ModelReferencePricing? {
+    val officialProvider = when (baseUrl?.let { runCatching { URI(it).host }.getOrNull() }?.lowercase()) {
+        "api.openai.com" -> "openai"
+        "generativelanguage.googleapis.com" -> "google"
+        "openrouter.ai" -> "openrouter"
+        else -> null
+    }
+    val actualModel = providerKey?.let { byKey[it]?.get(modelId) }
+        ?: baseUrl?.let { byApi[normalizeBaseUrl(it)]?.get(modelId) }
+        ?: officialProvider?.let { byKey[it]?.get(modelId) }
+    val nativeNamespace = providerKey?.takeIf { it == "openai" || it == "google" }
+        ?: officialProvider?.takeIf { it == "openai" || it == "google" }
+    val openRouter = byKey["openrouter"]
+    val standardIds = listOfNotNull(
+        modelId,
+        actualModel?.canonicalModelId,
+        nativeNamespace?.takeUnless { '/' in modelId }?.let { "$it/$modelId" },
+    )
+    // ① standardIds 直查 OpenRouter（官方命名空间与 canonical 命中的既有优先级）
+    // ② actualModel 自身价格（供应商自己收录时用自己的价，优先于 OR 参考价）
+    // ③ actualModel 的 canonical 反查 OpenRouter
+    // ④ 全局同名兜底：别家收录的同名条目 → canonical 反查 OR，或自身价格
+    return standardIds.firstNotNullOfOrNull { openRouter?.get(it)?.referencePricing() }
+        ?: actualModel?.referencePricing()
+        ?: actualModel?.canonicalModelId?.let { byCanonical[it]?.referencePricing() }
+        ?: byModelId[modelId]?.let { global ->
+            global.canonicalModelId?.let { byCanonical[it]?.referencePricing() }
+                ?: global.referencePricing()
+        }
+}
+
+internal fun CatalogIndex.providerPricing(
+    modelId: String,
+    providerKey: String?,
+    baseUrl: String?,
+): ModelReferencePricing? {
+    val providerModels = providerKey?.takeIf { it.isNotBlank() }?.let { byKey[it] }
+        ?: baseUrl?.let { byApi[normalizeBaseUrl(it)] }
+        ?: return null
+    val entry = providerModels[modelId] ?: return null
+    return entry.referencePricing()
+        ?: entry.canonicalModelId?.let { canonical -> providerModels[canonical]?.referencePricing() }
+}
+
+private fun ModelMetadata.referencePricing(): ModelReferencePricing? {
+    val input = inputPricePerMillion?.takeIf { it.isFinite() && it >= 0 } ?: return null
+    val output = outputPricePerMillion?.takeIf { it.isFinite() && it >= 0 } ?: return null
+    return ModelReferencePricing(input, output, cacheReadPricePerMillion, cacheWritePricePerMillion)
 }

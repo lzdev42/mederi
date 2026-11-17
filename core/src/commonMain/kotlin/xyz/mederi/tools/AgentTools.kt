@@ -288,7 +288,7 @@ class AgentTools(
         val id: String,
         @LLMDescription("Question text.")
         val prompt: String,
-        @LLMDescription("List of options. Empty = free-text input.")
+        @LLMDescription("Array of strings. Put the label and its rationale in the same string. Use an empty array for free-text input.")
         val options: List<String> = emptyList(),
         @LLMDescription("true = allow selecting multiple answers.")
         val multiSelect: Boolean = false
@@ -306,7 +306,8 @@ class AgentTools(
         description = "Ask the user one or more questions. Use this when you need clarification, " +
             "confirmation, or a decision from the user. Supports multiple questions, " +
             "multiple choice, and multi-select. " +
-            "Arguments format: {\"questions\": [{\"id\": \"\", \"prompt\": \"\", \"options\": [], \"multiSelect\": false}]}"
+            "Each option is a string. Example: " +
+            "{\"questions\":[{\"id\":\"q1\",\"prompt\":\"Which scope?\",\"options\":[\"A. Current session only — matches the workspace view\",\"B. All sessions — supports comparisons\"],\"multiSelect\":false}]}"
     ) {
         override suspend fun execute(args: AskUserArgs): String {
             if (questionRequester == null) {

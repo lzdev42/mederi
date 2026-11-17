@@ -339,6 +339,8 @@ Server interface 实现细节（端口记忆/密码门/Cloudflare 隧道）详�
 核心思想：**不对供应商参数做任何语义解释**。每个 ReasoningLevel 对应用户编写的请求体 JSON 片段，
 发送时根级合并进请求体（`{"reasoning_effort":"low"}` 之类）。用户填什么发什么，机制不纠错。
 
+- 自定义供应商按档位使用填写的值，缺失或留空时使用对应协议的默认值。内置供应商使用代码预设的完整映射，预设未指定映射时采用协议默认值。Chat Completions 的默认 `NONE` 为 `{"reasoning_effort":"none"}`。
+
 - 内置供应商参数按官方文档预填，UI 不可编辑；仅自定义供应商可配置
 - 自建 `MederiOpenAILLMClient` 覆盖 Koog 默认 client（vLLM `reasoning` 别名、Ktor SSE 流式、Responses `text` 字段等兼容性修复）
 - 任何路径不允许假流式（禁止"非流式拿全量再转帧"）

@@ -711,10 +711,11 @@ class WorkspaceProductionRoutesTest {
     private suspend fun realSelectorLabel(asm: RealUiAssembly): String {
         val info = asm.realCore.getConversationWorkspace(asm.convId).getOrThrow()
         val active = info.active
-        return if (active.workspace.kind == xyz.mederi.core.contract.models.WorkspaceKind.LOCAL) {
+        return active.branch ?: if (active.workspace.kind == xyz.mederi.core.contract.models.WorkspaceKind.LOCAL) {
             getString(Res.string.workspace_kind_local)
         } else {
-            active.branch ?: active.workspace.taskBranchName ?: getString(Res.string.workspace_kind_worktree)
+            xyz.mederi.ui.resolveWorktreeBaseBranch(active, asm.vm.repositoryInfo)
+                ?: getString(Res.string.workspace_kind_worktree)
         }
     }
 

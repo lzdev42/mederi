@@ -7,10 +7,12 @@ import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.prompt.executor.clients.openai.base.models.OpenAIUsage
+import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.ResponseMetaInfo
@@ -36,12 +38,15 @@ import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.timeout
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import ai.koog.agents.core.tools.ToolDescriptor
 import kotlin.time.Duration
@@ -54,6 +59,7 @@ import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
 import xyz.mederi.http.SseIdleTimeoutException
+import xyz.mederi.infrastructure.koog.requireToolCallArguments
 import xyz.mederi.tools.patch.ApplyPatchProtocol
 import java.net.URI
 
@@ -84,7 +90,48 @@ class MederiOpenAILLMClient(
             (!endpoint.isAbsolute && endpoint.rawAuthority == null || isOfficialOrigin(endpoint))
     }.getOrDefault(false)
 
-    override val clientName: String = "MederiOpenAILLMClient"
+    override val clientName: String = MederiOpenAILLMClient::class.java.simpleName
+
+    /**
+     * Chat Completions 规范不包含 input_file。
+     * 当 Prompt 中含有文件附件时，在转给 Chat Completions 序列化前安全降级为文件文本引用，
+     * 避免底层端点或 Koog 校验因不支持 document 抛出异常。
+     * Responses API 路径不经过此函数，保持原生 input_file 序列化。
+     */
+    private fun sanitizePromptForChatCompletions(prompt: Prompt): Prompt {
+        val hasFile = prompt.messages.any { m ->
+            m.parts.any { it is MessagePart.Attachment && it.source is AttachmentSource.File }
+        }
+        if (!hasFile) return prompt
+
+        val sanitizedMessages = prompt.messages.map { msg ->
+            val newParts = msg.parts.map { part ->
+                if (part is MessagePart.Attachment && part.source is AttachmentSource.File) {
+                    val name = part.source.fileName ?: "file"
+                    MessagePart.Text("[File: $name]")
+                } else part
+            }
+            when (msg) {
+                is ai.koog.prompt.message.Message.User -> ai.koog.prompt.message.Message.User(
+                    parts = newParts.filterIsInstance<MessagePart.RequestPart>(),
+                    metaInfo = msg.metaInfo,
+                    id = msg.id
+                )
+                is ai.koog.prompt.message.Message.Assistant -> ai.koog.prompt.message.Message.Assistant(
+                    parts = newParts.filterIsInstance<MessagePart.ResponsePart>(),
+                    metaInfo = msg.metaInfo,
+                    finishReason = msg.finishReason,
+                    id = msg.id
+                )
+                is ai.koog.prompt.message.Message.System -> ai.koog.prompt.message.Message.System(
+                    parts = newParts.filterIsInstance<MessagePart.Text>(),
+                    metaInfo = msg.metaInfo,
+                    id = msg.id
+                )
+            }
+        }
+        return Prompt(messages = sanitizedMessages, id = prompt.id, params = prompt.params)
+    }
 
     /**
      * 从 Prompt.id 提取 prompt_cache_key（OpenAI 请求级前缀缓存键）。
@@ -104,14 +151,14 @@ class MederiOpenAILLMClient(
     companion object {
         /**
          * SSE 空闲超时：连续这么久没收到**任何一行**（含 keep-alive 注释行 `: ping` /
-         * `: OPENROUTER PROCESSING` 等）才判定连接已死。
+         * `: OPENROUTER PROCESSING` 等）就停止等待当前请求。
          *
          * 语义：只要 SSE 还在吐数据（哪怕两帧之间卡几十秒、哪怕一次推理跑一两个小时），
          * 就永远不超时；只有连接真正没数据到达才计时。Koog/Ktor 的 requestTimeout 和
          * socketTimeout 已在 [xyz.mederi.http.MederiHttpClientFactory] 禁用（设为 0），
          * 这里是我们自己的唯一超时判定。
          */
-        val SSE_IDLE_TIMEOUT: Duration = 90.seconds
+        val SSE_IDLE_TIMEOUT: Duration = 180.seconds
     }
 
     /**
@@ -133,7 +180,7 @@ class MederiOpenAILLMClient(
         model: LLModel,
         tools: List<ToolDescriptor>
     ): Message.Assistant {
-        DebugLog.section("SSE", "MederiOpenAILLMClient.execute (non-streaming)")
+        DebugLog.section("SSE", "$clientName.execute (non-streaming)")
         DebugLog.data("SSE", "model", model.id)
         DebugLog.data("SSE", "messages", prompt.messages.size)
         DebugLog.data("SSE", "tools", tools.size)
@@ -148,15 +195,16 @@ class MederiOpenAILLMClient(
             return executeResponsesAPI(prompt, model, tools)
         }
 
-        val messages = convertPromptToMessages(prompt, model)
+        val chatPrompt = sanitizePromptForChatCompletions(prompt)
+        val messages = convertPromptToMessages(chatPrompt, model)
         val llmTools = tools.map { it.toOpenAIChatTool() }
-        val toolChoice = prompt.params.toolChoice?.toOpenAIToolChoice()
+        val toolChoice = chatPrompt.params.toolChoice?.toOpenAIToolChoice()
         val requestJson = super.serializeProviderChatRequest(
             messages = messages,
             model = model,
             tools = llmTools.takeIf { it.isNotEmpty() },
             toolChoice = toolChoice,
-            params = withChatPromptCacheKey(prompt),
+            params = withChatPromptCacheKey(chatPrompt),
             stream = false
         )
         DebugLog.event("SSE", "POST $chatCompletionsPath (stream=false)")
@@ -181,7 +229,7 @@ class MederiOpenAILLMClient(
                     MessagePart.Tool.Call(
                         id = toolCall.id,
                         tool = toolCall.function.name,
-                        args = toolCall.function.arguments
+                        args = requireToolCallArguments(toolCall.function.name, toolCall.id, toolCall.function.arguments)
                     )
                 )
             }
@@ -204,7 +252,7 @@ class MederiOpenAILLMClient(
         model: LLModel,
         tools: List<ToolDescriptor>
     ): Flow<StreamFrame> {
-        DebugLog.section("SSE", "MederiOpenAILLMClient.executeStreaming")
+        DebugLog.section("SSE", "$clientName.executeStreaming")
         DebugLog.data("SSE", "model", model.id)
         DebugLog.data("SSE", "messages", prompt.messages.size)
         DebugLog.data("SSE", "tools", tools.size)
@@ -219,15 +267,16 @@ class MederiOpenAILLMClient(
         }
 
         // Chat Completions - SanitizedModels 解析 + 共享 SSE 管线
-        val messages = convertPromptToMessages(prompt, model)
+        val chatPrompt = sanitizePromptForChatCompletions(prompt)
+        val messages = convertPromptToMessages(chatPrompt, model)
         val llmTools = tools.map { it.toOpenAIChatTool() }
-        val toolChoice = prompt.params.toolChoice?.toOpenAIToolChoice()
+        val toolChoice = chatPrompt.params.toolChoice?.toOpenAIToolChoice()
         val requestJson = super.serializeProviderChatRequest(
             messages = messages,
             model = model,
             tools = llmTools.takeIf { it.isNotEmpty() },
             toolChoice = toolChoice,
-            params = withChatPromptCacheKey(prompt),
+            params = withChatPromptCacheKey(chatPrompt),
             stream = true
         )
         DebugLog.event("SSE", "POST $chatCompletionsPath (stream=true)")
@@ -267,14 +316,8 @@ class MederiOpenAILLMClient(
 
         checkResponsesResponseError(rawResponse)
         val response = sanitizeJson.decodeFromString<SanitizedResponsesAPIResponse>(rawResponse)
-        if (response.output.any { it.type == "custom_tool_call" }) {
-            require(response.status == null || response.status == "completed") { "Incomplete apply_patch response: ${response.status}" }
-            require(response.output.none { it.type == "custom_tool_call" && it.status != null && it.status != "completed" }) {
-                "Incomplete apply_patch output item"
-            }
-        }
-
         val parts = mutableListOf<MessagePart.ResponsePart>()
+        val toolCallIds = mutableSetOf<String>()
         var finishReason: String? = null
 
         for (item in response.output) {
@@ -298,14 +341,21 @@ class MederiOpenAILLMClient(
                     }
                 }
                 "function_call", "custom_tool_call" -> {
+                    require(response.status == null || response.status == "completed") {
+                        "Incomplete Responses tool call response: ${response.status}"
+                    }
+                    require(item.status == null || item.status == "completed") { "Incomplete Responses tool call output item" }
+                    val callId = item.requireCallId()
+                    val name = item.requireToolName()
+                    require(toolCallIds.add(callId)) { "Duplicate Responses call ID: $callId" }
                     val isCustom = item.type == "custom_tool_call"
-                    require(!isCustom || item.name == ApplyPatchProtocol.TOOL_NAME) { "Unsupported custom tool: ${item.name}" }
+                    require(!isCustom || name == ApplyPatchProtocol.TOOL_NAME) { "Unsupported custom tool: $name" }
                     parts.add(
                         MessagePart.Tool.Call(
-                            id = item.callId ?: "",
-                            tool = item.name ?: "",
+                            id = callId,
+                            tool = name,
                             args = if (isCustom) ApplyPatchProtocol.encodeArguments(requireNotNull(item.input) { "Missing apply_patch input" })
-                                else item.arguments ?: "{}"
+                                else requireToolCallArguments(name, callId, item.arguments)
                         )
                     )
                 }
@@ -324,6 +374,15 @@ class MederiOpenAILLMClient(
         )
     }
 
+    private fun SanitizedResponsesOutputItem.requireCallId(): String =
+        requireNotNull(callId?.takeIf { it.isNotBlank() }) { "Missing Responses tool call ID" }
+
+    private fun SanitizedResponsesOutputItem.requireToolName(): String =
+        requireNotNull(name?.takeIf { it.isNotBlank() }) { "Missing Responses tool name for call $callId" }
+
+    private val SanitizedResponsesOutputItem.isToolCall: Boolean
+        get() = type == "function_call" || type == "custom_tool_call"
+
     private suspend fun collectChatGptResponse(stream: Flow<StreamFrame>): Message.Assistant {
         val parts = mutableListOf<MessagePart.ResponsePart>()
         var completed: StreamFrame.End? = null
@@ -334,7 +393,7 @@ class MederiOpenAILLMClient(
                     id = frame.id, content = frame.content, summary = frame.summary.orEmpty(),
                 ))
                 is StreamFrame.ToolCallComplete -> parts.add(MessagePart.Tool.Call(
-                    id = frame.id, tool = frame.name, args = frame.content,
+                    id = frame.id, tool = frame.name, args = requireToolCallArguments(frame.name, frame.id, frame.content),
                 ))
                 is StreamFrame.End -> completed = frame
                 else -> Unit
@@ -351,7 +410,52 @@ class MederiOpenAILLMClient(
         stream: Boolean
     ): String = buildJsonObject {
         put("model", model.id)
-        promptCacheKey(prompt)?.let { put("prompt_cache_key", it) }
+        val params = prompt.params
+        val responsesParams = params as? OpenAIResponsesParams
+        val cacheKey = responsesParams?.promptCacheKey ?: promptCacheKey(prompt)
+        cacheKey?.let { put("prompt_cache_key", it) }
+        if (!chatGptPlan) {
+            params.temperature?.let { put("temperature", it) }
+            params.maxTokens?.let { put("max_output_tokens", it) }
+            responsesParams?.apply {
+                maxToolCalls?.let { put("max_tool_calls", it) }
+                parallelToolCalls?.let { put("parallel_tool_calls", it) }
+                reasoning?.let { put("reasoning", sanitizeJson.encodeToJsonElement(it)) }
+                truncation?.let { put("truncation", sanitizeJson.encodeToJsonElement(it)) }
+                safetyIdentifier?.let { put("safety_identifier", it) }
+                serviceTier?.let { put("service_tier", sanitizeJson.encodeToJsonElement(it)) }
+                store?.let { put("store", it) }
+                include?.let { put("include", sanitizeJson.encodeToJsonElement(it)) }
+                topP?.let { put("top_p", it) }
+                topLogprobs?.let { put("top_logprobs", it) }
+                require(background != true) { "Responses background polling is not supported" }
+            }
+            (params.schema as? LLMParams.Schema.JSON)?.let { schema ->
+                require(model.supports(schema.capability)) { "Model ${model.id} does not support schema ${schema.name}" }
+                put("text", buildJsonObject {
+                    put("format", buildJsonObject {
+                        put("type", "json_schema")
+                        put("name", schema.name)
+                        put("schema", schema.schema)
+                        put("strict", true)
+                    })
+                })
+            }
+        }
+        params.toolChoice?.let { choice ->
+            put("tool_choice", when (choice) {
+                LLMParams.ToolChoice.Auto -> JsonPrimitive("auto")
+                LLMParams.ToolChoice.None -> JsonPrimitive("none")
+                LLMParams.ToolChoice.Required -> JsonPrimitive("required")
+                is LLMParams.ToolChoice.Named -> {
+                    require(tools.any { it.name == choice.name }) { "Responses tool_choice references undeclared tool '${choice.name}'" }
+                    buildJsonObject {
+                        put("type", if (supportsCustomApplyPatch && choice.name == ApplyPatchProtocol.TOOL_NAME) "custom" else "function")
+                        put("name", choice.name)
+                    }
+                }
+            })
+        }
         if (tools.isNotEmpty()) {
             // Responses API 工具是扁平结构（type/name/description/parameters 在根级），
             // 与 Chat 的 {type:function, function:{...}} 嵌套不同；参数 schema 复用 Chat 的转换
@@ -386,62 +490,69 @@ class MederiOpenAILLMClient(
             } else declaredTools)
         }
         put("input", buildJsonArray {
+            val pendingCalls = mutableMapOf<String, String>()
+
+            fun addMessageItem(role: String, content: JsonElement) {
+                add(buildJsonObject {
+                    put("type", "message")
+                    put("role", role)
+                    put("content", content)
+                })
+            }
+
             prompt.messages.forEach { message ->
                 when (message) {
                     is Message.System -> {
                         val text = message.parts.filterIsInstance<MessagePart.Text>().joinToString("\n") { it.text }
                         if (text.isNotBlank()) {
-                            add(buildJsonObject {
-                                put("role", "developer")
-                                put("content", text)
-                            })
+                            addMessageItem("developer", JsonPrimitive(text))
                         }
                     }
                     is Message.User -> {
                         // Tool results are user parts in Koog. Preserve their causal position;
                         // treating them as ordinary text silently drops the result on the next request.
-                        val texts = mutableListOf<MessagePart.Text>()
-                        fun flushText() {
-                            if (texts.isEmpty()) return
-                            add(buildJsonObject {
-                                put("role", "user")
-                                put("content", buildJsonArray {
-                                    texts.forEach { text -> add(buildJsonObject {
-                                        put("type", "input_text")
-                                        put("text", text.text)
-                                    }) }
-                                })
-                            })
-                            texts.clear()
+                        val content = mutableListOf<JsonElement>()
+                        fun flushContent() {
+                            if (content.isEmpty()) return
+                            addMessageItem("user", JsonArray(content.toList()))
+                            content.clear()
                         }
                         message.parts.forEach { part ->
                             when (part) {
-                                is MessagePart.Text -> texts.add(part)
+                                is MessagePart.Text -> content.add(encodeResponsesContent(part))
+                                is MessagePart.Attachment -> content.add(encodeResponsesContent(part))
                                 is MessagePart.Tool.Result -> {
-                                    flushText()
+                                    flushContent()
                                     add(buildJsonObject {
                                         val custom = supportsCustomApplyPatch && part.tool == ApplyPatchProtocol.TOOL_NAME
                                         put("type", if (custom) "custom_tool_call_output" else "function_call_output")
-                                        put("call_id", part.id ?: "")
-                                        put("output", part.output)
+                                        val id = requireResponsesCallId(part.id, part.tool)
+                                        require(pendingCalls.remove(id) == part.tool) { "No matching Responses tool call for result '$id'" }
+                                        put("call_id", id)
+                                        val text = part.parts.singleOrNull() as? MessagePart.Text
+                                        if (text != null || custom) {
+                                            require(text != null) { "Responses custom tool result must be text" }
+                                            put("output", text.text)
+                                        } else {
+                                            put("output", buildJsonArray {
+                                                part.parts.forEach { add(encodeResponsesContent(it)) }
+                                            })
+                                        }
                                     })
                                 }
                                 else -> {}
                             }
                         }
-                        flushText()
+                        flushContent()
                     }
                     is Message.Assistant -> {
                         message.parts.forEach { part ->
                             when (part) {
                                 is MessagePart.Text -> {
-                                    add(buildJsonObject {
-                                        put("role", "assistant")
-                                        put("content", buildJsonArray {
-                                            add(buildJsonObject {
-                                                put("type", "output_text")
-                                                put("text", part.text)
-                                            })
+                                    addMessageItem("assistant", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("type", "output_text")
+                                            put("text", part.text)
                                         })
                                     })
                                 }
@@ -449,11 +560,14 @@ class MederiOpenAILLMClient(
                                     add(buildJsonObject {
                                         val custom = supportsCustomApplyPatch && part.tool == ApplyPatchProtocol.TOOL_NAME
                                         put("type", if (custom) "custom_tool_call" else "function_call")
-                                        put("call_id", part.id ?: "")
+                                        val id = requireResponsesCallId(part.id, part.tool)
+                                        require(part.tool.isNotBlank()) { "Missing Responses tool name" }
+                                        require(pendingCalls.putIfAbsent(id, part.tool) == null) { "Duplicate Responses tool call '$id'" }
+                                        put("call_id", id)
                                         put("name", part.tool)
                                         if (chatGptPlan) put("namespace", MederiIdentity.PRODUCT_NAME)
                                         if (custom) put("input", ApplyPatchProtocol.decodeArguments(part.args))
-                                        else put("arguments", part.args)
+                                        else put("arguments", requireToolCallArguments(part.tool, part.id, part.args))
                                     })
                                 }
                                 is MessagePart.Reasoning -> {}
@@ -463,10 +577,55 @@ class MederiOpenAILLMClient(
                     }
                 }
             }
+            require(pendingCalls.isEmpty()) { "Missing Responses tool results for calls ${pendingCalls.keys}" }
         })
         if (chatGptPlan) put("store", false)
         put("stream", stream || chatGptPlan)
+        params.additionalProperties.orEmpty().forEach { (key, value) ->
+            require(key !in setOf("model", "input", "stream", "tools", "tool_choice", "background", "conversation", "previous_response_id") &&
+                (!chatGptPlan || key !in setOf("store", "temperature", "max_output_tokens"))) {
+                "Responses custom parameters cannot override '$key'"
+            }
+            put(key, value)
+        }
     }.toString()
+
+    private fun requireResponsesCallId(id: String?, tool: String): String {
+        require(!id.isNullOrBlank()) { "Missing Responses call_id for tool '$tool'" }
+        return id
+    }
+
+    private fun encodeResponsesContent(part: MessagePart): JsonElement = buildJsonObject {
+        when (part) {
+            is MessagePart.Text -> {
+                put("type", "input_text")
+                put("text", part.text)
+            }
+            is MessagePart.Attachment -> {
+                val source = part.source
+                val data = when (val content = source.content) {
+                    is AttachmentContent.URL -> content.url
+                    is AttachmentContent.Binary -> "data:${source.mimeType};base64,${content.asBase64()}"
+                    else -> throw IllegalArgumentException("Unsupported Responses attachment content")
+                }
+                when (source) {
+                    is AttachmentSource.Image -> {
+                        put("type", "input_image")
+                        put("image_url", data)
+                        put("detail", "auto")
+                    }
+                    is AttachmentSource.File -> {
+                        put("type", "input_file")
+                        if (source.content is AttachmentContent.URL) put("file_url", data)
+                        else put("file_data", data)
+                        source.fileName?.let { put("filename", it) }
+                    }
+                    else -> throw IllegalArgumentException("Unsupported Responses attachment type: ${source::class.simpleName}")
+                }
+            }
+            else -> throw IllegalArgumentException("Unsupported Responses content part: ${part::class.simpleName}")
+        }
+    }
 
     // ------------------------------------------------------------------
     // Responses API 流式（真流式：SSE 逐事件解析，推理/正文/工具参数按增量发帧）
@@ -527,9 +686,20 @@ class MederiOpenAILLMClient(
         val frames = StreamFrameFlowBuilder(output)
         val toolMetaByIndex = HashMap<Int, SanitizedResponsesOutputItem>()
         val indexByItemId = HashMap<String, Int>()
+        val indexByCallId = HashMap<String, Int>()
         val customInputs = HashMap<Int, ApplyPatchProtocol.StreamingArguments>()
         val functionInputs = HashMap<Int, StringBuilder>()
+        val finalFunctionArguments = HashMap<Int, String>()
         val completedTools = mutableSetOf<Int>()
+        val textByPart = mutableMapOf<Triple<Int?, Int?, Boolean>, StringBuilder>()
+        val completedText = mutableSetOf<Triple<Int?, Int?, Boolean>>()
+        var activeTextPart: Triple<Int?, Int?, Boolean>? = null
+
+        suspend fun emitTextPart(key: Triple<Int?, Int?, Boolean>, delta: String) {
+            if (key != activeTextPart) frames.tryEmitPendingText()
+            activeTextPart = key
+            if (delta.isNotEmpty()) frames.emitTextDelta(delta, key.first)
+        }
 
         suspend fun emitToolFrame(frame: StreamFrame) {
             frames.tryEmitPendingText()
@@ -537,15 +707,56 @@ class MederiOpenAILLMClient(
             output.emit(frame)
         }
 
-        fun indexOf(event: SanitizedResponsesStreamEvent): Int? =
-            event.outputIndex ?: event.itemId?.let { indexByItemId[it] }
-                ?: event.item?.id?.let { indexByItemId[it] }
+        fun toolIndex(
+            outputIndex: Int?,
+            itemId: String?,
+            item: SanitizedResponsesOutputItem?,
+        ): Int? {
+            val indices = listOfNotNull(
+                outputIndex,
+                itemId?.let(indexByItemId::get),
+                item?.id?.let(indexByItemId::get),
+                item?.callId?.let(indexByCallId::get),
+            ).distinct()
+            require(indices.size <= 1) { "Conflicting Responses tool output indices: $indices" }
+            return indices.singleOrNull()
+        }
+
+        fun indexOf(event: SanitizedResponsesStreamEvent): Int? {
+            val index = toolIndex(event.outputIndex, event.itemId, event.item)
+            val meta = index?.let(toolMetaByIndex::get)
+            require(event.itemId == null || meta?.id == null || event.itemId == meta.id) {
+                "Responses tool item ID changed for output index $index"
+            }
+            require(event.name == null || meta?.name == null || event.name == meta.name) {
+                "Responses tool name changed for output index $index"
+            }
+            return index
+        }
+
+        fun validateFinalItem(index: Int, item: SanitizedResponsesOutputItem) {
+            val meta = toolMetaByIndex.getValue(index)
+            require(item.type == meta.type &&
+                (item.id == null || meta.id == null || item.id == meta.id) &&
+                (item.callId == null || item.callId == meta.callId) &&
+                (item.name == null || item.name == meta.name)
+            ) { "Responses tool identity changed for output index $index" }
+            require(item.status == null || item.status == "completed") {
+                "Incomplete Responses tool call at output index $index"
+            }
+        }
+
+        fun confirmFunctionArguments(index: Int, arguments: String) {
+            val previous = finalFunctionArguments.putIfAbsent(index, arguments)
+            require(previous == null || previous == arguments) { "Final function JSON arguments disagree for output index $index" }
+        }
 
         suspend fun completeTool(index: Int, finalItem: SanitizedResponsesOutputItem? = null, finalInput: String? = null) {
             // input.done can precede output_item.done; validate final item status even
             // when its arguments were already completed by the earlier event.
-            if (index in customInputs) {
-                require(finalItem?.status == null || finalItem.status == "completed") { "Incomplete apply_patch output item" }
+            finalItem?.let { validateFinalItem(index, it) }
+            if (index in functionInputs) {
+                finalItem?.arguments?.let { confirmFunctionArguments(index, it) }
             }
             if (index in completedTools) {
                 customInputs[index]?.completeArguments(finalInput ?: finalItem?.input)
@@ -559,7 +770,7 @@ class MederiOpenAILLMClient(
                 encoder.completeArguments()
             } else {
                 val received = requireNotNull(functionInputs[index])
-                finalItem?.arguments?.let { final ->
+                finalFunctionArguments[index]?.let { final ->
                     require(final.startsWith(received.toString())) { "Function arguments disagree with streamed deltas" }
                     val suffix = final.substring(received.length)
                     if (suffix.isNotEmpty()) {
@@ -567,7 +778,9 @@ class MederiOpenAILLMClient(
                         emitToolFrame(StreamFrame.ToolCallDelta(meta.callId, meta.name, suffix, index))
                     }
                 }
-                received.toString().ifEmpty { "{}" }
+                val args = received.toString()
+                confirmFunctionArguments(index, args)
+                args
             }
             emitToolFrame(StreamFrame.ToolCallComplete(meta.callId, requireNotNull(meta.name), arguments, index))
             completedTools.add(index)
@@ -577,18 +790,24 @@ class MederiOpenAILLMClient(
             when (event.type) {
                 "response.output_item.added" -> {
                     val item = event.item ?: return@collect
-                    if (item.type == "function_call" || item.type == "custom_tool_call") {
-                        val index = event.outputIndex ?: (toolMetaByIndex.keys.maxOrNull()?.plus(1) ?: 0)
+                    if (item.isToolCall) {
+                        val callId = item.requireCallId()
+                        val name = item.requireToolName()
+                        val index = requireNotNull(event.outputIndex) { "Missing Responses tool output index for call $callId" }
+                        require(index >= 0) { "Invalid Responses tool output index: $index" }
                         require(index !in toolMetaByIndex) { "Duplicate tool output index: $index" }
-                        item.id?.let { indexByItemId[it] = index }
+                        require(indexByCallId.putIfAbsent(callId, index) == null) { "Duplicate Responses call ID: $callId" }
+                        item.id?.let {
+                            require(indexByItemId.putIfAbsent(it, index) == null) { "Duplicate Responses tool item ID: $it" }
+                        }
                         toolMetaByIndex[index] = item
                         val args = if (item.type == "custom_tool_call") {
-                            require(item.name == ApplyPatchProtocol.TOOL_NAME) { "Unsupported custom tool: ${item.name}" }
+                            require(name == ApplyPatchProtocol.TOOL_NAME) { "Unsupported custom tool: $name" }
                             ApplyPatchProtocol.StreamingArguments().also { customInputs[index] = it }.open(item.input.orEmpty())
                         } else {
                             item.arguments.orEmpty().also { functionInputs[index] = StringBuilder(it) }
                         }
-                        emitToolFrame(StreamFrame.ToolCallDelta(item.callId, item.name, args, index))
+                        emitToolFrame(StreamFrame.ToolCallDelta(callId, name, args, index))
                     }
                 }
                 "response.reasoning_text.delta" -> event.delta?.takeIf { it.isNotEmpty() }?.let {
@@ -597,8 +816,26 @@ class MederiOpenAILLMClient(
                 "response.reasoning_summary_text.delta" -> event.delta?.takeIf { it.isNotEmpty() }?.let {
                     frames.emitReasoningDelta(id = event.itemId, summary = it, index = event.outputIndex)
                 }
-                "response.output_text.delta", "response.refusal.delta" -> event.delta?.takeIf { it.isNotEmpty() }?.let {
-                    frames.emitTextDelta(it, event.outputIndex)
+                "response.output_text.delta", "response.refusal.delta",
+                "response.output_text.done", "response.refusal.done" -> {
+                    val refusal = event.type.startsWith("response.refusal.")
+                    val key = Triple(event.outputIndex, event.contentIndex, refusal)
+                    val received = textByPart.getOrPut(key) { StringBuilder() }
+                    if (event.type.endsWith(".delta")) {
+                        require(key !in completedText) { "Responses text delta after completion for part $key" }
+                        val delta = requireNotNull(event.delta) { "Missing Responses text delta for part $key" }
+                        received.append(delta)
+                        emitTextPart(key, delta)
+                    } else {
+                        val finalText = requireNotNull(if (refusal) event.refusal else event.text) {
+                            "Missing finalized Responses text for part $key"
+                        }
+                        require(finalText.startsWith(received.toString())) { "Final Responses text conflicts with deltas for part $key" }
+                        val suffix = finalText.substring(received.length)
+                        received.append(suffix)
+                        completedText.add(key)
+                        emitTextPart(key, suffix)
+                    }
                 }
                 "response.custom_tool_call_input.delta", "response.function_call_arguments.delta" -> {
                     val index = requireNotNull(indexOf(event)) { "Tool input delta without an added item" }
@@ -608,6 +845,7 @@ class MederiOpenAILLMClient(
                         val args = if (event.type == "response.custom_tool_call_input.delta") {
                             requireNotNull(customInputs[index]) { "Custom input for a function tool" }.append(delta)
                         } else {
+                            require(index !in finalFunctionArguments) { "Function argument delta after arguments.done" }
                             requireNotNull(functionInputs[index]) { "Function arguments for a custom tool" }.append(delta)
                             delta
                         }
@@ -615,39 +853,58 @@ class MederiOpenAILLMClient(
                     }
                 }
                 "response.custom_tool_call_input.done" -> {
-                    completeTool(requireNotNull(indexOf(event)), finalInput = event.input)
+                    val index = requireNotNull(indexOf(event)) { "Custom input.done without an added item" }
+                    require(index in customInputs) { "Custom input.done without a custom tool call" }
+                    completeTool(index, finalInput = requireNotNull(event.input) { "Missing custom input in input.done" })
+                }
+                "response.function_call_arguments.done" -> {
+                    val index = requireNotNull(indexOf(event)) { "Function arguments.done without an added item" }
+                    require(index in functionInputs) { "Function arguments.done without a function call" }
+                    confirmFunctionArguments(index, requireNotNull(event.arguments) { "Missing JSON arguments in arguments.done" })
                 }
                 "response.output_item.done" -> {
+                    val item = event.item
                     val index = indexOf(event)
-                    if (index != null && index in toolMetaByIndex) completeTool(index, finalItem = event.item)
+                    if (item?.isToolCall == true) {
+                        require(index != null && index in toolMetaByIndex) { "Responses tool item.done without an added item" }
+                    }
+                    if (index != null && index in toolMetaByIndex) {
+                        completeTool(index, finalItem = requireNotNull(item) { "Missing Responses tool item in output_item.done" })
+                    }
                 }
                 "response.completed", "response.incomplete" -> {
-                    require(!chatGptPlan || event.type == "response.completed") { "Incomplete ChatGPT response" }
-                    require(event.type != "response.incomplete" || customInputs.isEmpty()) { "Incomplete apply_patch response" }
                     val response = event.response
-                    if (customInputs.isNotEmpty()) {
-                        require(response?.status == null || response.status == "completed") { "Incomplete apply_patch response: ${response?.status}" }
-                        require(response?.output.orEmpty().none {
-                            it.type == "custom_tool_call" && it.status != null && it.status != "completed"
-                        }) { "Incomplete apply_patch output item" }
+                    val isIncomplete = event.type == "response.incomplete" || response?.status == "incomplete"
+                    require(!chatGptPlan || !isIncomplete) { "Incomplete ChatGPT response" }
+                    require(response?.status == null || response.status in setOf("completed", "incomplete")) {
+                        "Unexpected Responses terminal status: ${response?.status}"
                     }
-                    toolMetaByIndex.keys.sorted().forEach { index ->
-                        val meta = toolMetaByIndex.getValue(index)
-                        val finalItem = response?.output?.firstOrNull { it.callId == meta.callId }
-                        if (index in completedTools) {
-                            customInputs[index]?.completeArguments(finalItem?.input)
-                        } else {
-                            if (index in customInputs) {
-                                require(event.type == "response.completed" && finalItem?.input != null) { "Incomplete apply_patch input stream" }
+                    require(!isIncomplete || toolMetaByIndex.isEmpty()) {
+                        "Responses stream ended before tool call completion"
+                    }
+                    val finalTools = mutableMapOf<Int, SanitizedResponsesOutputItem>()
+                    for (item in response?.output.orEmpty()) {
+                        val index = toolIndex(outputIndex = null, itemId = null, item = item)
+                        if (item.isToolCall || index != null) {
+                            requireNotNull(index) { "Responses terminal tool item without an added item" }
+                            validateFinalItem(index, item)
+                            require(finalTools.putIfAbsent(index, item) == null) {
+                                "Duplicate Responses terminal tool item at output index $index"
                             }
-                            completeTool(index, finalItem)
                         }
                     }
-                    val finishReason = if (response?.status == "incomplete") {
+                    toolMetaByIndex.keys.sorted().forEach { index ->
+                        val finalItem = finalTools[index]
+                        if (index !in completedTools && index in customInputs) {
+                            require(finalItem?.input != null) { "Incomplete apply_patch input stream" }
+                        }
+                        completeTool(index, finalItem)
+                    }
+                    val finishReason = if (isIncomplete) {
                         "incomplete"
                     } else {
                         response?.output?.lastOrNull { it.type == "message" }?.status
-                            ?: if (event.type == "response.completed") "completed" else "incomplete"
+                            ?: "completed"
                     }
                     frames.emitEnd(finishReason, responsesMetaInfo(response?.usage))
                 }
@@ -672,6 +929,7 @@ class MederiOpenAILLMClient(
                 inputTokens = it.effectiveInputTokens,
                 outputTokens = it.effectiveOutputTokens,
                 cachedTokens = it.effectiveCachedTokens,
+                cacheWriteTokens = it.effectiveCacheWriteTokens,
             )
         }
 
@@ -740,7 +998,8 @@ class MederiOpenAILLMClient(
                         emitToolCallDelta(
                             id = toolCall.id,
                             name = toolCall.function?.name,
-                            args = toolCall.function?.arguments,
+                            // Koog 会把 null 参数合成为 "{}"；空增量保留缺失状态供完整调用校验。
+                            args = toolCall.function?.arguments.orEmpty(),
                             index = toolCall.index ?: lastToolCallIndex
                         )
                     }
@@ -749,7 +1008,7 @@ class MederiOpenAILLMClient(
                         DebugLog.event("SSE-Frame", "chat finishReason=$it")
                     }
                 }
-                chunk.usage?.let { metaInfo = chatMetaInfo(it) }
+                chunk.usage?.let { metaInfo = chatMetaInfo(it, metaInfo) }
             }
 
             DebugLog.event("SSE-Frame", "chat emitEnd: finishReason=$finishReason, toolCallDeltas=$toolCallDeltaCount, usage=${metaInfo != null}")
@@ -891,12 +1150,15 @@ class MederiOpenAILLMClient(
         }
     }
 
-    private fun chatMetaInfo(usage: OpenAIUsage?): ResponseMetaInfo =
+    private fun chatMetaInfo(usage: SanitizedChatUsage?, previous: ResponseMetaInfo? = null): ResponseMetaInfo =
         buildUsageMetaInfo(
-            totalTokens = usage?.totalTokens,
-            inputTokens = usage?.promptTokens,
-            outputTokens = usage?.completionTokens,
-            cachedTokens = usage?.promptTokensDetails?.cachedTokens,
+            totalTokens = usage?.totalTokens ?: previous?.totalTokensCount,
+            inputTokens = usage?.promptTokens ?: previous?.inputTokensCount,
+            outputTokens = usage?.completionTokens ?: previous?.outputTokensCount,
+            cachedTokens = usage?.effectiveCachedTokens
+                ?: (previous?.metadata?.get("cachedTokens") as? JsonPrimitive)?.intOrNull,
+            cacheWriteTokens = usage?.effectiveCacheWriteTokens
+                ?: (previous?.metadata?.get("cacheWriteTokens") as? JsonPrimitive)?.intOrNull,
         )
 
     private fun buildUsageMetaInfo(
@@ -904,13 +1166,15 @@ class MederiOpenAILLMClient(
         inputTokens: Int?,
         outputTokens: Int?,
         cachedTokens: Int?,
+        cacheWriteTokens: Int?,
     ): ResponseMetaInfo = ResponseMetaInfo.create(
         clock,
         totalTokensCount = totalTokens,
         inputTokensCount = inputTokens,
         outputTokensCount = outputTokens,
-        metadata = cachedTokens?.let {
-            buildJsonObject { put("cachedTokens", it) }
-        }
+        metadata = buildJsonObject {
+            cachedTokens?.let { put("cachedTokens", it) }
+            cacheWriteTokens?.let { put("cacheWriteTokens", it) }
+        }.takeIf { it.isNotEmpty() }
     )
 }

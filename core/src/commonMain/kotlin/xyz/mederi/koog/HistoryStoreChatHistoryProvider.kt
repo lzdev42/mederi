@@ -26,7 +26,12 @@ data class MessageDiagnostics(
     val agentMode: String? = null,
     val projectId: String? = null,
     val turnId: String? = null,
-    val workStartedAt: Long? = null
+    val workStartedAt: Long? = null,
+    val providerEndpoint: String? = null,
+    val providerModelId: String? = null,
+    val providerName: String? = null,
+    val modelsDevKey: String? = null,
+    val apiKeyId: String? = null,
 )
 
 /**
@@ -63,9 +68,14 @@ data class ToolTiming(val status: String, val durationMs: Long, val error: Strin
 internal fun xyz.mederi.domain.model.Message.withDiagnostics(d: MessageDiagnostics): xyz.mederi.domain.model.Message =
     copy(
         providerId = providerId ?: d.providerId,
+        providerName = providerName ?: d.providerName,
+        providerEndpoint = providerEndpoint ?: d.providerEndpoint,
         modelId = modelId ?: d.modelId,
+        providerModelId = providerModelId ?: d.providerModelId,
+        modelsDevKey = modelsDevKey ?: d.modelsDevKey,
         modelName = modelName ?: d.modelName,
         reasoningLevel = reasoningLevel ?: d.reasoningLevel,
+        apiKeyId = apiKeyId ?: d.apiKeyId,
         agentMode = agentMode ?: d.agentMode,
         projectId = projectId ?: d.projectId,
         turnId = turnId ?: d.turnId,
@@ -199,7 +209,11 @@ class HistoryStoreChatHistoryProvider(
                         if (head == tail) break
                         k--
                     }
-                    val markerAt = existing.size - k
+                    // The replay view can remove raw tool parts or entire rows. A stable
+                    // message ID still locates the start of the retained suffix.
+                    val retainedId = incoming.getOrNull(1)?.id
+                    val retainedIndex = existing.indexOfFirst { retainedId != null && it.id == retainedId }
+                    val markerAt = if (retainedIndex >= 0) retainedIndex else existing.size - k
                     val marker = summaryMarker(conversationId, firstText)
                     val recentSigs = existing.drop(markerAt).mapTo(java.util.HashSet()) { signature(it) }
                     val fresh = incoming.drop(1 + k).filter {
@@ -267,7 +281,7 @@ class HistoryStoreChatHistoryProvider(
                 is MessagePart.ToolResult -> append("|r:").append(part.id).append(':').append(part.tool).append(':').append(part.output)
                 is MessagePart.Reasoning -> append("|n:").append(part.content.joinToString("\u0001"))
                 is MessagePart.Image -> append("|i:").append(part.url)
-                is MessagePart.File -> Unit
+                is MessagePart.File -> append("|f:").append(part.path)
             }
         }
     }

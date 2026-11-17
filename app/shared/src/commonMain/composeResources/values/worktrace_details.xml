@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="worktrace_detail_commands">
+        <item quantity="other">运行 %1$d 条命令</item>
+    </plurals>
+    <plurals name="worktrace_detail_reads">
+        <item quantity="other">读取 %1$d 处</item>
+    </plurals>
+    <plurals name="worktrace_detail_searches">
+        <item quantity="other">搜索 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_edits">
+        <item quantity="other">编辑 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_lists">
+        <item quantity="other">列出 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_verifications">
+        <item quantity="other">验证子任务 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_specs">
+        <item quantity="other">编写实施说明 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_subagent_status">
+        <item quantity="other">查询子代理状态 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_mcp">
+        <item quantity="other">调用 MCP 工具 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_web_searches">
+        <item quantity="other">搜索网页 %1$d 次</item>
+    </plurals>
+    <plurals name="worktrace_detail_other">
+        <item quantity="other">%1$d 项工具操作</item>
+    </plurals>
+    <plurals name="worktrace_detail_failures">
+        <item quantity="other">%1$d 项失败</item>
+    </plurals>
+    <plurals name="worktrace_detail_notes">
+        <item quantity="other">%1$d 条过程记录</item>
+    </plurals>
+</resources>

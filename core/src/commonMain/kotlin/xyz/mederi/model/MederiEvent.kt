@@ -15,11 +15,9 @@ enum class EventType {
     TOOL_CALLED,
     TOOL_RESULT,
 
-    /**
-     * 单次 LLM HTTP 请求完成的用量事件。
-     * payload: inputTokens / outputTokens / cachedTokens?（均字符串化；cachedTokens 缺省即省略）。
-     * 每次 LLM 请求（流式 End 帧 / 非流式 call completed）完成时发射一次，供快照累加 requestCount。
-     */
+    /** 对话模型请求账本已写入，随后发起流式请求。messageId 是请求 ID，sessionId 是所属父会话。 */
+    LLM_REQUEST_STARTED,
+    /** 收到供应商结束帧并补齐请求账本。缺失的用量字段省略，与聊天消息是否落库独立。 */
     LLM_REQUEST_COMPLETED,
     QUESTION_REQUESTED,
     QUESTION_RESOLVED,

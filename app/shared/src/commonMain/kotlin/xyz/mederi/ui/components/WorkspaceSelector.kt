@@ -35,13 +35,14 @@ import xyz.mederi.theme.MederiRadius
 import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.ui.WorkspaceViewModel
+import xyz.mederi.ui.resolveWorktreeBaseBranch
 import xyz.mederi.ui.components.atoms.WorkspaceDropdownMenu
 import xyz.mederi.ui.components.atoms.WorkspaceMenuItem
 import xyz.mederi.ui.components.atoms.WorkspaceTextField
 import xyz.mederi.ui.components.atoms.WorkspaceTooltipPopup
 
 /**
- * 工作区选择器：GitBranch + Local/Worktree 短标签。
+ * 工作区选择器：GitBranch + 项目目录或工作树短标签。
  * 桌面高度对齐 ControlHeight，宽度最多 140dp，标签单行省略，tooltip 显示完整环境与分支信息。
  */
 @Composable
@@ -103,35 +104,31 @@ fun WorkspaceSelectorContent(
     val hovered by source.collectIsHoveredAsState()
     val colors = LocalMederiColors.current
 
-    val shortLabel = if (isExistingConversation && activeWorkspace != null) {
-        if (activeWorkspace.workspace.kind == WorkspaceKind.LOCAL) {
-            stringResource(Res.string.workspace_kind_local)
-        } else {
-            activeWorkspace.branch ?: activeWorkspace.workspace.taskBranchName ?: stringResource(Res.string.workspace_kind_worktree)
-        }
+    val projectDirectoryLabel = stringResource(Res.string.workspace_kind_local)
+    val worktreeLabel = stringResource(Res.string.workspace_kind_worktree)
+    val baseBranch = activeWorkspace?.let { resolveWorktreeBaseBranch(it, repositoryInfo) }
+    val kind = activeWorkspace?.workspace?.kind ?: selection.kind
+    val kindLabel = if (kind == WorkspaceKind.LOCAL) projectDirectoryLabel else worktreeLabel
+    val branch = if (isExistingConversation) {
+        activeWorkspace?.branch ?: baseBranch
     } else {
-        if (selection.kind == WorkspaceKind.LOCAL) {
-            stringResource(Res.string.workspace_kind_local)
-        } else {
-            selection.baseRef ?: stringResource(Res.string.workspace_kind_worktree)
-        }
+        selection.baseRef?.takeIf { kind == WorkspaceKind.MANAGED_WORKTREE } ?: repositoryInfo?.branch
+    }
+    val shortLabel = branch ?: kindLabel
+    val location = if (isExistingConversation && activeWorkspace != null) {
+        workspaceLocationLabel(activeWorkspace, repositoryInfo)
+    } else if (branch != null) {
+        stringResource(Res.string.workspace_kind_with_branch, kindLabel, branch)
+    } else kindLabel
+
+    val tooltipText = if (isExistingConversation) location else {
+        val env = environments.firstOrNull { it.id == selection.environmentId }?.name
+            ?: stringResource(Res.string.workspace_environment_none)
+        val carry = if (selection.carryLocalChanges) stringResource(Res.string.workspace_carry_local_changes) else null
+        listOfNotNull(location, env, carry).joinToString(" · ")
     }
 
-    val tooltipText = remember(isExistingConversation, activeWorkspace, selection, repositoryInfo) {
-        if (isExistingConversation && activeWorkspace != null) {
-            val kindStr = if (activeWorkspace.workspace.kind == WorkspaceKind.LOCAL) "Local" else "Worktree"
-            val branchStr = activeWorkspace.branch ?: activeWorkspace.workspace.taskBranchName ?: "HEAD"
-            "$kindStr ($branchStr)"
-        } else {
-            val kindStr = if (selection.kind == WorkspaceKind.LOCAL) "Local" else "Worktree"
-            val branchStr = selection.baseRef ?: repositoryInfo?.branch ?: "HEAD"
-            val envStr = selection.environmentId ?: "default"
-            val carryStr = if (selection.carryLocalChanges) "with uncommitted changes" else "clean"
-            "$kindStr ($branchStr, $carryStr) - env: $envStr"
-        }
-    }
-
-    val accessibleDescription = stringResource(Res.string.workspace_selector_description, shortLabel)
+    val accessibleDescription = stringResource(Res.string.workspace_selector_description, location)
 
     Box(modifier = modifier.hoverable(source)) {
         Surface(
@@ -218,6 +215,22 @@ fun WorkspaceSelectorContent(
 }
 
 @Composable
+private fun workspaceLocationLabel(activeWorkspace: WorkspaceInfo, repositoryInfo: RepositoryInfo?): String {
+    val kind = stringResource(if (activeWorkspace.workspace.kind == WorkspaceKind.LOCAL) {
+        Res.string.workspace_kind_local
+    } else {
+        Res.string.workspace_kind_worktree
+    })
+    val baseBranch = resolveWorktreeBaseBranch(activeWorkspace, repositoryInfo)
+    return when {
+        activeWorkspace.branch != null -> stringResource(Res.string.workspace_kind_with_branch, kind, activeWorkspace.branch)
+        baseBranch != null -> stringResource(Res.string.workspace_location_detached_base, kind, baseBranch)
+        !activeWorkspace.headOid.isNullOrBlank() -> stringResource(Res.string.workspace_location_detached, kind)
+        else -> kind
+    }
+}
+
+@Composable
 internal fun WorkspaceSelectorDropdownContent(
     selection: WorkspaceSelection,
     repositoryInfo: RepositoryInfo?,
@@ -266,6 +279,14 @@ internal fun WorkspaceSelectorDropdownContent(
         )
 
         if (isExistingConversation) {
+            if (activeWorkspace != null) {
+                Text(
+                    text = workspaceLocationLabel(activeWorkspace, repositoryInfo),
+                    style = WorkspaceStyle.Body,
+                    color = colors.textPrimary,
+                    modifier = Modifier.padding(horizontal = MederiSpacing.MD)
+                )
+            }
             Text(
                 text = stringResource(Res.string.workspace_existing_conversation_note),
                 style = WorkspaceStyle.Caption,
@@ -303,7 +324,8 @@ internal fun WorkspaceSelectorDropdownContent(
                     Column {
                         Text(stringResource(Res.string.workspace_kind_local))
                         Text(
-                            stringResource(Res.string.workspace_local_desc),
+                            repositoryInfo?.branch?.let { stringResource(Res.string.workspace_local_branch_desc, it) }
+                                ?: stringResource(Res.string.workspace_local_desc),
                             style = WorkspaceStyle.Caption,
                             color = colors.textMuted
                         )
@@ -356,18 +378,14 @@ internal fun WorkspaceSelectorDropdownContent(
                         .padding(horizontal = MederiSpacing.MD)
                 )
 
-                val branches = repositoryInfo?.branches ?: emptyList()
-                val candidateBranches = if (branches.isEmpty()) {
-                    listOfNotNull(repositoryInfo?.branch ?: "main")
-                } else {
-                    branches.map { it.name }
-                }
+                val candidateBranches = repositoryInfo?.branches.orEmpty().map { it.name }
+                    .ifEmpty { listOfNotNull(repositoryInfo?.branch) }
                 val filteredBranches = candidateBranches.filter {
                     branchQuery.isBlank() || it.contains(branchQuery, ignoreCase = true)
                 }
 
                 filteredBranches.forEach { branchName ->
-                    val isSelected = (selection.baseRef ?: repositoryInfo?.branch ?: "main") == branchName
+                    val isSelected = (selection.baseRef ?: repositoryInfo?.branch) == branchName
                     WorkspaceMenuItem(
                         text = {
                             Row(

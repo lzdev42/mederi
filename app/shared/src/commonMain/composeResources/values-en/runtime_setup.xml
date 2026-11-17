@@ -1,19 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="runtime_setup_title">Preparing your work environment</string>
-    <string name="runtime_setup_installing">Installation continues while minimized.</string>
-    <string name="runtime_setup_checking">Checking…</string>
+    <string name="runtime_setup_title">Install the tools you need</string>
+    <string name="runtime_setup_intro">These tools let Mederi run local tools, process files, and manage projects.</string>
+    <string name="runtime_setup_node">Node.js · Runs some local tools.</string>
+    <string name="runtime_setup_python">Python 3 · Processes spreadsheets, files, and data.</string>
+    <string name="runtime_setup_git">Git · Tracks and compares project changes.</string>
+    <string name="runtime_setup_uv">uv · Helps launch local tools written in Python.</string>
+    <string name="runtime_setup_homebrew">Homebrew · Downloads and installs these tools on your Mac.</string>
+    <string name="runtime_setup_privacy">Your password is used only to authorize installation on this computer. Mederi does not save or send it.</string>
+    <string name="runtime_setup_terminal">Installation terminal</string>
+    <string name="runtime_setup_waiting">Waiting to start</string>
+    <string name="runtime_setup_install">Install and continue</string>
+    <string name="runtime_setup_downloading">Downloading the installer</string>
+    <string name="runtime_setup_installing">Installing tools</string>
+    <string name="runtime_setup_permission">Administrator permission needed</string>
+    <string name="runtime_setup_password">Click the terminal below, type your computer login password, then press Enter. Characters will stay hidden as you type.</string>
+    <string name="runtime_setup_windows">Select Yes in the Windows prompt. If Windows asks for a password, enter it in that prompt.</string>
+    <string name="runtime_setup_confirm_homebrew">Confirm Homebrew installation</string>
+    <string name="runtime_setup_homebrew_return">Click the terminal below and press Enter to continue.</string>
+    <string name="runtime_setup_background">You can minimize the window while installation continues.</string>
+    <string name="runtime_setup_checking">Checking that the tools are ready</string>
     <string name="runtime_setup_minimize">Minimize</string>
-    <string name="runtime_setup_missing">Some components are still missing.</string>
+    <string name="runtime_setup_missing">Some tools are still missing</string>
+    <string name="runtime_setup_retry_hint">Try installing again. If you installed the tools elsewhere, check again.</string>
+    <string name="runtime_setup_exit_code">The installer exited with code %1$d.</string>
     <string name="runtime_setup_retry">Retry installation</string>
     <string name="runtime_setup_check">Check again</string>
-    <string name="runtime_setup_manual">Install in terminal</string>
-    <string name="runtime_setup_windows">Run in PowerShell and approve the administrator prompt.</string>
-    <string name="runtime_setup_linux">Run in a terminal and enter your administrator password if prompted.</string>
-    <string name="runtime_setup_copy">Copy command</string>
-    <string name="runtime_setup_command_error">Could not prepare the install command. Use a published build.</string>
-    <string name="runtime_setup_homebrew_install">If you need Homebrew, run this in Terminal. Enter your password if prompted and follow the Next steps to set your PATH.</string>
-    <string name="runtime_setup_homebrew_packages">Run this in Terminal.</string>
-    <string name="runtime_setup_show_details">Show install log</string>
-    <string name="runtime_setup_hide_details">Hide install log</string>
+    <string name="runtime_setup_show_details">Show error details</string>
+    <string name="runtime_setup_hide_details">Hide error details</string>
+    <string name="runtime_setup_ready">Your work environment is ready</string>
+    <string name="runtime_setup_opening">Opening the workspace…</string>
 </resources>

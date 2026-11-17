@@ -175,7 +175,10 @@ class ProviderFormsDeliveryTest {
         } }
         onNodeWithText(save).performScrollTo().assertIsNotEnabled()
         onNodeWithContentDescription(name).performScrollTo().performTextInput("  Raw provider  ")
-        onNodeWithText(ProtocolType.GOOGLE.displayName).performScrollTo().performClick()
+        // 2026-11-15：协议选择器只提供可新建协议（CREATABLE = OPENAI_CHAT / OPENAI_RESPONSES），
+        // GOOGLE 仅内置供应商使用，不再出现在新建表单。用 OPENAI_RESPONSES 覆盖同一条
+        // 「选中协议驱动 baseUrl placeholder + 原样回传」链路。
+        onNodeWithText(ProtocolType.OPENAI_RESPONSES.displayName).performScrollTo().performClick()
         onNodeWithContentDescription(url).performScrollTo().performTextInput(" https://example.invalid/api ")
         onNodeWithContentDescription(secret).performScrollTo().performTextInput(" raw-key ")
         runOnIdle { saving.value = true }
@@ -183,7 +186,7 @@ class ProviderFormsDeliveryTest {
         onNodeWithText(cancel).assertIsNotEnabled()
         runOnIdle { assertNull(values); saving.value = false }
         onNodeWithText(save).performClick()
-        runOnIdle { assertEquals(listOf("  Raw provider  ", ProtocolType.GOOGLE, " https://example.invalid/api ", " raw-key ", emptyMap<String, String?>()), values) }
+        runOnIdle { assertEquals(listOf("  Raw provider  ", ProtocolType.OPENAI_RESPONSES, " https://example.invalid/api ", " raw-key ", emptyMap<String, String?>()), values) }
     }
 
     @Test

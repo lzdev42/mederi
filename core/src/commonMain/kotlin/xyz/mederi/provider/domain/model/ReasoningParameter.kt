@@ -20,8 +20,7 @@ import kotlinx.serialization.json.JsonObject
  *
  * ## NONE 语义
  *
- * NONE 档缺省为 null = 不发推理参数（大多数 API：不发即关）。
- * 奇葩端点需要显式关闭时，在 NONE 档填关闭参数（如 `{"enable_thinking":false}`）。
+ * 默认关闭参数由协议决定，也可在 NONE 档提供供应商自己的关闭片段。
  *
  * ## 兼容字段（已降级，仅用于读取旧配置）
  *
@@ -34,18 +33,26 @@ import kotlinx.serialization.json.JsonObject
  * GoogleParams 的 thinkingConfig 是强类型参数，不支持根级合并，因此 GOOGLE 类型供应商的
  * [levels] 值仍为标量：数字字符串 → thinkingBudget，"minimal"/"low"/"high" → thinkingLevel。
  *
- * @param levels 级别 → 请求体 JSON 片段。值为 null 或键缺失表示该级别不发参数。
+ * @param levels 级别 → 已配置的请求体片段或标量。
  * @param parameterName 旧版标量值的挂载参数名，新配置留空。
  * @param customRequestBody 旧版级别无关静态参数，始终合并（不覆盖级别片段已写入的 key）。
+ * @param useProtocolDefaults 是否为未配置的档位继承协议默认值。代码预设可提供完整映射。
  */
 @Serializable
 data class ReasoningParameter(
     val levels: Map<ReasoningLevel, String?>,
     val parameterName: String = "",
-    val customRequestBody: Map<String, String> = emptyMap()
+    val customRequestBody: Map<String, String> = emptyMap(),
+    val useProtocolDefaults: Boolean = true
 ) {
+    /** 保留所有显式配置，为缺失、null 或空白档位补入协议默认值。 */
+    fun withProtocolDefaults(type: ProviderType): ReasoningParameter {
+        if (!useProtocolDefaults) return this
+        return copy(levels = forType(type).levels + levels.filterValues { !it.isNullOrBlank() })
+    }
+
     /**
-     * 获取指定级别对应的原始值（JSON 片段或标量），null/缺失表示不发参数。
+     * 获取指定级别对应的原始值（JSON 片段或标量），缺失时返回 null。
      */
     fun resolve(level: ReasoningLevel): String? = levels[level]
 
@@ -79,6 +86,10 @@ data class ReasoningParameter(
     companion object {
         private val json = Json
 
+        /** 计算请求与档位菜单共用的生效配置。 */
+        fun effective(type: ProviderType, parameter: ReasoningParameter?): ReasoningParameter =
+            parameter?.withProtocolDefaults(type) ?: forType(type)
+
         /**
          * 将字符串解析为任意 JSON 元素，失败返回 null。
          */
@@ -96,11 +107,11 @@ data class ReasoningParameter(
 
         /**
          * OpenAI Chat Completions 默认推理配置。
-         * 每档为根级合并的请求体片段；NONE 不发参数（不发即关）。
+         * 每档为根级合并的请求体片段；NONE 显式发送 `reasoning_effort: "none"`。
          */
         fun forOpenAIChat(): ReasoningParameter = ReasoningParameter(
             levels = mapOf(
-                ReasoningLevel.NONE to null,
+                ReasoningLevel.NONE to """{"reasoning_effort":"none"}""",
                 ReasoningLevel.MINIMAL to """{"reasoning_effort":"minimal"}""",
                 ReasoningLevel.LOW to """{"reasoning_effort":"low"}""",
                 ReasoningLevel.MEDIUM to """{"reasoning_effort":"medium"}""",

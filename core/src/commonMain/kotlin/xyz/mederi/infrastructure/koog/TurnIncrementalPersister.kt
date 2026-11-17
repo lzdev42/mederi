@@ -4,11 +4,19 @@ import ai.koog.agents.core.environment.ReceivedToolResult
 import ai.koog.agents.core.dsl.extension.ReceivedToolResults
 import ai.koog.prompt.message.Message as KoogMessage
 import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.utils.time.KoogClock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.withContext
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
+import xyz.mederi.domain.model.Message
+import xyz.mederi.domain.model.MessageRole
+import xyz.mederi.domain.model.ModelRequestRecord
 import xyz.mederi.store.HistoryStore
+import xyz.mederi.store.ModelRequestStore
 import java.time.Instant
 
 /**
@@ -44,20 +52,70 @@ class TurnIncrementalPersister(
     val includeImages: Boolean = true,
     val workStartedAt: Long? = null,
     private val responseBoundary: ((String, Boolean) -> Unit)? = null,
-    private val consumeInput: (suspend (SteeringItem) -> Unit)? = null
+    private val consumeInput: (suspend (SteeringItem) -> Unit)? = null,
+    private val modelRequestStore: ModelRequestStore? = null,
+    private val usageOwnerSessionId: String = sessionId,
+    private val usageEventBus: MutableSharedFlow<MederiEvent>? = eventBus,
 ) {
     val lastAssistantMessageId = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
     val currentResponseId = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
-    fun beginResponse(): String {
-        val id = "msg_${java.util.UUID.randomUUID()}"
+    suspend fun beginResponse(): String {
+        val id = beginModelRequest()
         currentResponseId.set(id)
         responseBoundary?.invoke(id, true)
         return id
     }
 
+    internal suspend fun beginModelRequest(purpose: String? = null): String {
+        val id = "msg_${java.util.UUID.randomUUID()}"
+        if (modelRequestStore != null) {
+            val startedAt = Instant.now().toString()
+            val usage = Message(id = id, sessionId = sessionId, role = MessageRole.ASSISTANT,
+                parts = emptyList(), createdAt = startedAt, modelRequestCompleted = false, modelRequestPurpose = purpose,
+            ).withDiagnostics(diagnostics)
+            modelRequestStore.start(ModelRequestRecord(id, usageOwnerSessionId, sessionId, startedAt, usage))
+            publishUsageEvent(EventType.LLM_REQUEST_STARTED, id)
+        }
+        return id
+    }
+
     fun completeResponse(id: String) { responseBoundary?.invoke(id, false) }
+
+    internal suspend fun recordResponseUsage(id: String, frame: StreamFrame.End, purpose: String? = null): Boolean {
+        val store = modelRequestStore ?: return false
+        val meta = frame.metaInfo
+        val read = meta.cacheReadTokens()
+        val write = meta.cacheWriteTokens()
+        // 兼容端点可能在意外断流时合成空 End。仅实际结束标记或明确上报的计数可以补齐账本。
+        if (frame.finishReason.isNullOrBlank() && meta.totalTokensCount == null && meta.inputTokensCount == null &&
+            meta.outputTokensCount == null && read == null && write == null
+        ) return false
+        val usage = Message(
+            id = id, sessionId = sessionId, role = MessageRole.ASSISTANT, parts = emptyList(),
+            createdAt = Instant.now().toString(), finishReason = frame.finishReason,
+            totalTokens = meta.totalTokensCount, inputTokens = meta.inputTokensCount,
+            outputTokens = meta.outputTokensCount, cachedTokens = read, cacheWriteTokens = write,
+            modelRequestCompleted = true, modelRequestPurpose = purpose,
+        ).withDiagnostics(diagnostics)
+        // 收到的供应商用量独立于聊天落库，取消不能丢掉已上报的用量。
+        withContext(NonCancellable) {
+            store.complete(usageOwnerSessionId, id, usage)
+            publishUsageEvent(EventType.LLM_REQUEST_COMPLETED, id, extractUsagePayload(usage))
+        }
+        return true
+    }
+
+    private suspend fun publishUsageEvent(type: EventType, id: String, usage: Map<String, String> = emptyMap()) {
+        usageEventBus?.emit(MederiEvent(
+            type = type,
+            sessionId = usageOwnerSessionId,
+            messageId = id,
+            payload = usage + mapOf("usageLedger" to "true", "executionSessionId" to sessionId),
+            timestamp = Instant.now().toString(),
+        ))
+    }
 
     suspend fun consumeSteering(item: SteeringItem) { consumeInput?.invoke(item) }
 
@@ -65,7 +123,7 @@ class TurnIncrementalPersister(
      * 输入接收可早于本次响应落库，但在模型因果顺序上，尚未消费的输入位于
      * 当前响应/工具结果之后。原子插入，避免历史重开后变成“模型已答过插话”。
      */
-    private suspend fun persistBeforePending(message: xyz.mederi.domain.model.Message) {
+    private suspend fun persistBeforePending(message: Message) {
         historyStore.updateHistory(sessionId) { history ->
             val index = history.indexOfFirst { it.pendingSteering }.let { if (it < 0) history.size else it }
             history.take(index) + message + history.drop(index)
@@ -79,11 +137,21 @@ class TurnIncrementalPersister(
      * 含推理+正文流式全程）。Koog 的 ResponseMetaInfo.timestamp 是**流结束/usage 到达时刻**
      * （非响应创建时刻），用它推算（storedAt - timestamp）≈ 0——所以必须显式传入。
      * null 时回退 metaInfo 推算（reconcile 兜底路径）。
+     * @param requestCompleted 为 false 时仅保存断流后的部分输出。
      */
-    suspend fun persistAssistant(response: KoogMessage.Assistant, durationMs: Long? = null) {
+    suspend fun persistAssistant(
+        response: KoogMessage.Assistant,
+        durationMs: Long? = null,
+        requestCompleted: Boolean = true,
+    ) {
         runCatching {
             val base = KoogMessageMapper.fromKoogMessage(sessionId, response).withDiagnostics(diagnostics)
-                .copy(turnId = turnId, isFinalAnswer = false, workStartedAt = workStartedAt)
+                .copy(
+                    turnId = turnId,
+                    isFinalAnswer = false,
+                    workStartedAt = workStartedAt,
+                    modelRequestCompleted = requestCompleted,
+                )
             val msg = if (durationMs != null) {
                 base.copy(durationMs = base.durationMs ?: durationMs.coerceAtLeast(0L))
             } else {

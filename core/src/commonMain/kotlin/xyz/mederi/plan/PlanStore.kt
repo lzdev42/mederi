@@ -3,6 +3,7 @@ package xyz.mederi.plan
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import xyz.mederi.config.MederiIdentity
+import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.debug.DebugLog
 import java.io.File
 /**
@@ -134,11 +135,11 @@ class PlanStore(
             val expectedRoot = File(artifactDirectory.absoluteFile.parentFile.canonicalFile, artifactDirectory.name)
             val expectedDir = File(expectedRoot, "plans/${plan.id}")
             require(expectedDir.canonicalFile == expectedDir) { "Plan projection directory must not traverse symlinks." }
-            writePlanFile(authority, payload)
         }
-        val dir = writePlanDir(plan.id) ?: return
-        writePlanFile(File(dir, "plan.json"), payload)
+        val dir = checkNotNull(writePlanDir(plan.id)) { "Could not create the plan directory for ${plan.id}." }
         writePlanFile(File(dir, "plan.md"), buildMarkdown(plan))
+        writePlanFile(File(dir, "plan.json"), payload)
+        if (authority != null) writePlanFile(authority, payload)
     }
 
     fun load(planId: String): Plan? {
@@ -149,15 +150,45 @@ class PlanStore(
     }
 
     /**
-     * 按 sessionId 加载该会话最晚的非终态计划（终态 = COMPLETED/VOIDED）。
-     *
-     * 计划状态机：每个会话同时最多一条"活跃"（非终态）计划——新 write_plan 作废旧的非终态
-     * 计划（voidActivePlans）并成为新的活跃计划。多份计划目录并列时按 createdAt 取最新，
-     * 避免目录乱序读到旧的作废前残本。作废计划已移出 plans/，正常不在此目录；此处仍按
-     * [Plan.isTerminal] 兜底排除，兼顾移出失败/历史数据的边界。
+     * 优先加载正在执行或已获批准的版本。替换草案等待审批期间，旧版仍是当前执行版本。
+     * 如果会话还没有可执行的计划，则返回最近的待批草案。
      */
-    fun loadBySession(sessionId: String): Plan? =
-        listBySession(sessionId).firstOrNull { !it.isTerminal }
+    fun loadBySession(sessionId: String): Plan? {
+        val plans = listBySession(sessionId)
+        return executablePlan(plans) ?: plans.firstOrNull { it.status == PlanStatus.PENDING_APPROVAL }
+    }
+
+    internal data class PlanLifecycleChange(val plan: Plan, val path: String, val voidedPlanIds: List<String>)
+
+    /** 持久化新版后再变更旧版。人工审批期间只清理被替代的待批草案。 */
+    internal fun submitDraft(draft: Plan): PlanLifecycleChange? = synchronized(planWriteLock) {
+        val priorPlans = listBySession(draft.sessionId)
+        val autoApprove = draft.agentMode == AgentMode.AUTONOMOUS
+        val plan = draft.copy(
+            replacesPlanId = executablePlan(priorPlans)?.id,
+            status = if (autoApprove) PlanStatus.APPROVED else PlanStatus.PENDING_APPROVAL,
+        )
+        if (autoApprove && plan.subtasks.any { !acceptanceFilesMatch(it) }) return null
+        save(plan)
+        val path = getPlanAbsolutePath(plan.id) ?: return null
+        val superseded = if (autoApprove) priorPlans.filterNot { it.isTerminal }
+            else priorPlans.filter { it.status == PlanStatus.PENDING_APPROVAL }
+        PlanLifecycleChange(plan, path, voidPlans(superseded))
+    }
+
+    /** 待批内容及验收文件仍与用户看到的版本一致时，批准新版并作废被替代的版本。 */
+    internal fun approveDraft(draft: Plan): PlanLifecycleChange? = synchronized(planWriteLock) {
+        if (draft.status != PlanStatus.PENDING_APPROVAL || load(draft.id) != draft ||
+            draft.subtasks.any { !acceptanceFilesMatch(it) }) return null
+        val path = getPlanAbsolutePath(draft.id) ?: return null
+        val superseded = listBySession(draft.sessionId).filter { it.id != draft.id && !it.isTerminal }
+        val plan = draft.copy(status = PlanStatus.APPROVED)
+        save(plan)
+        PlanLifecycleChange(plan, path, voidPlans(superseded))
+    }
+
+    private fun executablePlan(plans: List<Plan>): Plan? =
+        plans.firstOrNull { it.status == PlanStatus.APPROVED || it.status == PlanStatus.IN_PROGRESS }
 
     /**
      * 按 sessionId 加载该会话的所有历史与活跃计划（涵盖 plans/、plans-done/、plans-voided/），
@@ -314,17 +345,17 @@ class PlanStore(
      * 作废某会话全部非终态计划（含执行中）：状态置 VOIDED 落盘后连同整个 {planId}/ 目录
      * 移入 `plans-voided/`（与 [archive] 的 plans-done/ 对称，作废计划留痕可查、不删文件）。
      *
-     * 触发时机 = 新 write_plan：同一会话只有最新计划可执行，旧计划（无论 PENDING_APPROVAL /
-     * APPROVED / IN_PROGRESS）一律作废。已完成的算凭据保留，不受影响。
-     *
      * @return 被作废的计划 id列表（由调用方用于发 PLAN_PROGRESS(voided) 事件）。
      */
-    fun voidActivePlans(sessionId: String): List<String> {
-        return listBySession(sessionId).filterNot { it.isTerminal }.mapNotNull { plan ->
+    fun voidActivePlans(sessionId: String): List<String> = synchronized(planWriteLock) {
+        voidPlans(listBySession(sessionId).filterNot { it.isTerminal })
+    }
+
+    private fun voidPlans(plans: List<Plan>): List<String> =
+        plans.mapNotNull { plan ->
             val voided = updatePlan(plan.id) { if (it.isTerminal) null else it.copy(status = PlanStatus.VOIDED) }
             voided?.id?.also(::moveToVoided)
         }
-    }
 
     /** 把整个 `plans/{planId}/` 目录移入 `plans-voided/{planId}/`（作废留痕，对称 archive）。 */
     private fun moveToVoided(planId: String) {

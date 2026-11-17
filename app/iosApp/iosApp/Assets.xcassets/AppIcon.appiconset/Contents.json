@@ -1,32 +1,10 @@
 {
   "images": [
     {
-      "filename": "app-icon-1024.png",
+      "size": "1024x1024",
       "idiom": "universal",
       "platform": "ios",
-      "size": "1024x1024"
-    },
-    {
-      "appearances": [
-        {
-          "appearance": "luminosity",
-          "value": "dark"
-        }
-      ],
-      "idiom": "universal",
-      "platform": "ios",
-      "size": "1024x1024"
-    },
-    {
-      "appearances": [
-        {
-          "appearance": "luminosity",
-          "value": "tinted"
-        }
-      ],
-      "idiom": "universal",
-      "platform": "ios",
-      "size": "1024x1024"
+      "filename": "app-icon-1024.png"
     }
   ],
   "info": {

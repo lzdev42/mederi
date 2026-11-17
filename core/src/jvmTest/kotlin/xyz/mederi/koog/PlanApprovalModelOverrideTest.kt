@@ -31,7 +31,7 @@ class PlanApprovalModelOverrideTest {
         override suspend fun get(id: String) = unused()
         override suspend fun require(id: String) = unused()
         override suspend fun create(name: String, type: xyz.mederi.provider.domain.model.ProviderType, baseUrl: String, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?) = unused()
-        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?) = unused()
+        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?, type: xyz.mederi.provider.domain.model.ProviderType?) = unused()
         override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?) = unused()
         override suspend fun delete(id: String) = unused()
         override suspend fun listKeys(providerId: String) = unused()

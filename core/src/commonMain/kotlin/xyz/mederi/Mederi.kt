@@ -41,6 +41,7 @@ import xyz.mederi.store.HistoryStore
 import xyz.mederi.store.InMemoryApiKeyStore
 import xyz.mederi.store.InMemoryDiffStore
 import xyz.mederi.store.InMemoryHistoryStore
+import xyz.mederi.store.InMemoryModelRequestStore
 import xyz.mederi.store.InMemoryMcpServersStore
 import xyz.mederi.store.InMemoryProjectStore
 import xyz.mederi.store.InMemoryProviderStore
@@ -57,6 +58,7 @@ import xyz.mederi.store.db.DatabaseManager
 import xyz.mederi.store.sqlite.SqliteApiKeyStore
 import xyz.mederi.store.sqlite.SqliteDiffStore
 import xyz.mederi.store.sqlite.SqliteHistoryStore
+import xyz.mederi.store.sqlite.SqliteModelRequestStore
 import xyz.mederi.store.sqlite.SqliteMcpServersStore
 import xyz.mederi.store.sqlite.SqliteProjectStore
 import xyz.mederi.store.sqlite.SqliteProviderStore
@@ -248,6 +250,10 @@ class Mederi private constructor(
                 ?: dataDbm?.let { SqliteSessionStore(it) }
                 ?: InMemorySessionStore()
 
+            // Ledger rows reference the same database's owner session.
+            val modelRequestStore = dataDbm?.takeIf { config.sessionStore == null }?.let(::SqliteModelRequestStore)
+                ?: InMemoryModelRequestStore()
+
             val diffStore = config.diffStore
                 ?: dataDbm?.let { SqliteDiffStore(it) }
                 ?: InMemoryDiffStore()
@@ -265,7 +271,7 @@ class Mederi private constructor(
                 paths?.root?.let { java.io.File(it, "auth/chatgpt") }
             )
             val providerManager = ProviderManagerImpl(providerStore, apiKeyStore, chatGptAuth)
-            val projectManager = ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore)
+            val projectManager = ProjectManagerImpl(projectStore, sessionStore, historyStore, diffStore, modelRequestStore)
             val mcpServerManager = McpServerManagerImpl(mcpServerStore, mcpConnector)
             val mcpMarketManager = McpMarketManagerImpl(OfficialRegistrySource())
             // skills 需在 sessionManager 构造前就绪（注入系统提示词：主代理 + EXECUTOR 继承，见 AgentCapabilities）
@@ -314,6 +320,7 @@ class Mederi private constructor(
                 sessionStore = sessionStore,
                 historyStore = historyStore,
                 projectManager = projectManager,
+                modelRequestStore = modelRequestStore,
                 providerManager = providerManager,
                 diffStore = diffStore,
                 mcpConnector = mcpConnector,
@@ -421,6 +428,10 @@ class Mederi private constructor(
                 5 to listOf(
                     "ALTER TABLE sessions ADD COLUMN subagent_configs TEXT NOT NULL DEFAULT '{}'",
                     "ALTER TABLE sessions ADD COLUMN subagent_max_concurrent INTEGER"
+                ),
+                6 to listOf(
+                    "CREATE TABLE IF NOT EXISTS model_requests (sequence INTEGER NOT NULL PRIMARY KEY, owner_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, request_id TEXT NOT NULL, execution_session_id TEXT NOT NULL, started_at TEXT NOT NULL, usage_payload TEXT, completed INTEGER NOT NULL DEFAULT 0, UNIQUE (owner_session_id, request_id))",
+                    "CREATE INDEX IF NOT EXISTS idx_model_requests_owner_sequence ON model_requests(owner_session_id, sequence)"
                 )
             )
 
@@ -461,7 +472,7 @@ class Mederi private constructor(
         }
 
         /** 当前 data.db schema 版本（每次改 .sq schema 递增 + 加迁移脚本）。 */
-        internal const val DATA_DB_VERSION = 5
+        internal const val DATA_DB_VERSION = 6
 
         /** 创建 SQLite driver（WAL + 外键约束），建表。 */
         private fun createDriver(dbPath: String): app.cash.sqldelight.db.SqlDriver {

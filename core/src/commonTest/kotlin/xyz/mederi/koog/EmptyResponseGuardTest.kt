@@ -6,28 +6,24 @@ import ai.koog.prompt.streaming.StreamFrame
 import xyz.mederi.infrastructure.koog.toAssistantMessageSafe
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/**
- * 验证 toAssistantMessageSafe() 的空响应兜底：
- * 模型返回空响应或纯思考响应时，补入 Text("") 防止图引擎卡死
- * （AIAgentStuckInTheNodeException）。
- */
 class EmptyResponseGuardTest {
 
     @Test
-    fun emptyFrames_injectsEmptyText() {
+    fun endOnlyResponseHasNoContent() {
         // 模型只返回 End 帧，没有任何内容
         val frames = listOf(
             StreamFrame.End(finishReason = "stop", metaInfo = ResponseMetaInfo.Empty)
         )
         val result = frames.toAssistantMessageSafe()
-        // 必须有至少一个 Text part，否则图边条件全不匹配
-        assertTrue(result.parts.any { it is MessagePart.Text }, "empty response should have injected Text")
+        assertTrue(result.parts.isEmpty())
+        assertEquals("stop", result.finishReason)
     }
 
     @Test
-    fun reasoningOnly_injectsEmptyText() {
+    fun reasoningOnlyResponsePreservesReasoning() {
         // 模型只输出了思考过程，没有正文也没有工具调用
         val frames = listOf(
             StreamFrame.ReasoningComplete(
@@ -36,27 +32,34 @@ class EmptyResponseGuardTest {
             StreamFrame.End(finishReason = "stop", metaInfo = ResponseMetaInfo.Empty)
         )
         val result = frames.toAssistantMessageSafe()
-        // Reasoning 应保留
-        assertTrue(result.parts.any { it is MessagePart.Reasoning }, "reasoning should be preserved")
-        // 必须补了一个 Text
-        assertTrue(result.parts.any { it is MessagePart.Text }, "reasoning-only response should have injected Text")
+        val reasoning = assertIs<MessagePart.Reasoning>(result.parts.single())
+        assertEquals(listOf("Let me think..."), reasoning.content)
     }
 
     @Test
-    fun normalTextResponse_noInjection() {
-        // 正常的文本响应，不应额外注入
+    fun blankTextBlocksAreOmitted() {
         val frames = listOf(
-            StreamFrame.TextComplete(text = "Hello world", index = 0),
+            StreamFrame.TextComplete(text = "", index = 0),
+            StreamFrame.TextComplete(text = " \n\t", index = 1),
+            StreamFrame.End(finishReason = "stop", metaInfo = ResponseMetaInfo.Empty)
+        )
+        assertTrue(frames.toAssistantMessageSafe().parts.isEmpty())
+    }
+
+    @Test
+    fun whitespaceWithinMeaningfulTextIsPreserved() {
+        val frames = listOf(
+            StreamFrame.TextComplete(text = "  ", index = 0),
+            StreamFrame.TextComplete(text = "Hello world\n", index = 0),
             StreamFrame.End(finishReason = "stop", metaInfo = ResponseMetaInfo.Empty)
         )
         val result = frames.toAssistantMessageSafe()
-        val textParts = result.parts.filterIsInstance<MessagePart.Text>()
-        assertEquals(1, textParts.size, "normal response should have exactly one Text part")
-        assertEquals("Hello world", textParts.first().text)
+        val text = assertIs<MessagePart.Text>(result.parts.single())
+        assertEquals("  Hello world\n", text.text)
     }
 
     @Test
-    fun toolCallResponse_noInjection() {
+    fun toolCallOnlyResponsePreservesToolCall() {
         // 有工具调用的响应，不应额外注入
         val frames = listOf(
             StreamFrame.ToolCallComplete(
@@ -65,16 +68,14 @@ class EmptyResponseGuardTest {
             StreamFrame.End(finishReason = "tool_calls", metaInfo = ResponseMetaInfo.Empty)
         )
         val result = frames.toAssistantMessageSafe()
-        assertTrue(result.parts.any { it is MessagePart.Tool.Call }, "tool call should be present")
-        // 有 Tool.Call 时不需要注入 Text
-        assertEquals(1, result.parts.size, "tool-call-only response should not inject extra Text")
+        assertEquals("read_file", assertIs<MessagePart.Tool.Call>(result.parts.single()).tool)
     }
 
     @Test
-    fun completelyEmptyFrames_injectsEmptyText() {
+    fun emptyFrameListHasNoContent() {
         // 极端情况：连 End 帧都没有
         val frames = emptyList<StreamFrame>()
         val result = frames.toAssistantMessageSafe()
-        assertTrue(result.parts.any { it is MessagePart.Text }, "completely empty frames should have injected Text")
+        assertTrue(result.parts.isEmpty())
     }
 }

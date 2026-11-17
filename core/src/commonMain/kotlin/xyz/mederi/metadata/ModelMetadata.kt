@@ -26,7 +26,20 @@ data class ModelMetadata(
     /** 推理档位（供思考菜单展示）。空列表 = 无档位信息。 */
     val reasoningLevels: List<ReasoningLevel> = emptyList(),
     /** 推理控制方式（effort 档位型 / toggle 开关型 / budget 预算型）。 */
-    val reasoningOptionType: ReasoningOptionType? = null
+    val reasoningOptionType: ReasoningOptionType? = null,
+    /** 缓存读写参考价（美元 / 百万 token）。 */
+    val cacheReadPricePerMillion: Double? = null,
+    val cacheWritePricePerMillion: Double? = null,
+    /** 目录明确声明的标准模型 ID。 */
+    val canonicalModelId: String? = null,
+)
+
+/** 模型目录中的标准文本 token 价格，单位为美元 / 百万 token。 */
+data class ModelReferencePricing(
+    val inputPerMillion: Double,
+    val outputPerMillion: Double,
+    val cacheReadPerMillion: Double?,
+    val cacheWritePerMillion: Double?,
 )
 
 /**

@@ -5,7 +5,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +15,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import mederi.app.shared.generated.resources.Res
+import mederi.app.shared.generated.resources.app_icon
+import org.jetbrains.compose.resources.painterResource
 import xyz.mederi.browser.DesktopKBrowserRuntime
 import xyz.mederi.core.bridge.MederiAiCore
 import xyz.mederi.mcp.runtime.McpRuntime
@@ -30,7 +35,8 @@ import java.io.File
 private val terminalHub = PtyTerminalHub()
 
 fun main() = application {
-    val windowState = rememberWindowState()
+    // 启动默认最大化：窗口默认铺满屏幕（macOS 为 zoom，保留窗口 chrome），不是全屏
+    val windowState = rememberWindowState(placement = WindowPlacement.Maximized)
     val missingRuntimes = remember { mutableStateOf<Set<McpRuntime.Component>?>(null) }
     val waitingForDockReopen = remember { mutableStateOf(false) }
     val desktop = remember { if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null }
@@ -99,54 +105,63 @@ fun main() = application {
         },
         state = windowState,
         title = "Mederi",
-        visible = missingRuntimes.value != null && !waitingForDockReopen.value,
+        icon = painterResource(Res.drawable.app_icon),
+        // 窗口立即可见：运行时探测与 core 初始化并行进行，探测结果不再把窗口显示挡在前面。
+        // 缺项时引导页以全屏覆盖层形式弹出（见下方 Box 内叠加）。
+        visible = !waitingForDockReopen.value,
     ) {
-        val missing = missingRuntimes.value ?: return@Window
-        if (missing.isNotEmpty()) {
-            RuntimeSetupPage(
-                missing = missing,
-                onMinimize = { windowState.isMinimized = true },
-            ) { remaining ->
-                if (remaining.isEmpty() && windowState.isMinimized && reopenDesktop != null) {
-                    // Remove the minimized setup window from the Dock without bringing the workspace forward.
-                    waitingForDockReopen.value = true
-                }
-                missingRuntimes.value = remaining
-            }
-            return@Window
-        }
+        Box {
+            // 工作台在探测三态（探测中 / 缺项 / 全齐）下都保持组合：AppState 只创建一次、
+            // aiCore.initialize() 只跑一次。缺项安装期间 core 在后台完成 DB 打开 / Manager 装配 /
+            // 崩溃恢复扫描，引导页消失时工作台已就绪，不再二次初始化。
+            //
+            // 注入文件树数据源（desktop 宿主专属）：根 = 当前工作目录（AppState 项目目录在 MederiApp 内
+            // 创建才可得，宿主注入点取不到，按 S3 spec 退路用 user.dir）
+            val fileTreeProvider = remember { ProjectFileTreeProviderJvm(File(System.getProperty("user.dir") ?: ".")) }
+            CompositionLocalProvider(LocalProjectFileTreeProvider provides fileTreeProvider) {
+                MederiApp(
+                    onAppStateReady = { appState ->
+                        appStateHolder.value = appState
 
-        // 注入文件树数据源（desktop 宿主专属）：根 = 当前工作目录（AppState 项目目录在 MederiApp 内
-        // 创建才可得，宿主注入点取不到，按 S3 spec 退路用 user.dir）
-        val fileTreeProvider = remember { ProjectFileTreeProviderJvm(File(System.getProperty("user.dir") ?: ".")) }
-        CompositionLocalProvider(LocalProjectFileTreeProvider provides fileTreeProvider) {
-            MederiApp(
-                onAppStateReady = { appState ->
-                    appStateHolder.value = appState
+                        // 注入遥控 hooks：desktop 宿主 = 内嵌 server + cloudflared 隧道（共享同一 MederiAiCore 实例）
+                        val aiCore = appState.aiCore
+                        if (aiCore is MederiAiCore) {
+                            appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)
 
-                // 注入遥控 hooks：desktop 宿主 = 内嵌 server + cloudflared 隧道（共享同一 MederiAiCore 实例）
-                    val aiCore = appState.aiCore
-                    if (aiCore is MederiAiCore) {
-                        appState.remoteControl = DesktopRemoteControlHooks(aiCore, webappDir)
-
-                        // JCEF 是桌面渲染能力，由桌面宿主初始化并注入 InkCompose。
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-                            aiCore.isReady.first { it }
-                            val kb = DesktopKBrowserRuntime.ensureInitialized()
-                            if (kb != null) {
-                                xyz.emuci.diagram.mermaid.SingleMermaidWorker.attachBrowser(kb)
-                                xyz.emuci.inkcompose.MarkdownExporter.setBrowser(kb)
+                            // JCEF 是桌面渲染能力，由桌面宿主初始化并注入 InkCompose。
+                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+                                aiCore.isReady.first { it }
+                                val kb = DesktopKBrowserRuntime.ensureInitialized()
+                                if (kb != null) {
+                                    xyz.emuci.diagram.mermaid.SingleMermaidWorker.attachBrowser(kb)
+                                    xyz.emuci.inkcompose.MarkdownExporter.setBrowser(kb)
+                                }
                             }
                         }
+
+                        // 注入本地终端：pty4j registry（desktop 进程内直连，jediterm 渲染）
+                        appState.terminalManager = terminalHub
+
+                        // 注入文件树数据源到 AppState（VM 层读取用；CompositionLocal 同源实例，树面板继续用它）
+                        appState.fileTreeProvider = fileTreeProvider
+                    },
+                )
+            }
+
+            // 运行时引导页：探测完成且有缺项时全屏覆盖在工作台之上（不透明 Surface，完全遮挡）。
+            // 安装完成（onChecked 传空集）覆盖层消失；探测未完成（null）或全齐时不渲染。
+            missingRuntimes.value?.takeIf { it.isNotEmpty() }?.let { missing ->
+                RuntimeSetupPage(
+                    missing = missing,
+                    onMinimize = { windowState.isMinimized = true },
+                ) { remaining ->
+                    if (remaining.isEmpty() && windowState.isMinimized && reopenDesktop != null) {
+                        // Remove the minimized setup window from the Dock without bringing the workspace forward.
+                        waitingForDockReopen.value = true
                     }
-
-                    // 注入本地终端：pty4j registry（desktop 进程内直连，jediterm 渲染）
-                    appState.terminalManager = terminalHub
-
-                    // 注入文件树数据源到 AppState（VM 层读取用；CompositionLocal 同源实例，树面板继续用它）
-                    appState.fileTreeProvider = fileTreeProvider
-                },
-            )
+                    missingRuntimes.value = remaining
+                }
+            }
         }
     }
 }

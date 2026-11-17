@@ -41,8 +41,8 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --name, -n NAME     Application display name (default: Mederi)"
-            echo "  --skip-sign         Skip code signing (useful for CI without certs)"
+            echo "  --name, -n NAME     Release file name prefix (default: Mederi)"
+            echo "  --skip-sign         Skip macOS ad-hoc signing and signature verification"
             echo "  --skip-obscura      Skip downloading Obscura browser binary"
             echo "  --no-clean          Skip cleaning build artifacts"
             echo "  --output, -o DIR    Output directory (default: ./release)"
@@ -319,61 +319,71 @@ prepare_obscura
 
 case "$PLATFORM" in
     macos)
-        APP_DIR=$(find "$PROJECT_DIR/app/desktopApp/build/compose/binaries/main-release/app" -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
-        if [[ -z "$APP_DIR" || ! -d "$APP_DIR" ]]; then
-            echo "❌ 未找到打包产物 .app 目录"
+        APP_DIR="$PROJECT_DIR/app/desktopApp/build/compose/binaries/main-release/app/Mederi.app"
+        if [[ ! -d "$APP_DIR" ]]; then
+            echo "❌ 未找到打包产物: $APP_DIR"
             exit 1
         fi
-        
-        BUNDLE_NAME="$(basename "$APP_DIR")"
-        FINAL_APP="$OUTPUT_DIR/$BUNDLE_NAME"
-        rm -rf "$FINAL_APP"
-        cp -R "$APP_DIR" "$FINAL_APP"
 
-        # macOS 下 jpackage 默认不会把 JBR 的 Contents/Frameworks（cef_server.app）打进去
-        # 如果有 JBR JCEF，补拷进 runtime 并签名
+        DMG_ROOT="$STAGING/dmg"
+        mkdir -p "$DMG_ROOT"
+        STAGED_APP="$DMG_ROOT/Mederi.app"
+        cp -R "$APP_DIR" "$STAGED_APP"
+
+        # jpackage 不会复制 JBR 的 Contents/Frameworks，发布前补全 JCEF。
         FRAMEWORKS_SRC=""
         if [[ -n "$JBR_ROOT" && -d "$JBR_ROOT/Contents/Frameworks" ]]; then
             FRAMEWORKS_SRC="$JBR_ROOT/Contents/Frameworks"
         elif [[ -n "$JBR_ROOT" && -d "$JBR_ROOT/Frameworks" ]]; then
             FRAMEWORKS_SRC="$JBR_ROOT/Frameworks"
         fi
-
-        if [[ -n "$FRAMEWORKS_SRC" ]]; then
-            echo "💉 补全 CEF Frameworks 到 App Runtime..."
-            CEF_DST="$FINAL_APP/Contents/runtime/Contents/Frameworks"
-            mkdir -p "$CEF_DST"
-            cp -R "$FRAMEWORKS_SRC/"* "$CEF_DST/"
+        if [[ ! -d "$FRAMEWORKS_SRC/cef_server.app" || -z "$FRAMEWORKS_SRC" ]]; then
+            echo "❌ JBR 缺少 cef_server.app: $JAVA_HOME"
+            exit 1
         fi
+        echo "💉 补全 CEF Frameworks 到 App Runtime..."
+        APP_RUNTIME="$STAGED_APP/Contents/runtime"
+        CEF_DST="$APP_RUNTIME/Contents/Frameworks"
+        mkdir -p "$CEF_DST"
+        cp -R "$FRAMEWORKS_SRC/." "$CEF_DST/"
 
         echo "💉 部署 Obscura 到 App 资源目录..."
-        deploy_obscura "$FINAL_APP/Contents/Resources"
+        deploy_obscura "$STAGED_APP/Contents/Resources"
 
         if [[ "$SKIP_SIGN" == "false" ]]; then
             echo "🔏 执行 Ad-hoc 签名..."
-            codesign --remove-signature "$FINAL_APP" 2>/dev/null || true
-            find "$FINAL_APP" -name "*.dylib" -exec codesign --force -s - {} \; 2>/dev/null || true
-            find "$FINAL_APP" -name "*.jnilib" -exec codesign --force -s - {} \; 2>/dev/null || true
-            
-            if [[ -f "$FINAL_APP/Contents/Resources/obscura" ]]; then
-                codesign --force -s - "$FINAL_APP/Contents/Resources/obscura" 2>/dev/null || true
-            fi
-            if [[ -f "$FINAL_APP/Contents/Resources/obscura-worker" ]]; then
-                codesign --force -s - "$FINAL_APP/Contents/Resources/obscura-worker" 2>/dev/null || true
-            fi
-
-            CEF_FW_DIR="$FINAL_APP/Contents/runtime/Contents/Frameworks"
-            if [[ -d "$CEF_FW_DIR/cef_server.app" ]]; then
-                find "$CEF_FW_DIR" -name "*.dylib" -exec codesign --force -s - {} \; 2>/dev/null || true
-                find "$CEF_FW_DIR/cef_server.app" -path "*/Contents/MacOS/*" -type f -exec codesign --force -s - {} \; 2>/dev/null || true
-                find "$CEF_FW_DIR" -name "*.framework" -exec codesign --force -s - {} \; 2>/dev/null || true
-                find "$CEF_FW_DIR/cef_server.app" -name "*.app" -exec codesign --force -s - {} \; 2>/dev/null || true
-                codesign --force -s - "$CEF_FW_DIR/cef_server.app" 2>/dev/null || true
-            fi
-            codesign --force -s - "$FINAL_APP"
+            find "$STAGED_APP" -type f \( -name '*.dylib' -o -name '*.jnilib' \) \
+                -exec codesign --force --sign - {} +
+            for binary in obscura obscura-worker; do
+                if [[ -f "$STAGED_APP/Contents/Resources/$binary" ]]; then
+                    codesign --force --sign - "$STAGED_APP/Contents/Resources/$binary"
+                fi
+            done
+            # -depth 先签内部 framework 和 helper，再签 CEF 宿主。
+            # 逐个调用才能保证父包签名顺序，并将签名失败传回 shell。
+            find "$CEF_DST" -depth -type d \( -name '*.framework' -o -name '*.app' \) -print0 \
+                > "$STAGING/cef-bundles"
+            while IFS= read -r -d '' bundle; do
+                codesign --force --sign - "$bundle"
+            done < "$STAGING/cef-bundles"
+            codesign --force --sign - "$APP_RUNTIME"
+            codesign --force --sign - "$STAGED_APP"
+            # jpackage 的 runtime 路径需要单独验签，外层校验不会递归到这里。
+            codesign --verify --deep --strict "$APP_RUNTIME"
+            codesign --verify --deep --strict "$STAGED_APP"
         fi
 
+        ln -s /Applications "$DMG_ROOT/Applications"
+        DMG_NAME="${APP_NAME}-desktop-macos-$ARCH_NAME.dmg"
+        hdiutil create -volname Mederi -srcfolder "$DMG_ROOT" -format UDZO "$STAGING/$DMG_NAME"
+        hdiutil verify "$STAGING/$DMG_NAME"
+        mv -f "$STAGING/$DMG_NAME" "$OUTPUT_DIR/$DMG_NAME"
+
+        FINAL_APP="$OUTPUT_DIR/Mederi.app"
+        rm -rf "$FINAL_APP"
+        mv "$STAGED_APP" "$FINAL_APP"
         echo "✓ macOS App: $FINAL_APP"
+        echo "✓ DMG: $OUTPUT_DIR/$DMG_NAME"
         ;;
 
     linux|windows)

@@ -50,7 +50,8 @@ class MederiCompressionStrategy(
     private val eventBus: MutableSharedFlow<MederiEvent> = MutableSharedFlow(),
     private val sessionId: String = "",
     private val onCompactionStart: (() -> Unit)? = null,
-    private val onCompactionEnd: (() -> Unit)? = null
+    private val onCompactionEnd: (() -> Unit)? = null,
+    private val usagePersister: TurnIncrementalPersister? = null,
 ) : HistoryCompressionStrategy() {
 
     /**
@@ -92,7 +93,10 @@ class MederiCompressionStrategy(
                     .withMessages { _ -> batch }
                     .withUpdatedParams { toolChoice = null }
                 llmSession.appendPrompt { user(SUMMARY_PROMPT) }
-                llmSession.requestLLMStreaming().toList().toAssistantMessageSafe().textContent()
+                val requestId = usagePersister?.beginModelRequest("compaction")
+                llmSession.requestLLMStreaming()
+                    .recordRequestUsage(usagePersister, requestId, purpose = "compaction")
+                    .toList().toAssistantMessageSafe().textContent()
             }
 
             // 多批小结合并为一条（保证首行以 TLDR: 开头）

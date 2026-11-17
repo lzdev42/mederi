@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="worktrace_detail_commands">
+        <item quantity="one">%1$d command</item>
+        <item quantity="other">%1$d commands</item>
+    </plurals>
+    <plurals name="worktrace_detail_reads">
+        <item quantity="one">%1$d read</item>
+        <item quantity="other">%1$d reads</item>
+    </plurals>
+    <plurals name="worktrace_detail_searches">
+        <item quantity="one">%1$d search</item>
+        <item quantity="other">%1$d searches</item>
+    </plurals>
+    <plurals name="worktrace_detail_edits">
+        <item quantity="one">%1$d edit</item>
+        <item quantity="other">%1$d edits</item>
+    </plurals>
+    <plurals name="worktrace_detail_lists">
+        <item quantity="one">%1$d listing</item>
+        <item quantity="other">%1$d listings</item>
+    </plurals>
+    <plurals name="worktrace_detail_verifications">
+        <item quantity="one">%1$d subtask check</item>
+        <item quantity="other">%1$d subtask checks</item>
+    </plurals>
+    <plurals name="worktrace_detail_specs">
+        <item quantity="one">%1$d spec update</item>
+        <item quantity="other">%1$d spec updates</item>
+    </plurals>
+    <plurals name="worktrace_detail_subagent_status">
+        <item quantity="one">%1$d subagent status check</item>
+        <item quantity="other">%1$d subagent status checks</item>
+    </plurals>
+    <plurals name="worktrace_detail_mcp">
+        <item quantity="one">%1$d MCP call</item>
+        <item quantity="other">%1$d MCP calls</item>
+    </plurals>
+    <plurals name="worktrace_detail_web_searches">
+        <item quantity="one">%1$d web search</item>
+        <item quantity="other">%1$d web searches</item>
+    </plurals>
+    <plurals name="worktrace_detail_other">
+        <item quantity="one">%1$d tool action</item>
+        <item quantity="other">%1$d tool actions</item>
+    </plurals>
+    <plurals name="worktrace_detail_failures">
+        <item quantity="one">%1$d failure</item>
+        <item quantity="other">%1$d failures</item>
+    </plurals>
+    <plurals name="worktrace_detail_notes">
+        <item quantity="one">%1$d work note</item>
+        <item quantity="other">%1$d work notes</item>
+    </plurals>
+</resources>

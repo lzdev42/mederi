@@ -36,10 +36,7 @@ data class ConversationState(
     val browserAutomation: BrowserAutomationUiState? = null,
     val childConversations: List<Conversation> = emptyList(),
     val errorMessage: String? = null,
-    /**
-     * 主会话 LLM HTTP 请求累计次数：LLM_REQUEST_COMPLETED 事件逐次累加 +
-     * refreshPage 从 assistant 消息数回填（历史会话对齐）。
-     */
+    /** 收到非错误结束响应的会话模型步骤，含子代理。旧历史以已保存响应回填。 */
     val requestCount: Int = 0,
     /** 最近一次 LLM 请求的用量（LLM_REQUEST_COMPLETED 事件更新，refreshPage 回填）；null = 尚无请求 */
     val lastRequestUsage: LastRequestUsage? = null,
@@ -85,10 +82,11 @@ data class MessagesPage(
     val messages: List<ChatMessage>,
     val tokenUsage: TokenUsage,
     val contextUsedTokens: Long = 0,
-    /** 主会话 LLM HTTP 请求累计次数（= assistant 消息数），与 [ConversationState.requestCount] 同义 */
+    /** 与 [ConversationState.requestCount] 同义。 */
     val requestCount: Int = 0,
     /** 最近一次 LLM 请求的用量（取最后一条 assistant 的 usage，无则 null），与 [ConversationState.lastRequestUsage] 同义 */
-    val lastRequestUsage: LastRequestUsage? = null
+    val lastRequestUsage: LastRequestUsage? = null,
+    val cost: CostSummary? = null,
 )
 
 /**

@@ -13,6 +13,7 @@ import xyz.mederi.domain.model.FileDiff
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.MessagePart
+import xyz.mederi.domain.model.ModelRequestRecord
 import xyz.mederi.domain.model.Session
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.infrastructure.koog.TurnExecutor
@@ -21,6 +22,8 @@ import xyz.mederi.mcp.engine.McpConnector
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.store.DiffStore
 import xyz.mederi.store.HistoryStore
+import xyz.mederi.store.InMemoryModelRequestStore
+import xyz.mederi.store.ModelRequestStore
 import xyz.mederi.store.RawMessageRecord
 import xyz.mederi.store.SessionStore
 import xyz.mederi.skills.SkillManager
@@ -72,6 +75,7 @@ class SessionManagerImpl(
     private val llmClientFactory: (xyz.mederi.provider.domain.model.Provider, String) -> ai.koog.prompt.executor.clients.LLMClient = xyz.mederi.provider.infrastructure.koog.KoogClientFactory::create,
     /** RF-07：工作区执行租约（生产装配注入 WorkspaceManager.leaseManager；null = 不参与租约协调）。 */
     private val leaseManager: xyz.mederi.workspace.WorkspaceLeaseManager? = null,
+    private val modelRequestStore: ModelRequestStore = InMemoryModelRequestStore(),
 ) : SessionManager {
 
     private val turnExecutor = TurnExecutor(
@@ -91,6 +95,7 @@ class SessionManagerImpl(
         workspacePreparer = workspacePreparer,
         llmClientFactory = llmClientFactory,
         leaseManager = leaseManager,
+        modelRequestStore = modelRequestStore,
     )
 
     override suspend fun list(): List<Session> = sessionStore.list()
@@ -149,6 +154,7 @@ class SessionManagerImpl(
         sessionStore.delete(id)
         historyStore.delete(id)
         diffStore?.delete(id)
+        modelRequestStore.delete(id)
     }
 
     override suspend fun abort(id: String) {
@@ -316,6 +322,12 @@ class SessionManagerImpl(
 
     override suspend fun listMessages(id: String): List<Message> =
         historyStore.load(id)
+
+    override suspend fun listModelRequests(id: String): List<ModelRequestRecord> =
+        modelRequestStore.list(id)
+
+    override suspend fun listAllModelRequests(): List<ModelRequestRecord> =
+        modelRequestStore.listAll()
 
     override suspend fun contextUsedTokens(id: String): Int {
         val session = require(id)

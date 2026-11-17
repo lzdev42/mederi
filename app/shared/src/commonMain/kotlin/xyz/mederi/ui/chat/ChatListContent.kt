@@ -65,12 +65,17 @@ fun ChatListContent(
     showUserMessageActions: Boolean = true,
 ) {
     val colors = LocalMederiColors.current
+    val sidePadding = ChatLayout.messageSidePadding(isCompact)
     CompositionLocalProvider(LocalSessionKey provides viewModel.conversationId) {
         ChatScrollLayout(
             items = chatItems,
             state = lazyListState,
             modifier = modifier,
-            contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 12.dp) else PaddingValues(start = 24.dp, top = 20.dp, end = 24.dp, bottom = 10.dp),
+            contentPadding = if (isCompact) {
+                PaddingValues(horizontal = sidePadding, vertical = 12.dp)
+            } else {
+                PaddingValues(start = sidePadding, top = 20.dp, end = sidePadding, bottom = 10.dp)
+            },
             itemKey = { it.key },
         ) { index, item ->
             Box(
@@ -180,6 +185,7 @@ fun ChatListContent(
                                             isReasoningActive = stepItem.isReasoningActive,
                                             // 推理详情独立限高，默认收起；展开状态锚定步骤 ID。
                                             contentKey = stepItem.key,
+                                            showPreview = false,
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)
                                         )
                                     }

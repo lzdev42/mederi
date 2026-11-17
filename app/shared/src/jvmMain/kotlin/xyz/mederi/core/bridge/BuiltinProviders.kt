@@ -49,6 +49,9 @@ data class BuiltinProviderDef(
     val reasoningParameter: ReasoningParameter? = null,
     val modelsDevKey: String? = null
 ) {
+    val effectiveReasoningParameter: ReasoningParameter
+        get() = (reasoningParameter ?: ReasoningParameter.forType(type)).copy(useProtocolDefaults = false)
+
     /**
      * 获取该端点对应的完整显示名（如 "Agnes SG"、"Agnes CN"）。
      */
@@ -95,7 +98,7 @@ object BuiltinProviders {
                 EndpointDef("CN", "https://apihub.agnes-ai.cn/v1")
             ),
             responseSanitization = true,
-            // 开关型端点（Qwen3 无 effort 概念）：NONE = 显式关闭，HIGH = 开启（"高"即开）
+            // 开关型端点：NONE = 显式关闭，HIGH = 开启（"高"即开）
             reasoningParameter = ReasoningParameter(
                 levels = mapOf(
                     ReasoningLevel.NONE to """{"chat_template_kwargs":{"enable_thinking":false}}""",
@@ -108,7 +111,7 @@ object BuiltinProviders {
         BuiltinProviderDef(
             name = "Hetzner",
             type = ProviderType.OPENAI_CHAT,
-            endpoints = listOf(EndpointDef("", "https://inference.hetzner.com/api/v1")),
+            endpoints = listOf(EndpointDef("", "https://inference.hetzner.com/v1")),
             responseSanitization = true,
             modelsDevKey = "hetzner"
         ),
@@ -131,19 +134,9 @@ object BuiltinProviders {
         ),
         BuiltinProviderDef(
             name = "商汤 SenseNova",
-            type = ProviderType.OPENAI_CHAT,
+            type = ProviderType.OPENAI_RESPONSES,
             endpoints = listOf(EndpointDef("", "https://token.sensenova.cn/v1")),
             responseSanitization = true,
-            // 商汤必须显式指定 reasoning_effort: "none" 才能关闭推理
-            reasoningParameter = ReasoningParameter(
-                levels = mapOf(
-                    ReasoningLevel.NONE to """{"reasoning_effort":"none"}""",
-                    ReasoningLevel.LOW to """{"reasoning_effort":"low"}""",
-                    ReasoningLevel.MEDIUM to """{"reasoning_effort":"medium"}""",
-                    ReasoningLevel.HIGH to """{"reasoning_effort":"high"}""",
-                    ReasoningLevel.MAX to """{"reasoning_effort":"max"}"""
-                )
-            ),
             modelsDevKey = "sensenova"
         )
     )

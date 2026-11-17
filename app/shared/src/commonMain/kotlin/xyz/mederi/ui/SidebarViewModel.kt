@@ -5,14 +5,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.dto.CreateProjectInput
+import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.Project
 import xyz.mederi.currentTimeMillis
 import xyz.mederi.ui.appstate.AppState
@@ -23,6 +26,7 @@ data class SidebarUiState(
     val expandedProjectIds: Set<String> = emptySet(),
     val isBusy: Boolean = false,
     val error: String? = null,
+    val recentExpanded: Boolean = true,
 )
 
 class SidebarViewModel(
@@ -40,6 +44,17 @@ class SidebarViewModel(
                 project.conversations.maxOfOrNull { it.updatedAt } ?: project.createdAt
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val recentConversations: StateFlow<List<Conversation>> = appState.projects
+        .map { projects ->
+            projects.asSequence()
+                .flatMap { it.conversations.asSequence() }
+                .sortedByDescending { it.updatedAt }
+                .take(5)
+                .toList()
+        }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** 60 秒周期 tick，驱动会话列表相对时间刷新（一个 tick 驱动所有行 recompose） */
     val nowTick: StateFlow<Long> = kotlinx.coroutines.flow.flow {
@@ -162,11 +177,21 @@ class SidebarViewModel(
         )
     }
 
+    fun toggleRecentExpanded() {
+        uiState = uiState.copy(recentExpanded = !uiState.recentExpanded)
+    }
+
     fun selectProject(id: String?) {
         appState.selectProject(id)
     }
 
     fun selectConversation(id: String?) {
+        if (id != null) {
+            val project = appState.projects.value.firstOrNull { project ->
+                project.conversations.any { it.id == id }
+            } ?: return
+            if (project.id != appState.selectedProjectId.value) appState.selectProject(project.id)
+        }
         appState.selectConversation(id)
     }
 

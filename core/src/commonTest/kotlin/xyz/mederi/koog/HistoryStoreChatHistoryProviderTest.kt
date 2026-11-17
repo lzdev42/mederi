@@ -51,6 +51,27 @@ class HistoryStoreChatHistoryProviderTest {
             )
         )
 
+    @Test
+    fun loadOmitsBlankTextFromLegacyHistory() = runBlocking {
+        val store = InMemoryHistoryStore()
+        val reasoning = MederiMessagePart.Reasoning(content = listOf("partial reasoning"))
+        val history = listOf(
+            mederiMessage("a1", MessageRole.ASSISTANT, listOf(reasoning, MederiMessagePart.Text(""))),
+            mederiMessage("a2", MessageRole.ASSISTANT, listOf(MederiMessagePart.Text(""))),
+            mederiMessage("u1", MessageRole.USER, listOf(MederiMessagePart.Text("  \n"), MederiMessagePart.Image(IMAGE_URL))),
+            mederiMessage("u2", MessageRole.USER, listOf(MederiMessagePart.Text("  continue\n")))
+        )
+        history.forEach { store.append("s1", it) }
+
+        val loaded = HistoryStoreChatHistoryProvider(store).load("s1")
+
+        assertEquals(listOf("a1", "u1", "u2"), loaded.map { it.id })
+        assertEquals(listOf("partial reasoning"), (loaded[0].parts.single() as KoogMessagePart.Reasoning).content)
+        assertTrue(loaded[1].parts.single() is KoogMessagePart.Attachment)
+        assertEquals("  continue\n", (loaded[2].parts.single() as KoogMessagePart.Text).text)
+        assertEquals(history, store.load("s1"))
+    }
+
     // ── ① load includeImages=false 剔除图片 ──────────────────────────────
     @Test
     fun testLoadStripsImagesWhenIncludeImagesFalse() = runBlocking {
@@ -290,6 +311,58 @@ class HistoryStoreChatHistoryProviderTest {
     }
 
     // ── ⑥ ToolResult 共用 ID 去重 ─────────────────────────────────────────
+    @Test
+    fun cancelledToolAndOrphanResultStayLocalAndCompactionKeepsRetainedText() = runBlocking {
+        val store = InMemoryHistoryStore()
+        val original = listOf(
+            mederiMessage("old", MessageRole.USER, listOf(MederiMessagePart.Text("summarize me"))),
+            mederiMessage("orphan", MessageRole.USER, listOf(MederiMessagePart.ToolResult("lost", "read_file", "old output"))),
+            mederiMessage("recent", MessageRole.ASSISTANT, listOf(
+                MederiMessagePart.Text("I will read this file"),
+                MederiMessagePart.ToolCall("cancelled", "read_file", "{}")
+            ))
+        )
+        original.forEach { store.append("s1", it) }
+        val provider = HistoryStoreChatHistoryProvider(store)
+        val replay = provider.load("s1")
+        assertEquals(listOf("old", "recent"), replay.map { it.id })
+        assertEquals(listOf(KoogMessagePart.Text("I will read this file")), replay.last().parts)
+
+        provider.store("s1", listOf(
+            KoogMessage.Assistant("TLDR: covered the initial request", ResponseMetaInfo.Empty, id = "summary"),
+            replay.last()
+        ))
+        assertEquals(listOf("TLDR: covered the initial request", "I will read this file"),
+            provider.load("s1").flatMap { it.parts }.filterIsInstance<KoogMessagePart.Text>().map { it.text })
+        assertEquals(original, store.load("s1").filter { it.role != MessageRole.SUMMARY })
+    }
+
+    @Test
+    fun malformedHistoricalCallAndItsResultRemainInStorageButAreNotReplayed() = runBlocking {
+        val store = InMemoryHistoryStore()
+        val original = listOf(
+            mederiMessage("u1", MessageRole.USER, listOf(MederiMessagePart.Text("go"))),
+            mederiMessage("a1", MessageRole.ASSISTANT, listOf(
+                MederiMessagePart.Text("Preparing tools"),
+                MederiMessagePart.ToolCall("bad", "ask_user", """{"questions":"""),
+                MederiMessagePart.ToolCall("good", "read_file", """{"path":"file.txt"}""")
+            )),
+            mederiMessage("r1", MessageRole.USER, listOf(
+                MederiMessagePart.ToolResult("bad", "ask_user", "Parse error", isError = true)
+            )),
+            mederiMessage("r2", MessageRole.USER, listOf(
+                MederiMessagePart.ToolResult("good", "read_file", "file contents")
+            ))
+        )
+        original.forEach { store.append("s1", it) }
+
+        val replay = HistoryStoreChatHistoryProvider(store).load("s1")
+        assertEquals(listOf("u1", "a1", "r2"), replay.map { it.id })
+        assertEquals(listOf("good"), replay.flatMap { it.parts }.filterIsInstance<KoogMessagePart.Tool.Call>().map { it.id })
+        assertEquals(listOf("good"), replay.flatMap { it.parts }.filterIsInstance<KoogMessagePart.Tool.Result>().map { it.id })
+        assertEquals(original, store.load("s1"))
+    }
+
     @Test
     fun toolResultSharedIdDeduplicatesOnStore() = runBlocking {
         val store = InMemoryHistoryStore()

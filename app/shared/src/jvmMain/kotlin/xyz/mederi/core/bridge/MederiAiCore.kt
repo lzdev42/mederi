@@ -63,9 +63,11 @@ import xyz.mederi.core.contract.models.FileDiff
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.Project
 import xyz.mederi.core.contract.models.ProviderConfig
+import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.core.contract.models.AgentOption
 import xyz.mederi.core.contract.models.ProcessStats
 import xyz.mederi.core.contract.models.TokenUsage
+import xyz.mederi.core.contract.models.UsageStatistics
 import xyz.mederi.core.contract.models.SubagentConfigItem
 import xyz.mederi.core.contract.models.SubagentGlobalSettings
 import xyz.mederi.core.contract.models.SubagentReportDto
@@ -75,12 +77,14 @@ import xyz.mederi.browser.BrowserConstants
 import xyz.mederi.browser.BrowserKind
 import xyz.mederi.browser.BrowserRegistry
 import xyz.mederi.browser.obscura.ObscuraBinaryLocator
-import xyz.mederi.browser.obscura.ObscuraBrowserControl
-import xyz.mederi.browser.obscura.ObscuraMcpClient
+import xyz.mederi.browser.obscura.ObscuraCdpClient
+import xyz.mederi.browser.obscura.ObscuraCdpControl
 import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.Session
 import xyz.mederi.debug.DebugLog
 import xyz.mederi.provider.domain.model.Provider
+import xyz.mederi.provider.domain.model.ProviderAuthentication
+import xyz.mederi.provider.domain.model.ReasoningParameter
 import xyz.mederi.provider.infrastructure.koog.retry.LlmRetryConfig
 
 /** 会话最近一次终态错误的瞬态登记（内存态，不持久化；MESSAGE_ERROR 写入，MESSAGE_COMPLETED/新 turn 清除）。 */
@@ -138,6 +142,22 @@ internal fun hydrateLastError(snapshot: ConversationSnapshot, error: LastSession
         errorId = error.errorId,
         errorDiagnostic = error.errorDiagnostic,
         errorIsStreamInterrupted = error.isStreamInterrupted,
+    )
+}
+
+/**
+ * 跨会话累计统计的 apiKeyName 回填：账本只存 keyId，展示名取当前供应商配置。
+ * 已删 Key / 旧记录无 Key（null）/ 轮询（"__rotate__"）join 不到 → apiKeyName 保持 null，由 UI 回落 keyId。
+ */
+internal fun joinApiKeyNames(
+    statistics: UsageStatistics,
+    providers: List<ProviderConfig>,
+): UsageStatistics {
+    val keyNames = providers.associate { provider -> provider.id to provider.apiKeys.associate { it.id to it.name } }
+    return statistics.copy(
+        groups = statistics.groups.map { group ->
+            group.copy(apiKeyName = group.apiKeyId?.let { id -> keyNames[group.providerId]?.get(id) })
+        }
     )
 }
 
@@ -204,7 +224,8 @@ class MederiAiCore(
     /**
      * 注册 Obscura 浏览器后端（§1.5 合规：挂 initialize()）。
      * 幂等——Registry.register 同名覆盖。factory 不起进程：每任务由
-     * BrowserTaskManager 调 factory 新建轻量 control，start() 才 spawn obscura mcp --stealth。
+     * BrowserTaskManager 调 factory 新建轻量 control，start() 才 spawn obscura serve 子进程
+     * （CDP WebSocket，固定 --stealth --allow-private-network）。
      * internal 供 jvmTest 直调（真实 initialize() 需完整运行环境，见 ObscuraRegistrationTest 注释）。
      */
     internal fun registerObscuraBackend(resolver: () -> String? = obscuraBinaryResolver) {
@@ -216,7 +237,7 @@ class MederiAiCore(
                 BrowserRegistry.register(
                     BrowserConstants.DEFAULT_BROWSER_OBSCURA,
                     BrowserKind.OBSCURA,
-                    factory = { _, _ -> ObscuraBrowserControl(ObscuraMcpClient(binary), sessionLifecycleOwner = true) }
+                    factory = { _, _ -> ObscuraCdpControl(ObscuraCdpClient(binary)) }
                 )
                 BrowserRegistry.defaultName = BrowserConstants.DEFAULT_BROWSER_OBSCURA
             }
@@ -509,7 +530,7 @@ class MederiAiCore(
      * 用户通过 [addBuiltinProvider] 主动添加时才会重新创建（且必须带 Key）。
      */
     private suspend fun cleanupLegacyBuiltinProviders() {
-        val coreProviders = mederi.providers.list()
+        val coreProviders = mederi.providers.list().filter { it.authentication == ProviderAuthentication.API_KEY }
         for (entry in BuiltinProviders.allEntries()) {
             val existing = coreProviders.find { it.name.equals(entry.name, ignoreCase = true) }
             if (existing != null && existing.defaultApiKey == null) {
@@ -521,20 +542,19 @@ class MederiAiCore(
     /**
      * 启动时同步内置供应商配置。
      *
-     * 对于已存在的内置供应商（用户已添加且配了 Key），检查其 baseUrl、reasoningParameter、
-     * responseSanitization 是否与代码中的预设模板一致。不一致则更新。
-     * 模型列表不在此同步——模型由用户从远端拉取或手动添加，不属于预设模板。
+     * 对于已存在的内置供应商，将协议类型、地址和推理参数等预设配置写回。
+     * 协议类型和推理参数在同一次更新中保存。模型列表由用户从远端拉取或手动添加。
      */
     private suspend fun syncBuiltinProviders() {
-        val coreProviders = mederi.providers.list()
-        for (entry in BuiltinProviders.allEntries()) {
-            val existing = coreProviders.find { it.name.equals(entry.name, ignoreCase = true) }
-                ?: continue  // 用户未添加此预设供应商，跳过
+        val presets = BuiltinProviders.allEntries()
+        val coreProviders = mederi.providers.list().filter { it.authentication == ProviderAuthentication.API_KEY }
+        for (existing in coreProviders) {
+            val entry = presets.find { it.name.equals(existing.name, ignoreCase = true) } ?: continue
 
-            val expectedReasoningParameter = entry.def.reasoningParameter
-                ?: xyz.mederi.provider.domain.model.ReasoningParameter.forType(entry.def.type)
+            val expectedReasoningParameter = entry.def.effectiveReasoningParameter
 
-            val needsUpdate = existing.baseUrl != entry.baseUrl ||
+            val needsUpdate = existing.type != entry.def.type ||
+                existing.baseUrl != entry.baseUrl ||
                 existing.reasoningParameter != expectedReasoningParameter ||
                 existing.responseSanitization != entry.def.responseSanitization ||
                 existing.modelsDevKey != entry.def.modelsDevKey
@@ -546,7 +566,8 @@ class MederiAiCore(
                     xyz.mederi.api.UpdateProviderRequest(
                         baseUrl = entry.baseUrl,
                         reasoningParameter = expectedReasoningParameter,
-                        modelsDevKey = entry.def.modelsDevKey
+                        modelsDevKey = entry.def.modelsDevKey,
+                        type = entry.def.type.name
                     )
                 )
             }
@@ -603,8 +624,7 @@ class MederiAiCore(
                         reasoningLevels = it.reasoningLevels
                     )
                 },
-                reasoningParameter = def.reasoningParameter
-                    ?: xyz.mederi.provider.domain.model.ReasoningParameter.forType(def.type),
+                reasoningParameter = def.effectiveReasoningParameter,
                 responseSanitization = def.responseSanitization,
                 // 内置供应商填 key 添加是唯一一次自动刷新：拉端点 /models + models.dev 目录补参数
                 fetchModels = true,
@@ -739,7 +759,22 @@ class MederiAiCore(
         sessions = sessions,
         initialSnapshot = initialSnapshot,
         modelToProvider = modelToProvider,
+        referencePricing = ::referencePricing,
     ).flowOn(Dispatchers.IO)
+
+    private fun referencePricing(message: xyz.mederi.domain.model.Message): xyz.mederi.metadata.ModelReferencePricing? {
+        if (!::mederi.isInitialized) return null
+        val configuredProvider = if (message.providerEndpoint == null) {
+            _providers.value.firstOrNull { it.id == message.providerId }
+        } else null
+        val modelId = message.providerModelId
+            ?: configuredProvider?.models?.firstOrNull { it.id == message.modelId }?.providerModelId
+            ?: return null
+        val baseUrl = message.providerEndpoint
+            ?.removeSuffix("/chat/completions")?.removeSuffix("/responses")?.removeSuffix("/models")
+            ?: configuredProvider?.baseUrl
+        return mederi.modelCatalog.referencePricing(modelId, message.modelsDevKey, baseUrl)
+    }
 
     private suspend fun planStoreForSession(conversationId: String): xyz.mederi.plan.PlanStore {
         val session = mederi.sessions.get(conversationId)
@@ -774,14 +809,12 @@ class MederiAiCore(
 
     /**
      * 单次计划扫描装配：pending + 全量列表同源（[PlanApprovalHydration] 恰好承载一次扫描）。
-     * 保持旧语义：loadBySession = listBySession.firstOrNull { !isTerminal }（PlanStore.kt:150-151），
-     * 且仅 PENDING_APPROVAL 计划才上审批卡片（不可简化成"列表里第一个 PENDING"）。
+     * 替换草案与已批准的活跃计划可同时存在，审批卡片独立取最新待批准草案。
      */
     private suspend fun initialPlanHydration(conversationId: String): MederiEventAggregator.PlanApprovalHydration {
         val store = planStoreForSession(conversationId)
         val plans = store.listBySession(conversationId)
-        val pending = plans.firstOrNull { !it.isTerminal }
-            ?.takeIf { it.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL }
+        val pending = plans.firstOrNull { it.status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL }
             ?.toApprovalRequest(store)
         return MederiEventAggregator.PlanApprovalHydration(pending, plans.map { it.toApprovalRequest(store) })
     }
@@ -819,6 +852,7 @@ class MederiAiCore(
             lastError = { lastErrorBySessionId[conversationId] },
             // T09：初始快照水合工作区投影（active/associated + 活跃操作）；未绑定工作区的会话返回 null（runCatching 吞未找到异常）。
             workspaceInfo = { runCatching { mederi.workspaceManager.getConversationWorkspace(conversationId).toContract() }.getOrNull() },
+            referencePricing = ::referencePricing,
         )
     }
 
@@ -932,7 +966,13 @@ class MederiAiCore(
         providerId: String,
         input: ProviderUpdateInput
     ): Result<Unit> = runCatching {
-        if (input.baseUrl != null || input.name != null) {
+        if (input.reasoningParameter != null) {
+            val provider = mederi.providers.get(providerId)
+            if (provider.authentication == ProviderAuthentication.API_KEY && BuiltinProviders.isBuiltinName(provider.name)) {
+                throw xyz.mederi.api.exception.MederiValidationException("Reasoning parameters for built-in providers are set by their preset")
+            }
+        }
+        if (input.baseUrl != null || input.name != null || input.reasoningParameter != null) {
             mederi.providers.update(providerId, MederiInputMapper.toUpdateProviderRequest(input))
         }
         if (!input.apiKey.isNullOrBlank()) {
@@ -1059,6 +1099,9 @@ class MederiAiCore(
     }
 
     override suspend fun createCustomProvider(input: CreateCustomProviderInput): Result<ProviderConfig> = runCatching {
+        if (input.type !in ProtocolType.CREATABLE) {
+            throw xyz.mederi.api.exception.MederiValidationException("Unsupported custom provider protocol: ${input.type.name}")
+        }
         val created = mederi.providers.create(MederiInputMapper.toCreateProviderRequest(input))
         refreshProvidersAndAgents()
         // ProviderApi.create 返回的是 key/model 添加前的对象，需要重新 get 才能拿到合并后的 key。
@@ -1185,8 +1228,8 @@ class MederiAiCore(
         conversationId: String,
         planId: String,
         approved: Boolean
-    ): Result<Unit> = runCatching {
-        mederi.sessions.resolvePlanApproval(conversationId, planId, approved)
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching { mederi.sessions.resolvePlanApproval(conversationId, planId, approved) }
     }
 
     override suspend fun updateConversationSettings(
@@ -1227,17 +1270,20 @@ class MederiAiCore(
         messages.map { MederiModelMapper.toChatMessage(it, toolResults) }
     }
 
-    override suspend fun listMessagesPage(conversationId: String): Result<MessagesPage> = runCatching {
-        val messages = mederi.sessions.listMessages(conversationId)
-        val toolResults = MederiModelMapper.buildToolResultsById(messages)
-        val backfill = MederiModelMapper.toUsageBackfill(messages)
-        MessagesPage(
-            messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
-            tokenUsage = MederiModelMapper.toTokenUsage(messages),
-            contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong(),
-            requestCount = backfill.requestCount,
-            lastRequestUsage = backfill.lastRequestUsage
-        )
+    override suspend fun listMessagesPage(conversationId: String): Result<MessagesPage> = withContext(Dispatchers.IO) {
+        runCatching {
+            val messages = mederi.sessions.listMessages(conversationId)
+            val toolResults = MederiModelMapper.buildToolResultsById(messages)
+            val usage = MederiModelMapper.toUsageProjection(messages, mederi.sessions.listModelRequests(conversationId), ::referencePricing)
+            MessagesPage(
+                messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
+                tokenUsage = usage.tokens,
+                contextUsedTokens = mederi.sessions.contextUsedTokens(conversationId).toLong(),
+                requestCount = usage.requestCount,
+                lastRequestUsage = usage.lastRequest,
+                cost = usage.cost,
+            )
+        }
     }
 
     override suspend fun getMessage(
@@ -1405,6 +1451,14 @@ class MederiAiCore(
         )
     }
 
+    override suspend fun getUsageStatistics(): Result<UsageStatistics> = withContext(Dispatchers.IO) {
+        runCatching {
+            // 全库账本（跨 owner/跨会话），按 供应商+Key+模型 聚合；估价沿用同一 referencePricing
+            val records = mederi.sessions.listAllModelRequests()
+            joinApiKeyNames(MederiModelMapper.toCumulativeUsageStatistics(records, ::referencePricing), _providers.value)
+        }
+    }
+
     override fun events(): Flow<CoreEvent> =
         mederi.sessions.events().map { MederiModelMapper.toCoreEvent(it) }
 
@@ -1479,9 +1533,10 @@ class MederiAiCore(
         _availableModels.value = coreProviders
             .filter { it.defaultApiKey != null || (it.authentication == xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH && mederi.chatGptAuth.isConnected(it.id)) }
             .flatMap { provider ->
+                val effectiveReasoningParameter = ReasoningParameter.effective(provider.type, provider.reasoningParameter)
                 provider.models
                     .filter { it.isEnabled }
-                    .map { MederiModelMapper.toModelOption(it, provider.id, provider.reasoningParameter) }
+                    .map { MederiModelMapper.toModelOption(it, provider.id, effectiveReasoningParameter) }
             }
         _availableAgents.value = BuiltinAgents.ALL
     }

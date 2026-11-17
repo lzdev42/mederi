@@ -1,6 +1,11 @@
 # Installs shared Windows runtimes with WinGet. With no arguments, installs all components.
 $ErrorActionPreference = 'Stop'
 
+function Show-InstallerOutput([IO.StreamReader]$Reader) {
+    $output = $Reader.ReadToEnd()
+    if ($output.Length) { [Console]::Write($output) }
+}
+
 $packages = @{
     node   = @{ Id = 'OpenJS.NodeJS'; Type = 'wix'; Commands = @('node.exe', 'npm.cmd', 'npx.cmd') }
     python = @{ Id = 'Python.Python.3.14'; Type = 'burn'; Commands = @('python.exe') }
@@ -25,12 +30,33 @@ $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.Wind
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     # Use one UAC prompt for all requested machine-wide installers.
     $launcher = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $launcherArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $PSCommandPath)) + $components
-    $installer = Start-Process -FilePath $launcher -ArgumentList $launcherArgs -Verb RunAs -Wait -PassThru
-    if ($installer.ExitCode -ne 0) {
-        throw "System runtime setup exited with code $($installer.ExitCode). Run the command in an administrator PowerShell to see the installer output."
+    $log = [IO.Path]::GetTempFileName()
+    try {
+        $scriptPath = $PSCommandPath.Replace("'", "''")
+        $logPath = $log.Replace("'", "''")
+        $componentArgs = ($components | ForEach-Object { "'$_'" }) -join ' '
+        # A separately elevated process cannot inherit the installer's PTY handles.
+        # Stream its output through a temporary file and retain its real exit code.
+        $command = "& '$scriptPath' $componentArgs *> '$logPath'; if (-not `$?) { exit 1 }"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        Write-Output '[Mederi] Windows approval'
+        $installer = Start-Process -FilePath $launcher -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded -Verb RunAs -PassThru
+        $reader = [IO.StreamReader]::new([IO.File]::Open($log, 'Open', 'Read', 'ReadWrite'), [Text.Encoding]::Unicode)
+        try {
+            while (-not $installer.WaitForExit(250)) { Show-InstallerOutput $reader }
+            Show-InstallerOutput $reader
+            if ($installer.ExitCode -ne 0) {
+                throw "System runtime setup exited with code $($installer.ExitCode)."
+            }
+        } finally {
+            $reader.Dispose()
+            $installer.Dispose()
+        }
+    } finally {
+        Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
     }
 } else {
+    Write-Output '[Mederi] Installing'
     foreach ($component in $components) {
         $package = $packages[$component]
         Write-Output "Installing $($package.Id) for all users..."

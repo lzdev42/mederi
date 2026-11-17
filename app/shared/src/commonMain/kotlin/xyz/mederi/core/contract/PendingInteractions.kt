@@ -29,6 +29,9 @@ internal class PendingInteractionTracker {
                 CoreEventType.QUESTION_RESOLVED -> ids.removeAll { it.startsWith("question:") }
                 CoreEventType.PLAN_APPROVAL_REQUESTED -> event.payload["planId"]?.let { ids.add("plan:$it") }
                 CoreEventType.PLAN_APPROVAL_RESOLVED -> event.payload["planId"]?.let { ids.remove("plan:$it") }
+                CoreEventType.PLAN_PROGRESS -> if (event.payload["action"] == "voided") {
+                    event.payload["planId"]?.let { ids.remove("plan:$it") }
+                }
                 CoreEventType.EXECUTION_APPROVAL_REQUESTED -> event.payload["request"]?.let { raw ->
                     runCatching { json.decodeFromString<ExecutionApprovalRequest>(raw) }.getOrNull()
                         ?.takeIf { it.conversationId == event.sessionId }?.let { ids.add("execution:${it.id}") }

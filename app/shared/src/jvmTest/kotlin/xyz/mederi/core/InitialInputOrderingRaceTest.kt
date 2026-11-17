@@ -30,6 +30,7 @@ class InitialInputOrderingRaceTest {
                 "get" -> session
                 "listMessages" -> history
                 "contextUsedTokens" -> 0
+                "listModelRequests" -> emptyList<Any>()
                 "listSubagentsForSession" -> emptyList<Any>()
                 "events" -> events
                 else -> error("Unexpected API ${method.name}")

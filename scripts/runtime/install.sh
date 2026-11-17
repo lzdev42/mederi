@@ -93,45 +93,51 @@ has_python() { available python3 -E -S -c 'import sys; sys.exit(sys.version_info
 work=
 trap 'if [[ -n "$work" ]]; then rm -rf -- "$work"; fi' EXIT
 prepare_download() {
-    if ! command -v curl >/dev/null && ! command -v wget >/dev/null; then
+    if ! command -v curl >/dev/null; then
         repo_install curl ca-certificates
     fi
     if [[ -z "$work" ]]; then work=$(mktemp -d /tmp/mederi-runtimes.XXXXXXXX); fi
 }
 
 download() {
-    if command -v curl >/dev/null; then
-        curl --fail --silent --show-error --location --proto '=https' --retry 2 "$1" -o "$2"
-    else
-        wget --https-only --tries=3 -O "$2" "$1"
-    fi
+    local minimum_speed=${3:-1024}
+    curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+        --connect-timeout 5 --max-time 300 --speed-limit "$minimum_speed" --speed-time 10 "$1" -o "$2"
 }
 
-verify_sha256() {
-    printf '%s  %s\n' "$1" "$2" | sha256sum -c >/dev/null || die "SHA-256 mismatch: $2"
+download_verified() {
+    local digest=$1 destination=$2 official=$3 mirror=$4 source minimum_speed
+    local -a sources=("$official" "$mirror" "$official")
+    local index
+    for index in "${!sources[@]}"; do
+        source=${sources[index]}
+        minimum_speed=524288
+        # Give a slow official connection a chance if the mirror could not deliver.
+        if [[ "$index" == 2 ]]; then minimum_speed=1024; fi
+        echo "Downloading from $source"
+        if download "$source" "$destination" "$minimum_speed"; then
+            if printf '%s  %s\n' "$digest" "$destination" | sha256sum -c --status; then
+                return
+            fi
+            echo "SHA-256 mismatch: $source" >&2
+        fi
+        rm -f -- "$destination"
+    done
+    die "Could not download a verified copy of ${destination##*/}."
 }
 
 install_node_release() {
-    local arch digest archive release version url prefix binary target
+    # https://nodejs.org/dist/v24.22.3/SHASUMS256.txt
+    local version=v24.22.3 arch digest archive release prefix binary target
     case "$(uname -m)" in
-        x86_64) arch=x64 ;;
-        aarch64|arm64) arch=arm64 ;;
-        ppc64le|s390x) arch=$(uname -m) ;;
+        x86_64) arch=x64; digest=061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2 ;;
+        aarch64|arm64) arch=arm64; digest=261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8 ;;
+        ppc64le) arch=ppc64le; digest=ba4b26ade1f7b3f5ba6756856815de58e353746004e7e46cc838243a6cbf3299 ;;
+        s390x) arch=s390x; digest=d8f84397c1478c0ed0c1b29343626ed0f5f1a0985df0c5975c30f0c03836631f ;;
         *) die "No supported official Node.js Linux binary for $(uname -m)." ;;
     esac
-    # Node.js 24 is an LTS line. Select its latest point release from the official checksum list.
-    url=https://nodejs.org/dist/latest-v24.x
-    echo 'Installing Node.js from nodejs.org.'
-    prepare_download
-    download "$url/SHASUMS256.txt" "$work/SHASUMS256.txt"
-    read -r digest archive < <(awk -v arch="$arch" '$2 ~ ("^node-v24\\.[0-9]+\\.[0-9]+-linux-" arch "\\.tar\\.gz$") { print $1, $2; exit }' "$work/SHASUMS256.txt") ||
-        die "No official Node.js archive found for $arch."
-    [[ "$digest" =~ ^[[:xdigit:]]{64}$ && "$archive" =~ ^node-v24\.[0-9]+\.[0-9]+-linux-$arch\.tar\.gz$ ]] ||
-        die 'Unexpected Node.js checksum data.'
-
-    release=${archive%.tar.gz}
-    version=${release#node-}
-    version=${version%%-*}
+    release="node-$version-linux-$arch"
+    archive="$release.tar.gz"
     prefix="/usr/local/lib/nodejs/$release"
     for binary in node npm npx; do
         target="/usr/local/bin/$binary"
@@ -141,8 +147,10 @@ install_node_release() {
         fi
     done
 
-    download "https://nodejs.org/dist/$version/$archive" "$work/$archive"
-    verify_sha256 "$digest" "$work/$archive"
+    prepare_download
+    download_verified "$digest" "$work/$archive" \
+        "https://nodejs.org/dist/$version/$archive" \
+        "https://mirrors.huaweicloud.com/nodejs/$version/$archive"
     tar --no-same-owner --no-same-permissions -xzf "$work/$archive" -C "$work"
     "$work/$release/bin/node" --version >/dev/null ||
         die 'The official Node.js binary cannot run on this Linux system.'
@@ -190,7 +198,7 @@ install_python_release() {
         [[ -L "$target" && "$(readlink "$target")" == "$interpreter" ]] ||
             die "$target already exists. Resolve the conflict before installing Python."
     fi
-    echo 'Building Python from python.org. This may take several minutes.'
+    echo 'Installing the official CPython source release. Building it may take several minutes.'
     case "$manager" in
         apt-get) repo_install build-essential pkg-config libssl-dev zlib1g-dev libbz2-dev libffi-dev liblzma-dev libreadline-dev libsqlite3-dev ;;
         dnf|yum) repo_install gcc make pkgconfig openssl-devel zlib-devel bzip2-devel libffi-devel xz-devel readline-devel sqlite-devel ;;
@@ -200,8 +208,9 @@ install_python_release() {
     command -v cc >/dev/null && command -v make >/dev/null ||
         die 'Building Python requires a C compiler and make.'
     prepare_download
-    download "https://www.python.org/ftp/python/$version/$archive" "$work/$archive"
-    verify_sha256 "$digest" "$work/$archive"
+    download_verified "$digest" "$work/$archive" \
+        "https://www.python.org/ftp/python/$version/$archive" \
+        "https://mirrors.huaweicloud.com/python/$version/$archive"
     tar --no-same-owner --no-same-permissions -xzf "$work/$archive" -C "$work"
     jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
     [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || jobs=1

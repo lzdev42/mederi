@@ -48,9 +48,13 @@ sealed class MessagePart {
     @Serializable
     data class Image(val url: String, val mimeType: String? = null) : MessagePart()
 
-    /** 文件附件（路径引用） */
+    /** 文件附件（路径引用或数据） */
     @Serializable
-    data class File(val path: String) : MessagePart()
+    data class File(
+        val path: String,
+        val name: String? = null,
+        val mimeType: String? = null
+    ) : MessagePart()
 
     /** 工具调用（出现在 Assistant 消息中） */
     @Serializable
@@ -103,7 +107,7 @@ sealed class MessagePart {
  * @param createdAt 创建时间，ISO 8601（从 metaInfo.timestamp 提取）。
  * @param finishReason 停止原因（仅 Assistant 消息，如 "stop"、"tool_calls"）。
  * @param totalTokens token 总数（仅 Assistant 消息，从 ResponseMetaInfo 提取）。
- * @param inputTokens 输入 token 数（仅 Assistant 消息）。
+ * @param inputTokens 输入 token 总数，包含已读取和写入缓存的输入 token（仅 Assistant 消息）。
  * @param outputTokens 输出 token 数（仅 Assistant 消息）。
  * @param cachedTokens 缓存命中 token 数（仅 Assistant 消息，部分供应商支持）。
  * @param providerId 供应商 ID（原始消息诊断字段）。
@@ -149,6 +153,22 @@ data class Message(
     val pendingWorkspaceInput: PendingWorkspaceInput? = null,
     /** 内部系统触发消息（如跨 turn 计划批准指令）：保留在历史与 AI 视图中，不在 UI 聊天列表展示。 */
     val hiddenFromUi: Boolean = false,
+    /** 供应商报告的缓存写入 token 数。null 表示未报告。 */
+    val cacheWriteTokens: Int? = null,
+    /** 请求发出时的供应商 API 路由，省略认证信息、查询串和片段。 */
+    val providerEndpoint: String? = null,
+    /** 请求使用的上游模型标识。旧记录可能只有本地配置 ID。 */
+    val providerModelId: String? = null,
+    /** false 表示只保留了中断前的输出。null 为旧记录。 */
+    val modelRequestCompleted: Boolean? = null,
+    /** 发出请求时的供应商名称，供历史用量展示。 */
+    val providerName: String? = null,
+    /** 发出请求时用于匹配 models.dev 的供应商标识。 */
+    val modelsDevKey: String? = null,
+    /** 本次请求实际解析使用的 API Key ID（ApiKeyResolver.resolve 结果；轮询="__rotate__"；null=未记录或默认 key）。 */
+    val apiKeyId: String? = null,
+    /** 内部请求用途。null 为正常对话。 */
+    val modelRequestPurpose: String? = null,
 )
 
 /** 与用户消息同一条历史记录持久化。密钥只保存选择的 ID。 */

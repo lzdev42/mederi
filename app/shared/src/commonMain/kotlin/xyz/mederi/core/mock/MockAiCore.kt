@@ -298,6 +298,7 @@ class MockAiCore(
     override suspend fun autoSetupProviderModels(providerId: String): Result<Int> = runCatching { 0 }
 
     override suspend fun createCustomProvider(input: CreateCustomProviderInput): Result<ProviderConfig> = runCatching {
+        require(input.type in ProtocolType.CREATABLE) { "Unsupported custom provider protocol: ${input.type.name}" }
         val config = ProviderConfig(
             id = "custom_${idGenerator.next()}",
             name = input.name,

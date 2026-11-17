@@ -3,7 +3,6 @@ package xyz.mederi
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import xyz.mederi.core.contract.ToolArgParser
@@ -15,9 +14,6 @@ import xyz.mederi.ui.components.parseAskItems
  * 覆盖两条 output 形态：
  * - 干净 JSON（formatToolResultOutput 修复后的新数据 / 真实 AskUserResult 形态）
  * - Koog 引号包裹的非法 JSON（`"{"answers":...}"`，旧 .toString() 落盘的遗留脏数据）
- *
- * 以及 parseAskItems 硬化行为：裸数组支持、合法 JSON 无 answer 不回退原始 JSON、
- * 多问 questionId 不匹配按序 1:1 回退、非 JSON 纯文本仍回退 generalAnswer。
  */
 class ParseAskItemsTest {
 
@@ -64,13 +60,13 @@ class ParseAskItemsTest {
     }
 
     @Test
-    fun `bare array output is parsed by questionId`() {
+    fun `bare array output does not count as a structured result`() {
         val output = """[{"questionId":"q1","answers":["Kotlin"]},{"questionId":"q2","answers":["core","app"]}]"""
 
         val items = parseAskItems(realInput(), output)
 
-        assertEquals("Kotlin", items[0].answer)
-        assertEquals("core, app", items[1].answer)
+        assertEquals(3, items.size)
+        items.forEach { assertNull(it.answer) }
     }
 
     @Test
@@ -85,27 +81,43 @@ class ParseAskItemsTest {
     }
 
     @Test
-    fun `mismatched questionIds with equal count fall back to positional mapping`() {
-        // 多问、questionId 全部不匹配、答案数与问题数一致 → 按序一一对应（最后回退）
+    fun `mismatched questionIds never assign answers by position`() {
         val output = """{"answers":[{"questionId":"x1","answers":["one"]},{"questionId":"x2","answers":["two"]},{"questionId":"x3","answers":["three"]}]}"""
 
         val items = parseAskItems(realInput(), output)
 
-        assertEquals("one", items[0].answer)
-        assertEquals("two", items[1].answer)
-        assertEquals("three", items[2].answer)
+        assertEquals(3, items.size)
+        items.forEach { assertNull(it.answer) }
     }
 
     @Test
-    fun `non-json plain text output still falls back as general answer`() {
-        // 自定义工具的自由文本返回仍保留 generalAnswer 回退（单问进 Q1）
+    fun `a plain text diagnostic is neither an answer nor a decline`() {
         val singleInput = ToolArgParser.parse(
             """{"questions":[{"id":"q1","prompt":"确认继续吗","options":["是","否"]}]}"""
         )
 
-        val items = parseAskItems(singleInput, "looks fine, proceed")
+        val items = parseAskItems(singleInput, "Tool failed to parse options containing the word declined.")
 
-        assertEquals("looks fine, proceed", items[0].answer)
+        assertNull(items.single().answer)
+        assertFalse(items.single().isDeclined)
+    }
+
+    @Test
+    fun `declined in a user answer remains an answer`() {
+        val output = """{"answers":[{"questionId":"q1","answers":["I declined the previous proposal."]}]}"""
+        val items = parseAskItems(realInput(), output)
+
+        assertEquals("I declined the previous proposal.", items[0].answer)
+        items.forEach { assertFalse(it.isDeclined) }
+    }
+
+    @Test
+    fun `duplicate IDs and empty answer lists produce no answer`() {
+        val output = """{"answers":[{"questionId":"q1","answers":["Kotlin"]},{"questionId":"q1","answers":["Java"]},{"questionId":"q2","answers":[]}]}"""
+        val items = parseAskItems(realInput(), output)
+
+        assertEquals(3, items.size)
+        items.forEach { assertNull(it.answer) }
     }
 
     @Test
@@ -136,17 +148,12 @@ class ParseAskItemsTest {
     }
 
     @Test
-    fun `legacy double-encoded questions degrade to placeholder without unpacking`() {
-        // 旧会话双层编码脏数据：questions 的值是"包了引号的数组文本"（JSON 字符串字面量）。
-        // 源头修复后 UI 侧不再解包——必须退化为最终占位回退，绝不成功拆出问题项。
+    fun `legacy double-encoded questions produce no structured items`() {
         val inner = """[{"id":"q1","prompt":"选择语言","options":["Kotlin","Java"]}]""".replace("\"", "\\\"")
         val doubleEncoded = "\"$inner\""
 
         val items = parseAskItems(mapOf("questions" to doubleEncoded), null)
 
-        assertEquals(1, items.size, "双层编码不再解包，必须退化为单个占位项")
-        assertNotEquals("选择语言", items[0].prompt, "不得从双层编码中成功拆出问题")
-        assertEquals(doubleEncoded, items[0].prompt, "占位回退显示原始脏字符串（纯显示）")
-        assertNull(items[0].answer)
+        assertTrue(items.isEmpty())
     }
 }

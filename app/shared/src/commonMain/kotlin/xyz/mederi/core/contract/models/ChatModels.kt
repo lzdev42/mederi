@@ -201,12 +201,9 @@ enum class CoreEventType {
     TOOL_CALLED,
     TOOL_RESULT,
 
-    /**
-     * 单次 LLM HTTP 请求完成的用量事件（与 core EventType.LLM_REQUEST_COMPLETED 同名对齐，
-     * 映射靠 MederiModelMapper.toCoreEvent 的 valueOf(event.type.name)；
-     * app/shared jvmTest 的 EnumMirrorContractTest 锁死两侧枚举名集合相等，必须两侧同时加）。
-     * payload: inputTokens / outputTokens / cachedTokens?。快照据此累加 requestCount、更新 lastRequestUsage。
-     */
+    /** 模型步骤已登记，messageId 是请求 ID，sessionId 是账本所属会话。 */
+    LLM_REQUEST_STARTED,
+    /** 供应商返回的用量已写入同一请求记录。 */
     LLM_REQUEST_COMPLETED,
     QUESTION_REQUESTED,
     EXECUTION_APPROVAL_REQUESTED,

@@ -39,7 +39,7 @@ object OneShotCompletion {
             val params = KoogParamsBuilder.build(
                 type = provider.type,
                 reasoningLevel = xyz.mederi.provider.domain.model.ReasoningLevel.NONE,
-                reasoningParameter = null,
+                reasoningParameter = provider.reasoningParameter,
                 maxTokens = maxTokens
             )
             val koogPrompt = prompt(tag, params = params) {

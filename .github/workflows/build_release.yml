@@ -47,7 +47,8 @@ jobs:
 
     env:
       APP_NAME: Mederi
-      ARCHIVE_EXTENSION: ${{ matrix.platform == 'windows' && 'zip' || 'tar.gz' }}
+      SERVER_ARCHIVE_EXTENSION: ${{ matrix.platform == 'windows' && 'zip' || 'tar.gz' }}
+      DESKTOP_ARCHIVE_EXTENSION: ${{ matrix.platform == 'macos' && 'dmg' || matrix.platform == 'windows' && 'zip' || 'tar.gz' }}
       GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g
 
     steps:
@@ -148,9 +149,9 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.platform }}-${{ matrix.arch }}" == macos-x64 ]]; then
-            /usr/bin/arch -x86_64 /bin/bash ./build_release.sh --skip-sign
+            /usr/bin/arch -x86_64 /bin/bash ./build_release.sh
           else
-            bash ./build_release.sh --skip-sign
+            bash ./build_release.sh
           fi
 
       - name: Verify Bundled Server Java
@@ -179,7 +180,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify and Archive macOS Desktop
+      - name: Verify macOS Desktop
         if: matrix.platform == 'macos'
         shell: bash
         run: |
@@ -194,7 +195,13 @@ jobs:
             exit 1
           fi
           app="${apps[0]}"
-          launcher=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          plist="$app/Contents/Info.plist"
+          test "$app" = release/Mederi.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$plist")" = Mederi
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = xyz.mederi
+          icon=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist")
+          cmp "app/desktopApp/src/main/resources/icons/icon.icns" "$app/Contents/Resources/$icon"
+          launcher=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
           for binary in "$app/Contents/MacOS/$launcher" \
             "$app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib" \
             server/build/install/server-bundled/runtime/lib/server/libjvm.dylib; do
@@ -205,13 +212,12 @@ jobs:
               exit 1
             fi
           done
-          tar -czf "release/$APP_NAME-desktop-macos-${{ matrix.arch }}.tar.gz" -C release "${app##*/}"
 
       - name: Upload Desktop
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.APP_NAME }}-desktop-${{ matrix.platform }}-${{ matrix.arch }}
-          path: release/${{ env.APP_NAME }}-desktop-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.ARCHIVE_EXTENSION }}
+          path: release/${{ env.APP_NAME }}-desktop-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.DESKTOP_ARCHIVE_EXTENSION }}
           retention-days: 7
           if-no-files-found: error
           compression-level: 0
@@ -220,7 +226,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.APP_NAME }}-server-with-wasmjs-${{ matrix.platform }}-${{ matrix.arch }}
-          path: release/${{ env.APP_NAME }}-server-bundled-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.ARCHIVE_EXTENSION }}
+          path: release/${{ env.APP_NAME }}-server-bundled-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.SERVER_ARCHIVE_EXTENSION }}
           retention-days: 7
           if-no-files-found: error
           compression-level: 0
@@ -229,7 +235,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.APP_NAME }}-server-api-without-wasmjs-${{ matrix.platform }}-${{ matrix.arch }}
-          path: release/${{ env.APP_NAME }}-server-api-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.ARCHIVE_EXTENSION }}
+          path: release/${{ env.APP_NAME }}-server-api-${{ matrix.platform }}-${{ matrix.arch }}.${{ env.SERVER_ARCHIVE_EXTENSION }}
           retention-days: 7
           if-no-files-found: error
           compression-level: 0

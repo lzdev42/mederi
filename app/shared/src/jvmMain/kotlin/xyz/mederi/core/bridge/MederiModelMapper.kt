@@ -14,6 +14,9 @@ import xyz.mederi.core.contract.models.CustomModelEntry
 import xyz.mederi.core.contract.models.ReasoningMenu
 import xyz.mederi.core.contract.models.FileDiff as UiFileDiff
 import xyz.mederi.core.contract.models.LastRequestUsage
+import xyz.mederi.core.contract.models.CacheHitSample
+import xyz.mederi.core.contract.models.CacheModel
+import xyz.mederi.core.contract.models.ModelCacheUsage
 import xyz.mederi.core.contract.models.ModelOption
 import xyz.mederi.core.contract.models.ProtocolType
 import xyz.mederi.core.contract.models.Project as UiProject
@@ -28,10 +31,17 @@ import xyz.mederi.domain.model.MessagePart as CoreMessagePart
 import xyz.mederi.domain.model.MessageRole as CoreMessageRole
 import xyz.mederi.domain.model.Project as CoreProject
 import xyz.mederi.domain.model.Session
+import xyz.mederi.domain.model.SessionUsage
+import xyz.mederi.metadata.ModelReferencePricing
+import xyz.mederi.core.contract.models.ModelUsageCost
+import xyz.mederi.core.contract.models.SelectedModelUsage
+import xyz.mederi.core.contract.models.UsageStatGroup
+import xyz.mederi.core.contract.models.UsageStatistics
 import xyz.mederi.domain.model.SessionStatus
 import xyz.mederi.provider.domain.model.Provider as CoreProvider
 import xyz.mederi.provider.domain.model.ProviderType as CoreProviderType
 import xyz.mederi.provider.domain.model.ReasoningLevel
+import xyz.mederi.provider.domain.model.ReasoningParameter
 
 /**
  * 将 core 领域模型转换为 UI contract 模型。
@@ -96,13 +106,14 @@ object MederiModelMapper {
         val oauth = provider.authentication == xyz.mederi.provider.domain.model.ProviderAuthentication.CHATGPT_OAUTH
         val isBuiltin = BuiltinProviders.isBuiltinName(provider.name)
         val rp = provider.reasoningParameter
+        val effectiveReasoningParameter = ReasoningParameter.effective(provider.type, rp)
         return ProviderConfig(
             id = provider.id,
             name = provider.name,
             type = if (isBuiltin) UiProviderType.Builtin else UiProviderType.Custom,
             baseUrl = provider.baseUrl,
             isConnected = if (oauth) oauthConnected else provider.defaultApiKey != null,
-            models = provider.models.map { toModelOption(it, provider.id, provider.reasoningParameter) },
+            models = provider.models.map { toModelOption(it, provider.id, effectiveReasoningParameter) },
             customModels = provider.models.map { toCustomModelEntry(it) },
             supportsApiKey = !oauth,
             supportsBaseUrl = !isBuiltin && !oauth,
@@ -156,7 +167,7 @@ object MederiModelMapper {
     fun toModelOption(
         model: AIModel,
         providerId: String,
-        reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter? = null
+        reasoningParameter: ReasoningParameter? = null
     ): ModelOption {
         // 思考菜单选项：有值档位 ∩ 模型勾选（NONE 恒为关闭档，ReasoningMenu.derive 推导）
         val reasoningLevels = ReasoningMenu.derive(
@@ -353,9 +364,9 @@ object MederiModelMapper {
         }
         is CoreMessagePart.File -> ChatBlock.File(
             id = blockId(message, index),
-            name = part.path.substringAfterLast('/').substringAfterLast('\\'),
+            name = part.name ?: part.path.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" },
             url = part.path,
-            mimeType = null
+            mimeType = part.mimeType
         )
         is CoreMessagePart.Image -> ChatBlock.File(
             id = blockId(message, index),
@@ -380,56 +391,188 @@ object MederiModelMapper {
     // Token / Cost
     // ------------------------------------------------------------------
 
-    fun toTokenUsage(messages: List<CoreMessage>): TokenUsage {
-        var input = 0L
-        var output = 0L
-        var cacheRead = 0L
-        messages.forEach { msg ->
-            if (msg.role == CoreMessageRole.ASSISTANT) {
-                msg.inputTokens?.let { input += it }
-                msg.outputTokens?.let { output += it }
-                msg.cachedTokens?.let { cacheRead += it }
+    fun toTokenUsage(messages: List<CoreMessage>): TokenUsage =
+        toUsageProjection(messages).tokens
+
+    data class UsageBackfill(val requestCount: Int, val lastRequestUsage: LastRequestUsage?)
+
+    fun toUsageBackfill(messages: List<CoreMessage>): UsageBackfill =
+        SessionUsage.fromMessages(messages).let { UsageBackfill(it.requestCount, it.latest?.toRequestUsage()) }
+
+    internal data class UsageProjection(
+        val tokens: TokenUsage,
+        val requestCount: Int,
+        val lastRequest: LastRequestUsage?,
+        val cost: CostSummary,
+    )
+
+    internal fun toUsageProjection(
+        messages: List<CoreMessage>,
+        records: List<xyz.mederi.domain.model.ModelRequestRecord> = emptyList(),
+        referencePricing: (CoreMessage) -> ModelReferencePricing? = { null },
+    ): UsageProjection {
+        val usage = SessionUsage.fromMessages(messages, records)
+        val estimates = java.util.IdentityHashMap<CoreMessage, Double?>()
+        var total = 0.0
+        var priced = 0
+        val modelCosts = usage.groups.map { group ->
+            var groupCost = 0.0
+            var groupPriced = 0
+            for (request in group.requests) {
+                val estimate = referencePricing(request)?.let { estimateRequestCost(request, it) }
+                estimates[request] = estimate
+                if (estimate != null) {
+                    groupCost += estimate
+                    groupPriced++
+                }
             }
+            total += groupCost
+            priced += groupPriced
+            ModelUsageCost(
+                providerName = group.providerName,
+                modelName = group.modelName,
+                providerId = group.key.providerId,
+                modelId = group.key.providerModelId,
+                endpoint = group.key.providerEndpoint,
+                inputTokens = group.totals.inputTokens,
+                outputTokens = group.totals.outputTokens,
+                estimate = groupCost.takeIf { groupPriced > 0 },
+                pricedRequests = groupPriced,
+                totalRequests = group.totals.usageCoverageRequests,
+                successfulRequests = group.totals.requestCount,
+                variant = group.key.reasoningLevel,
+                cacheSample = group.totals.cacheHitSample?.toContract(),
+                cacheReadTokens = group.totals.cacheReadTokens,
+                cacheWriteTokens = group.totals.cacheWriteTokens,
+            )
         }
-        return TokenUsage(
-            input = input,
-            output = output,
-            // reasoning / cacheWrite 无 core 源 = 死值，传 null 诚实标记"无数据"（UI 显示"—"）
-            reasoning = null,
-            cacheRead = cacheRead,
-            cacheWrite = null
+        val totals = usage.totals
+        return UsageProjection(
+            tokens = TokenUsage(
+                input = totals.inputTokens ?: 0,
+                output = totals.outputTokens ?: 0,
+                cacheRead = totals.cacheReadTokens,
+                cacheWrite = totals.cacheWriteTokens,
+                cacheHitSample = totals.cacheHitSample?.toContract(),
+                modelCacheUsage = usage.groups.mapNotNull { group ->
+                    val model = group.key.toCacheModel() ?: return@mapNotNull null
+                    val sample = group.totals.cacheHitSample
+                    ModelCacheUsage(model, sample?.toContract(), sample?.requestCount ?: 0, group.totals.usageCoverageRequests)
+                },
+                inputReported = totals.inputTokens != null,
+                outputReported = totals.outputTokens != null,
+                latestByModel = usage.latestByModel.map { (key, request) ->
+                    SelectedModelUsage(key.modelId, key.providerId, request.toRequestUsage(), estimates[request])
+                },
+            ),
+            requestCount = usage.requestCount,
+            lastRequest = usage.latest?.toRequestUsage(),
+            cost = CostSummary(
+                total = total.takeIf { priced > 0 },
+                pricedRequests = priced,
+                totalRequests = totals.usageCoverageRequests,
+                models = modelCosts,
+            ),
         )
     }
 
-    // total 无真实费用源 = 死值，传 null 诚实标记"不可用"（UI 显示"不可用"或隐藏费用行）
-    fun toCostSummary(): CostSummary = CostSummary(total = null, currency = "USD")
+    /** 跨会话累计分组键：供应商 + API Key + 上游模型（null 各自成桶 = 旧记录「未知」维度）。 */
+    private data class UsageGroupKey(
+        val providerId: String?,
+        val apiKeyId: String?,
+        val modelId: String?,
+    )
 
     /**
-     * LLM 请求用量回填结果：主会话 requestCount（= assistant 消息数）+ 最近一次请求用量。
+     * 跨会话累计使用统计：全库 model_requests 账本按 [UsageGroupKey] 分组聚合。
+     *
+     * token / 成功计数 / 覆盖率一律由 [SessionUsage] 的账本路径算出（同一真理源，不复制成功判定）；
+     * 估价复用本文件 [estimateRequestCost]，故与单会话 cost 口径一致。
+     * 组顺序 = 记录首次出现顺序。
      */
-    data class UsageBackfill(val requestCount: Int, val lastRequestUsage: LastRequestUsage?)
+    internal fun toCumulativeUsageStatistics(
+        records: List<xyz.mederi.domain.model.ModelRequestRecord>,
+        referencePricing: (CoreMessage) -> ModelReferencePricing? = { null },
+    ): UsageStatistics {
+        // records → 一条 usage Message（未完成 usage==null 的由 SessionUsage 合成），与 records 同序同长
+        val requests = SessionUsage.fromMessages(emptyList(), records).requests
+        val buckets = linkedMapOf<UsageGroupKey, MutableList<Int>>()
+        requests.forEachIndexed { index, request ->
+            val key = UsageGroupKey(request.providerId, request.apiKeyId, request.providerModelId ?: request.modelId)
+            buckets.getOrPut(key) { mutableListOf() }.add(index)
+        }
 
-    /**
-     * 从历史 assistant 消息回填 [requestCount]（计数 = assistant 消息数）与 [lastRequestUsage]
-     * （取最后一条带 usage 的 assistant 消息；无 = null）。用于 getSnapshot / listMessagesPage /
-     * 初始快照把"事件累加"与"DB 落库"对齐。
-     */
-    fun toUsageBackfill(messages: List<CoreMessage>): UsageBackfill {
-        var count = 0
-        var last: LastRequestUsage? = null
-        messages.forEach { msg ->
-            if (msg.role == CoreMessageRole.ASSISTANT) {
-                count += 1
-                if (msg.inputTokens != null || msg.outputTokens != null || msg.cachedTokens != null) {
-                    last = LastRequestUsage(
-                        inputTokens = msg.inputTokens?.toLong() ?: 0,
-                        outputTokens = msg.outputTokens?.toLong() ?: 0,
-                        cachedTokens = msg.cachedTokens?.toLong()
-                    )
+        val groups = buckets.map { (key, indexes) ->
+            // 组内 records 重投影：成功计数/覆盖率/非负 token 过滤语义与单会话完全同源
+            val groupUsage = SessionUsage.fromMessages(emptyList(), indexes.map { records[it] }).totals
+            var providerName: String? = null
+            var modelName: String? = null
+            var groupCost = 0.0
+            var groupPriced = 0
+            for (index in indexes) {
+                val request = requests[index]
+                providerName = request.providerName ?: providerName
+                modelName = request.modelName ?: modelName
+                referencePricing(request)?.let { price -> estimateRequestCost(request, price) }?.let {
+                    groupCost += it
+                    groupPriced++
                 }
             }
+            UsageStatGroup(
+                providerId = key.providerId,
+                providerName = providerName,
+                apiKeyId = key.apiKeyId,
+                apiKeyName = null,
+                modelId = key.modelId,
+                modelName = modelName,
+                inputTokens = groupUsage.inputTokens,
+                outputTokens = groupUsage.outputTokens,
+                cacheReadTokens = groupUsage.cacheReadTokens,
+                cacheWriteTokens = groupUsage.cacheWriteTokens,
+                successfulRequests = groupUsage.requestCount,
+                totalRequests = indexes.size,
+                pricedRequests = groupPriced,
+                estimate = groupCost.takeIf { groupPriced > 0 },
+            )
         }
-        return UsageBackfill(count, last)
+
+        val priced = groups.sumOf { it.pricedRequests }
+        return UsageStatistics(
+            groups = groups,
+            totalEstimatedCost = groups.sumOf { it.estimate ?: 0.0 }.takeIf { priced > 0 },
+            pricedRequests = priced,
+            totalRequests = records.size,
+        )
+    }
+
+    private fun SessionUsage.CacheHitSample.toContract() =
+        CacheHitSample(inputTokens, readTokens, writeTokens, requestCount, minRate, maxRate)
+
+    private fun SessionUsage.RouteKey.toCacheModel(): CacheModel? {
+        return CacheModel(providerId ?: return null, providerEndpoint, providerModelId ?: return null, reasoningLevel)
+    }
+
+    private fun CoreMessage.toRequestUsage() = LastRequestUsage(
+        inputTokens = inputTokens?.toLong()?.takeIf { it >= 0 },
+        outputTokens = outputTokens?.toLong()?.takeIf { it >= 0 },
+        cachedTokens = cachedTokens?.toLong()?.takeIf { it >= 0 },
+        cacheWriteTokens = cacheWriteTokens?.toLong()?.takeIf { it >= 0 },
+        cacheModel = SessionUsage.RouteKey(providerId, providerEndpoint, providerModelId ?: modelId, reasoningLevel).toCacheModel(),
+        cacheRateSample = SessionUsage.cacheHitSample(this)?.toContract(),
+    )
+
+    private fun estimateRequestCost(message: CoreMessage, price: ModelReferencePricing): Double? {
+        val input = message.inputTokens?.takeIf { it >= 0 } ?: return null
+        val output = message.outputTokens?.takeIf { it >= 0 } ?: return null
+        val read = message.cachedTokens ?: 0
+        val write = message.cacheWriteTokens ?: 0
+        if (read < 0 || write < 0 || write > input || read > input - write) return null
+        val readPrice = price.cacheReadPerMillion ?: price.inputPerMillion
+        val writePrice = price.cacheWritePerMillion ?: price.inputPerMillion
+        return (
+            (input - read - write) * price.inputPerMillion + output * price.outputPerMillion +
+                read * readPrice + write * writePrice
+            ).div(1_000_000).takeIf { it.isFinite() }
     }
 
     // ------------------------------------------------------------------

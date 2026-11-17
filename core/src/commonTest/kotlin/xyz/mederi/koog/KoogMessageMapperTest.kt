@@ -99,4 +99,38 @@ class KoogMessageMapperTest {
             "默认行为下用户消息的 Image 应转为 Attachment"
         )
     }
+
+    @Test
+    fun testUserFileAttachmentMapping() {
+        val coreMsg = MederiMessage(
+            id = "msg_user_file",
+            sessionId = "sess_1",
+            role = MessageRole.USER,
+            parts = listOf(
+                MederiMessagePart.Text("请查看文件"),
+                MederiMessagePart.File(
+                    path = "https://example.com/spec.pdf",
+                    name = "spec.pdf",
+                    mimeType = "application/pdf"
+                )
+            ),
+            status = MessageStatus.COMPLETED,
+            createdAt = "2026-09-08T12:00:00Z"
+        )
+        val koogMsg = KoogMessageMapper.toKoogMessage(coreMsg)
+        assertTrue(koogMsg is KoogMessage.User)
+        assertEquals(2, koogMsg.parts.size)
+        val attachment = koogMsg.parts.filterIsInstance<KoogMessagePart.Attachment>().single()
+        val fileSource = attachment.source as ai.koog.prompt.message.AttachmentSource.File
+        assertEquals("spec.pdf", fileSource.fileName)
+        assertEquals("application/pdf", fileSource.mimeType)
+        assertEquals("pdf", fileSource.format)
+        assertEquals("https://example.com/spec.pdf", (fileSource.content as ai.koog.prompt.message.AttachmentContent.URL).url)
+
+        val restoredCoreMsg = KoogMessageMapper.fromKoogUserMessage("sess_1", koogMsg)
+        val restoredFile = restoredCoreMsg.parts.filterIsInstance<MederiMessagePart.File>().single()
+        assertEquals("https://example.com/spec.pdf", restoredFile.path)
+        assertEquals("spec.pdf", restoredFile.name)
+        assertEquals("application/pdf", restoredFile.mimeType)
+    }
 }

@@ -56,6 +56,32 @@ class ExecutionApprovalReducerTest {
     }
 
     @Test
+    fun supersededPlanClearsOnlyItsOwnApproval() {
+        fun planEvent(type: CoreEventType, planId: String, vararg fields: Pair<String, String>) =
+            CoreEvent(type, "s", payload = mapOf("planId" to planId, *fields))
+
+        val old = planEvent(CoreEventType.PLAN_APPROVAL_REQUESTED, "old")
+        val replacement = planEvent(CoreEventType.PLAN_APPROVAL_REQUESTED, "replacement")
+        val voided = planEvent(CoreEventType.PLAN_PROGRESS, "old", "action" to "voided")
+        val stale = planEvent(CoreEventType.PLAN_APPROVAL_RESOLVED, "old", "approved" to "true")
+
+        val waiting = ConversationStateReducer.apply(state(), old)
+        val cleared = ConversationStateReducer.apply(waiting, voided)
+        assertEquals(null, cleared.pendingPlanApproval)
+        assertEquals(ConversationStatus.Working, cleared.conversation.status)
+        val waitingForReplacement = ConversationStateReducer.apply(cleared, replacement)
+        val afterStaleResolution = ConversationStateReducer.apply(waitingForReplacement, stale)
+        assertEquals("replacement", afterStaleResolution.pendingPlanApproval?.id)
+        assertEquals("VOIDED", afterStaleResolution.planApprovals.first { it.id == "old" }.status)
+
+        val tracker = PendingInteractionTracker()
+        tracker.accept(old)
+        assertTrue(tracker.isWaiting("s"))
+        tracker.accept(voided)
+        assertTrue(!tracker.isWaiting("s"))
+    }
+
+    @Test
     fun malformedOrForeignRequestsAndStaleResolutionAreIgnored() {
         val initial = state()
         assertEquals(initial, ConversationStateReducer.apply(initial, CoreEvent(

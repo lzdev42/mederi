@@ -34,11 +34,14 @@ import mederi.app.shared.generated.resources.status_working
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.WorkTraceActivity
+import xyz.mederi.ui.WorkTraceEntry
 import xyz.mederi.ui.workTraceElapsedMs
 import xyz.mederi.ui.chat.ToolActionGroup
+import xyz.mederi.ui.chat.ToolActionKind
 import xyz.mederi.ui.chat.classifyToolAction
 import mederi.app.shared.generated.resources.status_thinking
 import mederi.app.shared.generated.resources.status_generating
+import mederi.app.shared.generated.resources.tool_action_run_running
 import mederi.app.shared.generated.resources.worktrace_waiting_response
 import mederi.app.shared.generated.resources.worktrace_waiting_subagents
 import xyz.mederi.theme.WorkspaceStyle
@@ -46,14 +49,15 @@ import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.ui.components.atoms.expansionSemantics
 import xyz.mederi.ui.components.atoms.ProcessRow
 
-/** 执行中展开过程，交付/等待子代理时收起；正文原样显示，推理与工具独立折叠。 */
+/** 进展正文直接可读，推理与连续操作分别折叠。 */
 @Composable
 fun WorkTraceCard(
     workTrace: ChatListItem.WorkTraceBlock,
     modifier: Modifier = Modifier,
     renderStepItem: @Composable (ChatListItem) -> Unit,
 ) {
-    if (workTrace.items.isEmpty() && !workTrace.isRunning) return
+    val entries = workTrace.entries
+    if (entries.isEmpty() && !workTrace.isRunning) return
 
     val colors = LocalMederiColors.current
     var userChoice by remember(workTrace.key, workTrace.defaultExpanded) { mutableStateOf<Boolean?>(null) }
@@ -85,7 +89,11 @@ fun WorkTraceCard(
         durationStr?.let { add(stringResource(Res.string.worktrace_duration, it)) }
     }.joinToString(" · ")
     val activitySummary = if (workTrace.isRunning) when (val activity = workTrace.activity) {
-        is WorkTraceActivity.Tool -> toolRunningLabel(ToolActionGroup(classifyToolAction(activity.call.name), listOf(activity.call)))
+        is WorkTraceActivity.Tool -> {
+            val kind = classifyToolAction(activity.call)
+            if (kind == ToolActionKind.COMMAND) stringResource(Res.string.tool_action_run_running)
+            else toolRunningLabel(ToolActionGroup(kind, listOf(activity.call)))
+        }
         WorkTraceActivity.Thinking -> stringResource(Res.string.status_thinking)
         WorkTraceActivity.Generating -> stringResource(Res.string.status_generating)
         is WorkTraceActivity.WaitingSubagents -> stringResource(Res.string.worktrace_waiting_subagents, activity.count)
@@ -94,8 +102,8 @@ fun WorkTraceCard(
 
     // 汇总折叠栏：整行可点，hover 才浮出 surfaceHover 底色（无常态底色、无描边）。
     ProcessRow(
-        expanded = isExpanded && workTrace.items.isNotEmpty(),
-        clickable = workTrace.items.isNotEmpty(),
+        expanded = isExpanded && entries.isNotEmpty(),
+        clickable = entries.isNotEmpty(),
         onExpandedChange = { userChoice = !isExpanded },
         modifier = modifier.fillMaxWidth(),
         icon = FeatherIcons.Activity,
@@ -103,7 +111,7 @@ fun WorkTraceCard(
         label = titleText,
         labelColor = colors.textSecondary,
         summary = activitySummary,
-        leading = if (workTrace.isRunning && (!isExpanded || workTrace.items.isEmpty()) && workTrace.activity !is WorkTraceActivity.WaitingSubagents) {
+        leading = if (workTrace.isRunning && (!isExpanded || entries.isEmpty()) && workTrace.activity !is WorkTraceActivity.WaitingSubagents) {
             { WorkspaceLoadingIndicator(color = colors.accentPrimary, strokeWidth = 1.4.dp,
                 modifier = Modifier.size(WorkspaceStyle.IconSize)) }
         } else null,
@@ -113,8 +121,13 @@ fun WorkTraceCard(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            workTrace.items.forEach { stepItem ->
-                key(stepItem.key) { renderStepItem(stepItem) }
+            entries.forEach { entry ->
+                key(entry.key) {
+                    when (entry) {
+                        is WorkTraceEntry.Step -> renderStepItem(entry.item)
+                        is WorkTraceEntry.Details -> WorkTraceDetails(entry, renderStepItem)
+                    }
+                }
             }
         }
     }

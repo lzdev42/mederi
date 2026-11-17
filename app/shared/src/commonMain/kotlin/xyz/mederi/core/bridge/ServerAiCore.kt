@@ -717,6 +717,10 @@ class ServerAiCore(
         httpGet("/v1/system/stats")
     }
 
+    override suspend fun getUsageStatistics(): Result<UsageStatistics> = runCatching {
+        httpGet("/v1/usage/statistics")
+    }
+
     override fun events(): Flow<CoreEvent> = sharedEvents
 
     // ------------------------------------------------------------------

@@ -35,26 +35,34 @@ class ProjectPermissionSelectorTest {
         return this
     }
     @Test
-    fun oneIconOpensIndependentExecutionAndPlanChoicesAtPhoneWidth() = runComposeUiTest {
+    fun separateButtonsOpenOnlyTheirOwnChoicesAtPhoneWidth() = runComposeUiTest {
         val state = ProjectPermissionState(projectId = "a", settings = SandboxSettings())
         val executions = mutableListOf<ExecutionPermissionMode>()
         val plans = mutableListOf<AgentMode>()
-        var iconLabel = ""; var full = ""; var scope = ""; var manual = ""; var density = 1f
+        var sandboxLabel = ""
+        var planLabel = ""
+        var full = ""
+        var scope = ""
+        var manual = ""
+        var density = 1f
         setContent { AppTheme {
             density = LocalDensity.current.density
             full = stringResource(Res.string.settings_sandbox_full_access)
-            manual = stringResource(Res.string.mode_manual_approve)
-            iconLabel = stringResource(Res.string.permission_plan_button_description,
-                stringResource(Res.string.settings_sandbox_needs_approval), stringResource(Res.string.mode_auto_approve))
+            manual = stringResource(Res.string.plan_approval_manual)
+            sandboxLabel = stringResource(Res.string.composer_sandbox_mode, stringResource(Res.string.settings_sandbox_needs_approval))
+            planLabel = stringResource(Res.string.composer_plan_approval_mode, stringResource(Res.string.plan_approval_automatic))
             scope = stringResource(Res.string.execution_permission_project_scope)
-            Box(Modifier.width(320.dp)) {
+            FlowRow(Modifier.width(320.dp)) {
                 PermissionPlanSelectorContent(state, AgentMode.AUTONOMOUS, { executions += it }, { plans += it }, {}, {})
             }
         } }
+        onNodeWithText(sandboxLabel).assertIsDisplayed()
+        onNodeWithText(planLabel).assertIsDisplayed()
         onNodeWithText(full).assertDoesNotExist()
         onNodeWithText(manual).assertDoesNotExist()
-        onNodeWithContentDescription(iconLabel).assertWidthAtMost(48.dp, density).performClick()
+        onNodeWithText(sandboxLabel).performClick()
         onNodeWithText(scope).assertIsDisplayed().assertWidthAtMost(320.dp, density)
+        onNodeWithText(manual).assertDoesNotExist()
         System.getenv("MEDERI_PERMISSION_PREVIEW_DIR")?.let { location ->
             val directory = File(location).apply { mkdirs() }
             val roots = onAllNodes(isRoot())
@@ -62,7 +70,8 @@ class ProjectPermissionSelectorTest {
         }
         onNodeWithText(full).performClick()
         runOnIdle { assertEquals(listOf(ExecutionPermissionMode.FULL_ACCESS), executions); assertTrue(plans.isEmpty()) }
-        onNodeWithContentDescription(iconLabel).performClick()
+        onNodeWithText(planLabel).performClick()
+        onNodeWithText(full).assertDoesNotExist()
         onNodeWithText(manual).performClick()
         runOnIdle { assertEquals(listOf(AgentMode.APPROVAL), plans); assertEquals(1, executions.size) }
     }
@@ -72,16 +81,15 @@ class ProjectPermissionSelectorTest {
         val state = ProjectPermissionState(projectId = "b")
         var label = ""; var full = ""; var settings = ""; var opens = 0
         setContent { AppTheme {
-            label = stringResource(Res.string.permission_plan_button_description,
-                stringResource(Res.string.settings_sandbox_unknown), stringResource(Res.string.mode_auto_approve))
+            label = stringResource(Res.string.composer_sandbox_mode, stringResource(Res.string.settings_sandbox_unknown))
             full = stringResource(Res.string.settings_sandbox_full_access)
             settings = stringResource(Res.string.project_settings_title)
-            Box(Modifier.width(320.dp)) {
+            FlowRow(Modifier.width(320.dp)) {
                 PermissionPlanSelectorContent(state, AgentMode.AUTONOMOUS,
                     { error("Unloaded project cannot grant access") }, {}, {}, { opens++ })
             }
         } }
-        onNodeWithContentDescription(label).performClick()
+        onNodeWithText(label).performClick()
         onNodeWithText(full).assertDoesNotExist()
         onNodeWithText(settings).performClick()
         runOnIdle { assertEquals(1, opens) }
@@ -93,7 +101,7 @@ class ProjectPermissionSelectorTest {
         setContent { AppTheme {
             full = stringResource(Res.string.settings_sandbox_full_access)
             density = LocalDensity.current.density
-            plans = stringResource(Res.string.plan_approval_settings_title)
+            plans = stringResource(Res.string.composer_plan_approval_title)
             Box(Modifier.width(320.dp).testTag("permission-sheet-preview")) {
                 PermissionPlanSettingsContent(ProjectPermissionState(projectId = "a", settings = SandboxSettings()),
                     AgentMode.APPROVAL, {}, {}, {}, {})

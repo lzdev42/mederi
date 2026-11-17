@@ -61,9 +61,7 @@ internal fun CustomProviderFormContent(
         ProtocolSelectorBar(protocolType, { protocolType = it }, colors)
         LabeledTextField(
             label = stringResource(Res.string.settings_panel_base_url_label), value = baseUrl, onValueChange = { baseUrl = it },
-            placeholder = if (protocolType == ProtocolType.GOOGLE) ProtocolType.GOOGLE.placeholderUrl else {
-                stringResource(Res.string.settings_panel_base_url_placeholder_local, ProtocolType.OPENAI_CHAT.placeholderUrl)
-            },
+            placeholder = stringResource(Res.string.settings_panel_base_url_placeholder_local, protocolType.placeholderUrl),
             colors = colors,
         )
         LabeledTextField(stringResource(Res.string.settings_panel_api_key_secret_label), apiKey, { apiKey = it },

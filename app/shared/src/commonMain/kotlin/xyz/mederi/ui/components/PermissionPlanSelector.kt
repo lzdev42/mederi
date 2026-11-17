@@ -1,8 +1,5 @@
 package xyz.mederi.ui.components
 
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -10,7 +7,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.CheckSquare
@@ -27,7 +24,7 @@ import xyz.mederi.ui.appstate.ProjectPermissionState
 import xyz.mederi.ui.resolvePermissionProjectId
 import xyz.mederi.ui.components.atoms.*
 
-/** 输入栏只保留一个图标；手机设置页直接展开同一组内容，不再嵌套菜单。 */
+/** 输入栏显示两个独立菜单，手机设置页直接展示同样的选项。 */
 @Composable
 internal fun PermissionPlanSelector(viewModel: WorkspaceViewModel, inline: Boolean = false) {
     val selectedProjectId by viewModel.selectedProjectId.collectAsState()
@@ -59,7 +56,10 @@ private fun executionPermissionValue(state: ProjectPermissionState): String = wh
     else -> stringResource(Res.string.settings_sandbox_needs_approval)
 }
 
-/** 图标的可访问名称/悬停提示包含两个当前状态；常驻工具条不平铺说明文字。 */
+@Composable
+private fun planApprovalValue(mode: AgentMode): String =
+    stringResource(if (mode == AgentMode.APPROVAL) Res.string.plan_approval_manual else Res.string.plan_approval_automatic)
+
 @Composable
 internal fun PermissionPlanSelectorContent(
     state: ProjectPermissionState,
@@ -69,23 +69,26 @@ internal fun PermissionPlanSelectorContent(
     onReload: () -> Unit,
     onProjectSettings: () -> Unit,
 ) {
-    var expanded by remember(state.projectId) { mutableStateOf(false) }
-    var focused by remember { mutableStateOf(false) }
-    val source = remember { MutableInteractionSource() }
-    val hovered by source.collectIsHoveredAsState()
-    val label = stringResource(Res.string.permission_plan_button_description, executionPermissionValue(state),
-        stringResource(if (planMode == AgentMode.AUTONOMOUS) Res.string.mode_auto_approve else Res.string.mode_manual_approve))
-    Box(Modifier.hoverable(source)) {
-        WorkspaceIconButton(FeatherIcons.Shield, { expanded = !expanded }, label,
-            modifier = Modifier.onFocusChanged { focused = it.hasFocus })
-        if ((hovered || focused) && !expanded) WorkspaceTooltipPopup(label, onDismiss = { focused = false })
-        WorkspaceDropdownMenu(expanded, { expanded = false }) {
-            PermissionPlanSettingsContent(state, planMode,
-                onExecution = { expanded = false; onExecution(it) },
-                onPlan = { expanded = false; onPlan(it) },
-                onReload = { expanded = false; onReload() },
-                onProjectSettings = { expanded = false; onProjectSettings() },
-                modifier = Modifier.widthIn(max = 300.dp))
+    PermissionMenu(stringResource(Res.string.composer_sandbox_mode, executionPermissionValue(state)), FeatherIcons.Shield) { close ->
+        ExecutionPermissionOptions(state, onExecution = { close(); onExecution(it) },
+            onReload = { close(); onReload() }, onProjectSettings = { close(); onProjectSettings() })
+    }
+    PermissionMenu(stringResource(Res.string.composer_plan_approval_mode, planApprovalValue(planMode)), FeatherIcons.CheckSquare) { close ->
+        PlanApprovalOptions(planMode, onPlan = { close(); onPlan(it) })
+    }
+}
+
+@Composable
+private fun PermissionMenu(
+    label: String,
+    icon: ImageVector,
+    content: @Composable ColumnScope.(close: () -> Unit) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        WorkspaceActionButton(label, { expanded = !expanded }, icon = icon)
+        WorkspaceDropdownMenu(expanded, { expanded = false }, Modifier.widthIn(max = 300.dp)) {
+            content { expanded = false }
         }
     }
 }
@@ -103,6 +106,21 @@ internal fun PermissionPlanSettingsContent(
 ) {
     val colors = LocalMederiColors.current
     Column(modifier, verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
+        ExecutionPermissionOptions(state, onExecution, onReload, onProjectSettings)
+        HorizontalDivider(color = colors.divider)
+        PlanApprovalOptions(planMode, onPlan)
+    }
+}
+
+@Composable
+private fun ExecutionPermissionOptions(
+    state: ProjectPermissionState,
+    onExecution: (ExecutionPermissionMode) -> Unit,
+    onReload: () -> Unit,
+    onProjectSettings: () -> Unit,
+) {
+    val colors = LocalMederiColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
         Text(stringResource(Res.string.settings_sandbox_permissions_title),
             modifier = Modifier.padding(horizontal = MederiSpacing.MD, vertical = MederiSpacing.XS),
             style = WorkspaceStyle.Title, color = colors.textPrimary)
@@ -132,7 +150,13 @@ internal fun PermissionPlanSettingsContent(
                 text = { Text(stringResource(Res.string.settings_sandbox_retry)) }, onClick = onReload)
             WorkspaceMenuItem(text = { Text(stringResource(Res.string.project_settings_title)) }, onClick = onProjectSettings)
         }
-        HorizontalDivider(color = colors.divider)
+    }
+}
+
+@Composable
+private fun PlanApprovalOptions(planMode: AgentMode, onPlan: (AgentMode) -> Unit) {
+    val colors = LocalMederiColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
         Row(
             modifier = Modifier.padding(horizontal = MederiSpacing.MD, vertical = MederiSpacing.XS),
             horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
@@ -142,10 +166,10 @@ internal fun PermissionPlanSettingsContent(
                 imageVector = FeatherIcons.CheckSquare,
                 contentDescription = null,
                 tint = colors.textPrimary,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(WorkspaceStyle.IconSize)
             )
             Text(
-                stringResource(Res.string.plan_approval_settings_title),
+                stringResource(Res.string.composer_plan_approval_title),
                 style = WorkspaceStyle.Title,
                 color = colors.textPrimary
             )
@@ -153,9 +177,9 @@ internal fun PermissionPlanSettingsContent(
         Text(stringResource(Res.string.plan_approval_independent_description),
             modifier = Modifier.padding(horizontal = MederiSpacing.MD),
             style = WorkspaceStyle.Caption, color = colors.textMuted)
-        listOf(AgentMode.AUTONOMOUS, AgentMode.APPROVAL).forEach { mode ->
+        listOf(AgentMode.APPROVAL, AgentMode.AUTONOMOUS).forEach { mode ->
             WorkspaceMenuItem(text = {
-                Text(stringResource(if (mode == AgentMode.AUTONOMOUS) Res.string.mode_auto_approve else Res.string.mode_manual_approve))
+                Text(planApprovalValue(mode))
             }, selected = planMode == mode, onClick = { onPlan(mode) })
         }
     }

@@ -41,7 +41,23 @@ class ReleasePackagingTest(unittest.TestCase):
                 (java_home / 'jmods/jcef.jmod').touch()
                 (java_home / 'release').write_text('JAVA_VERSION="25.0.5"\nMODULES="java.base jcef"\n')
                 if platform == 'macos':
-                    (jbr / 'Contents/Frameworks/cef_server.app').mkdir(parents=True)
+                    cef = jbr / 'Contents/Frameworks/cef_server.app'
+                    (cef / 'Contents/Frameworks/Helper.app').mkdir(parents=True)
+                    executable(tools / 'codesign', '''#!/bin/sh
+printf '%s %s\n' "$1" "${4##*/}" >> signing-calls
+if [ "${FAIL_SIGNING:-}" = "${4##*/}" ]; then exit 1; fi
+''')
+                    executable(tools / 'hdiutil', '''#!/usr/bin/env bash
+set -e
+if [[ "$1" == create ]]; then
+    [[ "$2 $3 $4" == "-volname Mederi -srcfolder" ]]
+    [[ -d "$5/Mederi.app/Contents/runtime/Contents/Frameworks/cef_server.app" ]]
+    [[ "$(readlink "$5/Applications")" == /Applications ]]
+    touch "${!#}"
+else
+    [[ "$1" == verify && -f "$2" ]]
+fi
+''')
                 # Real ZIP assembly with the same CLI shape as jar, so archive contents can be checked.
                 executable(java_home / 'bin/jar', '''#!/usr/bin/env python3
 import sys, zipfile
@@ -81,9 +97,8 @@ fi
                 env = dict(os.environ, JAVA_HOME=str(java_home), FAKE_PLATFORM=platform,
                            PATH=f'{tools}:{os.environ["PATH"]}')
                 env.pop('MEDERI_SERVER_JAVA_HOME', None)
-                result = subprocess.run(['bash', str(root / 'build_release.sh'), '--skip-sign', '--skip-obscura',
-                                         '--output', 'relative output'], cwd=root, env=env,
-                                        capture_output=True, text=True)
+                command = ['bash', str(root / 'build_release.sh'), '--skip-obscura', '--output', 'relative output']
+                result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 output = root / 'relative output'
                 suffix = '.zip' if platform == 'windows' else '.tar.gz'
@@ -110,7 +125,26 @@ fi
                         self.assertFalse(any('/runtime' in n for n in names))
                 if platform == 'macos':
                     self.assertTrue((output / 'Mederi.app').is_dir())
-                    self.assertFalse(list(output.glob('*.dmg')))
+                    self.assertTrue((output / 'Mederi-desktop-macos-x64.dmg').is_file())
+                    self.assertEqual((root / 'signing-calls').read_text().splitlines(), [
+                        '--force Helper.app',
+                        '--force cef_server.app',
+                        '--force runtime',
+                        '--force Mederi.app',
+                        '--verify runtime',
+                        '--verify Mederi.app',
+                    ])
+                    (root / 'signing-calls').unlink()
+                    result = subprocess.run(command + ['--skip-sign', '--name', 'Preview'], cwd=root, env=env,
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue((output / 'Preview-desktop-macos-x64.dmg').is_file())
+                    self.assertFalse((root / 'signing-calls').exists())
+                    result = subprocess.run(command + ['--name', 'Broken'], cwd=root,
+                                            env=dict(env, FAIL_SIGNING='Helper.app'),
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((output / 'Broken-desktop-macos-x64.dmg').exists())
                 else:
                     self.assertTrue((output / f'Mederi-desktop-{platform}-{arch}{suffix}').is_file())
                 calls = (root / 'gradle-calls').read_text()

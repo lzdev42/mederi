@@ -44,7 +44,7 @@ private val ReasoningMaxContentHeight = 200.dp
  * 顶层独立显示（enforceMaxHeight=true）时：展开内容高度自适应（wrap content），
  * 未点展开按钮时最高高度上限为 [ReasoningMaxContentHeight]，内容溢出时在视口内滚动 + 流式即时吸底；
  * 底部「展开/收起」按钮在溢出或摊开时出现，点击可解除限高，由外层消息视口展示完整内容。
- * 工作过程内同样默认折叠，折叠头单行展示供应商推理最新片段；完整文本不裁剪、不丢弃。
+ * 工作过程内默认折叠且可隐藏标题上的推理预览；展开后仍可查看完整文本。
  */
 @Composable
 fun ReasoningBlock(
@@ -55,6 +55,7 @@ fun ReasoningBlock(
     modifier: Modifier = Modifier,
     enforceMaxHeight: Boolean = true,
     contentKey: String? = null,
+    showPreview: Boolean = true,
 ) {
     if (text.isBlank() && !isReasoningActive) return
 
@@ -93,11 +94,11 @@ fun ReasoningBlock(
     val showHeightToggle = shouldShowHeightToggle(enforceMaxHeight, isUnbounded, hasOverflow)
 
     // 摘要只截取显示窗口；详情始终保留完整供应商推理。
-    val preview = remember(text) { reasoningPreview(text) }
+    val preview = remember(text, showPreview) { if (showPreview) reasoningPreview(text) else "" }
     val previewScroll = rememberScrollState()
     val reducedMotion = LocalWorkspaceMotion.current.reducedMotion
     LaunchedEffect(preview, previewScroll.maxValue, isExpanded, isReasoningActive, reducedMotion) {
-        if (!isExpanded) {
+        if (!isExpanded && preview.isNotBlank()) {
             if (reducedMotion || !isReasoningActive) previewScroll.scrollTo(previewScroll.maxValue)
             else previewScroll.animateScrollTo(previewScroll.maxValue)
         }

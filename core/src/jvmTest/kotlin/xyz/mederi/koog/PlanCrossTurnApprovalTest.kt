@@ -41,7 +41,7 @@ class PlanCrossTurnApprovalTest {
         override suspend fun get(id: String) = unused()
         override suspend fun require(id: String) = unused()
         override suspend fun create(name: String, type: xyz.mederi.provider.domain.model.ProviderType, baseUrl: String, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?) = unused()
-        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?) = unused()
+        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?, type: xyz.mederi.provider.domain.model.ProviderType?) = unused()
         override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?) = unused()
         override suspend fun delete(id: String) = unused()
         override suspend fun listKeys(providerId: String) = unused()
@@ -119,8 +119,11 @@ class PlanCrossTurnApprovalTest {
         val project = Project(projectId, "p", tmpDir.absolutePath, "now", "now")
         val store = InMemorySessionStore()
         val sessionId = insertSession(store, "sess_cross", projectId, model("A"))
-        val p = plan(sessionId)
-        planStore.save(p)
+        val active = plan(sessionId, PlanStatus.IN_PROGRESS)
+        planStore.save(active)
+        val p = requireNotNull(planStore.submitDraft(plan(sessionId))).plan
+        assertEquals(active.id, p.replacesPlanId)
+        assertEquals(PlanStatus.IN_PROGRESS, planStore.load(active.id)?.status)
 
         // (executor 用桩 provider/真实项目，段2启动执行 turn 会因桩 provider 无法解析模型而抛——见下注释)
         val executor = newExecutor(store, StubProjectManager(project))
@@ -132,6 +135,7 @@ class PlanCrossTurnApprovalTest {
         // 该断言成立即证明跨 turn 批准段1（校验→置 APPROVED→发事件）完整走通。
         runCatching { executor.resolvePlanApproval(sessionId, p.id, approved = true) }
         assertEquals(PlanStatus.APPROVED, planStore.load(p.id)?.status, "计划应被置为 APPROVED（段1已落盘）")
+        assertEquals(PlanStatus.VOIDED, planStore.listBySession(sessionId).single { it.id == active.id }.status)
     }
 
     @Test

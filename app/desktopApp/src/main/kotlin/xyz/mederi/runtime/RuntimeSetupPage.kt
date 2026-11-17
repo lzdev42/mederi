@@ -1,10 +1,13 @@
 package xyz.mederi.runtime
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -26,20 +29,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
-import kotlinx.coroutines.withContext
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
+import xyz.mederi.core.contract.TerminalSession
 import xyz.mederi.mcp.runtime.McpRuntime
-import xyz.mederi.util.rememberClipboardCopy
+import xyz.mederi.ui.components.RuntimeInstallTerminal
 
-private enum class SetupOperation { INSTALL, CHECK }
+private enum class SetupStep { CONFIRM, INSTALL, CHECK, FAILED, READY }
 
 @Composable
 internal fun RuntimeSetupPage(
@@ -48,157 +51,197 @@ internal fun RuntimeSetupPage(
     onChecked: (Set<McpRuntime.Component>) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val copy = rememberClipboardCopy()
-    var operation by remember { mutableStateOf<SetupOperation?>(SetupOperation.INSTALL) }
-    var manual by remember { mutableStateOf(false) }
+    val isDark = isSystemInDarkTheme()
+    var step by remember { mutableStateOf(SetupStep.CONFIRM) }
+    var needsHomebrew by remember { mutableStateOf<Boolean?>(null) }
+    var stage by remember { mutableStateOf(InstallStage.DOWNLOADING) }
+    var terminal by remember { mutableStateOf<TerminalSession?>(null) }
+    var errorDetails by remember { mutableStateOf<String?>(null) }
+    var installExitCode by remember { mutableStateOf<Int?>(null) }
     var showDetails by remember { mutableStateOf(false) }
-    var details by remember { mutableStateOf<String?>(null) }
-    var terminalCommand by remember(manual, missing) { mutableStateOf<Result<String>?>(null) }
 
-    suspend fun runSetup(request: SetupOperation) {
-        try {
-            if (request == SetupOperation.INSTALL) {
-                manual = false
-                showDetails = false
-                details = try {
-                    RuntimeInstaller.install(missing)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    failure.message
+    LaunchedEffect(Unit) {
+        needsHomebrew = runInterruptible(Dispatchers.IO) { RuntimeInstaller.needsHomebrew() }
+    }
+
+    fun start(install: Boolean) {
+        if (step != SetupStep.CONFIRM && step != SetupStep.FAILED) return
+        step = if (install) SetupStep.INSTALL else SetupStep.CHECK
+        errorDetails = null
+        showDetails = false
+        if (install) {
+            terminal = null
+            stage = InstallStage.DOWNLOADING
+            installExitCode = null
+        }
+
+        scope.launch {
+            var session: TerminalSession? = null
+            try {
+                if (install) {
+                    val started = RuntimeInstaller.start(missing)
+                    session = started
+                    terminal = started
+                    val status = InstallTerminalStatus()
+                    started.output().collect { chunk ->
+                        status.accept(chunk)?.let { stage = it }
+                    }
+                    started.isRunning.first { !it }
+                    installExitCode = started.exitCode.value
                 }
-            }
-            onChecked(runInterruptible(Dispatchers.IO) { McpRuntime.missing() })
-        } finally {
-            operation = null
-        }
-    }
-
-    fun start(request: SetupOperation) {
-        if (operation != null) return
-        operation = request
-        scope.launch { runSetup(request) }
-    }
-
-    LaunchedEffect(Unit) { runSetup(SetupOperation.INSTALL) }
-
-    LaunchedEffect(manual, operation, missing) {
-        if (!manual || operation != null) return@LaunchedEffect
-        while (true) {
-            delay(5_000)
-            val remaining = runInterruptible(Dispatchers.IO) { McpRuntime.missing() }
-            if (remaining != missing) {
-                onChecked(remaining)
-                break
-            }
-        }
-    }
-
-    LaunchedEffect(manual, missing) {
-        if (manual && !RuntimeInstaller.mac) {
-            terminalCommand = try {
-                Result.success(withContext(Dispatchers.IO) { RuntimeInstaller.terminalCommand(missing) })
+                step = SetupStep.CHECK
+                val remaining = runInterruptible(Dispatchers.IO) { McpRuntime.missing() }
+                if (remaining.isEmpty()) {
+                    step = SetupStep.READY
+                    delay(600)
+                    onChecked(remaining)
+                } else {
+                    step = SetupStep.FAILED
+                    onChecked(remaining)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                Result.failure(failure)
+                errorDetails = failure.message
+                step = SetupStep.FAILED
+            } finally {
+                session?.takeIf { it.isRunning.value }?.kill()
             }
         }
     }
 
     MaterialTheme {
         Surface(Modifier.fillMaxSize()) {
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Column(Modifier.widthIn(max = 520.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(Res.string.runtime_setup_title), style = MaterialTheme.typography.headlineMedium)
-                    Text(
-                        missing.joinToString(" · ") {
-                            when (it) {
-                                McpRuntime.Component.NODE -> "Node.js"
-                                McpRuntime.Component.PYTHON -> "Python 3"
-                                McpRuntime.Component.GIT -> "Git"
+            if (step == SetupStep.CONFIRM) {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Column(Modifier.widthIn(max = 620.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(stringResource(Res.string.runtime_setup_title), style = MaterialTheme.typography.headlineMedium)
+                        Text(stringResource(Res.string.runtime_setup_intro))
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (McpRuntime.Component.NODE in missing) Text(stringResource(Res.string.runtime_setup_node))
+                            if (McpRuntime.Component.PYTHON in missing) Text(stringResource(Res.string.runtime_setup_python))
+                            if (McpRuntime.Component.GIT in missing) Text(stringResource(Res.string.runtime_setup_git))
+                            Text(stringResource(Res.string.runtime_setup_uv))
+                            if (needsHomebrew == true) Text(stringResource(Res.string.runtime_setup_homebrew))
+                        }
+                        Text(
+                            stringResource(Res.string.runtime_setup_privacy),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(stringResource(Res.string.runtime_setup_terminal), style = MaterialTheme.typography.titleSmall)
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth().height(88.dp),
+                        ) {
+                            Box(Modifier.padding(12.dp), contentAlignment = Alignment.TopStart) {
+                                Text(stringResource(Res.string.runtime_setup_waiting))
                             }
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                        }
+                        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Button(onClick = { start(install = true) }, enabled = needsHomebrew != null) {
+                                Text(stringResource(Res.string.runtime_setup_install))
+                            }
+                        }
+                    }
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxSize().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Column(
+                        Modifier.widthIn(max = 720.dp).fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        val heading = when (step) {
+                            SetupStep.CONFIRM -> Res.string.runtime_setup_title
+                            SetupStep.INSTALL -> when (stage) {
+                                InstallStage.DOWNLOADING -> Res.string.runtime_setup_downloading
+                                InstallStage.INSTALLING -> Res.string.runtime_setup_installing
+                                InstallStage.PASSWORD, InstallStage.WINDOWS_APPROVAL -> Res.string.runtime_setup_permission
+                                InstallStage.CONTINUE_HOMEBREW -> Res.string.runtime_setup_confirm_homebrew
+                            }
+                            SetupStep.CHECK -> Res.string.runtime_setup_checking
+                            SetupStep.FAILED -> Res.string.runtime_setup_missing
+                            SetupStep.READY -> Res.string.runtime_setup_ready
+                        }
+                        Text(stringResource(heading), style = MaterialTheme.typography.headlineMedium)
 
-                    val activeOperation = operation
-                    if (activeOperation != null) {
-                        LinearProgressIndicator(Modifier.fillMaxWidth())
-                        val status = when (activeOperation) {
-                            SetupOperation.INSTALL -> Res.string.runtime_setup_installing
-                            SetupOperation.CHECK -> Res.string.runtime_setup_checking
-                        }
-                        Text(stringResource(status))
-                        OutlinedButton(onClick = onMinimize) {
-                            Text(stringResource(Res.string.runtime_setup_minimize))
-                        }
-                    } else {
-                        Text(stringResource(Res.string.runtime_setup_missing), color = MaterialTheme.colorScheme.error)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { start(SetupOperation.INSTALL) }) {
-                                Text(stringResource(Res.string.runtime_setup_retry))
+                        if (step == SetupStep.INSTALL) {
+                            val instruction = when (stage) {
+                                InstallStage.PASSWORD -> Res.string.runtime_setup_password
+                                InstallStage.WINDOWS_APPROVAL -> Res.string.runtime_setup_windows
+                                InstallStage.CONTINUE_HOMEBREW -> Res.string.runtime_setup_homebrew_return
+                                else -> Res.string.runtime_setup_background
                             }
-                            OutlinedButton(onClick = { start(SetupOperation.CHECK) }) {
-                                Text(stringResource(Res.string.runtime_setup_check))
-                            }
-                            TextButton(onClick = { manual = !manual }) {
-                                Text(stringResource(Res.string.runtime_setup_manual))
+                            Text(stringResource(instruction))
+                        } else if (step == SetupStep.READY) {
+                            Text(stringResource(Res.string.runtime_setup_opening))
+                        } else if (step == SetupStep.FAILED) {
+                            Text(stringResource(Res.string.runtime_setup_retry_hint))
+                            installExitCode?.takeIf { it != 0 }?.let { code ->
+                                Text(
+                                    stringResource(Res.string.runtime_setup_exit_code, code),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
-                        if (manual) {
-                            if (RuntimeInstaller.mac) {
-                                Text(stringResource(Res.string.runtime_setup_homebrew_install))
-                                RuntimeCommand(RuntimeInstaller.HOMEBREW_INSTALL, copy)
-                                Text(stringResource(Res.string.runtime_setup_homebrew_packages))
-                                RuntimeCommand(RuntimeInstaller.homebrewCommand(missing), copy)
-                            } else {
-                                val command = terminalCommand?.getOrNull()
-                                when {
-                                    command != null -> {
-                                        val hint = if (RuntimeInstaller.windows) Res.string.runtime_setup_windows
-                                        else Res.string.runtime_setup_linux
-                                        Text(stringResource(hint))
-                                        RuntimeCommand(command, copy)
+
+                        val session = terminal
+                        if (session != null) {
+                            Text(stringResource(Res.string.runtime_setup_terminal), style = MaterialTheme.typography.titleSmall)
+                            RuntimeInstallTerminal(
+                                session = session,
+                                isDark = isDark,
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                            )
+                        } else {
+                            if (step == SetupStep.INSTALL || step == SetupStep.CHECK) {
+                                LinearProgressIndicator(Modifier.fillMaxWidth())
+                            }
+                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                                if (showDetails) {
+                                    SelectionContainer(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                                        Text(errorDetails.orEmpty(), style = MaterialTheme.typography.bodySmall)
                                     }
-                                    terminalCommand?.isFailure == true -> Text(stringResource(Res.string.runtime_setup_command_error))
-                                    else -> LinearProgressIndicator(Modifier.fillMaxWidth())
                                 }
                             }
                         }
-                        details?.takeIf { it.isNotBlank() }?.let { output ->
-                            TextButton(onClick = { showDetails = !showDetails }) {
-                                Text(
-                                    stringResource(
-                                        if (showDetails) Res.string.runtime_setup_hide_details
-                                        else Res.string.runtime_setup_show_details
-                                    )
-                                )
-                            }
-                            if (showDetails) {
-                                SelectionContainer { Text(output, style = MaterialTheme.typography.bodySmall) }
+
+                        FlowRow(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                        ) {
+                            if (step == SetupStep.FAILED) {
+                                if (session == null && !errorDetails.isNullOrBlank()) {
+                                    TextButton(onClick = { showDetails = !showDetails }) {
+                                        Text(stringResource(
+                                            if (showDetails) Res.string.runtime_setup_hide_details
+                                            else Res.string.runtime_setup_show_details
+                                        ))
+                                    }
+                                }
+                                OutlinedButton(onClick = { start(install = false) }) {
+                                    Text(stringResource(Res.string.runtime_setup_check))
+                                }
+                                Button(onClick = { start(install = true) }) {
+                                    Text(stringResource(Res.string.runtime_setup_retry))
+                                }
+                            } else if (step != SetupStep.READY) {
+                                OutlinedButton(onClick = onMinimize) {
+                                    Text(stringResource(Res.string.runtime_setup_minimize))
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun RuntimeCommand(command: String, copy: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-            SelectionContainer(Modifier.padding(12.dp)) {
-                Text(command, fontFamily = FontFamily.Monospace)
-            }
-        }
-        OutlinedButton(onClick = { copy(command) }) {
-            Text(stringResource(Res.string.runtime_setup_copy))
         }
     }
 }

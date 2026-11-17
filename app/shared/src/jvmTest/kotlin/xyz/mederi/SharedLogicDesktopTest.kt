@@ -125,18 +125,13 @@ class SharedLogicDesktopTest {
         val senseNova = entries.find { it.name == "商汤 SenseNova" }
         assertNotNull(senseNova, "BuiltinProviders.allEntries() 应包含 '商汤 SenseNova'")
         assertEquals("https://token.sensenova.cn/v1", senseNova.baseUrl)
-        assertEquals(ProviderType.OPENAI_CHAT, senseNova.def.type)
+        // 2026-11-14：商汤切换到 Responses 协议端点（/v1/responses），推理档位改用协议默认
+        // 参数（effectiveReasoningParameter 兜底 forType(OPENAI_RESPONSES)），不再逐级显式注入。
+        assertEquals(ProviderType.OPENAI_RESPONSES, senseNova.def.type)
         assertEquals("sensenova", senseNova.def.modelsDevKey)
         assertTrue(senseNova.def.responseSanitization)
         assertTrue(BuiltinProviders.isBuiltinName("商汤 SenseNova"))
-        assertEquals(
-            """{"reasoning_effort":"none"}""",
-            senseNova.def.reasoningParameter?.resolve(xyz.mederi.provider.domain.model.ReasoningLevel.NONE)
-        )
-        assertEquals(
-            """{"reasoning_effort":"high"}""",
-            senseNova.def.reasoningParameter?.resolve(xyz.mederi.provider.domain.model.ReasoningLevel.HIGH)
-        )
+        assertNull(senseNova.def.reasoningParameter, "推理参数交给协议默认，不逐级显式注入")
     }
 
     @Test
@@ -2836,10 +2831,11 @@ class SharedLogicDesktopTest {
         )
         val groups = xyz.mederi.ui.chat.groupToolCallsByAction(listOf(call))
         assertEquals(1, groups.size)
-        assertEquals(xyz.mederi.ui.chat.ToolActionKind.SUBAGENT, groups.first().kind)
+        // SPAWN_RESEARCHER 现归 SUBAGENT_RESEARCH 分类（ToolActions.classifyToolAction 已改，断言对齐）
+        assertEquals(xyz.mederi.ui.chat.ToolActionKind.SUBAGENT_RESEARCH, groups.first().kind)
 
         val isGroupRunning = true
-        val isSubagentPreparing = groups.first().kind == xyz.mederi.ui.chat.ToolActionKind.SUBAGENT && isGroupRunning
+        val isSubagentPreparing = groups.first().kind == xyz.mederi.ui.chat.ToolActionKind.SUBAGENT_RESEARCH && isGroupRunning
         val canExpand = !isSubagentPreparing
         assertFalse(canExpand, "子agent准备中状态不可展开")
     }
@@ -3069,16 +3065,22 @@ class SharedLogicDesktopTest {
             println("[$i] ${item::class.simpleName}: key=${item.key}")
         }
 
-        val planCard = items.filterIsInstance<ChatListItem.PlanApproval>().firstOrNull()
-        val planCardIdx = items.indexOfFirst { it is ChatListItem.PlanApproval }
+        // 2026-11-15 计划卡锚定重写后的新语义：APPROVED 计划不再渲染 pending 审批卡
+        //（PlanApproval 只挂 pending 态），改为在创建调用的工具行上打 planOutcome 标记。
         val userTurn2Idx = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("停止测试") }
-        val asstTurn2TextIdx = items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("收尾状态维持") }
 
-        println("=== [DEBUG_LOG_PLAN_CARD_REPRODUCTION] planCardIdx=$planCardIdx, userTurn2Idx=$userTurn2Idx, asstTurn2TextIdx=$asstTurn2TextIdx ===")
-        assertNotNull(planCard, "计划卡片必须存在")
-        assertEquals(planId, planCard.request.id)
-        assertTrue(planCardIdx < userTurn2Idx, "计划卡片必须在第一轮（userTurn2 之前），而不是跑到会话最底下！planCardIdx=$planCardIdx, userTurn2Idx=$userTurn2Idx")
-        assertEquals(1, items.filterIsInstance<ChatListItem.PlanApproval>().size, "计划卡片严格只能出现 1 次，不得在末尾重复兜底")
+        println("=== [DEBUG_LOG_PLAN_CARD_REPRODUCTION] userTurn2Idx=$userTurn2Idx ===")
+        // 新语义：pendingPlanApproval 错误回填的 APPROVED 计划不得渲染审批卡（旧 bug 形态：卡跑到会话最底下）
+        assertEquals(0, items.filterIsInstance<ChatListItem.PlanApproval>().size, "APPROVED 计划不得渲染 pending 审批卡，更不得跑到会话最底下")
+        // 锚定回归价值保持：Approved 标记必须挂在第一轮创建调用的工具行上（userTurn2 之前），且恰好一次
+        val marked = items.filterIsInstance<ChatListItem.WorkTraceBlock>()
+            .flatMap { it.items }
+            .filterIsInstance<ChatListItem.ToolCalls>()
+            .filter { it.planOutcome == xyz.mederi.ui.PlanSubmissionOutcome.Approved }
+        assertEquals(1, marked.size, "创建调用的工具行必须带 Approved 标记且恰好一次")
+        val anchorTrace = items.filterIsInstance<ChatListItem.WorkTraceBlock>()
+            .single { trace -> trace.items.any { it === marked.single() } }
+        assertTrue(items.indexOf(anchorTrace) < userTurn2Idx, "Approved 标记必须在第一轮（userTurn2 之前），而不是跑到会话最底下！anchorIdx=${items.indexOf(anchorTrace)}, userTurn2Idx=$userTurn2Idx")
     }
 
     @Test
@@ -3327,11 +3329,15 @@ class SharedLogicDesktopTest {
             val t1Index = trace.items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("下面是计划") }
             val t2Index = trace.items.indexOfFirst { it is ChatListItem.TextMessage && it.text.contains("批准了") }
             val specToolIndex = trace.items.indexOfFirst { it is ChatListItem.ToolCalls && it.toolCalls.any { tc -> tc.name == "generate_spec" } }
-            val planCardIndex = items.indexOfFirst { it is ChatListItem.PlanApproval && it.request.id == "plan_test_order" }
 
             assertTrue(t1Index >= 0 && t2Index > t1Index && specToolIndex > t2Index,
                 "工作详情内必须按阶段1说明、阶段2说明、generate_spec保持真实时序")
-            assertTrue(planCardIndex > items.indexOf(trace), "计划审批卡独立显示在过程栏外")
+            // 2026-11-15 新语义：APPROVED 计划不再渲染 pending 审批卡；锚定回归价值改为
+            // Approved 标记必须挂在提交调用的工具行上（过程块内，不得丢失也不得顶层重复）。
+            assertEquals(0, items.filterIsInstance<ChatListItem.PlanApproval>().size, "APPROVED 计划不渲染 pending 审批卡")
+            val marked = trace.items.filterIsInstance<ChatListItem.ToolCalls>()
+                .filter { it.planOutcome == xyz.mederi.ui.PlanSubmissionOutcome.Approved }
+            assertEquals(1, marked.size, "提交调用的工具行必须带 Approved 标记且恰好一次")
             assertTrue(items.filterIsInstance<ChatListItem.TextMessage>().none { !it.isUser },
                 "工作期间的阶段说明不能成为顶层交付正文")
         } finally {

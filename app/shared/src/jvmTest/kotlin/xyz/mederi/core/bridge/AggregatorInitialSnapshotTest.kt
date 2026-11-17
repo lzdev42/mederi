@@ -61,6 +61,7 @@ class AggregatorInitialSnapshotTest {
             "get" -> session
             "listMessages" -> messages
             "contextUsedTokens" -> contextUsedTokens()
+            "listModelRequests" -> emptyList<Any>()
             "listSubagentsForSession" -> emptyList<Any>()
             "events" -> events
             else -> error("Unexpected API ${method.name}")
@@ -86,7 +87,7 @@ class AggregatorInitialSnapshotTest {
             conversation = MederiModelMapper.toConversation(session(), null),
             messages = emptyList(),
             tokenUsage = MederiModelMapper.toTokenUsage(emptyList()),
-            cost = MederiModelMapper.toCostSummary(),
+            cost = xyz.mederi.core.contract.models.CostSummary(),
         )
 
         val frames = mutableListOf<ConversationSnapshot>()
@@ -156,13 +157,12 @@ class AggregatorInitialSnapshotTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun planHydrationCalledOnceAndPendingFollowsStrictSemantics() = runTest {
+    fun planHydrationCalledOnceAndKeepsPendingReplacementAlongsideApprovedPlan() = runTest {
         val plans = listOf(
             PlanApprovalRequest(id = "approved", conversationId = "s", planPath = "a.md", title = "approved", status = "APPROVED"),
             PlanApprovalRequest(id = "pending", conversationId = "s", planPath = "b.md", title = "pending", status = "PENDING"),
         )
         var planHydrationCalls = 0
-        // 注入与生产 initialPlanHydration 相同的严格推导：firstOrNull 非终态 且 PENDING 才有值
         val api = fakeApi(session(), messages = emptyList(), events = MutableSharedFlow())
         val snapshot = MederiEventAggregator.buildInitialSnapshot(
             conversationId = "s",
@@ -171,8 +171,7 @@ class AggregatorInitialSnapshotTest {
             planHydration = {
                 planHydrationCalls++
                 MederiEventAggregator.PlanApprovalHydration(
-                    pending = plans.firstOrNull { it.status !in setOf("COMPLETED", "VOIDED") }
-                        ?.takeIf { it.status == "PENDING" },
+                    pending = plans.firstOrNull { it.status == "PENDING" },
                     all = plans,
                 )
             },
@@ -183,14 +182,14 @@ class AggregatorInitialSnapshotTest {
         )
 
         assertEquals(1, planHydrationCalls, "计划目录只能扫描一次（pending + 全量同源），不得 planApprovals/planApproval 各扫一遍")
-        assertNull(snapshot.pendingPlanApproval, "[APPROVED, PENDING]：第一条非终态是 APPROVED → pending 必须为 null（不能取列表里第一个 PENDING）")
+        assertEquals("pending", snapshot.pendingPlanApproval?.id)
         assertEquals(plans, snapshot.planApprovals, "全量计划列表取自同一次扫描")
     }
 
     @Test
-    fun planHydrationPendingIsFirstNonTerminalPending() = runTest {
+    fun planHydrationDoesNotRequestApprovalForApprovedPlans() = runTest {
         val plans = listOf(
-            PlanApprovalRequest(id = "pending", conversationId = "s", planPath = "b.md", title = "pending", status = "PENDING"),
+            PlanApprovalRequest(id = "voided", conversationId = "s", planPath = "b.md", title = "voided", status = "VOIDED"),
             PlanApprovalRequest(id = "approved", conversationId = "s", planPath = "a.md", title = "approved", status = "APPROVED"),
         )
         var planHydrationCalls = 0
@@ -202,8 +201,7 @@ class AggregatorInitialSnapshotTest {
             planHydration = {
                 planHydrationCalls++
                 MederiEventAggregator.PlanApprovalHydration(
-                    pending = plans.firstOrNull { it.status !in setOf("COMPLETED", "VOIDED") }
-                        ?.takeIf { it.status == "PENDING" },
+                    pending = plans.firstOrNull { it.status == "PENDING" },
                     all = plans,
                 )
             },
@@ -214,7 +212,7 @@ class AggregatorInitialSnapshotTest {
         )
 
         assertEquals(1, planHydrationCalls, "计划目录只能扫描一次")
-        assertEquals("pending", snapshot.pendingPlanApproval?.id, "[PENDING, APPROVED]：第一条非终态是 PENDING → pending == 第一个")
+        assertNull(snapshot.pendingPlanApproval)
         assertEquals(plans, snapshot.planApprovals, "全量计划列表取自同一次扫描")
     }
 }

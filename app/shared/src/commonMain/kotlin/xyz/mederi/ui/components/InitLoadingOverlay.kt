@@ -25,7 +25,10 @@ import xyz.mederi.theme.LocalMederiColors
 
 /**
  * 初始化全屏加载遮罩层。
- * 注意：当前架构为直接调用库，已不存在异步初始化过程；本组件暂无用途，留下备用。
+ *
+ * 遮罩等的是 AiCore.isReady（MederiAiCore.initialize() 完成：双库打开、崩溃残留
+ * 恢复扫描、全局状态重建）。MainScreen 以 `isInitializing = !isReady` 控制显隐，
+ * 覆盖在工作区之上，拦截手势，避免用户在核心未就绪时操作会话。
  */
 @Composable
 fun InitLoadingOverlay(

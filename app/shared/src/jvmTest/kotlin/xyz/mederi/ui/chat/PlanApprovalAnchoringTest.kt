@@ -11,8 +11,8 @@ import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.core.contract.models.TokenUsage
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.ui.ChatListItem
+import xyz.mederi.ui.PlanSubmissionOutcome
 import xyz.mederi.ui.computeChatItems
-import xyz.mederi.ui.createdPlansForTurn
 import xyz.mederi.ui.planCallIdentity
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -134,8 +134,13 @@ class PlanApprovalAnchoringTest {
         assertEquals(request.id, cards.single().request.id)
     }
 
+    /**
+     * 2026-11-15 计划卡锚定重写后的新语义：已批准/已作废的计划不再渲染独立审批卡
+     * （PlanApproval 只挂 pending 态），改为在创建调用的工具行上打 [PlanSubmissionOutcome] 标记。
+     * 回归价值保持不变：标记必须锚在创建调用所在的轮次（不被末轮抢走，也不丢）。
+     */
     @Test
-    fun `approved plan keeps its card anchored at the creation turn`() {
+    fun `approved plan keeps its submission outcome anchored at the creation turn`() {
         val title = plan().title
         val request = plan().copy(status = "APPROVED")
         val messages = listOf(
@@ -146,14 +151,18 @@ class PlanApprovalAnchoringTest {
         )
         // 批准后 pendingPlanApproval 清空，planApprovals 保留全生命周期投影
         val items = computeChatItems(messages, isWorking = false, snapshot = snapshot(request, pending = null))
-        val cards = planCards(items)
-        assertEquals(1, cards.size, "批准后的计划卡仍须渲染在创建轮次")
+        // 新语义：批准后不再有 pending 审批卡
+        assertEquals(0, planCards(items).size, "批准后的计划不再渲染 pending 审批卡")
+        // 标记锚定：创建调用的工具行携带 Approved 结果（折叠在工作过程块的 items 内）
         val traces = items.filterIsInstance<ChatListItem.WorkTraceBlock>()
-        assertTrue(
-            items.indexOf(cards.single()) > items.indexOf(traces.first()) &&
-                items.indexOf(cards.single()) < items.indexOf(traces.last()),
-            "批准后的卡片应留在创建轮次（第一个过程块之后），不被末轮兜底抢走",
-        )
+        val marked = traces.flatMap { it.items }
+            .filterIsInstance<ChatListItem.ToolCalls>()
+            .filter { it.planOutcome == PlanSubmissionOutcome.Approved }
+        assertEquals(1, marked.size, "创建调用的工具行必须带 Approved 标记且恰好一次")
+        val anchorTrace = traces.single { trace -> trace.items.any { it === marked.single() } }
+        // 布局序 = [u1 用户气泡, a1 创建轮过程块(带标记), u2 气泡, a2 轮文本]——标记必须锚在创建轮的
+        // 过程块（index 1），不能被末轮/末尾兜底抢走，也不能丢。
+        assertEquals(1, items.indexOf(anchorTrace), "Approved 标记应留在创建轮次（第一个过程块），不被末轮抢走")
     }
 
     @Test
@@ -182,18 +191,7 @@ class PlanApprovalAnchoringTest {
         assertEquals("T", planCallIdentity(ToolCallState.Running(mapOf("title" to "T"))).second)
     }
 
-    @Test
-    fun `createdPlansForTurn skips failed calls and matches via the successful one in the same turn`() {
-        val title = plan().title
-        val request = plan()
-        val turn = listOf(
-            assistant("a1", listOf(
-                writePlanCall("w1", title, "Error: Plan validation failed — fix ALL of the following items."),
-                writePlanCall("w2", title, neutralContinued),
-                ChatBlock.ToolCall(id = "w3", name = "bash", state = ToolCallState.Completed(emptyMap(), "ok")),
-            )),
-        )
-        val matched = createdPlansForTurn(turn, snapshot(request))
-        assertEquals(listOf(request.id), matched.map { it.id }, "轮内失败调用必须被跳过，仅成功调用匹配")
-    }
+    // createdPlansForTurn 单元测试已随 2026-11-15 计划卡锚定重写（matchPlanCall + planAnchors
+    // 就地锚定方案）移除——该 internal 函数不复存在；轮内失败调用跳过的行为现在由上面的
+    // 端到端用例 `failed attempts do not steal the card ...` 覆盖（卡片锚成功调用所在轮）。
 }

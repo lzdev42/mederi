@@ -6,6 +6,8 @@ import xyz.mederi.core.contract.models.*
  * 展平后的聊天列表 item — 每个文本块/思考面板都是独立 LazyColumn item。
  * 所有展示所需的派生数据（聚合文案、目标参数、轮次标记）在此预计算，View 零逻辑。
  */
+enum class PlanSubmissionOutcome { Approved, Voided }
+
 sealed interface ChatListItem {
     val key: String
 
@@ -29,6 +31,7 @@ sealed interface ChatListItem {
        val toolSummary: String = "",
        val hasFailedTool: Boolean = false,
        val isRunning: Boolean = false,
+       val planOutcome: PlanSubmissionOutcome? = null,
    ) : ChatListItem
 
     data class SubagentCalls(
@@ -42,7 +45,7 @@ sealed interface ChatListItem {
 
     /**
      * 多步任务的工作过程聚合栏（Work 栏）。
-     * 将轮次内的推理、过渡正文与工具调用按时序聚合；执行时展开，交付或等待子代理时收起。
+     * 将轮次内的推理、过程正文与工具调用按时序聚合。默认保留可读进展，技术细节可独立展开。
      */
     data class WorkTraceBlock(
         override val key: String,
@@ -58,7 +61,11 @@ sealed interface ChatListItem {
         /** 当前阶段的默认展开态；阶段切换后重置手动选择，仍允许用户重新展开查看。 */
         val defaultExpanded: Boolean = true,
         override val isTurnStart: Boolean = false,
-    ) : ChatListItem
+        /** 主流卡片和工作轮次可分断相邻细节，即使它们不进入 items。 */
+        val detailBreakBefore: Set<String> = emptySet(),
+    ) : ChatListItem {
+        internal val entries = projectWorkTraceEntries(items, detailBreakBefore)
+    }
 
     data class TextMessage(
         override val key: String,

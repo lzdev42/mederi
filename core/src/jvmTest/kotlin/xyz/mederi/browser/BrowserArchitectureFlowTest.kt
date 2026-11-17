@@ -195,7 +195,8 @@ class BrowserArchitectureFlowTest {
             name: String?,
             baseUrl: String?,
             reasoningParameter: ReasoningParameter?,
-            modelsDevKey: String?
+            modelsDevKey: String?,
+            type: ProviderType?
         ): Provider = untouched()
 
         override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?): Provider = untouched()

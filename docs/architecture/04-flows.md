@@ -53,18 +53,23 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[启动桌面端] --> B[探测 Node.js、Python 3 和 Git]
-    B -->|全部可用| C[加载工作台]
-    B -->|有缺项| D[显示引导并自动尝试安装]
-    D -->|最小化 / 恢复| D
-    D --> E[复检必需组件]
-    E -->|全部可用| C
-    E -->|仍有缺项| F[显示重试和终端备用入口]
-    F -->|重试| D
-    F -->|终端安装完成后复检| E
+    A[启动桌面端] --> C[窗口立即可见<br/>工作台组合 + core 初始化立即启动]
+    A --> B[后台并行探测 Node.js、Python 3 和 Git<br/>（异步非阻塞，不拦窗口显示与 core 初始化）]
+    B -->|全部可用| R[无覆盖层，工作台直接可用]
+    B -->|有缺项| D[RuntimeSetupPage 全屏覆盖层弹出<br/>盖在已组合的工作台之上，说明用途并等待用户确认]
+    D -->|安装并继续| G[在引导页终端中运行安装<br/>（期间 core 继续在后台初始化）]
+    G -->|最小化 / 恢复| G
+    G -->|需要授权| H[提示输入密码或确认 UAC]
+    H --> G
+    G -->|安装进程退出| E[复检必需组件]
+    E -->|全部可用| X[覆盖层消失：core 已就绪，零二次初始化]
+    E -->|仍有缺项| F[保留终端输出并显示重试]
+    F -->|重试| G
 ```
 
-引导和工作台共用原生窗口。关闭引导窗口会最小化，安装继续运行；点击 Dock 或任务栏可恢复。安装完成时切换到工作台。macOS 在后台完成时会移除 Dock 中最小化的引导窗口入口，用户点击 Mederi 图标时再显示工作台。macOS 自动使用已有 Homebrew，缺少时在终端备用入口提供官方安装命令。Linux 使用非交互 sudo，要求密码时改在终端执行。Windows 通过 WinGet 安装，按需请求 UAC。Linux 和 Windows 的脚本从 jsDelivr 下载。安装一并提供 uv/uvx，启动检查只要求 Node.js（含 npm/npx）、Python 3 和 Git。
+引导页使用独立 PTY 运行固定安装命令。Linux 和 Windows 从 jsDelivr 下载固定提交的脚本。macOS 使用 Homebrew，缺少时运行 Homebrew 官方安装器。Linux 的 sudo 和 Homebrew 直接通过终端请求授权，Windows 通过 UAC 并将提权安装器输出转回引导终端。页面识别安装阶段和授权提示，最终以环境复检为准。最小化时 PTY 继续运行。macOS 在后台就绪时移除 Dock 的引导缩略图。安装一并提供 uv/uvx，启动检查只要求 Node.js（含 npm/npx）、Python 3 和 Git。
+
+**探测与初始化并行（2026-11）**：`McpRuntime.missing()` 在 `LaunchedEffect + Dispatchers.IO` 后台探测，窗口 `visible` 不再等探测结果；工作台（AppState + `MederiAiCore.initialize()`）在探测三态下保持组合、只初始化一次。缺项时 `RuntimeSetupPage` 以全屏覆盖层（`Box` 叠加，不透明 `Surface`）弹出而非替换内容，安装期间 core 继续后台完成 DB 打开/崩溃恢复扫描，覆盖层消失时工作台已就绪。退出守卫语义不变：探测未完成（null）或有缺项时点关闭 = 最小化，仅全齐允许真正退出（含 Command-Q/系统 Quit 菜单路径）。
 
 ## 1. 发送消息全链路（sendMessage 端到端时序图）
 
@@ -107,7 +112,7 @@ sequenceDiagram
         TE->>TE: CustomToolRegistry.buildAll() 收集 UI 层注册的自定义工具
         TE->>TE: 连接已启用的 MCP 并发现工具，失败原因随本轮系统提示传给模型
         TE->>TE: ToolFactory.build(工具集, agentMode/role裁剪, customTools+mcpTools旁路合并)<br/>透传 AgentsSubtreeDiscovery: read/list 工具访问路径上<br/>发现未注入过的 AGENTS.md 时追加进工具返回文本(会话级去重)
-        TE->>TE: buildTurnAgent: KoogClientFactory(+RetryableLLMClient)<br/>+ KoogModelBuilder + KoogParamsBuilder<br/>+ ChatMemory(HistoryStoreChatHistoryProvider)<br/>+ graphStrategy(+Compression) + EventHandler
+        TE->>TE: buildTurnAgent: KoogClientFactory(+RetryableLLMClient)<br/>+ KoogModelBuilder + KoogParamsBuilder（自定义档位继承协议默认值，内置按预设）<br/>+ ChatMemory(HistoryStoreChatHistoryProvider)<br/>+ graphStrategy(+Compression) + EventHandler
         K->>HS: load → aiViewWindow(最后 SUMMARY 之后) → KoogMessageMapper
         K->>LLM: requestLLMStreaming(系统提示+AI视图窗口+哨兵输入)
         loop 流式帧
@@ -116,7 +121,11 @@ sequenceDiagram
             EB-->>UI: SSE 或进程内 → SnapshotReducer 更新快照
         end
         loop 工具循环 (maxAgentIterations=3000)
-            K->>K: toAssistantMessageSafe(坏 JSON args 原样保留，回喂模型自纠)
+            K->>K: toAssistantMessageSafe（合并续片后校验完整工具参数）
+            break 参数不是有效 JSON 对象
+                K->>HS: 仅保存已收到的正文与推理
+                K-->>EB: MESSAGE_ERROR（工具名、调用 ID 与解析原因）
+            end
             K->>HS: TurnIncrementalPersister.persistAssistant（增量定向写防崩丢：内存真理源 + B 单写队列，commit 后换内存引用）
             K->>K: nodeExecuteTools: 执行工具<br/>(文件写白名单/沙盒命令/office_read/office_write(pptx 只读)/<br/>list_processes/stop_process/Plan/Verify/ask_user...)
             K-->>EB: TOOL_CALLED / TOOL_RESULT 事件
@@ -201,6 +210,10 @@ flowchart TD
     A --> S[发布快照 用户气泡先于新响应 不产生重复等待占位]
 ```
 
+### 侧栏会话导航
+
+`AppState.projects` → `SidebarViewModel.recentConversations` 按活动时间倒序取前五条 → 侧栏在项目树上方显示可折叠的最近会话组。点击任一会话行先同步所属项目，再选中会话，由 `WorkspaceViewModel` 观察选中项并切换，浮层抽屉随后收起。顶部「新建会话」清空当前会话选中，进入当前项目的新会话输入态。
+
 ## 2. Turn 执行流程图（含错误分类）
 
 ```mermaid
@@ -271,6 +284,8 @@ flowchart TD
 过程进入折叠块；Core 正常收尾确认本轮完整回复，含派发子代理后等待的阶段回复。阶段回复与成功派发通知在折叠块外保留；UI 仅在 `subagent` 的 SPAWN/SPAWN_RESEARCHER 工具 Completed 且结果非 `Error:` 时生成固定通知（已启动子 Agent / 概览查看详情 / 可继续与主 AI 对话，不影响子 Agent），不依赖模型输出文字；未完成、失败及 STATUS/STOP 保留在工具过程内。通知是历史派发记录，实时状态由概览展示；只有整项工作结束才写 workCompletedAt。UI 以用户消息切分显示段，同一 turnId 不跨插话气泡合并后续推理。取消、异常和截断不确认最终交付；收尾未消费输入不能静默清掉。历史重开使用持久化标记，不依赖 UI 猜测。
 
 ## 3. 事件 → UI 状态机聚合流程
+
+供应商响应 `usage`（Gemini 为 `usageMetadata`）经协议适配器归一到 `ResponseMetaInfo`。主代理和子代理在对话模型步骤或压缩批次发起前写入同一归属会话的请求账本并发送 `LLM_REQUEST_STARTED`；模型 End 上报的用量补到同一请求 ID，并发送 `LLM_REQUEST_COMPLETED`。Core `SessionUsage` 合并账本和未被账本覆盖的旧历史，仅对收到非错误结束响应的步骤计一次。token 与缓存率独立采用有效上报用量，成功响应未上报 token 仍计次，按请求时的供应商、端点、上游模型与推理档位分组，并为输入框选中的模型提供该模型在本会话最近一次主代理对话请求。会话命中率为有效样本的 `Σ缓存读取 / Σ总输入`。应用桥按各请求的 models.dev 目录价计算估价，随桌面快照和 REST 消息页返回。概览切换请求与会话，详情弹窗展示模型用量、估价、命中率样本覆盖及单次命中范围。
 
 ```mermaid
 flowchart TD
@@ -356,13 +371,17 @@ sequenceDiagram
     participant TE as TurnExecutor
     participant PS as PlanStore(.mederi/plans/)
 
-    M->>PS: PlanStore.save(plan)
+    M->>PS: 保存待批准草案，保留当前已批准计划
     M->>PAR: request(planId, planPath, title, summary, subtaskCount, subtasksJson=encodeSubtasksWire(...))
     PAR->>PAR: 取消当前 pending(superseded)
     PAR->>EB: PLAN_APPROVAL_REQUESTED(payload 不携 planContent；spec/planDetail 全文在盘上，UI 按需 getPlanDocument)
     EB-->>UI: SnapshotReducer → pendingPlanApproval + planApprovals
     UI->>TE: resolvePlanApproval(convId, planId, approved)
-    TE->>PAR: resolve(planId, approved) → deferred.complete
+    TE->>PAR: resolve(planId, approved)
+    opt 用户批准
+        PAR->>PS: 校验草案与取证文件，批准新版，再作废旧版
+        PS-->>PAR: 返回已持久化的批准结果
+    end
     PAR->>EB: PLAN_APPROVAL_RESOLVED
     EB-->>UI: 清 pendingPlanApproval, 对应项 status=APPROVED/REJECTED
     PAR-->>M: PlanApprovalResult(approved, superseded=false)
@@ -378,12 +397,10 @@ sequenceDiagram
 翻历史 / 进程重启后 requester 已消亡，无法唤醒任何挂起协程，走**跨 turn 分支**（`TurnExecutor.resolvePlanApproval`）：
 1. 审批仅批准技术方案，不修改会话模型与配置；拒绝（approved=false）无存活 turn 可唤醒、无状态变更，直接返回 false（计划保持 PENDING_APPROVAL）；
 2. 从 PlanStore 按 planId `load` 并校验：会话匹配、非终态、PENDING_APPROVAL——不满足则跳过（作废/已完成/他会话计划不可批）；
-3. `updatePlan` 置 APPROVED 落盘 → 发 `PLAN_APPROVAL_RESOLVED` 事件；
-4. 以一条 **UI 隐藏内部消息**（`hiddenFromUi=true`，`MederiModelMapper` 清空渲染块且 `ChatItemsBuilder` 不渲染气泡 → 用户不可见、AI 可见）经 `sendMessageInternal` 启动新执行 turn，AI 读到 Active Plan 已是 APPROVED 后自行走 generate_spec → spawn → verify。
+3. 持有与普通输入共用的会话输入锁，确认该会话可启动新轮次，再校验草案和取证文件、批准落盘、作废旧版并发出对应事件；
+4. 以一条 **UI 隐藏内部消息**（`hiddenFromUi=true`，`MederiModelMapper` 清空渲染块且 `ChatItemsBuilder` 不渲染气泡 → 用户不可见、AI 可见）经 `sendMessageInternal` 启动新执行 turn。该 job 捕获同一输入锁，用于正常及失败收尾。AI 读到 Active Plan 已是 APPROVED 后自行走 generate_spec → spawn → verify。
 
-**重启/翻历史恢复待批准卡片**：`MederiAiCore.initialPlanHydration()`（buildInitialSnapshot 单一实现，getSnapshot 与 observe 共用；计划目录单次扫描同时产出 pending 与全量列表）读该会话最新非终态计划投影为契约 `PlanApprovalRequest` 填入 `pendingPlanApproval`——`status` 区分：
-- APPROVAL 模式 + PENDING_APPROVAL → `"PENDING"`（待用户批准）；
-- 自动模式已 APPROVED / 执行中 IN_PROGRESS → `"AUTO_APPROVED"`（已自动审批，UI 可展示而非完全不展示）。
+**重启/翻历史恢复待批准卡片**：`MederiAiCore.initialPlanHydration()`（buildInitialSnapshot 单一实现，getSnapshot 与 observe 共用；计划目录单次扫描同时产出 pending 与全量列表）将该会话最新 PENDING_APPROVAL 草案映射为 `"PENDING"` 并填入 `pendingPlanApproval`。已批准的活跃旧版可以与待批准的新草案同时展示。自动批准的新版以 APPROVED 落盘并进入全量计划列表。
 职能边界：core **只把计划状态作为数据给 UI**，不判定卡片必须在对话内/外——UI 层自决渲染位置。
 
 **问与计划挂起时用户直接回复**（三条硬规则之一）：`sendMessageInternal` 检测到 pending 时先 `injectNeutralPlanToolResult`（补写中性 ToolResult 落库，非批准/非拒绝）再 abort 旧 turn——计划保持 PENDING_APPROVAL，AI 响应新消息，绝不反问"为什么"。计划无"拒绝"态，只有批准/作废/被无视三态。
@@ -461,6 +478,8 @@ flowchart TD
     H --> I["效果: message_history 全量保留(UI 可见/回滚可用)<br/>aiViewWindow = SUMMARY + 保留段原文 + 之后新消息 → AI 视图变小"]
 ```
 
+**压缩后缺少用户输入的续跑（主、子代理共用）**：普通模型请求若以 `TLDR:` 摘要开头，且当前 Prompt 没有普通用户内容（工具结果不计），对话策略仅在本次请求中于摘要前插入一条 `user` 续跑指令，要求结合摘要和工具结果继续当前任务。工具调用与结果顺序保持完整。Koog 捕获请求 Prompt 后立即恢复原 Prompt，ChatMemory 和 UI 都不会收到这条合成消息。后续请求按同一条件判断，已有用户输入时直接使用原 Prompt。摘要请求及空闲会话的手动压缩不触发续跑。
+
 **压缩互斥与暂停保护（2026-10，防止压缩被打断或空转重入）**：
 - **`compactingSessions` 排他集合**：`TurnExecutor` 维护 `compactingSessions` 集合。在 `compressOnce` 全程以及 `MederiCompressionStrategy` 执行图策略内联压缩（`onCompactionStart` / `onCompactionEnd`）期间，当前会话处于压缩保护状态；
 - **全链路互斥保护**：
@@ -478,6 +497,8 @@ flowchart TD
 - **自动路径仍为窗口相对口径**（70% 触发 preflight / 保留段 ≤ 窗口×0.3），不受手动改动影响。
 
 窗口取 `HistoryStoreChatHistoryProvider.aiViewWindow`（即"最后一条 SUMMARY 及其后"，与实际压缩所见一致），图片按当前模型 `supportsImages` 能力剔除。
+
+**工具调用与压缩边界**：按工具调用 ID 与工具名配对，保留段和旧消息分批都不能切开完整调用与结果；超硬上限的组合整体从摘要请求中去除。轮内压缩先于结果入 prompt，尚待追加结果的调用留在保留段。摘要标记优先按首条保留消息的 ID 定位原始历史位置，回放投影省略的工具记录仍留在原始历史。
 
 **SUMMARY 插入位置与 AI 视图（2026-10 修复）**：压缩回写时 SUMMARY 标记插在**保留段（recent）起点之前**——库里顺序为 `...被压掉的旧消息 | SUMMARY | 保留段原文 | 之后新消息`，AI 视图 = SUMMARY + 保留段 + 新消息，模型既看到摘要又看到压缩点前保留的最后几句原文。对齐必须用 **id 过滤前的完整 incoming**：Koog ChatMemory 在 strategy 完成时把压缩后的历史 `[TLDR, recent...]` 整体交给 store，recent 携带与库中一致的 id，若先按 id 过滤（`existingIds`）再对齐，recent 会被全部剔除、k 恒为 0，SUMMARY 会追加到历史末尾、保留段退出 AI 视图（压缩后模型只看到摘要、看不到保留原文——历史上该 bug 真实存在，修复 + 回归测试见 `CompressionSummaryPositionTest`）。
 
@@ -655,14 +676,14 @@ sequenceDiagram
     participant BTM as BrowserTaskManager
     participant BO as BrowserOperator(手和眼)
     participant BB as BrowserBrain(大脑)
-    participant BC as ObscuraBrowserControl(MCP stdio 子进程)
+    participant BC as ObscuraCdpControl(CDP 子进程)
     participant EB as eventBus
     participant WV as WorkspaceViewModel
 
     U->>MA: "搜一下51job的Java开发工作"
     MA->>RBT: browser(action=RUN, task, browser="obscura", recipe='{"name":"job_filter","description":"Java岗位筛选"}')
     RBT->>BTM: runTask(task, model, projectId, sessionId, browser, recipe)
-    BTM->>BTM: resolve(browser)→factory(suspend)→新建 ObscuraBrowserControl<br/>tasks[taskId]=STARTED; scope.launch{...}
+    BTM->>BTM: resolve(browser)→factory(suspend)→新建 ObscuraCdpControl<br/>tasks[taskId]=STARTED; scope.launch{...}
     BTM->>EB: BROWSER_TASK_STARTED(taskId, STARTED, browser="obscura")
     RBT-->>MA: {"taskId":"bt_xxx","status":"RUNNING","browser":"obscura"} (立即返回, 不阻塞)
     MA-->>U: 主代理继续对话(浏览器任务在后台跑)
@@ -670,7 +691,7 @@ sequenceDiagram
     EB-->>WV: BROWSER_TASK_STARTED(任意 browser)
     Note over WV: openDockPanel(BROWSER_AUTOMATION)（任务监控）
     Note over BTM,BC: 后台执行(与主 turn 并行)
-    BTM->>BC: start() 起 obscura mcp --stealth --allow-private-network stdio 子进程
+    BTM->>BC: start() 起 obscura serve --port 0 --stealth --allow-private-network 子进程（CDP WebSocket）
     BTM->>BO: operator.run(task)
     loop AIAgent tool-calling 循环(每步)
         BO->>BO: agent.run → call_llm(nodePerceive 注入当步 Obscura 快照，refs 直传)
@@ -708,7 +729,7 @@ sequenceDiagram
 > - **自动唤醒**：任务终态发 `BROWSER_TASK_COMPLETED/ERROR/STOPPED`（携带 `role=BROWSER_OPERATOR`），`TurnExecutor` 订阅并组装 `<event_message type="browser_task_completed">` 放入待发队列，自动唤醒主 Agent 开启新 turn 向用户汇报，无需主代理主动轮询。
 > - **用户停止链路（真停）**：UI 浮条「停止」→ `WorkspaceViewModel.stopBrowserAutomation()` 读 `browserAutomationState.taskId` → `AiCore.stopBrowserTask(taskId)` → `MederiAiCore` → `SessionApi.stopBrowserTask` → `BrowserTaskManager.stopTask`：同步置 STOPPED + 发 `BROWSER_TASK_STOPPED` + `cancel(job)`，协程 `finally` 在 `NonCancellable` 上下文 `control.close()` 真正关闭浏览器。UI 不再 `abort()` 主 turn（浏览器任务与主 turn 无生命周期绑定）。
 > - **生命周期（终态一律关闭）**：任务终态（完成/失败/停止）一律 `control.close()` 真正关闭浏览器并折叠 UI Dock 面板；已删除基于 isTest 关键词保留现场的旧逻辑。
-> 浏览器任务依赖 `BrowserRegistry` 注册的 `BrowserControl`（每任务经工厂新建 ObscuraBrowserControl → `start()` 起 `obscura mcp --stealth --allow-private-network` stdio 子进程 → 任务终态 `close()` 销毁进程（SIGTERM→2s→SIGKILL 双保险））。主代理只有在有可用后端时才收到 `browser` 工具。
+> 浏览器任务依赖 `BrowserRegistry` 注册的 `BrowserControl`（每任务经工厂新建 ObscuraCdpControl → `start()` 起 `obscura serve --port 0 --stealth --allow-private-network` 子进程并经 CDP WebSocket 连接 → 任务终态 `close()` 销毁进程（SIGTERM→2s→SIGKILL 双保险））。主代理只有在有可用后端时才收到 `browser` 工具。
 > 任意 BROWSER_TASK_STARTED 都会把浏览器自动化监控面板展开，遥控端同样可以查看任务事件。
 
 > 执行模型（2026-10 重构）：BrowserOperator 遵循 4-phase 循环（perceive → decide → execute → postprocess）。
@@ -816,7 +837,8 @@ sequenceDiagram
     MED->>MED: MederiPaths.ensureDirectories + handleLegacyFiles(旧文件须批准)
     MED->>MED: 双库 driver + Schema.create + 7 Store 装配
     MED->>MED: Manager 层 + API 层装配
-    MAC->>MAC: cleanupLegacyBuiltinProviders / cleanupStaleRunningSessions / syncBuiltinProviders
+    MAC->>MAC: cleanupLegacyBuiltinProviders / cleanupStaleRunningSessions
+    MAC->>MED: syncBuiltinProviders → 写回已有内置供应商的预设协议和推理参数
     MAC->>MAC: refreshGlobalState(4 个 StateFlow) → isReady=true
     MAC->>SVC: modelCatalog.start()(models.dev 每小时刷新)
     MAC->>SVC: autoRefreshBuiltinGoogleModels(后台)
@@ -889,7 +911,7 @@ flowchart LR
 
 **Message 状态机**：`PROCESSING(streaming 占位) → COMPLETED / ERROR`；快照里 isStreaming 对应 PROCESSING。
 
-**Plan 状态机**：`PENDING_APPROVAL → (批准) APPROVED → (spawn 首子任务) IN_PROGRESS → (全子任务 COMPLETED) COMPLETED → archive(plans-done/)`；`PENDING_APPROVAL/APPROVED/IN_PROGRESS → (write_plan 前置 voidActivePlans) VOIDED → .mederi/plans-voided/`；`PENDING_APPROVAL → (拒绝) 停留/用户重试`。
+**Plan 状态机**：`PENDING_APPROVAL → (批准) APPROVED → (spawn 首子任务) IN_PROGRESS → (全子任务 COMPLETED) COMPLETED → archive(plans-done/)`。APPROVAL 先持久化待批准草案，旧版保持活跃。新版批准落盘后旧版进入 VOIDED 并移入 plans-voided/。AUTONOMOUS 的初版与替换版均直接批准落盘。被新草案取代的旧待批准草案进入 VOIDED。
 
 **Subtask 状态机**：`PENDING → (spawn) IN_PROGRESS → (verify PASS) COMPLETED`；`IN_PROGRESS → (verify FAIL/PARTIAL) FAILED → (converge_plan 追加补救 或 regenerate spec) 重执行`。
 
@@ -1408,7 +1430,7 @@ flowchart TD
 
 ### 工作过程显示投影（2026-11-04）
 
-`computeChatItems` 的过程/交付归组及 Core 交付确认保持原有流程；`WorkTraceCard` 执行中默认展开显示步骤；最新响应经 Core 确认交付或无活跃步骤而等待子代理时，`computeChatItems` 将 `WorkTraceBlock.defaultExpanded` 置 false，组件重置手动选择并自动收起，运行状态、墙钟及等待摘要继续保留。用户仍可重新展开查看，主代理恢复新响应的推理/工具时重新默认展开。普通生成中的中间正文不触发交付折叠。过程正文走与交付一致的 Markdown 渲染。各推理与工具行独立默认收起；推理折叠头显示最新推理单行预览，新内容驱动末尾滚动（减弱动效时直接定位），展开可读全文。失败信息仅保留在具体工具行/详情，不提升为工作过程汇总失败状态。
+`computeChatItems` 先按 Core 既有交付标记分出交付、提问和审批，再将过程交给 `WorkTraceCard`。处理顺序为原始步骤 → 普通进展、推理、文档或连续明细组 → 折叠明细组 → 按原顺序展开单项参数与结果。首行 `<!-- mederi:work-note -->` 只标识可选旁白，普通文本保持可见，不执行额外模型请求或改写历史。工作过程含可见进展时，在等待子代理和交付后继续默认展开；只有明细时沿用原默认收起规则。用户仍可手动收起整个过程。思考头只显示状态，完整推理在展开区；工具失败可在所属组的计数与单项详情查阅。
 
 
 ### 首响应前即时反馈（2026-11-04）
@@ -1485,7 +1507,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    IDLE["连续 90 秒无 SSE 行"] --> STOP["本地超时取消当前请求 / 清理流"]
+    IDLE["连续 180 秒无 SSE 行"] --> STOP["本地超时取消当前请求 / 清理流"]
     STOP --> ESCAPE["RetryableLLMClient 不重放原请求"]
     ESCAPE --> TURN["TurnExecutor 捕获本地超时信号"]
     TURN --> BUDGET{还有自动恢复预算?}
@@ -1514,11 +1536,11 @@ flowchart TD
     BUDGET -->|否| ERROR["保留具体诊断，汇报失败"]
 ```
 
-不将 stop 等同于任务成功；纯推理、空响应可自动索取正文一次。恢复不依赖“供应商故意截断”的假设，不对 length、content_filter 或已提供有效正文的正常回复盲目续写。
+流式图在无工具调用时直接检查 Steering 并结束本次执行，无需生成空正文占位符。TurnExecutor 根据实际正文与结束原因判断是否已交付，纯推理、空响应可自动索取正文一次。恢复不依赖“供应商故意截断”的假设，不对 length、content_filter 或已提供有效正文的正常回复盲目续写。
 
 ### batch 的显示展开（2026-11-05）
 
-Core 历史与事件仍保留一次 batch 调用及聚合 JSON 结果；客户端 commonMain 的 computeChatItems → expandBatchToolCall 将 calls 与索引化 results 对账，生成多个普通 ToolCallUi → ToolCallsBlock 按成员展示原工具行。父 batch 参数未完整到达时暂不显示外壳，运行时按父阶段显示成员；完成结果按成员映射成功/失败，保留独立输出。子代理详情复用同一条投影与渲染链。该显示展开不会触发任何工具或模型请求。
+Core 历史与事件仍保留一次 batch 调用及聚合 JSON 结果。客户端 commonMain 的 computeChatItems → expandBatchToolCall 将 calls 与索引化 results 对账，生成多个普通 ToolCallUi → ToolCallsBlock 按成员展示原工具行。父调用参数未完整到达时暂不显示外壳，运行时按父阶段显示成员。完成结果按成员映射成功或失败，保留独立输出。无法展开的失败调用显示「调用工具（失败）」并保留原始诊断。子代理详情复用同一条投影与渲染链。该显示展开不会触发任何工具或模型请求。
 
 ### 结构化验收闭环
 
@@ -1533,7 +1555,7 @@ flowchart LR
     Log -- "方案或验收契约需要改变" --> Draft
 ```
 
-任务完成以批准用例的逐条实测为依据，整体用例等待前序任务完成。失败后可按原契约重试，替换已批准版本须经用户重新批准。报告可在进行中读取，输出按任务、用例及运行记录关联。Desktop 与 Server 共用 Core 逻辑。
+任务完成以批准用例的逐条实测为依据，整体用例等待前序任务完成。失败后可按原契约重试，替换已批准版本会创建带独立验收契约的新版本，由当前 AgentMode 决定审批方式。报告可在进行中读取，输出按任务、用例及运行记录关联。Desktop 与 Server 共用 Core 逻辑。
 
 ## 16. 关闭时序（手动关闭 + SIGTERM 兜底，2026-11 存储层重构）
 

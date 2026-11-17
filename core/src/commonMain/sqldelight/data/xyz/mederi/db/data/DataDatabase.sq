@@ -105,6 +105,42 @@ deleteSession:
 DELETE FROM sessions
 WHERE id = ?;
 
+CREATE TABLE IF NOT EXISTS model_requests (
+    sequence INTEGER NOT NULL PRIMARY KEY,
+    owner_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    request_id TEXT NOT NULL,
+    execution_session_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    usage_payload TEXT,
+    completed INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (owner_session_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_requests_owner_sequence ON model_requests(owner_session_id, sequence);
+
+insertModelRequest:
+INSERT INTO model_requests (owner_session_id, request_id, execution_session_id, started_at, usage_payload)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(owner_session_id, request_id) DO NOTHING;
+
+completeModelRequest:
+UPDATE model_requests SET usage_payload = ?, completed = 1
+WHERE owner_session_id = ? AND request_id = ? AND completed = 0;
+
+listModelRequests:
+SELECT request_id, owner_session_id, execution_session_id, started_at, usage_payload
+FROM model_requests
+WHERE owner_session_id = ?
+ORDER BY sequence ASC;
+
+listAllModelRequests:
+SELECT request_id, owner_session_id, execution_session_id, started_at, usage_payload
+FROM model_requests
+ORDER BY sequence ASC;
+
+deleteModelRequests:
+DELETE FROM model_requests WHERE owner_session_id = ?;
+
 -- 更新会话工作区绑定
 updateSessionWorkspaceBinding:
 UPDATE sessions SET workspace_id = ?, associated_worktree_id = ?, updated_at = ?

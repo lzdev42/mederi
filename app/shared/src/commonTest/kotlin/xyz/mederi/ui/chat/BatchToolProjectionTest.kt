@@ -54,11 +54,11 @@ class BatchToolProjectionTest {
     }
 
     @Test
-    fun batchFailureRetainsOriginalErrorOnProjectedMembers() {
-        val rows = expandBatchToolCall(ToolCallUi("batch-1", "batch", ToolCallState.Failed(input, "original failure")))
-        assertEquals(3, rows.size)
-        assertTrue(rows.all { it.isFailed })
-        assertTrue(rows.all { (it.state as ToolCallState.Failed).error == "original failure" })
+    fun parentBatchFailureKeepsOneGenericRowAndOriginalError() {
+        val call = ToolCallUi("batch-1", "batch", ToolCallState.Failed(input, "original failure"), isFailed = true)
+        val group = groupToolCallsByAction(listOf(call)).single()
+        assertEquals(ToolActionKind.OTHER, group.kind)
+        assertEquals(listOf(call), group.calls)
     }
 
     @Test
@@ -69,6 +69,24 @@ class BatchToolProjectionTest {
         }
         val call = ToolCallUi("bad-input", "batch", ToolCallState.Running(mapOf("calls" to "[partial")))
         assertEquals(emptyList(), expandBatchToolCall(call))
+    }
+
+    @Test
+    fun actionsDescribeKnownOperationsWithoutInferringFromToolNameFragments() {
+        val namesAndInputs = listOf<Triple<String, Map<String, String>, ToolActionKind>>(
+            Triple("write_plan", emptyMap(), ToolActionKind.PLAN_DRAFT),
+            Triple("write_plan", mapOf("planId" to "plan-1"), ToolActionKind.PLAN_UPDATE),
+            Triple("list_processes", emptyMap(), ToolActionKind.LIST_PROCESSES),
+            Triple("subagent", mapOf("action" to "STOP"), ToolActionKind.SUBAGENT_STOP),
+            Triple("browser", mapOf("action" to "STATUS"), ToolActionKind.BROWSER_STATUS),
+            Triple("unrecognized_read_example", emptyMap(), ToolActionKind.OTHER),
+            Triple("verify_subtask", emptyMap(), ToolActionKind.VERIFY),
+        )
+        val calls = namesAndInputs.mapIndexed { index, (name, input, _) ->
+            ToolCallUi("call-$index", name, ToolCallState.Completed(input, output = ""))
+        }
+
+        assertEquals(namesAndInputs.map { it.third }, groupToolCallsByAction(calls).map { it.kind })
     }
 
     @Test

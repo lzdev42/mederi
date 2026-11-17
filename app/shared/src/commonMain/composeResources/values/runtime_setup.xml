@@ -1,19 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="runtime_setup_title">准备工作环境</string>
-    <string name="runtime_setup_installing">正在安装。最小化后会继续。</string>
-    <string name="runtime_setup_checking">正在检查…</string>
+    <string name="runtime_setup_title">安装工作所需的工具</string>
+    <string name="runtime_setup_intro">装好后，Mederi 就可以运行本地工具、处理文件和管理项目。</string>
+    <string name="runtime_setup_node">Node.js · 运行一部分本地工具。</string>
+    <string name="runtime_setup_python">Python 3 · 处理表格、文件和数据。</string>
+    <string name="runtime_setup_git">Git · 记录和比较项目里的改动。</string>
+    <string name="runtime_setup_uv">uv · 帮助启动用 Python 编写的本地工具。</string>
+    <string name="runtime_setup_homebrew">Homebrew · 帮助 Mac 下载和安装这些工具。</string>
+    <string name="runtime_setup_privacy">安装时输入的电脑密码仅用于本机授权，Mederi 不会保存或发送。</string>
+    <string name="runtime_setup_terminal">安装终端</string>
+    <string name="runtime_setup_waiting">等待开始安装</string>
+    <string name="runtime_setup_install">安装并继续</string>
+    <string name="runtime_setup_downloading">正在下载安装程序</string>
+    <string name="runtime_setup_installing">正在安装工具</string>
+    <string name="runtime_setup_permission">需要管理员权限</string>
+    <string name="runtime_setup_password">请点击下方终端，输入这台电脑的登录密码，再按回车。输入时不会显示字符。</string>
+    <string name="runtime_setup_windows">请在系统弹窗里点击「是」。如果 Windows 要求密码，请在弹窗里输入。</string>
+    <string name="runtime_setup_confirm_homebrew">确认安装 Homebrew</string>
+    <string name="runtime_setup_homebrew_return">请点击下方终端，按回车继续安装。</string>
+    <string name="runtime_setup_background">可以最小化窗口，安装会继续。</string>
+    <string name="runtime_setup_checking">正在检查工具是否可用</string>
     <string name="runtime_setup_minimize">最小化</string>
-    <string name="runtime_setup_missing">仍有组件未就绪。</string>
+    <string name="runtime_setup_missing">还有工具未就绪</string>
+    <string name="runtime_setup_retry_hint">请重试安装。如果已在其他地方装好，可以重新检查。</string>
+    <string name="runtime_setup_exit_code">安装程序退出代码为 %1$d。</string>
     <string name="runtime_setup_retry">重试安装</string>
     <string name="runtime_setup_check">重新检查</string>
-    <string name="runtime_setup_manual">终端安装</string>
-    <string name="runtime_setup_windows">在 PowerShell 中运行，按提示批准管理员权限。</string>
-    <string name="runtime_setup_linux">在终端运行，按提示输入管理员密码。</string>
-    <string name="runtime_setup_copy">复制命令</string>
-    <string name="runtime_setup_command_error">无法准备安装命令。请使用发布版。</string>
-    <string name="runtime_setup_homebrew_install">没有 Homebrew 时，在终端运行以下命令，按提示输入密码并完成「Next steps」以设置 PATH。</string>
-    <string name="runtime_setup_homebrew_packages">在终端运行以下命令。</string>
-    <string name="runtime_setup_show_details">查看安装日志</string>
-    <string name="runtime_setup_hide_details">收起安装日志</string>
+    <string name="runtime_setup_show_details">查看错误详情</string>
+    <string name="runtime_setup_hide_details">收起错误详情</string>
+    <string name="runtime_setup_ready">工作环境已就绪</string>
+    <string name="runtime_setup_opening">正在打开工作台…</string>
 </resources>

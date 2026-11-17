@@ -10,6 +10,7 @@ import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -18,6 +19,10 @@ import xyz.mederi.domain.model.*
 import xyz.mederi.infrastructure.koog.TurnExecutor
 import xyz.mederi.infrastructure.koog.HistoryStoreChatHistoryProvider
 import xyz.mederi.infrastructure.koog.isCompleteDeliverable
+import xyz.mederi.infrastructure.koog.requireToolCallArguments
+import xyz.mederi.plan.Plan
+import xyz.mederi.plan.PlanStatus
+import xyz.mederi.plan.PlanStore
 import xyz.mederi.project.ProjectManager
 import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.*
@@ -38,7 +43,7 @@ class UnifiedTurnLifecycleTest {
         override suspend fun get(id: String) = provider
         override suspend fun require(id: String) = provider
         override suspend fun create(name: String, type: xyz.mederi.provider.domain.model.ProviderType, baseUrl: String, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, responseSanitization: Boolean, modelsDevKey: String?) = unused()
-        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?) = unused()
+        override suspend fun update(id: String, name: String?, baseUrl: String?, reasoningParameter: xyz.mederi.provider.domain.model.ReasoningParameter?, modelsDevKey: String?, type: xyz.mederi.provider.domain.model.ProviderType?) = unused()
         override suspend fun updateRetrySettings(id: String, autoRetryEnabled: Boolean, retryMaxDelaySeconds: Int?) = unused()
         override suspend fun delete(id: String) = unused()
         override suspend fun listKeys(providerId: String) = provider.apiKeys
@@ -98,6 +103,8 @@ class UnifiedTurnLifecycleTest {
         val directory = File(root, "temp/unified-turn-${UUID.randomUUID()}").apply { mkdirs() }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val history = InMemoryHistoryStore()
+        val childHistory = InMemoryHistoryStore()
+        val requestStore = InMemoryModelRequestStore()
         val sessions = InMemorySessionStore()
         val events = CopyOnWriteArrayList<MederiEvent>()
         val bus = MutableSharedFlow<MederiEvent>(extraBufferCapacity = 128)
@@ -107,14 +114,16 @@ class UnifiedTurnLifecycleTest {
         val client = ScriptClient(provider, script)
         val executor = TurnExecutor(sessions, history, bus, TestProviderManager(provider),
             StubProjectManager(Project("project", "Test", directory.absolutePath, "now", "now")),
-            scope = scope, llmClientFactory = { _, _ -> client })
+            scope = scope, llmClientFactory = { _, _ -> client }, modelRequestStore = requestStore)
         val childManager = xyz.mederi.tools.subagent.SubagentManager(
             xyz.mederi.tools.subagent.SubagentRunnerImpl(
                 providerManager = TestProviderManager(provider),
                 projectManager = StubProjectManager(Project("project", "Test", directory.absolutePath, "now", "now")),
                 llmClientFactory = { _, _ -> client },
                 sessionStore = xyz.mederi.store.InMemorySessionStore(),
-                historyStore = xyz.mederi.store.InMemoryHistoryStore()), scope, bus)
+                historyStore = childHistory,
+                modelRequestStore = requestStore,
+                usageEventBus = bus), scope, bus)
         suspend fun spawnChild(selectedModel: AIModel = model): String = childManager.spawn(task = "analyze", briefing = null, plan = null,
             role = SubagentRole.EXECUTOR, directories = listOf(directory.absolutePath), aiModel = selectedModel,
             reasoningLevel = ReasoningLevel.NONE, projectId = "project", parentSessionId = "parent")
@@ -169,6 +178,56 @@ class UnifiedTurnLifecycleTest {
         emit(StreamFrame.TextDelta(text))
         emit(StreamFrame.TextComplete(text))
         emit(StreamFrame.End(reason, ResponseMetaInfo.create(KoogClock.System)))
+    }
+
+    @Test
+    fun crossTurnApprovalCompletesWithoutAnyPriorInputInThisExecutor() = runBlocking {
+        val fixture = Fixture { _, _ -> answer("approved work started") }
+        try {
+            fixture.initialize()
+            val planStore = PlanStore(listOf(fixture.directory.absolutePath))
+            val draft = Plan(
+                id = "plan_restarted",
+                title = "Persisted draft",
+                sessionId = "session",
+                subtasks = emptyList(),
+                status = PlanStatus.PENDING_APPROVAL,
+                createdAt = java.time.Instant.now().toString(),
+                agentMode = AgentMode.APPROVAL,
+            )
+            planStore.save(draft)
+
+            // A fresh executor has neither a live requester nor a session input lock yet.
+            assertTrue(fixture.executor.resolvePlanApproval("session", draft.id, approved = true))
+            withTimeout(10_000) {
+                while (fixture.events.none { it.type == EventType.MESSAGE_COMPLETED || it.type == EventType.MESSAGE_ERROR }) {
+                    delay(10)
+                }
+            }
+
+            val events = fixture.events.toList()
+            val terminal = events.single { it.type == EventType.MESSAGE_COMPLETED || it.type == EventType.MESSAGE_ERROR }
+            assertEquals(EventType.MESSAGE_COMPLETED, terminal.type, terminal.payload.toString())
+            val approval = events.single { it.type == EventType.PLAN_APPROVAL_RESOLVED }
+            assertEquals(draft.id, approval.payload["planId"])
+            assertEquals("true", approval.payload["approved"])
+            assertEquals(PlanStatus.APPROVED, planStore.load(draft.id)?.status)
+            assertEquals(SessionStatus.IDLE, fixture.sessions.get("session")?.status)
+
+            val history = fixture.history.load("session")
+            val hiddenInput = history.single { it.role == MessageRole.USER }
+            assertTrue(hiddenInput.hiddenFromUi)
+            val instruction = hiddenInput.parts.filterIsInstance<MessagePart.Text>().single().text
+            assertContains(instruction, "(id=${draft.id}) has been approved by the user.")
+            assertEquals(1, fixture.client.calls.get())
+            val modelInputs = fixture.client.prompts.single().messages
+                .filterIsInstance<ai.koog.prompt.message.Message.User>()
+                .flatMap { it.parts.filterIsInstance<ai.koog.prompt.message.MessagePart.Text>() }
+            assertTrue(modelInputs.any { it.text == instruction }, "The hidden input must still reach the model")
+            val reply = history.single { it.role == MessageRole.ASSISTANT }
+            assertTrue(reply.isFinalAnswer == true)
+            assertEquals(reply.id, terminal.payload["finalMessageId"])
+        } finally { fixture.close() }
     }
 
     @Test
@@ -229,6 +288,73 @@ class UnifiedTurnLifecycleTest {
             fixture.completed()
             assertEquals(2, fixture.client.calls.get())
             assertEquals(1, fixture.events.count { it.type == EventType.TOOL_RESULT })
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun toolFollowUpIsRegisteredWhileStreamingAndCountsOnNonErrorResponse() = runBlocking {
+        val streaming = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val fixture = Fixture { _, call ->
+            if (call == 1) {
+                emit(StreamFrame.ToolCallComplete("read", "read_file", buildJsonObject { put("path", "source.txt") }.toString()))
+                emit(StreamFrame.End("tool_calls", ResponseMetaInfo.create(KoogClock.System, inputTokensCount = 50)))
+            } else {
+                emit(StreamFrame.TextDelta("analysis"))
+                streaming.complete(Unit)
+                finish.await()
+                emit(StreamFrame.TextComplete("analysis"))
+                emit(StreamFrame.End("stop", ResponseMetaInfo.create(KoogClock.System, inputTokensCount = 100)))
+            }
+        }
+        try {
+            fixture.initialize()
+            File(fixture.directory, "source.txt").writeText("evidence")
+            fixture.send("request", "Read source.txt")
+            withTimeout(15_000) {
+                streaming.await()
+                while (fixture.events.count { it.type == EventType.LLM_REQUEST_STARTED } < 2) delay(10)
+            }
+            val pending = fixture.requestStore.list("session")
+            assertEquals(2, pending.size)
+            assertEquals(listOf(50, null), pending.map { it.usage?.inputTokens })
+            assertEquals(false, pending.last().usage?.modelRequestCompleted)
+            assertEquals(1, xyz.mederi.domain.model.SessionUsage.fromMessages(fixture.history.load("session"), pending).requestCount)
+            assertEquals(1, fixture.history.load("session").count { it.role == MessageRole.ASSISTANT })
+            finish.complete(Unit)
+            fixture.completed()
+            assertEquals(listOf(50, 100), fixture.requestStore.list("session").map { it.usage?.inputTokens })
+            assertEquals(2, xyz.mederi.domain.model.SessionUsage.fromMessages(
+                fixture.history.load("session"), fixture.requestStore.list("session"),
+            ).requestCount)
+            assertEquals(pending.map { it.requestId }, fixture.events.filter { it.type == EventType.LLM_REQUEST_COMPLETED }
+                .map { it.messageId })
+        } finally { fixture.close() }
+    }
+
+    @Test
+    fun childRequestUsesParentLedgerAndEventsAfterChildHistoryIsCleared() = runBlocking {
+        val fixture = Fixture { _, call ->
+            emit(StreamFrame.TextDelta("private child response"))
+            emit(StreamFrame.TextComplete("private child response"))
+            emit(StreamFrame.End("stop", ResponseMetaInfo.create(KoogClock.System, inputTokensCount = 100 * call)))
+        }
+        try {
+            fixture.spawnChild()
+            assertEquals(EventType.SUBAGENT_COMPLETED, fixture.childTerminal().type)
+            val record = fixture.requestStore.list("parent").single()
+            assertTrue(record.executionSessionId != "parent")
+            assertEquals(record.executionSessionId, record.usage?.sessionId)
+            assertEquals(100, record.usage?.inputTokens)
+            assertEquals(emptyList(), record.usage?.parts)
+            assertTrue(fixture.requestStore.list(record.executionSessionId).isEmpty())
+            assertTrue(fixture.childHistory.load(record.executionSessionId).isEmpty())
+            val events = fixture.events.filter {
+                it.type == EventType.LLM_REQUEST_STARTED || it.type == EventType.LLM_REQUEST_COMPLETED
+            }
+            assertEquals(listOf(EventType.LLM_REQUEST_STARTED, EventType.LLM_REQUEST_COMPLETED), events.map { it.type })
+            assertTrue(events.all { it.sessionId == "parent" && it.messageId == record.requestId &&
+                it.payload["executionSessionId"] == record.executionSessionId })
         } finally { fixture.close() }
     }
 
@@ -313,6 +439,43 @@ class UnifiedTurnLifecycleTest {
                 it.payload["workStartedAt"] == clockStart.toString() && it.payload["workCompletedAt"] == null
             })
         } finally { release.complete(Unit); fixture.close() }
+    }
+
+    @Test
+    fun toolArgumentsMustBeASingleStrictJsonObject() {
+        for (invalid in listOf("", """{"path":missing}""", """{"n":01}""", "[]", """{} {}""", """{"x":"line
+break"}""")) {
+            assertFailsWith<SerializationException> { requireToolCallArguments("test", "call", invalid) }
+        }
+        val valid = """{"path":"file.txt","nested":[true, null, -1.25e+10]}"""
+        assertEquals(valid, requireToolCallArguments("test", "call", valid))
+    }
+
+    @Test
+    fun malformedToolArgumentsFailTheTurnBeforeAnyToolRuns() = runBlocking {
+        val fixture = Fixture { _, _ ->
+            emit(StreamFrame.TextComplete("I will ask a question"))
+            emit(StreamFrame.ToolCallComplete("ask-malformed", "ask_user", """{"questions":"""))
+            emit(StreamFrame.ToolCallComplete("read-valid", "read_file", """{"path":"file.txt"}"""))
+            emit(StreamFrame.End("tool_calls", ResponseMetaInfo.create(KoogClock.System)))
+        }
+        try {
+            fixture.initialize()
+            fixture.send("malformed-request", "analyze")
+            val failure = withTimeout(10_000) {
+                while (fixture.events.none { it.type == EventType.MESSAGE_ERROR }) delay(10)
+                fixture.events.single { it.type == EventType.MESSAGE_ERROR }
+            }
+            assertContains(failure.payload.getValue("fullDiagnostic"), "Invalid JSON arguments for tool 'ask_user'")
+            assertEquals(1, fixture.client.calls.get())
+            assertTrue(fixture.events.none {
+                it.type in setOf(EventType.QUESTION_REQUESTED, EventType.TOOL_CALLED, EventType.MESSAGE_COMPLETED)
+            })
+            val history = fixture.history.load("session")
+            assertTrue(history.none { it.isFinalAnswer == true })
+            assertEquals(listOf(MessagePart.Text("I will ask a question")),
+                history.single { it.role == MessageRole.ASSISTANT }.parts)
+        } finally { fixture.close() }
     }
 
     @Test

@@ -38,7 +38,7 @@ import kotlin.test.assertTrue
 
 class GoogleNativeTransportTest {
     private val model = LLModel(LLMProvider.Google, "gemma-4-31b-it",
-        capabilities = listOf(LLMCapability.Completion, LLMCapability.Thinking, LLMCapability.Tools))
+        capabilities = listOf(LLMCapability.Completion, LLMCapability.Thinking, LLMCapability.Tools, LLMCapability.MultipleChoices))
     private val tools = listOf(BatchTool(emptyMap()).descriptor)
     private val prompt = Prompt(
         listOf(Message.System("System rules", RequestMetaInfo.Empty), Message.User("Inspect", RequestMetaInfo.Empty)),
@@ -127,6 +127,35 @@ class GoogleNativeTransportTest {
                 assertEquals("300", config.getValue("maxOutputTokens").jsonPrimitive.content)
                 assertNull(config["additionalProperties"])
             }
+        }
+    }
+
+    @Test
+    fun nativeUsagePreservesCacheCountsAndTrailingMetadataPerRequest() = runBlocking {
+        val stream = """
+            {"candidates":[],"usageMetadata":{"promptTokenCount":120,"cachedContentTokenCount":80}}
+            $complete
+            {"usageMetadata":{"candidatesTokenCount":5,"totalTokenCount":125}}
+        """.trimIndent()
+        val explicitZero = """{"candidates":[{"content":{"role":"model","parts":[{"text":"Done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":0}}"""
+        withClient(
+            Reply(stream), Reply(explicitZero, streaming = false), Reply(explicitZero, streaming = false), Reply(complete),
+        ) { client, _ ->
+            val end = client.executeStreaming(prompt, model, tools).toList().filterIsInstance<StreamFrame.End>().single()
+            assertEquals(120, end.metaInfo.inputTokensCount)
+            assertEquals(5, end.metaInfo.outputTokensCount)
+            assertEquals(125, end.metaInfo.totalTokensCount)
+            assertEquals("80", end.metaInfo.metadata?.get("cachedTokens")?.jsonPrimitive?.content)
+
+            val response = client.execute(prompt, model, tools)
+            assertEquals(10, response.metaInfo.inputTokensCount)
+            assertEquals("0", response.metaInfo.metadata?.get("cachedTokens")?.jsonPrimitive?.content)
+
+            val choice = client.executeMultipleChoices(prompt, model, tools).single()
+            assertEquals("0", choice.metaInfo.metadata?.get("cachedTokens")?.jsonPrimitive?.content)
+
+            val missing = client.executeStreaming(prompt, model, tools).toList().filterIsInstance<StreamFrame.End>().single()
+            assertNull(missing.metaInfo.metadata?.get("cachedTokens"))
         }
     }
 

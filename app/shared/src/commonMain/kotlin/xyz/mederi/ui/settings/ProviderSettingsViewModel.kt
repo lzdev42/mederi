@@ -529,9 +529,7 @@ class ProviderSettingsViewModel(
         if (uiState.isSavingCredentials) return
         uiState = uiState.copy(isSavingCredentials = true, errorMessage = null, successMessage = null)
         viewModelScope.launch {
-            // 用户配置了推理参数则用用户的（levels 为空 map 视为未配置，core 侧回退协议默认工厂）
             val reasoningConfig = ReasoningConfigInput(levels = reasoningLevels)
-                .takeIf { reasoningLevels.isNotEmpty() }
 
             if (providerId == null) {
                 // 新建自定义供应商：core 返回完整 ProviderConfig
@@ -542,7 +540,7 @@ class ProviderSettingsViewModel(
                         apiKey = apiKey.trim().ifBlank { null },
                         type = protocolType,
                         responseSanitization = false,
-                        reasoningParameter = reasoningConfig
+                        reasoningParameter = reasoningConfig.takeIf { reasoningLevels.isNotEmpty() }
                     )
                 ).fold(
                     onSuccess = { config ->

@@ -22,24 +22,27 @@ internal class BatchTool(
 ) : SimpleTool<BatchTool.Args>(
     argsType = typeToken<Args>(),
     name = ToolName.BATCH.value,
-    description = "Run independent operations together and return all results in input order. " +
-        "Available members: ${operations.keys.joinToString()}. Each call uses the original tool's parameters. " +
-        "Each call must nest the member tool's arguments under a \"parameters\" object, " +
-        "e.g. {\"calls\":[{\"tool\":\"read_file\",\"parameters\":{\"path\":\"src/Main.kt\"}}," +
-        "{\"tool\":\"bash\",\"parameters\":{\"command\":\"ls\"}}]}. " +
-        "Send multiple independent operations in one batch to collect their results in a single round. " +
-        "Members run concurrently; do not batch dependencies, overlapping writes, duplicate commands, or background commands. " +
-        "Each member retains its original sandbox and approval checks. One member failure does not discard other results. " +
-        "No recursive batch, plan, agent-spawn, or other unlisted tools.",
+    description = describeCalls(operations.keys),
 ) {
     @Serializable
     data class Args(
-        @LLMDescription("Independent calls to run together. Use the original tool names and argument objects.")
+        @LLMDescription(
+            "Required JSON array of call objects. Pass the array directly, without surrounding quotes. " +
+                "Every item requires both tool (a tool name) and parameters (a nested JSON object)."
+        )
         val calls: List<Call>,
     )
 
     @Serializable
-    data class Call(val tool: String, val parameters: Parameters)
+    data class Call(
+        @LLMDescription("Required. Exact name of one of the available member tools.")
+        val tool: String,
+        @LLMDescription(
+            "Required JSON object containing the selected tool's arguments. " +
+                "Put fields such as command or path inside this object."
+        )
+        val parameters: Parameters,
+    )
 
     /** 有限成员的参数超集，避免工具 schema 对任意 JsonElement 的递归多态展开。 */
     @Serializable
@@ -57,6 +60,23 @@ internal class BatchTool(
 
     @Serializable
     data class Result(val index: Int, val tool: String, val output: String? = null, val error: String? = null)
+
+    companion object {
+        private fun describeCalls(available: Set<String>): String = buildString {
+            appendLine("Run independent tool calls concurrently and return their results in input order.")
+            appendLine("Available member tools: ${available.joinToString()}.")
+            appendLine("Pass calls as a JSON array, never as a string containing JSON.")
+            appendLine("Each array item must include tool and parameters. Put command, path, and other member arguments inside the parameters object.")
+            val examples = listOf(
+                Call(ToolName.BASH.value, Parameters(command = "pwd")),
+                Call(ToolName.READ_FILE.value, Parameters(path = "src/Main.kt")),
+                Call(ToolName.LIST_DIRECTORY.value, Parameters(path = "src")),
+            ).filter { it.tool in available }
+            if (examples.isNotEmpty()) appendLine("Example arguments: ${Json.encodeToString(Args(examples))}")
+            appendLine("Use this for independent reads, directory listings, or foreground commands. Run dependencies, overlapping writes, duplicate commands, and background commands separately.")
+            append("Each call retains its sandbox and approval checks. Results include individual failures.")
+        }
+    }
 
     override suspend fun execute(args: Args): String {
         require(args.calls.isNotEmpty()) { "batch requires at least one call" }

@@ -2,7 +2,6 @@ package xyz.mederi.provider.infrastructure.koog.sanitize
 
 import ai.koog.prompt.executor.clients.openai.base.models.OpenAIStreamToolCall
 import ai.koog.prompt.executor.clients.openai.base.models.OpenAIToolCall
-import ai.koog.prompt.executor.clients.openai.base.models.OpenAIUsage
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -10,11 +9,10 @@ import kotlinx.serialization.json.JsonObject
 /**
  * Sanitized OpenAI 响应数据模型。
  *
- * 与 Koog 原版模型的唯一区别：message/delta 额外声明了 [reasoningAlias] 字段（`@SerialName("reasoning")`），
+ * message/delta 额外声明了 reasoningAlias 字段（`@SerialName("reasoning")`），
  * 用于兜底解析 vLLM 兼容端点（如 Hetzner）返回的非标准 `reasoning` 字段。
  *
- * 兜底原则：[effectiveReasoning] 优先取标准字段 [reasoningContent]（JSON `reasoning_content`），
- * 缺失才取 [reasoningAlias]（JSON `reasoning`）。供应商修好返回标准字段后自动适配。
+ * reasoning 优先取标准字段 `reasoning_content`。用量也优先取标准字段，再读取兼容端点的别名。
  *
  * Json 配置需与 Koog 一致：`ignoreUnknownKeys = true` + `namingStrategy = SnakeCase`（见 [sanitizeJson]）。
  */
@@ -29,7 +27,7 @@ data class SanitizedChatCompletionResponse(
     val id: String,
     val model: String,
     @SerialName("object") val objectType: String,
-    val usage: OpenAIUsage? = null
+    val usage: SanitizedChatUsage? = null
 )
 
 @Serializable
@@ -61,8 +59,26 @@ data class SanitizedStreamResponse(
     val id: String,
     val model: String,
     @SerialName("object") val objectType: String,
-    val usage: OpenAIUsage? = null
+    val usage: SanitizedChatUsage? = null
 )
+
+@Serializable
+data class SanitizedChatUsage(
+    val promptTokens: Int? = null,
+    val completionTokens: Int? = null,
+    val totalTokens: Int? = null,
+    val promptTokensDetails: SanitizedInputTokensDetails? = null,
+    val promptCacheHitTokens: Int? = null,
+    val cachedTokens: Int? = null,
+    val cacheReadInputTokens: Int? = null,
+    val cacheCreatedInputTokens: Int? = null,
+) {
+    val effectiveCachedTokens: Int?
+        get() = promptTokensDetails?.cachedTokens ?: promptCacheHitTokens ?: cachedTokens ?: cacheReadInputTokens
+
+    val effectiveCacheWriteTokens: Int?
+        get() = promptTokensDetails?.effectiveCacheWriteTokens ?: cacheCreatedInputTokens
+}
 
 @Serializable
 data class SanitizedStreamChoice(
@@ -128,11 +144,13 @@ data class SanitizedResponsesStreamEvent(
     @SerialName("content_index") val contentIndex: Int? = null,
     val delta: String? = null,
     val text: String? = null,
+    val refusal: String? = null,
     val arguments: String? = null,
     val input: String? = null,
     val response: SanitizedResponsesAPIResponse? = null,
     val code: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val name: String? = null,
 )
 
 /**
@@ -169,9 +187,13 @@ data class SanitizedResponsesContentPart(
 )
 
 @Serializable
-data class SanitizedResponsesInputTokensDetails(
+data class SanitizedInputTokensDetails(
     @SerialName("cached_tokens") val cachedTokens: Int? = null,
-)
+    @SerialName("cache_write_tokens") val cacheWriteTokens: Int? = null,
+    @SerialName("created_cache_tokens") val createdCacheTokens: Int? = null,
+) {
+    val effectiveCacheWriteTokens: Int? get() = cacheWriteTokens ?: createdCacheTokens
+}
 
 @Serializable
 data class SanitizedResponsesUsage(
@@ -180,14 +202,16 @@ data class SanitizedResponsesUsage(
     @SerialName("prompt_tokens") val promptTokens: Int? = null,
     @SerialName("output_tokens") val outputTokens: Int? = null,
     @SerialName("completion_tokens") val completionTokens: Int? = null,
-    @SerialName("input_tokens_details") val inputTokensDetails: SanitizedResponsesInputTokensDetails? = null,
-    @SerialName("prompt_tokens_details") val promptTokensDetails: SanitizedResponsesInputTokensDetails? = null,
+    @SerialName("input_tokens_details") val inputTokensDetails: SanitizedInputTokensDetails? = null,
+    @SerialName("prompt_tokens_details") val promptTokensDetails: SanitizedInputTokensDetails? = null,
     @SerialName("cached_tokens") val cachedTokens: Int? = null,
 ) {
     val effectiveInputTokens: Int? get() = inputTokens ?: promptTokens
     val effectiveOutputTokens: Int? get() = outputTokens ?: completionTokens
     val effectiveCachedTokens: Int?
         get() = inputTokensDetails?.cachedTokens ?: promptTokensDetails?.cachedTokens ?: cachedTokens
+    val effectiveCacheWriteTokens: Int?
+        get() = inputTokensDetails?.effectiveCacheWriteTokens ?: promptTokensDetails?.effectiveCacheWriteTokens
 }
 
 /** 错误帧独立于成功响应解码：HTTP 200 也可能包含供应商错误，保留未知错误字段。 */

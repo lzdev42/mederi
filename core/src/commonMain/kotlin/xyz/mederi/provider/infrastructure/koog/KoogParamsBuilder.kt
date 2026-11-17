@@ -27,7 +27,8 @@ import xyz.mederi.provider.domain.model.ReasoningParameter
  *
  * - OPENAI_CHAT: LOW 档 `{"reasoning_effort":"low"}` → 请求体 `"reasoning_effort":"low"`
  * - OPENAI_RESPONSES: LOW 档 `{"reasoning":{"effort":"low"}}` → 请求体 `"reasoning":{"effort":"low"}`
- * - NONE 档缺省 null = 不发参数；也可填显式关闭参数（奇葩端点）
+ * - NONE 缺少配置时，OPENAI_CHAT 发送 `"reasoning_effort":"none"`，OPENAI_RESPONSES 省略推理参数。
+ *   两种协议都允许显式指定关闭参数。
  *
  * 兼容路径（旧配置）：
  * - 标量值（非 "{" 开头）挂 [ReasoningParameter.parameterName] 下注入
@@ -39,8 +40,7 @@ import xyz.mederi.provider.domain.model.ReasoningParameter
  * levels 值为标量：数字 → thinkingBudget，"low"/"high" → thinkingLevel。
  *
  * 前置条件：
- * 1. [reasoningParameter] 为 null → 不设置任何推理参数
- * 2. 级别值缺失或为 null → 不注入该级别的参数
+ * 采用协议默认档位或供应商显式配置，生效值为 null 时省略 thinkingConfig。
  *
  * 这是一个无状态的构建器对象，线程安全。
  */
@@ -56,7 +56,7 @@ object KoogParamsBuilder {
      *
      * @param type 供应商类型。
      * @param reasoningLevel 推理级别。
-     * @param reasoningParameter 供应商的推理参数配置。如果为 null，则忽略推理级别。
+     * @param reasoningParameter 供应商推理参数，缺省使用协议默认配置。
      * @param temperature 温度参数（可选，默认 null）。
      * @param maxTokens 最大输出 token 数（可选，默认 null）。
      * @return Koog LLMParams 实例（具体类型取决于供应商类型）。
@@ -68,15 +68,16 @@ object KoogParamsBuilder {
         temperature: Double? = null,
         maxTokens: Int? = null
     ): LLMParams {
+        val effectiveParameter = ReasoningParameter.effective(type, reasoningParameter)
         return when (type) {
             ProviderType.OPENAI_CHAT -> buildOpenAIChatParams(
-                reasoningLevel, reasoningParameter, temperature, maxTokens
+                reasoningLevel, effectiveParameter, temperature, maxTokens
             )
             ProviderType.OPENAI_RESPONSES -> buildOpenAIResponsesParams(
-                reasoningLevel, reasoningParameter, temperature, maxTokens
+                reasoningLevel, effectiveParameter, temperature, maxTokens
             )
             ProviderType.GOOGLE -> buildGoogleParams(
-                reasoningLevel, reasoningParameter, temperature, maxTokens
+                reasoningLevel, effectiveParameter, temperature, maxTokens
             )
         }
     }
@@ -88,7 +89,7 @@ object KoogParamsBuilder {
      * 后者对未知类型执行 JsonPrimitive(v.toString())，会把 JsonElement 字符串化（双重编码）。
      *
      * 注入规则（用户填什么发什么）：
-     * 1. 级别片段（含 NONE，一律查表无特判）：
+     * 1. 级别片段（含 NONE，一律查表）：
      *    - 缺失或 null → 不注入
      *    - 以 "{" 开头 → 必须解析为 JsonObject，逐 key 根级合并（写入时已校验，此处为运行时防御）
      *    - 标量值 → 旧配置兼容，挂 parameterName 下注入
@@ -139,17 +140,15 @@ object KoogParamsBuilder {
      * 构建 OpenAI Chat Completions 参数。
      *
      * 级别片段根级合并进 additionalProperties，Koog 序列化时原样写入请求 JSON。
-     * Koog 的 reasoningEffort 枚举字段不使用（不支持 MAX，且无法表达完整 JSON 片段）。
+     * Koog 的 reasoningEffort 枚举字段无法表达完整 JSON 片段，直接使用 additionalProperties。
      */
     private fun buildOpenAIChatParams(
         level: ReasoningLevel,
-        reasoningParameter: ReasoningParameter?,
+        reasoningParameter: ReasoningParameter,
         temperature: Double?,
         maxTokens: Int?
     ): OpenAIChatParams {
-        val additionalProps = reasoningParameter
-            ?.let { resolveAdditionalProps(it, level) }
-            ?.takeIf { it.isNotEmpty() }
+        val additionalProps = resolveAdditionalProps(reasoningParameter, level).takeIf { it.isNotEmpty() }
 
         return OpenAIChatParams(
             temperature = temperature,
@@ -167,13 +166,11 @@ object KoogParamsBuilder {
      */
     private fun buildOpenAIResponsesParams(
         level: ReasoningLevel,
-        reasoningParameter: ReasoningParameter?,
+        reasoningParameter: ReasoningParameter,
         temperature: Double?,
         maxTokens: Int?
     ): OpenAIResponsesParams {
-        val additionalProps = reasoningParameter
-            ?.let { resolveAdditionalProps(it, level) }
-            ?.takeIf { it.isNotEmpty() }
+        val additionalProps = resolveAdditionalProps(reasoningParameter, level).takeIf { it.isNotEmpty() }
 
         return OpenAIResponsesParams(
             temperature = temperature,
@@ -199,12 +196,12 @@ object KoogParamsBuilder {
      */
     private fun buildGoogleParams(
         level: ReasoningLevel,
-        reasoningParameter: ReasoningParameter?,
+        reasoningParameter: ReasoningParameter,
         temperature: Double?,
         maxTokens: Int?
     ): GoogleParams {
         // 级别值缺失（NONE 缺省/未配置）→ thinkingConfig 置 null，与"不发参数"语义一致
-        val levelValue = reasoningParameter?.resolve(level)
+        val levelValue = reasoningParameter.resolve(level)
         // Koog 当前的 GoogleThinkingLevel 只有 LOW/HIGH，原生适配器将扩展值放入 generationConfig。
         val minimal = levelValue.equals("minimal", ignoreCase = true)
         val thinkingConfig = levelValue?.takeUnless { minimal }?.let(::buildGoogleThinkingConfig)

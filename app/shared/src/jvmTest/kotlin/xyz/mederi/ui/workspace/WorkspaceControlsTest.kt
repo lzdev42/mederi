@@ -34,6 +34,51 @@ class WorkspaceControlsTest {
     }
 
     @Test
+    fun detachedWorktreeShowsMainAsBaseAndIdentifiesItsLocation() = runComposeUiTest {
+        val repository = RepositoryInfo(
+            isGit = true, gitCommonDirectory = "/repo/.git", branch = "main", headOid = "commit",
+            branches = listOf(GitBranchInfo("main", "commit")),
+        )
+        val worktree = WorkspaceInfo(
+            workspace = Workspace(
+                id = "worktree", projectId = "project", kind = WorkspaceKind.MANAGED_WORKTREE,
+                checkoutRoot = "/worktree", projectRelativePath = "", gitCommonDirectory = "/repo/.git",
+                baseCommit = "commit", state = WorkspaceState.READY, generation = 1,
+                createdAt = "", lastUsedAt = "",
+            ),
+            headOid = "commit", branch = null, dirty = false, capabilities = emptySet(),
+        )
+        assertNull(xyz.mederi.ui.resolveWorktreeBaseBranch(worktree, repository.copy(
+            branches = repository.branches + GitBranchInfo("other", "commit"),
+        )))
+        assertNull(xyz.mederi.ui.resolveWorktreeBaseBranch(worktree, repository.copy(gitCommonDirectory = "/other/.git")))
+
+        var detachedLocation = ""
+        setContent {
+            AppTheme {
+                detachedLocation = stringResource(
+                    Res.string.workspace_location_detached_base,
+                    stringResource(Res.string.workspace_kind_worktree),
+                    "main",
+                )
+                WorkspaceSelectorContent(
+                    selection = WorkspaceSelection(),
+                    repositoryInfo = repository,
+                    environments = emptyList(),
+                    isExistingConversation = true,
+                    activeWorkspace = worktree,
+                    onSelectKind = { error("Existing checkout may not change from the selector") },
+                    onSelectBaseRef = { error("Opening the selector may not change the base") },
+                    onToggleCarryLocalChanges = {},
+                    onSelectEnvironmentId = {},
+                )
+            }
+        }
+        onNodeWithText("main").assertIsDisplayed().performClick()
+        onNodeWithText(detachedLocation).assertIsDisplayed()
+    }
+
+    @Test
     fun selectsLocalWorktreeBranchCarryAndEnvironment() = runComposeUiTest {
         val selectedKinds = mutableListOf<WorkspaceKind>()
         val selectedBranches = mutableListOf<String?>()
@@ -126,25 +171,25 @@ class WorkspaceControlsTest {
         val state = ProjectPermissionState(projectId = "p1", settings = SandboxSettings())
         val executions = mutableListOf<ExecutionPermissionMode>()
         val plans = mutableListOf<AgentMode>()
-        var iconLabel = ""
+        var sandboxLabel = ""
+        var planLabel = ""
         var fullAccess = ""
         var manualApprove = ""
-        var planTitle = ""
         var density = 1f
 
         setContent {
             AppTheme {
                 density = LocalDensity.current.density
                 fullAccess = stringResource(Res.string.settings_sandbox_full_access)
-                manualApprove = stringResource(Res.string.mode_manual_approve)
-                planTitle = stringResource(Res.string.plan_approval_settings_title)
-                iconLabel = stringResource(
-                    Res.string.permission_plan_button_description,
-                    stringResource(Res.string.settings_sandbox_needs_approval),
-                    stringResource(Res.string.mode_auto_approve)
+                manualApprove = stringResource(Res.string.plan_approval_manual)
+                sandboxLabel = stringResource(
+                    Res.string.composer_sandbox_mode, stringResource(Res.string.settings_sandbox_needs_approval)
+                )
+                planLabel = stringResource(
+                    Res.string.composer_plan_approval_mode, stringResource(Res.string.plan_approval_automatic)
                 )
 
-                Box(Modifier.width(320.dp)) {
+                androidx.compose.foundation.layout.FlowRow(Modifier.width(320.dp)) {
                     PermissionPlanSelectorContent(
                         state = state,
                         planMode = AgentMode.AUTONOMOUS,
@@ -157,14 +202,10 @@ class WorkspaceControlsTest {
             }
         }
 
-        // 图标单按钮保持紧凑（不超过 48dp）
-        onNodeWithContentDescription(iconLabel)
-            .assertIsDisplayed()
-            .assertWidthAtMost(48.dp, density)
-            .performClick()
-
-        // 计划组标题展示
-        onNodeWithText(planTitle).assertIsDisplayed()
+        onNodeWithText(sandboxLabel).assertIsDisplayed().assertWidthAtMost(320.dp, density)
+        onNodeWithText(planLabel).assertIsDisplayed().assertWidthAtMost(320.dp, density)
+        onNodeWithText(sandboxLabel).performClick()
+        onNodeWithText(manualApprove).assertDoesNotExist()
 
         // 点击更改执行权限为完全访问，计划模式不改变
         onNodeWithText(fullAccess).performClick()
@@ -173,8 +214,9 @@ class WorkspaceControlsTest {
             assertTrue(plans.isEmpty())
         }
 
-        // 再次打开选择器，点击手动审批计划，执行权限不受影响
-        onNodeWithContentDescription(iconLabel).performClick()
+        // 打开计划菜单，选择手动审批。
+        onNodeWithText(planLabel).performClick()
+        onNodeWithText(fullAccess).assertDoesNotExist()
         onNodeWithText(manualApprove).performClick()
         runOnIdle {
             assertEquals(listOf(AgentMode.APPROVAL), plans)
@@ -438,7 +480,7 @@ class WorkspaceControlsTest {
 
         setContent {
             AppTheme {
-                localText = stringResource(Res.string.workspace_kind_local)
+                localText = stringResource(Res.string.workspace_kind_with_branch, stringResource(Res.string.workspace_kind_local), "main")
                 handoffText = stringResource(Res.string.workspace_open_handoff)
                 WorkspaceSelectorContent(
                     selection = presenter.draftSelection,
@@ -456,7 +498,8 @@ class WorkspaceControlsTest {
         }
 
         // 点击已有对话的选择器，显示迁移提示并引导至 Handoff，绝不直接切换
-        onNodeWithText(localText).performClick()
+        onNodeWithText("main").performClick()
+        onNodeWithText(localText).assertIsDisplayed()
         onNodeWithText(handoffText).assertIsDisplayed().performClick()
         runOnIdle {
             assertTrue(handoffOpened)

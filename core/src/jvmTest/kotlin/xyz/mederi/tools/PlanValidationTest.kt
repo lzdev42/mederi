@@ -1,16 +1,22 @@
 package xyz.mederi.tools
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import xyz.mederi.domain.model.AgentMode
+import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.plan.Notebook
 import xyz.mederi.plan.PlanApprovalRequester
+import xyz.mederi.plan.PlanStatus
 import xyz.mederi.plan.PlanStore
 import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -34,9 +40,9 @@ class PlanValidationTest {
     private val eventBus = MutableSharedFlow<MederiEvent>(replay = 64)
     private val planApprovalRequester = PlanApprovalRequester("sess_validation", eventBus)
 
-    private fun planTools() = PlanTools(
+    private fun planTools(mode: AgentMode = AgentMode.AUTONOMOUS) = PlanTools(
         sessionId = "sess_validation",
-        agentMode = AgentMode.AUTONOMOUS,
+        agentMode = mode,
         planStore = planStore,
         planApprovalRequester = planApprovalRequester,
         notebook = Notebook(listOf(tmpDir.absolutePath)),
@@ -72,50 +78,98 @@ class PlanValidationTest {
 
     @Test
     fun `pure ASCII command passes validation`() = runBlocking {
-        val result = planTools().WritePlanTool().execute(
-            PlanTools.WritePlanArgs(
-                title = "test plan",
-                summary = "test summary",
-                background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
-                businessLogic = "Entry: CLI command; before: no grep check exists; after: runs the grep assertion and reports the result.",
-                inScope = listOf("Add grep check"),
-                keyDecisions = listOf(
-                    PlanTools.DecisionArg(
-                        question = "How to run the check?",
-                        choice = "Single shell command",
-                        rationale = "Keeps verification directly executable."
-                    )
-                ),
-                changes = listOf(
-                    PlanTools.PlannedChangeArg(
-                        module = "cli",
-                        action = "NEW",
-                        filePath = "check.sh",
-                        description = "grep check script",
-                        rationale = "No existing file fits this purpose."
-                    )
-                ),
-                successCriteria = listOf("grep -q foo file.txt exits 0"),
-                languageStack = "Shell",
-                subtasks = listOf(
-                    PlanTools.SubtaskArg(
-                        name = "grep check",
-                        planDetail = "run grep check",
-                        targetFiles = listOf("check.sh"),
-                        verification = "grep -q foo file.txt && echo PASS",
-                        verificationExpected = "命令 exit 0，输出 PASS",
-                        verificationExpectStdoutContains = listOf("PASS"),
-                        overallAcceptance = true,
-                        acceptanceCases = listOf(xyz.mederi.plan.AcceptanceCase(
-                            "V-01", "Check output", "file.txt exists", "line foo", "Run the script",
-                            "Collector stdout", "foo", "Missing line"
-                        ))
-                    )
-                )
-            )
-        )
+        val result = planTools().WritePlanTool().execute(validPlanArgs())
         assertTrue(result.startsWith("Plan created"), "Expected success, got: $result")
     }
+
+    @Test
+    fun `autonomous replacement approves without a request and archives the old plan`() = runBlocking {
+        val tool = planTools().WritePlanTool()
+        tool.execute(validPlanArgs())
+        val original = assertNotNull(planStore.loadBySession("sess_validation"))
+
+        val response = withTimeout(2_000) { tool.execute(validPlanArgs().copy(title = "Replacement")) }
+
+        assertTrue(response.contains("auto-approved"), response)
+        val replacement = assertNotNull(planStore.loadBySession("sess_validation"))
+        assertEquals(PlanStatus.APPROVED, replacement.status)
+        assertEquals(original.id, replacement.replacesPlanId)
+        assertEquals(PlanStatus.VOIDED, planStore.listBySession("sess_validation").single { it.id == original.id }.status)
+        assertTrue(eventBus.replayCache.none { it.type == EventType.PLAN_APPROVAL_REQUESTED })
+    }
+
+    @Test
+    fun `approval replacement preserves the old plan until collector pins validate and approval commits`() = runBlocking {
+        planTools().WritePlanTool().execute(validPlanArgs())
+        val original = assertNotNull(planStore.loadBySession("sess_validation"))
+        val collector = File(tmpDir, "collector.sh").apply { writeText("original") }
+        val args = validPlanArgs().let { plan ->
+            plan.copy(title = "Replacement", subtasks = plan.subtasks.map { it.copy(acceptanceFiles = listOf(collector.name)) })
+        }
+        val waiting = async(start = CoroutineStart.UNDISPATCHED) {
+            planTools(AgentMode.APPROVAL).WritePlanTool().execute(args)
+        }
+        try {
+            val draft = planStore.listBySession("sess_validation").single { it.status == PlanStatus.PENDING_APPROVAL }
+            assertEquals(original.id, draft.replacesPlanId)
+            assertEquals(original.id, planStore.loadBySession("sess_validation")?.id)
+
+            collector.writeText("changed")
+            assertFalse(planApprovalRequester.resolve(draft.id, approved = true))
+            assertEquals(original.id, planStore.loadBySession("sess_validation")?.id)
+            assertTrue(eventBus.replayCache.none { it.type == EventType.PLAN_APPROVAL_RESOLVED })
+            assertTrue(eventBus.replayCache.none { it.payload["action"] == "voided" })
+
+            collector.writeText("original")
+            assertTrue(planApprovalRequester.resolve(draft.id, approved = true))
+            assertTrue(withTimeout(2_000) { waiting.await() }.startsWith("Plan approved."))
+            assertEquals(draft.id, planStore.loadBySession("sess_validation")?.id)
+            assertEquals(PlanStatus.VOIDED, planStore.listBySession("sess_validation").single { it.id == original.id }.status)
+        } finally {
+            waiting.cancel()
+        }
+    }
+
+    private fun validPlanArgs() = PlanTools.WritePlanArgs(
+        title = "test plan",
+        summary = "test summary",
+        background = "b", problemAnalysis = "p", approach = "a", expectedOutcome = "e", testMethod = "t",
+        businessLogic = "Entry: CLI command; before: no grep check exists; after: runs the grep assertion and reports the result.",
+        inScope = listOf("Add grep check"),
+        keyDecisions = listOf(
+            PlanTools.DecisionArg(
+                question = "How to run the check?",
+                choice = "Single shell command",
+                rationale = "Keeps verification directly executable."
+            )
+        ),
+        changes = listOf(
+            PlanTools.PlannedChangeArg(
+                module = "cli",
+                action = "NEW",
+                filePath = "check.sh",
+                description = "grep check script",
+                rationale = "No existing file fits this purpose."
+            )
+        ),
+        successCriteria = listOf("grep -q foo file.txt exits 0"),
+        languageStack = "Shell",
+        subtasks = listOf(
+            PlanTools.SubtaskArg(
+                name = "grep check",
+                planDetail = "run grep check",
+                targetFiles = listOf("check.sh"),
+                verification = "grep -q foo file.txt && echo PASS",
+                verificationExpected = "命令 exit 0，输出 PASS",
+                verificationExpectStdoutContains = listOf("PASS"),
+                overallAcceptance = true,
+                acceptanceCases = listOf(xyz.mederi.plan.AcceptanceCase(
+                    "V-01", "Check output", "file.txt exists", "line foo", "Run the script",
+                    "Collector stdout", "foo", "Missing line"
+                ))
+            )
+        )
+    )
 
     @Test
     fun `cwd and timeout flow into VerificationSpec`() = runBlocking {

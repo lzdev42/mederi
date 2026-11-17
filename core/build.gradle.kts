@@ -34,9 +34,17 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }
+        jvmMain.dependencies {
+            implementation(libs.jackson.core)
+        }
         jvmTest.dependencies {
             implementation(libs.kotlin.testJunit)
             implementation(libs.kotlinx.coroutinesCore)
+            // FakeCdpServer 测试基座（ST2）：Ktor server CIO 引擎 + WS 插件（工件同 catalog ktor 版本、
+            // 本地缓存已有）；仅测试类路径，不进入生产依赖树（生产 CDP 通讯是纯客户端）
+            implementation(libs.ktor.serverCore)
+            implementation("io.ktor:ktor-server-cio:${libs.versions.ktor.get()}")
+            implementation("io.ktor:ktor-server-websockets:${libs.versions.ktor.get()}")
         }
     }
 }

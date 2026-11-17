@@ -1,5 +1,7 @@
 package xyz.mederi.browser
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import xyz.mederi.browser.bidi.KeyboardKey
 import xyz.mederi.browser.bidi.OperationResult
 
@@ -122,7 +124,25 @@ interface BrowserControl {
     /** 等待选择器对应元素出现/可见。 */
     suspend fun waitFor(selector: String, timeoutMs: Long = 5000): OperationResult =
         throw UnsupportedOperationException("waitFor not supported")
+
+    /**
+     * 实时画面帧流（活动驱动：页面变化才推帧）。
+     * 默认空流（后端不支持时不报错——screencast 是可选能力，既有实现无需 override）；UI 直播面板另立计划。
+     */
+    fun screencastFrames(): Flow<ScreencastFrame> = emptyFlow()
 }
+
+/** screencast 帧（CDP `Page.screencastFrame` 事件解码）。 */
+data class ScreencastFrame(
+    /** base64 解码后的图片字节（实测 PNG）。 */
+    val data: ByteArray,
+    /** metadata.deviceWidth。 */
+    val width: Int,
+    /** metadata.deviceHeight。 */
+    val height: Int,
+    /** offsetTop/scrollOffsetX/scrollOffsetY/timestamp 等 metadata 原样字符串化。 */
+    val metadata: Map<String, String>,
+)
 
 /**
  * 元素定位器（Playwright Locator 的轻量子集，仅 Drill 需要的方法）。

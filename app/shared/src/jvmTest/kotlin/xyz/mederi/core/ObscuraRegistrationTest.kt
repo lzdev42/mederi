@@ -14,7 +14,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.mederi.browser.BrowserRegistry
-import xyz.mederi.browser.obscura.ObscuraBrowserControl
+import xyz.mederi.browser.obscura.ObscuraCdpControl
 import xyz.mederi.core.bridge.MederiAiCore
 
 /**
@@ -65,8 +65,8 @@ class ObscuraRegistrationTest {
         // 只调 factory（建轻量 control），不调 start()——不起进程
         val first = entry.factory("t1", "s1")
         val second = entry.factory("t2", "s2")
-        assertTrue(first is ObscuraBrowserControl, "factory 应产出 ObscuraBrowserControl")
-        assertTrue(second is ObscuraBrowserControl, "factory 应产出 ObscuraBrowserControl")
+        assertTrue(first is ObscuraCdpControl, "factory 应产出 ObscuraCdpControl")
+        assertTrue(second is ObscuraCdpControl, "factory 应产出 ObscuraCdpControl")
         assertFalse(first === second, "每任务应新建不同实例")
         writeObservation("st5_per_task", "distinct-instances")
     }

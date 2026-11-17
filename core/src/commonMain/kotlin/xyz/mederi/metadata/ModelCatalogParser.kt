@@ -30,10 +30,16 @@ internal val modelsDevJson = Json { ignoreUnknownKeys = true }
  *              撞上目录里任何一家的 api 字段就自动命中。
  * @param byKey 供应商 key → modelId → 元数据。用于 api 字段缺失的目录条目
  *              （如 google），由内置预设显式指定 modelsDevKey。
+ * @param byCanonical canonical_model_id → OpenRouter 供应商下该条目的元数据。
+ *                    用于「用户供应商未收录该模型」时反查 OpenRouter 参考价。
+ * @param byModelId 裸 modelId → 任一非 OpenRouter 供应商的同名条目元数据。
+ *                  用于全局同名兜底（用户供应商未收录、但别家收录了同一模型）。
  */
 class CatalogIndex(
     val byApi: Map<String, Map<String, ModelMetadata>>,
-    val byKey: Map<String, Map<String, ModelMetadata>>
+    val byKey: Map<String, Map<String, ModelMetadata>>,
+    val byCanonical: Map<String, ModelMetadata> = emptyMap(),
+    val byModelId: Map<String, ModelMetadata> = emptyMap(),
 ) {
     fun size(): Int = byKey.values.sumOf { it.size }
 
@@ -58,6 +64,7 @@ internal data class CatalogProvider(
 @Serializable
 internal data class CatalogModel(
     val id: String? = null,
+    @SerialName("canonical_model_id") val canonicalModelId: String? = null,
     val name: String? = null,
     val reasoning: Boolean? = null,
     @SerialName("reasoning_options") val reasoningOptions: List<CatalogReasoningOption>? = null,
@@ -93,7 +100,9 @@ internal data class CatalogLimit(
 @Serializable
 internal data class CatalogCost(
     val input: kotlinx.serialization.json.JsonElement? = null,
-    val output: kotlinx.serialization.json.JsonElement? = null
+    val output: kotlinx.serialization.json.JsonElement? = null,
+    @SerialName("cache_read") val cacheRead: kotlinx.serialization.json.JsonElement? = null,
+    @SerialName("cache_write") val cacheWrite: kotlinx.serialization.json.JsonElement? = null,
 ) {
     val inputPrice: Double? get() = input?.lenientDouble()
     val outputPrice: Double? get() = output?.lenientDouble()
@@ -122,11 +131,30 @@ internal fun parseModelsDevResponse(raw: String): CatalogIndex {
 
     val byApi = mutableMapOf<String, MutableMap<String, ModelMetadata>>()
     val byKey = mutableMapOf<String, MutableMap<String, ModelMetadata>>()
+    val byCanonical = mutableMapOf<String, ModelMetadata>()
+    // byModelId 选择规则：优先第一个 canonicalModelId 非空的条目；
+    // 都没有 canonical 时退到第一个有有效价格的条目（先暂存到 priceFallback，遍历结束后补位）。
+    val byModelId = mutableMapOf<String, ModelMetadata>()
+    val priceFallback = mutableMapOf<String, ModelMetadata>()
 
     for ((key, provider) in root) {
         val models = mutableMapOf<String, ModelMetadata>()
         for ((modelId, model) in provider.models) {
-            models[modelId] = toModelMetadata(model)
+            val metadata = toModelMetadata(model)
+            models[modelId] = metadata
+            // 仅从 OpenRouter 条目构建 canonical → OR 参考价索引，先遍历到的为准
+            if (key == "openrouter") {
+                metadata.canonicalModelId?.takeIf { it.isNotBlank() }?.let { canonical ->
+                    byCanonical.putIfAbsent(canonical, metadata)
+                }
+            } else {
+                // 全局同名兜底：跳过 OpenRouter 自身，按 JSON 遍历顺序择优
+                if (metadata.canonicalModelId != null) {
+                    byModelId.putIfAbsent(modelId, metadata)
+                } else if (metadata.hasValidPrice()) {
+                    priceFallback.putIfAbsent(modelId, metadata)
+                }
+            }
         }
         byKey[key] = models
         provider.api?.takeIf { it.isNotBlank() }?.let { api ->
@@ -134,7 +162,12 @@ internal fun parseModelsDevResponse(raw: String): CatalogIndex {
         }
     }
 
-    return CatalogIndex(byApi = byApi, byKey = byKey)
+    // 无 canonical 的候选补位：仅在还没有 canonical 非空的条目时生效
+    for ((modelId, metadata) in priceFallback) {
+        byModelId.putIfAbsent(modelId, metadata)
+    }
+
+    return CatalogIndex(byApi = byApi, byKey = byKey, byCanonical = byCanonical, byModelId = byModelId)
 }
 
 /**
@@ -188,9 +221,17 @@ internal fun toModelMetadata(model: CatalogModel): ModelMetadata {
         supportsImages = images,
         supportsReasoning = supportsReasoning,
         reasoningLevels = levels,
-        reasoningOptionType = optionType
+        reasoningOptionType = optionType,
+        cacheReadPricePerMillion = model.cost?.cacheRead?.lenientDouble()?.takeIf { it.isFinite() && it >= 0 },
+        cacheWritePricePerMillion = model.cost?.cacheWrite?.lenientDouble()?.takeIf { it.isFinite() && it >= 0 },
+        canonicalModelId = model.canonicalModelId,
     )
 }
+
+/** 输入/输出价均合法（finite 且 >= 0）时才算「有有效价格」。 */
+internal fun ModelMetadata.hasValidPrice(): Boolean =
+    inputPricePerMillion?.let { it.isFinite() && it >= 0 } == true &&
+        outputPricePerMillion?.let { it.isFinite() && it >= 0 } == true
 
 /**
  * 目录档位名 → Mederi [ReasoningLevel]。

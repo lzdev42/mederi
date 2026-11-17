@@ -37,7 +37,8 @@ internal fun expandBatchToolCall(
         is ToolCallState.Pending -> state.input
         is ToolCallState.Running -> state.input
         is ToolCallState.Completed -> state.input
-        is ToolCallState.Failed -> state.input
+        // 只有父调用失败时，没有可归属到各成员的执行结果。
+        is ToolCallState.Failed -> return listOf(call)
     }
     val members = runCatching {
         batchProjectionJson.decodeFromString<List<BatchDisplayCall>>(input["calls"] ?: return fallback())
@@ -59,15 +60,12 @@ internal fun expandBatchToolCall(
     return members.mapIndexed { index, member ->
         val memberInput = ToolArgParser.parse(batchProjectionJson.encodeToString(member.parameters))
         val result = results?.get(index)
-        val state = when (val parent = call.state) {
-            is ToolCallState.Pending -> ToolCallState.Pending(memberInput)
-            is ToolCallState.Running -> ToolCallState.Running(memberInput)
-            is ToolCallState.Failed -> ToolCallState.Failed(memberInput, parent.error)
-            is ToolCallState.Completed -> if (result?.error != null) {
-                ToolCallState.Failed(memberInput, result.error)
-            } else {
-                ToolCallState.Completed(memberInput, result?.output ?: return listOf(call))
-            }
+        val state = when {
+            result?.error != null -> ToolCallState.Failed(memberInput, result.error)
+            result?.output != null -> ToolCallState.Completed(memberInput, result.output)
+            call.state is ToolCallState.Pending -> ToolCallState.Pending(memberInput)
+            call.state is ToolCallState.Running -> ToolCallState.Running(memberInput)
+            else -> return listOf(call)
         }
         ToolCallUi(
             id = "${call.id}/batch/$index",

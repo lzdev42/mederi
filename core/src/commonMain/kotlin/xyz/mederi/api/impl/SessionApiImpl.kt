@@ -12,6 +12,7 @@ import xyz.mederi.domain.model.AgentMode
 import xyz.mederi.domain.model.FileDiff
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
+import xyz.mederi.domain.model.ModelRequestRecord
 import xyz.mederi.domain.model.Session
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.session.SessionManager
@@ -110,6 +111,14 @@ class SessionApiImpl(private val sessionManager: SessionManager) : SessionApi {
 
     override suspend fun listMessages(sessionId: String): List<Message> = mederiCall {
         sessionManager.listMessages(sessionId)
+    }
+
+    override suspend fun listModelRequests(sessionId: String): List<ModelRequestRecord> = mederiCall {
+        sessionManager.listModelRequests(sessionId)
+    }
+
+    override suspend fun listAllModelRequests(): List<ModelRequestRecord> = mederiCall {
+        sessionManager.listAllModelRequests()
     }
 
     override suspend fun getMessage(sessionId: String, messageId: String): Message = mederiCall {

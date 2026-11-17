@@ -29,6 +29,28 @@ class CompressionPlannerTest {
 
     // ── 切批：10 条大消息按批预算（窗口一半）切成多批 ──────────────────────
     @Test
+    fun completedToolExchangeStaysInOneOlderBatchAcrossSteering() {
+        val call = Message.Assistant(listOf(
+            MessagePart.Text("a".repeat(30_000)),
+            MessagePart.Tool.Call("read-id", "read_file", "{}")
+        ), ResponseMetaInfo.Empty)
+        val steering = user(30_000)
+        val result = Message.User(MessagePart.Tool.Result("read-id", "read_file", "a".repeat(30_000)), RequestMetaInfo.Empty)
+        val recent = user(4)
+        val plan = planCompression(listOf(call, steering, result, recent), 40_000, keepLastMessages = 1)
+        assertEquals(listOf(listOf(call, steering, result)), plan.olderBatches)
+        assertEquals(listOf(recent), plan.recentMessages)
+    }
+
+    @Test
+    fun pendingToolCallRemainsInRecentUntilItsResultIsAppended() {
+        val call = Message.Assistant(listOf(MessagePart.Tool.Call("read-id", "read_file", "{}")), ResponseMetaInfo.Empty)
+        val recent = user(4)
+        val plan = planCompression(listOf(user(100), call, recent), 40_000, keepLastMessages = 1)
+        assertEquals(listOf(call, recent), plan.recentMessages)
+    }
+
+    @Test
     fun testSplitsOlderIntoBatches() {
         val window = 100_000
         val batchBudget = (window * COMPRESS_BATCH_BUDGET_RATIO).toInt() // 50_000

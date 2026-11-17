@@ -32,6 +32,8 @@ import xyz.mederi.provider.ProviderManager
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.skills.SkillManager
 import xyz.mederi.plan.PlanStore
+import xyz.mederi.store.InMemoryModelRequestStore
+import xyz.mederi.store.ModelRequestStore
 import java.time.Instant
 import java.util.UUID
 /**
@@ -59,6 +61,9 @@ class SubagentRunnerImpl(
     private val sessionStore: xyz.mederi.store.SessionStore,
     /** 子代理历史存储（同上，EphemeralHistoryStore 装饰注入）。 */
     private val historyStore: xyz.mederi.store.HistoryStore,
+    private val modelRequestStore: ModelRequestStore = InMemoryModelRequestStore(),
+    private val usageEventBus: MutableSharedFlow<MederiEvent>? = null,
+    private val usageOwnerSessionId: String? = null,
 ) : SubagentRunner {
     override suspend fun run(
         task: String,
@@ -132,6 +137,9 @@ class SubagentRunnerImpl(
             llmClientFactory = llmClientFactory,
             // RF-07：子代理 turn 持执行租约，归档/配额等待含子代理执行。
             leaseManager = leaseManager,
+            modelRequestStore = modelRequestStore,
+            usageOwnerSessionId = usageOwnerSessionId ?: parentSessionId,
+            usageEventBus = usageEventBus ?: eventBus,
         )
 
         val inputText = when (role) {

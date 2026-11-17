@@ -15,11 +15,11 @@ import kotlin.time.Instant as KoogInstant
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
@@ -31,10 +31,52 @@ object KoogMessageMapper {
      * 将 Mederi 消息列表转换为 Koog Prompt 用的 Message 列表。
      *
      * @param includeImages 为 false 时剔除用户消息中的 Image part（AI 视图层按"当前模型
-     *   是否支持图片"过滤），历史存储不受影响；默认 true 时行为与原先完全一致。
+     *   是否支持图片"过滤），历史存储不受影响。
      */
-    fun toKoogMessages(messages: List<MederiMessage>, includeImages: Boolean = true): List<KoogMessage> =
-        messages.map { toKoogMessage(it, includeImages) }
+    fun toKoogMessages(messages: List<MederiMessage>, includeImages: Boolean = true): List<KoogMessage> {
+        // A cancelled request can persist the call before its result. Replay only
+        // complete exchanges, leaving all original parts available in local history.
+        val pending = mutableMapOf<Pair<String, String>, Pair<Int, Int>>()
+        val exchanges = mutableSetOf<Pair<Int, Int>>()
+        messages.forEachIndexed { messageIndex, message ->
+            message.parts.forEachIndexed { partIndex, part ->
+                when (part) {
+                    is MederiMessagePart.ToolCall -> {
+                        val id = part.id
+                        if (!id.isNullOrBlank()) {
+                            val key = id to part.tool
+                            pending.remove(key)
+                            try {
+                                requireToolCallArguments(part.tool, id, part.args)
+                                if (part.tool.isNotBlank()) pending[key] = messageIndex to partIndex
+                            } catch (_: SerializationException) {
+                                // The raw malformed call stays in storage.
+                            }
+                        }
+                    }
+                    is MederiMessagePart.ToolResult -> {
+                        part.id?.let { pending.remove(it to part.tool) }?.let { call ->
+                            exchanges.add(call)
+                            exchanges.add(messageIndex to partIndex)
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        return messages.mapIndexedNotNull { messageIndex, message ->
+            val parts = message.parts.filterIndexed { partIndex, part ->
+                when (part) {
+                    is MederiMessagePart.ToolCall, is MederiMessagePart.ToolResult ->
+                        (messageIndex to partIndex) in exchanges
+                    else -> true
+                }
+            }
+            if (parts.isEmpty()) return@mapIndexedNotNull null
+            val replayMessage = if (parts.size == message.parts.size) message else message.copy(parts = parts)
+            toKoogMessage(replayMessage, includeImages).takeIf { it.parts.isNotEmpty() }
+        }
+    }
 
     /**
      * 单条 Mederi Message -> Koog Message。
@@ -72,9 +114,10 @@ object KoogMessageMapper {
                         totalTokensCount = message.totalTokens,
                         inputTokensCount = message.inputTokens,
                         outputTokensCount = message.outputTokens,
-                        metadata = message.cachedTokens?.let {
-                            buildJsonObject { put("cachedTokens", it) }
-                        }
+                        metadata = buildJsonObject {
+                            message.cachedTokens?.let { put("cachedTokens", it) }
+                            message.cacheWriteTokens?.let { put("cacheWriteTokens", it) }
+                        }.takeUnless { it.isEmpty() }
                     ),
                     finishReason = message.finishReason,
                     id = message.id
@@ -108,21 +151,9 @@ object KoogMessageMapper {
             totalTokens = metaInfo.totalTokensCount,
             inputTokens = metaInfo.inputTokensCount,
             outputTokens = metaInfo.outputTokensCount,
-            cachedTokens = readCachedTokens(metaInfo.metadata)
+            cachedTokens = metaInfo.cacheReadTokens(),
+            cacheWriteTokens = metaInfo.cacheWriteTokens()
         )
-    }
-
-    /**
-     * 从 ResponseMetaInfo.metadata 中读取缓存命中 token 数。
-     * 支持 Mederi 自定义 key `cachedTokens`，以及 OpenAI 风格的 `usage.prompt_tokens_details.cached_tokens`。
-     */
-    private fun readCachedTokens(metadata: JsonObject?): Int? {
-        if (metadata == null) return null
-        // Mederi 自定义顶层 key
-        metadata["cachedTokens"]?.jsonPrimitive?.intOrNull?.let { return it }
-        // OpenAI usage 风格
-        metadata["usage"]?.jsonObject?.get("prompt_tokens_details")?.jsonObject?.get("cached_tokens")?.jsonPrimitive?.intOrNull?.let { return it }
-        return null
     }
 
     /**
@@ -162,7 +193,8 @@ object KoogMessageMapper {
     }
 
     private fun toKoogPart(part: MederiMessagePart, includeImages: Boolean = true): KoogMessagePart? = when (part) {
-        is MederiMessagePart.Text -> KoogMessagePart.Text(part.text)
+        // 旧历史可能带有流程图使用的空正文占位符，回放时只保留实际文本。
+        is MederiMessagePart.Text -> part.text.takeIf { it.isNotBlank() }?.let { KoogMessagePart.Text(it) }
         // includeImages=false 时（模型不支持图片）剔除 Image part，其余 part 行为不变
         is MederiMessagePart.Image ->
             if (includeImages) KoogMessagePart.Attachment(
@@ -172,7 +204,18 @@ object KoogMessageMapper {
                     mimeType = part.mimeType ?: "image/"
                 )
             ) else null
-        is MederiMessagePart.File -> null
+        is MederiMessagePart.File -> {
+            val format = deriveFileFormat(part.name ?: part.path, part.mimeType)
+            val fileName = part.name ?: part.path.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+            KoogMessagePart.Attachment(
+                source = AttachmentSource.File(
+                    content = AttachmentContent.URL(part.path),
+                    format = format,
+                    mimeType = part.mimeType ?: "application/octet-stream",
+                    fileName = fileName
+                )
+            )
+        }
         is MederiMessagePart.ToolCall -> KoogMessagePart.Tool.Call(
             id = part.id,
             tool = part.tool,
@@ -220,6 +263,16 @@ object KoogMessageMapper {
                         MederiMessagePart.Image(url = url, mimeType = src.mimeType.takeIf { it != "image/" })
                     } else null
                 }
+                is AttachmentSource.File -> {
+                    val url = (src.content as? AttachmentContent.URL)?.url
+                    if (url != null) {
+                        MederiMessagePart.File(
+                            path = url,
+                            name = src.fileName,
+                            mimeType = src.mimeType
+                        )
+                    } else null
+                }
                 else -> null
             }
         }
@@ -248,4 +301,23 @@ object KoogMessageMapper {
         mimeType?.substringAfter('/')?.takeIf { it.isNotEmpty() }?.let { return it }
         return "png"
     }
+
+    private fun deriveFileFormat(pathOrName: String, mimeType: String?): String {
+        val ext = pathOrName.substringAfterLast('.', "").substringBefore(';').lowercase()
+        if (ext.isNotEmpty() && ext.length <= 8) return ext
+        mimeType?.substringAfter('/')?.substringBefore(';')?.takeIf { it.isNotEmpty() && it.length <= 8 }?.let { return it }
+        return "bin"
+    }
 }
+
+internal fun ResponseMetaInfo.cacheReadTokens(): Int? =
+    metadata.tokenCount("cachedTokens") ?: metadata.promptTokensDetails().tokenCount("cached_tokens")
+
+internal fun ResponseMetaInfo.cacheWriteTokens(): Int? =
+    metadata.tokenCount("cacheWriteTokens") ?: metadata.promptTokensDetails().tokenCount("cache_write_tokens")
+
+private fun JsonObject?.promptTokensDetails(): JsonObject? =
+    (this?.get("usage") as? JsonObject)?.get("prompt_tokens_details") as? JsonObject
+
+private fun JsonObject?.tokenCount(key: String): Int? =
+    (this?.get(key) as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }

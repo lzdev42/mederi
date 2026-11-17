@@ -1,9 +1,14 @@
 package xyz.mederi.infrastructure.koog
 
+import ai.koog.prompt.dsl.prompt
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.prompt.message.ResponseMetaInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import xyz.mederi.koog.COMPRESS_BATCH_BUDGET_RATIO
 import xyz.mederi.koog.RECENT_KEEP_BUDGET_RATIO
@@ -19,6 +24,48 @@ class MederiCompressionStrategyTest {
 
     // ── 构造 helper：ASCII 文本长度 n → 估计约 n/4 token ────────────────────
     private fun user(n: Int) = Message.User("a".repeat(n), RequestMetaInfo.Empty)
+
+    @Test
+    fun continuationOnlyChangesTheRequestAndKeepsToolMessagesTogether() {
+        val call = Message.Assistant(
+            parts = listOf(MessagePart.Tool.Call("call-1", "read_file", "{}")),
+            metaInfo = ResponseMetaInfo.Empty
+        )
+        val result = Message.User(
+            parts = listOf(MessagePart.Tool.Result("call-1", "read_file", "file contents")),
+            metaInfo = RequestMetaInfo.Empty
+        )
+        val history = prompt("compacted") {
+            system("Session instructions")
+            assistant("TLDR: Task is in progress.")
+            message(call)
+            message(result)
+        }
+        val messages = history.messages.toList()
+
+        val request = history.withCompactionContinuation()
+
+        assertEquals(messages, history.messages)
+        assertEquals(messages, request.messages.filterIndexed { index, _ -> index != 1 })
+        val continuation = assertIs<Message.User>(request.messages[1])
+        assertTrue(continuation.textContent().startsWith("Continue"))
+        assertSame(request, request.withCompactionContinuation())
+        assertEquals(request.messages, history.withCompactionContinuation().messages)
+    }
+
+    @Test
+    fun continuationLeavesRealUserInputAndUncompressedHistoryAlone() {
+        val withUser = prompt("with-user") {
+            assistant("TLDR: Task is in progress.")
+            user("Check the changed file.")
+        }
+        val uncompressed = prompt("uncompressed") {
+            assistant("There is no compaction summary.")
+        }
+
+        assertSame(withUser, withUser.withCompactionContinuation())
+        assertSame(uncompressed, uncompressed.withCompactionContinuation())
+    }
 
     // ── contextWindow 正确流入规划：大消息按批预算切成多批，且每批不超批预算 ──
     @Test

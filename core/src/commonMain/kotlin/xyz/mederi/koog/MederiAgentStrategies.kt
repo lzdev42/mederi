@@ -1,6 +1,7 @@
 package xyz.mederi.infrastructure.koog
 
 import ai.koog.agents.core.agent.entity.AIAgentGraphStrategy
+import ai.koog.agents.core.agent.session.AIAgentLLMWriteSession
 import ai.koog.agents.core.dsl.builder.AIAgentNodeDelegate
 import ai.koog.agents.core.dsl.builder.node
 import ai.koog.agents.core.dsl.builder.strategy
@@ -8,10 +9,10 @@ import ai.koog.agents.core.dsl.extension.HistoryCompressionStrategy
 import ai.koog.agents.core.dsl.extension.ReceivedToolResults
 import ai.koog.agents.core.dsl.extension.nodeExecuteTools
 import ai.koog.agents.core.dsl.extension.nodeLLMCompressHistory
-import ai.koog.agents.core.dsl.extension.onTextMessage
 import ai.koog.agents.core.dsl.extension.onToolCalls
 import ai.koog.agents.core.environment.ReceivedToolResult
 import ai.koog.agents.ext.agent.HistoryCompressionConfig
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
@@ -22,16 +23,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import xyz.mederi.config.MederiIdentity
 
-/**
- * 把流式帧重建为 Assistant 消息，带 ToolCallComplete args 解析容错。
- *
- * Koog 的 toMessageResponse 对 ToolCallComplete.content 直接
- * `Json.parseToJsonElement(...)` 且无 try-catch——兼容端点返回截断/非法 JSON 参数时
- * 抛 SerializationException 杀死整个流（症状=正文到一半戛然而止）。
- * salvage 分支保留全部 ToolCallComplete（含非法 args）与全部 TextComplete：
- * 坏调用的 args 原样保留，下游 GenericAgentEnvironment 解析 argsJson 抛错并把
- * 原始错误回喂模型自纠，turn 不中断；合法调用不再被坏 JSON 连累丢弃。
- */
 /**
  * 合并被流式协议切碎的工具调用碎片。
  *
@@ -130,59 +121,22 @@ internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
     if (pendingReasoning.isNotEmpty()) {
         normalized.add(StreamFrame.ReasoningComplete(null, listOf(pendingReasoning.toString())))
     }
-    val rebuilt = try {
-        normalized.mergeFragmentedToolCalls()
-            .mergeFragmentedReasoning()
-            .mergeFragmentedText()
-            .toMessageResponse()
-    } catch (e: Exception) {
-        if (e is kotlinx.coroutines.CancellationException) throw e
-        xyz.mederi.debug.DebugLog.error(
-            "StreamRebuild",
-            "toMessageResponse FAILED (${e::class.simpleName}: ${e.message}) — salvaging frames, toolCalls=" +
-                "${filterIsInstance<StreamFrame.ToolCallComplete>().size}, textComplete=${filterIsInstance<StreamFrame.TextComplete>().size}",
-            e
-        )
-        val salvaged = filterIsInstance<StreamFrame.TextComplete>()
-            .map { MessagePart.Text(it.text) } +
-            filterIsInstance<StreamFrame.ToolCallComplete>()
-                .map {
-                    // args 保留原始字符串：坏 JSON 会在此处原样进入 Tool.Call，
-                    // 下游 GenericAgentEnvironment 访问 argsJson 抛错并回喂模型自纠。
-                    MessagePart.Tool.Call(id = it.id, tool = it.name, args = it.content)
-                }
-        if (salvaged.isEmpty()) throw e
-        Message.Assistant(
-            parts = salvaged,
-            finishReason = filterIsInstance<StreamFrame.End>().firstOrNull()?.finishReason,
-            metaInfo = filterIsInstance<StreamFrame.End>().firstOrNull()?.metaInfo ?: ai.koog.prompt.message.ResponseMetaInfo.Empty
-        )
+    val merged = normalized.mergeFragmentedToolCalls()
+        .mergeFragmentedReasoning()
+        .mergeFragmentedText()
+        .filterNot { it is StreamFrame.TextComplete && it.text.isBlank() }
+    merged.filterIsInstance<StreamFrame.ToolCallComplete>().forEach { call ->
+        requireToolCallArguments(call.name, call.id, call.content)
     }
-    // 图边条件兜底：onToolCalls 要求有 Tool.Call，onTextMessage 要求有 Text。
-    // 模型可能返回空响应（只有 End 帧）或纯思考响应（只有 Reasoning），此时 parts 里
-    // 既没有 Text 也没有 Tool.Call，图引擎在 send_tool_results / call_llm 节点无边可走，
-    // 直接抛 AIAgentStuckInTheNodeException 崩溃。
-    // 补入空 Text("") 让 onTextMessage 恒可匹配，Turn 正常结束（空回复），不卡死图引擎。
-    val hasText = rebuilt.parts.any { it is MessagePart.Text }
-    val hasToolCall = rebuilt.parts.any { it is MessagePart.Tool.Call }
-    val guarded = if (!hasText && !hasToolCall) {
-        xyz.mederi.debug.DebugLog.event(
-            "StreamRebuild",
-            "empty-response guard: model returned no Text and no ToolCall (parts=${rebuilt.parts.map { it::class.simpleName }}), " +
-                "injecting empty Text to prevent graph stuck"
-        )
-        rebuilt.copy(parts = rebuilt.parts + MessagePart.Text(""))
-    } else {
-        rebuilt
-    }
-    val toolCalls = guarded.parts.filterIsInstance<MessagePart.Tool.Call>()
+    val rebuilt = merged.toMessageResponse()
+    val toolCalls = rebuilt.parts.filterIsInstance<MessagePart.Tool.Call>()
     xyz.mederi.debug.DebugLog.event(
         "StreamRebuild",
-        "rebuilt assistant: parts=${guarded.parts.map { it::class.simpleName }}, " +
-            "finishReason=${guarded.finishReason}, toolCalls=${toolCalls.map { "${it.tool}(${it.args.toString().take(80)})" }}, " +
+        "rebuilt assistant: parts=${rebuilt.parts.map { it::class.simpleName }}, " +
+            "finishReason=${rebuilt.finishReason}, toolCalls=${toolCalls.map { "${it.tool}(${it.args.toString().take(80)})" }}, " +
             "tookMs=${(System.nanoTime() - start) / 1_000_000}"
     )
-    return guarded
+    return rebuilt
 }
 
 /** 网络抛错/取消（用户中止、关闭应用）时保留已输出正文/推理落库，再向上抛原异常；绝不执行中断的工具调用。 */
@@ -191,7 +145,8 @@ internal suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
 ): Message.Assistant {
     val frames = mutableListOf<StreamFrame>()
     try {
-        collect { frames.add(it) }
+        recordRequestUsage(persister, responseId).collect { frames.add(it) }
+        return frames.toAssistantMessageSafe()
     } catch (error: Throwable) {
         // 取消（用户中止/关闭应用）与流错误同构：半截正文必须先落库再 rethrow
         // （persist-then-rethrow——"手动关闭一定保存"）。persist 失败不吞原异常。
@@ -203,12 +158,63 @@ internal suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
             val readable = if (text.isNotEmpty() && partial.none { it is StreamFrame.TextComplete })
                 partial + StreamFrame.TextComplete(text) else partial
             val response = readable.toAssistantMessageSafe().let { if (responseId != null) it.copy(id = responseId) else it }
-            runCatching { persister?.persistAssistant(response) }
+            runCatching { persister?.persistAssistant(response, requestCompleted = false) }
                 .onFailure { xyz.mederi.debug.DebugLog.error("Persist", "partial persist on cancel/error failed: ${it.message}", it) }
         }
         throw error
     }
-    return frames.toAssistantMessageSafe()
+}
+
+internal fun Prompt.withCompactionContinuation(): Prompt {
+    val summaryIndex = messages.indexOfFirst { it !is Message.System }
+    val summary = messages.getOrNull(summaryIndex) as? Message.Assistant ?: return this
+    if (!summary.textContent().startsWith(HistoryStoreChatHistoryProvider.TLDR_PREFIX)) return this
+
+    val hasUserInput = messages.filterIsInstance<Message.User>().any { user ->
+        user.parts.any { part ->
+            part is MessagePart.ContentPart && (part !is MessagePart.Text || part.text.isNotBlank())
+        }
+    }
+    if (hasUserInput) return this
+
+    val continuation = Message.User(
+        "Continue the current task using the conversation summary and tool results.",
+        RequestMetaInfo.Empty
+    )
+    // Keep tool calls and results adjacent, and provide a user message before the assistant history.
+    return withMessages { history -> history.toMutableList().apply { add(summaryIndex, continuation) } }
+}
+
+private suspend fun AIAgentLLMWriteSession.requestTurnStreaming(): Flow<StreamFrame> {
+    val history = prompt
+    val requestPrompt = history.withCompactionContinuation()
+    if (requestPrompt === history) return requestLLMStreaming()
+
+    // Koog captures the request prompt when creating the flow. Restore history before ChatMemory can write it back.
+    prompt = requestPrompt
+    return try {
+        requestLLMStreaming()
+    } finally {
+        prompt = history
+    }
+}
+
+/** 供应商 End 用量由对话和压缩请求共用，保留在账本后再继续处理帧。 */
+internal fun Flow<StreamFrame>.recordRequestUsage(
+    persister: TurnIncrementalPersister?,
+    requestId: String?,
+    purpose: String? = null,
+): Flow<StreamFrame> {
+    if (persister == null || requestId == null) return this
+    return kotlinx.coroutines.flow.flow {
+        var usageRecorded = false
+        collect { frame ->
+            if (!usageRecorded && frame is StreamFrame.End) {
+                usageRecorded = persister.recordResponseUsage(requestId, frame, purpose)
+            }
+            emit(frame)
+        }
+    }
 }
 
 /**
@@ -225,9 +231,7 @@ val MEDERI_INPUT_PERSISTED: String get() = "\u0000" + MederiIdentity.PRODUCT_NAM
  * 1. LLM 节点用 [ai.koog.prompt.streaming] 的流式请求（requestLLMStreaming）：
  *    - 逐帧消费产生 MESSAGE_DELTA 的输入，UI 实时可见；
  *    - 完整帧通过 [toAssistantMessageSafe] 重建 [Message.Assistant]，继续工具循环。
- * 2. ToolCallComplete args 解析容错：Koog 原版对非法 JSON 参数整条流直接炸
- *    （症状=正文播到一半戛然而止、无任何错误）。salvage 保留全部调用与原始 args，
- *    坏 JSON 由下游 GenericAgentEnvironment 解析抛错并回喂模型自纠，而不是杀死整个 turn。
+ * 2. 在执行前验证完整工具参数，非法 JSON 终止该轮，只保留已输出的正文和推理。
  *
  * 输入为 [MEDERI_INPUT_PERSISTED] 时跳过 user() 追加（消息已落库、随历史恢复）。
  */
@@ -302,12 +306,12 @@ private fun nodeLLMSendToolResultsPersistable(
             // 故围绕 requestLLMStreaming 前后测量真实流耗时（含推理+正文）。
             val startNs = System.nanoTime()
             val responseId = persister?.beginResponse()
-            val response = requestLLMStreaming().collectAssistantPreservingPartial(persister, responseId).let {
+            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
             val durationMs = (System.nanoTime() - startNs) / 1_000_000
-            // requestLLMStreaming() 不自动追加响应到 prompt（与 requestLLM() 不同），手动补
-            appendPrompt { message(response) }
+            // requestLLMStreaming() 不会自动追加响应。空响应只保留在历史诊断中。
+            if (response.parts.isNotEmpty()) appendPrompt { message(response) }
             persister?.persistAssistant(response, durationMs)
             responseId?.let { persister?.completeResponse(it) }
             response
@@ -325,13 +329,12 @@ fun mederiSingleRunStrategy(
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
                 val responseId = persister?.beginResponse()
-            val response = requestLLMStreaming().collectAssistantPreservingPartial(persister, responseId).let {
+            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000
-                // requestLLMStreaming() 不会自动把响应追加到 prompt（与 requestLLM() 不同），
-                // 必须手动追加，否则 ChatMemory.store 时 assistant 消息会丢失。
-                appendPrompt { message(response) }
+                // requestLLMStreaming() 不会自动追加响应。空响应只保留在历史诊断中。
+                if (response.parts.isNotEmpty()) appendPrompt { message(response) }
                 // 增量持久化：LLM 响应到达即落库。turn 中途崩溃时本轮对话不丢
                 // （ChatMemory 的 strategy 级 store 只在 turn 正常结束时执行）
                 persister?.persistAssistant(response, durationMs)
@@ -342,7 +345,7 @@ fun mederiSingleRunStrategy(
         val nodeExecuteTool by nodeExecuteTools(parallel = true)
         val nodeSendToolResult by nodeLLMSendToolResultsPersistable(persister, pollSteering)
 
-        val nodeCheckSteering by node<String, String>("check_steering") { lastText ->
+        val nodeCheckSteering by node<Message.Assistant, String>("check_steering") { response ->
             val steer = pollSteering?.invoke()
             if (steer != null) {
                 val steerId = steer.messageId ?: "msg_${java.util.UUID.randomUUID()}"
@@ -353,21 +356,17 @@ fun mederiSingleRunStrategy(
                 else persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
                 MEDERI_INPUT_PERSISTED
             } else {
-                lastText
+                response.textContent()
             }
         }
 
         edge(nodeStart forwardTo nodeCallLLM)
         edge(nodeCallLLM forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeCallLLM forwardTo nodeCheckSteering onTextMessage { true })
+        edge(nodeCallLLM forwardTo nodeCheckSteering onCondition { it.parts.none { part -> part is MessagePart.Tool.Call } })
         edge(nodeExecuteTool forwardTo nodeSendToolResult)
-        // 边选择按注册顺序取第一条命中（AIAgentNode.resolveEdge）。模型常把解释文本
-        // 与工具调用混排在同一条消息（parts = [Text, Call, ...]）——此时 onTextMessage
-        // 与 onToolCalls 都命中，若 onTextMessage 先注册，turn 会以"文本即最终答案"
-        // 结束，工具调用被静默丢弃（端到端实测抓到：edit_file 报成功但从未执行）。
-        // 所以"执行 vs 结束"的每个分支点必须 onToolCalls 先注册。
+        // 有工具调用时继续工具循环。空响应和纯推理响应也会进入 steering 检查。
         edge(nodeSendToolResult forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeSendToolResult forwardTo nodeCheckSteering onTextMessage { true })
+        edge(nodeSendToolResult forwardTo nodeCheckSteering onCondition { it.parts.none { part -> part is MessagePart.Tool.Call } })
         edge(nodeCheckSteering forwardTo nodeCallLLM onCondition { it == MEDERI_INPUT_PERSISTED })
         edge(nodeCheckSteering forwardTo nodeFinish onCondition { it != MEDERI_INPUT_PERSISTED })
     }
@@ -392,11 +391,11 @@ fun mederiSingleRunStrategyWithCompression(
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
                 val responseId = persister?.beginResponse()
-            val response = requestLLMStreaming().collectAssistantPreservingPartial(persister, responseId).let {
+            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000
-                appendPrompt { message(response) }
+                if (response.parts.isNotEmpty()) appendPrompt { message(response) }
                 // 增量持久化（同 mederiSingleRunStrategy）
                 persister?.persistAssistant(response, durationMs)
             responseId?.let { persister?.completeResponse(it) }
@@ -412,7 +411,7 @@ fun mederiSingleRunStrategyWithCompression(
             retrievalModel = config.retrievalModel
         )
 
-        val nodeCheckSteering by node<String, String>("check_steering") { lastText ->
+        val nodeCheckSteering by node<Message.Assistant, String>("check_steering") { response ->
             val steer = pollSteering?.invoke()
             if (steer != null) {
                 val steerId = steer.messageId ?: "msg_${java.util.UUID.randomUUID()}"
@@ -423,13 +422,13 @@ fun mederiSingleRunStrategyWithCompression(
                 else persister?.persistSteeringUserMessage(steer.text, id = steerId, timestamp = steer.timestamp)
                 MEDERI_INPUT_PERSISTED
             } else {
-                lastText
+                response.textContent()
             }
         }
 
         edge(nodeStart forwardTo nodeCallLLM)
         edge(nodeCallLLM forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeCallLLM forwardTo nodeCheckSteering onTextMessage { true })
+        edge(nodeCallLLM forwardTo nodeCheckSteering onCondition { it.parts.none { part -> part is MessagePart.Tool.Call } })
 
         edge(nodeExecuteTool forwardTo nodeCompressHistory onCondition {
             llm.readSession { config.isHistoryTooBig(prompt) }
@@ -440,10 +439,8 @@ fun mederiSingleRunStrategyWithCompression(
         // 压缩完成后流向 nodeSendToolResult：正常持久化工具结果、注入 prompt 与引导消息并流式发送
         edge(nodeCompressHistory forwardTo nodeSendToolResult)
 
-        // 同 mederiSingleRunStrategy：onToolCalls 必须先于 onTextMessage 注册，
-        // 否则 Text+Call 混排消息会直接结束 turn、工具调用被静默丢弃。
         edge(nodeSendToolResult forwardTo nodeExecuteTool onToolCalls { true })
-        edge(nodeSendToolResult forwardTo nodeCheckSteering onTextMessage { true })
+        edge(nodeSendToolResult forwardTo nodeCheckSteering onCondition { it.parts.none { part -> part is MessagePart.Tool.Call } })
         edge(nodeCheckSteering forwardTo nodeCallLLM onCondition { it == MEDERI_INPUT_PERSISTED })
         edge(nodeCheckSteering forwardTo nodeFinish onCondition { it != MEDERI_INPUT_PERSISTED })
     }

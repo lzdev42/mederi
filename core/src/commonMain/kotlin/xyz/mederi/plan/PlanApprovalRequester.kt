@@ -5,8 +5,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import xyz.mederi.domain.model.EventType
 import xyz.mederi.domain.model.MederiEvent
 import java.time.Instant
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import xyz.mederi.debug.DebugLog
 
 data class PlanApprovalResult(
@@ -18,8 +16,14 @@ class PlanApprovalRequester(
     private val sessionId: String,
     private val eventBus: MutableSharedFlow<MederiEvent>
 ) {
-    private var pendingId: String? = null
-    private var pendingDeferred: CompletableDeferred<PlanApprovalResult>? = null
+    private class Pending(
+        val id: String,
+        val commitApproval: () -> Boolean,
+        val result: CompletableDeferred<PlanApprovalResult> = CompletableDeferred(),
+    )
+
+    private val lock = Any()
+    private var pending: Pending? = null
 
     suspend fun request(
         planId: String,
@@ -27,13 +31,14 @@ class PlanApprovalRequester(
         title: String,
         summary: String = "",
         subtaskCount: Int,
-        subtasksJson: String = ""
+        subtasksJson: String = "",
+        commitApproval: () -> Boolean,
     ): PlanApprovalResult {
-        cancelCurrent("superseded by new plan request")
-
-        val deferred = CompletableDeferred<PlanApprovalResult>()
-        pendingId = planId
-        pendingDeferred = deferred
+        val request = Pending(planId, commitApproval)
+        synchronized(lock) {
+            pending?.result?.complete(PlanApprovalResult(approved = false, superseded = true))
+            pending = request
+        }
 
         DebugLog.data(
             "PlanApprovalRequester",
@@ -52,44 +57,46 @@ class PlanApprovalRequester(
             payloadMap["subtasks"] = subtasksJson
         }
 
-        eventBus.emit(MederiEvent(
-            type = EventType.PLAN_APPROVAL_REQUESTED,
-            sessionId = sessionId,
-            payload = payloadMap,
-            timestamp = Instant.now().toString()
-        ))
-
-        return deferred.await()
+        return try {
+            eventBus.emit(MederiEvent(
+                type = EventType.PLAN_APPROVAL_REQUESTED,
+                sessionId = sessionId,
+                payload = payloadMap,
+                timestamp = Instant.now().toString()
+            ))
+            request.result.await()
+        } finally {
+            synchronized(lock) { if (pending === request) pending = null }
+        }
     }
 
     suspend fun resolve(planId: String, approved: Boolean): Boolean {
-        if (planId != pendingId) return false
-        val deferred = pendingDeferred ?: return false
-        pendingId = null
-        pendingDeferred = null
-        deferred.complete(PlanApprovalResult(approved = approved))
-
-        eventBus.emit(MederiEvent(
-            type = EventType.PLAN_APPROVAL_RESOLVED,
-            sessionId = sessionId,
-            payload = mapOf(
-                "planId" to planId,
-                "approved" to approved.toString()
-            ),
-            timestamp = Instant.now().toString()
-        ))
+        val request = synchronized(lock) {
+            val request = pending?.takeIf { it.id == planId } ?: return false
+            if (approved && !request.commitApproval()) return false
+            pending = null
+            request
+        }
+        try {
+            eventBus.emit(MederiEvent(
+                type = EventType.PLAN_APPROVAL_RESOLVED,
+                sessionId = sessionId,
+                payload = mapOf(
+                    "planId" to planId,
+                    "approved" to approved.toString()
+                ),
+                timestamp = Instant.now().toString()
+            ))
+        } finally {
+            request.result.complete(PlanApprovalResult(approved = approved))
+        }
         return true
     }
 
-    fun hasPending(): Boolean = pendingDeferred?.isActive == true
+    fun hasPending(): Boolean = synchronized(lock) { pending?.result?.isActive == true }
 
-    fun cancelAll() {
-        cancelCurrent("cancelled")
-    }
-
-    private fun cancelCurrent(reason: String) {
-        pendingId = null
-        pendingDeferred?.let { it.complete(PlanApprovalResult(approved = false, superseded = true)) }
-        pendingDeferred = null
+    fun cancelAll() = synchronized(lock) {
+        pending?.result?.complete(PlanApprovalResult(approved = false, superseded = true))
+        pending = null
     }
 }

@@ -74,7 +74,7 @@ internal fun ProviderCredentialsContent(
  * v6 推理参数编辑器：NONE/LOW/MEDIUM/HIGH/MAX 每档一个 JSON 输入框。
  *
  * - LOW~MAX：该级别的请求体 JSON 片段（如 {"reasoning":{"effort":"high"}}）
- * - NONE：一般留空（不发即关）；奇葩端点填显式关闭参数；常开型端点（Agnes）填常开开关
+ * - NONE：留空时使用协议默认行为，也可填写供应商特有的关闭片段
  *
  * 档位顺序唯一真理源 = ReasoningLevels.ORDER（contract 层）
  */

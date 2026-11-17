@@ -19,13 +19,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
 import mederi.app.shared.generated.resources.Res
-import mederi.app.shared.generated.resources.sidebar_automation
 import mederi.app.shared.generated.resources.sidebar_cancel
 import mederi.app.shared.generated.resources.sidebar_close
 import mederi.app.shared.generated.resources.sidebar_confirm_delete
@@ -47,21 +46,18 @@ import mederi.app.shared.generated.resources.sidebar_delete_project_message
 import mederi.app.shared.generated.resources.sidebar_delete_project_title
 import mederi.app.shared.generated.resources.sidebar_dismiss
 import mederi.app.shared.generated.resources.sidebar_new_conversation
-import mederi.app.shared.generated.resources.sidebar_new_task
 import mederi.app.shared.generated.resources.sidebar_open_project_directory
-import mederi.app.shared.generated.resources.sidebar_plugin_market
 import mederi.app.shared.generated.resources.sidebar_project_menu
 import mederi.app.shared.generated.resources.project_settings_title
 import mederi.app.shared.generated.resources.language_system
 import mederi.app.shared.generated.resources.sidebar_language
-import mederi.app.shared.generated.resources.sidebar_pin
 import mederi.app.shared.generated.resources.sidebar_projects
+import mederi.app.shared.generated.resources.sidebar_recent_conversations
 import mederi.app.shared.generated.resources.sidebar_rename_conversation
 import mederi.app.shared.generated.resources.sidebar_rename_project
 import mederi.app.shared.generated.resources.sidebar_settings
 import mederi.app.shared.generated.resources.sidebar_toggle_theme
 import mederi.app.shared.generated.resources.sidebar_pin_conversation
-import mederi.app.shared.generated.resources.sidebar_unpin
 import mederi.app.shared.generated.resources.sidebar_unpin_conversation
 import mederi.app.shared.generated.resources.sidebar_version
 import org.jetbrains.compose.resources.stringResource
@@ -70,20 +66,21 @@ import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.ConversationStatus
 import xyz.mederi.core.contract.models.Project
-import xyz.mederi.ui.DebugLog
-import xyz.mederi.ui.SidebarViewModel
 import xyz.mederi.ui.appstate.LocalAppState
 import xyz.mederi.theme.AppLanguage
 import xyz.mederi.ui.components.atoms.BadgeStatus
 import xyz.mederi.ui.components.atoms.ConfirmDialog
+import xyz.mederi.ui.components.atoms.ExpandChevron
 import xyz.mederi.ui.components.atoms.InputDialog
 import xyz.mederi.ui.components.atoms.MederiIconSquareButton
 import xyz.mederi.ui.components.atoms.MederiMinimalIconButton
 import xyz.mederi.ui.components.atoms.MederiStatusDot
+import xyz.mederi.ui.components.atoms.WorkspaceActionButton
 import xyz.mederi.theme.AppThemeMode
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiColors
 import xyz.mederi.theme.MederiRadius
+import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.theme.MederiTypeScale
 import xyz.mederi.util.TimeFormatter
 
@@ -122,8 +119,6 @@ fun Sidebar(
     viewModel: SidebarViewModel,
     isCompact: Boolean = false,
     isDrawer: Boolean = false,
-    isPinned: Boolean = false,
-    onTogglePin: (() -> Unit)? = null,
     onActiveInteractionChange: (Boolean) -> Unit = {},
     onRequestClose: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -134,8 +129,7 @@ fun Sidebar(
     val colors = LocalMederiColors.current
     val leftSidebarWidth by appState.leftSidebarWidth.collectAsState()
     val projects by viewModel.filteredProjects.collectAsState()
-    val selectedProjectId by appState.selectedProjectId.collectAsState()
-    val selectedConversationId by appState.selectedConversationId.collectAsState()
+    val recentConversations by viewModel.recentConversations.collectAsState()
     val theme by viewModel.theme.collectAsState()
 
     val interactionState = remember { SidebarInteractionState() }
@@ -162,414 +156,353 @@ fun Sidebar(
                 .background(colors.surfaceSidebar)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
-        // Top Toolbar (40dp 高度对齐全屏顶栏线条)
-        if (isCompact) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(40.dp)
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier.size(24.dp).clip(RoundedCornerShape(6.dp)).background(colors.accentPrimary.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(FeatherIcons.Cpu, null, tint = colors.accentPrimary, modifier = Modifier.size(13.dp))
-                    }
-                    Text("Mederi", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                }
-                MederiMinimalIconButton(
-                    icon = FeatherIcons.X,
-                    onClick = onRequestClose,
-                    contentDescription = stringResource(Res.string.sidebar_close),
-                    colors = colors
-                )
-            }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(40.dp)
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                MederiMinimalIconButton(
-                    icon = FeatherIcons.Search,
-                    onClick = {},
-                    enabled = false,
-                    colors = colors
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    if (onTogglePin != null) {
-                        MederiMinimalIconButton(
-                            icon = FeatherIcons.Sidebar,
-                            onClick = onTogglePin,
-                            contentDescription = stringResource(if (isPinned) Res.string.sidebar_unpin else Res.string.sidebar_pin),
-                            active = isPinned,
-                            colors = colors
-                        )
-                    }
-                    if (isDrawer) {
-                        MederiMinimalIconButton(
-                            icon = FeatherIcons.ChevronLeft,
-                            onClick = onRequestClose,
-                            contentDescription = stringResource(Res.string.sidebar_close),
-                            colors = colors
-                        )
-                    }
-                }
-            }
-        }
-
-        // 操作失败提示（rename/delete 等）：侧边栏唯一的错误出口，可关闭（不再静默失败）
-        val errorMessage = viewModel.uiState.error
-        if (errorMessage != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(MederiRadius.Control))
-                    .background(colors.accentDanger.copy(alpha = 0.12f))
-                    .padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = errorMessage,
-                    color = colors.accentDanger,
-                    fontSize = 11.5.sp,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                MederiMinimalIconButton(
-                    icon = FeatherIcons.X,
-                    contentDescription = stringResource(Res.string.sidebar_dismiss),
-                    onClick = { viewModel.clearError() },
-                    colors = colors
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-        }
-
-        // 顶层三大固定菜单 (新建任务、插件市场、自动化 - 对齐图 2)
-        Column(
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            SidebarMenuItem(
-                icon = FeatherIcons.MessageSquare,
-                title = stringResource(Res.string.sidebar_new_task),
-                isSelected = false,
-                colors = colors,
-                onClick = {
-                    viewModel.newSession()
-                    navigate()
-                }
-            )
-            SidebarMenuItem(
-                icon = FeatherIcons.Grid,
-                title = stringResource(Res.string.sidebar_plugin_market),
-                isSelected = false,
-                colors = colors,
-                enabled = false
-            )
-            SidebarMenuItem(
-                icon = FeatherIcons.Clock,
-                title = stringResource(Res.string.sidebar_automation),
-                isSelected = false,
-                colors = colors,
-                enabled = false
-            )
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // 项目分组 Header（原型 .sidebar-section-header：mt 20 / padding 0-6-4-6 / 11sp 500 uppercase + 0.5sp 字距）
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(Res.string.sidebar_projects).uppercase(),
-                color = colors.textSecondary,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 0.5.sp
-            )
-            // 20×20 plus 按钮（icon-btn-minimal 缩小实例）：透明底 hover surfaceHover
-            val plusInteraction = remember { MutableInteractionSource() }
-            val plusHovered by plusInteraction.collectIsHoveredAsState()
-            val plusBg by animateColorAsState(
-                targetValue = if (plusHovered) colors.surfaceHover else Color.Transparent,
-                animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
-                label = "sectionHeaderPlusBg",
-            )
-            Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(RoundedCornerShape(MederiRadius.Square))
-                    .background(plusBg)
-                    .hoverable(plusInteraction)
-                    .clickable(interactionSource = plusInteraction) { onOpenProjectPicker() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.Plus,
-                    contentDescription = stringResource(Res.string.sidebar_open_project_directory),
-                    tint = colors.textSecondary,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // 项目层级树与会话列表（已由 SidebarViewModel.filteredProjects 提供）
-        val scrollState = rememberScrollState()
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            projects.forEach { project ->
-                ProjectTreeRow(
-                    project = project,
-                    viewModel = viewModel,
-                    colors = colors,
-                    navigate = navigate,
-                    onOpenProjectSettings = onOpenProjectSettings,
-                    isCompact = isCompact,
-                )
-            }
-        }
-
-        HorizontalDivider(
-            color = colors.divider,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
-
-        // Sidebar Footer (两行布局：设置 + 主题切换，全称版本号)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 2.dp)
-        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 左「设置」组（原型 .settings-button：padding 4/6、gap 6、圆角 6、12.5sp、⚙16；hover surfaceHover）
-                val settingsInteraction = remember { MutableInteractionSource() }
-                val settingsHovered by settingsInteraction.collectIsHoveredAsState()
-                val settingsBg by animateColorAsState(
-                    targetValue = if (settingsHovered) colors.surfaceHover else Color.Transparent,
-                    animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
-                    label = "settingsButtonBg",
+                WorkspaceActionButton(
+                    text = stringResource(Res.string.sidebar_new_conversation),
+                    icon = FeatherIcons.Plus,
+                    primary = true,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        viewModel.newSession()
+                        navigate()
+                    },
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(MederiRadius.Control))
-                        .background(settingsBg)
-                        .hoverable(settingsInteraction)
-                        .clickable(interactionSource = settingsInteraction) { onOpenSettings() }
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                ) {
-                    Icon(
-                        imageVector = FeatherIcons.Settings,
-                        contentDescription = stringResource(Res.string.sidebar_settings),
-                        tint = colors.textSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = stringResource(Res.string.sidebar_settings),
-                        color = colors.textSecondary,
-                        fontSize = 12.5.sp
+                if (isCompact && isDrawer) {
+                    MederiMinimalIconButton(
+                        icon = FeatherIcons.X,
+                        onClick = onRequestClose,
+                        contentDescription = stringResource(Res.string.sidebar_close),
+                        colors = colors,
                     )
                 }
+            }
+            Spacer(Modifier.height(MederiSpacing.MD))
 
-                // 右侧：多语言切换与主题切换（对应红框位置）
+            // 操作失败提示（rename/delete 等）：侧边栏唯一的错误出口，可关闭（不再静默失败）
+            val errorMessage = viewModel.uiState.error
+            if (errorMessage != null) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(MederiRadius.Control))
+                        .background(colors.accentDanger.copy(alpha = 0.12f))
+                        .padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 多语言切换按钮与下拉菜单
-                    val interaction = LocalSidebarInteractionState.current
-                    var showLanguageMenu by remember { mutableStateOf(false) }
-                    val currentLanguage by viewModel.language.collectAsState()
-
-                    DisposableEffect(showLanguageMenu) {
-                        if (showLanguageMenu) {
-                            interaction.onOpen()
-                            onDispose { interaction.onClose() }
-                        } else onDispose {}
-                    }
-
-                    Box {
-                        // 02 §1.6 icon-square-btn（28×28 / 圆角 6 / bg surfaceHover + 1dp 边框 / icon 14）
-                        MederiIconSquareButton(
-                            icon = FeatherIcons.Globe,
-                            contentDescription = stringResource(Res.string.sidebar_language),
-                            onClick = {
-                                DebugLog.info("SidebarHover", "Language menu opened: showLanguageMenu = true")
-                                showLanguageMenu = true
-                            },
-                            colors = colors
-                        )
-
-                        DropdownMenu(
-                            expanded = showLanguageMenu,
-                            onDismissRequest = {
-                                DebugLog.info("SidebarHover", "Language menu dismissed: showLanguageMenu = false")
-                                showLanguageMenu = false
-                            },
-                            modifier = Modifier.background(colors.surfaceCard)
-                        ) {
-                            AppLanguage.entries.forEach { lang ->
-                                val isSelected = currentLanguage == lang
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = if (lang == AppLanguage.SYSTEM) stringResource(Res.string.language_system) else lang.nativeName,
-                                                color = if (isSelected) colors.accentPrimary else colors.textPrimary,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                fontSize = 13.sp
-                                            )
-                                            if (isSelected) {
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Icon(
-                                                    imageVector = FeatherIcons.Check,
-                                                    contentDescription = null,
-                                                    tint = colors.accentPrimary,
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                            }
-                                        }
-                                    },
-                                    onClick = {
-                                        viewModel.setLanguage(lang)
-                                        showLanguageMenu = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    // Theme Switch Button（主题写操作唯一通道：AppState；02 §1.6 icon-square-btn）
-                    MederiIconSquareButton(
-                        icon = if (theme.isDark) FeatherIcons.Moon else FeatherIcons.Sun,
-                        contentDescription = stringResource(Res.string.sidebar_toggle_theme),
-                        onClick = { viewModel.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK) },
+                    Text(
+                        text = errorMessage,
+                        color = colors.accentDanger,
+                        fontSize = 11.5.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MederiMinimalIconButton(
+                        icon = FeatherIcons.X,
+                        contentDescription = stringResource(Res.string.sidebar_dismiss),
+                        onClick = { viewModel.clearError() },
                         colors = colors
                     )
                 }
+                Spacer(modifier = Modifier.height(6.dp))
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 第二行：版本号（原型 .footer-line-2：mono 11sp text-muted padding 0/4，格式 "Mederi vX"）
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(MederiSpacing.Micro),
             ) {
-                Text(
-                    text = stringResource(Res.string.sidebar_version, AppInfo.VERSION),
-                    color = colors.textMuted,
-                    fontSize = 11.sp,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
+                if (recentConversations.isNotEmpty()) {
+                    val expanded = viewModel.uiState.recentExpanded
+                    SidebarGroupHeader(
+                        title = stringResource(Res.string.sidebar_recent_conversations),
+                        icon = FeatherIcons.Clock,
+                        expanded = expanded,
+                        onToggle = viewModel::toggleRecentExpanded,
+                        colors = colors,
+                    )
+                    if (expanded) {
+                        SidebarConversationList(recentConversations, viewModel, colors, navigate)
+                    }
+                    Spacer(Modifier.height(MederiSpacing.SM))
+                }
+
+                // 项目分组 Header（原型 .sidebar-section-header：mt 20 / padding 0-6-4-6 / 11sp 500 uppercase + 0.5sp 字距）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(Res.string.sidebar_projects).uppercase(),
+                        color = colors.textSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 0.5.sp
+                    )
+                    // 20×20 plus 按钮（icon-btn-minimal 缩小实例）：透明底 hover surfaceHover
+                    val plusInteraction = remember { MutableInteractionSource() }
+                    val plusHovered by plusInteraction.collectIsHoveredAsState()
+                    val plusBg by animateColorAsState(
+                        targetValue = if (plusHovered) colors.surfaceHover else Color.Transparent,
+                        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
+                        label = "sectionHeaderPlusBg",
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clip(RoundedCornerShape(MederiRadius.Square))
+                            .background(plusBg)
+                            .hoverable(plusInteraction)
+                            .clickable(interactionSource = plusInteraction) { onOpenProjectPicker() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Plus,
+                            contentDescription = stringResource(Res.string.sidebar_open_project_directory),
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                projects.forEach { project ->
+                    key(project.id) {
+                        ProjectTreeRow(
+                            project = project,
+                            viewModel = viewModel,
+                            colors = colors,
+                            navigate = navigate,
+                            onOpenProjectSettings = onOpenProjectSettings,
+                            isCompact = isCompact,
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(
+                color = colors.divider,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+
+            // Sidebar Footer (两行布局：设置 + 主题切换，全称版本号)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // 左「设置」组（原型 .settings-button：padding 4/6、gap 6、圆角 6、12.5sp、⚙16；hover surfaceHover）
+                    val settingsInteraction = remember { MutableInteractionSource() }
+                    val settingsHovered by settingsInteraction.collectIsHoveredAsState()
+                    val settingsBg by animateColorAsState(
+                        targetValue = if (settingsHovered) colors.surfaceHover else Color.Transparent,
+                        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
+                        label = "settingsButtonBg",
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(MederiRadius.Control))
+                            .background(settingsBg)
+                            .hoverable(settingsInteraction)
+                            .clickable(interactionSource = settingsInteraction) { onOpenSettings() }
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = FeatherIcons.Settings,
+                            contentDescription = stringResource(Res.string.sidebar_settings),
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = stringResource(Res.string.sidebar_settings),
+                            color = colors.textSecondary,
+                            fontSize = 12.5.sp
+                        )
+                    }
+
+                    // 右侧：多语言切换与主题切换（对应红框位置）
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // 多语言切换按钮与下拉菜单
+                        val interaction = LocalSidebarInteractionState.current
+                        var showLanguageMenu by remember { mutableStateOf(false) }
+                        val currentLanguage by viewModel.language.collectAsState()
+
+                        DisposableEffect(showLanguageMenu) {
+                            if (showLanguageMenu) {
+                                interaction.onOpen()
+                                onDispose { interaction.onClose() }
+                            } else onDispose {}
+                        }
+
+                        Box {
+                            // 02 §1.6 icon-square-btn（28×28 / 圆角 6 / bg surfaceHover + 1dp 边框 / icon 14）
+                            MederiIconSquareButton(
+                                icon = FeatherIcons.Globe,
+                                contentDescription = stringResource(Res.string.sidebar_language),
+                                onClick = {
+                                    DebugLog.info("SidebarHover", "Language menu opened: showLanguageMenu = true")
+                                    showLanguageMenu = true
+                                },
+                                colors = colors
+                            )
+
+                            DropdownMenu(
+                                expanded = showLanguageMenu,
+                                onDismissRequest = {
+                                    DebugLog.info("SidebarHover", "Language menu dismissed: showLanguageMenu = false")
+                                    showLanguageMenu = false
+                                },
+                                modifier = Modifier.background(colors.surfaceCard)
+                            ) {
+                                AppLanguage.entries.forEach { lang ->
+                                    val isSelected = currentLanguage == lang
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = if (lang == AppLanguage.SYSTEM) stringResource(Res.string.language_system) else lang.nativeName,
+                                                    color = if (isSelected) colors.accentPrimary else colors.textPrimary,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                    fontSize = 13.sp
+                                                )
+                                                if (isSelected) {
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Icon(
+                                                        imageVector = FeatherIcons.Check,
+                                                        contentDescription = null,
+                                                        tint = colors.accentPrimary,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.setLanguage(lang)
+                                            showLanguageMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Theme Switch Button（主题写操作唯一通道：AppState；02 §1.6 icon-square-btn）
+                        MederiIconSquareButton(
+                            icon = if (theme.isDark) FeatherIcons.Moon else FeatherIcons.Sun,
+                            contentDescription = stringResource(Res.string.sidebar_toggle_theme),
+                            onClick = { viewModel.setTheme(if (theme.isDark) AppThemeMode.LIGHT else AppThemeMode.DARK) },
+                            colors = colors
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // 第二行：版本号（原型 .footer-line-2：mono 11sp text-muted padding 0/4，格式 "Mederi vX"）
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(Res.string.sidebar_version, AppInfo.VERSION),
+                        color = colors.textMuted,
+                        fontSize = 11.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                }
             }
         }
     }
 }
-}
 
 @Composable
-private fun SidebarMenuItem(
-    icon: ImageVector,
+private fun SidebarGroupHeader(
     title: String,
-    isSelected: Boolean,
+    icon: ImageVector,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     colors: MederiColors,
-    enabled: Boolean = true,
-    onClick: () -> Unit = {}
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
-    // 02 §1.9：高 36 / padding 0-12 / gap 10 / icon 16 / 13.5sp；active 用 iris 族（accentBg/accentText/accentBorder），
-    // hover 用 surfaceHover + textPrimary；常态预留 1dp 透明 border 防 active 1px 抖动（03 §3.3#10）。
-    val interactionSource = remember { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    val bg by animateColorAsState(
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val background by animateColorAsState(
         targetValue = when {
-            !enabled -> Color.Transparent
-            isSelected -> colors.accentBg
             hovered -> colors.surfaceHover
+            expanded -> colors.surfaceCard.copy(alpha = 0.5f)
             else -> Color.Transparent
         },
         animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
-        label = "sidebarMenuItemBg",
-    )
-    val contentColor by animateColorAsState(
-        targetValue = when {
-            !enabled -> colors.textMuted
-            isSelected -> colors.accentText
-            hovered -> colors.textPrimary
-            else -> colors.textSecondary
-        },
-        animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
-        label = "sidebarMenuItemContent",
+        label = "sidebarGroupBackground",
     )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(36.dp)
+            .heightIn(min = WorkspaceStyle.ControlHeight)
             .clip(RoundedCornerShape(MederiRadius.Control))
-            .background(bg)
-            .border(
-                width = 1.dp,
-                color = if (isSelected && enabled) colors.accentBorder else Color.Transparent,
-                shape = RoundedCornerShape(MederiRadius.Control)
-            )
-            .then(if (enabled) Modifier.hoverable(interactionSource) else Modifier)
-            .clickable(interactionSource = interactionSource, enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp),
+            .background(background)
+            .hoverable(interaction)
+            .clickable(interactionSource = interaction, role = Role.Button, onClick = onToggle)
+            .padding(horizontal = MederiSpacing.SM, vertical = MederiSpacing.Tight),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = contentColor,
-            modifier = Modifier.size(16.dp)
-        )
-        Text(
-            text = title,
-            color = contentColor,
-            style = MederiTypeScale.Section.copy(
-                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
-            ),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
+        ) {
+            ExpandChevron(
+                expanded = expanded,
+                tint = if (expanded) colors.textSecondary else colors.textMuted,
+                size = MederiSpacing.Loose,
+            )
+            Icon(icon, null, tint = colors.accentPrimary, modifier = Modifier.size(MederiSpacing.Loose))
+            Text(title, style = MederiTypeScale.Title, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        actions()
+    }
+}
+
+@Composable
+private fun SidebarConversationList(
+    conversations: List<Conversation>,
+    viewModel: SidebarViewModel,
+    colors: MederiColors,
+    navigate: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(start = MederiSpacing.MD, top = MederiSpacing.XS, bottom = MederiSpacing.XS),
+        verticalArrangement = Arrangement.spacedBy(MederiSpacing.Micro),
+    ) {
+        conversations.forEach { conversation ->
+            key(conversation.id) {
+                ConversationTreeRow(conversation, viewModel, colors, navigate)
+            }
+        }
     }
 }
 
@@ -582,8 +515,6 @@ private fun ProjectTreeRow(
     onOpenProjectSettings: (String) -> Unit,
     isCompact: Boolean,
 ) {
-    val appState = LocalAppState.current
-    val selectedProjectId by appState.selectedProjectId.collectAsState()
     val isExpanded = project.id in viewModel.uiState.expandedProjectIds
     val interaction = LocalSidebarInteractionState.current
     var isMenuExpanded by remember { mutableStateOf(false) }
@@ -610,60 +541,13 @@ private fun ProjectTreeRow(
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // 项目主行（原型 .project-row：padding 6/8、13sp/500；hover 优先 surfaceHover，展开底色 surfaceCard α0.5 保留）
-        val rowInteraction = remember { MutableInteractionSource() }
-        val rowHovered by rowInteraction.collectIsHoveredAsState()
-        val rowBg by animateColorAsState(
-            targetValue = when {
-                rowHovered -> colors.surfaceHover
-                isExpanded -> colors.surfaceCard.copy(alpha = 0.5f)
-                else -> Color.Transparent
-            },
-            animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
-            label = "projectRowBg",
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(MederiRadius.Control))
-                .background(rowBg)
-                .hoverable(rowInteraction)
-                .clickable(interactionSource = rowInteraction) { viewModel.toggleProjectExpanded(project.id) }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        SidebarGroupHeader(
+            title = project.name,
+            icon = if (isExpanded) FeatherIcons.FolderMinus else FeatherIcons.Folder,
+            expanded = isExpanded,
+            onToggle = { viewModel.toggleProjectExpanded(project.id) },
+            colors = colors,
         ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // chevron 13dp：展开 rotate 90，展开时 textSecondary
-                Icon(
-                    imageVector = FeatherIcons.ChevronRight,
-                    contentDescription = null,
-                    tint = if (isExpanded) colors.textSecondary else colors.textMuted,
-                    modifier = Modifier
-                        .size(13.dp)
-                        .rotate(if (isExpanded) 90f else 0f)
-                )
-                // folder 14dp：accent 色（原型 folder accent）
-                Icon(
-                    imageVector = if (isExpanded) FeatherIcons.FolderMinus else FeatherIcons.Folder,
-                    contentDescription = null,
-                    tint = colors.accentPrimary,
-                    modifier = Modifier.size(14.dp)
-                )
-                Text(
-                    text = project.name,
-                    color = colors.textPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
             // 右侧操作图标组 (+ 和 三竖点)：20×20 / 透明底 hover surfaceHover / icon 13dp textMuted
             Row(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -768,23 +652,8 @@ private fun ProjectTreeRow(
             }
         }
 
-        // 会话子列表
         if (isExpanded && project.conversations.isNotEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                project.conversations.forEach { conversation ->
-                    ConversationTreeRow(
-                        conversation = conversation,
-                        viewModel = viewModel,
-                        colors = colors,
-                        navigate = navigate
-                    )
-                }
-            }
+            SidebarConversationList(project.conversations, viewModel, colors, navigate)
         }
     }
 
@@ -1025,7 +894,7 @@ fun SidebarResizeHandle(
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val bg by animateColorAsState(
-        targetValue = if (hovered) colors.borderStrong else Color.Transparent,
+        targetValue = if (hovered) colors.borderStrong else colors.surfaceSidebar,
         animationSpec = LocalWorkspaceMotion.current.feedbackSpec(),
         label = "resizeHandleBg",
     )

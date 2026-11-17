@@ -14,7 +14,7 @@
 | C04 | UserMessageFooter | 时间/回滚/复制；复制反馈自行delay；子代理合成用户消息不能显示回滚 | MessageActionBar，R06 |
 | C05 | ChatListContent 助手正文、图片；`atoms/MederiMarkdown.kt` | InkCompose承载选择、复制、代码、表格、公式、图表/竖排；内容主题与UI主题边界需明确 | MessageContent，R06 |
 | C06 | AssistantMessageFooter | 模型/审批/推理/时间/耗时常显；mono与两个复制文字入口密集 | MessageActionBar + Details，R06 |
-| C07 | `WorkTraceCard.kt` | 共享ProcessRow是好基础；默认展开，正文统一Markdown；推理/工具独立收起，推理头实时单行预览（2026-11-04） | Activity，R07 |
+| C07 | `WorkTraceCard.kt`、`WorkTraceDetails.kt` | 工作过程保留当前活动与阶段进展，连续工具和显式标记的过程旁白按组默认收起；组内操作的原顺序、输入和输出可展开查看 | Activity，R07 |
 | C08 | `ReasoningBlock.kt` | 共享ProcessRow；200dp独立限高；局部文字呼吸，无活动也可能创建transition | ActivityDetail，R04b/R07 |
 | C09 | `ToolCallsBlock.kt` | 动作聚合/输入参数/输出/报告/ASK结果；运行中可查看输入，不能退回不可展开占位 | ActivityDetail + CodeOutput，R07 |
 | C10 | ToolCallsBlock SubagentCallsBlock | 已有成功派发细rail/Check/两行固定说明，折叠外展示；Builder与View重复判成功谓词 | Notice，R07；保留已有异步说明 |
@@ -40,13 +40,13 @@
 |---|---|---|---|
 | W01 | `Workspace.kt`、`ChatLayout.kt` | Header40dp、对话最小360dp、内容最大820dp、Dock46dp；Header整块描边；Route/布局混合 | Chrome/Route，R02/R05 |
 | W02 | `MainScreen.kt`、`Sidebar.kt`、`SidebarReveal.kt` | 侧栏固定/浮层/边缘唤出已有状态机；部分手绘控件 | Chrome接缝，R05；不另造抽屉机制 |
-| W03 | `overview/FloatingOverviewWindow.kt`、`OverviewWindowState.kt` | 已改共享visible显隐/Grid选中/无胶囊；292dp固定宽、shadow8dp；无整窗限高滚动可能越界 | Chrome/Overlay，R05 |
+| W03 | `overview/FloatingOverviewWindow.kt`、`OverviewWindowState.kt` | 2026-11-14 起子 Agent 行并入概览成为手风琴行（行序定稿见 W09 登记与 `OverviewRowIndex`）；共享visible显隐/Grid选中/无胶囊；292dp固定宽；隐藏概览连同子 Agent 行一起隐藏 | Chrome/Overlay，R05 |
 | W04 | `overview/OverviewAccordionRow.kt` | 34dp行头、1dp divider、180ms高度动画、chevron直接切角度；缺统一展开语义 | Disclosure，R04/R05 |
 | W05 | `overview/OverviewRunningTaskRow.kt` | 后台command/timer；每2秒View触发轮询；spinner与文字均呼吸800ms | TaskGroup/ActivityQuery，R03b/R05 |
 | W06 | `overview/OverviewContextRow.kt` | 上下文、压缩、自绘阈值slider及局部动效 | Metric/Progress/Slider，R05 |
 | W07 | `overview/OverviewUsageRow.kt` | 用量依真实数据有无显示；摘要字号与其它行不同 | Metric，R05 |
 | W08 | `overview/OverviewPlanRow.kt` | 空则隐藏；批准/plan/spec入口/步骤/局部展开，可能卡中卡 | Decision + TaskStep，R05/R09 |
-| W09 | `overview/OverviewSubAgentRow.kt` | 已有整栏2400ms呼吸；头部点1600ms、单行Loader1200ms仍三种节律；概览Stop用红X直接停 | TaskGroup，R04b/R05；先统一动作与组级动效 |
+| W09 | `overview/OverviewSubAgentRow.kt` | 2026-11-14 由独立常驻面板并入概览为手风琴行（SUBAGENT=2，`WorkspaceAgentOverviewStack`/`SubagentPanelState` 删除）；运行开始自动展开/全部结束自动收起（改写 `expandedRowIndex`，随会话切换重置）；会话子代理设置入口在行头齿轮；整栏2400ms呼吸保持 | TaskGroup，R04b/R05 |
 | W10 | `overview/OverviewMcpRow.kt` | refresh/add/开关/菜单/弹窗；View内调Store/load；局部图标控件22dp | ManagementRow + 状态holder，R02/R05 |
 | W11 | `overview/OverviewSkillRow.kt` | 目录选择/刷新/安装与Store编排仍在Composable；与旧管理卡重复 | ManagementRow + 状态holder，R02/R05 |
 | W12 | `overview/OverviewTodoRow.kt` | 局部SemiBold；与计划步骤形态可复用，数据源不能合并 | TaskStep，R05/R13 |
@@ -196,3 +196,7 @@ WorkspaceFeedbackPresenter按Session/Draft分离Core投影、本地失败、关�
 ### 2026-11 文件管理器 / 文档面板 / 概览文档行定稿
 
 dock rail 定稿四入口：代码变更(DIFF=DiffPanelContent 直接挂接，TurnDiffSummaryCard 点文件行直达该文件 diff、全部文件数默认折叠为单栏摘要并带边框 Review 按钮) / 文件(FILES=文件管理器，TreePanelContent 全宽项目目录树，点文件 openDocument(Path) 在文档面板打开) / 终端 / 网页。文档面板(ARTIFACTS=阅读器)无 dock 按钮——由 openDocument / 概览"文档"行 / 对话流文档卡触达打开。FilesPanel 双 Tab 包装层(FilesPanelContent/FilesTab/FilesPanelTabs)删除，其两个 tab 测试随之下线。概览新增 OverviewDocumentsRow（索引4，紧随实施计划）：数据=WorkspaceViewModel.sessionDocuments（chatItems 的 DocumentCard 按 artifactId 去重投影），空整行不渲染，点击 openDocument(Content) 打开文档面板；测试 OverviewDocumentsRowTest。
+
+### 2026-11-14 概览一体化与行序定稿
+
+W03/W09：子 Agent 行并入概览浮动窗成为手风琴行（独立常驻面板 `WorkspaceAgentOverviewStack` / `SubagentPanelState` 与其测试删除，`Workspace` 直调 `FloatingOverviewWindow`）；隐藏概览连同子 Agent 行一起隐藏。行顺序定稿（索引常量 `OverviewRowIndex`）= 上下文占用 / 用量 / 子 Agent / 后台任务 / 计划 / 文档 / Todo / MCP / Skill / 原始消息；子 Agent 行运行开始自动展开、全部结束自动收起（改写 `expandedRowIndex`，随会话切换重置），会话子代理设置入口在行头齿轮、`SessionAgentSettingsDialog` 由概览窗挂载（`SubagentSettingsEntryTest` 改渲染可见概览）。W07：用量文案改「N 次 / 请求次数」（不再带「成功」），无请求数据显示 —，token ≥1000 切 k/m/b 两位小数（`formatTokenShort` 升级，上下文行同源复用；新增 `FormatTokenShortTest`）。桌面启动窗口默认最大化（`main.kt` `WindowPlacement.Maximized`，zoom 铺满屏幕非全屏）。

@@ -44,7 +44,8 @@ interface ProviderManager {
         name: String?,
         baseUrl: String?,
         reasoningParameter: ReasoningParameter?,
-        modelsDevKey: String? = null
+        modelsDevKey: String? = null,
+        type: ProviderType? = null
     ): Provider
 
     /**

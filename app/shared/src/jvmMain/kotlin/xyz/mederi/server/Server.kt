@@ -324,6 +324,9 @@ fun Route.v1Routes(aiCore: AiCore) {
     // 进程资源监控：返回本进程（即被遥控端宿主）真实 CPU/内存占用，遥控端透传展示
     get("/v1/system/stats") { call.respondResult(aiCore.getProcessStats()) }
 
+    // 跨会话累计用量：全库 model_requests 账本按 供应商+API Key+模型 分组（遥控端统计页数据源）
+    get("/v1/usage/statistics") { call.respondResult(aiCore.getUsageStatistics()) }
+
     // 自动压缩阈值配置
     get("/v1/config/compaction-threshold") {
         call.respondData(CompactionThresholdDto(aiCore.compactionThresholdPercent.value))

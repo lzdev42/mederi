@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -305,23 +306,14 @@ class WorkspaceViewModel(
 
     val workspacePresenter = WorkspacePresenter()
 
-    var repositoryInfo by mutableStateOf<RepositoryInfo?>(null)
-        private set
+    internal suspend fun readWorkspaceRepository(projectId: String): RepositoryInfo? =
+        appState.aiCore.getRepositoryInfo(projectId).getOrNull()
 
-    var projectEnvironments by mutableStateOf<List<ProjectEnvironment>>(emptyList())
-        private set
+    internal suspend fun readWorkspaceEnvironments(projectId: String): List<ProjectEnvironment> =
+        appState.aiCore.listProjectEnvironments(projectId).getOrDefault(emptyList())
 
-    fun refreshWorkspaceContext(projectId: String?) {
-        if (projectId == null) {
-            repositoryInfo = null
-            projectEnvironments = emptyList()
-            return
-        }
-        viewModelScope.launch {
-            repositoryInfo = appState.aiCore.getRepositoryInfo(projectId).getOrNull()
-            projectEnvironments = appState.aiCore.listProjectEnvironments(projectId).getOrDefault(emptyList())
-        }
-    }
+    internal suspend fun readConversationWorkspace(sessionId: String): WorkspaceInfo? =
+        appState.aiCore.getConversationWorkspace(sessionId).getOrNull()?.active
 
     fun retryWorkspaceOperation(operation: WorkspaceOperation) {
         val convId = conversationId ?: operation.sessionId ?: return
@@ -934,11 +926,6 @@ class WorkspaceViewModel(
         // 程序关闭时同步保存当前会话 compose state（AppState.flushAll 先跑全部 flush 回调再落偏好）
         appState.registerFlushCallback { flushComposeState() }
 
-        viewModelScope.launch {
-            appState.selectedProjectId.collect { pid ->
-                refreshWorkspaceContext(pid)
-            }
-        }
     }
 
 
@@ -2098,7 +2085,7 @@ class WorkspaceViewModel(
     val compactionThresholdPercent: StateFlow<Int> = appState.compactionThresholdPercent
     fun setCompactionThreshold(value: Int) = appState.setCompactionThreshold(value)
 
-    /** 主会话 LLM HTTP 请求累计次数（事件累加 + 历史回填，见 SnapshotReducer/MederiModelMapper） */
+    /** 会话收到非错误结束响应的模型步骤，含子代理。 */
     val requestCount: Int get() = snapshot?.requestCount ?: 0
 
     /** 最近一次 LLM 请求用量（null = 无数据，UI 卡片隐藏） */
@@ -2121,25 +2108,31 @@ class WorkspaceViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, appState.selectedModel.value?.contextWindow)
     val cost: CostSummary get() = snapshot?.cost ?: CostSummary()
 
-    /**
-     * 预估成本（参考价）。
-     *
-     * 用当前选中模型的 models.dev 目录参考价 × 会话累计 token 估算。
-     * 是量级参考不是真实账单——不知道用户 plan/折扣，也不区分会话中途换过模型。
-     * 任一单价缺失（目录没标价）时返回 0，卡片显示 $0.00。
-     *
-     * 响应式说明：本 getter 读取 selectedModel 与 snapshot（tokenUsage），在组合期间
-     * 只要消费方订阅了 [contextWindow]（同源 selectedModel 流）或读取了任一 Compose
-     * State（tokenUsage），getter 就会在每次重组时重新求值，不会停留旧值。
-     */
-    val referenceCostUsd: Double
-        get() {
-            val model = appState.selectedModel.value ?: return 0.0
-            val inputPrice = model.inputPricePerMillion ?: return 0.0
-            val outputPrice = model.outputPricePerMillion ?: return 0.0
-            val usage = tokenUsage
-            return usage.input / 1_000_000.0 * inputPrice + usage.output / 1_000_000.0 * outputPrice
+    val usageSelectedModel: StateFlow<ModelOption?> = appState.selectedModel
+
+    private val _usageStatistics = MutableStateFlow<UsageStatistics?>(null)
+
+    /** 跨会话累计用量统计（打开统计页时拉取一次；null = 未加载）。 */
+    val usageStatistics: StateFlow<UsageStatistics?> = _usageStatistics.asStateFlow()
+
+    /** 拉取全库账本聚合的累计用量；失败静默保持 null（UI 显示空态），不打扰用户。 */
+    fun loadUsageStatistics() {
+        viewModelScope.launch {
+            appState.aiCore.getUsageStatistics().onSuccess { _usageStatistics.value = it }
         }
+    }
+
+    fun usageForModel(modelId: String?): LastRequestUsage? = selectedModelUsage(modelId)?.usage
+
+    fun costForModel(modelId: String?): Double? = selectedModelUsage(modelId)?.estimatedCost
+
+    private fun selectedModelUsage(modelId: String?): xyz.mederi.core.contract.models.SelectedModelUsage? {
+        if (modelId == null) return null
+        val provider = usageSelectedModel.value?.takeIf { it.id == modelId }?.provider
+        val records = tokenUsage.latestByModel
+        return records.firstOrNull { it.modelId == modelId && it.providerId == provider }
+            ?: records.firstOrNull { it.modelId == modelId && it.providerId == null }
+    }
     val todos: List<TodoItem> get() = snapshot?.todos ?: emptyList()
     val childConversations: List<Conversation> get() = snapshot?.childConversations ?: emptyList()
     val conversation: Conversation? get() = snapshot?.conversation
@@ -2693,7 +2686,6 @@ class WorkspaceViewModel(
 
     fun selectProject(id: String?) {
         workspacePresenter.resetDraft()
-        refreshWorkspaceContext(id)
         appState.selectProject(id)
     }
 

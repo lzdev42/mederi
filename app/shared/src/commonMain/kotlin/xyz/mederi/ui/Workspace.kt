@@ -21,7 +21,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.CoroutineStart
@@ -32,6 +37,7 @@ import xyz.mederi.util.readPlainTextFromClip
 import xyz.mederi.util.rememberClipboardCopy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.emuci.markdown.renderer.MarkdownTheme
@@ -66,8 +72,11 @@ import mederi.app.shared.generated.resources.ws_generated_image_n
 import mederi.app.shared.generated.resources.ws_new_conversation
 import mederi.app.shared.generated.resources.overview_show
 import mederi.app.shared.generated.resources.overview_hide
+import mederi.app.shared.generated.resources.overview_active_tasks
+import mederi.app.shared.generated.resources.overview_window_title
 import mederi.app.shared.generated.resources.ws_open_menu
-import mederi.app.shared.generated.resources.ws_open_sidebar
+import mederi.app.shared.generated.resources.sidebar_pin
+import mederi.app.shared.generated.resources.sidebar_unpin
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.theme.LocalMederiColors
 import androidx.compose.runtime.CompositionLocalProvider
@@ -95,7 +104,11 @@ import xyz.mederi.ui.components.CreateBranchPanelContent
 import xyz.mederi.ui.components.StatusBar
 import xyz.mederi.ui.components.WorkspaceFloatingOverlay
 import xyz.mederi.ui.overview.OverviewWindowState
-import xyz.mederi.ui.overview.WorkspaceAgentOverviewStack
+import xyz.mederi.ui.overview.FloatingOverviewWindow
+import xyz.mederi.ui.overview.CompactOverviewPage
+import xyz.mederi.ui.overview.CompactOverviewDestination
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.zIndex
@@ -134,7 +147,7 @@ fun Workspace(
     viewModel: WorkspaceViewModel,
     isCompact: Boolean = false,
     isLeftSidebarOpen: Boolean = true,
-    onToggleLeftSidebar: () -> Unit = {},
+    onToggleLeftSidebar: (() -> Unit)? = null,
     onOpenProjectPicker: () -> Unit = {},
     imeOverlayActive: Boolean = false,
     projectMenuExpanded: Boolean,
@@ -158,11 +171,6 @@ fun Workspace(
     }
     LaunchedEffect(overviewState.visible, overviewLoaded) {
         if (overviewLoaded) overviewState.save(appState.preferencesStore)
-    }
-
-    DisposableEffect(viewModel, overviewLoaded, overviewState.visible) {
-        val release = if (overviewLoaded && overviewState.visible) viewModel.observeBackgroundTasks() else null
-        onDispose { release?.invoke() }
     }
 
     Column(
@@ -191,14 +199,50 @@ fun Workspace(
                         // 对话视图最小宽度 = 手机宽度：扩展面板再宽也不能把对话区压到手机宽度以下
                         .widthIn(min = if (isCompact) Dp.Unspecified else ChatLayout.conversationMinWidth)
                 ) {
+                val direction = LocalLayoutDirection.current
+                val compactOverview = with(LocalDensity.current) {
+                    // 用实际约束和消息列的居中布局算边界，浮窗隐藏时也能判断。
+                    val sidePadding = ChatLayout.messageSidePadding(isCompact).roundToPx()
+                    val messageArea = (constraints.maxWidth - sidePadding * 2).coerceAtLeast(0)
+                    val columnWidth = minOf(messageArea, ChatLayout.contentMaxWidth.roundToPx())
+                    val columnLeft = Alignment.CenterHorizontally.align(columnWidth, messageArea, direction)
+                    val endSpace = sidePadding + if (direction == LayoutDirection.Ltr) {
+                        messageArea - columnLeft - columnWidth
+                    } else columnLeft
+                    endSpace < ChatLayout.overviewWidth.roundToPx() + ChatLayout.overviewEndPadding.roundToPx()
+                }
+                var overviewDestination by remember(compactOverview, viewModel.conversationId) {
+                    mutableStateOf<CompactOverviewDestination?>(null)
+                }
+                val overviewOpen = overviewDestination != null
+                val focusManager = LocalFocusManager.current
+                val keyboard = LocalSoftwareKeyboardController.current
+                val subagentPanelOpen = viewModel.activeSubagentPanel != null
+
+                // 窄屏入口使用同一份任务状态，概览合上时仍能反映后台任务开始或结束。
+                val observeTasks = compactOverview || (overviewLoaded && overviewState.visible)
+                DisposableEffect(viewModel, observeTasks) {
+                    val release = if (observeTasks) viewModel.observeBackgroundTasks() else null
+                    onDispose { release?.invoke() }
+                }
+                LaunchedEffect(isRightPanelOpen, subagentPanelOpen) {
+                    if (isRightPanelOpen || subagentPanelOpen) overviewDestination = null
+                }
+
                 Column(
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize().layout { measurable, constraints ->
+                        val chat = measurable.measure(constraints)
+                        layout(chat.width, chat.height) {
+                            // 保留列表、草稿和编辑态，概览打开时对话不参与绘制或命中。
+                            if (!overviewOpen) chat.placeRelative(0, 0)
+                        }
+                    },
                 ) {
                     // 中央区 Header (40dp 高度对齐全屏顶栏线条)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(40.dp)
+                            .height(if (compactOverview) 48.dp else 40.dp)
                             .background(colors.surfaceWorkspace)
                             .border(width = 1.dp, color = colors.divider)
                             .padding(horizontal = if (isCompact) 8.dp else 12.dp),
@@ -208,8 +252,7 @@ fun Workspace(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 侧边栏开闭按钮：移动端显示 Menu 图标，桌面端在侧边栏未固定/未打开时显示 Sidebar 图标
-                            if (isCompact || !isLeftSidebarOpen) {
+                            if (onToggleLeftSidebar != null) {
                                 Box(
                                     modifier = Modifier
                                         .size(28.dp)
@@ -219,7 +262,13 @@ fun Workspace(
                                 ) {
                                     Icon(
                                         imageVector = if (isCompact) FeatherIcons.Menu else FeatherIcons.Sidebar,
-                                        contentDescription = stringResource(if (isCompact) Res.string.ws_open_menu else Res.string.ws_open_sidebar),
+                                        contentDescription = stringResource(
+                                            when {
+                                                isCompact -> Res.string.ws_open_menu
+                                                isLeftSidebarOpen -> Res.string.sidebar_unpin
+                                                else -> Res.string.sidebar_pin
+                                            }
+                                        ),
                                         tint = colors.textSecondary,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -231,6 +280,7 @@ fun Workspace(
                             val header by viewModel.headerTitle.collectAsState()
 
                             Row(
+                                modifier = if (compactOverview) Modifier.weight(1f) else Modifier,
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -261,7 +311,7 @@ fun Workspace(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Spacer(modifier = Modifier.weight(1f))
+                            if (!compactOverview) Spacer(modifier = Modifier.weight(1f))
 
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -319,22 +369,53 @@ fun Workspace(
                                     }
                                 }
 
-                                // 概览独立开关：选中状态直接对应窗口可见性，扩展面板仍由 Dock 控制。
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(if (overviewState.visible) colors.accentBg else Color.Transparent)
-                                        .semantics { selected = overviewState.visible }
-                                        .clickable { overviewState.visible = !overviewState.visible },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = FeatherIcons.Grid,
-                                        contentDescription = stringResource(if (overviewState.visible) Res.string.overview_hide else Res.string.overview_show),
-                                        tint = if (overviewState.visible) colors.accentText else colors.textSecondary,
-                                        modifier = Modifier.size(15.dp)
-                                    )
+                                if (compactOverview) {
+                                    val running = viewModel.hasRunningSubagents ||
+                                        viewModel.backgroundTasks.any { it.status == "running" }
+                                    val activeDescription = stringResource(Res.string.overview_active_tasks)
+                                    Row(
+                                        modifier = Modifier
+                                            .heightIn(min = 44.dp)
+                                            .clickable(role = Role.Button) {
+                                                focusManager.clearFocus(force = true)
+                                                keyboard?.hide()
+                                                overviewDestination = CompactOverviewDestination.Overview
+                                            }
+                                            .padding(horizontal = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            stringResource(Res.string.overview_window_title),
+                                            modifier = if (running) Modifier.semantics {
+                                                contentDescription = activeDescription
+                                            } else Modifier,
+                                            color = colors.accentText,
+                                            style = WorkspaceStyle.Title,
+                                            maxLines = 1,
+                                        )
+                                        if (running) {
+                                            Spacer(Modifier.size(6.dp).background(colors.accentPrimary, RoundedCornerShape(50)))
+                                        }
+                                    }
+                                } else {
+                                    // 宽屏开关直接使用已保存的浮窗偏好。
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (overviewState.visible) colors.accentBg else Color.Transparent)
+                                            .semantics { selected = overviewState.visible }
+                                            .clickable { overviewState.visible = !overviewState.visible },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = FeatherIcons.Grid,
+                                            contentDescription = stringResource(if (overviewState.visible) Res.string.overview_hide else Res.string.overview_show),
+                                            tint = if (overviewState.visible) colors.accentText else colors.textSecondary,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -366,7 +447,7 @@ fun Workspace(
                                         ChatListSkeleton(
                                             modifier = Modifier.fillMaxWidth(),
                                             contentMaxWidth = contentMaxWidth,
-                                            horizontalPadding = if (isCompact) 8.dp else 24.dp
+                                            horizontalPadding = ChatLayout.messageSidePadding(isCompact)
                                         )
                                     } else {
                                         Text(
@@ -396,7 +477,7 @@ fun Workspace(
                                             viewModel = viewModel,
                                             modifier = Modifier.fillMaxWidth(),
                                             onOpenProjectPicker = onOpenProjectPicker,
-                                            imeOverlayActive = wsOverlayActive,
+                                            imeOverlayActive = wsOverlayActive || overviewOpen,
                                             projectMenuExpanded = projectMenuExpanded,
                                             onProjectMenuExpandedChange = onProjectMenuExpandedChange
                                         )
@@ -439,7 +520,7 @@ fun Workspace(
                                             viewModel = viewModel,
                                             modifier = Modifier.fillMaxWidth(),
                                             onOpenProjectPicker = onOpenProjectPicker,
-                                            imeOverlayActive = wsOverlayActive,
+                                            imeOverlayActive = wsOverlayActive || overviewOpen,
                                             projectMenuExpanded = projectMenuExpanded,
                                             onProjectMenuExpandedChange = onProjectMenuExpandedChange
                                         )
@@ -450,15 +531,31 @@ fun Workspace(
                     }
                 }
 
-                // 浮动概览窗 overlay（固定内容区右上角，非模态）
-                WorkspaceAgentOverviewStack(
-                    viewModel = viewModel,
-                    rawVm = rawMessagesViewModel,
-                    state = overviewState,
-                    maxHeight = maxHeight,
-                    maxWidth = maxWidth,
-                    modifier = Modifier.align(Alignment.TopEnd),
-                )
+                if (compactOverview) {
+                    overviewDestination?.let { destination ->
+                        CompactOverviewPage(
+                            viewModel = viewModel,
+                            rawVm = rawMessagesViewModel,
+                            state = overviewState,
+                            destination = destination,
+                            onOpenStats = { overviewDestination = CompactOverviewDestination.UsageStats },
+                            onBack = {
+                                overviewDestination = if (destination == CompactOverviewDestination.UsageStats) {
+                                    CompactOverviewDestination.Overview
+                                } else null
+                            },
+                        )
+                    }
+                } else {
+                    FloatingOverviewWindow(
+                        viewModel = viewModel,
+                        rawVm = rawMessagesViewModel,
+                        state = overviewState,
+                        maxHeight = maxHeight,
+                        maxWidth = maxWidth,
+                        modifier = Modifier.align(Alignment.TopEnd),
+                    )
+                }
                 } // end Box（中央主工作区）
 
                 // 桌面端：独立功能面板与常驻 Dock 栏

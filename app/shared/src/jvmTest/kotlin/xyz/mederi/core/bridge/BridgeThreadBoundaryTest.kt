@@ -78,6 +78,7 @@ class BridgeThreadBoundaryTest {
                         emptyList<Message>()
                     }
                     "contextUsedTokens" -> 0
+                    "listModelRequests" -> emptyList<Any>()
                     "listSubagentsForSession" -> emptyList<Any>()
                     "events" -> events
                     else -> error("Unexpected SessionApi.${method.name}")

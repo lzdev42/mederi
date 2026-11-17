@@ -4,12 +4,16 @@ import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
+import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.message.ResponseMetaInfo
+import ai.koog.prompt.params.LLMParams
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -106,9 +110,72 @@ class ApplyPatchTransportTest {
     }
 
     @Test
+    fun `compatible responses sends explicit input types for mixed conversation history`() = runBlocking {
+        val history = listOf(
+            Message.System("Follow instructions", RequestMetaInfo.Empty),
+            Message.User(listOf(MessagePart.Text("Read the file"), MessagePart.Attachment(
+                AttachmentSource.Image(AttachmentContent.URL("https://example.com/screenshot.png"), "png")
+            )), RequestMetaInfo.Empty),
+            Message.Assistant(listOf(
+                MessagePart.Text("I will read it."),
+                MessagePart.Tool.Call("call-read", "read_file", """{"path":"notes.txt"}""")
+            ), ResponseMetaInfo.Empty),
+            Message.User(listOf(
+                MessagePart.Text("Before the result"),
+                MessagePart.Tool.Result("call-read", "read_file", "file contents"),
+                MessagePart.Text("After the result")
+            ), RequestMetaInfo.Empty)
+        )
+        responseBody = """{"status":"completed","output":[]}"""
+        responseLines = listOf("""data: {"type":"response.completed","response":{"status":"completed","output":[]}}""", "data: [DONE]")
+        val reasoning = buildJsonObject { put("effort", "low") }
+        val prompt = Prompt(history, "audit", OpenAIResponsesParams(
+            maxTokens = 256,
+            temperature = 0.4,
+            toolChoice = LLMParams.ToolChoice.Named("apply_patch"),
+            parallelToolCalls = false,
+            additionalProperties = mapOf("reasoning" to reasoning),
+        ))
+
+        client("https://compatible.example").use { client ->
+            for (stream in listOf(false, true)) {
+                if (stream) client.executeStreaming(prompt, model, listOf(tool)).toList()
+                else client.execute(prompt, model, listOf(tool))
+
+                val request = Json.parseToJsonElement(assertNotNull(capturedRequest)).jsonObject
+                val items = request.getValue("input").jsonArray.map { it.jsonObject }
+                assertEquals(stream, request.getValue("stream").jsonPrimitive.boolean)
+                assertEquals(256, request.getValue("max_output_tokens").jsonPrimitive.int)
+                assertEquals(0.4, request.getValue("temperature").jsonPrimitive.double)
+                assertEquals(false, request.getValue("parallel_tool_calls").jsonPrimitive.boolean)
+                assertEquals(reasoning, request.getValue("reasoning"))
+                assertEquals(buildJsonObject { put("type", "function"); put("name", "apply_patch") }, request["tool_choice"])
+                assertEquals(listOf("message", "message", "message", "function_call", "message", "function_call_output", "message"),
+                    items.map { it.getValue("type").jsonPrimitive.content })
+                assertEquals(listOf("developer", "user", "assistant", "user", "user"),
+                    items.mapNotNull { it["role"]?.jsonPrimitive?.content })
+                assertEquals("Follow instructions", items[0].getValue("content").jsonPrimitive.content)
+                assertEquals(buildJsonObject {
+                    put("type", "input_image")
+                    put("image_url", "https://example.com/screenshot.png")
+                    put("detail", "auto")
+                }, items[1].getValue("content").jsonArray[1])
+                assertEquals(listOf("input_text", "output_text", "input_text", "input_text"),
+                    listOf(1, 2, 4, 6).map { items[it].getValue("content").jsonArray.first().jsonObject.getValue("type").jsonPrimitive.content })
+                assertEquals(listOf("call-read", "call-read"),
+                    listOf(3, 5).map { items[it].getValue("call_id").jsonPrimitive.content })
+            }
+        }
+    }
+
+    @Test
     fun `history replays raw custom input and retains both custom and function results in order`() {
         val history = listOf(
-            Message.Assistant(listOf(MessagePart.Text("I will apply the patch."), MessagePart.Tool.Call("call-patch", "apply_patch", ApplyPatchProtocol.encodeArguments(patch))), ResponseMetaInfo.Empty),
+            Message.Assistant(listOf(
+                MessagePart.Text("I will apply the patch."),
+                MessagePart.Tool.Call("call-patch", "apply_patch", ApplyPatchProtocol.encodeArguments(patch)),
+                MessagePart.Tool.Call("call-read", "read_file", "{}")
+            ), ResponseMetaInfo.Empty),
             Message.User(listOf(MessagePart.Tool.Result("call-patch", "apply_patch", "Success."), MessagePart.Text("continue"),
                 MessagePart.Tool.Result("call-read", "read_file", "file contents")), RequestMetaInfo.Empty)
         )
@@ -117,14 +184,29 @@ class ApplyPatchTransportTest {
         val input = withText.drop(1)
         assertEquals("custom_tool_call", input[0].jsonObject.getValue("type").jsonPrimitive.content)
         assertEquals(patch, input[0].jsonObject.getValue("input").jsonPrimitive.content)
-        assertEquals("custom_tool_call_output", input[1].jsonObject.getValue("type").jsonPrimitive.content)
-        assertEquals("Success.", input[1].jsonObject.getValue("output").jsonPrimitive.content)
-        assertEquals("user", input[2].jsonObject.getValue("role").jsonPrimitive.content)
-        assertEquals("function_call_output", input[3].jsonObject.getValue("type").jsonPrimitive.content)
-        assertEquals("call-read", input[3].jsonObject.getValue("call_id").jsonPrimitive.content)
+        assertEquals("function_call", input[1].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("custom_tool_call_output", input[2].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("Success.", input[2].jsonObject.getValue("output").jsonPrimitive.content)
+        assertEquals("user", input[3].jsonObject.getValue("role").jsonPrimitive.content)
+        assertEquals("function_call_output", input[4].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("call-read", input[4].jsonObject.getValue("call_id").jsonPrimitive.content)
         val compatible = Json.parseToJsonElement(client("https://compatible.example").buildResponsesRequestJson(prompt(history), model, listOf(tool), false)).jsonObject.getValue("input").jsonArray.drop(1)
         assertEquals("function_call", compatible[0].jsonObject.getValue("type").jsonPrimitive.content)
         assertEquals(ApplyPatchProtocol.encodeArguments(patch), compatible[0].jsonObject.getValue("arguments").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `request rejects orphaned or mismatched tool items instead of sending malformed history`() {
+        val call = Message.Assistant(listOf(MessagePart.Tool.Call("read", "read_file", "{}")), ResponseMetaInfo.Empty)
+        val orphan = Message.User(MessagePart.Tool.Result("other", "read_file", "old"), RequestMetaInfo.Empty)
+        val wrongTool = Message.User(MessagePart.Tool.Result("read", "list_directory", "old"), RequestMetaInfo.Empty)
+        client("https://compatible.example").use { client ->
+            for (history in listOf(listOf(call), listOf(orphan), listOf(call, wrongTool))) {
+                assertFailsWith<IllegalArgumentException> {
+                    client.buildResponsesRequestJson(prompt(history), model, emptyList(), true)
+                }
+            }
+        }
     }
 
     @Test

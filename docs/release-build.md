@@ -8,7 +8,7 @@ Windows 使用 Git Bash。Desktop 构建使用 `JAVA_HOME` 指向 **JBR 25 SDK w
 ## GitHub Actions 测试打包
 
 任意分支 push 后，`Test Release Packaging` 在 macOS arm64、macOS x64、Linux x64、Linux arm64 和 Windows x64 上分别运行 JVM 测试。
-每组用目标架构的 JBR 跑测试，测试通过后调用 `build_release.sh --skip-sign` 打包。Linux 直接运行 Gradle 测试，并强制验证真实的 bubblewrap 沙盒。
+每组用目标架构的 JBR 跑测试，测试通过后调用 `build_release.sh` 打包。Linux 直接运行 Gradle 测试，并强制验证真实的 bubblewrap 沙盒。
 也可在 Actions 手动触发。每组各上传三个 Artifact，每个只含一个发行包，保留 7 天。
 
 macOS ARM64 运行 `./gradlew allTests test --continue --no-configuration-cache`，覆盖 Android 宿主、WasmJS 浏览器、iOS 模拟器和 Android 应用单元测试，随后运行打包脚本模拟测试。
@@ -23,10 +23,10 @@ Android 应用和 InkCompose 设备测试最低需要 Android 14（API 34），�
 - `Mederi-server-with-wasmjs-<platform>-<arch>`：Server 完整版，带 JVM 和 WasmJS 页面
 - `Mederi-server-api-without-wasmjs-<platform>-<arch>`：Server API 版，无 JVM 和 WasmJS 页面
 
-macOS 的 `.app` 先封装成 tar.gz，保留可执行权限和符号链接。
+macOS 上传经过校验的 DMG，卷名为 `Mederi`，内含 `Mederi.app` 和 `Applications` 快捷入口。
 
 两组 macOS 构建都使用 ARM64 runner。x64 组用 Rosetta 运行
-`arch -x86_64 /bin/bash ./build_release.sh --skip-sign`，并使用 x64 版 JBR 25 SDK with JCEF。
+`arch -x86_64 /bin/bash ./build_release.sh`，并使用 x64 版 JBR 25 SDK with JCEF。
 Linux ARM64 组使用 `ubuntu-26.04-arm` runner 与 aarch64 版 JBR 25 SDK with JCEF，原生生成 `linux-arm64` 发行包。
 workflow 会从空目录安装 MCP 运行时并执行实际命令探测，也会校验 Desktop 启动器及 Desktop、Server 完整版内置 JVM 的架构，再上传产物。
 JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自动提供的 token，无需手工配置。
@@ -40,12 +40,12 @@ JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自�
 
 | 产物 | macOS | Linux | Windows |
 |---|---|---|---|
-| Desktop（带 JVM、Web UI） | `.app` | `Mederi-desktop-linux-<arch>.tar.gz` | `Mederi-desktop-windows-<arch>.zip` |
+| Desktop（带 JVM、Web UI） | `Mederi.app`、`Mederi-desktop-macos-<arch>.dmg` | `Mederi-desktop-linux-<arch>.tar.gz` | `Mederi-desktop-windows-<arch>.zip` |
 | Server 完整版（带 JVM、Web UI） | `Mederi-server-bundled-macos-<arch>.tar.gz` | `Mederi-server-bundled-linux-<arch>.tar.gz` | `Mederi-server-bundled-windows-<arch>.zip` |
 | Server API 版（无 JVM、无 Web UI） | `Mederi-server-api-macos-<arch>.tar.gz` | `Mederi-server-api-linux-<arch>.tar.gz` | `Mederi-server-api-windows-<arch>.zip` |
 
-`<arch>` 为 `x64` 或 `arm64`；JBR 与宿主必须匹配。`--name` 修改压缩包文件名前缀，
-不修改 `.app` 的 bundle 名、应用标识或可执行文件名。脚本不生成 MSI、DEB、DMG 安装包。
+`<arch>` 为 `x64` 或 `arm64`，JBR 与宿主必须匹配。`--name` 修改 DMG 和压缩包的文件名前缀。
+macOS 应用和镜像卷显示为 `Mederi`，bundle identifier 为 `xyz.mederi`。脚本在 Linux 和 Windows 上生成绿色版。
 绿色版表示解压即用，不表示用户数据存进程序目录：默认数据仍在 `~/.mederi`。
 
 打包脚本每次打包时自动拉取并解压最新版标准 Obscura（Stealth 浏览器可执行文件 `obscura` 及配套 worker）：
@@ -60,28 +60,28 @@ JBR 由 `actions/setup-java` 下载，查询版本时使用 GitHub Actions 自�
 Desktop：macOS 打开 `.app`；Linux 执行解压目录的 `bin/` 下启动器；Windows 打开目录内 `.exe`。
 
 桌面端每次启动时从 PATH 和常见系统目录检查 Node.js（含 npm 和 npx）、Python 3 和 Git。
-三项均可用后才加载工作台。这是本地 MCP、Git 和 Python 工作任务的基础环境；桌面应用本身使用发布包内的 JBR。有缺项时自动尝试安装，可以最小化窗口，让安装继续运行。安装引导也会安装 PyPI MCP 使用的 `uv` 和 `uvx`，这两项不参加启动检查。下面的终端命令适用于需要手动安装的情况。
+三项均可用后才加载工作台。这是本地 MCP、Git 和 Python 工作任务的基础环境；桌面应用本身使用发布包内的 JBR。有缺项时先确认安装，应用随后在引导页的终端执行安装。按页面提示输入密码或确认 Windows 授权。可以最小化窗口，让安装继续运行。安装引导也会安装 PyPI MCP 使用的 `uv` 和 `uvx`，这两项不参加启动检查。下面的终端命令适用于需要手动安装的情况。
 
-- macOS：已有 Homebrew 时由应用直接安装。需要安装 Homebrew 时，在终端运行 [Homebrew 官方安装命令](https://brew.sh/)（已装 Homebrew 可跳过）。按提示输入管理员密码，再按 Homebrew 的 Next steps 设置 PATH。然后运行 `brew install node python git uv`，也可以只指定需要的包。
+- macOS：引导页会按需安装 Homebrew。独立安装时，在终端运行 [Homebrew 官方安装命令](https://brew.sh/)（已装 Homebrew 可跳过）。按提示输入管理员密码，再按 Homebrew 的 Next steps 设置 PATH。然后运行 `brew install node python git uv`，也可以只指定需要的包。
 
   ```sh
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   ```
 
-- Linux：在引导页复制命令，或用下面的命令下载安装脚本。脚本优先用发行版仓库；没有 Node.js 或 Python 的包时使用官方发布的二进制或源码。若一键安装遇到 sudo 密码提示，改在终端执行。
+- Linux：也可用下面的命令独立安装。脚本优先用发行版仓库；没有 Node.js 或 Python 的包时下载固定版本的官方发布文件。官方线路连接失败、下载过慢或校验失败时，自动尝试华为云镜像。两条线路都使用脚本内的官方 SHA-256 校验值。
 
   ```sh
   curl -fsSL 'https://cdn.jsdelivr.net/gh/lzdev42/mederi@main/scripts/runtime/install.sh' -o install.sh && sudo /bin/bash install.sh
   ```
 
-- Windows：在引导页复制 PowerShell 命令，或在 PowerShell 运行下面两行。脚本使用 Microsoft App Installer 提供的 [WinGet](https://learn.microsoft.com/windows/package-manager/winget/install)，需要时弹出 UAC，并验证机器 PATH。
+- Windows：也可在 PowerShell 运行下面两行独立安装。脚本使用 Microsoft App Installer 提供的 [WinGet](https://learn.microsoft.com/windows/package-manager/winget/install)，需要时弹出 UAC，并验证机器 PATH。
 
   ```powershell
   curl.exe -fsSL 'https://cdn.jsdelivr.net/gh/lzdev42/mederi@main/scripts/runtime/install.ps1' -o install.ps1
   if ($LASTEXITCODE -eq 0) { powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 }
   ```
 
-Linux 和 Windows 的脚本只保存在仓库中。应用内一键安装和引导页的复制命令都从 jsDelivr 取构建所对应的 Git 提交。发布前须先推送该提交。两个脚本都接受 `node`、`python`、`git`、`uv`，省略时安装全部。
+Linux 和 Windows 的脚本只保存在仓库中。应用内安装从 jsDelivr 取构建所对应的 Git 提交。发布前须先推送该提交。两个脚本都接受 `node`、`python`、`git`、`uv`，省略时安装全部。
 
 两种 Server：Unix 执行根目录 `./run.sh`；Windows 执行 `run.bat`。
 完整版启动器使用 `runtime/` 下的 Java 25，API 版使用系统 `JAVA_HOME`/`PATH` 的 Java **25 或更高版本**。
@@ -92,7 +92,7 @@ API 版保留全部后端依赖，只移除 JVM 与 `static/` 页面资源，不
 显式设置 `MEDERI_WEBAPP_DIR` 可额外托管外部页面（见 `server/Application.kt`）。
 
 Linux/Windows 的 Desktop 复制 JBR SDK 以保留 JCEF native 辅助文件。完整 Server 只打包链接后的运行时，CI 核对包内没有 JCEF 模块或 CEF 文件。
-macOS Desktop 保留原有 `.app` runtime/CEF 补全和 ad-hoc 签名流程，`--skip-sign` 跳过签名。
+macOS Desktop 补全 CEF 后从内到外 ad-hoc 签名，分别校验内置 Java runtime 和外层 `.app`，然后生成并校验 DMG。`--skip-sign` 跳过脚本的签名和验签步骤。ad-hoc 签名适用于本地构建和 CI，无需证书。
 自包含 JVM 不包含操作系统库。Linux Desktop 的 JCEF 依赖宿主图形环境。
 
 ## Gradle 入口和验证

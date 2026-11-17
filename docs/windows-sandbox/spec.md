@@ -67,6 +67,7 @@ JVM 复用 `SandboxPaths` 生成策略，native 用实际文件句柄校验安�
 ### MXC 后端
 
 - 使用公开 Microsoft MXC SDK 的 Windows ProcessContainer，锁定经过原生验证的稳定 SDK/运行时版本，按其公开 schema 和 SDK 类型建策略。不要照抄旧分析里的私有运行器名称，禁止用 WSL2 或 Docker 代替 Windows 原生 payload。探测必须检查实际 Windows backend、隔离级别及本次策略能力，并用可信探针执行验证其行为。 [Microsoft MXC 平台支持](https://learn.microsoft.com/en-us/windows/apps/develop/mxc/platform-support) · [Microsoft MXC SDK 快速入门](https://learn.microsoft.com/en-us/windows/apps/develop/mxc/quickstart)
+- W00 先验证两个上游已知差异。Codex 的 MXC 适配器按硬链接路径分别授权，Mederi 的受保护或拒绝对象需达到 §3 的对象级验收条件。Codex 的 runner 在命令退出时回收剩余子进程，Mederi 的后台执行应由可信 helper 持有 Job 及策略，直到任务结束或被取消。任一能力无法证明时，该策略或执行模式保持拦截并报告原因。 [Codex MXC 限制与验证](https://github.com/openai/codex/blob/main/codex-rs/mxc-sandbox/README.md)
 - 共享策略映射到可读、可写、保护与拒绝对象，明确默认只读面、典型工具链和所需加载路径。验证 deny 与父目录可写映射的优先级，以及 deny-only 是否可表示。不能用把权限授予整盘、然后指望 SDK 自动正确叠加 deny 的猜测通过验收。默认关闭网络和宿主回环，联网请求只改变网络策略。禁用与运行任务无关的 UI、剪贴板、输入注入。SDK/容器终止、后代清理、输出和退出状态仍遵守 §2。 [Microsoft MXC 策略文档](https://learn.microsoft.com/en-us/windows/apps/develop/mxc/policy)
 - 每次启动前按策略能力选择。优先 MXC，其次已配置且支持该完整策略的兼容后端。明确未安装、功能不支持才可在选型阶段考虑兼容后端。探测异常、未知协议、策略校验失败、状态无法确认，或已经选定后端后发生启动失败，均报告错误，无自动重试换后端。未经本规格授权的执行永远不能降级为普通 shell。单次拒绝启动与普通 payload 返回非零退出码是两种结果。
 

@@ -7,10 +7,10 @@ import java.util.concurrent.ConcurrentHashMap
  */
 enum class BrowserKind(val label: String) {
     /**
-     * 内置无头浏览器（Obscura，外挂二进制）：经 MCP stdio 驱动的独立进程，永远 stealth。
+    * 内置无头浏览器（Obscura，外挂二进制）：经 CDP（Chrome DevTools Protocol）WebSocket 驱动的独立进程，永远 stealth。
      * 适合所有无头自动化浏览任务（页面不可见）。
      */
-    OBSCURA("built-in headless browser (Obscura) — external binary driven over MCP stdio, always stealth"),
+    OBSCURA("built-in headless browser (Obscura) — external binary driven over CDP (Chrome DevTools Protocol), always stealth"),
 
     /** 宿主提供的自定义浏览器实现。 */
     CUSTOM("custom browser")

@@ -87,6 +87,24 @@ class PlanStoreVoidTest {
     }
 
     @Test
+    fun `superseded draft cannot activate and original plan is preserved until approval`() {
+        val original = makePlan(status = PlanStatus.IN_PROGRESS)
+        planStore.save(original)
+        val first = assertNotNull(planStore.submitDraft(makePlan(createdAt = "2026-09-09T00:00:00Z")))
+        val latest = assertNotNull(planStore.submitDraft(makePlan(createdAt = "2026-09-10T00:00:00Z")))
+
+        assertEquals(listOf(first.plan.id), latest.voidedPlanIds)
+        assertEquals(original.id, latest.plan.replacesPlanId)
+        assertEquals(original.id, planStore.loadBySession(original.sessionId)?.id)
+        assertNull(planStore.approveDraft(first.plan))
+
+        val approval = assertNotNull(planStore.approveDraft(latest.plan))
+        assertEquals(listOf(original.id), approval.voidedPlanIds)
+        assertEquals(PlanStatus.APPROVED, planStore.loadBySession(original.sessionId)?.status)
+        assertEquals(latest.plan.id, planStore.loadBySession(original.sessionId)?.id)
+    }
+
+    @Test
     fun `voided plans no longer surfaced by loadBySession loadActive`() {
         val p1 = makePlan(createdAt = "2026-09-08T00:00:00Z")
         val p2 = makePlan(createdAt = "2026-09-09T00:00:00Z")

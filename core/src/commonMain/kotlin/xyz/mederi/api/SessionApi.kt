@@ -7,6 +7,7 @@ import xyz.mederi.domain.model.FileDiff
 import xyz.mederi.domain.model.MederiEvent
 import xyz.mederi.domain.model.Message
 import xyz.mederi.domain.model.MessagePart
+import xyz.mederi.domain.model.ModelRequestRecord
 import xyz.mederi.domain.model.Session
 import xyz.mederi.provider.domain.model.ReasoningLevel
 import xyz.mederi.skills.domain.SkillInfo
@@ -75,6 +76,10 @@ interface SessionApi {
     )
     suspend fun compressHistory(sessionId: String)
     suspend fun listMessages(sessionId: String): List<Message>
+    /** 主会话与其子代理已发起的模型请求，按发起顺序。 */
+    suspend fun listModelRequests(sessionId: String): List<ModelRequestRecord> = emptyList()
+    /** 全库跨会话的模型请求账本（跨会话累计统计数据源），按全库 sequence 升序。 */
+    suspend fun listAllModelRequests(): List<ModelRequestRecord> = emptyList()
     suspend fun getMessage(sessionId: String, messageId: String): Message
 
     /** 当前上下文占用（token），口径与压缩判定同源（AI 视图窗口：压缩后走估算，否则用 API 报告的真实 inputTokens）。 */

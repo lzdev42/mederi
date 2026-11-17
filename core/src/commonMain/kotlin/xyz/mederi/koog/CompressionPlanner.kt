@@ -138,11 +138,32 @@ fun planCompression(
         }
     }
 
+    // Mark every boundary crossed by a tool call/result pair, including steering
+    // messages between the two. Use the same boundaries for recent and older batches.
+    val calls = mutableMapOf<Pair<String, String>, Int>()
+    val pairBoundaries = IntArray(nonSystem.size + 1)
+    nonSystem.forEachIndexed { index, message ->
+        message.parts.forEach { part ->
+            when (part) {
+                is MessagePart.Tool.Call -> part.id?.let { calls[it to part.tool] = index }
+                is MessagePart.Tool.Result -> part.id?.let { calls.remove(it to part.tool) }?.let { callIndex ->
+                    pairBoundaries[callIndex + 1]++
+                    pairBoundaries[index + 1]--
+                }
+                else -> Unit
+            }
+        }
+    }
+    for (index in 1..<pairBoundaries.size) pairBoundaries[index] += pairBoundaries[index - 1]
+    // In-turn compaction runs before the just-executed tools' results are appended.
+    calls.values.minOrNull()?.let { start = minOf(start, it) }
+
     // e. 工具配对守卫：recent 首条不能是孤立的 tool result，否则连同其前面的 tool call 一起留在 recent。
     //    两种切分模式共用（放在 start 计算之后）：按条数切分同样可能把 tool result 切在 recent 首条。
     //    注意：Koog 中 tool result 是 User 消息里的 part、tool call 是 Assistant 消息里的 part，
     //    并非独立的「消息类型」，因此这里检查消息的 parts 而非消息本身。
-    while (start > 0 && nonSystem[start].parts.any { it is MessagePart.Tool.Result }) {
+    while (start in 1..<nonSystem.size && (pairBoundaries[start] > 0 ||
+            nonSystem[start].parts.any { it is MessagePart.Tool.Result })) {
         start--
     }
 
@@ -153,21 +174,25 @@ fun planCompression(
     // g. 对 older 保持原顺序按 batchBudget 贪心切批；单条超过硬上限的从最旧侧丢弃。
     //    单条估计值落在 (batchBudget, hardCap] 的消息单独成一批（不丢弃）——它仍小于窗口，可单独发送。
     val batches = mutableListOf<List<Message>>()
-    var cur = mutableListOf<Message>()
+    val cur = mutableListOf<Message>()
     var curTokens = 0
     var dropped = 0
-    for (msg in older) {
-        val t = estimateTokens(listOf(msg))
+    var groupStart = 0
+    for (index in older.indices) {
+        if (pairBoundaries[index + 1] > 0) continue
+        val group = older.subList(groupStart, index + 1)
+        groupStart = index + 1
+        val t = estimateTokens(group)
         if (t > hardCap) {
-            dropped++
+            dropped += group.size
             continue
         }
         if (cur.isNotEmpty() && curTokens + t > batchBudget) {
-            batches.add(cur)
-            cur = mutableListOf()
+            batches.add(cur.toList())
+            cur.clear()
             curTokens = 0
         }
-        cur.add(msg)
+        cur.addAll(group)
         curTokens += t
     }
     if (cur.isNotEmpty()) batches.add(cur)

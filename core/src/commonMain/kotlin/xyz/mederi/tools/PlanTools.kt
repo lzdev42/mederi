@@ -281,12 +281,11 @@ class PlanTools(
         name = ToolName.WRITE_PLAN.value,
         description = "Software-development workflow only; not for browser, research, office, or document tasks, " +
             "even when temporary scripts are used. Resolve substantive decisions via ask_user first; " +
-            "leave openQuestions empty. Create or update a PENDING_APPROVAL plan. Without planId: " +
-            "creates a new plan (voids prior active plans in this session). With planId: updates the existing " +
+            "leave openQuestions empty. Submit a plan for the current session. Without planId: " +
+            "submits a new plan that replaces the prior executable version after approval. With planId: updates the existing " +
             "plan in place — only provide fields you want to change, blank/empty fields keep their existing " +
             "values. Only a legacy PENDING_APPROVAL draft can be edited in place. Structured drafts use a " +
-            "fresh ID for each revision. Replacing an approved active plan requires explicit user approval. " +
-            "Autonomous mode auto-approves initial plans. " +
+            "fresh ID for each revision. Approval mode waits for the user. Autonomous mode auto-approves each submitted version. " +
             "Arguments format: " + WRITE_PLAN_ARGS_STRUCTURE
     ) {
         override suspend fun execute(args: WritePlanArgs): String {
@@ -321,6 +320,7 @@ class PlanTools(
 
                 // 应用非空字段，blank/empty = 保持原值
                 val updated = existing.copy(
+                    agentMode = agentMode,
                     title = args.title.takeIf { it.isNotBlank() } ?: existing.title,
                     summary = args.summary.takeIf { it.isNotBlank() } ?: existing.summary,
                     projectContext = if (args.projectContext.isNotBlank() && args.projectContext.equals("GREENFIELD", ignoreCase = true))
@@ -345,61 +345,25 @@ class PlanTools(
                     appendix = args.appendix ?: existing.appendix
                 )
 
-                planStore.save(updated)
-
-                val planPath = planStore.getPlanAbsolutePath(updated.id)
+                val saved = planStore.updatePlan(existing.id) { if (it == existing) updated else null }
+                    ?: return "Error: the pending draft changed or was superseded. Load the current version before retrying."
+                val planPath = planStore.getPlanAbsolutePath(saved.id)
                     ?: return "Error: plan was updated but plan.md could not be read."
-                val subtasksJson = encodeSubtasksWire(updated.subtasks)
-
-                return if (updated.status == PlanStatus.PENDING_APPROVAL) {
-                    val result = planApprovalRequester.request(
-                        planId = updated.id,
-                        planPath = planPath,
-                        title = updated.title,
-                        summary = updated.summary,
-                        subtaskCount = updated.subtasks.size,
-                        subtasksJson = subtasksJson
-                    )
-                    if (result.superseded) "Plan superseded by a newer plan request."
-                    else if (result.approved) {
-                        planStore.update(updated.copy(status = PlanStatus.APPROVED))
-                        notebook.append("## ${Instant.now()} — Plan approved: ${updated.title}")
-                        emitPlanProgress(updated.copy(status = PlanStatus.APPROVED), "approved")
-                        "Plan updated and approved. Plan ID: ${updated.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
-                    } else {
-                        "Plan updated; remains PENDING_APPROVAL. Respond to the user's latest message."
-                    }
-                } else {
-                    "Plan updated. Plan ID: ${updated.id}."
+                if (agentMode == AgentMode.AUTONOMOUS) {
+                    val activated = planStore.approveDraft(saved)
+                        ?: return "Error: the pending draft changed or was superseded. Load the current version before retrying."
+                    emitVoidedPlans(eventBus, sessionId, activated.voidedPlanIds)
+                    notebook.append("## ${Instant.now()} — Plan updated (auto-approved): ${saved.title}")
+                    emitPlanProgress(activated.plan, "approved")
+                    return executionGuidance(activated.plan, "Plan updated and auto-approved.")
                 }
-            }
-
-            // ===== CREATE MODE（现有逻辑，原封不动）=====
-            // 三条硬规则之二：同一会话只有最新计划可执行——新 write_plan 作废全部非终态旧计划
-            // （含执行中），作废旧计划移入 plans-voided/ 留痕。已完成的 COMPLETED 计划保留不受影响。
-            val previous = planStore.loadBySession(sessionId)
-            val replacesPlanId = previous?.takeIf { it.status != PlanStatus.PENDING_APPROVAL || it.replacesPlanId != null }?.id
-            val needsUserApproval = agentMode == AgentMode.APPROVAL || replacesPlanId != null
-            val voidedIds = planStore.voidActivePlans(sessionId)
-            if (voidedIds.isNotEmpty()) {
-                voidedIds.forEach { oldPlanId ->
-                    eventBus.emit(MederiEvent(
-                        type = EventType.PLAN_PROGRESS,
-                        sessionId = sessionId,
-                        payload = mapOf(
-                            "planId" to oldPlanId,
-                            "action" to "voided"
-                        ),
-                        timestamp = Instant.now().toString()
-                    ))
-                }
-                DebugLog.data("PlanTools", "voided prior non-terminal plans", "count=${voidedIds.size}, ids=$voidedIds")
+                return requestApproval(saved, planPath, updated = true)
             }
 
             val now = Instant.now().atZone(ZoneOffset.UTC)
             val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").format(now)
 
-            val plan = Plan(
+            val draft = Plan(
                 id = "plan_${UUID.randomUUID().toString().take(8)}",
                 title = args.title,
                 summary = args.summary,
@@ -448,62 +412,54 @@ class PlanTools(
                         overallAcceptance = st.overallAcceptance
                     )
                 },
-                status = if (needsUserApproval) PlanStatus.PENDING_APPROVAL else PlanStatus.APPROVED,
                 createdAt = timestamp,
                 agentMode = agentMode,
-                replacesPlanId = replacesPlanId
             )
 
-            planStore.save(plan)
-            // save 已自愈创建 .mederi；仍拿不到路径说明项目目录异常——明确报错，
-            // 绝不带着空 planPath 发批准事件（UI 会渲染成无内容的空壳卡片）
-            val planPath = planStore.getPlanAbsolutePath(plan.id)
-                ?: return "Error: plan was created but could not be persisted under .mederi/plans/ " +
-                    "of the project directories. Check that the project's main directory is writable, " +
-                    "then retry write_plan."
-
-            val planContent = planStore.planMarkdown(plan)
+            val submitted = planStore.submitDraft(draft)
+                ?: return "Error: could not persist the plan or its declared verification files changed. Check the plan directory and verification files before retrying."
+            val plan = submitted.plan
+            emitVoidedPlans(eventBus, sessionId, submitted.voidedPlanIds)
             DebugLog.data(
                 "PlanTools",
                 "write_plan executed",
-                "planId=${plan.id}, title='${plan.title}', summary='${plan.summary}', contentLen=${planContent.length}"
+                "planId=${plan.id}, title='${plan.title}', status=${plan.status}"
             )
 
-            return if (needsUserApproval) {
-                val subtasksJson = encodeSubtasksWire(plan.subtasks)
-                val result = planApprovalRequester.request(
-                    planId = plan.id,
-                    planPath = planPath,
-                    title = plan.title,
-                    summary = plan.summary,
-                    subtaskCount = plan.subtasks.size,
-                    subtasksJson = subtasksJson
-                )
-                if (result.superseded) {
-                    "Plan superseded by a newer plan request."
-                } else if (result.approved) {
-                    val approvedPlan = planStore.updatePlan(plan.id) { current ->
-                        if (current != plan || current.subtasks.any { !planStore.acceptanceFilesMatch(it) }) null
-                        else current.copy(status = PlanStatus.APPROVED)
-                    }
-                    if (approvedPlan == null) return "Error: the draft or its verification files changed before approval. Submit a fresh draft."
-                    notebook.append("## ${Instant.now()} — Plan approved: ${plan.title}")
-                    emitPlanProgress(approvedPlan, "approved")
-                    "Plan approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
-                } else {
-                    // 计划无"拒绝"态（只有批准/作废/被无视）。此分支是用户未批准也未作废时的
-                    // 兜底：不预设意图、绝不反问"为什么"。让模型回去响应用户最新消息，计划保持
-                    // PENDING_APPROVAL，等用户明确批准或下个 write_plan 作废它。
-                    "Plan was not approved and not voided; it remains PENDING_APPROVAL. " +
-                        "Do not retry write_plan now. Respond to the user's latest message; " +
-                        "do not ask why they did not approve."
-                }
-            } else {
-                notebook.append("## ${Instant.now()} — Plan created (auto-approved): ${plan.title}")
-                emitPlanProgress(plan, "created")
-                "Plan created and auto-approved. Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
-            }
+            if (plan.status == PlanStatus.PENDING_APPROVAL) return requestApproval(plan, submitted.path)
+            notebook.append("## ${Instant.now()} — Plan created (auto-approved): ${plan.title}")
+            emitPlanProgress(plan, "created")
+            return executionGuidance(plan, "Plan created and auto-approved.")
         }
+
+        private suspend fun requestApproval(plan: Plan, path: String, updated: Boolean = false): String {
+            var activation: PlanStore.PlanLifecycleChange? = null
+            val result = planApprovalRequester.request(
+                planId = plan.id,
+                planPath = path,
+                title = plan.title,
+                summary = plan.summary,
+                subtaskCount = plan.subtasks.size,
+                subtasksJson = encodeSubtasksWire(plan.subtasks),
+            ) {
+                val approved = planStore.approveDraft(plan)
+                activation = approved
+                approved != null
+            }
+            if (result.superseded) return "Plan superseded by a newer plan request."
+            if (!result.approved) {
+                return "Plan remains PENDING_APPROVAL. Respond to the user's latest message. " +
+                    "Do not retry write_plan now or ask why the draft was not approved."
+            }
+            val approved = checkNotNull(activation)
+            emitVoidedPlans(eventBus, sessionId, approved.voidedPlanIds)
+            notebook.append("## ${Instant.now()} — Plan approved: ${plan.title}")
+            emitPlanProgress(approved.plan, "approved")
+            return executionGuidance(approved.plan, if (updated) "Plan updated and approved." else "Plan approved.")
+        }
+
+        private fun executionGuidance(plan: Plan, status: String) =
+            "$status Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
 
         /**
          * PLAN_PROGRESS 事件：驱动 UI planApprovals 投影表。
@@ -931,6 +887,19 @@ class PlanTools(
     }
 
     companion object {
+        internal suspend fun emitVoidedPlans(
+            eventBus: MutableSharedFlow<MederiEvent>, sessionId: String, planIds: List<String>
+        ) {
+            for (planId in planIds) {
+                eventBus.emit(MederiEvent(
+                    type = EventType.PLAN_PROGRESS,
+                    sessionId = sessionId,
+                    payload = mapOf("planId" to planId, "action" to "voided"),
+                    timestamp = Instant.now().toString()
+                ))
+            }
+        }
+
         /** write_plan 工具名（TurnExecutor 据此刻意写或找到挂起的计划工具调用）。 */
         val PLAN_TOOL = ToolName.WRITE_PLAN.value
 

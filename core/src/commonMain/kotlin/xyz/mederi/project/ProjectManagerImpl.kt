@@ -20,7 +20,8 @@ class ProjectManagerImpl(
     private val projectStore: ProjectStore,
     private val sessionStore: SessionStore,
     private val historyStore: HistoryStore,
-    private val diffStore: xyz.mederi.store.DiffStore? = null
+    private val diffStore: xyz.mederi.store.DiffStore? = null,
+    private val modelRequestStore: xyz.mederi.store.ModelRequestStore? = null,
 ) : ProjectManager {
 
     override suspend fun list(): List<Project> = projectStore.list()
@@ -56,6 +57,7 @@ class ProjectManagerImpl(
             sessionStore.delete(session.id)
             historyStore.delete(session.id)
             diffStore?.delete(session.id)
+            modelRequestStore?.delete(session.id)
         }
         projectStore.delete(id)
     }

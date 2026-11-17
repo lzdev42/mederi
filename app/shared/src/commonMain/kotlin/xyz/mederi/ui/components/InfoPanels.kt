@@ -10,6 +10,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import compose.icons.FeatherIcons
+import kotlin.math.roundToLong
 import compose.icons.feathericons.File
 import compose.icons.feathericons.GitCommit
 import mederi.app.shared.generated.resources.Res
@@ -218,25 +219,30 @@ internal fun ArtifactTabs(
 }
 
 /**
- * Token 短格式（自动切换单位）：
- * ≥1_000_000 显示一位小数 m（4_200_000 → 4.2m），
- * ≥1000 显示一位小数 k（42_800 → 42.8k），否则原值。
+ * Token 短格式（自动切换单位，两位小数）：
+ * ≥1e9 → b（1_500_000_000 → 1.50b）、≥1e6 → m（4_250_000 → 4.25m）、
+ * ≥1000 → k（42_850 → 42.85k），否则原值；进位边界四舍五入收敛（999_999 → 1.00m）。
  */
 internal fun formatTokenShort(tokens: Long): String {
-    return when {
-        tokens >= 1_000_000 -> {
-            val m = tokens / 1_000_000
-            val dec = (tokens % 1_000_000) / 100_000
-            "${m}.${dec}m"
-        }
-        tokens >= 1000 -> {
-            val k = tokens / 1000
-            val dec = (tokens % 1000) / 100
-            "${k}.${dec}k"
-        }
-        else -> tokens.toString()
+    if (tokens < 1_000) return tokens.toString()
+    // divisions = 已除以 1000 的次数（1→k、2→m、3→b、4→t）
+    var scaled = tokens.toDouble() / 1_000.0
+    var divisions = 1
+    while (divisions < TokenCountUnits.size && scaled >= 1_000.0) {
+        scaled /= 1_000.0
+        divisions++
     }
+    var hundredths = (scaled * 100).roundToLong()
+    // 四舍五入进位到 1000.00 时收敛到下一单位（如 999_999 → 1.00m）
+    if (hundredths >= 100_000 && divisions < TokenCountUnits.size) {
+        scaled /= 1_000.0
+        divisions++
+        hundredths = (scaled * 100).roundToLong()
+    }
+    return "${hundredths / 100}.${(hundredths % 100).toString().padStart(2, '0')}${TokenCountUnits[divisions - 1]}"
 }
+
+private val TokenCountUnits = arrayOf("k", "m", "b", "t")
 
 /** 参考费用展示（三位小数收敛），模块内可见（overview 行复用）。 */
 internal fun formatCost(cost: Double): String {

@@ -1,7 +1,9 @@
 package xyz.mederi.ui.components
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
@@ -23,7 +25,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import xyz.mederi.core.contract.TerminalSession
 import java.awt.Font
+import java.awt.event.HierarchyEvent
 import java.util.concurrent.ConcurrentHashMap
+import javax.swing.SwingUtilities
 
 /**
  * desktop actual：jediterm（IntelliJ 终端本体）渲染 [session]，经 SwingPanel 嵌入 Compose。
@@ -56,6 +60,32 @@ internal actual fun TerminalView(
         factory = { widget },
         modifier = modifier,
     )
+}
+
+/** Renders a private, one-shot installation session, retaining the transcript until the view leaves. */
+@Composable
+fun RuntimeInstallTerminal(
+    session: TerminalSession,
+    isDark: Boolean,
+    modifier: Modifier,
+) {
+    val widget = remember(session) {
+        createJediTermWidget(session, isDark).apply {
+            addHierarchyListener { event ->
+                if (event.changeFlags and HierarchyEvent.SHOWING_CHANGED.toLong() != 0L && isShowing) {
+                    SwingUtilities.invokeLater {
+                        if (isShowing) requestFocusInWindow()
+                    }
+                }
+            }
+        }
+    }
+    DisposableEffect(widget) {
+        onDispose { SwingUtilities.invokeLater { widget.close() } }
+    }
+    key(widget) {
+        SwingPanel(factory = { widget }, modifier = modifier)
+    }
 }
 
 /** 进程级 widget 缓存：session 实例（identity 语义）→ 活跃 widget。 */

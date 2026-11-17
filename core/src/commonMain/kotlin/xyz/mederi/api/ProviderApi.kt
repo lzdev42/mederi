@@ -76,7 +76,8 @@ data class UpdateProviderRequest(
     val name: String? = null,
     val baseUrl: String? = null,
     val reasoningParameter: ReasoningParameterRequest? = null,
-    val modelsDevKey: String? = null
+    val modelsDevKey: String? = null,
+    val type: ProviderTypeRequest? = null
 )
 
 /**

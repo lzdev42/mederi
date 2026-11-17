@@ -6,11 +6,14 @@ import com.pty4j.WinSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import xyz.mederi.core.contract.TerminalException
@@ -20,6 +23,7 @@ import java.io.File
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.uuid.Uuid
 
 /**
  * 终端会话注册表（会话唯一拥有者，desktop 与 server 共用）。
@@ -33,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap
 class PtyTerminalHub : TerminalManager {
 
     private val sessions = ConcurrentHashMap<String, PtyTerminalSession>()
+    private val privateSessions = ConcurrentHashMap<String, PtyTerminalSession>()
     private val hubScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun getOrCreate(key: String, cwd: String?, title: String): TerminalSession =
@@ -44,18 +49,31 @@ class PtyTerminalHub : TerminalManager {
 
     override fun all(): List<TerminalSession> = sessions.values.toList()
 
+    /** Starts a one-shot command in a local PTY that is absent from terminal lookup and remote routes. */
+    fun startCommand(command: List<String>, title: String, cwd: String? = null): TerminalSession {
+        require(command.isNotEmpty())
+        val key = Uuid.random().toString()
+        return privateSessions.computeIfAbsent(key) {
+            PtyTerminalSession.createCommand(key, command, cwd, title, hubScope) {
+                privateSessions.remove(key, it)
+            }
+        }
+    }
+
     /** 宿主退出时显式收尾（正常路径下进程退出本身即 SIGHUP 全部会话）。 */
     fun shutdown() {
         sessions.values.forEach { it.kill() }
+        privateSessions.values.forEach { it.kill() }
         sessions.clear()
+        privateSessions.clear()
     }
 }
 
 /**
  * 一个常驻 shell 会话。output 为 pty 原始字节流（含 ANSI 与回显），渲染方负责 VT 解释。
  *
- * 数据面：专属读线程把新输出推入 [recentBroadcast]（Fan-out DROP_OLDEST，消费慢不阻塞读）
- * 并 append 进 [scrollback]；订阅者先收 scrollback 快照再收广播流。
+ * 专属读线程更新 scrollback，并向当前订阅者广播。回放与注册订阅使用同一把锁，
+ * 因此订阅建立时不会丢掉或重复输出。读完尾部输出后关闭订阅。
  */
 class PtyTerminalSession private constructor(
     override val key: String,
@@ -63,30 +81,29 @@ class PtyTerminalSession private constructor(
     private val process: PtyProcess,
     private val stdin: OutputStream,
     private val scope: CoroutineScope,
+    private val oneShot: Boolean,
     private val onEnded: (PtyTerminalSession) -> Unit,
 ) : TerminalSession {
 
     private val scrollback = StringBuilder()
-    private val scrollbackLock = Any()
+    private val outputLock = Any()
+    private val subscribers = mutableSetOf<ProducerScope<String>>()
+    private var outputFinished = false
     private val _isRunning = MutableStateFlow(true)
     override val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
     private val _exitCode = MutableStateFlow<Int?>(null)
     override val exitCode: StateFlow<Int?> = _exitCode.asStateFlow()
 
-    /** 单订阅者场景（当前每个会话一个 webview 客户端）；多客户端时升级为 broadcast。 */
-    private val chunkListeners = mutableListOf<(String) -> Unit>()
-    private val listenersLock = Any()
-
-    override fun output(): Flow<String> = callbackFlow {
-        val snapshot = synchronized(scrollbackLock) { scrollback.toString() }
-        if (snapshot.isNotEmpty()) trySend(snapshot)
-        val listener: (String) -> Unit = { chunk -> trySend(chunk) }
-        synchronized(listenersLock) { chunkListeners += listener }
-        awaitClose {
-            synchronized(listenersLock) { chunkListeners -= listener }
+    override fun output(): Flow<String> = callbackFlow<String> {
+        synchronized(outputLock) {
+            if (scrollback.isNotEmpty()) trySend(scrollback.toString())
+            if (outputFinished) close() else subscribers += this
         }
-    }
+        awaitClose {
+            synchronized(outputLock) { subscribers -= this }
+        }
+    }.buffer(if (oneShot) Channel.UNLIMITED else Channel.BUFFERED)
 
     override suspend fun write(text: String) {
         if (!_isRunning.value) return
@@ -103,26 +120,23 @@ class PtyTerminalSession private constructor(
         if (_isRunning.value) runCatching { process.destroy() }
     }
 
-    private fun dispatchChunk(chunk: String) {
-        synchronized(listenersLock) { chunkListeners.toList() }.forEach { runCatching { it(chunk) } }
-    }
-
     private fun startReading() {
         scope.launch(Dispatchers.IO) {
-            val reader = process.inputStream.reader(StandardCharsets.UTF_8)
             val buffer = CharArray(8192)
             try {
-                while (true) {
-                    val n = reader.read(buffer)
-                    if (n < 0) break
-                    val chunk = String(buffer, 0, n)
-                    synchronized(scrollbackLock) {
-                        scrollback.append(chunk)
-                        if (scrollback.length > SCROLLBACK_MAX_CHARS) {
-                            scrollback.delete(0, scrollback.length - SCROLLBACK_MAX_CHARS)
+                process.inputStream.reader(StandardCharsets.UTF_8).use { reader ->
+                    while (true) {
+                        val n = reader.read(buffer)
+                        if (n < 0) break
+                        val chunk = String(buffer, 0, n)
+                        synchronized(outputLock) {
+                            scrollback.append(chunk)
+                            if (scrollback.length > SCROLLBACK_MAX_CHARS) {
+                                scrollback.delete(0, scrollback.length - SCROLLBACK_MAX_CHARS)
+                            }
+                            subscribers.toList().forEach { it.trySend(chunk) }
                         }
                     }
-                    dispatchChunk(chunk)
                 }
             } catch (_: Exception) {
                 // pty 关闭（kill / 进程退出）引发的流异常属正常路径
@@ -130,7 +144,14 @@ class PtyTerminalSession private constructor(
                 // 读到 EOF = pty master 已关（kill/进程退出）；顽固子进程给 5s 宽限
                 val exited = runCatching { process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
                 val code = if (exited) runCatching { process.exitValue() }.getOrNull() else null
+                runCatching { stdin.close() }
                 _exitCode.value = code
+                synchronized(outputLock) {
+                    outputFinished = true
+                    val closing = subscribers.toList()
+                    subscribers.clear()
+                    closing.forEach { it.close() }
+                }
                 _isRunning.value = false
                 onEnded(this@PtyTerminalSession)
             }
@@ -158,20 +179,40 @@ class PtyTerminalSession private constructor(
             title: String,
             scope: CoroutineScope,
             onEnded: (PtyTerminalSession) -> Unit,
+        ): PtyTerminalSession = start(key, detectShellCommand(), cwd, title, scope, oneShot = false, onEnded)
+
+        internal fun createCommand(
+            key: String,
+            command: List<String>,
+            cwd: String?,
+            title: String,
+            scope: CoroutineScope,
+            onEnded: (PtyTerminalSession) -> Unit,
+        ): PtyTerminalSession = start(key, command.toTypedArray(), cwd, title, scope, oneShot = true, onEnded)
+
+        private fun start(
+            key: String,
+            command: Array<String>,
+            cwd: String?,
+            title: String,
+            scope: CoroutineScope,
+            oneShot: Boolean,
+            onEnded: (PtyTerminalSession) -> Unit,
         ): PtyTerminalSession {
-            val command = detectShellCommand()
             val workingDir = cwd?.takeIf { File(it).isDirectory } ?: System.getProperty("user.home")
             val process = runCatching {
                 PtyProcessBuilder()
                     .setCommand(command)
                     .setDirectory(workingDir)
                     .setEnvironment(ptyEnvironment())
+                    .setRedirectErrorStream(oneShot)
+                    .setUnixOpenTtyToPreserveOutputAfterTermination(oneShot)
                     .setInitialColumns(80)
                     .setInitialRows(24)
                     .start()
             }.getOrElse { throw TerminalException("终端启动失败: ${it.message}", it) }
 
-            val session = PtyTerminalSession(key, title, process, process.outputStream, scope, onEnded)
+            val session = PtyTerminalSession(key, title, process, process.outputStream, scope, oneShot, onEnded)
             session.startReading()
             return session
         }

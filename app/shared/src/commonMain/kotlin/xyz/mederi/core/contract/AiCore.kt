@@ -152,6 +152,14 @@ interface AiCore {
      */
     suspend fun getProcessStats(): Result<ProcessStats>
 
+    /**
+     * 跨会话累计使用统计：按 供应商 + API Key + 上游模型 分组聚合全库 model_requests 账本
+     * （不是单会话口径——会话投影见 [MessagesPage.cost]）。
+     * desktop/server 在本进程聚合；遥控端经 REST（`GET /v1/usage/statistics`）拿到被遥控端数据。
+     */
+    suspend fun getUsageStatistics(): Result<UsageStatistics> =
+        Result.failure(UnsupportedOperationException("Usage statistics unavailable"))
+
     fun events(): Flow<CoreEvent>
 
     suspend fun getFileDiffs(conversationId: String, messageId: String? = null): Result<List<FileDiff>>

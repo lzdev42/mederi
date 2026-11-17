@@ -69,18 +69,23 @@ fun computeChatItems(
     // 执行工作ID可跨插话延续，但显示段必须以真实用户消息为边界，禁止向上合并。
     val hasRunningSubagents = snapshot?.subagents?.any { it.status == "RUNNING" } == true
 
-    // 计划审批卡锚定表（planId -> 最近一次"确实创建/更新了该计划"的轮次索引）：
-    // 同一计划可能经历多次 write_plan 失败尝试（校验被拒不落盘），失败尝试不该承载
-    // 卡片——否则跨轮去重会把卡锚到最早的失败调用上（真实事故：Obscura 会话 12 连试，
-    // 审批卡挂在了第一次校验失败的尝试后，真正创建成功的轮次与对话末尾反而无卡）。
-    // 预扫描各轮的创建匹配，后轮覆盖前轮 = 锚定最后一次成功调用。
-    val planAnchorTurn = buildMap {
-        turns.forEachIndexed { index, (role, turnMessages) ->
-            if (role == ChatRole.Assistant) {
-                createdPlansForTurn(turnMessages, snapshot).forEach { put(it.id, index) }
+    val recordedPlans = snapshot?.planApprovals.orEmpty()
+    val pendingPlan = snapshot?.pendingPlanApproval?.let { pending ->
+        recordedPlans.find { it.id == pending.id } ?: pending
+    }
+    val plans = if (pendingPlan != null && recordedPlans.none { it.id == pendingPlan.id }) {
+        recordedPlans + pendingPlan
+    } else recordedPlans
+
+    // 同一计划只在最近一次匹配的提交处投影。工具行和审批卡使用同一个锚点。
+    val planAnchors = buildMap {
+        msgs.filter { it.role == ChatRole.Assistant }.forEach { message ->
+            message.blocks.filterIsInstance<ChatBlock.ToolCall>().forEach { call ->
+                matchPlanCall(call, plans)?.let { plan -> put(plan.id, "${message.id}_${call.id}" to plan) }
             }
         }
-    }
+    }.values.toMap()
+
 
     for ((turnIndex, turnPair) in turns.withIndex()) {
         val (role, turnMessages) = turnPair
@@ -159,21 +164,9 @@ fun computeChatItems(
 
         var turnHasFirstItem = false
 
-        // 预解析计划审批卡片匹配：只认"确实创建/更新了计划"的调用，失败尝试不参与匹配
-        val matchedPlan = createdPlansForTurn(turnMessages, snapshot).firstOrNull()
-            ?: if (turnMessages == lastAssistantTurn) {
-                snapshot?.pendingPlanApproval?.takeIf { it.status == "PENDING" || it.status == "PENDING_APPROVAL" }
-            } else null
-        // 卡片只挂在锚定轮（同计划多次尝试时 = 最后一次成功创建/更新的轮次）；
-        // 历史数据找不到任何成功调用可锚定时保持旧行为：匹配轮就地兜底
-        val planAnchorIndex = matchedPlan?.let { planAnchorTurn[it.id] }
-        val isPlanAnchorTurn = matchedPlan != null &&
-            (planAnchorIndex == null || planAnchorIndex == turnIndex)
-
         // 按真实自然时序收集本轮的消息块
         val rawChronologicalItems = mutableListOf<ChatListItem>()
         val itemMessageIds = mutableMapOf<String, String>()
-        var planApprovalEmitted = false
         var questionCardEmitted = false
 
         for ((msgIndex, msg) in turnMessages.withIndex()) {
@@ -319,28 +312,28 @@ fun computeChatItems(
                                 questionCardEmitted = true
                             }
                         } else {
+                            val key = "${msg.id}_${block.id}"
+                            val plan = planAnchors[key]
+                            val planOutcome = when (plan?.status) {
+                                "APPROVED", "AUTO_APPROVED", "IN_PROGRESS", "COMPLETED" -> PlanSubmissionOutcome.Approved
+                                "VOIDED" -> PlanSubmissionOutcome.Voided
+                                else -> null
+                            }
                             val displayCalls = expandBatchToolCall(toolUi, snapshot)
                             if (displayCalls.isNotEmpty()) rawChronologicalItems.add(
                                 ChatListItem.ToolCalls(
-                                    key = "${msg.id}_${block.id}",
+                                    key = key,
                                     toolCalls = displayCalls,
                                     isStreaming = msg.isStreaming,
                                     isTurnStart = false,
                                     toolSummary = buildToolSummary(displayCalls),
                                     hasFailedTool = displayCalls.any { it.isFailed },
-                                    isRunning = isStreaming && toolUi.state is ToolCallState.Running,
+                                    isRunning = planOutcome == null && isStreaming && toolUi.state is ToolCallState.Running,
+                                    planOutcome = planOutcome,
                                 )
                             )
-                            // 若为计划创建/更新工具且已匹配到计划卡片，紧随其后就地挂载计划审批卡片
-                            if (isPlanCreationCandidate(toolUi) && isPlanAnchorTurn && !planApprovalEmitted) {
-                                rawChronologicalItems.add(
-                                    ChatListItem.PlanApproval(
-                                        key = "plan_${matchedPlan.id}",
-                                        request = matchedPlan,
-                                        isTurnStart = false
-                                    )
-                                )
-                                planApprovalEmitted = true
+                            if (plan != null && plan.status.isPendingPlanApproval()) {
+                                rawChronologicalItems.add(ChatListItem.PlanApproval(key = "plan_${plan.id}", request = plan))
                             }
                         }
                     }
@@ -380,23 +373,37 @@ fun computeChatItems(
         val finalMessageIds = finalMessages.map { it.id }.toSet()
         val workItems = mutableListOf<ChatListItem>()
         val deliverableItems = mutableListOf<ChatListItem>()
+        val detailBreakBefore = mutableSetOf<String>()
+        val turnIdsByMessageId = turnMessages.associate { it.id to it.turnId }
+        var previousTurnId: String? = null
+        var afterDeliverable = false
         for (item in rawChronologicalItems) {
-            when (item) {
+            val messageId = itemMessageIds[item.key]
+            val itemTurnId = messageId?.let { turnIdsByMessageId[it] }
+            val staysInMainFlow = when (item) {
                 is ChatListItem.PlanApproval, is ChatListItem.QuestionCard, is ChatListItem.ExecutionApproval,
-                is ChatListItem.SubagentCalls -> deliverableItems.add(item)
-                is ChatListItem.TextMessage, is ChatListItem.DocumentCard -> {
-                    if (itemMessageIds[item.key] in finalMessageIds) deliverableItems.add(item)
-                    else workItems.add(item)
-                }
-                else -> workItems.add(item)
+                is ChatListItem.SubagentCalls -> true
+                is ChatListItem.TextMessage, is ChatListItem.DocumentCard -> messageId in finalMessageIds
+                else -> false
             }
+            if (staysInMainFlow) {
+                deliverableItems.add(item)
+                afterDeliverable = true
+            } else {
+                if (workItems.isNotEmpty() && (afterDeliverable || itemTurnId != previousTurnId)) {
+                    detailBreakBefore.add(item.key)
+                }
+                workItems.add(item)
+                afterDeliverable = false
+            }
+            previousTurnId = itemTurnId
         }
         if (workItems.isNotEmpty() || isActiveAssistant) {
             val activity = if (isActiveAssistant) deriveWorkTraceActivity(workItems,
                 snapshot?.subagents?.count { it.status == "RUNNING" } ?: 0) else null
-            // 阶段交付并不代表整项工作结束：等待子代理时保留运行与计时，但自动收起旧过程。
-            // 只检查最新响应，后续主代理恢复推理/工具调用时应重新展开。
+            // 等待子代理或交付时，仅在没有可读进展或文档的情况下自动收起整段。
             val latestResponseDelivered = turnMessages.lastOrNull()?.id in finalMessageIds
+            val hasVisibleProgress = workItems.any { it.isVisibleWorkProgress() }
             result.add(
                 ChatListItem.WorkTraceBlock(
                     key = "${turnMessages.firstOrNull()?.id ?: "active"}_worktrace",
@@ -420,16 +427,14 @@ fun computeChatItems(
                     completedAt = if (turnMessages.any { it.id == lastResponseByWork[it.turnId] || it.turnId == null && turnMessages == lastAssistantTurn })
                         turnMessages.mapNotNull { it.workCompletedAt }.maxOrNull() else null,
                     activity = activity,
-                    defaultExpanded = !latestResponseDelivered && activity !is WorkTraceActivity.WaitingSubagents,
+                    defaultExpanded = hasVisibleProgress ||
+                        (!latestResponseDelivered && activity !is WorkTraceActivity.WaitingSubagents),
                     isTurnStart = true,
+                    detailBreakBefore = detailBreakBefore,
                 )
             )
             turnHasFirstItem = true
         }
-        // 待用户操作的卡片必须留在折叠块外，不能因等待而藏起入口。
-        if (isPlanAnchorTurn && deliverableItems.none { it is ChatListItem.PlanApproval } &&
-            result.none { it is ChatListItem.PlanApproval && it.request.id == matchedPlan.id }
-        ) deliverableItems.add(ChatListItem.PlanApproval(key = "plan_${matchedPlan.id}", request = matchedPlan))
         deliverableItems.forEach { item ->
             if (item is ChatListItem.QuestionCard && result.any { it is ChatListItem.QuestionCard }) return@forEach
             if (item is ChatListItem.PlanApproval && result.any { it is ChatListItem.PlanApproval && it.request.id == item.request.id }) return@forEach
@@ -525,7 +530,7 @@ fun computeChatItems(
             result.add(ChatListItem.QuestionCard(key = "question_${question.id}", request = question, isTurnStart = true))
         }
     }
-    val pending = snapshot?.pendingPlanApproval?.takeIf { it.status == "PENDING" || it.status == "PENDING_APPROVAL" }
+    val pending = pendingPlan?.takeIf { it.status.isPendingPlanApproval() }
     if (pending != null && result.none { it is ChatListItem.PlanApproval && it.request.id == pending.id }) {
         result.add(
             ChatListItem.PlanApproval(
@@ -601,13 +606,13 @@ internal fun toToolCallUi(toolCall: ChatBlock.ToolCall, snapshot: ConversationSn
  *   会被同 title 的后续成功创建"错认"，把审批卡锚到最早的失败尝试上（真实事故：
  *   Obscura 会话 12 次 write_plan 连试，6 次失败与成功共用同一 title）；
  * - Failed（参数解析失败，isError=true）同上；
- * - Running = 创建/更新进行中（如挂起等待审批），允许实时匹配；
+ * - Running/Pending = 工具结果尚未到达或历史没有结果，按已有入参匹配；
  * - Completed 且非 Error 输出 = 成功路径（approved / auto-approved / 用户继续对话保持
  *   PENDING_APPROVAL 的中性结果），按入参 planId（更新路径）、输出 Plan ID 或 title 匹配。
  */
 internal fun planCallIdentity(state: ToolCallState): Pair<String?, String?> = when (state) {
     is ToolCallState.Completed -> {
-        if (state.output.startsWith("Error")) null to null
+        if (state.output.startsWith("Error") || state.output.startsWith("Plan superseded")) null to null
         else {
             val idFromOutput = Regex("""Plan ID:\s*([a-zA-Z0-9_-]+)""").find(state.output)?.groupValues?.getOrNull(1)
                 ?: Regex("""(plan_[a-f0-9]{8})""").find(state.output)?.groupValues?.getOrNull(1)
@@ -615,39 +620,24 @@ internal fun planCallIdentity(state: ToolCallState): Pair<String?, String?> = wh
         }
     }
     is ToolCallState.Running -> state.input["planId"] to state.input["title"]
-    else -> null to null
+    is ToolCallState.Pending -> state.input["planId"] to state.input["title"]
+    is ToolCallState.Failed -> null to null
 }
 
-/**
- * 该调用是否是"确实创建/更新了计划"的计划工具调用（失败尝试无身份，不承载审批卡）。
- */
-internal fun isPlanCreationCandidate(call: ToolCallUi): Boolean =
-    call.name in PLAN_CREATION_TOOL_NAMES &&
-        planCallIdentity(call.state).let { it.first != null || it.second != null }
+private fun String.isPendingPlanApproval() = this == "PENDING" || this == "PENDING_APPROVAL"
 
-/**
- * 匹配本轮计划创建/更新调用实际落盘的计划（不含 pendingPlanApproval 末轮兜底）。
- *
- * 轮内可能有多条计划工具调用（如同一轮里先失败后成功）：逐条取身份，凡是匹配到
- * planApprovals 的都返回（同 id 去重），供锚点表覆盖轮内全部创建/更新；
- * [computeChatItems] 就地发射卡片时取 firstOrNull（与旧行为一致：一轮只挂一张）。
- */
-internal fun createdPlansForTurn(
-    turnMessages: List<ChatMessage>,
-    snapshot: ConversationSnapshot?,
-): List<PlanApprovalRequest> {
-    val approvals = snapshot?.planApprovals ?: return emptyList()
-    val matches = mutableListOf<PlanApprovalRequest>()
-    turnMessages.flatMap { it.blocks.filterIsInstance<ChatBlock.ToolCall>() }
-        .map { toToolCallUi(it, snapshot) }
-        .filter { it.name in PLAN_CREATION_TOOL_NAMES }
-        .forEach { call ->
-            val (planId, title) = planCallIdentity(call.state)
-            approvals.find { plan ->
-                (planId != null && plan.id == planId) || (!title.isNullOrBlank() && plan.title == title)
-            }?.let { if (matches.none { m -> m.id == it.id }) matches += it }
-        }
-    return matches
+private fun matchPlanCall(call: ChatBlock.ToolCall, plans: List<PlanApprovalRequest>): PlanApprovalRequest? {
+    if (call.name !in PLAN_CREATION_TOOL_NAMES) return null
+    val (planId, title) = planCallIdentity(call.state)
+    if (!planId.isNullOrBlank()) return plans.find { it.id == planId }
+    if (title.isNullOrBlank()) return null
+    val sameTitle = plans.filter { it.title == title }
+    return sameTitle.singleOrNull() ?: when (call.state) {
+        // 挂起的提交还没有工具结果。版本同名时，当前非终态版本可以定位这次提交。
+        is ToolCallState.Running, is ToolCallState.Pending ->
+            sameTitle.singleOrNull { it.status != "VOIDED" && it.status != "COMPLETED" }
+        else -> null
+    }
 }
 
 /** 工具调用聚合摘要：同名工具计次合并，如 "read_file ×3, edit_file"。 */

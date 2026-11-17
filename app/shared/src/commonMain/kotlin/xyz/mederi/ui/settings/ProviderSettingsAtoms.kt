@@ -91,7 +91,7 @@ internal fun ProtocolSelectorBar(selected: ProtocolType, onSelect: (ProtocolType
         FlowRow(modifier = Modifier.fillMaxWidth().selectableGroup(),
             horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
             verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
-            ProtocolType.ALL.forEach { protocol ->
+            ProtocolType.CREATABLE.forEach { protocol ->
                 WorkspaceNavigationTab(text = protocol.displayName, selected = selected == protocol,
                     onClick = { onSelect(protocol) }, role = Role.RadioButton)
             }

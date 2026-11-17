@@ -110,8 +110,24 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "xyz.mederi"
+            packageName = "Mederi"
             packageVersion = "1.0.0"
+            description = "Mederi"
+            copyright = "© 2026 Mederi"
+            vendor = "Mederi"
+
+            macOS {
+                bundleID = "xyz.mederi"
+                dockName = "Mederi"
+                iconFile.set(project.file("src/main/resources/icons/icon.icns"))
+            }
+            windows {
+                iconFile.set(project.file("src/main/resources/icons/icon.ico"))
+            }
+            linux {
+                packageName = "mederi"
+                iconFile.set(project.file("src/main/resources/icons/icon.png"))
+            }
 
             modules(
                 "java.instrument",

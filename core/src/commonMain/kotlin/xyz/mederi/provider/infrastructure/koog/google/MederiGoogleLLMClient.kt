@@ -8,6 +8,9 @@ import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.executor.clients.google.GoogleClientSettings
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.LLMChoice
+import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.ResponseMetaInfo
 import ai.koog.prompt.streaming.IncompleteStreamException
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.currentCoroutineContext
@@ -16,13 +19,16 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.serializer
 import xyz.mederi.http.MederiHttpClientFactory
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -31,12 +37,26 @@ import kotlin.reflect.KClass
 import kotlin.reflect.full.cast
 import kotlin.reflect.full.starProjectedType
 
-/** 补齐当前 Koog Google 客户端没有映射的原生请求和流式响应字段。 */
+/** 补齐当前 Koog Google 客户端没有映射的原生请求和响应字段。 */
 internal class MederiGoogleLLMClient(apiKey: String, settings: GoogleClientSettings) :
     GoogleLLMClient(apiKey, settings, GoogleHttpClientFactory) {
 
+    override suspend fun execute(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant {
+        val capture = GoogleResponseCapture()
+        val response = withContext(capture) { super.execute(prompt, model, tools) }
+        return response.copy(metaInfo = capture.enrichUsage(response.metaInfo))
+    }
+
+    override suspend fun executeMultipleChoices(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): LLMChoice {
+        val capture = GoogleResponseCapture()
+        return withContext(capture) { super.executeMultipleChoices(prompt, model, tools) }.map { response ->
+            response.copy(metaInfo = capture.enrichUsage(response.metaInfo))
+        }
+    }
+
     override fun executeStreaming(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Flow<StreamFrame> = flow {
-        val capture = GoogleStreamCapture()
+        val capture = GoogleResponseCapture()
+        var end: StreamFrame.End? = null
         super.executeStreaming(prompt, model, tools)
             .flowOn(capture)
             .catch { failure ->
@@ -52,8 +72,14 @@ internal class MederiGoogleLLMClient(apiKey: String, settings: GoogleClientSetti
                         emit(StreamFrame.ReasoningComplete(id = null, content = emptyList(), encrypted = signature))
                     }
                 }
-                emit(frame)
+                if (frame is StreamFrame.End) {
+                    end = frame
+                } else {
+                    emit(frame)
+                }
             }
+        // Google 可以在 finishReason 之后单独发送最后一帧 usageMetadata。
+        end?.let { emit(it.copy(metaInfo = capture.enrichUsage(it.metaInfo))) }
     }
 }
 
@@ -91,7 +117,8 @@ private class GoogleHttpClient(private val delegate: KoogHttpClient, private val
         }
         val raw = delegate.post(path, encodeRequest(requestBody, requestBodyType), String::class, String::class,
             parameters, headers)
-        inspect(raw)
+        val metadata = inspect(raw)
+        currentCoroutineContext()[GoogleResponseCapture]?.record(metadata)
         return responseType.cast(json.decodeFromString(json.serializersModule.serializer(responseType.starProjectedType), raw))
     }
 
@@ -105,7 +132,7 @@ private class GoogleHttpClient(private val delegate: KoogHttpClient, private val
         parameters: Map<String, String>,
         headers: Map<String, String>,
     ): Flow<O> = flow {
-        val capture = currentCoroutineContext()[GoogleStreamCapture]
+        val capture = currentCoroutineContext()[GoogleResponseCapture]
         delegate.sse(
             path, encodeRequest(requestBody, requestBodyType), String::class, dataFilter,
             decodeStreamingResponse = { it },
@@ -116,7 +143,10 @@ private class GoogleHttpClient(private val delegate: KoogHttpClient, private val
             // 在 Ktor SSE 处理边界之外抛出供应商错误，避免错误体随传输包装丢失。
             val metadata = inspect(raw)
             capture?.record(metadata)
-            processStreamingChunk(decodeStreamingResponse(raw))?.let { emit(it) }
+            // Koog 的响应 DTO 要求 candidates。只有 usage 的分块已在上面采集。
+            if (metadata.candidates.isNotEmpty() || metadata.usageMetadata == null) {
+                processStreamingChunk(decodeStreamingResponse(raw))?.let { emit(it) }
+            }
         }
     }
 
@@ -158,6 +188,15 @@ private data class GoogleResponseMetadata(
     val promptFeedback: JsonObject? = null,
     val error: JsonObject? = null,
     val candidates: List<GoogleCandidateMetadata> = emptyList(),
+    val usageMetadata: GoogleUsageMetadata? = null,
+)
+
+@Serializable
+private data class GoogleUsageMetadata(
+    val promptTokenCount: Int? = null,
+    val candidatesTokenCount: Int? = null,
+    val totalTokenCount: Int? = null,
+    val cachedContentTokenCount: Int? = null,
 )
 
 @Serializable
@@ -178,9 +217,9 @@ private data class GooglePartMetadata(
 @Serializable
 private data class GoogleFunctionCallMetadata(val name: String, val id: String? = null)
 
-/** 隔离每次流式请求，并把传输层采集的签名匹配回 Koog 已组装的工具调用。 */
-private class GoogleStreamCapture : AbstractCoroutineContextElement(Key) {
-    companion object Key : CoroutineContext.Key<GoogleStreamCapture>
+/** 每个请求独立采集原始用量，流式工具签名按调用匹配回 Koog 已组装的帧。 */
+private class GoogleResponseCapture : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<GoogleResponseCapture>
 
     private data class Call(val id: String?, val name: String, val index: Int, val signature: String?)
 
@@ -188,11 +227,21 @@ private class GoogleStreamCapture : AbstractCoroutineContextElement(Key) {
     private var responseId: String? = null
     private var finishReason: String? = null
     private var chunks = 0
+    private var inputTokens: Int? = null
+    private var outputTokens: Int? = null
+    private var totalTokens: Int? = null
+    private var cachedTokens: Int? = null
 
     @Synchronized
     fun record(response: GoogleResponseMetadata) {
         chunks++
         response.responseId?.let { responseId = it }
+        response.usageMetadata?.let { usage ->
+            usage.promptTokenCount?.let { inputTokens = it }
+            usage.candidatesTokenCount?.let { outputTokens = it }
+            usage.totalTokenCount?.let { totalTokens = it }
+            usage.cachedContentTokenCount?.let { cachedTokens = it }
+        }
         val candidate = response.candidates.firstOrNull() ?: return
         candidate.finishReason?.let { finishReason = it }
         candidate.content?.parts?.forEachIndexed { index, part ->
@@ -206,6 +255,19 @@ private class GoogleStreamCapture : AbstractCoroutineContextElement(Key) {
             }
         }
     }
+
+    @Synchronized
+    fun enrichUsage(meta: ResponseMetaInfo): ResponseMetaInfo = meta.copy(
+        totalTokensCount = totalTokens ?: meta.totalTokensCount,
+        inputTokensCount = inputTokens ?: meta.inputTokensCount,
+        outputTokensCount = outputTokens ?: meta.outputTokensCount,
+        metadata = cachedTokens?.let { cached ->
+            buildJsonObject {
+                meta.metadata?.forEach { (key, value) -> put(key, value) }
+                put("cachedTokens", cached)
+            }
+        } ?: meta.metadata,
+    )
 
     @Synchronized
     fun takeSignature(frame: StreamFrame.ToolCallComplete): String? {

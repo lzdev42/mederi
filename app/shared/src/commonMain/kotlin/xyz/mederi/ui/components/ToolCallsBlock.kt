@@ -21,11 +21,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.*
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.tool_detail_report
@@ -37,8 +35,7 @@ import mederi.app.shared.generated.resources.tool_action_ask_answered
 import mederi.app.shared.generated.resources.tool_action_ask_answered_many
 import mederi.app.shared.generated.resources.tool_action_ask_unanswered
 import mederi.app.shared.generated.resources.tool_action_ask_declined
-import mederi.app.shared.generated.resources.tool_action_ask_many
-import mederi.app.shared.generated.resources.tool_action_ask_one
+import mederi.app.shared.generated.resources.tool_action_ask_failed
 import mederi.app.shared.generated.resources.tool_action_ask_running
 import mederi.app.shared.generated.resources.tool_action_edit_many
 import mederi.app.shared.generated.resources.tool_action_edit_one
@@ -52,12 +49,13 @@ import mederi.app.shared.generated.resources.tool_action_list_running
 import mederi.app.shared.generated.resources.tool_action_list_running_target
 import mederi.app.shared.generated.resources.tool_action_list_target
 import mederi.app.shared.generated.resources.tool_action_mcp_many
+import mederi.app.shared.generated.resources.tool_action_mcp_one
+import mederi.app.shared.generated.resources.tool_action_mcp_running
 import mederi.app.shared.generated.resources.tool_action_mcp_running_target
 import mederi.app.shared.generated.resources.tool_action_mcp_target
 import mederi.app.shared.generated.resources.tool_action_other_many
+import mederi.app.shared.generated.resources.tool_action_other_one
 import mederi.app.shared.generated.resources.tool_action_other_running
-import mederi.app.shared.generated.resources.tool_action_other_running_target
-import mederi.app.shared.generated.resources.tool_action_other_target
 import mederi.app.shared.generated.resources.tool_action_read_many
 import mederi.app.shared.generated.resources.tool_action_read_one
 import mederi.app.shared.generated.resources.tool_action_read_running
@@ -94,6 +92,7 @@ import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.ui.DebugLog
 import xyz.mederi.core.contract.models.ToolCallState
 import xyz.mederi.core.contract.models.ToolCallUi
+import xyz.mederi.core.contract.models.QuestionRequest
 import xyz.mederi.ui.SubagentReportMarkdown
 import xyz.mederi.ui.chat.ToolActionGroup
 import xyz.mederi.ui.chat.ToolActionKind
@@ -168,16 +167,17 @@ fun ToolActionGroupRow(
 
     val defaultMutedColor = colors.textSecondary
 
-    val isAskDeclined = group.kind == ToolActionKind.ASK && group.calls.any { call ->
-        val output = when (val s = call.state) {
-            is ToolCallState.Completed -> s.output
-            is ToolCallState.Failed -> s.error
-            else -> null
-        }
-        output?.contains("declined", ignoreCase = true) == true
+    val askItems = remember(group) {
+        if (group.kind == ToolActionKind.ASK) group.calls.mapNotNull { call ->
+            val completed = call.state as? ToolCallState.Completed
+            if (completed == null || call.isFailed) null
+            else call.id to parseAskItems(completed.input, completed.output)
+        }.toMap() else emptyMap()
     }
-
-    val isAskPending = group.kind == ToolActionKind.ASK && group.calls.any { it.state is ToolCallState.Pending }
+    val answeredQuestionCount = askItems.values.sumOf { items -> items.count { it.answer != null } }
+    val isAskDeclined = group.kind == ToolActionKind.ASK && group.calls.any { call ->
+        !call.isFailed && (call.state as? ToolCallState.Completed)?.output.isAskDeclined()
+    }
 
     // 图标与颜色
     val (iconVector, iconTint) = when {
@@ -189,20 +189,28 @@ fun ToolActionGroupRow(
         group.kind == ToolActionKind.LIST -> Pair(FeatherIcons.Folder, defaultMutedColor)
         group.kind == ToolActionKind.SUBAGENT -> Pair(FeatherIcons.Users, colors.textSecondary)
         group.kind == ToolActionKind.MCP -> Pair(FeatherIcons.Cpu, defaultMutedColor)
-        group.kind == ToolActionKind.ASK -> if (!isGroupRunning && !isAskDeclined) {
-            Pair(FeatherIcons.HelpCircle, colors.textSecondary)
-        } else {
-            Pair(FeatherIcons.HelpCircle, defaultMutedColor)
-        }
+        group.kind == ToolActionKind.ASK -> Pair(FeatherIcons.HelpCircle, defaultMutedColor)
         group.kind == ToolActionKind.TODO -> Pair(FeatherIcons.CheckSquare, defaultMutedColor)
         group.kind == ToolActionKind.VERIFY -> Pair(FeatherIcons.CheckCircle, colors.textSecondary)
         else -> Pair(FeatherIcons.Zap, defaultMutedColor)
     }
 
     // 标题文本（全部走资源化，三类：执行中 / 单条 / 多条；带目标时用 _target/_running_target 格式化）
-    val titleText = run {
+    val titleText = if (group.kind == ToolActionKind.ASK) {
+        when {
+            isFailed -> stringResource(Res.string.tool_action_ask_failed)
+            isGroupRunning -> toolRunningLabel(group)
+            answeredQuestionCount > 1 -> stringResource(Res.string.tool_action_ask_answered_many, answeredQuestionCount)
+            answeredQuestionCount == 1 -> stringResource(Res.string.tool_action_ask_answered)
+            isAskDeclined -> stringResource(Res.string.tool_action_ask_declined)
+            else -> stringResource(Res.string.tool_action_ask_unanswered)
+        }
+    } else {
+        val completedTargetLabel = group.kind.completedTargetLabel
         val base = when {
             isGroupRunning -> toolRunningLabel(group)
+            completedTargetLabel != null && singleTarget != null -> stringResource(completedTargetLabel, singleTarget)
+            group.kind.completedLabel != null -> stringResource(group.kind.completedLabel)
             count == 1 -> when (group.kind) {
                 ToolActionKind.COMMAND -> singleTarget?.let { stringResource(Res.string.tool_action_run_target, it) }
                     ?: stringResource(Res.string.tool_action_run_one)
@@ -216,16 +224,12 @@ fun ToolActionGroupRow(
                     ?: stringResource(Res.string.tool_action_list_one)
                 ToolActionKind.SUBAGENT -> singleTarget?.let { stringResource(Res.string.tool_action_subagent_target, it) }
                     ?: stringResource(Res.string.tool_action_subagent_one)
-                ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_target, singleTarget ?: firstCall.name)
-                ToolActionKind.ASK -> when {
-                    isAskDeclined -> stringResource(Res.string.tool_action_ask_declined)
-                    isAskPending -> stringResource(Res.string.tool_action_ask_unanswered)
-                    else -> stringResource(Res.string.tool_action_ask_answered)
-                }
+                ToolActionKind.MCP -> singleTarget?.let { stringResource(Res.string.tool_action_mcp_target, it) }
+                    ?: stringResource(Res.string.tool_action_mcp_one)
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_one)
                 ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_target, it) }
                     ?: stringResource(Res.string.tool_action_verify_one)
-                else -> stringResource(Res.string.tool_action_other_target, singleTarget ?: firstCall.name)
+                else -> stringResource(Res.string.tool_action_other_one)
             }
             else -> when (group.kind) {
                 ToolActionKind.COMMAND -> stringResource(Res.string.tool_action_run_many, count)
@@ -235,11 +239,6 @@ fun ToolActionGroupRow(
                 ToolActionKind.LIST -> stringResource(Res.string.tool_action_list_many, count)
                 ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_many, count)
                 ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_many, count)
-                ToolActionKind.ASK -> when {
-                    isAskDeclined -> stringResource(Res.string.tool_action_ask_declined)
-                    isAskPending -> stringResource(Res.string.tool_action_ask_unanswered)
-                    else -> stringResource(Res.string.tool_action_ask_answered_many, count)
-                }
                 ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_many, count)
                 ToolActionKind.VERIFY -> stringResource(Res.string.tool_action_verify_many, count)
                 else -> stringResource(Res.string.tool_action_other_many, count)
@@ -280,11 +279,7 @@ fun ToolActionGroupRow(
                         SubagentReportMarkdown.fromToolResult(call.name, completedState.output)?.takeIf { it.isNotBlank() }
                     } else null
                 }
-                val output = when (val s = call.state) {
-                    is ToolCallState.Completed -> s.output
-                    is ToolCallState.Failed -> s.error
-                    else -> null
-                }?.trim()
+                val items = askItems[call.id].orEmpty()
 
                 if (reportMarkdown != null) {
                     // 子代理任务报告 Markdown（默认不展开，点击 REPORT 展开）
@@ -294,14 +289,8 @@ fun ToolActionGroupRow(
                         colors = colors,
                         onLinkClick = onLinkClick,
                     )
-                } else if (group.kind == ToolActionKind.ASK) {
-                    // 问询明细展开：展示问题问了什么、用户回答了什么
-                    ToolCallAskBlock(
-                        call = call,
-                        output = output,
-                        isFailed = isCallFailed,
-                        colors = colors,
-                    )
+                } else if (items.any { it.answer != null || it.isDeclined }) {
+                    ToolCallAskBlock(items = items, colors = colors)
                 } else {
                     ToolCallExecutionDetails(call = call, isFailed = isCallFailed, colors = colors)
                 }
@@ -459,162 +448,57 @@ data class ParsedAskItem(
     val isDeclined: Boolean = false,
 )
 
-/**
- * 从 ask_user 的入参 (input) 与工具出参 (output) 中解析结构化问答项。
- *
- * output 形态：
- * - `{"answers":[{"questionId":"q1","answers":[...]},...]}`（ask_user 的 AskUserResult 标准形态）
- * - 裸数组 `[{"questionId":...,"answers":[...]},...]`（同样按 questionId 归位）
- * - 非 JSON 纯文本（自定义工具的自由文本返回）→ 回退 generalAnswer
- *
- * 硬化（ask_user 已回答显示根因修复的 UI 侧配套）：
- * - 合法 JSON 但没提取出任何 answer 时，**不再**把原始 JSON 回退塞进问题（generalAnswer 保持 null）；
- * - Koog 引号包裹的遗留脏数据（`"{"answers":...}"`，JSONLiteral.toString() 包引号不转义）
- *   解析失败后同样不进 generalAnswer——整串原始 JSON 绝不显示为答案。
- */
+private val askResultJson = Json { ignoreUnknownKeys = true }
+
+@Serializable
+private data class AskResult(val answers: List<AskAnswer>)
+
+@Serializable
+private data class AskAnswer(val questionId: String, val answers: List<String>)
+
+private fun String?.isAskDeclined(): Boolean = this == "User declined to answer the questions."
+
+/** 仅按 questionId 关联 ask_user 的结构化结果。无法解析的原始数据由工具明细展示。 */
 fun parseAskItems(input: Map<String, String>, output: String?): List<ParsedAskItem> {
-    val answersMap = mutableMapOf<String, String>()
-    // 输出顺序的答案列表（questionId 缺失/不匹配时按序 1:1 回退用）
-    val orderedAnswers = mutableListOf<String>()
-    var generalAnswer: String? = null
-    var isDeclined = false
-
-    if (!output.isNullOrBlank()) {
-        val trimmed = output.trim()
-        if (trimmed.contains("declined", ignoreCase = true)) {
-            isDeclined = true
-        } else {
-            try {
-                val json = Json { ignoreUnknownKeys = true }
-                val root = json.parseToJsonElement(trimmed)
-                // 兼容 `{"answers":[...]}` 对象形态与裸数组形态
-                val answersArray: JsonArray? = when (root) {
-                    is JsonObject -> root["answers"] as? JsonArray
-                    is JsonArray -> root
-                    else -> null
-                }
-                answersArray?.forEach { elem ->
-                    when (elem) {
-                        is JsonObject -> {
-                            val qId = (elem["questionId"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-                            val ansList = (elem["answers"] as? JsonArray)?.mapNotNull {
-                                (it as? JsonPrimitive)?.contentOrNull
-                            }
-                            if (ansList.isNullOrEmpty()) return@forEach
-                            val answerText = ansList.joinToString(", ")
-                            orderedAnswers.add(answerText)
-                            if (qId.isNotBlank()) {
-                                answersMap[qId] = answerText
-                            }
-                        }
-                        is JsonPrimitive -> {
-                            // 裸字符串数组 ["A", "B"]：无 questionId，只进顺序列表
-                            val text = elem.contentOrNull
-                            if (!text.isNullOrBlank()) orderedAnswers.add(text)
-                        }
-                        else -> Unit
-                    }
-                }
-                // 合法 JSON 但未提取出任何 answer（空 answers 数组 / 无关 JSON）→ 不回退原始 JSON
-            } catch (_: Exception) {
-                // 回退仅保留给非 JSON 纯文本输出（如自定义工具返回的自由文本）；
-                // Koog 引号包裹的 JSON 字符串（遗留脏数据）不是纯文本，不进 generalAnswer
-                if (!isQuotedLegacyJson(trimmed)) {
-                    generalAnswer = trimmed
-                }
-            }
-        }
+    val rawQuestions = input["questions"] ?: return emptyList()
+    val questions = try {
+        askResultJson.decodeFromString<List<QuestionRequest.Question>>(rawQuestions)
+    } catch (_: SerializationException) {
+        return emptyList()
     }
+    if (questions.any { it.id.isBlank() || it.prompt.isBlank() } ||
+        questions.map { it.id }.toSet().size != questions.size
+    ) return emptyList()
 
-    val questions = mutableListOf<ParsedAskItem>()
-    val rawQuestions = input["questions"]
-    if (!rawQuestions.isNullOrBlank()) {
-        // 严格解析：只接受规范 JsonArray（每项含 prompt）。不再解包双层编码字符串、不再兼容
-        // `question` 别名——旧会话脏数据走下方占位回退（纯显示，不崩）。
+    val isDeclined = output.isAskDeclined()
+    val answersById = if (output != null && !isDeclined) {
         try {
-            val json = Json { ignoreUnknownKeys = true }
-            val elem = json.parseToJsonElement(rawQuestions)
-            if (elem is JsonArray) {
-                elem.forEachIndexed { idx, item ->
-                    if (item is JsonObject) {
-                        val id = (item["id"] as? JsonPrimitive)?.contentOrNull ?: "q_$idx"
-                        val prompt = (item["prompt"] as? JsonPrimitive)?.contentOrNull ?: ""
-                        val options = (item["options"] as? JsonArray)?.mapNotNull {
-                            (it as? JsonPrimitive)?.contentOrNull
-                        } ?: emptyList()
-                        if (prompt.isNotBlank()) {
-                            questions.add(ParsedAskItem(id = id, prompt = prompt, options = options))
-                        }
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-    }
-
-    if (questions.isEmpty()) {
-        val singlePrompt = input["prompt"] ?: input["question"] ?: input["query"]
-        if (!singlePrompt.isNullOrBlank()) {
-            questions.add(ParsedAskItem(id = "q_0", prompt = singlePrompt))
+            askResultJson.decodeFromString<AskResult>(output).answers.groupBy { it.questionId }
+        } catch (_: SerializationException) {
+            emptyMap()
         }
+    } else {
+        emptyMap()
     }
-
-    if (questions.isEmpty()) {
-        val fallbackPrompt = input.values.firstOrNull { it.isNotBlank() && !it.startsWith("{") && !it.startsWith("[") }
-            ?: "提问"
-        questions.add(ParsedAskItem(id = "q_0", prompt = fallbackPrompt))
-    }
-
-    // questionId 是否全部不匹配（答案里虽有 questionId，但没有一个对应当前问题的 id）
-    val anyIdMatched = questions.any { answersMap.containsKey(it.id) }
-
-    return questions.mapIndexed { idx, q ->
-        val ans = when {
-            isDeclined -> null
-            answersMap.containsKey(q.id) -> answersMap[q.id]
-            questions.size == 1 && answersMap.isNotEmpty() -> answersMap.values.first()
-            questions.size == 1 && generalAnswer != null -> generalAnswer
-            // 多问且 questionId 全部不匹配、但答案数与问题数一致 → 按序一一对应（最后回退）
-            !anyIdMatched && orderedAnswers.size == questions.size -> orderedAnswers[idx]
-            idx == 0 && generalAnswer != null -> generalAnswer
-            else -> null
-        }
-        q.copy(answer = ans, isDeclined = isDeclined)
+    return questions.map { question ->
+        val answers = answersById[question.id]?.singleOrNull()?.answers
+        ParsedAskItem(
+            id = question.id,
+            prompt = question.prompt,
+            options = question.options,
+            answer = answers?.takeIf { it.any(String::isNotBlank) }?.joinToString(", "),
+            isDeclined = isDeclined,
+        )
     }
 }
 
-/**
- * 判定 [text] 是否为 Koog 引号包裹的 JSON 字符串遗留脏数据：
- * 首尾各一个 `"`、内部以 `{` / `[` 开头——`JSONLiteral.toString()` 对字符串
- * 包引号且不转义内部引号的根因形态（如 `"{"answers":[...]}"`）。
- * 这类内容绝不是"自由文本答案"，不允许回退显示为答案。
- */
-private fun isQuotedLegacyJson(text: String): Boolean {
-    if (text.length < 4 || !text.startsWith("\"") || !text.endsWith("\"")) return false
-    val inner = text.substring(1, text.length - 1).trimStart()
-    return inner.startsWith("{") || inner.startsWith("[")
-}
-
-/**
- * 问询交互明细展开块：清晰呈现“问题问了什么，回答了什么”。
- */
+/** 问询交互明细展示已提交的答案和拒答状态。 */
 @Composable
 private fun ToolCallAskBlock(
-    call: ToolCallUi,
-    output: String?,
-    isFailed: Boolean,
+    items: List<ParsedAskItem>,
     colors: xyz.mederi.theme.MederiColors,
     modifier: Modifier = Modifier,
 ) {
-    val input = when (val s = call.state) {
-        is ToolCallState.Completed -> s.input
-        is ToolCallState.Failed -> s.input
-        is ToolCallState.Running -> s.input
-        is ToolCallState.Pending -> s.input
-    }
-    val items = remember(call.id, input, output) {
-        parseAskItems(input, output)
-    }
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -660,17 +544,11 @@ private fun ToolCallAskBlock(
                         fontFamily = FontFamily.Monospace,
                     )
                     val answerText = when {
-                        isFailed && !output.isNullOrBlank() -> output
                         item.answer != null -> item.answer
                         item.isDeclined -> stringResource(Res.string.tool_action_ask_declined)
-                        else -> stringResource(Res.string.tool_action_ask_running)
+                        else -> stringResource(Res.string.tool_action_ask_unanswered)
                     }
-                    val answerColor = when {
-                        isFailed -> colors.accentDanger
-                        item.answer != null -> colors.textPrimary
-                        item.isDeclined -> colors.textMuted
-                        else -> colors.textMuted
-                    }
+                    val answerColor = if (item.answer != null) colors.textPrimary else colors.textMuted
                     SelectionContainer(modifier = Modifier.weight(1f)) {
                         Text(
                             text = answerText,
@@ -762,6 +640,9 @@ fun SubagentCallsBlock(
 internal fun toolRunningLabel(group: ToolActionGroup): String {
     val firstCall = group.calls.first()
     val singleTarget = firstCall.target?.trim()?.takeIf { it.isNotBlank() }
+    val runningTargetLabel = group.kind.runningTargetLabel
+    if (runningTargetLabel != null && singleTarget != null) return stringResource(runningTargetLabel, singleTarget)
+    group.kind.runningLabel?.let { return stringResource(it) }
     return when (group.kind) {
         ToolActionKind.COMMAND -> singleTarget?.let { stringResource(Res.string.tool_action_run_running_target, it) }
             ?: stringResource(Res.string.tool_action_run_running)
@@ -774,12 +655,12 @@ internal fun toolRunningLabel(group: ToolActionGroup): String {
         ToolActionKind.LIST -> singleTarget?.let { stringResource(Res.string.tool_action_list_running_target, it) }
             ?: stringResource(Res.string.tool_action_list_running)
         ToolActionKind.SUBAGENT -> stringResource(Res.string.tool_action_subagent_running)
-        ToolActionKind.MCP -> stringResource(Res.string.tool_action_mcp_running_target, singleTarget ?: firstCall.name)
+        ToolActionKind.MCP -> singleTarget?.let { stringResource(Res.string.tool_action_mcp_running_target, it) }
+            ?: stringResource(Res.string.tool_action_mcp_running)
         ToolActionKind.ASK -> stringResource(Res.string.tool_action_ask_running)
         ToolActionKind.TODO -> stringResource(Res.string.tool_action_todo_running)
         ToolActionKind.VERIFY -> singleTarget?.let { stringResource(Res.string.tool_action_verify_running_target, it) }
             ?: stringResource(Res.string.tool_action_verify_running)
-        else -> singleTarget?.let { stringResource(Res.string.tool_action_other_running_target, it) }
-            ?: stringResource(Res.string.tool_action_other_running)
+        else -> stringResource(Res.string.tool_action_other_running)
     }
 }

@@ -12,7 +12,7 @@ import xyz.mederi.util.MederiProductNames
  * - 文件工具（read/write/edit/list）→ 路径（会话目录内显示相对路径，目录外保留绝对路径；读取文件时追加 #L$start-$end 行号）；
  * - 命令工具（bash）→ 命令原文；
  * - apply_patch → 补丁内涉及的文件清单（Add/Update/Delete/Move 去重取前 3）；
- * - 计划子任务工具（verify_subtask / generate_spec / update_verification）→ 序号 + 子任务标题
+ * - 计划子任务工具（verify_subtask / generate_spec / update_verify）→ 序号 + 子任务标题
  *   （从计划投影按 planId + subtaskIndex 查出；verify_subtask 只在已记录判定时追加 PASS/FAIL）；
  * - todo 工具 → 返回 null（UI 仅显示“更新待办清单”，不显示内容）；
  * - 其余 → 回退到 path/file/command 等常见键，最后兜底第一个参数值（拦截任何以 [ 或 { 开头的复合 JSON 文本）。
@@ -51,7 +51,7 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
             extractAskUserSummary(input)
         name == "verify_subtask" ->
             planSubtaskTarget(input, snapshot, includeRecordedVerdict = true)
-        name == "generate_spec" || name == "update_verification" ->
+        name == "generate_spec" || name == "update_verify" || name == "update_verification" ->
             planSubtaskTarget(input, snapshot, includeRecordedVerdict = false)
         name == "write_log" ->
             "${MederiProductNames.projectWorkdirName}/notebook.md"
@@ -88,7 +88,7 @@ internal fun probeToolTarget(name: String, input: Map<String, String>, snapshot:
 }
 
 /**
- * 计划子任务的目标摘要（verify_subtask / generate_spec / update_verification 共用）：
+ * 计划子任务的目标摘要（verify_subtask / generate_spec / update_verify 共用）：
  * 优先输出「序号 + 标题」，序号 1-based——与计划卡 step_label（"步骤 N"）同一口径，
  * 因为光给 "#4" 用户看不出是哪个子任务。
  *

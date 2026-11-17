@@ -10,6 +10,23 @@ import xyz.mederi.core.contract.models.WorkspaceKind
 import xyz.mederi.core.contract.models.WorkspaceOperation
 import xyz.mederi.core.contract.models.WorkspaceSelection
 
+/** A detached worktree may still have a known base branch in its own repository. */
+internal fun resolveWorktreeBaseBranch(workspace: WorkspaceInfo, repository: RepositoryInfo?): String? {
+    val checkout = workspace.workspace
+    val commonDirectory = checkout.gitCommonDirectory ?: return null
+    if (checkout.kind != WorkspaceKind.MANAGED_WORKTREE || workspace.branch != null ||
+        repository?.isGit != true || repository.gitCommonDirectory != commonDirectory
+    ) return null
+
+    val baseRef = checkout.pendingSelection?.selection?.baseRef?.removePrefix("refs/heads/")
+    repository.branches.firstOrNull { it.name == baseRef }?.let { return it.name }
+
+    val baseCommit = checkout.baseCommit ?: return null
+    val matchingBranches = repository.branches.filter { it.headOid == baseCommit }
+    if (matchingBranches.isNotEmpty()) return matchingBranches.singleOrNull()?.name
+    return repository.branch?.takeIf { repository.branches.isEmpty() && repository.headOid == baseCommit }
+}
+
 /**
  * WorkspacePresenter: 管理按 session/workspace 投影，operation 只读。
  * 针对未创建对话管理 draft WorkspaceSelection；创建之后状态以 Core Session 为真理源。

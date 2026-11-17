@@ -22,6 +22,11 @@ object ChatLayout {
     /** 对话视图最小宽度（手机宽度下限）：右侧扩展面板 + Dock 不得把对话区压缩到小于此宽度 */
     val conversationMinWidth: Dp = 360.dp
 
+    internal fun messageSidePadding(isCompact: Boolean): Dp = if (isCompact) 8.dp else 24.dp
+
+    internal val overviewWidth: Dp = 292.dp
+    internal val overviewEndPadding: Dp = 16.dp
+
     /** 右侧常驻 Dock 栏宽度（RightDock） */
     val rightDockWidth: Dp = 46.dp
 

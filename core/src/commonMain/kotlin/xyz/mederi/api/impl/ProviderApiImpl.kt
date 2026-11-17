@@ -37,18 +37,9 @@ class ProviderApiImpl(
     }
 
     override suspend fun create(request: CreateProviderRequest): Provider = mederiCall {
-        val type = try {
-            ProviderType.valueOf(request.type)
-        } catch (e: IllegalArgumentException) {
-            throw MederiValidationException(
-                "Invalid provider type '${request.type}'. " +
-                    "Expected one of: ${ProviderType.entries.joinToString()}",
-                e
-            )
-        }
         val created = providerManager.create(
             name = request.name,
-            type = type,
+            type = parseProviderType(request.type),
             baseUrl = request.baseUrl,
             reasoningParameter = request.reasoningParameter,
             responseSanitization = request.responseSanitization,
@@ -96,7 +87,17 @@ class ProviderApiImpl(
             name = request.name,
             baseUrl = request.baseUrl,
             reasoningParameter = request.reasoningParameter,
-            modelsDevKey = request.modelsDevKey
+            modelsDevKey = request.modelsDevKey,
+            type = request.type?.let(::parseProviderType)
+        )
+    }
+
+    private fun parseProviderType(type: String): ProviderType = try {
+        ProviderType.valueOf(type)
+    } catch (e: IllegalArgumentException) {
+        throw MederiValidationException(
+            "Invalid provider type '$type'. Expected one of: ${ProviderType.entries.joinToString()}",
+            e
         )
     }
 

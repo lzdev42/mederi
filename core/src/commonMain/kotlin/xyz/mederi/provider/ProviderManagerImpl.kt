@@ -107,17 +107,28 @@ class ProviderManagerImpl(
         name: String?,
         baseUrl: String?,
         reasoningParameter: ReasoningParameter?,
-        modelsDevKey: String?
+        modelsDevKey: String?,
+        type: ProviderType?
     ): Provider {
         val existing = require(id)
+        val updatedType = type ?: existing.type
         require(existing.authentication != ProviderAuthentication.CHATGPT_OAUTH || baseUrl == null || baseUrl == existing.baseUrl) {
             "The ChatGPT authorization endpoint cannot be changed"
         }
+        require(existing.authentication != ProviderAuthentication.CHATGPT_OAUTH || updatedType == existing.type) {
+            "The ChatGPT authorization protocol cannot be changed"
+        }
         reasoningParameter?.let { validateReasoningParameter(it) }
+        val updatedReasoningParameter = reasoningParameter ?: if (updatedType != existing.type) {
+            ReasoningParameter.forType(updatedType)
+        } else {
+            existing.reasoningParameter
+        }
         val updated = existing.copy(
             name = name ?: existing.name,
+            type = updatedType,
             baseUrl = baseUrl ?: existing.baseUrl,
-            reasoningParameter = reasoningParameter ?: existing.reasoningParameter,
+            reasoningParameter = updatedReasoningParameter,
             modelsDevKey = modelsDevKey ?: existing.modelsDevKey
         )
         saveProviderInternal(updated)

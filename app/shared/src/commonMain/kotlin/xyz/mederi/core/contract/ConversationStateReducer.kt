@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import xyz.mederi.core.contract.dto.ConversationState
 import xyz.mederi.core.contract.dto.MessagesPage
 import xyz.mederi.core.contract.models.ChatBlock
+import xyz.mederi.core.contract.models.CacheModel
 import xyz.mederi.core.contract.models.ChatMessage
 import xyz.mederi.core.contract.models.ChatRole
 import xyz.mederi.core.contract.models.ConversationStatus
@@ -45,7 +46,7 @@ import xyz.mederi.ui.browser.BrowserStepStatus
  * - [CoreEventType.MESSAGE_ERROR] 设置 errorMessage 并回查落库数据
  * - [CoreEventType.TOOL_CALLED] / [CoreEventType.TOOL_RESULT] 维护 ToolCall block 状态机
  * - APPROVAL / QUESTION / PLAN_APPROVAL 系列事件维护 pending 状态与全生命周期投影
- * - [CoreEventType.LLM_REQUEST_COMPLETED] 累加 requestCount、更新 lastRequestUsage
+ * - 请求发起和用量完成均回查已持久化的请求记录；旧端完成事件保留兼容处理
  * - [CoreEventType.SUBAGENT_*] 事件由 [SubagentTracker] 原子更新 [ConversationState.subagents]
  * - [CoreEventType.BROWSER_TASK_*] 事件更新 [ConversationState.browserAutomation] 与 [ConversationState.activeDockPanel]
  */
@@ -72,7 +73,11 @@ object ConversationStateReducer {
                 snapshot.messages.none { it.id == event.messageId }
             val page = if (isNewResponse) runCatching { refreshPage() }.getOrNull() else null
             val aligned = if (page != null) snapshot.copy(
-                messages = restoreInputOrder(snapshot.messages, page.messages)
+                messages = restoreInputOrder(snapshot.messages, page.messages),
+                requestCount = page.requestCount,
+                tokenUsage = page.tokenUsage,
+                lastRequestUsage = page.lastRequestUsage,
+                cost = page.cost ?: snapshot.cost,
             ) else snapshot
             listOf(apply(aligned, event))
         }
@@ -85,6 +90,7 @@ object ConversationStateReducer {
                     idle.copy(
                         messages = page.messages,
                         tokenUsage = page.tokenUsage,
+                        cost = page.cost ?: idle.cost,
                         contextUsedTokens = page.contextUsedTokens,
                         requestCount = page.requestCount,
                         lastRequestUsage = page.lastRequestUsage,
@@ -102,6 +108,7 @@ object ConversationStateReducer {
                 updated.copy(
                     messages = if (event.payload["inputAccepted"] == "true") mergeLiveMessages(p.messages, snapshot.messages) else p.messages,
                     tokenUsage = p.tokenUsage,
+                    cost = p.cost ?: updated.cost,
                     contextUsedTokens = p.contextUsedTokens,
                     requestCount = p.requestCount,
                     lastRequestUsage = p.lastRequestUsage,
@@ -117,11 +124,28 @@ object ConversationStateReducer {
                 errored.copy(
                     messages = p.messages,
                     tokenUsage = p.tokenUsage,
+                    cost = p.cost ?: errored.cost,
                     contextUsedTokens = p.contextUsedTokens,
                     requestCount = p.requestCount,
                     lastRequestUsage = p.lastRequestUsage,
                 )
             } ?: errored)
+        }
+
+        CoreEventType.LLM_REQUEST_STARTED, CoreEventType.LLM_REQUEST_COMPLETED,
+        CoreEventType.SUBAGENT_COMPLETED, CoreEventType.SUBAGENT_ERROR, CoreEventType.SUBAGENT_STOPPED -> {
+            val updated = apply(snapshot, event)
+            // 发起和完成事件都读取权威累计值，避免重放或回查与事件重叠时重复计数。
+            val refreshUsage = event.type != CoreEventType.LLM_REQUEST_COMPLETED || event.messageId != null
+            val page = if (refreshUsage) runCatching { refreshPage() }.getOrNull() else null
+            listOf(page?.let {
+                updated.copy(
+                    tokenUsage = it.tokenUsage,
+                    requestCount = it.requestCount,
+                    lastRequestUsage = it.lastRequestUsage,
+                    cost = it.cost ?: updated.cost,
+                )
+            } ?: updated)
         }
 
         else -> listOf(apply(snapshot, event))
@@ -267,10 +291,11 @@ object ConversationStateReducer {
             event = event,
         )
 
-        // 单次 LLM HTTP 请求完成：实时累加 requestCount、更新 lastRequestUsage（不走 refreshPage）
-        CoreEventType.LLM_REQUEST_COMPLETED -> snapshot.copy(
+        // 新端事件只通知回查账本。历史服务端无请求 ID，沿用旧增量。
+        CoreEventType.LLM_REQUEST_STARTED -> snapshot
+        CoreEventType.LLM_REQUEST_COMPLETED -> if ("executionSessionId" in event.payload) snapshot else snapshot.copy(
             requestCount = snapshot.requestCount + 1,
-            lastRequestUsage = event.toLastRequestUsage()
+            lastRequestUsage = event.toLastRequestUsage() ?: snapshot.lastRequestUsage,
         )
 
         CoreEventType.QUESTION_REQUESTED -> {
@@ -402,29 +427,42 @@ object ConversationStateReducer {
                 } else snapshot.planApprovals
             } else snapshot.planApprovals
 
-            snapshot.copy(planApprovals = updatedApprovals)
+            val voidedPending = action == "voided" && planId != null && snapshot.pendingPlanApproval?.id == planId
+            if (voidedPending) {
+                snapshot.copy(
+                    conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
+                    planApprovals = updatedApprovals,
+                    pendingPlanApproval = null,
+                )
+            } else snapshot.copy(planApprovals = updatedApprovals)
         }
 
         CoreEventType.PLAN_APPROVAL_RESOLVED -> {
             val planId = event.payload["planId"]
             val approved = event.payload["approved"]?.toBooleanStrictOrNull() ?: true
             val updatedList = snapshot.planApprovals.map {
-                if (it.id == planId) it.copy(status = if (approved) "APPROVED" else "REJECTED") else it
+                if (it.id == planId && it.status != "VOIDED") {
+                    it.copy(status = if (approved) "APPROVED" else "REJECTED")
+                } else it
             }
-            val lastMsg = snapshot.messages.lastOrNull()
-            val updatedMessages = if (approved && lastMsg != null && lastMsg.role == ChatRole.Assistant && !lastMsg.isStreaming) {
-                val msgs = snapshot.messages.toMutableList()
-                msgs[msgs.lastIndex] = lastMsg.copy(isStreaming = true)
-                msgs
+            val anotherPlanIsPending = snapshot.pendingPlanApproval?.let { it.id != planId } == true
+            val resolvedPlanWasVoided = snapshot.planApprovals.any { it.id == planId && it.status == "VOIDED" }
+            if (anotherPlanIsPending || resolvedPlanWasVoided) {
+                snapshot.copy(planApprovals = updatedList)
             } else {
-                snapshot.messages
+                val lastMsg = snapshot.messages.lastOrNull()
+                val updatedMessages = if (approved && lastMsg != null && lastMsg.role == ChatRole.Assistant && !lastMsg.isStreaming) {
+                    snapshot.messages.dropLast(1) + lastMsg.copy(isStreaming = true)
+                } else {
+                    snapshot.messages
+                }
+                snapshot.copy(
+                    conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
+                    messages = updatedMessages,
+                    pendingPlanApproval = null,
+                    planApprovals = updatedList,
+                )
             }
-            snapshot.copy(
-                conversation = snapshot.conversation.copy(status = ConversationStatus.Working),
-                messages = updatedMessages,
-                pendingPlanApproval = null,
-                planApprovals = updatedList
-            )
         }
 
         // 浏览器任务生命周期与步骤事件（收敛入状态机）
@@ -1053,11 +1091,24 @@ object ConversationStateReducer {
 
     private fun parseToolArgs(args: String): Map<String, String> = ToolArgParser.parse(args)
 
-    private fun CoreEvent.toLastRequestUsage(): LastRequestUsage = LastRequestUsage(
-        inputTokens = payload["inputTokens"]?.toLongOrNull() ?: 0,
-        outputTokens = payload["outputTokens"]?.toLongOrNull() ?: 0,
-        cachedTokens = payload["cachedTokens"]?.toLongOrNull()
-    )
+    private fun CoreEvent.toLastRequestUsage(): LastRequestUsage? {
+        val input = payload["inputTokens"]?.toLongOrNull()
+        val output = payload["outputTokens"]?.toLongOrNull()
+        val read = payload["cachedTokens"]?.toLongOrNull()
+        val write = payload["cacheWriteTokens"]?.toLongOrNull()
+        if (messageId == null && input == null && output == null && read == null && write == null) return null
+        val providerId = payload["providerId"]
+        val modelId = payload["providerModelId"] ?: payload["modelId"]
+        return LastRequestUsage(
+            inputTokens = input,
+            outputTokens = output,
+            cachedTokens = read,
+            cacheWriteTokens = write,
+            cacheModel = if (providerId != null && modelId != null) {
+                CacheModel(providerId, payload["providerEndpoint"], modelId, payload["reasoningLevel"])
+            } else null,
+        )
+    }
 }
 
 /** 渐进迁移类型别名，确保历史引用向后兼容。 */

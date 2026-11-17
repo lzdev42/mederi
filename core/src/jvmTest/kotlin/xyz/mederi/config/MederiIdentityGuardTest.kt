@@ -30,12 +30,6 @@ class MederiIdentityGuardTest {
      * 仅限"非产品身份、但与类名/组件声明同名"的自引用字面量；新增此类豁免必须写明理由。
      */
     private val exemptedOccurrences: Map<String, String> = linkedMapOf(
-        "commonMain/kotlin/xyz/mederi/provider/infrastructure/koog/sanitize/MederiOpenAILLMClient.kt:87" to
-            "clientName 与类名同名（MederiOpenAILLMClient）的组件自引用，随代码标识符改名，非产品命名空间派生",
-        "commonMain/kotlin/xyz/mederi/provider/infrastructure/koog/sanitize/MederiOpenAILLMClient.kt:136" to
-            "调试标签引用类名 MederiOpenAILLMClient（与代码标识符一致），非产品身份派生",
-        "commonMain/kotlin/xyz/mederi/provider/infrastructure/koog/sanitize/MederiOpenAILLMClient.kt:207" to
-            "调试标签引用类名 MederiOpenAILLMClient（与代码标识符一致），非产品身份派生",
         "commonMain/kotlin/xyz/mederi/http/MederiHttpClientFactory.kt:71" to
             "Ktor 插件名与声明标识 ProviderFailureMetadata 同名（含类名前缀），随代码标识符改名，非产品身份派生",
     )
