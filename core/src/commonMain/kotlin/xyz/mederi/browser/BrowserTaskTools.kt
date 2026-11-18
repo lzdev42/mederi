@@ -289,7 +289,11 @@ class BrowserTool(
             } else {
                 "Registered browsers: ${available.joinToString(", ")} (default: ${default ?: "first registered"})."
             }
-            return "Single tool to dispatch and manage browser sub-agent tasks. The actual page operation " +
+            return "Dispatch and manage browser sub-agent tasks for website use, such as retrieving information, " +
+                "filling forms, or completing a user workflow. Do not use RUN for software development testing " +
+                "of a web app, including smoke tests, UI or end-to-end tests, and verifying a code change or bug fix. " +
+                "Use the project's development and testing tools for those tasks. Classify by the task's purpose, " +
+                "regardless of the website's URL or deployment environment. The actual page operation " +
                 "is done by a DEDICATED BROWSER SUB-AGENT — you never operate the page. " +
                 "action=RUN(task[, browser]): dispatch a task, returns a taskId immediately, the sub-agent " +
                 "runs in the background and does not block your turn. " +

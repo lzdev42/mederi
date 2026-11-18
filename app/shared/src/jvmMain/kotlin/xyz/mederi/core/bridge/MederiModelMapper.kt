@@ -410,11 +410,15 @@ object MederiModelMapper {
         messages: List<CoreMessage>,
         records: List<xyz.mederi.domain.model.ModelRequestRecord> = emptyList(),
         referencePricing: (CoreMessage) -> ModelReferencePricing? = { null },
+        providerPricing: (CoreMessage) -> ModelReferencePricing? = { null },
     ): UsageProjection {
         val usage = SessionUsage.fromMessages(messages, records)
         val estimates = java.util.IdentityHashMap<CoreMessage, Double?>()
+        val providerEstimates = java.util.IdentityHashMap<CoreMessage, Double?>()
         var total = 0.0
         var priced = 0
+        var providerTotal = 0.0
+        var providerPriced = 0
         val modelCosts = usage.groups.map { group ->
             var groupCost = 0.0
             var groupPriced = 0
@@ -424,6 +428,14 @@ object MederiModelMapper {
                 if (estimate != null) {
                     groupCost += estimate
                     groupPriced++
+                }
+                // 供应商实际价并行估价：与标准价共用 [estimateRequestCost] 公式（零分叉，仅价格输入不同），
+                // 一有一无互不传染（标准价链路不因供应商价为 null 受影响，反之亦然）。
+                val providerEstimate = providerPricing(request)?.let { estimateRequestCost(request, it) }
+                providerEstimates[request] = providerEstimate
+                if (providerEstimate != null) {
+                    providerTotal += providerEstimate
+                    providerPriced++
                 }
             }
             total += groupCost
@@ -462,7 +474,7 @@ object MederiModelMapper {
                 inputReported = totals.inputTokens != null,
                 outputReported = totals.outputTokens != null,
                 latestByModel = usage.latestByModel.map { (key, request) ->
-                    SelectedModelUsage(key.modelId, key.providerId, request.toRequestUsage(), estimates[request])
+                    SelectedModelUsage(key.modelId, key.providerId, request.toRequestUsage(), estimates[request], providerEstimates[request])
                 },
             ),
             requestCount = usage.requestCount,
@@ -472,6 +484,7 @@ object MederiModelMapper {
                 pricedRequests = priced,
                 totalRequests = totals.usageCoverageRequests,
                 models = modelCosts,
+                providerEstimatedTotal = providerTotal.takeIf { providerPriced > 0 },
             ),
         )
     }
@@ -488,11 +501,14 @@ object MederiModelMapper {
      *
      * token / 成功计数 / 覆盖率一律由 [SessionUsage] 的账本路径算出（同一真理源，不复制成功判定）；
      * 估价复用本文件 [estimateRequestCost]，故与单会话 cost 口径一致。
+     * 与 [toUsageProjection] 对称双算：[referencePricing] 标准价 + [providerPricing] 该渠道实际价
+     * 共用估价公式（零分叉），一有一无互不传染（供应商目录无价时 provider 侧保持 null）。
      * 组顺序 = 记录首次出现顺序。
      */
     internal fun toCumulativeUsageStatistics(
         records: List<xyz.mederi.domain.model.ModelRequestRecord>,
         referencePricing: (CoreMessage) -> ModelReferencePricing? = { null },
+        providerPricing: (CoreMessage) -> ModelReferencePricing? = { null },
     ): UsageStatistics {
         // records → 一条 usage Message（未完成 usage==null 的由 SessionUsage 合成），与 records 同序同长
         val requests = SessionUsage.fromMessages(emptyList(), records).requests
@@ -509,6 +525,8 @@ object MederiModelMapper {
             var modelName: String? = null
             var groupCost = 0.0
             var groupPriced = 0
+            var groupProviderCost = 0.0
+            var groupProviderPriced = 0
             for (index in indexes) {
                 val request = requests[index]
                 providerName = request.providerName ?: providerName
@@ -516,6 +534,11 @@ object MederiModelMapper {
                 referencePricing(request)?.let { price -> estimateRequestCost(request, price) }?.let {
                     groupCost += it
                     groupPriced++
+                }
+                // 供应商实际价并行估价：与标准价共用 [estimateRequestCost] 公式（零分叉，仅价格输入不同），一有一无互不传染
+                providerPricing(request)?.let { price -> estimateRequestCost(request, price) }?.let {
+                    groupProviderCost += it
+                    groupProviderPriced++
                 }
             }
             UsageStatGroup(
@@ -533,13 +556,16 @@ object MederiModelMapper {
                 totalRequests = indexes.size,
                 pricedRequests = groupPriced,
                 estimate = groupCost.takeIf { groupPriced > 0 },
+                providerEstimate = groupProviderCost.takeIf { groupProviderPriced > 0 },
             )
         }
 
         val priced = groups.sumOf { it.pricedRequests }
+        val providerPricedGroups = groups.count { group -> group.providerEstimate != null }
         return UsageStatistics(
             groups = groups,
             totalEstimatedCost = groups.sumOf { it.estimate ?: 0.0 }.takeIf { priced > 0 },
+            totalProviderEstimatedCost = groups.sumOf { it.providerEstimate ?: 0.0 }.takeIf { providerPricedGroups > 0 },
             pricedRequests = priced,
             totalRequests = records.size,
         )

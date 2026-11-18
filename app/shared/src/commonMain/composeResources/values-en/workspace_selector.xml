@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="workspace_selector_local">Local</string>
+    <string name="workspace_selector_detecting">Detecting</string>
+    <string name="workspace_selector_unavailable">Workspace unavailable</string>
+    <string name="workspace_location_detached_commit">%1$s · detached HEAD %2$s</string>
+    <string name="workspace_location_detached_commit_base">%1$s · detached HEAD %2$s · base branch %3$s</string>
+</resources>

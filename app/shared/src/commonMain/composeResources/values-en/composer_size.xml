@@ -1,0 +1,6 @@
+<resources>
+    <string name="input_expand">Expand</string>
+    <string name="input_collapse">Collapse</string>
+    <string name="input_expand_description">Expand message composer</string>
+    <string name="input_collapse_description">Collapse message composer</string>
+</resources>

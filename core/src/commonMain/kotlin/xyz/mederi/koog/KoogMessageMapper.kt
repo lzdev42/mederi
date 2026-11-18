@@ -47,7 +47,7 @@ object KoogMessageMapper {
                             val key = id to part.tool
                             pending.remove(key)
                             try {
-                                requireToolCallArguments(part.tool, id, part.args)
+                                requireToolCallArguments(part.args, kind = JsonRecordKind.SENT_TOOL_ARGUMENTS)
                                 if (part.tool.isNotBlank()) pending[key] = messageIndex to partIndex
                             } catch (_: SerializationException) {
                                 // The raw malformed call stays in storage.

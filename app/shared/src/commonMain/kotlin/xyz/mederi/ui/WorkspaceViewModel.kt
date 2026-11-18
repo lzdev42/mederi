@@ -926,6 +926,15 @@ class WorkspaceViewModel(
         // 程序关闭时同步保存当前会话 compose state（AppState.flushAll 先跑全部 flush 回调再落偏好）
         appState.registerFlushCallback { flushComposeState() }
 
+        var draftProjectId = appState.selectedProjectId.value
+        viewModelScope.launch {
+            appState.selectedProjectId.collect { projectId ->
+                if (projectId != draftProjectId) {
+                    workspacePresenter.resetDraft()
+                    draftProjectId = projectId
+                }
+            }
+        }
     }
 
 
@@ -2126,6 +2135,9 @@ class WorkspaceViewModel(
 
     fun costForModel(modelId: String?): Double? = selectedModelUsage(modelId)?.estimatedCost
 
+    /** 该渠道（供应商目录价）口径的最近请求预估成本；null = 供应商目录缺价，不可估。 */
+    fun providerCostForModel(modelId: String?): Double? = selectedModelUsage(modelId)?.providerEstimatedCost
+
     private fun selectedModelUsage(modelId: String?): xyz.mederi.core.contract.models.SelectedModelUsage? {
         if (modelId == null) return null
         val provider = usageSelectedModel.value?.takeIf { it.id == modelId }?.provider
@@ -2685,7 +2697,6 @@ class WorkspaceViewModel(
     }
 
     fun selectProject(id: String?) {
-        workspacePresenter.resetDraft()
         appState.selectProject(id)
     }
 

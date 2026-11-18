@@ -761,6 +761,11 @@
     <string name="overview_usage_cache_sample">命中 %1$s · 缓存命中 %2$s / %3$s token · %4$d / %5$d 次有有效用量</string>
     <string name="overview_usage_cost_column">预估成本</string>
     <string name="overview_usage_session_cost">会话累计</string>
+    <string name="overview_usage_input_miss">├ 未命中</string>
+    <string name="overview_usage_input_write">├ 缓存写入</string>
+    <string name="overview_usage_input_hit">└ 缓存命中</string>
+    <string name="overview_usage_standard_price">标准价</string>
+    <string name="overview_usage_provider_actual">该渠道实际</string>
     <string name="overview_usage_stats">累计用量</string>
     <string name="overview_usage_stats_title">累计用量</string>
     <string name="overview_usage_stats_empty">暂无模型使用记录</string>

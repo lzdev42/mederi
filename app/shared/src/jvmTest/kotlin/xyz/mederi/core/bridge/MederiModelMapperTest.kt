@@ -142,13 +142,13 @@ class MederiModelMapperTest {
             .copy(providerId = "gateway", modelId = "local-a", providerModelId = "remote-a", cacheWriteTokens = 100_000)
         val second = first.copy(modelId = "local-b", providerModelId = "remote-b", cachedTokens = 0, cacheWriteTokens = 0)
         val unpriced = first.copy(modelId = "local-c", providerModelId = "remote-c")
-        val projection = MederiModelMapper.toUsageProjection(listOf(first, second, unpriced)) { message ->
+        val projection = MederiModelMapper.toUsageProjection(listOf(first, second, unpriced), referencePricing = { message ->
             when (message.providerModelId) {
                 "remote-a" -> xyz.mederi.metadata.ModelReferencePricing(2.0, 4.0, 1.0, 7.0)
                 "remote-b" -> xyz.mederi.metadata.ModelReferencePricing(4.0, 6.0, null, null)
                 else -> null
             }
-        }
+        })
         assertEquals(3_000_000L, projection.tokens.input)
         assertEquals(6.0, projection.tokens.latestByModel.first().estimatedCost)
         assertEquals(10.0, projection.tokens.latestByModel[1].estimatedCost)
@@ -180,6 +180,92 @@ class MederiModelMapperTest {
         assertNull(row.estimate)
     }
 
+    // ── ST2 双价并行估价（标准价 + 供应商实际价，同一 estimateRequestCost 公式，仅价格输入不同）──
+
+    /** glm-5.3（sensenova 渠道）请求：in=1000, read=800, write=0, out=100。 */
+    private fun glm53Request() = msg(MessageRole.ASSISTANT, input = 1000, output = 100, cached = 800).copy(
+        providerId = "sensenova",
+        modelId = "glm-5.3",
+        providerModelId = "glm-5.3",
+        providerEndpoint = "https://api.sensenova.cn/v1",
+    )
+
+    /** OpenRouter 标准目录价：in 1.0 / out 2.0 / cacheRead 0.1（美元每百万）。 */
+    private val glm53StandardPricing = xyz.mederi.metadata.ModelReferencePricing(1.0, 2.0, 0.1, null)
+
+    /** sensenova 自身目录 0 价（glm 系列免费）：in 0.0 / out 0.0 / cacheRead null（回落输入价 0.0）。 */
+    private val sensenovaZeroPricing = xyz.mederi.metadata.ModelReferencePricing(0.0, 0.0, null, null)
+
+    @Test
+    fun st2_glm53_std() {
+        // 标准价有、供应商价无 → 标准价链路正常出值
+        val projection = MederiModelMapper.toUsageProjection(
+            listOf(glm53Request()),
+            referencePricing = { glm53StandardPricing },
+            providerPricing = { null },
+        )
+        val latest = projection.tokens.latestByModel.single()
+        assertEquals("glm-5.3", latest.modelId)
+        assertTrue(latest.estimatedCost != null, "estimatedCost 非 null（标准价存在）")
+        assertTrue(projection.cost.total != null, "CostSummary.total 非 null")
+    }
+
+    @Test
+    fun st2_glm53_provider() {
+        // 同请求：供应商价 null → provider 字段全 null，且不被标准价传染
+        val projection = MederiModelMapper.toUsageProjection(
+            listOf(glm53Request()),
+            referencePricing = { glm53StandardPricing },
+            providerPricing = { null },
+        )
+        val latest = projection.tokens.latestByModel.single()
+        assertNull(latest.providerEstimatedCost, "供应商目录无价 → providerEstimatedCost == null")
+        assertNull(projection.cost.providerEstimatedTotal, "供应商目录无价 → CostSummary.providerEstimatedTotal == null")
+        // 一有一无互不传染：标准价仍出值
+        assertTrue(latest.estimatedCost != null, "provider 价为 null 不影响标准价 estimatedCost")
+        assertTrue(projection.cost.total != null, "provider 价为 null 不影响 CostSummary.total")
+    }
+
+    @Test
+    fun st2_glm52_diff() {
+        // glm-5.2（sensenova 0 价真实场景）：两价均非 null 且不同（0 价 vs 标准价）
+        val request = glm53Request().copy(modelId = "glm-5.2", providerModelId = "glm-5.2")
+        // 第二条同渠道请求（不同 token 数），覆盖 providerEstimatedTotal 多请求求和
+        val second = request.copy(id = "b", inputTokens = 500, outputTokens = 50, cachedTokens = 0)
+        val projection = MederiModelMapper.toUsageProjection(
+            listOf(request, second),
+            referencePricing = { glm53StandardPricing },
+            providerPricing = { sensenovaZeroPricing },
+        )
+        val latest = projection.tokens.latestByModel.single()
+        assertTrue(latest.estimatedCost != null, "标准价非 null")
+        assertTrue(latest.providerEstimatedCost != null, "供应商价非 null")
+        assertTrue(
+            latest.estimatedCost != latest.providerEstimatedCost,
+            "标准价 ${latest.estimatedCost} 与供应商 0 价 ${latest.providerEstimatedCost} 不同",
+        )
+        // 多请求 providerTotal 求和：0.0 + 0.0 = 0.0，但 priced>0 → 非 null
+        assertEquals(0.0, projection.cost.providerEstimatedTotal, "providerEstimatedTotal = 两条 0 价请求之和（0.0，非 null）")
+        assertTrue(projection.cost.total != null, "CostSummary.total 非 null")
+    }
+
+    @Test
+    fun st2_formula() {
+        // in=1000, read=800, write=0, out=100
+        // 标准价 (1.0, 2.0, cacheRead 0.1)：(1000-800)×1.0 + 800×0.1 + 100×2.0 = 480 / 1e6 = 0.00048
+        // 供应商价 (0.0, 0.0, null)：读价回落输入价 0.0 → 0.0
+        val projection = MederiModelMapper.toUsageProjection(
+            listOf(glm53Request()),
+            referencePricing = { glm53StandardPricing },
+            providerPricing = { sensenovaZeroPricing },
+        )
+        val latest = projection.tokens.latestByModel.single()
+        // 精确值 = (200×1.0 + 800×0.1 + 100×2.0)/1e6 = 480/1e6 = 0.00048（逐行相加的 0.1 ulp 舍入差异不在此断言）
+        assertEquals(0.00048, latest.estimatedCost, "estimatedCost == 0.00048（手算 200×1.0/1M + 800×0.1/1M + 100×2.0/1M）")
+        assertEquals(0.0, latest.providerEstimatedCost, "供应商 0 价 → providerEstimatedCost == 0.0")
+        assertEquals(0.00048, projection.cost.total, "CostSummary.total 与单请求一致")
+    }
+
     // ── 跨会话累计统计（供应商 + API Key + 上游模型 分组）──
 
     private fun record(message: Message, owner: String = message.sessionId): xyz.mederi.domain.model.ModelRequestRecord =
@@ -191,10 +277,19 @@ class MederiModelMapperTest {
             usage = message,
         )
 
-    /** input 1.0 / output 2.0 / cacheRead 0.1 / cacheWrite 1.5（美元每百万）。 */
+    /** input 1.0 / output 2.0 / cacheRead 0.1 / cacheWrite 1.5（美元每百万）；remote-c 2.0/3.0/0.2/2.5（供应商目录无价）。 */
     private fun keyPricing(message: Message): xyz.mederi.metadata.ModelReferencePricing? =
         when (message.providerModelId) {
             "remote-a" -> xyz.mederi.metadata.ModelReferencePricing(1.0, 2.0, 0.1, 1.5)
+            "remote-c" -> xyz.mederi.metadata.ModelReferencePricing(2.0, 3.0, 0.2, 2.5)
+            else -> null
+        }
+
+    /** input 1.2 / output 2.4 / cacheRead 0.12 / cacheWrite 1.8（美元每百万）；remote-b 3.0/4.0/0.3/3.5（标准目录无价）。 */
+    private fun providerKeyPricing(message: Message): xyz.mederi.metadata.ModelReferencePricing? =
+        when (message.providerModelId) {
+            "remote-a" -> xyz.mederi.metadata.ModelReferencePricing(1.2, 2.4, 0.12, 1.8)
+            "remote-b" -> xyz.mederi.metadata.ModelReferencePricing(3.0, 4.0, 0.3, 3.5)
             else -> null
         }
 
@@ -241,6 +336,44 @@ class MederiModelMapperTest {
         assertEquals(3, stats.totalRequests)
         assertEquals(2 * 730.0 / 1_000_000, requireNotNull(stats.totalEstimatedCost), 1e-12)
         assertEquals("USD", stats.currency)
+    }
+
+    @Test
+    fun cumulativeUsageProviderEstimateIsSymmetricAndMutuallyIndependent() {
+        val base = msg(MessageRole.ASSISTANT, input = 1000, output = 200, cached = 800).copy(
+            providerId = "gateway", providerName = "Gateway", providerModelId = "remote-a", modelName = "Model A",
+            modelId = "local-a", cacheWriteTokens = 100, modelRequestCompleted = true, finishReason = "stop",
+        )
+        // 双有价：标准价与供应商价不同值 → 双价格各自独立成列
+        val bothPriced = base.copy(id = "req_a", sessionId = "s1")
+        // 仅标准价（供应商目录无价）→ providerEstimate 为 null，estimate 不受影响
+        val standardOnly = base.copy(id = "req_b", sessionId = "s2", providerModelId = "remote-c", modelName = "Model C")
+        // 仅供应商价（标准目录无价）→ estimate 为 null，providerEstimate 不受影响
+        val providerOnly = base.copy(id = "req_c", sessionId = "s3", providerModelId = "remote-b", modelName = "Model B")
+
+        val stats = MederiModelMapper.toCumulativeUsageStatistics(
+            listOf(record(bothPriced), record(standardOnly), record(providerOnly)),
+            ::keyPricing,
+            ::providerKeyPricing,
+        )
+
+        val both = stats.groups[0]
+        assertEquals(730.0 / 1_000_000, requireNotNull(both.estimate), 1e-12)
+        // 手算：(1000-800-100)*1.2 + 800*0.12 + 100*1.8 + 200*2.4 = 120 + 96 + 180 + 480 = 876
+        assertEquals(876.0 / 1_000_000, requireNotNull(both.providerEstimate), 1e-12)
+
+        val standard = stats.groups[1]
+        // 手算：(1000-800-100)*2.0 + 800*0.2 + 100*2.5 + 200*3.0 = 200 + 160 + 250 + 600 = 1210
+        assertEquals(1210.0 / 1_000_000, requireNotNull(standard.estimate), 1e-12)
+        assertNull(standard.providerEstimate, "供应商目录无价不造 0.0")
+
+        val provider = stats.groups[2]
+        assertNull(provider.estimate, "标准价链路不因供应商价有无受影响")
+        // 手算：(1000-800-100)*3.0 + 800*0.3 + 100*3.5 + 200*4.0 = 300 + 240 + 350 + 800 = 1690
+        assertEquals(1690.0 / 1_000_000, requireNotNull(provider.providerEstimate), 1e-12)
+
+        assertEquals((730.0 + 1210.0) / 1_000_000, requireNotNull(stats.totalEstimatedCost), 1e-12)
+        assertEquals((876.0 + 1690.0) / 1_000_000, requireNotNull(stats.totalProviderEstimatedCost), 1e-12)
     }
 
     @Test

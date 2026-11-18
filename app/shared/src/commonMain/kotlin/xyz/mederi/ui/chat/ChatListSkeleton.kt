@@ -45,7 +45,7 @@ internal fun ChatListSkeleton(
         modifier = modifier
             .widthIn(max = contentMaxWidth)
             .fillMaxWidth()
-            .padding(start = horizontalPadding, top = 20.dp, end = horizontalPadding)
+            .padding(horizontal = horizontalPadding, vertical = 20.dp)
             .then(visibility.modifier),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {

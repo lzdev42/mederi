@@ -25,7 +25,7 @@
 | C15 | `DiffCards.kt` TurnDiffSummaryCard/FileDiffRow | 扁平变更列表较轻；mono路径/增删数、Review按钮，需统一密度和操作 | ObjectList，R10 |
 | C16 | `WorkspaceFloatingOverlay.kt`、`StatusBar.kt` | 已删重复子Agent浮条；仍有主轮次状态、压缩结果、文件打开失败、截图预览；Capsule与Strip风格并存 | SharedFeedback，R04/R09 |
 | C17 | `ErrorBoard.kt`、`ErrorDetailDialog.kt` | 简报/详情/继续/关闭；红底红框红字叠加；关闭小热区；恢复入口必须保留 | ActionNotice + Dialog，R09 |
-| C18 | `ChatInputCard.kt` | 输入/键盘/剪贴板/popup/能力提示/effect收集混合；与MainScreen竞争effect | Composer + Route，R03a/R08 |
+| C18 | `ChatInputCard.kt` | 顶栏显示项目、实际检出、沙盒与计划审批；底栏一键切换自动高度与最大化，草稿保留 | Composer + Route，R03a/R08 |
 | C19 | `ChatInputAttachments.kt` | 图片缩略图、大文本卡、预算、删除；多层框，删除/点击语义需统一 | Attachment，R08 |
 | C25 | `ui/chat/ChatListSkeleton.kt`（2026-11-12 新增） | 会话首帧快照未到（`conversationId != null && !isAttached`）时替代欢迎页的骨架占位；复用 `workspaceTaskPulseAlpha` 单色呼吸（减弱模式静态），无文本无 i18n | Placeholder，跟随现有运动语言 |
 | C20 | `ChatInputControls.kt` | 审批模式帮助/开关/Chip；有遗留无效参数；自绘开关语义/热区需补 | ComposerControl，R08 |

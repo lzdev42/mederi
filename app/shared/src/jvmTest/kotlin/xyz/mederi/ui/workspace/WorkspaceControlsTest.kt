@@ -1,6 +1,7 @@
 package xyz.mederi.ui.workspace
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -35,21 +36,22 @@ class WorkspaceControlsTest {
 
     @Test
     fun detachedWorktreeShowsMainAsBaseAndIdentifiesItsLocation() = runComposeUiTest {
+        val commit = "8597cd4b323afeb1"
         val repository = RepositoryInfo(
-            isGit = true, gitCommonDirectory = "/repo/.git", branch = "main", headOid = "commit",
-            branches = listOf(GitBranchInfo("main", "commit")),
+            isGit = true, gitCommonDirectory = "/repo/.git", branch = "main", headOid = commit,
+            branches = listOf(GitBranchInfo("main", commit)),
         )
         val worktree = WorkspaceInfo(
             workspace = Workspace(
                 id = "worktree", projectId = "project", kind = WorkspaceKind.MANAGED_WORKTREE,
                 checkoutRoot = "/worktree", projectRelativePath = "", gitCommonDirectory = "/repo/.git",
-                baseCommit = "commit", state = WorkspaceState.READY, generation = 1,
+                baseCommit = commit, state = WorkspaceState.READY, generation = 1,
                 createdAt = "", lastUsedAt = "",
             ),
-            headOid = "commit", branch = null, dirty = false, capabilities = emptySet(),
+            headOid = commit, branch = null, dirty = false, capabilities = emptySet(),
         )
         assertNull(xyz.mederi.ui.resolveWorktreeBaseBranch(worktree, repository.copy(
-            branches = repository.branches + GitBranchInfo("other", "commit"),
+            branches = repository.branches + GitBranchInfo("other", commit),
         )))
         assertNull(xyz.mederi.ui.resolveWorktreeBaseBranch(worktree, repository.copy(gitCommonDirectory = "/other/.git")))
 
@@ -57,8 +59,9 @@ class WorkspaceControlsTest {
         setContent {
             AppTheme {
                 detachedLocation = stringResource(
-                    Res.string.workspace_location_detached_base,
+                    Res.string.workspace_location_detached_commit_base,
                     stringResource(Res.string.workspace_kind_worktree),
+                    commit.take(7),
                     "main",
                 )
                 WorkspaceSelectorContent(
@@ -74,7 +77,7 @@ class WorkspaceControlsTest {
                 )
             }
         }
-        onNodeWithText("main").assertIsDisplayed().performClick()
+        onNodeWithText(commit.take(7)).assertIsDisplayed().performClick()
         onNodeWithText(detachedLocation).assertIsDisplayed()
     }
 
@@ -189,7 +192,7 @@ class WorkspaceControlsTest {
                     Res.string.composer_plan_approval_mode, stringResource(Res.string.plan_approval_automatic)
                 )
 
-                androidx.compose.foundation.layout.FlowRow(Modifier.width(320.dp)) {
+                FlowRow(Modifier.width(320.dp)) {
                     PermissionPlanSelectorContent(
                         state = state,
                         planMode = AgentMode.AUTONOMOUS,
@@ -236,7 +239,7 @@ class WorkspaceControlsTest {
         val nonGitRepo = RepositoryInfo(isGit = false)
         setContent {
             AppTheme {
-                localText = stringResource(Res.string.workspace_kind_local)
+                localText = stringResource(Res.string.workspace_selector_local)
                 notGitReason = stringResource(Res.string.workspace_unavailable_not_git)
                 WorkspaceSelectorContent(
                     selection = WorkspaceSelection(kind = WorkspaceKind.LOCAL),
@@ -263,10 +266,10 @@ class WorkspaceControlsTest {
 
         // Case B: 是 Git 但无 HEAD
         selectedKinds.clear()
-        val emptyRepo = RepositoryInfo(isGit = true, headOid = null)
+        val emptyRepo = RepositoryInfo(isGit = true, headOid = null, branch = "unborn")
         setContent {
             AppTheme {
-                localText = stringResource(Res.string.workspace_kind_local)
+                localText = "unborn"
                 noHeadReason = stringResource(Res.string.workspace_unavailable_no_head)
                 WorkspaceSelectorContent(
                     selection = WorkspaceSelection(kind = WorkspaceKind.LOCAL),
@@ -296,7 +299,7 @@ class WorkspaceControlsTest {
         )
         setContent {
             AppTheme {
-                localText = stringResource(Res.string.workspace_kind_local)
+                localText = "oid1"
                 unsupportedReason = "Git submodule worktrees unsupported"
                 WorkspaceSelectorContent(
                     selection = WorkspaceSelection(kind = WorkspaceKind.LOCAL),

@@ -21,6 +21,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -29,6 +33,8 @@ import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ArrowUp
 import compose.icons.feathericons.ChevronDown
+import compose.icons.feathericons.ChevronsDown
+import compose.icons.feathericons.ChevronsUp
 import compose.icons.feathericons.Square
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.auto_approve_title
@@ -44,6 +50,7 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiRadius
+import xyz.mederi.theme.MederiSpacing
 import xyz.mederi.ui.components.atoms.MederiSendRoundButton
 
 /** 发送 / 停止按钮。输入存在时统一发送，工作中无输入时可中止。样式收敛为 MederiSendRoundButton（反色 send，KDoc 已注明）。 */
@@ -133,6 +140,7 @@ internal fun IconToolButton(
 internal fun Modifier.inputControlSurface(
     onClick: () -> Unit,
     highlight: Boolean = false,
+    selected: Boolean = false,
 ): Modifier {
     val colors = LocalMederiColors.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -141,6 +149,7 @@ internal fun Modifier.inputControlSurface(
     val background by animateColorAsState(
         targetValue = when {
             highlight -> colors.warningBg
+            selected -> colors.accentBg
             hovered || focused -> colors.surfaceHover
             else -> Color.Transparent
         },
@@ -152,25 +161,26 @@ internal fun Modifier.inputControlSurface(
         .background(background)
         .border(1.dp, if (focused) colors.accentFocus else Color.Transparent, shape)
         .hoverable(interactionSource)
-        .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+        .clickable(interactionSource = interactionSource, indication = null, role = Role.Button, onClick = onClick)
 }
 
 @Composable
 internal fun ContextToolChip(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     label: String,
     onClick: () -> Unit,
-    highlight: Boolean = false
+    highlight: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
     val colors = LocalMederiColors.current
     val contentColor = if (highlight) colors.accentWarning else colors.textSecondary
     Row(
-        modifier = Modifier
+        modifier = modifier
             .heightIn(min = WorkspaceStyle.ControlHeight)
             .inputControlSurface(onClick = onClick, highlight = highlight)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = MederiSpacing.Tight),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
+        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS)
     ) {
         Icon(
             imageVector = icon,
@@ -183,13 +193,51 @@ internal fun ContextToolChip(
             color = contentColor,
             style = WorkspaceStyle.Body,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
         )
         Icon(
             imageVector = FeatherIcons.ChevronDown,
             contentDescription = null,
             tint = contentColor,
             modifier = Modifier.size(10.dp)
+        )
+    }
+}
+
+@Composable
+internal fun ComposerHeightButton(
+    label: String,
+    description: String,
+    maximized: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalMederiColors.current
+    val contentColor = if (maximized) colors.accentText else colors.textPrimary
+    Row(
+        modifier = modifier
+            .heightIn(min = WorkspaceStyle.ControlHeight)
+            .semantics {
+                contentDescription = description
+                selected = maximized
+            }
+            .inputControlSurface(onClick = onClick, selected = maximized)
+            .padding(horizontal = MederiSpacing.XS),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+    ) {
+        Icon(
+            imageVector = if (maximized) FeatherIcons.ChevronsDown else FeatherIcons.ChevronsUp,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(WorkspaceStyle.IconSize),
+        )
+        Text(
+            text = label,
+            color = contentColor,
+            style = WorkspaceStyle.Title,
+            maxLines = 1,
         )
     }
 }

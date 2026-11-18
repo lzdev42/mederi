@@ -9,7 +9,9 @@ import androidx.compose.animation.*
 import xyz.mederi.theme.WorkspaceStyle
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.progressSemantics
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -20,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboard
@@ -45,8 +48,6 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.Grid
 import compose.icons.feathericons.Plus
-import compose.icons.feathericons.Shield
-import compose.icons.feathericons.Zap
 import xyz.mederi.core.contract.models.*
 import xyz.mederi.ui.ChatListItem
 import xyz.mederi.ui.RawMessagesViewModel
@@ -60,8 +61,6 @@ import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.input_image_attachment
 import mederi.app.shared.generated.resources.input_image_n
 import mederi.app.shared.generated.resources.input_pasted_text_n
-import mederi.app.shared.generated.resources.mode_auto_approve
-import mederi.app.shared.generated.resources.mode_manual_approve
 import mederi.app.shared.generated.resources.copy
 import mederi.app.shared.generated.resources.ws_add_to_input
 import mederi.app.shared.generated.resources.ws_ai_image_n
@@ -154,6 +153,7 @@ fun Workspace(
     onProjectMenuExpandedChange: (Boolean) -> Unit,
 ) {
     val colors = LocalMederiColors.current
+    var composerMaximized by remember(viewModel) { mutableStateOf(false) }
     val appState = LocalAppState.current
     // 覆盖层状态传递：任何 Dialog/错误详情/文件确认弹窗打开时，ChatInputCard 需隐藏 IME 桥接 textarea
     val wsOverlayActive = imeOverlayActive ||
@@ -162,6 +162,7 @@ fun Workspace(
     // 子面板 VM 在 Route 层统一创建（ViewModelStore 管理生命周期），组件只接收实例渲染
     val rawMessagesViewModel: RawMessagesViewModel = viewModel { RawMessagesViewModel(appState) }
     val terminalViewModel: TerminalViewModel = viewModel { TerminalViewModel(appState) }
+    val awaitingFirstSnapshot = viewModel.conversationId != null && !viewModel.isAttached
     val isRightPanelOpen = viewModel.isRightPanelOpen
     val overviewState = remember { OverviewWindowState() }
     var overviewLoaded by remember { mutableStateOf(false) }
@@ -211,7 +212,7 @@ fun Workspace(
                     } else columnLeft
                     endSpace < ChatLayout.overviewWidth.roundToPx() + ChatLayout.overviewEndPadding.roundToPx()
                 }
-                var overviewDestination by remember(compactOverview, viewModel.conversationId) {
+                var overviewDestination by remember(compactOverview, viewModel.conversationId, awaitingFirstSnapshot) {
                     mutableStateOf<CompactOverviewDestination?>(null)
                 }
                 val overviewOpen = overviewDestination != null
@@ -220,7 +221,7 @@ fun Workspace(
                 val subagentPanelOpen = viewModel.activeSubagentPanel != null
 
                 // 窄屏入口使用同一份任务状态，概览合上时仍能反映后台任务开始或结束。
-                val observeTasks = compactOverview || (overviewLoaded && overviewState.visible)
+                val observeTasks = !awaitingFirstSnapshot && (compactOverview || (overviewLoaded && overviewState.visible))
                 DisposableEffect(viewModel, observeTasks) {
                     val release = if (observeTasks) viewModel.observeBackgroundTasks() else null
                     onDispose { release?.invoke() }
@@ -318,41 +319,6 @@ fun Workspace(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (isCompact) {
-                                    run {
-                                        // 唯一真理源：AppState.selectedAgentMode 派生流，collectAsState 订阅
-                                        val mode by viewModel.selectedAgentMode.collectAsState()
-                                        val isAutonomous = mode == AgentMode.AUTONOMOUS
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(if (isAutonomous) colors.accentPrimary.copy(alpha = 0.15f) else colors.accentWarning.copy(alpha = 0.15f))
-                                                .border(1.dp, if (isAutonomous) colors.accentPrimary.copy(alpha = 0.4f) else colors.accentWarning.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-                                                .clickable {
-                                                    viewModel.selectAgentMode(if (isAutonomous) AgentMode.APPROVAL else AgentMode.AUTONOMOUS)
-                                                }
-                                                .padding(horizontal = 6.dp, vertical = 3.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (isAutonomous) FeatherIcons.Zap else FeatherIcons.Shield,
-                                                    contentDescription = null,
-                                                    tint = if (isAutonomous) colors.accentPrimary else colors.accentWarning,
-                                                    modifier = Modifier.size(12.dp)
-                                                )
-                                                Text(
-                                                    text = if (isAutonomous) stringResource(Res.string.mode_auto_approve) else stringResource(Res.string.mode_manual_approve),
-                                                    color = if (isAutonomous) colors.accentPrimary else colors.accentWarning,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Medium
-                                                )
-                                            }
-                                        }
-                                    }
-
                                     Box(
                                         modifier = Modifier
                                             .size(28.dp)
@@ -369,7 +335,7 @@ fun Workspace(
                                     }
                                 }
 
-                                if (compactOverview) {
+                                if (!awaitingFirstSnapshot && compactOverview) {
                                     val running = viewModel.hasRunningSubagents ||
                                         viewModel.backgroundTasks.any { it.status == "running" }
                                     val activeDescription = stringResource(Res.string.overview_active_tasks)
@@ -398,7 +364,7 @@ fun Workspace(
                                             Spacer(Modifier.size(6.dp).background(colors.accentPrimary, RoundedCornerShape(50)))
                                         }
                                     }
-                                } else {
+                                } else if (!awaitingFirstSnapshot) {
                                     // 宽屏开关直接使用已保存的浮窗偏好。
                                     Box(
                                         modifier = Modifier
@@ -421,117 +387,92 @@ fun Workspace(
                         }
                     }
 
-                    // 主内容区（消息列表与输入框）
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    ) {
+                    BoxWithConstraints(
+                        modifier = Modifier.weight(1f).fillMaxWidth().imePadding()
+                    ) conversationContent@{
+                        if (awaitingFirstSnapshot) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().clipToBounds().progressSemantics(),
+                                contentAlignment = Alignment.BottomCenter,
+                            ) {
+                                ChatListSkeleton(horizontalPadding = ChatLayout.messageSidePadding(isCompact))
+                            }
+                            return@conversationContent
+                        }
+                        val conversationHeight = maxHeight
+                        val isEmpty = viewModel.messages.isEmpty() && !viewModel.isWorking
+                        val listState = key(viewModel.conversationId) { rememberLazyListState() }
                         val contentMaxWidth = ChatLayout.contentMaxWidth
-                        when {
-                            viewModel.messages.isEmpty() && !viewModel.isWorking -> {
-                                // 空状态：首帧快照未到（会话已选中但尚未 attach）时骨架占位，否则居中欢迎页
-                                val awaitingFirstSnapshot = viewModel.conversationId != null && !viewModel.isAttached
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(
-                                            bottom = if (isCompact) 20.dp else 60.dp,
-                                            start = if (isCompact) 12.dp else 24.dp,
-                                            end = if (isCompact) 12.dp else 24.dp
-                                        ),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = if (awaitingFirstSnapshot) Arrangement.Top else Arrangement.Center
-                                ) {
-                                    if (awaitingFirstSnapshot) {
-                                        ChatListSkeleton(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            contentMaxWidth = contentMaxWidth,
-                                            horizontalPadding = ChatLayout.messageSidePadding(isCompact)
-                                        )
-                                    } else {
-                                        Text(
-                                            text = "mederi",
-                                            color = colors.textPrimary,
-                                            fontSize = if (isCompact) 24.sp else 28.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = (-0.5).sp
-                                        )
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                    }
-                                    Column(
-                                        modifier = Modifier
-                                            .widthIn(max = if (isCompact) Dp.Unspecified else 700.dp)
-                                            .fillMaxWidth(),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                    ) {
-                                        WorkspaceFloatingOverlay(
-                                            viewModel = viewModel,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .zIndex(10f)
-                                                .padding(bottom = 6.dp)
-                                        )
 
-                                        ChatInputCard(
-                                            viewModel = viewModel,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            onOpenProjectPicker = onOpenProjectPicker,
-                                            imeOverlayActive = wsOverlayActive || overviewOpen,
-                                            projectMenuExpanded = projectMenuExpanded,
-                                            onProjectMenuExpandedChange = onProjectMenuExpandedChange
-                                        )
+                        Column(
+                            modifier = Modifier.fillMaxSize()
+                                .padding(
+                                    bottom = when {
+                                        composerMaximized -> 0.dp
+                                        isEmpty -> if (isCompact) 20.dp else 60.dp
+                                        else -> if (isCompact) 8.dp else 24.dp
                                     }
+                                ),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = if (isEmpty && !composerMaximized)
+                                Arrangement.Center else Arrangement.Top,
+                        ) {
+                            if (!composerMaximized) {
+                                if (!isEmpty) {
+                                    MessageList(
+                                        viewModel = viewModel,
+                                        lazyListState = listState,
+                                        contentMaxWidth = contentMaxWidth,
+                                        isCompact = isCompact,
+                                        modifier = Modifier.weight(1f).fillMaxWidth()
+                                    )
+                                } else {
+                                    Text(
+                                        text = "mederi",
+                                        color = colors.textPrimary,
+                                        fontSize = if (isCompact) 24.sp else 28.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = (-0.5).sp
+                                    )
+                                    Spacer(Modifier.height(16.dp))
                                 }
                             }
-                            else -> {
-                                // 有消息
-                                MessageList(
-                                    viewModel = viewModel,
-                                    contentMaxWidth = contentMaxWidth,
-                                    isCompact = isCompact,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth()
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = if (isCompact) 8.dp else 24.dp)
-                                        .padding(bottom = if (isCompact) 8.dp else 24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .widthIn(max = contentMaxWidth)
-                                            .fillMaxWidth(),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                    ) {
-                                        // 顶层浮动状态栈 (Floating Overlay Stack, zIndex 顶层)
-                                        WorkspaceFloatingOverlay(
-                                            viewModel = viewModel,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .zIndex(10f)
-                                                .padding(bottom = 6.dp)
-                                        )
 
-                                        ChatInputCard(
-                                            viewModel = viewModel,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            onOpenProjectPicker = onOpenProjectPicker,
-                                            imeOverlayActive = wsOverlayActive || overviewOpen,
-                                            projectMenuExpanded = projectMenuExpanded,
-                                            onProjectMenuExpandedChange = onProjectMenuExpandedChange
-                                        )
-                                    }
-                                }
+                            Column(
+                                modifier = Modifier
+                                    .then(if (composerMaximized) Modifier.weight(1f) else Modifier.padding(
+                                        horizontal = if (!isCompact) 24.dp else if (isEmpty) 12.dp else 8.dp
+                                    ))
+                                    .widthIn(max = when {
+                                        composerMaximized -> Dp.Unspecified
+                                        isEmpty && !isCompact -> 700.dp
+                                        else -> contentMaxWidth
+                                    })
+                                    .fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                WorkspaceFloatingOverlay(
+                                    viewModel = viewModel,
+                                    modifier = Modifier.fillMaxWidth().zIndex(10f).padding(bottom = 6.dp)
+                                )
+                                ChatInputCard(
+                                    viewModel = viewModel,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .then(if (composerMaximized) Modifier.weight(1f) else Modifier),
+                                    onOpenProjectPicker = onOpenProjectPicker,
+                                    imeOverlayActive = wsOverlayActive || overviewOpen,
+                                    projectMenuExpanded = projectMenuExpanded,
+                                    onProjectMenuExpandedChange = onProjectMenuExpandedChange,
+                                    conversationHeight = conversationHeight,
+                                    maximized = composerMaximized,
+                                    onToggleMaximized = { composerMaximized = !composerMaximized },
+                                )
                             }
                         }
                     }
                 }
 
-                if (compactOverview) {
+                if (!awaitingFirstSnapshot && compactOverview) {
                     overviewDestination?.let { destination ->
                         CompactOverviewPage(
                             viewModel = viewModel,
@@ -546,7 +487,7 @@ fun Workspace(
                             },
                         )
                     }
-                } else {
+                } else if (!awaitingFirstSnapshot) {
                     FloatingOverviewWindow(
                         viewModel = viewModel,
                         rawVm = rawMessagesViewModel,
@@ -837,13 +778,11 @@ fun WorkspaceDialogs(viewModel: WorkspaceViewModel) {
 @Composable
 private fun MessageList(
     viewModel: WorkspaceViewModel,
+    lazyListState: LazyListState,
     modifier: Modifier = Modifier,
     isCompact: Boolean = false,
     contentMaxWidth: Dp = ChatLayout.contentMaxWidth,
 ) {
-    // 切会话使用独立列表状态；reverseLayout 的 index 0 即内容底部。
-    val lazyListState = key(viewModel.conversationId) { rememberLazyListState() }
-
     // 展平后的聊天列表 item 由 WorkspaceViewModel 计算
     val chatItems = viewModel.chatItems
 

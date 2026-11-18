@@ -750,6 +750,11 @@
     <string name="overview_usage_cache_sample">%1$s hit · %2$s / %3$s input tokens from cache · %4$d / %5$d requests with valid usage</string>
     <string name="overview_usage_cost_column">Est. cost</string>
     <string name="overview_usage_session_cost">Session total</string>
+    <string name="overview_usage_input_miss">├ Cache miss</string>
+    <string name="overview_usage_input_write">├ Cache write</string>
+    <string name="overview_usage_input_hit">└ Cache hit</string>
+    <string name="overview_usage_standard_price">OpenRouter rate</string>
+    <string name="overview_usage_provider_actual">Provider rate</string>
     <string name="overview_usage_stats">Cumulative usage</string>
     <string name="overview_usage_stats_title">Cumulative usage</string>
     <string name="overview_usage_stats_empty">No model usage recorded yet</string>

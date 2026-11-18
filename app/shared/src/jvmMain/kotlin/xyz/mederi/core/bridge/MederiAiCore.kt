@@ -760,9 +760,25 @@ class MederiAiCore(
         initialSnapshot = initialSnapshot,
         modelToProvider = modelToProvider,
         referencePricing = ::referencePricing,
+        providerPricing = ::providerPricing,
     ).flowOn(Dispatchers.IO)
 
     private fun referencePricing(message: xyz.mederi.domain.model.Message): xyz.mederi.metadata.ModelReferencePricing? {
+        val context = pricingContext(message) ?: return null
+        return mederi.modelCatalog.referencePricing(context.first, message.modelsDevKey, context.second)
+    }
+
+    /**
+     * 供应商实际目录价：与 [referencePricing] 完全对称（modelId/baseUrl 解析复用 [pricingContext]），
+     * 仅目录查询入口不同——查该供应商自己条目的价格，绝不跨供应商兜底（无价 = null）。
+     */
+    private fun providerPricing(message: xyz.mederi.domain.model.Message): xyz.mederi.metadata.ModelReferencePricing? {
+        val context = pricingContext(message) ?: return null
+        return mederi.modelCatalog.providerPricing(context.first, message.modelsDevKey, context.second)
+    }
+
+    /** 双价共用解析：provider 回落查找 → modelId 解析（配置回落）→ baseUrl（端点去后缀 ?: 供应商 baseUrl）。返回 modelId to baseUrl。 */
+    private fun pricingContext(message: xyz.mederi.domain.model.Message): Pair<String, String?>? {
         if (!::mederi.isInitialized) return null
         val configuredProvider = if (message.providerEndpoint == null) {
             _providers.value.firstOrNull { it.id == message.providerId }
@@ -773,7 +789,7 @@ class MederiAiCore(
         val baseUrl = message.providerEndpoint
             ?.removeSuffix("/chat/completions")?.removeSuffix("/responses")?.removeSuffix("/models")
             ?: configuredProvider?.baseUrl
-        return mederi.modelCatalog.referencePricing(modelId, message.modelsDevKey, baseUrl)
+        return modelId to baseUrl
     }
 
     private suspend fun planStoreForSession(conversationId: String): xyz.mederi.plan.PlanStore {
@@ -853,6 +869,7 @@ class MederiAiCore(
             // T09：初始快照水合工作区投影（active/associated + 活跃操作）；未绑定工作区的会话返回 null（runCatching 吞未找到异常）。
             workspaceInfo = { runCatching { mederi.workspaceManager.getConversationWorkspace(conversationId).toContract() }.getOrNull() },
             referencePricing = ::referencePricing,
+            providerPricing = ::providerPricing,
         )
     }
 
@@ -1274,7 +1291,7 @@ class MederiAiCore(
         runCatching {
             val messages = mederi.sessions.listMessages(conversationId)
             val toolResults = MederiModelMapper.buildToolResultsById(messages)
-            val usage = MederiModelMapper.toUsageProjection(messages, mederi.sessions.listModelRequests(conversationId), ::referencePricing)
+            val usage = MederiModelMapper.toUsageProjection(messages, mederi.sessions.listModelRequests(conversationId), ::referencePricing, ::providerPricing)
             MessagesPage(
                 messages = messages.map { MederiModelMapper.toChatMessage(it, toolResults) },
                 tokenUsage = usage.tokens,
@@ -1453,9 +1470,12 @@ class MederiAiCore(
 
     override suspend fun getUsageStatistics(): Result<UsageStatistics> = withContext(Dispatchers.IO) {
         runCatching {
-            // 全库账本（跨 owner/跨会话），按 供应商+Key+模型 聚合；估价沿用同一 referencePricing
+            // 全库账本（跨 owner/跨会话），按 供应商+Key+模型 聚合；估价双算 referencePricing + providerPricing（与单会话对称）
             val records = mederi.sessions.listAllModelRequests()
-            joinApiKeyNames(MederiModelMapper.toCumulativeUsageStatistics(records, ::referencePricing), _providers.value)
+            joinApiKeyNames(
+                MederiModelMapper.toCumulativeUsageStatistics(records, ::referencePricing, ::providerPricing),
+                _providers.value,
+            )
         }
     }
 

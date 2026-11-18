@@ -69,11 +69,17 @@ internal fun PermissionPlanSelectorContent(
     onReload: () -> Unit,
     onProjectSettings: () -> Unit,
 ) {
-    PermissionMenu(stringResource(Res.string.composer_sandbox_mode, executionPermissionValue(state)), FeatherIcons.Shield) { close ->
-        ExecutionPermissionOptions(state, onExecution = { close(); onExecution(it) },
-            onReload = { close(); onReload() }, onProjectSettings = { close(); onProjectSettings() })
+    val sandboxLabel = stringResource(Res.string.composer_sandbox_mode, executionPermissionValue(state))
+    val planLabel = stringResource(Res.string.composer_plan_approval_mode, planApprovalValue(planMode))
+    PermissionMenu(sandboxLabel, FeatherIcons.Shield) { close ->
+        ExecutionPermissionOptions(
+            state = state,
+            onExecution = { close(); onExecution(it) },
+            onReload = { close(); onReload() },
+            onProjectSettings = { close(); onProjectSettings() },
+        )
     }
-    PermissionMenu(stringResource(Res.string.composer_plan_approval_mode, planApprovalValue(planMode)), FeatherIcons.CheckSquare) { close ->
+    PermissionMenu(planLabel, FeatherIcons.CheckSquare) { close ->
         PlanApprovalOptions(planMode, onPlan = { close(); onPlan(it) })
     }
 }
@@ -82,11 +88,11 @@ internal fun PermissionPlanSelectorContent(
 private fun PermissionMenu(
     label: String,
     icon: ImageVector,
-    content: @Composable ColumnScope.(close: () -> Unit) -> Unit,
+    content: @Composable (close: () -> Unit) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        WorkspaceActionButton(label, { expanded = !expanded }, icon = icon)
+        ContextToolChip(icon = icon, label = label, onClick = { expanded = !expanded })
         WorkspaceDropdownMenu(expanded, { expanded = false }, Modifier.widthIn(max = 300.dp)) {
             content { expanded = false }
         }

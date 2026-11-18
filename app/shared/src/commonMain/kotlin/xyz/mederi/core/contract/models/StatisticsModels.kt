@@ -108,6 +108,8 @@ data class UsageStatGroup(
     val totalRequests: Int,
     val pricedRequests: Int,
     val estimate: Double?,
+    /** 按该渠道实际目录价的累计成本（与 [estimate] 对称双算）。null = 供应商目录无价，UI 显示 — */
+    val providerEstimate: Double? = null,
 )
 
 /** 跨会话累计使用统计（全部会话的 model_requests 账本聚合）。 */
@@ -115,6 +117,8 @@ data class UsageStatGroup(
 data class UsageStatistics(
     val groups: List<UsageStatGroup> = emptyList(),
     val totalEstimatedCost: Double? = null,
+    /** 按该渠道实际目录价的累计成本。null = 供应商目录无价 */
+    val totalProviderEstimatedCost: Double? = null,
     val pricedRequests: Int = 0,
     val totalRequests: Int = 0,
     val currency: String = "USD",

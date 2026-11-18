@@ -14,15 +14,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Check
 import compose.icons.feathericons.GitBranch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import mederi.app.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import xyz.mederi.core.contract.models.ProjectEnvironment
@@ -30,6 +31,7 @@ import xyz.mederi.core.contract.models.RepositoryInfo
 import xyz.mederi.core.contract.models.WorkspaceInfo
 import xyz.mederi.core.contract.models.WorkspaceKind
 import xyz.mederi.core.contract.models.WorkspaceSelection
+import xyz.mederi.core.contract.models.WorkspaceState
 import xyz.mederi.theme.LocalMederiColors
 import xyz.mederi.theme.MederiRadius
 import xyz.mederi.theme.MederiSpacing
@@ -41,9 +43,10 @@ import xyz.mederi.ui.components.atoms.WorkspaceMenuItem
 import xyz.mederi.ui.components.atoms.WorkspaceTextField
 import xyz.mederi.ui.components.atoms.WorkspaceTooltipPopup
 
+private const val WorkspaceRefreshIntervalMillis = 15_000L
+
 /**
- * 工作区选择器：GitBranch + 项目目录或工作树短标签。
- * 桌面高度对齐 ControlHeight，宽度最多 140dp，标签单行省略，tooltip 显示完整环境与分支信息。
+ * 工作区选择器。检出状态来自宿主探测，草稿只保留显式创建选项。
  */
 @Composable
 fun WorkspaceSelector(
@@ -52,19 +55,72 @@ fun WorkspaceSelector(
 ) {
     val snapshot = viewModel.snapshot
     val conversationId = viewModel.conversationId
-    val isExisting = conversationId != null && snapshot?.conversation?.id == conversationId
     val presenter = viewModel.workspacePresenter
-    val draft = presenter.draftSelection
-    val activeWorkspace = presenter.resolveActiveWorkspace(conversationId, snapshot)
-    val repo = viewModel.repositoryInfo
-    val environments = viewModel.projectEnvironments
+    val selectedProjectId by viewModel.selectedProjectId.collectAsState()
+    val conversation = snapshot?.conversation?.takeIf { it.id == conversationId }
+    val projectId = if (conversationId == null) selectedProjectId else conversation?.projectId
+    val boundWorkspace = presenter.resolveActiveWorkspace(conversationId, snapshot)
+    val workspaceId = conversation?.workspaceId ?: boundWorkspace?.workspace?.id
+    val generation = boundWorkspace?.workspace?.generation
+    val workspaceState = boundWorkspace?.workspace?.state
+    // 旧会话未绑定工作区时，执行端会使用项目目录；有工作区 ID 的会话不能借用项目分支。
+    val usesProjectCheckout = conversationId == null ||
+        (conversation?.projectId != null && workspaceId == null && conversation.directory == null)
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    var refreshRequest by remember { mutableIntStateOf(0) }
+    var repo by remember(viewModel, projectId) { mutableStateOf<RepositoryInfo?>(null) }
+    var repoChecked by remember(viewModel, projectId) { mutableStateOf(false) }
+    var environments by remember(viewModel, projectId) { mutableStateOf(emptyList<ProjectEnvironment>()) }
+    var liveWorkspace by remember(viewModel, conversationId, projectId, workspaceId, generation, workspaceState) {
+        mutableStateOf<WorkspaceInfo?>(null)
+    }
+    var workspaceChecked by remember(viewModel, conversationId, projectId, workspaceId, generation, workspaceState) {
+        mutableStateOf(false)
+    }
+
+    LaunchedEffect(viewModel, projectId, usesProjectCheckout, windowFocused, refreshRequest) {
+        if (projectId == null) return@LaunchedEffect
+        do {
+            val detected = viewModel.readWorkspaceRepository(projectId)
+            currentCoroutineContext().ensureActive()
+            if (detected != null) repo = detected
+            repoChecked = true
+            if (!windowFocused || !usesProjectCheckout) break
+            delay(WorkspaceRefreshIntervalMillis)
+        } while (true)
+    }
+    LaunchedEffect(viewModel, projectId, refreshRequest) {
+        if (projectId == null) return@LaunchedEffect
+        val detected = viewModel.readWorkspaceEnvironments(projectId)
+        currentCoroutineContext().ensureActive()
+        environments = detected
+    }
+    LaunchedEffect(viewModel, conversationId, projectId, workspaceId, generation, workspaceState, usesProjectCheckout, windowFocused, refreshRequest) {
+        if (conversationId == null) return@LaunchedEffect
+        do {
+            val detected = viewModel.readConversationWorkspace(conversationId)
+            currentCoroutineContext().ensureActive()
+            if (detected != null &&
+                (projectId == null || detected.workspace.projectId == projectId) &&
+                (workspaceId == null || detected.workspace.id == workspaceId) &&
+                (generation == null || detected.workspace.generation >= generation)
+            ) {
+                liveWorkspace = detected
+            }
+            workspaceChecked = true
+            if (!windowFocused || usesProjectCheckout) break
+            delay(WorkspaceRefreshIntervalMillis)
+        } while (true)
+    }
+
+    val detectionPending = if (usesProjectCheckout) projectId != null && !repoChecked else !workspaceChecked
 
     WorkspaceSelectorContent(
-        selection = draft,
+        selection = presenter.draftSelection,
         repositoryInfo = repo,
         environments = environments,
-        isExistingConversation = isExisting,
-        activeWorkspace = activeWorkspace,
+        isExistingConversation = conversationId != null,
+        activeWorkspace = liveWorkspace ?: boundWorkspace,
         onSelectKind = presenter::updateDraftKind,
         onSelectBaseRef = presenter::updateDraftBaseRef,
         onToggleCarryLocalChanges = presenter::updateDraftCarryLocalChanges,
@@ -75,7 +131,11 @@ fun WorkspaceSelector(
         onOpenEnvironmentEditor = { viewModel.openEnvironmentEditor() },
         onOpenWorktreeSettings = { viewModel.openWorktreeSettings() },
         onOpenCreateBranch = { viewModel.openCreateBranchDialog() },
-        modifier = modifier
+        modifier = modifier,
+        detectionPending = detectionPending,
+        hasProject = projectId != null,
+        usesProjectCheckout = usesProjectCheckout,
+        onOpen = { refreshRequest++ },
     )
 }
 
@@ -96,30 +156,50 @@ fun WorkspaceSelectorContent(
     onOpenEnvironmentEditor: () -> Unit = {},
     onOpenWorktreeSettings: () -> Unit = {},
     onOpenCreateBranch: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    detectionPending: Boolean = false,
+    hasProject: Boolean = repositoryInfo != null,
+    usesProjectCheckout: Boolean = !isExistingConversation,
+    onOpen: () -> Unit = {},
 ) {
     var expanded by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
-    val colors = LocalMederiColors.current
 
     val projectDirectoryLabel = stringResource(Res.string.workspace_kind_local)
     val worktreeLabel = stringResource(Res.string.workspace_kind_worktree)
-    val baseBranch = activeWorkspace?.let { resolveWorktreeBaseBranch(it, repositoryInfo) }
-    val kind = activeWorkspace?.workspace?.kind ?: selection.kind
+    val kind = activeWorkspace?.workspace?.kind ?: if (isExistingConversation) WorkspaceKind.LOCAL else selection.kind
     val kindLabel = if (kind == WorkspaceKind.LOCAL) projectDirectoryLabel else worktreeLabel
-    val branch = if (isExistingConversation) {
-        activeWorkspace?.branch ?: baseBranch
-    } else {
-        selection.baseRef?.takeIf { kind == WorkspaceKind.MANAGED_WORKTREE } ?: repositoryInfo?.branch
+    val localLabel = stringResource(Res.string.workspace_selector_local)
+    val detectingLabel = stringResource(Res.string.workspace_selector_detecting)
+    val unavailableLabel = stringResource(Res.string.workspace_selector_unavailable)
+    val preparing = activeWorkspace?.workspace?.state in setOf(WorkspaceState.REQUESTED, WorkspaceState.PREPARING)
+    val projectRepo = repositoryInfo?.takeIf { activeWorkspace == null && usesProjectCheckout }
+    val branch = when {
+        activeWorkspace != null -> activeWorkspace.branch
+        !isExistingConversation && kind == WorkspaceKind.MANAGED_WORKTREE && projectRepo?.isGit == true ->
+            selection.baseRef ?: projectRepo.branch
+        else -> projectRepo?.branch
     }
-    val shortLabel = branch ?: kindLabel
-    val location = if (isExistingConversation && activeWorkspace != null) {
-        workspaceLocationLabel(activeWorkspace, repositoryInfo)
-    } else if (branch != null) {
-        stringResource(Res.string.workspace_kind_with_branch, kindLabel, branch)
-    } else kindLabel
+    val commit = (activeWorkspace?.headOid ?: projectRepo?.headOid)
+        ?.takeIf { it.isNotBlank() }?.take(7)
+    val shortLabel = when {
+        branch != null -> branch
+        commit != null -> commit
+        preparing -> stringResource(Res.string.workspace_status_preparing)
+        isExistingConversation && activeWorkspace?.workspace?.kind == WorkspaceKind.LOCAL -> localLabel
+        projectRepo?.isGit == false || (!isExistingConversation && !hasProject) -> localLabel
+        detectionPending -> detectingLabel
+        else -> unavailableLabel
+    }
+    val location = when {
+        isExistingConversation && activeWorkspace != null && (branch != null || commit != null) ->
+            workspaceLocationLabel(activeWorkspace, repositoryInfo)
+        branch != null -> stringResource(Res.string.workspace_kind_with_branch, kindLabel, branch)
+        commit != null -> stringResource(Res.string.workspace_location_detached_commit, kindLabel, commit)
+        else -> shortLabel
+    }
 
     val tooltipText = if (isExistingConversation) location else {
         val env = environments.firstOrNull { it.id == selection.environmentId }?.name
@@ -131,40 +211,18 @@ fun WorkspaceSelectorContent(
     val accessibleDescription = stringResource(Res.string.workspace_selector_description, location)
 
     Box(modifier = modifier.hoverable(source)) {
-        Surface(
-            onClick = { expanded = !expanded },
+        ContextToolChip(
+            icon = FeatherIcons.GitBranch,
+            label = shortLabel,
+            onClick = {
+                expanded = !expanded
+                if (expanded) onOpen()
+            },
             modifier = Modifier
-                .height(WorkspaceStyle.ControlHeight)
                 .widthIn(max = 140.dp)
                 .onFocusChanged { focused = it.hasFocus }
                 .semantics { contentDescription = accessibleDescription },
-            shape = RoundedCornerShape(MederiRadius.Control),
-            color = colors.surfaceInput,
-            border = androidx.compose.foundation.BorderStroke(1.dp, colors.surfaceCardBorder)
-        ) {
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 8.dp)
-                    .fillMaxHeight(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(
-                    imageVector = FeatherIcons.GitBranch,
-                    contentDescription = null,
-                    tint = colors.textSecondary,
-                    modifier = Modifier.size(WorkspaceStyle.IconSize)
-                )
-                Text(
-                    text = shortLabel,
-                    style = WorkspaceStyle.Body.copy(fontSize = 12.sp),
-                    color = colors.textPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-            }
-        }
+        )
 
         if ((hovered || focused) && !expanded) {
             WorkspaceTooltipPopup(tooltipText, onDismiss = { focused = false })
@@ -180,7 +238,6 @@ fun WorkspaceSelectorContent(
                 repositoryInfo = repositoryInfo,
                 environments = environments,
                 isExistingConversation = isExistingConversation,
-                activeWorkspace = activeWorkspace,
                 onSelectKind = { onSelectKind(it) },
                 onSelectBaseRef = { onSelectBaseRef(it) },
                 onToggleCarryLocalChanges = { onToggleCarryLocalChanges(it) },
@@ -208,7 +265,10 @@ fun WorkspaceSelectorContent(
                 onOpenCreateBranch = {
                     expanded = false
                     onOpenCreateBranch()
-                }
+                },
+                location = location,
+                detectionPending = detectionPending,
+                hasProject = hasProject,
             )
         }
     }
@@ -222,10 +282,12 @@ private fun workspaceLocationLabel(activeWorkspace: WorkspaceInfo, repositoryInf
         Res.string.workspace_kind_worktree
     })
     val baseBranch = resolveWorktreeBaseBranch(activeWorkspace, repositoryInfo)
+    val shortCommit = activeWorkspace.headOid?.takeIf { it.isNotBlank() }?.take(7)
     return when {
         activeWorkspace.branch != null -> stringResource(Res.string.workspace_kind_with_branch, kind, activeWorkspace.branch)
-        baseBranch != null -> stringResource(Res.string.workspace_location_detached_base, kind, baseBranch)
-        !activeWorkspace.headOid.isNullOrBlank() -> stringResource(Res.string.workspace_location_detached, kind)
+        shortCommit != null && baseBranch != null ->
+            stringResource(Res.string.workspace_location_detached_commit_base, kind, shortCommit, baseBranch)
+        shortCommit != null -> stringResource(Res.string.workspace_location_detached_commit, kind, shortCommit)
         else -> kind
     }
 }
@@ -236,7 +298,6 @@ internal fun WorkspaceSelectorDropdownContent(
     repositoryInfo: RepositoryInfo?,
     environments: List<ProjectEnvironment>,
     isExistingConversation: Boolean,
-    activeWorkspace: WorkspaceInfo?,
     onSelectKind: (WorkspaceKind) -> Unit,
     onSelectBaseRef: (String?) -> Unit,
     onToggleCarryLocalChanges: (Boolean) -> Unit,
@@ -247,6 +308,9 @@ internal fun WorkspaceSelectorDropdownContent(
     onOpenEnvironmentEditor: () -> Unit = {},
     onOpenWorktreeSettings: () -> Unit = {},
     onOpenCreateBranch: () -> Unit = {},
+    location: String,
+    detectionPending: Boolean,
+    hasProject: Boolean,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalMederiColors.current
@@ -257,6 +321,8 @@ internal fun WorkspaceSelectorDropdownContent(
     val unsupportedReasons = repositoryInfo?.unsupportedReasons ?: emptyList()
 
     val worktreeUnavailableReason = when {
+        detectionPending && repositoryInfo == null -> stringResource(Res.string.workspace_selector_detecting)
+        hasProject && repositoryInfo == null -> stringResource(Res.string.workspace_selector_unavailable)
         !isGit -> stringResource(Res.string.workspace_unavailable_not_git)
         !hasHead -> stringResource(Res.string.workspace_unavailable_no_head)
         unsupportedReasons.isNotEmpty() -> unsupportedReasons.first()
@@ -279,14 +345,12 @@ internal fun WorkspaceSelectorDropdownContent(
         )
 
         if (isExistingConversation) {
-            if (activeWorkspace != null) {
-                Text(
-                    text = workspaceLocationLabel(activeWorkspace, repositoryInfo),
-                    style = WorkspaceStyle.Body,
-                    color = colors.textPrimary,
-                    modifier = Modifier.padding(horizontal = MederiSpacing.MD)
-                )
-            }
+            Text(
+                text = location,
+                style = WorkspaceStyle.Body,
+                color = colors.textPrimary,
+                modifier = Modifier.padding(horizontal = MederiSpacing.MD)
+            )
             Text(
                 text = stringResource(Res.string.workspace_existing_conversation_note),
                 style = WorkspaceStyle.Caption,

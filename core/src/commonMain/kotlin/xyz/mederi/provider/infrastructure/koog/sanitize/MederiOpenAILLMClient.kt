@@ -59,6 +59,7 @@ import xyz.mederi.debug.StreamCloseDiagnostics
 import xyz.mederi.debug.StreamTimingLog
 import xyz.mederi.debug.StreamTrace
 import xyz.mederi.http.SseIdleTimeoutException
+import xyz.mederi.infrastructure.koog.JsonRecordKind
 import xyz.mederi.infrastructure.koog.requireToolCallArguments
 import xyz.mederi.tools.patch.ApplyPatchProtocol
 import java.net.URI
@@ -188,7 +189,7 @@ class MederiOpenAILLMClient(
         if (chatGptPlan) {
             // SIWC 不接受非流式 HTTP。压缩/改名等 execute 调用仍走同一 SSE 协议，
             // 只在内部收集完整帧，不把 delta 当作正式完整响应。
-            return collectChatGptResponse(executeStreamingResponsesAPI(prompt, model, tools))
+            return collectChatGptResponse(executeStreamingResponsesAPI(prompt, model, tools), tools)
         }
         if (!model.supports(LLMCapability.OpenAIEndpoint.Completions)) {
             DebugLog.event("SSE", "routing to Responses API (model lacks Completions capability)")
@@ -212,8 +213,9 @@ class MederiOpenAILLMClient(
         val rawResponse = postJson(chatCompletionsPath, requestJson, "HTTP POST failed")
         DebugLog.data("SSE", "response length", rawResponse.length)
 
-        checkChatResponseError(rawResponse)
-        val response = sanitizeJson.decodeFromString<SanitizedChatCompletionResponse>(rawResponse)
+        val response = decodeReceivedJson<SanitizedChatCompletionResponse>(
+            rawResponse, JsonRecordKind.RESPONSE_BODY, ::checkChatResponseError,
+        )
         require(response.choices.isNotEmpty()) { "Empty choices in response" }
 
         val choice = response.choices[0]
@@ -229,7 +231,9 @@ class MederiOpenAILLMClient(
                     MessagePart.Tool.Call(
                         id = toolCall.id,
                         tool = toolCall.function.name,
-                        args = requireToolCallArguments(toolCall.function.name, toolCall.id, toolCall.function.arguments)
+                        args = requireToolCallArguments(
+                            toolCall.function.arguments, tools.firstOrNull { it.name == toolCall.function.name },
+                        )
                     )
                 )
             }
@@ -290,8 +294,7 @@ class MederiOpenAILLMClient(
         ) { dataLines ->
             dataLines
                 .map { data ->
-                    checkChatResponseError(data)
-                    sanitizeJson.decodeFromString<SanitizedStreamResponse>(data)
+                    decodeReceivedJson<SanitizedStreamResponse>(data, JsonRecordKind.SSE_EVENT, ::checkChatResponseError)
                 }
                 .let { processStreamingFlow(it) }
                 .requireEndFrame()
@@ -314,8 +317,9 @@ class MederiOpenAILLMClient(
         val rawResponse = postJson(responsesAPIPath, requestJson, "Responses API POST failed")
         DebugLog.data("SSE", "response length", rawResponse.length)
 
-        checkResponsesResponseError(rawResponse)
-        val response = sanitizeJson.decodeFromString<SanitizedResponsesAPIResponse>(rawResponse)
+        val response = decodeReceivedJson<SanitizedResponsesAPIResponse>(
+            rawResponse, JsonRecordKind.RESPONSE_BODY, ::checkResponsesResponseError,
+        )
         val parts = mutableListOf<MessagePart.ResponsePart>()
         val toolCallIds = mutableSetOf<String>()
         var finishReason: String? = null
@@ -355,7 +359,7 @@ class MederiOpenAILLMClient(
                             id = callId,
                             tool = name,
                             args = if (isCustom) ApplyPatchProtocol.encodeArguments(requireNotNull(item.input) { "Missing apply_patch input" })
-                                else requireToolCallArguments(name, callId, item.arguments)
+                                else requireToolCallArguments(item.arguments, tools.firstOrNull { it.name == name })
                         )
                     )
                 }
@@ -383,7 +387,10 @@ class MederiOpenAILLMClient(
     private val SanitizedResponsesOutputItem.isToolCall: Boolean
         get() = type == "function_call" || type == "custom_tool_call"
 
-    private suspend fun collectChatGptResponse(stream: Flow<StreamFrame>): Message.Assistant {
+    private suspend fun collectChatGptResponse(
+        stream: Flow<StreamFrame>,
+        tools: List<ToolDescriptor>,
+    ): Message.Assistant {
         val parts = mutableListOf<MessagePart.ResponsePart>()
         var completed: StreamFrame.End? = null
         stream.requireEndFrame().collect { frame ->
@@ -393,7 +400,8 @@ class MederiOpenAILLMClient(
                     id = frame.id, content = frame.content, summary = frame.summary.orEmpty(),
                 ))
                 is StreamFrame.ToolCallComplete -> parts.add(MessagePart.Tool.Call(
-                    id = frame.id, tool = frame.name, args = requireToolCallArguments(frame.name, frame.id, frame.content),
+                    id = frame.id, tool = frame.name,
+                    args = requireToolCallArguments(frame.content, tools.firstOrNull { it.name == frame.name }),
                 ))
                 is StreamFrame.End -> completed = frame
                 else -> Unit
@@ -567,7 +575,9 @@ class MederiOpenAILLMClient(
                                         put("name", part.tool)
                                         if (chatGptPlan) put("namespace", MederiIdentity.PRODUCT_NAME)
                                         if (custom) put("input", ApplyPatchProtocol.decodeArguments(part.args))
-                                        else put("arguments", requireToolCallArguments(part.tool, part.id, part.args))
+                                        else put("arguments", requireToolCallArguments(
+                                            part.args, tools.firstOrNull { it.name == part.tool }, JsonRecordKind.SENT_TOOL_ARGUMENTS,
+                                        ))
                                     })
                                 }
                                 is MessagePart.Reasoning -> {}
@@ -668,8 +678,7 @@ class MederiOpenAILLMClient(
         ) { dataLines ->
             dataLines
                 .map { data ->
-                    checkResponsesResponseError(data)
-                    sanitizeJson.decodeFromString<SanitizedResponsesStreamEvent>(data)
+                    decodeReceivedJson<SanitizedResponsesStreamEvent>(data, JsonRecordKind.SSE_EVENT, ::checkResponsesResponseError)
                 }
                 .let { processResponsesStreamingFlow(it) }
                 .requireEndFrame()

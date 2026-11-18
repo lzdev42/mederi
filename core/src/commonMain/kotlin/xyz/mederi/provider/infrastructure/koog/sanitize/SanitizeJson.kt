@@ -1,8 +1,14 @@
 package xyz.mederi.provider.infrastructure.koog.sanitize
 
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
+import kotlinx.serialization.serializer
+import xyz.mederi.infrastructure.koog.JsonRecordKind
+import xyz.mederi.infrastructure.koog.jsonRecordException
 
 /**
  * Sanitized 模型专用的 Json 实例。
@@ -24,4 +30,35 @@ val sanitizeJson: Json = Json {
     explicitNulls = false
     coerceInputValues = true
     namingStrategy = JsonNamingStrategy.SnakeCase
+}
+
+internal inline fun <reified T> decodeReceivedJson(
+    data: String,
+    kind: JsonRecordKind,
+    checkError: (String) -> Unit,
+): T = try {
+    checkError(data)
+    sanitizeJson.decodeFromString<T>(data)
+} catch (_: SerializationException) {
+    throw jsonRecordException("Invalid provider JSON", kind, data, responseFieldNames(serializer<T>().descriptor))
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+internal fun responseFieldNames(root: SerialDescriptor): Set<String> = buildSet {
+    // The failure envelope carries its error object as an opaque JSON object.
+    addAll(listOf("error", "message", "code", "param"))
+    val visited = mutableSetOf<SerialDescriptor>()
+    fun collect(descriptor: SerialDescriptor) {
+        if (!visited.add(descriptor)) return
+        when (descriptor.kind) {
+            StructureKind.CLASS, StructureKind.OBJECT -> repeat(descriptor.elementsCount) { index ->
+                val name = descriptor.getElementName(index)
+                add(JsonNamingStrategy.SnakeCase.serialNameForJson(descriptor, index, name))
+                collect(descriptor.getElementDescriptor(index))
+            }
+            StructureKind.LIST -> collect(descriptor.getElementDescriptor(0))
+            else -> Unit
+        }
+    }
+    collect(root)
 }

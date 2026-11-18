@@ -11,6 +11,7 @@ import ai.koog.agents.core.dsl.extension.nodeExecuteTools
 import ai.koog.agents.core.dsl.extension.nodeLLMCompressHistory
 import ai.koog.agents.core.dsl.extension.onToolCalls
 import ai.koog.agents.core.environment.ReceivedToolResult
+import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.ext.agent.HistoryCompressionConfig
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.message.Message
@@ -101,7 +102,7 @@ internal fun List<StreamFrame>.mergeFragmentedText(): List<StreamFrame> {
     return out
 }
 
-internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
+internal fun List<StreamFrame>.toAssistantMessageSafe(tools: List<ToolDescriptor> = emptyList()): Message.Assistant {
     val start = System.nanoTime()
     // 未完成的推理也是真实输出；Koog 只从 Complete 帧重建消息，不能丢掉末尾 delta。
     val normalized = mutableListOf<StreamFrame>()
@@ -126,7 +127,7 @@ internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
         .mergeFragmentedText()
         .filterNot { it is StreamFrame.TextComplete && it.text.isBlank() }
     merged.filterIsInstance<StreamFrame.ToolCallComplete>().forEach { call ->
-        requireToolCallArguments(call.name, call.id, call.content)
+        requireToolCallArguments(call.content, tools.firstOrNull { it.name == call.name })
     }
     val rebuilt = merged.toMessageResponse()
     val toolCalls = rebuilt.parts.filterIsInstance<MessagePart.Tool.Call>()
@@ -142,11 +143,12 @@ internal fun List<StreamFrame>.toAssistantMessageSafe(): Message.Assistant {
 /** 网络抛错/取消（用户中止、关闭应用）时保留已输出正文/推理落库，再向上抛原异常；绝不执行中断的工具调用。 */
 internal suspend fun Flow<StreamFrame>.collectAssistantPreservingPartial(
     persister: TurnIncrementalPersister?, responseId: String?,
+    tools: List<ToolDescriptor> = emptyList(),
 ): Message.Assistant {
     val frames = mutableListOf<StreamFrame>()
     try {
         recordRequestUsage(persister, responseId).collect { frames.add(it) }
-        return frames.toAssistantMessageSafe()
+        return frames.toAssistantMessageSafe(tools)
     } catch (error: Throwable) {
         // 取消（用户中止/关闭应用）与流错误同构：半截正文必须先落库再 rethrow
         // （persist-then-rethrow——"手动关闭一定保存"）。persist 失败不吞原异常。
@@ -306,7 +308,7 @@ private fun nodeLLMSendToolResultsPersistable(
             // 故围绕 requestLLMStreaming 前后测量真实流耗时（含推理+正文）。
             val startNs = System.nanoTime()
             val responseId = persister?.beginResponse()
-            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId).let {
+            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId, tools).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
             val durationMs = (System.nanoTime() - startNs) / 1_000_000
@@ -329,7 +331,7 @@ fun mederiSingleRunStrategy(
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
                 val responseId = persister?.beginResponse()
-            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId).let {
+            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId, tools).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000
@@ -391,7 +393,7 @@ fun mederiSingleRunStrategyWithCompression(
                 // 显式计时：Koog metaInfo.timestamp=流结束时刻，推算 durationMs≈0，必须实测
                 val startNs = System.nanoTime()
                 val responseId = persister?.beginResponse()
-            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId).let {
+            val response = requestTurnStreaming().collectAssistantPreservingPartial(persister, responseId, tools).let {
                 if (responseId != null) it.copy(id = responseId) else it
             }
                 val durationMs = (System.nanoTime() - startNs) / 1_000_000

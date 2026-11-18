@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,33 +15,35 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.Activity
 import kotlin.math.roundToLong
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
-import mederi.app.shared.generated.resources.overview_usage_cache_rate
-import mederi.app.shared.generated.resources.overview_usage_cache_detail
-import mederi.app.shared.generated.resources.overview_usage_cache_read
-import mederi.app.shared.generated.resources.overview_usage_cache_write
-import mederi.app.shared.generated.resources.overview_usage_cost
 import mederi.app.shared.generated.resources.overview_usage_cost_note
 import mederi.app.shared.generated.resources.overview_usage_cost_column
 import mederi.app.shared.generated.resources.overview_usage_input
-import mederi.app.shared.generated.resources.overview_usage_input_uncached
+import mederi.app.shared.generated.resources.overview_usage_input_hit
+import mederi.app.shared.generated.resources.overview_usage_input_miss
+import mederi.app.shared.generated.resources.overview_usage_input_write
 import mederi.app.shared.generated.resources.overview_usage_key_default
 import mederi.app.shared.generated.resources.overview_usage_key_rotation
 import mederi.app.shared.generated.resources.overview_usage_model
 import mederi.app.shared.generated.resources.overview_usage_output
+import mederi.app.shared.generated.resources.overview_usage_provider_actual
 import mederi.app.shared.generated.resources.overview_usage_request
 import mederi.app.shared.generated.resources.overview_usage_successful_requests
 import mederi.app.shared.generated.resources.overview_usage_row_cache_rate
 import mederi.app.shared.generated.resources.overview_usage_row_count
 import mederi.app.shared.generated.resources.overview_usage_row_title
 import mederi.app.shared.generated.resources.overview_usage_session
-import mederi.app.shared.generated.resources.overview_usage_session_cost
+import mederi.app.shared.generated.resources.overview_usage_standard_price
 import mederi.app.shared.generated.resources.overview_usage_stats
 import mederi.app.shared.generated.resources.overview_usage_stats_empty
 import mederi.app.shared.generated.resources.overview_usage_stats_title
@@ -58,7 +59,6 @@ import xyz.mederi.ui.WorkspaceViewModel
 import xyz.mederi.ui.components.atoms.MederiCompactStrokeButton
 import xyz.mederi.ui.components.atoms.MederiDialog
 import xyz.mederi.ui.components.atoms.MederiGhostButton
-import xyz.mederi.ui.components.atoms.WorkspaceNavigationTab
 
 @Composable
 fun OverviewUsageRow(
@@ -73,7 +73,6 @@ fun OverviewUsageRow(
     val request = viewModel.usageForModel(selectedModel?.id)
     val session = viewModel.tokenUsage
     val cost = viewModel.cost
-    var showSession by remember(viewModel.conversationId) { mutableStateOf(false) }
     var showStats by remember(viewModel.conversationId) { mutableStateOf(false) }
 
     OverviewAccordionRow(
@@ -101,59 +100,91 @@ fun OverviewUsageRow(
         modifier = modifier,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(MederiSpacing.Tight)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().selectableGroup(),
-                horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
-            ) {
-                WorkspaceNavigationTab(
-                    text = stringResource(Res.string.overview_usage_request),
-                    selected = !showSession,
-                    onClick = { showSession = false },
-                    modifier = Modifier.weight(1f),
-                )
-                WorkspaceNavigationTab(
-                    text = stringResource(Res.string.overview_usage_session),
-                    selected = showSession,
-                    onClick = { showSession = true },
-                    modifier = Modifier.weight(1f),
-                )
+            // 双列表格（方案 B 定稿）：同一指标本次请求 / 会话累计并列对照，模型名标注本次列归属。
+            selectedModel?.name?.let { name ->
+                Text(name, color = colors.textSecondary, style = WorkspaceStyle.Caption)
             }
 
-            val input = if (showSession) session.input.takeIf { session.inputReported } else request?.inputTokens
-            val output = if (showSession) session.output.takeIf { session.outputReported } else request?.outputTokens
-            val cacheRead = if (showSession) session.cacheRead else request?.cachedTokens
-            val cacheWrite = if (showSession) session.cacheWrite else request?.cacheWriteTokens
-            val cacheRate = if (showSession) session.cacheHitSample?.percent else request?.cacheHitPercent
-            if (!showSession) {
-                selectedModel?.name?.let { name ->
-                    Text(name, color = colors.textSecondary, style = WorkspaceStyle.Caption)
-                }
-            }
-            if (showSession) {
-                UsageLine(
-                    stringResource(Res.string.overview_usage_successful_requests),
-                    viewModel.requestCount.takeIf { it > 0 }?.toString() ?: "—",
+            val requestInput = request?.inputTokens
+            val sessionInput = session.input.takeIf { session.inputReported }
+            val requestRead = request?.cachedTokens
+            val sessionRead = session.cacheRead
+            val requestWrite = request?.cacheWriteTokens
+            val sessionWrite = session.cacheWrite
+            // 缓存写入两列都未上报时不渲染该行，保持 ├/└ 树形前缀有效。
+            val showCacheWrite = requestWrite != null || sessionWrite != null
+
+            Row(modifier = Modifier.fillMaxWidth()) {
+                UsageTableCell(
+                    text = "",
+                    modifier = Modifier.weight(1.3f),
+                    color = colors.textMuted,
+                    style = UsageTableHeaderStyle,
+                )
+                UsageTableCell(
+                    text = stringResource(Res.string.overview_usage_request),
+                    modifier = Modifier.weight(1f),
+                    color = colors.textMuted,
+                    style = UsageTableHeaderStyle,
+                )
+                UsageTableCell(
+                    text = stringResource(Res.string.overview_usage_session),
+                    modifier = Modifier.weight(1f),
+                    color = colors.textMuted,
+                    style = UsageTableHeaderStyle,
                 )
             }
-            // 输入是含缓存读写的总量，拆出无缓存部分后四行互不重叠。
-            UsageLine(stringResource(Res.string.overview_usage_input), usageCount(input))
-            UsageLine(
-                stringResource(Res.string.overview_usage_input_uncached),
-                usageCount(uncachedInputTokens(input, cacheRead, cacheWrite)),
+            // 输入是含缓存读写的总量，拆出未命中/写入/命中后各行互不重叠。
+            UsageTableRow(
+                label = stringResource(Res.string.overview_usage_input),
+                request = usageCount(requestInput),
+                session = usageCount(sessionInput),
+                emphasized = true,
             )
-            UsageLine(stringResource(Res.string.overview_usage_cache_read), usageCount(cacheRead))
-            UsageLine(stringResource(Res.string.overview_usage_cache_write), usageCount(cacheWrite))
-            UsageLine(stringResource(Res.string.overview_usage_output), usageCount(output))
-            UsageLine(stringResource(Res.string.overview_usage_cache_rate), usageRate(cacheRate))
+            UsageTableRow(
+                label = stringResource(Res.string.overview_usage_input_miss),
+                request = usageCount(uncachedInputTokens(requestInput, requestRead, requestWrite)),
+                session = usageCount(uncachedInputTokens(sessionInput, sessionRead, sessionWrite)),
+            )
+            if (showCacheWrite) {
+                UsageTableRow(
+                    label = stringResource(Res.string.overview_usage_input_write),
+                    request = usageCount(requestWrite),
+                    session = usageCount(sessionWrite),
+                )
+            }
+            UsageTableRow(
+                label = stringResource(Res.string.overview_usage_input_hit),
+                request = usageCount(requestRead),
+                session = usageCount(sessionRead),
+            )
+            UsageTableRow(
+                label = stringResource(Res.string.overview_usage_output),
+                request = usageCount(request?.outputTokens),
+                session = usageCount(session.output.takeIf { session.outputReported }),
+                emphasized = true,
+            )
+            UsageTableRow(
+                label = stringResource(Res.string.overview_usage_successful_requests),
+                request = "1",
+                session = viewModel.requestCount.takeIf { it > 0 }?.toString() ?: "—",
+            )
 
             HorizontalDivider(color = colors.divider)
-            Text(stringResource(Res.string.overview_usage_cost), color = colors.textPrimary, style = WorkspaceStyle.Title)
-            UsageCostNote()
-            UsageLine(
-                stringResource(Res.string.overview_usage_request),
-                usageCost(viewModel.costForModel(selectedModel?.id)),
+            // 双价格进表格两行：标准价主行 + 该渠道实际次行（供应商名附在标签后），口径注释复用 cost_note。
+            UsageTableRow(
+                label = stringResource(Res.string.overview_usage_standard_price),
+                request = usageCost(viewModel.costForModel(selectedModel?.id)),
+                session = usageCost(cost.total),
+                emphasized = true,
             )
-            UsageLine(stringResource(Res.string.overview_usage_session_cost), usageCost(cost.total))
+            UsageTableRow(
+                label = stringResource(Res.string.overview_usage_provider_actual) +
+                    selectedModel?.provider?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "",
+                request = usageCost(viewModel.providerCostForModel(selectedModel?.id)),
+                session = usageCost(cost.providerEstimatedTotal),
+            )
+            UsageCostNote()
             MederiGhostButton(
                 text = stringResource(Res.string.overview_usage_stats),
                 onClick = onOpenStats ?: { showStats = true },
@@ -206,6 +237,7 @@ private fun UsageStatsDialog(viewModel: WorkspaceViewModel, onDismiss: () -> Uni
                 input = stringResource(Res.string.overview_usage_input),
                 output = stringResource(Res.string.overview_usage_output),
                 estimate = stringResource(Res.string.overview_usage_cost_column),
+                providerEstimate = stringResource(Res.string.overview_usage_provider_actual),
                 emphasized = true,
             )
             HorizontalDivider(color = colors.divider)
@@ -217,6 +249,7 @@ private fun UsageStatsDialog(viewModel: WorkspaceViewModel, onDismiss: () -> Uni
                     input = usageCount(group.inputTokens),
                     output = usageCount(group.outputTokens),
                     estimate = usageCost(group.estimate),
+                    providerEstimate = usageCost(group.providerEstimate),
                 )
                 UsageCacheDetail(group.inputTokens, group.cacheReadTokens, group.cacheWriteTokens)
             }
@@ -228,6 +261,7 @@ private fun UsageStatsDialog(viewModel: WorkspaceViewModel, onDismiss: () -> Uni
                 input = usageCount(reportedSum(groups.map { it.inputTokens })),
                 output = usageCount(reportedSum(groups.map { it.outputTokens })),
                 estimate = usageCost(statistics?.totalEstimatedCost),
+                providerEstimate = usageCost(statistics?.totalProviderEstimatedCost),
                 emphasized = true,
             )
             UsageCacheDetail(
@@ -271,6 +305,7 @@ internal fun CompactUsageStats(viewModel: WorkspaceViewModel) {
                 input = group.inputTokens,
                 output = group.outputTokens,
                 estimate = group.estimate,
+                providerEstimate = group.providerEstimate,
                 cacheRead = group.cacheReadTokens,
                 cacheWrite = group.cacheWriteTokens,
             )
@@ -284,6 +319,7 @@ internal fun CompactUsageStats(viewModel: WorkspaceViewModel) {
                 input = reportedSum(groups.map { it.inputTokens }),
                 output = reportedSum(groups.map { it.outputTokens }),
                 estimate = statistics?.totalEstimatedCost,
+                providerEstimate = statistics?.totalProviderEstimatedCost,
                 cacheRead = reportedSum(groups.map { it.cacheReadTokens }),
                 cacheWrite = reportedSum(groups.map { it.cacheWriteTokens }),
             )
@@ -300,6 +336,7 @@ private fun CompactUsageStatsGroup(
     input: Long?,
     output: Long?,
     estimate: Double?,
+    providerEstimate: Double? = null,
     cacheRead: Long?,
     cacheWrite: Long?,
 ) {
@@ -313,6 +350,12 @@ private fun CompactUsageStatsGroup(
         UsageLine(stringResource(Res.string.overview_usage_input), usageCount(input))
         UsageLine(stringResource(Res.string.overview_usage_output), usageCount(output))
         UsageLine(stringResource(Res.string.overview_usage_cost_column), usageCost(estimate))
+        // 双价格：标准价主行 + 该渠道实际次行（次级样式；无供应商价显示 —）
+        UsageLine(
+            stringResource(Res.string.overview_usage_provider_actual),
+            usageCost(providerEstimate),
+            secondary = true,
+        )
         UsageCacheDetail(input, cacheRead, cacheWrite)
     }
 }
@@ -338,19 +381,79 @@ private fun GroupSecondaryLine(group: UsageStatGroup): String {
     return listOfNotNull(provider, key).joinToString(" · ")
 }
 
-/** 组下小字明细行：无缓存 / 命中 / 写入（未上报显示 —）。 */
+/** 组下树形明细行：输入 / ├ 未命中 / ├ 缓存写入 / └ 缓存命中（未上报显示 —）。 */
+private val UsageTableHeaderStyle = TextStyle(fontSize = 10.sp, lineHeight = 14.sp)
+
+/** 双列表格单元格：数字右对齐；空文本仅占位。 */
+@Composable
+private fun UsageTableCell(text: String, modifier: Modifier, color: Color, style: TextStyle) {
+    Text(text, modifier = modifier, textAlign = TextAlign.End, color = color, style = style)
+}
+
+/**
+ * 双列表格数据行：标签列 + 本次 + 会话累计（右对齐）。
+ * 主行（输入/输出/标准价）= 13sp Medium textPrimary；次行 = 11sp textSecondary；
+ * 标签 11sp，主行 textSecondary、次行 textMuted（字重只用 Regular/Medium，层级靠字号+灰度）。
+ */
+@Composable
+private fun UsageTableRow(label: String, request: String, session: String, emphasized: Boolean = false) {
+    val colors = LocalMederiColors.current
+    val valueStyle = if (emphasized) {
+        TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+    } else {
+        TextStyle(fontSize = 11.sp, lineHeight = 15.sp)
+    }
+    Row(modifier = Modifier.fillMaxWidth()) {
+        UsageTableCell(
+            text = label,
+            modifier = Modifier.weight(1.3f),
+            color = if (emphasized) colors.textSecondary else colors.textMuted,
+            style = TextStyle(fontSize = 11.sp, lineHeight = 15.sp),
+        )
+        UsageTableCell(
+            text = request,
+            modifier = Modifier.weight(1f),
+            color = if (emphasized) colors.textPrimary else colors.textSecondary,
+            style = valueStyle,
+        )
+        UsageTableCell(
+            text = session,
+            modifier = Modifier.weight(1f),
+            color = if (emphasized) colors.textPrimary else colors.textSecondary,
+            style = valueStyle,
+        )
+    }
+}
+
 @Composable
 private fun UsageCacheDetail(input: Long?, read: Long?, write: Long?) {
-    Text(
-        stringResource(
-            Res.string.overview_usage_cache_detail,
-            usageCount(uncachedInputTokens(input, read, write)),
-            usageCount(read),
-            usageCount(write),
-        ),
-        color = LocalMederiColors.current.textSecondary,
-        style = WorkspaceStyle.Caption,
-    )
+    val colors = LocalMederiColors.current
+    // 树形明细：父行输入 + ├ 未命中 / ├ 缓存写入（write == null 时不渲染）/ └ 缓存命中（前缀在文案资源内）
+    Column {
+        Text(
+            stringResource(Res.string.overview_usage_input) + " " + usageCount(input),
+            color = colors.textSecondary,
+            style = WorkspaceStyle.Caption,
+        )
+        Text(
+            stringResource(Res.string.overview_usage_input_miss) + " " +
+                usageCount(uncachedInputTokens(input, read, write)),
+            color = colors.textSecondary,
+            style = WorkspaceStyle.Caption,
+        )
+        if (write != null) {
+            Text(
+                stringResource(Res.string.overview_usage_input_write) + " " + usageCount(write),
+                color = colors.textSecondary,
+                style = WorkspaceStyle.Caption,
+            )
+        }
+        Text(
+            stringResource(Res.string.overview_usage_input_hit) + " " + usageCount(read),
+            color = colors.textSecondary,
+            style = WorkspaceStyle.Caption,
+        )
+    }
 }
 
 /** 只对已上报（非 null）的分组求和；全都没上报时返回 null（UI 显示 —）。 */
@@ -367,6 +470,8 @@ private fun UsageStatsRow(
     input: String,
     output: String,
     estimate: String,
+    // estimate 单元格次行（11sp textSecondary，该渠道实际）；表头传口径标签
+    providerEstimate: String,
     emphasized: Boolean = false,
 ) {
     val colors = LocalMederiColors.current
@@ -384,20 +489,41 @@ private fun UsageStatsRow(
         Text(requests, Modifier.weight(1f), textAlign = TextAlign.End, style = style, color = colors.textPrimary)
         Text(input, Modifier.weight(1f), textAlign = TextAlign.End, style = style, color = colors.textPrimary)
         Text(output, Modifier.weight(1f), textAlign = TextAlign.End, style = style, color = colors.textPrimary)
-        Text(estimate, Modifier.weight(1.2f), textAlign = TextAlign.End, style = style, color = colors.textPrimary)
+        Column(
+            modifier = Modifier.weight(1.2f),
+            horizontalAlignment = Alignment.End,
+        ) {
+            Text(estimate, textAlign = TextAlign.End, style = style, color = colors.textPrimary)
+            Text(
+                providerEstimate,
+                textAlign = TextAlign.End,
+                color = colors.textSecondary,
+                fontSize = 11.sp,
+            )
+        }
     }
 }
 
 @Composable
-private fun UsageLine(label: String, value: String) {
+private fun UsageLine(label: String, value: String, secondary: Boolean = false) {
     val colors = LocalMederiColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(MederiSpacing.SM),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, Modifier.weight(1f), color = colors.textSecondary, style = WorkspaceStyle.Caption)
-        Text(value, color = colors.textPrimary, style = WorkspaceStyle.Title)
+        // 次级样式（双价格该渠道实际行）：label muted + value 11sp textSecondary；主行保持 Title
+        Text(
+            label,
+            Modifier.weight(1f),
+            color = if (secondary) colors.textMuted else colors.textSecondary,
+            style = WorkspaceStyle.Caption,
+        )
+        Text(
+            value,
+            color = if (secondary) colors.textSecondary else colors.textPrimary,
+            style = if (secondary) TextStyle(fontSize = 11.sp, lineHeight = 15.sp) else WorkspaceStyle.Title,
+        )
     }
 }
 

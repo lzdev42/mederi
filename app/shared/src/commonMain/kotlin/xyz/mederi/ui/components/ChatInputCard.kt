@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import mederi.app.shared.generated.resources.Res
 import mederi.app.shared.generated.resources.close
 import mederi.app.shared.generated.resources.image_stripped_notice
@@ -58,6 +60,7 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -110,6 +113,11 @@ import mederi.app.shared.generated.resources.input_attach_image
 import mederi.app.shared.generated.resources.slash_input_search_hint
 import xyz.mederi.theme.WorkspaceStyle
 import xyz.mederi.theme.MederiRadius
+import xyz.mederi.theme.MederiSpacing
+import mederi.app.shared.generated.resources.input_expand
+import mederi.app.shared.generated.resources.input_expand_description
+import mederi.app.shared.generated.resources.input_collapse
+import mederi.app.shared.generated.resources.input_collapse_description
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -164,6 +172,9 @@ fun ChatInputCard(
     imeOverlayActive: Boolean = false,
     projectMenuExpanded: Boolean,
     onProjectMenuExpandedChange: (Boolean) -> Unit,
+    conversationHeight: Dp,
+    maximized: Boolean,
+    onToggleMaximized: () -> Unit,
 ) {
     val colors = LocalMederiColors.current
     val appState = LocalAppState.current
@@ -174,6 +185,7 @@ fun ChatInputCard(
     // IME 桥接（wasmJs）：透明 <textarea> 覆盖输入框触发 iOS 软键盘，需跟踪输入框在窗口中的矩形。
     // positionInWindow 返回 Compose px（= CSS px * density），wasmJs actual 侧除 density 得 CSS px。
     var imeRect by remember { mutableStateOf<Rect?>(null) }
+    var toolbarCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val imeDensity = LocalDensity.current.density
     var isMobileSheetOpen by remember { mutableStateOf(false) }
     // 覆盖层状态：任何 Dialog/错误详情/文件确认弹窗/移动端 Sheet 打开时，隐藏 IME 桥接 textarea（文字不得透过遮罩可见）
@@ -408,21 +420,51 @@ fun ChatInputCard(
 
         // 输入外壳只保留一条边界；聚焦只变边框颜色，不额外叠加 ring。
         Box(
-            modifier = Modifier.onGloballyPositioned { cardCoords = it }
+            modifier = Modifier
+                .then(if (maximized) Modifier.weight(1f).fillMaxWidth() else Modifier)
+                .onGloballyPositioned { cardCoords = it }
         ) {
             Card(
+                modifier = if (maximized) Modifier.fillMaxSize() else Modifier,
                 shape = RoundedCornerShape(WorkspaceStyle.InputRadius),
                 colors = CardDefaults.cardColors(containerColor = colors.surfaceCard),
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
-                    if (focused) colors.accentFocus else colors.surfaceCardBorder
+                    if (focused) colors.textMuted.copy(alpha = 0.45f) else colors.surfaceCardBorder
                 )
             ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp)
-            ) {
+                BoxWithConstraints(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(colors.surfaceHover.copy(alpha = 0.65f))
+                        .padding(horizontal = MederiSpacing.Tight, vertical = MederiSpacing.XS),
+                ) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
+                        maxItemsInEachRow = if (maxWidth < 480.dp) 1 else 2,
+                    ) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
+                            ProjectSelectorMenu(
+                                onOpenProjectPicker = onOpenProjectPicker,
+                                onSelect = { viewModel.selectProject(it) },
+                                highlight = needProjectGuide,
+                                expanded = projectMenuExpanded,
+                                onExpandedChange = onProjectMenuExpandedChange,
+                            )
+                            WorkspaceSelector(viewModel = viewModel)
+                        }
+                        FlowRow {
+                            PermissionPlanSelector(viewModel = viewModel)
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .then(if (maximized) Modifier.weight(1f) else Modifier)
+                        .padding(horizontal = MederiSpacing.SM, vertical = MederiSpacing.XS),
+                ) {
                 // 第一层：输入框顶部附件缩略图/卡片区（对标设计图，置于 TextField 正上方）
                 if (pendingPastedTexts.isNotEmpty() || pendingImages.isNotEmpty()) {
                     ChatInputAttachments(
@@ -566,12 +608,20 @@ fun ChatInputCard(
                     }
                 }
 
-                // 第二层：输入文本区域（最小高度 44dp）
+                val lineHeight = with(LocalDensity.current) { WorkspaceStyle.MessageBody.lineHeight.toDp() }
+                val automaticHeight = composerAutomaticTextHeight(conversationHeight, lineHeight)
+                // 先给顶栏和底栏留空间，窄窗里长草稿也不能挤掉最大化或发送按钮。
+                val textHeight = Modifier.weight(1f, fill = maximized)
+                    .then(if (maximized) Modifier else Modifier.heightIn(max = automaticHeight))
+
+                // 显式换行和软折行都由 TextField 测量；超过上限后保留内置滚动。
                 val slashSearchHint = stringResource(Res.string.slash_input_search_hint)
-                TextField(
+                BasicTextField(
                     value = textValue,
                     onValueChange = onSlashCommandTextChange,
                     enabled = true,
+                    minLines = if (maximized) 1 else 2,
+                    maxLines = if (maximized) Int.MAX_VALUE else 7,
                     visualTransformation = remember(colors, slashSearchHint) {
                         SlashCommandTransformation(
                             highlightColor = colors.accentPrimary,
@@ -585,27 +635,19 @@ fun ChatInputCard(
                         fontSize = WorkspaceStyle.MessageBody.fontSize,
                         lineHeight = WorkspaceStyle.MessageBody.lineHeight
                     ),
-                    placeholder = if (isDomTextInput) null else {
-                        {
-                            Text(
-                                text = placeholderText,
-                                color = colors.textSecondary,
-                                style = WorkspaceStyle.MessageBody
-                            )
+                    cursorBrush = SolidColor(colors.accentPrimary),
+                    decorationBox = { innerTextField ->
+                        Box(Modifier.fillMaxWidth()) {
+                            if (textValue.text.isEmpty() && !isDomTextInput) {
+                                Text(placeholderText, color = colors.textMuted, style = WorkspaceStyle.MessageBody)
+                            }
+                            innerTextField()
                         }
                     },
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        focusedTextColor = colors.textPrimary,
-                        unfocusedTextColor = colors.textPrimary,
-                        cursorColor = colors.accentPrimary
-                    ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 48.dp, max = 160.dp)
+                        .then(textHeight)
+                        .padding(horizontal = MederiSpacing.XS, vertical = MederiSpacing.SM)
                         .onFocusChanged { focused = it.isFocused }
                         .onGloballyPositioned { coords: LayoutCoordinates ->
                             val pos = coords.positionInWindow()
@@ -741,46 +783,51 @@ fun ChatInputCard(
                     }
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
-
                 // 第二层：工具栏（内容驱动换行：发送按钮钉在第一行最右永不换行；
                 // 其余控件在其左侧剩余空间回流，挤兑时自动折行，不再依赖 640dp 阈值）
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().onGloballyPositioned { toolbarCoords = it },
                     verticalAlignment = Alignment.Top
                 ) {
-                    // 回流区：上下文控制 + 模型配置，占据发送按钮左侧的剩余宽度，内容超限自动折行
                     FlowRow(
                         modifier = Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalArrangement = Arrangement.spacedBy(MederiSpacing.XS),
                     ) {
-                        ProjectSelectorMenu(
-                            onOpenProjectPicker = onOpenProjectPicker,
-                            onSelect = { viewModel.selectProject(it) },
-                            highlight = needProjectGuide,
-                            expanded = projectMenuExpanded,
-                            onExpandedChange = onProjectMenuExpandedChange
-                        )
-                        IconToolButton(icon = FeatherIcons.Paperclip, onClick = onAttachPastedText,
-                            contentDescription = stringResource(Res.string.input_attach_text))
-                        if (modelSupportsImages) {
-                            IconToolButton(icon = FeatherIcons.Image, onClick = onAttachImage,
-                                contentDescription = stringResource(Res.string.input_attach_image))
+                        Row(horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
+                            IconToolButton(
+                                icon = FeatherIcons.Paperclip, onClick = onAttachPastedText,
+                                contentDescription = stringResource(Res.string.input_attach_text),
+                            )
+                            if (modelSupportsImages) {
+                                IconToolButton(
+                                    icon = FeatherIcons.Image, onClick = onAttachImage,
+                                    contentDescription = stringResource(Res.string.input_attach_image),
+                                )
+                            }
                         }
-                        PermissionPlanSelector(viewModel = viewModel)
-                        WorkspaceSelector(viewModel = viewModel)
-                        ApiKeySelectorMenu(viewModel = viewModel)
-                        ModelSelectorMenu(viewModel = viewModel, compact = false)
-                        AnimatedVisibility(
-                            visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
-                            enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.disclosureSpec()) + expandHorizontally(LocalWorkspaceMotion.current.disclosureSpec()),
-                            exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.disclosureSpec()) + shrinkHorizontally(LocalWorkspaceMotion.current.disclosureSpec())
-                        ) {
-                            ThinkingLevelMenu(viewModel = viewModel)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(MederiSpacing.XS)) {
+                            ApiKeySelectorMenu(viewModel = viewModel)
+                            ModelSelectorMenu(viewModel = viewModel, compact = false)
+                            AnimatedVisibility(
+                                visible = selectedModel?.supportsThinking == true && (selectedModel?.reasoningLevels?.isNotEmpty() == true),
+                                enter = if (LocalWorkspaceMotion.current.reducedMotion) EnterTransition.None else fadeIn(LocalWorkspaceMotion.current.disclosureSpec()) + expandHorizontally(LocalWorkspaceMotion.current.disclosureSpec()),
+                                exit = if (LocalWorkspaceMotion.current.reducedMotion) ExitTransition.None else fadeOut(LocalWorkspaceMotion.current.disclosureSpec()) + shrinkHorizontally(LocalWorkspaceMotion.current.disclosureSpec()),
+                            ) {
+                                ThinkingLevelMenu(viewModel = viewModel)
+                            }
                         }
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(Modifier.width(MederiSpacing.XS))
+                    ComposerHeightButton(
+                        label = stringResource(if (maximized) Res.string.input_collapse else Res.string.input_expand),
+                        description = stringResource(
+                            if (maximized) Res.string.input_collapse_description else Res.string.input_expand_description
+                        ),
+                        maximized = maximized,
+                        onClick = onToggleMaximized,
+                    )
+                    Spacer(Modifier.width(MederiSpacing.XS))
                     // 发送/停止：钉在第一行最右，永不参与换行（Top 对齐回流区首行）
                     SendButton(
                         size = WorkspaceStyle.ControlHeight,
@@ -790,10 +837,10 @@ fun ChatInputCard(
                         onSubmit = submit
                     )
                 }
+                }
             }
-            }
-            // 斜杠菜单 Popup 浮层（不参与布局测量；锚定输入卡片正上方，上方空间不足翻转到下方）
-            val anchoredCoords = cardCoords?.takeIf { it.isAttached }
+            // 最大化时从底栏向上展开，保证斜杠菜单留在窗口内。
+            val anchoredCoords = (if (maximized) toolbarCoords else cardCoords)?.takeIf { it.isAttached }
             if (slashMenuOpen && anchoredCoords != null) {
                 // 菜单宽度对齐输入卡片：Popup 内容默认受窗口宽度约束，SlashCommandMenu 内部
                 // fillMaxWidth 会撑满整窗；用卡片实际宽度收口，使菜单与输入框同宽（左缘对齐卡片）。
@@ -845,7 +892,7 @@ private class SlashMenuPopupPositionProvider(
         if (targetX + popupContentSize.width > windowSize.width) {
             targetX = max(0, windowSize.width - popupContentSize.width)
         }
-        return IntOffset(targetX, targetY)
+        return IntOffset(targetX, targetY.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)))
     }
 }
 
@@ -874,4 +921,11 @@ private fun SlashMenuPopupContent(
             modifier = Modifier.fillMaxWidth()
         )
     }
+}
+
+/** Shares an automatic cap across viewports while allowing two lines on short, keyboard-inset screens. */
+internal fun composerAutomaticTextHeight(conversationHeight: Dp, lineHeight: Dp): Dp {
+    val fieldPadding = MederiSpacing.SM * 2
+    return (conversationHeight * 0.35f)
+        .coerceIn(lineHeight * 2 + fieldPadding, lineHeight * 7 + fieldPadding)
 }

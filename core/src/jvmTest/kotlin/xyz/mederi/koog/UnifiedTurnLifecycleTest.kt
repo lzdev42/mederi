@@ -445,17 +445,18 @@ class UnifiedTurnLifecycleTest {
     fun toolArgumentsMustBeASingleStrictJsonObject() {
         for (invalid in listOf("", """{"path":missing}""", """{"n":01}""", "[]", """{} {}""", """{"x":"line
 break"}""")) {
-            assertFailsWith<SerializationException> { requireToolCallArguments("test", "call", invalid) }
+            assertFailsWith<SerializationException> { requireToolCallArguments(invalid) }
         }
         val valid = """{"path":"file.txt","nested":[true, null, -1.25e+10]}"""
-        assertEquals(valid, requireToolCallArguments("test", "call", valid))
+        assertEquals(valid, requireToolCallArguments(valid))
     }
 
     @Test
     fun malformedToolArgumentsFailTheTurnBeforeAnyToolRuns() = runBlocking {
         val fixture = Fixture { _, _ ->
             emit(StreamFrame.TextComplete("I will ask a question"))
-            emit(StreamFrame.ToolCallComplete("ask-malformed", "ask_user", """{"questions":"""))
+            emit(StreamFrame.ToolCallComplete("ask-malformed", "ask_user",
+                """{"questions":[],"secret-inbound-key":"secret-inbound-value" "trailing":0}"""))
             emit(StreamFrame.ToolCallComplete("read-valid", "read_file", """{"path":"file.txt"}"""))
             emit(StreamFrame.End("tool_calls", ResponseMetaInfo.create(KoogClock.System)))
         }
@@ -466,7 +467,13 @@ break"}""")) {
                 while (fixture.events.none { it.type == EventType.MESSAGE_ERROR }) delay(10)
                 fixture.events.single { it.type == EventType.MESSAGE_ERROR }
             }
-            assertContains(failure.payload.getValue("fullDiagnostic"), "Invalid JSON arguments for tool 'ask_user'")
+            val diagnostic = failure.payload.getValue("fullDiagnostic")
+            assertContains(diagnostic, "JSON record: receive / tool arguments")
+            assertContains(diagnostic, "Fields: questions, <unknown field> (incomplete)")
+            assertContains(diagnostic, "JSON syntax location: line 1, column")
+            listOf("secret-inbound-key", "secret-inbound-value", "ask-malformed").forEach { secret ->
+                assertTrue(failure.payload.values.none { secret in it })
+            }
             assertEquals(1, fixture.client.calls.get())
             assertTrue(fixture.events.none {
                 it.type in setOf(EventType.QUESTION_REQUESTED, EventType.TOOL_CALLED, EventType.MESSAGE_COMPLETED)

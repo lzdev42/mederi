@@ -124,7 +124,7 @@ sequenceDiagram
             K->>K: toAssistantMessageSafe（合并续片后校验完整工具参数）
             break 参数不是有效 JSON 对象
                 K->>HS: 仅保存已收到的正文与推理
-                K-->>EB: MESSAGE_ERROR（工具名、调用 ID 与解析原因）
+                K-->>EB: MESSAGE_ERROR（接收方向、工具参数字段名及可用的语法错误位置）
             end
             K->>HS: TurnIncrementalPersister.persistAssistant（增量定向写防崩丢：内存真理源 + B 单写队列，commit 后换内存引用）
             K->>K: nodeExecuteTools: 执行工具<br/>(文件写白名单/沙盒命令/office_read/office_write(pptx 只读)/<br/>list_processes/stop_process/Plan/Verify/ask_user...)
@@ -666,6 +666,7 @@ flowchart TD
 > 细节经 BROWSER_TASK_* 事件给 UI，用户自己看。
 > 滚动工具有两种模式——空 refid 走页面级 `scrollPage`、非空走元素级 `scroll`。
 > 主代理入口为 `browser` 工具（action=RUN/STATUS/STOP/INFO，委托原 run_browser_task 等四个工具类）。
+> 主代理根据工具描述派发网页自动化任务，Web 开发测试走项目测试工具。若 BrowserOperator 收到 Web 开发测试任务，其系统提示词要求先通过 `done` 报告任务超出范围。
 
 ```mermaid
 sequenceDiagram
@@ -1303,7 +1304,9 @@ sequenceDiagram
 
 项目侧栏三点菜单或执行权限下拉 → OpenProjectSettings(projectId) → 窗口路由 ProjectSettingsPanel → SandboxSettingsViewModel.bindProject → ProjectPermissionStore.state(projectId)。输入栏用当前对话所属项目（新对话用选中项目；已有对话归属尚未加载时不回退到其它项目），共享同一投影；无需依赖打开设置页才能加载。模式/四组规则提交经 AiCore 带 version 保存，成功才回显；SANDBOX_SETTINGS_CHANGED 按 payload.projectId 回查，不会使其它项目配置或草稿失效。
 
-桌面输入栏 FlowRow 只放“权限与计划”图标，tooltip及可访问名称包含当前两项状态；点击菜单将项目执行权限和“计划：自动/手动批准”分组列出，发送按钮独立。手机输入选项 sheet 直接展开同样两组内容，避免嵌套菜单。项目设置在窄屏占满可用区域，规则编辑器随可用宽度回流，不放到狭窄侧栏中。
+输入框顶栏按空间折行，分别显示项目、实时工作区标签、沙盒档位和计划审批状态。两个权限各自打开菜单并沿原业务链路保存；手机输入选项 sheet 直接显示相同选项。自动档根据键盘安全区和文本实际折行限制高度，最大档复用同一编辑器并占满对话区，缩放窗口跟随新约束；底栏的单一动作用向上、向下箭头和「展开」「收起」切换。项目设置在窄屏占满可用区域，规则编辑器随可用宽度回流。
+
+切换到尚未收到首帧快照的会话时，尚未 attach 的状态只占用实际对话区域来显示加载占位。输入框和概览均在首帧提交后挂载；可直接使用缓存快照的会话跳过占位。
 
 执行工具先读取所属项目快照 → 路径/命令显式拒绝则失败 → default受限执行或匹配允许前缀免提升审批 → 其余network/off/越界写注册一次申请。设置变化仅取消该项目申请、递增该项目代次；启动/落盘前复核。不同项目保持独立。
 

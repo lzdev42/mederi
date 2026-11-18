@@ -3,6 +3,7 @@ package xyz.mederi.debug
 import ai.koog.http.client.KoogHttpClientException
 import ai.koog.prompt.streaming.IncompleteStreamException
 import xyz.mederi.config.MederiIdentity
+import xyz.mederi.infrastructure.koog.JsonRecordException
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.ConnectException
@@ -609,6 +610,14 @@ object ErrorCollector {
             appendLine("Message: $msg")
             appendLine()
         }
+
+        generateSequence(throwable) { it.cause }
+            .take(MAX_CAUSE_DEPTH)
+            .filterIsInstance<JsonRecordException>()
+            .firstOrNull()?.let {
+                appendLine(it.record)
+                appendLine()
+            }
 
         if (diag.failureMode == FailureMode.HTTP_ERROR) {
             diag.httpStatusCode?.let { appendLine("Provider Error Status: $it") }

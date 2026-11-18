@@ -711,11 +711,32 @@ class WorkspaceProductionRoutesTest {
     private suspend fun realSelectorLabel(asm: RealUiAssembly): String {
         val info = asm.realCore.getConversationWorkspace(asm.convId).getOrThrow()
         val active = info.active
-        return active.branch ?: if (active.workspace.kind == xyz.mederi.core.contract.models.WorkspaceKind.LOCAL) {
-            getString(Res.string.workspace_kind_local)
+        return active.branch ?: active.headOid?.takeIf { it.isNotBlank() }?.take(7)
+        ?: if (active.workspace.kind == xyz.mederi.core.contract.models.WorkspaceKind.LOCAL) {
+            getString(Res.string.workspace_selector_local)
         } else {
-            xyz.mederi.ui.resolveWorktreeBaseBranch(active, asm.vm.repositoryInfo)
-                ?: getString(Res.string.workspace_kind_worktree)
+            getString(Res.string.workspace_selector_unavailable)
+        }
+    }
+
+    @Test
+    fun openingSelectorDetectsBranchChangedOutsideTheConversation() = runComposeUiTest {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        val asm = realUiAssembly(WorkspaceKind.LOCAL)
+        try {
+            setContent {
+                AppTheme { WorkspaceSelector(viewModel = asm.vm) }
+            }
+            val original = realSelectorLabel(asm)
+            waitUntil(null, 15_000) { onAllNodesWithText(original).fetchSemanticsNodes().size == 1 }
+            git(File(asm.root, "repo"), "switch", "-c", "composer-git-refresh")
+
+            onNodeWithText(original).performClick()
+            waitUntil(null, 15_000) { onAllNodesWithText("composer-git-refresh").fetchSemanticsNodes().size == 1 }
+            onNodeWithText("composer-git-refresh").assertIsDisplayed()
+        } finally {
+            Dispatchers.resetMain()
+            asm.close()
         }
     }
 

@@ -1,5 +1,8 @@
 package xyz.mederi.provider.infrastructure.koog.sanitize
 
+import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.agents.core.tools.ToolParameterDescriptor
+import ai.koog.agents.core.tools.ToolParameterType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -10,16 +13,23 @@ import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.MessagePart
+import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.ResponseMetaInfo
 import ai.koog.prompt.streaming.StreamFrame
+import ai.koog.utils.time.KoogClock
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.reflect.KClass
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.mederi.debug.ErrorCategory
+import xyz.mederi.debug.ErrorCollector
 
 /**
  * 验证流式路径 [MederiOpenAILLMClient.processStreamingFlow] 把 usage 的 cached_tokens
@@ -30,6 +40,60 @@ import kotlin.test.assertTrue
  * 会调 factory.create，故需一个返回 fake client 的 factory。
  */
 class MederiOpenAILLMClientTest {
+
+    @Test
+    fun `invalid outbound tool arguments report fields without values`() {
+        val tool = ToolDescriptor(
+            name = "private-tool-name",
+            description = "Test tool",
+            requiredParameters = listOf(ToolParameterDescriptor("title", "Title", ToolParameterType.String)),
+        )
+        val call = MessagePart.Tool.Call(
+            id = "private-call-id",
+            tool = tool.name,
+            args = """{"title":"private-outbound-value","private-outbound-key":"other-value" "trailing":0}""",
+        )
+        val prompt = Prompt(listOf(Message.Assistant(call, ResponseMetaInfo.create(KoogClock.System))), "sess-1")
+        val error = assertFailsWith<SerializationException> {
+            makeClient().buildResponsesRequestJson(prompt, responsesTestModel, listOf(tool), stream = false)
+        }
+        val record = ErrorCollector.collect(error)
+        assertEquals(ErrorCategory.SERIALIZATION, record.category)
+        assertContains(record.fullDiagnostic, "JSON record: send / tool arguments")
+        assertContains(record.fullDiagnostic, "Fields: title, <unknown field> (incomplete)")
+        listOf(tool.name, call.id!!, "private-outbound-key", "private-outbound-value", "other-value").forEach { secret ->
+            assertTrue(record.toPayload().values.none { secret in it })
+        }
+    }
+
+    @Test
+    fun `invalid inbound response reports only schema fields`() = runBlocking {
+        val body = """{"status":"private-inbound-value","private-inbound-key":true,"output":[}"""
+        val error = assertFailsWith<SerializationException> {
+            responsesClient { body }.execute(Prompt(emptyList(), "sess-1"), responsesTestModel, emptyList())
+        }
+        val record = ErrorCollector.collect(error)
+        assertEquals(ErrorCategory.SERIALIZATION, record.category)
+        assertContains(record.fullDiagnostic, "JSON record: receive / response body")
+        assertContains(record.fullDiagnostic, "Fields: status, <unknown field>, output (incomplete)")
+        assertTrue(record.toPayload().values.none { "private-inbound" in it })
+    }
+
+    @Test
+    fun `malformed SSE reports the failing data event rather than the prior one`() = runBlocking {
+        val client = responsesClient(sseLines = listOf(
+            """data: {"type":"response.reasoning_text.delta","delta":"private-previous-value"}""",
+            """data: {"type":"private-failing-type","item_id":"private-failing-id","private-failing-key":true,"response":[}""",
+        ))
+        val error = kotlin.test.assertFails {
+            client.executeStreaming(Prompt(emptyList(), "sess-1"), responsesTestModel, emptyList()).toList()
+        }
+        val record = ErrorCollector.collect(error)
+        assertEquals(ErrorCategory.SERIALIZATION, record.category)
+        assertContains(record.fullDiagnostic, "JSON record: receive / SSE event")
+        assertContains(record.fullDiagnostic, "Fields: type, item_id, <unknown field>, response (incomplete)")
+        assertTrue(record.toPayload().values.none { "private-" in it })
+    }
 
     @Test
     fun `stream error preserves original payload classification and retry eligibility`() {
@@ -461,7 +525,7 @@ class MederiOpenAILLMClientTest {
     @Test
     fun `responses non-stream preserves cached tokens and incomplete status`() = runBlocking {
         val body = """{"id":"resp_1","status":"incomplete","output":[{"type":"reasoning","id":"rs_1","summary":null,"content":[{"type":"reasoning_text","text":"partial"}]}],"usage":{"input_tokens":2540,"output_tokens":16,"total_tokens":2556,"input_tokens_details":{"cached_tokens":2096,"cache_write_tokens":0}}}"""
-        val response = nonStreamingResponsesClient { body }.execute(Prompt(emptyList(), "sess-1"), responsesTestModel, emptyList())
+        val response = responsesClient { body }.execute(Prompt(emptyList(), "sess-1"), responsesTestModel, emptyList())
 
         assertEquals("incomplete", response.finishReason)
         assertEquals(2540, response.metaInfo.inputTokensCount)
@@ -477,7 +541,7 @@ class MederiOpenAILLMClientTest {
         for (items in listOf(listOf(tool.copy(callId = null)), listOf(tool.copy(name = "")), listOf(tool, tool))) {
             val body = sanitizeJson.encodeToString(SanitizedResponsesAPIResponse(status = "completed", output = items))
             assertFailsWith<IllegalArgumentException> {
-                nonStreamingResponsesClient { body }.execute(Prompt(emptyList(), "sess-1"), responsesTestModel, emptyList())
+                responsesClient { body }.execute(Prompt(emptyList(), "sess-1"), responsesTestModel, emptyList())
             }
         }
     }
@@ -526,7 +590,7 @@ class MederiOpenAILLMClientTest {
 
     @Test
     fun `file attachment in responses api serializes to input_file`() {
-        val client = nonStreamingResponsesClient { "{}" }
+        val client = responsesClient { "{}" }
         val filePart = ai.koog.prompt.message.MessagePart.Attachment(
             source = ai.koog.prompt.message.AttachmentSource.File(
                 content = ai.koog.prompt.message.AttachmentContent.URL("https://example.com/doc.pdf"),
@@ -547,14 +611,17 @@ class MederiOpenAILLMClientTest {
 
     private val responsesTestModel = LLModel(LLMProvider.OpenAI, "Qwen/Qwen3.6-35B-A3B")
 
-    private fun nonStreamingResponsesClient(body: () -> String): MederiOpenAILLMClient {
+    private fun responsesClient(
+        sseLines: List<String> = emptyList(),
+        body: () -> String = { error("not used") },
+    ): MederiOpenAILLMClient {
         val http = object : KoogHttpClient {
             override val clientName: String = "fake-responses"
             override suspend fun <R : Any> get(path: String, responseType: KClass<R>, parameters: Map<String, String>, headers: Map<String, String>): R = error("not used")
             @Suppress("UNCHECKED_CAST")
             override suspend fun <T : Any, R : Any> post(path: String, requestBody: T, requestBodyType: KClass<T>, responseType: KClass<R>, parameters: Map<String, String>, headers: Map<String, String>): R = body() as R
             override fun <T : Any, R : Any, O : Any> sse(path: String, requestBody: T, requestBodyType: KClass<T>, dataFilter: (String?) -> Boolean, decodeStreamingResponse: (String) -> R, processStreamingChunk: (R) -> O?, parameters: Map<String, String>, headers: Map<String, String>): Flow<O> = error("not used")
-            override fun <T : Any> lines(path: String, requestBody: T, requestBodyType: KClass<T>, parameters: Map<String, String>, headers: Map<String, String>): Flow<String> = error("not used")
+            override fun <T : Any> lines(path: String, requestBody: T, requestBodyType: KClass<T>, parameters: Map<String, String>, headers: Map<String, String>): Flow<String> = flowOf(*sseLines.toTypedArray())
             override fun close() = Unit
         }
         val factory = object : KoogHttpClient.Factory {

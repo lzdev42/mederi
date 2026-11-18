@@ -59,6 +59,7 @@ object MederiEventAggregator {
         initialSnapshot: suspend () -> ConversationState,
         modelToProvider: (String) -> String?,
         referencePricing: (Message) -> ModelReferencePricing? = { null },
+        providerPricing: (Message) -> ModelReferencePricing? = { null },
     ): Flow<ConversationSnapshot> = flow {
         DebugLog.section("Aggregator", "MederiEventAggregator.observe start")
         DebugLog.data("Aggregator", "conversationId", conversationId)
@@ -83,7 +84,7 @@ object MederiEventAggregator {
             val refreshed = runCatching { sessions.listMessages(conversationId) }.getOrNull() ?: return null
             DebugLog.data("Aggregator", "refreshed messages", refreshed.size)
             val refreshedToolResults = MederiModelMapper.buildToolResultsById(refreshed)
-            val usage = MederiModelMapper.toUsageProjection(refreshed, sessions.listModelRequests(conversationId), referencePricing)
+            val usage = MederiModelMapper.toUsageProjection(refreshed, sessions.listModelRequests(conversationId), referencePricing, providerPricing)
             // 从已加载的 domain messages 直接算 contextUsedTokens，避免第二次全量 DB 加载 + Koog 转换
             val contextTokens = computeContextUsedTokens(refreshed, includeImages)
             return MessagesPage(
@@ -195,6 +196,7 @@ object MederiEventAggregator {
         workspaceInfo: suspend () -> ConversationWorkspaceInfo?,
         mappingCache: ChatMessageMappingCache? = null,
         referencePricing: (Message) -> ModelReferencePricing? = { null },
+        providerPricing: (Message) -> ModelReferencePricing? = { null },
     ): ConversationSnapshot {
         val session = sessions.get(conversationId)
         val includeImages = session.aiModel?.supportsImages ?: true
@@ -202,7 +204,7 @@ object MederiEventAggregator {
         val toolResults = MederiModelMapper.buildToolResultsById(messages)
         DebugLog.data("Aggregator", "initial messages", messages.size)
 
-        val usage = MederiModelMapper.toUsageProjection(messages, sessions.listModelRequests(conversationId), referencePricing)
+        val usage = MederiModelMapper.toUsageProjection(messages, sessions.listModelRequests(conversationId), referencePricing, providerPricing)
         val mappedMessages = if (mappingCache != null) {
             mappingCache.mapAll(messages, toolResults)
         } else {
