@@ -3,6 +3,7 @@ package xyz.emuci.markdown.parser.html
 import xyz.emuci.markdown.parser.ast.*
 import xyz.emuci.markdown.parser.flavour.ExtendedFlavour
 import xyz.emuci.markdown.parser.flavour.MarkdownFlavour
+import kotlin.math.roundToInt
 
 /**
  * 将 Markdown AST 节点树输出为标准 HTML 的渲染器。
@@ -58,15 +59,25 @@ class HtmlRenderer(
     val directiveBlockFallback: ((HtmlDirectiveBlockSnapshot) -> String?)? = null,
     /** 自定义行内 directive HTML fallback，返回 null 则走默认输出 */
     val directiveInlineFallback: ((HtmlDirectiveInlineSnapshot) -> String?)? = null,
+    /** 渲染增强 SPI（数学 MathML / 代码高亮 / 图表 bootstrap），默认全部降级 */
+    val hooks: HtmlExportHooks = HtmlExportHooks(),
+    /** 资源需求收集器，传入后渲染过程填充 hasMath/hasDiagram/hasVerticalText 等 */
+    val requirements: HtmlExportRequirements? = null,
 ) : NodeVisitor<Unit> {
 
     private val sb = StringBuilder()
+    /** 当前 render(document) 的根文档（TOC 两遍扫描用） */
+    private var rootDocument: Document? = null
+    /** 惰性收集的全文档 heading 列表（TOC 两遍扫描用） */
+    private var collectedHeadings: List<TocHeadingInfo>? = null
 
     /**
      * 渲染 Document AST 为 HTML 字符串。
      */
     fun render(document: Document): String {
         sb.clear()
+        rootDocument = document
+        collectedHeadings = null
         document.accept(this)
         return sb.toString()
     }
@@ -196,53 +207,214 @@ class HtmlRenderer(
     }
 
     override fun visitFencedCodeBlock(node: FencedCodeBlock) {
-        val codeAttrs = mutableMapOf<String, String?>()
-        if (node.language.isNotEmpty()) {
-            codeAttrs["class"] = "language-${node.language}"
-        }
-        // 合并自定义属性
-        if (!node.attributes.isEmpty) {
-            val attrMap = node.attributes.toMap()
-            for ((k, v) in attrMap) {
-                when (k) {
-                    "class" -> {
-                        val existing = codeAttrs["class"]
-                        codeAttrs["class"] = if (existing != null) "$existing $v" else v
-                    }
-                    else -> codeAttrs[k] = v
-                }
-            }
-        }
-        // build pre-level attributes for code block enhancements
-        val preAttrs = mutableMapOf<String, String?>()
-        if (node.highlightLines.isNotEmpty()) {
-            preAttrs["data-hl-lines"] = node.highlightLines.joinToString(" ") { range ->
-                if (range.first == range.last) range.first.toString()
-                else "${range.first}-${range.last}"
-            }
-        }
-        if (node.showLineNumbers) {
-            preAttrs["data-linenums"] = "true"
-        }
-        if (node.startLineNumber != 1) {
-            preAttrs["data-startline"] = node.startLineNumber.toString()
-        }
-        tag("pre", preAttrs)
-        tag("code", codeAttrs)
-        sb.append(escape(node.literal))
-        closeTag("code")
-        closeTag("pre")
-        sb.append('\n')
+        val title = node.attributes.pairs["title"].orEmpty()
+        renderCodeBlock(
+            code = node.literal,
+            language = node.language,
+            title = title,
+            showLineNumbers = node.showLineNumbers,
+            startLineNumber = node.startLineNumber,
+            highlightLines = node.highlightLines,
+            extraCodeAttrs = node.attributes.toMap().filterKeys { it != "title" },
+        )
     }
 
     override fun visitIndentedCodeBlock(node: IndentedCodeBlock) {
-        tag("pre")
-        tag("code")
-        sb.append(escape(node.literal))
+        renderCodeBlock(
+            code = node.literal,
+            language = "",
+            title = "",
+            showLineNumbers = false,
+            startLineNumber = 1,
+            highlightLines = emptyList(),
+        )
+    }
+
+    /**
+     * 输出对齐 Compose 端 CodeBlock 视觉的代码块结构：
+     * 可选 title 栏（语言标签 + 标题文本）、行号列、高亮行背景与 tok-* 语法高亮。
+     */
+    private fun renderCodeBlock(
+        code: String,
+        language: String,
+        title: String,
+        showLineNumbers: Boolean,
+        startLineNumber: Int,
+        highlightLines: List<IntRange>,
+        extraCodeAttrs: Map<String, String> = emptyMap(),
+    ) {
+        val containerAttrs = buildMap<String, String?> {
+            put("class", "code-block")
+            if (!showLineNumbers) put("data-linenums", "false")
+        }
+        tag("div", containerAttrs)
+        sb.append('\n')
+        if (title.isNotEmpty() || language.isNotEmpty()) {
+            tag("div", mapOf("class" to "code-block-title"))
+            if (language.isNotEmpty()) {
+                tag("span", mapOf("class" to "code-lang"))
+                sb.append(escape(language))
+                closeTag("span")
+            }
+            if (title.isNotEmpty()) {
+                tag("span", mapOf("class" to "code-title-text"))
+                sb.append(escape(title))
+                closeTag("span")
+            }
+            closeTag("div")
+            sb.append('\n')
+        }
+
+        val preAttrs = buildMap<String, String?> {
+            put("class", "code-block-pre")
+            if (startLineNumber != 1) put("data-startline", startLineNumber.toString())
+            if (showLineNumbers) put("data-linenums", "true")
+            if (highlightLines.isNotEmpty()) {
+                put(
+                    "data-hl-lines",
+                    highlightLines.joinToString(" ") { range ->
+                        if (range.first == range.last) range.first.toString()
+                        else "${range.first}-${range.last}"
+                    },
+                )
+            }
+        }
+        tag("pre", preAttrs)
+        val codeAttrs = buildMap<String, String?> {
+            if (language.isNotEmpty()) put("class", "language-$language")
+            for ((k, v) in extraCodeAttrs) {
+                if (k == "class") {
+                    val existing = this["class"]
+                    put("class", if (existing != null) "$existing $v" else v)
+                } else {
+                    put(k, v)
+                }
+            }
+        }
+        tag("code", codeAttrs)
+        sb.append('\n')
+        sb.append(appendHighlightedLines(code, language, showLineNumbers, startLineNumber, highlightLines))
         closeTag("code")
+        sb.append('\n')
         closeTag("pre")
         sb.append('\n')
+        closeTag("div")
+        sb.append('\n')
     }
+
+    /**
+     * 按行输出代码内容：行号 span + 行内容（tok-* 高亮或转义纯文本）。
+     * 高亮 token 覆盖不完整（串联 != 原文）时整块降级为转义纯文本。
+     */
+    private fun appendHighlightedLines(
+        code: String,
+        language: String,
+        showLineNumbers: Boolean,
+        startLineNumber: Int,
+        highlightLines: List<IntRange>,
+    ): String {
+        val lines = code.split('\n')
+        // 尾部空行来自结尾换行符，不输出多余空行
+        val end = if (lines.isNotEmpty() && lines.last().isEmpty()) lines.size - 1 else lines.size
+        val tokensByLine = resolveTokensByLine(code, language, lines)
+        val out = StringBuilder()
+        for (index in 0 until end) {
+            val lineText = lines[index]
+            val lineNumber = startLineNumber + index
+            val isHighlighted = highlightLines.any { lineNumber >= it.first && lineNumber <= it.last }
+            val lineClass = if (isHighlighted) "code-line hl" else "code-line"
+            out.append("<span class=\"").append(lineClass).append("\">")
+            if (showLineNumbers) {
+                out.append("<span class=\"line-number\">").append(lineNumber).append("</span>")
+            }
+            out.append("<span class=\"line-content\">")
+            val lineTokens: List<HtmlHighlightToken>? = if (tokensByLine != null) tokensByLine[index] else null
+            if (lineTokens != null && lineTokens.isNotEmpty()) {
+                for (token in lineTokens) {
+                    out.append("<span class=\"tok-").append(token.category).append("\">")
+                    out.append(escape(token.text))
+                    out.append("</span>")
+                }
+            } else if (lineText.isNotEmpty()) {
+                out.append(escape(lineText))
+            }
+            out.append("</span></span>\n")
+        }
+        return out.toString()
+    }
+
+    /**
+     * 调用 code hook 取得中立 token，并按源码行切分。
+     * 返回 null 表示 hook 缺失、抛错或 token 文本串联与原文不一致（降级纯文本）。
+     */
+    private fun resolveTokensByLine(
+        code: String,
+        language: String,
+        lines: List<String>,
+    ): List<List<HtmlHighlightToken>>? {
+        val provider = hooks.code
+        if (provider == null || code.isEmpty()) return null
+        val tokens: List<HtmlHighlightToken>?
+        try {
+            tokens = provider.highlight(code, language)
+        } catch (_: Throwable) {
+            return null
+        }
+        if (tokens == null) return null
+        // 安全兜底：token 必须按序完整覆盖原文，否则放弃高亮
+        var total = 0
+        for (token in tokens) {
+            total += token.text.length
+        }
+        if (total != code.length) {
+            return null
+        }
+        val result: MutableList<MutableList<HtmlHighlightToken>> = ArrayList(lines.size)
+        for (index in lines.indices) {
+            result.add(ArrayList())
+        }
+        var cursor = 0
+        for (token in tokens) {
+            if (token.text.isEmpty()) continue
+            var remaining = token.text
+            while (remaining.isNotEmpty()) {
+                if (cursor >= lines.size) {
+                    // 所有行已填满：仅剩换行分隔符可丢弃，否则视为覆盖错位
+                    if (remaining.any { it != '\n' }) return null
+                    break
+                }
+                val lineText = lines[cursor]
+                val used = result[cursor].sumOf { t -> t.text.length }
+                val lineRemaining = lineText.length - used
+                if (lineRemaining <= 0) {
+                    // 当前行已填满：token 中只允许出现换行分隔符，否则视为覆盖错位
+                    if (remaining.first() != '\n') return null
+                    remaining = remaining.substring(1)
+                    cursor++
+                    continue
+                }
+                if (remaining.first() == '\n') {
+                    // 行内容未满却遇到换行：token 与源码行错位
+                    return null
+                }
+                val take = minOf(lineRemaining, remaining.length)
+                result[cursor].add(HtmlHighlightToken(token.category, remaining.substring(0, take)))
+                remaining = remaining.substring(take)
+            }
+        }
+        // 最终校验：每行 token 串联必须与该行原文一致，任何错位都降级
+        for (index in result.indices) {
+            val joined = result[index].joinToString("") { it.text }
+            if (joined != lines[index]) return null
+        }
+        return result
+    }
+
+    fun resolveTokensByLinePublic(code: String, language: String, lines: List<String>): List<List<HtmlHighlightToken>>? =
+        resolveTokensByLine(code, language, lines)
+
+    fun appendHighlightedLinesPublic(code: String, language: String, showLineNumbers: Boolean, startLineNumber: Int, highlightLines: List<IntRange>): String =
+        appendHighlightedLines(code, language, showLineNumbers, startLineNumber, highlightLines)
 
     override fun visitBlockQuote(node: BlockQuote) {
         val attrs = buildAttrs(attributes = node.blockAttributes)
@@ -375,6 +547,16 @@ class HtmlRenderer(
     }
 
     override fun visitMathBlock(node: MathBlock) {
+        requirements?.hasMath = true
+        val mathml = hooks.math?.toMathMl(node.literal, displayMode = true)
+        if (mathml != null) {
+            val attrs = mapOf<String, String?>("class" to "math-display")
+            tag("div", attrs)
+            sb.append(mathml)
+            closeTag("div")
+            sb.append('\n')
+            return
+        }
         val attrs = mapOf<String, String?>("class" to "math-display")
         tag("div", attrs)
         sb.append("\\[")
@@ -430,14 +612,129 @@ class HtmlRenderer(
     }
 
     override fun visitTocPlaceholder(node: TocPlaceholder) {
+        // 两遍扫描：渲染到 TOC 节点时从根文档收集全文档 heading（惰性，仅首次触发）
+        val all = collectedHeadings
+            ?: rootDocument?.let { collectHeadings(it) }?.also { collectedHeadings = it }
+            ?: emptyList()
+        var entries = all.filter { it.level in node.minDepth..node.maxDepth }
+        if (node.excludeIds.isNotEmpty()) {
+            entries = entries.filter { it.id == null || it.id !in node.excludeIds }
+        }
+        if (node.order == "desc") entries = entries.reversed()
+
         val attrs = mapOf<String, String?>("class" to "table-of-contents")
+        if (entries.isEmpty()) {
+            // 全部被过滤 → 空壳 nav（不输出任何占位文本）
+            tag("nav", attrs)
+            closeTag("nav")
+            sb.append('\n')
+            return
+        }
         tag("nav", attrs)
         sb.append('\n')
-        tag("p")
-        sb.append("[TOC]")
+        tag("p", mapOf("class" to "toc-title"))
+        sb.append("Table of Contents")
         closeTag("p")
         sb.append('\n')
+        appendTocList(entries)
         closeTag("nav")
+        sb.append('\n')
+    }
+
+    private data class TocHeadingInfo(val text: String, val level: Int, val id: String?)
+
+    /** 递归收集全文档 heading（Heading + SetextHeading，ContainerNode 递归） */
+    private fun collectHeadings(document: Document): List<TocHeadingInfo> {
+        val result = mutableListOf<TocHeadingInfo>()
+        for (child in document.children) {
+            collectHeadingsRecursive(child, result)
+        }
+        return result
+    }
+
+    private fun collectHeadingsRecursive(node: Node, result: MutableList<TocHeadingInfo>) {
+        when (node) {
+            is Heading -> result.add(TocHeadingInfo(extractTocText(node), node.level, node.id))
+            is SetextHeading -> result.add(TocHeadingInfo(extractTocText(node), node.level, node.id))
+            is ContainerNode -> node.children.forEach { collectHeadingsRecursive(it, result) }
+            else -> {}
+        }
+    }
+
+    /** 提取行内节点纯文本（与 Compose 端 extractText 语义一致） */
+    private fun extractTocText(node: Node): String = buildString {
+        for (child in (node as? ContainerNode)?.children ?: emptyList()) {
+            append(extractTocTextOf(child))
+        }
+    }
+
+    private fun extractTocTextOf(node: Node): String = when (node) {
+        is Text -> node.literal
+        is InlineCode -> node.literal
+        is EscapedChar -> node.literal
+        is HtmlEntity -> node.resolved.ifEmpty { node.literal }
+        is Emoji -> node.literal
+        is ContainerNode -> buildString { for (c in node.children) append(extractTocTextOf(c)) }
+        else -> ""
+    }
+
+    /**
+     * 嵌套 ul 输出：level 加深时在当前 li 内开新 ul，level 减浅时逐层闭合 ul/li；
+     * 跳级不产生空 ul。每项 `<li class="toc-level-{n}">`，id 非空包锚点 `<a href="#id">`。
+     */
+    private fun appendTocList(entries: List<TocHeadingInfo>) {
+        tag("ul", mapOf("class" to "toc-list"))
+        sb.append('\n')
+        val openUlParentLevels = ArrayList<Int>()
+        var prevLevel: Int? = null
+        for (entry in entries) {
+            val level = entry.level
+            val prev = prevLevel
+            when {
+                prev == null -> {}
+                level > prev -> {
+                    tag("ul")
+                    sb.append('\n')
+                    openUlParentLevels.add(prev)
+                }
+                level < prev -> {
+                    closeTag("li")
+                    sb.append('\n')
+                    while (openUlParentLevels.isNotEmpty() && openUlParentLevels.last() >= level) {
+                        closeTag("ul")
+                        sb.append('\n')
+                        openUlParentLevels.removeAt(openUlParentLevels.size - 1)
+                        closeTag("li")
+                        sb.append('\n')
+                    }
+                }
+                else -> {
+                    closeTag("li")
+                    sb.append('\n')
+                }
+            }
+            tag("li", mapOf("class" to "toc-level-$level"))
+            val id = entry.id
+            if (id != null) {
+                tag("a", mapOf("href" to "#$id"))
+                sb.append(escape(entry.text))
+                closeTag("a")
+            } else {
+                sb.append(escape(entry.text))
+            }
+            // li 暂不闭合：更深层级的 ul 可能嵌套在其内
+            prevLevel = level
+        }
+        closeTag("li")
+        sb.append('\n')
+        while (openUlParentLevels.isNotEmpty()) {
+            closeTag("ul")
+            sb.append('\n')
+            openUlParentLevels.removeAt(openUlParentLevels.size - 1)
+            closeTag("li")
+            sb.append('\n')
+        }
+        closeTag("ul")
         sb.append('\n')
     }
 
@@ -469,20 +766,38 @@ class HtmlRenderer(
     }
 
     override fun visitDiagramBlock(node: DiagramBlock) {
+        requirements?.let {
+            it.hasDiagram = true
+            it.diagramTypes += node.diagramType
+        }
+        val isMermaid = node.diagramType.equals("mermaid", ignoreCase = true)
         val attrs = mapOf<String, String?>("class" to "diagram ${node.diagramType}")
         tag("div", attrs)
         sb.append('\n')
-        tag("pre")
-        tag("code", mapOf("class" to "language-${node.diagramType}"))
-        sb.append(escape(node.literal))
-        closeTag("code")
-        closeTag("pre")
+        if (isMermaid) {
+            // mermaid 渲染路径：<pre class="mermaid"> 包转义源码，页面尾部 bootstrap 的
+            // mermaid.run() 扫描 .mermaid 元素渲染为 SVG。
+            // 内容必须转义：源码可能含 < > &；mermaid 读 textContent，转义不影响图表语义。
+            // 无 bootstrap 时（平台无资源 / embedMermaid=false）浏览器直接展示转义源码文本，
+            // pre 本就是源码展示容器，视觉与结构均可接受（降级语义天然成立）。
+            tag("pre", mapOf<String, String?>("class" to "mermaid"))
+            sb.append(escape(node.literal))
+            closeTag("pre")
+        } else {
+            // 非 mermaid 图表类型（plantuml/dot/…）：无 JS 渲染引擎，保留源码展示
+            tag("pre")
+            tag("code", mapOf("class" to "language-${node.diagramType}"))
+            sb.append(escape(node.literal))
+            closeTag("code")
+            closeTag("pre")
+        }
         sb.append('\n')
         closeTag("div")
         sb.append('\n')
     }
 
     override fun visitVerticalTextBlock(node: VerticalTextBlock) {
+        requirements?.hasVerticalText = true
         val classNames = buildList {
             add("vtext")
             add("vertical-text")
@@ -490,7 +805,10 @@ class HtmlRenderer(
         }.joinToString(" ")
 
         val style = buildString {
-            append("writing-mode: vertical-lr; text-orientation: mixed; font-family: 'Noto Sans Mongolian', sans-serif; max-width: 100%; box-sizing: border-box;")
+            // 字体回退链：NotoSansMongolian 嵌入时首选；未嵌入时平台系统蒙文字体兜底
+            // （macOS Mongolian Baiti / Win Segoe UI Historic），末尾 serif 保底
+            // （竖排场景 serif 默认字形直立性优于 sans-serif）。
+            append("writing-mode: vertical-lr; text-orientation: mixed; font-family: 'Noto Sans Mongolian', 'Mongolian Baiti', 'Segoe UI Historic', serif; max-width: 100%; box-sizing: border-box;")
             node.height?.let { h ->
                 val cssH = formatCssDimension(h)
                 append(" height: $cssH;")
@@ -498,6 +816,17 @@ class HtmlRenderer(
             node.fontSize?.let { s ->
                 val cssS = formatCssDimension(s)
                 append(" font-size: $cssS;")
+            }
+            // Compose 端 verticalTextStyle：fontSize 13sp / lineHeight 21.5sp（lineHeight/fontSize ≈ 1.654）。
+            // vertical-lr 下 line-height 即"列宽/列距"——Compose fixedWidth 等宽列语义的 CSS 近似
+            //（实际列宽由每列最长字符决定，固定 line-height + text-orientation: mixed 已能模拟等宽列观感）。
+            // fontSize 未指定 → 文档默认 13px 配 21.5px；可解析数值 → 1.654×px（保留 1 位小数）；
+            // 非数值单位（如 2em）→ 无单位倍数 1.654。
+            val fontSizePx = node.fontSize?.let { cssDimensionPxValue(it) }
+            when {
+                node.fontSize == null -> append(" line-height: 21.5px;")
+                fontSizePx != null -> append(" line-height: ${formatLineHeightPx(1.654 * fontSizePx)};")
+                else -> append(" line-height: 1.654;")
             }
             if (node.wrap == true) {
                 append(" white-space: normal; overflow-x: auto;")
@@ -530,6 +859,25 @@ class HtmlRenderer(
         return trimmed
     }
 
+    /** [raw] 可解析为纯数值或 dp/sp 数值时返回 px 数值（dp/sp → px 1:1）；否则 null（如 "2em"） */
+    private fun cssDimensionPxValue(raw: String): Double? {
+        val trimmed = raw.trim()
+        trimmed.toDoubleOrNull()?.let { return it }
+        if (trimmed.endsWith("dp", ignoreCase = true) || trimmed.endsWith("sp", ignoreCase = true)) {
+            val prefix = trimmed.substring(0, trimmed.length - 2).trim()
+            prefix.toDoubleOrNull()?.let { return it }
+        }
+        return null
+    }
+
+    /** lineHeight px 值保留 1 位小数（1.654×18 = 29.772 → "29.8px"）；整数无小数部分 */
+    private fun formatLineHeightPx(px: Double): String {
+        val tenths = (px * 10).roundToInt()
+        val intPart = tenths / 10
+        val fracPart = tenths % 10
+        return if (fracPart == 0) "${intPart}px" else "${intPart}.${fracPart}px"
+    }
+
     override fun visitColumnsLayout(node: ColumnsLayout) {
         tag("div", mapOf("class" to "columns-layout"))
         sb.append('\n')
@@ -541,7 +889,8 @@ class HtmlRenderer(
     override fun visitColumnItem(node: ColumnItem) {
         val attrs = mutableMapOf<String, String?>("class" to "column-item")
         if (node.width.isNotEmpty()) {
-            attrs["style"] = "width:${node.width}"
+            // 显式列宽 → flex-basis 固定；无 width 的列由样式表 flex:1 1 0 均分
+            attrs["style"] = "flex: 0 0 ${node.width}"
         }
         tag("div", attrs)
         sb.append('\n')
@@ -700,6 +1049,14 @@ class HtmlRenderer(
     }
 
     override fun visitInlineMath(node: InlineMath) {
+        requirements?.hasMath = true
+        val mathml = hooks.math?.toMathMl(node.literal, displayMode = false)
+        if (mathml != null) {
+            tag("span", mapOf("class" to "math-inline"))
+            sb.append(mathml)
+            closeTag("span")
+            return
+        }
         tag("span", mapOf("class" to "math-inline"))
         sb.append("\\(")
         sb.append(escape(node.literal))
@@ -782,7 +1139,20 @@ class HtmlRenderer(
     }
 
     override fun visitTabBlock(node: TabBlock) {
-        tag("div", mapOf("class" to "tab-block"))
+        tag("div", mapOf("class" to "tab-block", "role" to "tablist"))
+        sb.append('\n')
+        // tab 栏：每项一个视觉标签（静态呈现，无 JS 交互）
+        tag("div", mapOf("class" to "tab-bar"))
+        node.children.forEach { child ->
+            // 空 title 的 TabItem 是解析器的结构占位（tab 分隔），不生成标签
+            val title = (child as? TabItem)?.title
+            if (title.isNullOrEmpty()) return@forEach
+            tag("span", mapOf("class" to "tab-label"))
+            sb.append(escape(title))
+            closeTag("span")
+            sb.append('\n')
+        }
+        closeTag("div")
         sb.append('\n')
         visitChildren(node)
         closeTag("div")
@@ -790,7 +1160,7 @@ class HtmlRenderer(
     }
 
     override fun visitTabItem(node: TabItem) {
-        tag("div", mapOf("class" to "tab-item", "data-tab-title" to node.title))
+        tag("div", mapOf("class" to "tab-item", "data-tab-title" to node.title, "aria-selected" to "true"))
         sb.append('\n')
         visitChildren(node)
         closeTag("div")
@@ -918,101 +1288,117 @@ class HtmlRenderer(
             title: String = "Markdown Export",
             customCss: String = "",
             embeddedFontBase64: String? = null,
+        ): String = renderFullHtmlPage(
+            document = document,
+            options = HtmlPageOptions(
+                title = title,
+                customCss = customCss,
+                dark = false,
+                fontBase64ByFamily = if (embeddedFontBase64.isNullOrBlank()) {
+                    emptyMap()
+                } else {
+                    mapOf("Noto Sans Mongolian" to embeddedFontBase64)
+                },
+            ),
+        )
+
+        /**
+         * 完整 HTML 页面配置。
+         *
+         * @param title 页面标题
+         * @param customCss 自定义附加 CSS
+         * @param dark 是否启用深色主题
+         * @param fontBase64ByFamily family 名 → Base64 字体数据（无则空 map）
+         * @param lang <html lang> 属性值
+         * @param hooks 渲染增强 SPI
+         * @param requirements 资源需求收集器
+         * @param codeColors 代码高亮 category（"keyword"/"string"/…）→ hex 颜色，注入 tok-* CSS 规则
+         * @param mathFontVariants KaTeX 数学字体变体（family/weight/style + Base64），逐变体生成 @font-face
+         */
+        data class HtmlPageOptions(
+            val title: String = "Markdown Export",
+            val customCss: String = "",
+            val dark: Boolean = false,
+            /** family 名 → Base64（无则空） */
+            val fontBase64ByFamily: Map<String, String> = emptyMap(),
+            val lang: String = "zh-CN",
+            val hooks: HtmlExportHooks = HtmlExportHooks(),
+            val requirements: HtmlExportRequirements = HtmlExportRequirements(),
+            /** 语法高亮 category（"keyword"/"string"/…）→ hex 颜色；空 map 时 tok-* 走 --md-text-color 缺省 */
+            val codeColors: Map<String, String> = emptyMap(),
+            /** KaTeX 数学字体变体（family/weight/style + Base64），renderFullHtmlPage 逐变体生成 @font-face；空则零嵌入 */
+            val mathFontVariants: List<Pair<HtmlFontVariant, String>> = emptyList(),
+            /** 图表 bootstrap 完整 <script>…</script> 片段（含 mermaid 库 + initialize + run + ready flag）；空串/null 则不注入（mermaid 源码降级展示） */
+            val diagramBootstrap: String = "",
+        )
+
+        /**
+         * 将 Markdown AST 渲染为完整的、自包含样式的独立 HTML 页面。
+         *
+         * 适合在 WebView / JCEF 中离屏加载并执行打印（Print to PDF）。
+         */
+        fun renderFullHtmlPage(
+            document: Document,
+            options: HtmlPageOptions,
         ): String {
-            val bodyHtml = HtmlRenderer().render(document)
-            val fontFaceCss = if (!embeddedFontBase64.isNullOrBlank()) {
+            val bodyHtml = HtmlRenderer(
+                hooks = options.hooks,
+                requirements = options.requirements,
+            ).render(document)
+            val fontFaceCss = options.fontBase64ByFamily.entries.joinToString("\n") { (family, base64) ->
                 """
                 @font-face {
-                    font-family: 'Noto Sans Mongolian';
-                    src: url('data:font/truetype;charset=utf-8;base64,$embeddedFontBase64') format('truetype');
+                    font-family: '$family';
+                    src: url('data:font/truetype;charset=utf-8;base64,$base64') format('truetype');
                     font-weight: normal;
                     font-style: normal;
                 }
                 """.trimIndent()
-            } else ""
+            }
+            val mathFontFaceCss = options.mathFontVariants.joinToString("\n") { (variant, base64) ->
+                """
+                @font-face {
+                    font-family: '${variant.family}';
+                    src: url('data:font/truetype;charset=utf-8;base64,$base64') format('truetype');
+                    font-weight: ${variant.weight};
+                    font-style: ${variant.style};
+                }
+                """.trimIndent()
+            }
+            val css = buildString {
+                append(
+                    HtmlStyleSheet.generate(
+                        dark = options.dark,
+                        customCss = options.customCss,
+                        codeColors = options.codeColors,
+                    )
+                )
+                if (fontFaceCss.isNotBlank()) {
+                    append("\n\n")
+                    append(fontFaceCss)
+                }
+                if (mathFontFaceCss.isNotBlank()) {
+                    append("\n\n")
+                    append(mathFontFaceCss)
+                }
+            }
+            val themeAttr = if (options.dark) " data-theme=\"dark\"" else ""
+            // bootstrap 注入点：bodyHtml 之后、</body> 之前（body 尾部 inline，DOM 已就绪可直接执行）
+            val bootstrapScript = if (options.diagramBootstrap.isNotBlank()) "\n${options.diagramBootstrap}\n" else ""
 
             return """
             <!DOCTYPE html>
-            <html lang="zh-CN">
+            <html lang="${escapeHtmlText(options.lang)}"$themeAttr>
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>${escapeHtmlText(title)}</title>
+                <title>${escapeHtmlText(options.title)}</title>
                 <style>
-                    $fontFaceCss
-                    
-                    /* Reset & Base Typography */
-                    *, *::before, *::after { box-sizing: border-box; }
-                    body {
-                        margin: 0;
-                        padding: 32px;
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-                        font-size: 16px;
-                        line-height: 1.6;
-                        color: #24292f;
-                        background-color: #ffffff;
-                    }
-                    
-                    /* Markdown Body Defaults */
-                    h1, h2, h3, h4, h5, h6 { margin-top: 24px; margin-bottom: 16px; font-weight: 600; line-height: 1.25; }
-                    h1 { font-size: 2em; border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
-                    h2 { font-size: 1.5em; border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
-                    h3 { font-size: 1.25em; }
-                    p { margin-top: 0; margin-bottom: 16px; }
-                    blockquote { margin: 0 0 16px; padding: 0 1em; color: #57606a; border-left: .25em solid #d0d7de; }
-                    ul, ol { padding-left: 2em; margin-top: 0; margin-bottom: 16px; }
-                    table { border-spacing: 0; border-collapse: collapse; margin-top: 0; margin-bottom: 16px; width: 100%; overflow: auto; display: block; }
-                    table th, table td { padding: 6px 13px; border: 1px solid #d0d7de; }
-                    table tr:nth-child(2n) { background-color: #f6f8fa; }
-                    
-                    /* Code Blocks */
-                    pre {
-                        padding: 16px;
-                        overflow: auto;
-                        font-size: 85%;
-                        line-height: 1.45;
-                        background-color: #f6f8fa;
-                        border-radius: 6px;
-                        margin-top: 0;
-                        margin-bottom: 16px;
-                        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-                    }
-                    code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
-                    
-                    /* Math & Diagram */
-                    .math-display { text-align: center; margin: 16px 0; overflow-x: auto; }
-                    
-                    /* Vertical Text (vlr) Container */
-                    .vtext, .vertical-text {
-                        background-color: #f6f8fa;
-                        border-radius: 6px;
-                        padding: 16px;
-                        margin-bottom: 16px;
-                        border: 1px solid #e1e4e8;
-                    }
-                    
-                    /* Page Break */
-                    .page-break {
-                        display: block;
-                        height: 0;
-                        page-break-after: always;
-                        break-after: page;
-                    }
-                    
-                    /* Print Media Settings */
-                    @media print {
-                        body { padding: 0; }
-                        pre, code, table, img, .admonition, .math-display, .vtext {
-                            break-inside: avoid;
-                            page-break-inside: avoid;
-                        }
-                    }
-                    
-                    $customCss
+                    $css
                 </style>
             </head>
             <body>
-            $bodyHtml
+            $bodyHtml$bootstrapScript
             </body>
             </html>
             """.trimIndent()

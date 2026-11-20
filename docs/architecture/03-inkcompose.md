@@ -17,7 +17,7 @@
 | `SelectionMenuAction` | 同目录 SelectionMenuAction.kt | sealed interface：`Copy` / `Paste` / `Custom(label, onClick: (String) -> Unit, leadingIcon: (@Composable () -> Unit)? = null, enabled: Boolean = true)`；完整有序菜单数组，不使用字符串判定动作 |
 | `MermaidCacheConfig` | 同目录（object + 顶层 expect 函数） | `setBaseDirectory(path)` / `getBaseDirectory()` / `clearSessionCache(sessionKey)` |
 | `LocalSessionKey` | 同目录 | `compositionLocalOf<String?>`，会话标识用于图表缓存前缀 |
-| `MarkdownExporter` | `common/entry/kotlin/xyz/emuci/inkcompose/MarkdownExporter.kt` | Markdown 文档导出器（object）：`setBrowser(browser: KBrowser?)` / `getBrowser()` + `toHtml`×2（同步，自包含 HTML 字符串）+ `suspend toPdf`×2（`Result<String>`，KBrowser 打印矢量 PDF）；配置 `HtmlExportOptions` / `PdfExportOptions`（含 `landscape`/`printBackground`/`browser: KBrowser?`） |
+| `MarkdownExporter` | `common/entry/kotlin/xyz/emuci/inkcompose/MarkdownExporter.kt` | Markdown 文档导出器（object）：`setBrowser(browser: KBrowser?)` / `getBrowser()` + `suspend toHtml`×2（自包含 HTML 字符串；ST7 起 suspend——跨平台 Compose Resources 字体读取为挂起点，JVM classloader 快路径即时完成）+ `suspend toPdf`×2（`Result<String>`，KBPdf.fromHtml 打印矢量 PDF——KBrowser 0.2.2 起；`browser` 参数不再被消费，保留向后兼容）；配置 `HtmlExportOptions` / `PdfExportOptions`（含 `landscape`/`printBackground`/`browser: KBrowser?`；`landscape` 现阶段 KBPdf 未暴露横向设置暂不生效） |
 | `DiffView` / `MultiFileDiffView` | `common/entry/kotlin/xyz/emuci/inkcompose/DiffView.kt` | 差异查看器：`DiffView` 4 重载（`DiffFile` 结构化 / unified `patch` 字符串 / `oldText,newText` 文本对比）+ `MultiFileDiffView` 多文件列表 |
 | `DiffFile` / `DiffHunk` / `DiffLine` / `DiffStats` | `common/entry/kotlin/xyz/emuci/inkcompose/DiffModels.kt` | 4 个 typealias → 内部 `xyz.emuci.diff.model.*`（对外入口别名） |
 | `InkImage(...)` | `common/image/kotlin/xyz/emuci/inkcompose/InkImage.kt` | 统一图片组件（Coil3）：网络 URL、base64 data URI、本地文件（`~/`、`/abs`、`file://`、Windows 盘符 `C:\`/`C:/` → `file:///`、Android `content://`）、SVG（jvm/ios/wasm=Skia SVGDOM，android=coil-svg ServiceLoader）；失败显示可见占位不静默；配套 public `getInkImageLoader(context)`（进程级共享 loader）+ `InkSvgSanitizer`（`sanitizeSvgForSkia`，修复 Skia SVGDOM 渐变缺陷，被 `InkSvgDecoder.jvm.kt` 调用） |
@@ -68,14 +68,18 @@ MarkdownView(
 公共入口 `common/entry/kotlin/xyz/emuci/inkcompose/MarkdownExporter.kt`：
 
 - `object MarkdownExporter`
-  - `setBrowser(browser: KBrowser?)` / `getBrowser()`：宿主注入已初始化就绪的 KBrowser 全局单例（`toPdf` 在 `options.browser` 为空时回退用它）。
-  - `toHtml(markdown, options)` / `toHtml(document: Document, options)`：同步，返回完整的自包含样式独立 HTML 页面字符串。
+  - `setBrowser(browser: KBrowser?)` / `getBrowser()`：宿主注入已初始化就绪的 KBrowser 全局单例（`toPdf` 在 `options.browser` 为空时回退用它）。0.2.2 起 PDF 走 KBPdf 自建离屏实例，注入的 browser 不再被消费（保留 API 兼容）。
+  - `suspend toHtml(markdown, options)` / `suspend toHtml(document: Document, options)`：返回完整的自包含样式独立 HTML 页面字符串（ST7 起 suspend：字体按需读取为挂起点；调用方需协程上下文）。
   - `suspend toPdf(markdown, outputPath, options)` / `suspend toPdf(document, outputPath, options)`：返回 `Result<String>`，成功为生成的 PDF 绝对路径。
 - 配置 DTO：`HtmlExportOptions`（title / customCss / embedFonts / flavour）；`PdfExportOptions`（title / customCss / embedFonts / `landscape` / `printBackground` / flavour / `browser: KBrowser?`）。
+- 渲染增强 SPI（ST0 起新增）：`HtmlExportOptions` 追加 `theme: HtmlExportTheme(LIGHT|DARK)` / `codeTheme: CodeTheme?` / `embedMathFonts` / `embedMermaid` / `mermaidScript` / `lang` / `hooks: HtmlExportHooks?`；`toHtml` 内部经 `HtmlExportPipeline.defaultHooks()`（`common/entry/kotlin/xyz/emuci/inkcompose/HtmlExportPipeline.kt`）注入默认 hooks：math=LatexParser+MathMLVisitor（失败降级 `\(…\)` 纯文本）、code=IncrementalHighlighter→中立 `HtmlHighlightToken`（覆盖不完整降级）、diagram=暂 null（ST4 接 mermaid bootstrap）。
+- markdown-parser 侧（`common/markdown-parser/kotlin/xyz/emuci/markdown/parser/html/`）：`HtmlExportHooks.kt`（`MathHtmlProvider`/`CodeHighlightProvider`/`DiagramBootstrapProvider`/`HtmlHighlightToken`/`HtmlExportHooks`/`HtmlExportRequirements` 收集器，域内零 latex/syntax/diagram 依赖）；`HtmlRenderer` 构造参数追加 `hooks`/`requirements`，`visitMathBlock`/`visitInlineMath` 走 hook 注入 MathML（`<div class="math-display">`/`<span class="math-inline">`），`visitDiagramBlock`/`visitVerticalTextBlock` 填充 requirements；`HtmlStyleSheet.kt` 生成 CSS 变量主题骨架（`:root`/`[data-theme="dark"]` 的 `--md-*` 变量 + 基础规则 + `.vtext`/`.page-break`/`@media print`/`.math-display`），替代内联样式字符串；`HtmlRenderer.Companion.HtmlPageOptions`（title/customCss/dark/fontBase64ByFamily/lang/hooks/requirements）+ 新 `renderFullHtmlPage(document, options)` 重载（旧 4 参签名 delegate，字体映射为 `mapOf("Noto Sans Mongolian" to base64)`）。ST6 扩展块：`visitTocPlaceholder` 两遍扫描真渲染（render 入口持 `rootDocument`，惰性 `collectHeadings` 全文档递归 + 域内 `extractTocText`，按 minDepth/maxDepth/excludeIds/order 过滤后输出 `<nav class="table-of-contents">` 嵌套 ul + `#id` 锚点，全过滤时输出空壳 nav）；`visitTabBlock` 输出 `role="tablist"` + `.tab-bar` 视觉标签列表（跳过空 title 的解析器占位 TabItem），`visitTabItem` 追加 `aria-selected="true"` 全展开（无 JS，打印完整性优先）；`visitColumnItem` 显式宽度改 `flex: 0 0 {width}`（无 width 由样式表 `flex:1 1 0` 均分）；`HtmlStyleSheet` 补全 admonition 5 类型 light/dark 双主题色板（色值逐值对齐 Compose `defaultAdmonitionStyles`/`darkAdmonitionStyles`，dark 走 `html[data-theme="dark"]` 选择器）+ `.custom-container`/`.tab-*`/`.columns-layout`/`.toc-*`/`.spoiler:hover`+print 揭示规则。
 - 平台 actual 四份：
-  - **jvm 真实现**（`jvm/kotlin/xyz/emuci/inkcompose/MarkdownExporter.jvm.kt`）：`getBundledMongolianFontBase64()` 读打包字体（`composeResources/xyz.emuci.inkcompose.resources/font/NotoSansMongolian-Regular.ttf`，进程级缓存）；`exportMarkdownHtmlToPdfPlatform` 用 KBrowser `printToPDF`（`CefPdfPrintSettings`），页面 load 20s 超时 + 打印 Mutex 严格串行。
-  - **android / ios / wasmJs 桩**（同包 `MarkdownExporter.{android,ios,wasmJs}.kt`）：`getBundledMongolianFontBase64()` 返回 null；`exportMarkdownHtmlToPdfPlatform` 返回 `Result.failure(UnsupportedOperationException(...))`。
-- 引入 2 个新 expect：`exportMarkdownHtmlToPdfPlatform` + `getBundledMongolianFontBase64`（均定义在 `MarkdownExporter.kt`）。
+  - **jvm 真实现**（`jvm/kotlin/xyz/emuci/inkcompose/MarkdownExporter.jvm.kt`）：`readBundledFontBase64(fontFileName)` classloader 快路径读打包字体（`composeResources/xyz.emuci.inkcompose.resources/font/{蒙古文 NotoSansMongolian-Regular.ttf + KaTeX ×20}`，`@Volatile` map 进程级缓存，缺失缓存空串）；`exportMarkdownHtmlToPdfPlatform` = `KBPdf.fromHtml(html)` 转调（KBrowser 0.2.2+）：内建等待 load/字体/mermaid SVG（`.mermaid` → svg）/图片/`document.fonts.ready` 就绪后打印（60s 总超时），自建离屏 OSR browser，不消费注入 browser；fonts 传空 Map（HTML 已内嵌 `data:font/truetype` @font-face）；JCEF 不可用快速失败；手写 JCEF `printToPDF` 管线（loadHandler/delay(250)/Mutex）已删除。
+  - **android / ios / wasmJs 真实现**（同包 `MarkdownExporter.{android,ios,wasmJs}.kt`，ST7 起三平台同构）：`readBundledFontBase64(fontFileName)` = `kotlin.io.encoding.Base64.encode(Res.readBytes("font/$fontFileName"))`（Compose Resources 生成 internal `Res`，同模块可见；`@Volatile` map 缓存 + 双读兜底，读取失败静默 null）；`exportMarkdownHtmlToPdfPlatform` 仍返回 `Result.failure(UnsupportedOperationException(...))` 桩。
+- expect 三函数（均定义在 `MarkdownExporter.kt`）：`exportMarkdownHtmlToPdfPlatform`（suspend）+ `readBundledFontBase64(fontFileName)`（ST7 起 suspend，统一替代旧 `getBundledMongolianFontBase64`/`readKaTeXFontBase64` 双 expect）+ `readBundledMermaidScript`（非 suspend；mermaid.min.js 仅 JVM 资产，其余平台 null 桩走源码降级）。
+- 字体按需嵌入开关链（two-pass 先探测再嵌）：`embedFonts` × `requirements.hasVerticalText`（vlr 块）→ 蒙古文 `@font-face`；`embedMathFonts` × `requirements.hasMath` → KaTeX 变体逐条 `@font-face`；`embedMermaid` × `requirements.hasDiagram` → mermaid bootstrap。任一信号缺失零嵌入（ST7 起蒙古文不再无条件嵌，仅 vlr 文档带 `@font-face`）。
+- 测试：`jvm-test/kotlin/xyz/emuci/inkcompose/MarkdownExporterFullMatrixTest.kt`（ST9）——单文档全节点矩阵集成测试，一个 ExtendedFlavour 文档覆盖 ~60/66 种 AST 节点类型，`toHtml` 整页逐节点结构断言 + dark 主题色板抽查 + PDF 冒烟（JCEF assumeTrue 守卫）。
 
 ## 3. Markdown 渲染管线
 
@@ -217,7 +221,7 @@ flowchart TD
 
 ## 10. 平台层（expect → actual 矩阵）
 
-commonMain 全部顶层 expect 函数（零 expect class/object）：`DiagramBlockView`(diagram)、`setMermaidCacheBaseDirectory`/`getMermaidCacheBaseDirectory`/`clearMermaidSessionCache`(entry/MermaidCacheConfig)、`exportMarkdownHtmlToPdfPlatform`/`getBundledMongolianFontBase64`(entry/MarkdownExporter)、`inkExpandUserHome`/`inkSvgDecoderFactory`(image)、`getCurrentPlatform`/`measureGlyphBounds`/`renderToSvgPlatform`/`ImageBitmap.encodeToFormat`(latex-renderer)、`createCacheMutexHandle`/`withCacheMutexLock`/`plainTextClipEntry`/`isSecondaryClick`(markdown-renderer)、`getPlatformLocaleLanguageCode`(syntax)。
+commonMain 全部顶层 expect 函数（零 expect class/object）：`DiagramBlockView`(diagram)、`setMermaidCacheBaseDirectory`/`getMermaidCacheBaseDirectory`/`clearMermaidSessionCache`(entry/MermaidCacheConfig)、`exportMarkdownHtmlToPdfPlatform`/`readBundledFontBase64`(entry/MarkdownExporter)、`inkExpandUserHome`/`inkSvgDecoderFactory`(image)、`getCurrentPlatform`/`measureGlyphBounds`/`renderToSvgPlatform`/`ImageBitmap.encodeToFormat`(latex-renderer)、`createCacheMutexHandle`/`withCacheMutexLock`/`plainTextClipEntry`/`isSecondaryClick`(markdown-renderer)、`getPlatformLocaleLanguageCode`(syntax)。
 
 | 领域 | jvm | android | ios | wasmJs |
 |---|---|---|---|---|
@@ -226,7 +230,7 @@ commonMain 全部顶层 expect 函数（零 expect class/object）：`DiagramBlo
 | latex | LatexExporter/SvgCanvas/GlyphBoundsProvider/Platform | 同左各 .android | 同左各 .ios | 同左各 .wasmJs |
 | selection | SelectionClipboard/SelectionPointerEvent/CacheMutex | 同左 | 同左 | 同左 |
 | i18n | PlatformLocale(Locale.getDefault) | 同左 | 同左 | 同左 |
-| export | MarkdownExporter.jvm（真实现：printToPDF） | MarkdownExporter.android（桩：UnsupportedOperationException） | MarkdownExporter.ios（桩） | MarkdownExporter.wasmJs（桩） |
+| export | MarkdownExporter.jvm（真实现：KBPdf.fromHtml，KBrowser 0.2.2） | MarkdownExporter.android（桩：UnsupportedOperationException） | MarkdownExporter.ios（桩） | MarkdownExporter.wasmJs（桩） |
 
 > `InkImagePlatform` 是**文件名**而非类名——四平台文件 `InkImagePlatform.{jvm,android,ios,wasmJs}.kt` 各只含 `inkExpandUserHome` + `inkSvgDecoderFactory` 两个 actual。
 

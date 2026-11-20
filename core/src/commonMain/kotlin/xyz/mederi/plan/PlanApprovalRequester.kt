@@ -32,6 +32,7 @@ class PlanApprovalRequester(
         summary: String = "",
         subtaskCount: Int,
         subtasksJson: String = "",
+        replacesPlanId: String? = null,
         commitApproval: () -> Boolean,
     ): PlanApprovalResult {
         val request = Pending(planId, commitApproval)
@@ -56,6 +57,7 @@ class PlanApprovalRequester(
         if (subtasksJson.isNotBlank()) {
             payloadMap["subtasks"] = subtasksJson
         }
+        replacesPlanId?.let { payloadMap["replacesPlanId"] = it }
 
         return try {
             eventBus.emit(MederiEvent(

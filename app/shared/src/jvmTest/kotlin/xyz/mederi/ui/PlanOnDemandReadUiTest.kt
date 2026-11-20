@@ -10,9 +10,12 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import xyz.mederi.core.contract.AiCore
+import xyz.mederi.core.contract.ConversationStateReducer
 import xyz.mederi.core.contract.dto.ConversationState
 import xyz.mederi.core.contract.models.Conversation
 import xyz.mederi.core.contract.models.ConversationStatus
+import xyz.mederi.core.contract.models.CoreEvent
+import xyz.mederi.core.contract.models.CoreEventType
 import xyz.mederi.core.contract.models.CostSummary
 import xyz.mederi.core.contract.models.PlanApprovalRequest
 import xyz.mederi.core.contract.models.PlanSubtaskItem
@@ -173,6 +176,37 @@ class PlanOnDemandReadUiTest {
         assertTrue(active.title.contains("步骤 2 Spec: 迁移代码"), "保留「步骤 N Spec」拼装格式: ${active.title}")
         assertTrue(active.content.contains("> 所属计划：Migration Plan (`plan_a`)"), "拼装正文应含所属计划头")
         assertTrue(active.content.contains("spec body"), "拼装正文应含契约返回的 Spec 原文")
+    }
+
+    @Test
+    fun planOverviewKeepsTheEffectiveRevisionWithoutReadingPlanDocuments() = testVm(RecordingPlanDocCore()) { vm, core ->
+        val original = PlanApprovalRequest("v1", "conv_1", "", "Original", status = "VOIDED")
+        val active = original.copy(id = "v2", title = "Current", status = "IN_PROGRESS", replacesPlanId = original.id)
+        var snapshot = snapWithPlan(active).copy(planApprovals = listOf(original, active))
+        snapshot = ConversationStateReducer.apply(snapshot, CoreEvent(
+            CoreEventType.PLAN_APPROVAL_REQUESTED, "conv_1",
+            payload = mapOf("planId" to "v3", "title" to "Draft", "replacesPlanId" to active.id),
+        ))
+        applySnapshot(vm, snapshot)
+        runCurrent()
+        assertEquals(listOf("v2", "v3"), vm.planOverviewList.map { it.id })
+        assertTrue(core.planDocCalls.isEmpty())
+
+        snapshot = ConversationStateReducer.apply(snapshot, CoreEvent(
+            CoreEventType.PLAN_APPROVAL_RESOLVED, "conv_1", payload = mapOf("planId" to "v3", "approved" to "true"),
+        ))
+        snapshot = ConversationStateReducer.apply(snapshot, CoreEvent(
+            CoreEventType.PLAN_PROGRESS, "conv_1", payload = mapOf("planId" to "v3", "action" to "completed"),
+        ))
+        applySnapshot(vm, snapshot)
+        runCurrent()
+        assertEquals(listOf("v3"), vm.planOverviewList.map { it.id })
+        assertEquals(PlanOverviewStatus.Completed, vm.planOverviewList.single().status)
+        assertTrue(core.planDocCalls.isEmpty())
+
+        vm.openPlanDocument(original.id, original.title)
+        runCurrent()
+        assertEquals(listOf(Triple("conv_1", original.id, null)), core.planDocCalls.toList())
     }
 
     @Test

@@ -114,14 +114,26 @@ Each subtask specifies targetFiles and a collector command. Give each acceptance
 a business or calculation objective, initial state, concrete input, steps through a real entry point,
 the observation source, exact expected scalar and the defect it would detect. The collector must
 print one JSON object with actual scalar values keyed by case ID. Core compares the values to the
-approved expectations. Exit status, success markers and prose are not observations. List every
-collector script, assertion helper and fixture in acceptanceFiles so its content is pinned.
+approved expectations using strict equality (observed == expected). Exit status, success markers,
+and prose explanations are not observations: never include explanatory comments like 'PASS (...)'.
+Banned expected literals: PASS, ALL PASS, BUILD SUCCESSFUL, CHECK_PASS, BEHAVIOR_CHECK_PASS; assert
+concrete observable values (counts, tags, exact tokens) instead. List every collector script,
+assertion helper and fixture in acceptanceFiles so its content is pinned.
 For a fix, exercise the check against the old behavior and verify the target assertion can fail;
 setup errors are separate. Use a dedicated manual task only when automated observation is
 impractical. Set manual=true for its cases, omit its command and ask the operator to record
 observed values and evidence via the acceptance UI or API. For a new entry point, check the observation logic against known-good
 and known-bad samples first. The final overallAcceptance task depends on all implementation tasks
-and exercises their integration through the actual entry point.
+(its dependsOn must strictly contain every preceding index from 0 to lastIndex-1, e.g. [0, 1, ..., n-1];
+never omit index 0) and exercises their integration through the actual entry point.
+
+Plans are authoritative and tamper-proof once approved: never attempt to edit .mederi/plans/<planId>/plan.json
+directly via bash or scripts. Core validates against an isolated authority store outside the workspace;
+workspace plan file edits are ignored. To revise an approved plan, submit the complete new version via
+write_plan with revisionReason under the current approval mode. For execution, use the plan.md path
+from Active Plan or the latest approval result. When reviewing project or session records, start with
+summaries and read the chosen document by its exact path. Read older plans only for an explicit
+historical question.
 """.trimIndent()
 
     /** 计划概览：只记录已确认方案，按信息需要组织内容。 */

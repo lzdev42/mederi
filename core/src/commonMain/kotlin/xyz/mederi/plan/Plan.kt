@@ -308,7 +308,8 @@ data class Plan(
     val status: PlanStatus = PlanStatus.PENDING_APPROVAL,
     val createdAt: String,
     val agentMode: AgentMode,
-    val replacesPlanId: String? = null
+    val replacesPlanId: String? = null,
+    val revisionReason: String? = null,
 ) {
     /** 是否处于终态：已归档（COMPLETED）或已作废（VOIDED）。终态计划不再是被"活跃"的候选。 */
     val isTerminal: Boolean get() = status == PlanStatus.COMPLETED || status == PlanStatus.VOIDED

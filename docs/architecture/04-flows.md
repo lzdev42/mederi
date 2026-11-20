@@ -371,7 +371,7 @@ sequenceDiagram
     participant TE as TurnExecutor
     participant PS as PlanStore(.mederi/plans/)
 
-    M->>PS: 保存待批准草案，保留当前已批准计划
+    M->>PS: 保存草案与固定方案快照，修订关联当前已批准计划
     M->>PAR: request(planId, planPath, title, summary, subtaskCount, subtasksJson=encodeSubtasksWire(...))
     PAR->>PAR: 取消当前 pending(superseded)
     PAR->>EB: PLAN_APPROVAL_REQUESTED(payload 不携 planContent；spec/planDetail 全文在盘上，UI 按需 getPlanDocument)
@@ -379,7 +379,7 @@ sequenceDiagram
     UI->>TE: resolvePlanApproval(convId, planId, approved)
     TE->>PAR: resolve(planId, approved)
     opt 用户批准
-        PAR->>PS: 校验草案与取证文件，批准新版，再作废旧版
+        PAR->>PS: 校验草案、修订基线与取证文件，批准新版，再作废旧版
         PS-->>PAR: 返回已持久化的批准结果
     end
     PAR->>EB: PLAN_APPROVAL_RESOLVED
@@ -402,6 +402,8 @@ sequenceDiagram
 
 **重启/翻历史恢复待批准卡片**：`MederiAiCore.initialPlanHydration()`（buildInitialSnapshot 单一实现，getSnapshot 与 observe 共用；计划目录单次扫描同时产出 pending 与全量列表）将该会话最新 PENDING_APPROVAL 草案映射为 `"PENDING"` 并填入 `pendingPlanApproval`。已批准的活跃旧版可以与待批准的新草案同时展示。自动批准的新版以 APPROVED 落盘并进入全量计划列表。
 职能边界：core **只把计划状态作为数据给 UI**，不判定卡片必须在对话内/外——UI 层自决渲染位置。
+
+修订预览只在用户打开计划时读取两个方案快照并生成普通 Markdown 页尾。AI 每轮从会话生效版获得状态与 `plan.md` 路径。同轮批准时工具结果返回新版路径，跨轮批准时新轮次重新选取生效版。
 
 **问与计划挂起时用户直接回复**（三条硬规则之一）：`sendMessageInternal` 检测到 pending 时先 `injectNeutralPlanToolResult`（补写中性 ToolResult 落库，非批准/非拒绝）再 abort 旧 turn——计划保持 PENDING_APPROVAL，AI 响应新消息，绝不反问"为什么"。计划无"拒绝"态，只有批准/作废/被无视三态。
 

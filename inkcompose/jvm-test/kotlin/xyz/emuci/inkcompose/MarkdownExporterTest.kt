@@ -8,13 +8,12 @@ import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.initializeKBrowser
 import java.io.File
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MarkdownExporterTest {
 
     @Test
-    fun should_export_html_with_vlr_and_styles() {
+    fun should_export_html_with_vlr_and_styles() = runBlocking {
         val md = """
             # ᠮᠣᠩᠭᠣᠯ ᠪᠢᠴᠢᠭ
             
@@ -35,14 +34,26 @@ class MarkdownExporterTest {
     }
 
     @Test
-    fun should_fail_pdf_when_browser_not_provided() = runBlocking {
-        MarkdownExporter.setBrowser(null)
-        val tmpPdf = File.createTempFile("inkcompose_export_fail_test_", ".pdf")
-        tmpPdf.deleteOnExit()
+    fun should_export_pdf_with_mermaid_via_kbpdf() = runBlocking {
+        assumeTrue("PDF export requires JCEF", JcefChecker.isJcefAvailable)
+        if (System.getProperty("os.name").startsWith("Linux", ignoreCase = true)) {
+            assumeTrue("Linux JCEF uses X11 and requires DISPLAY", !System.getenv("DISPLAY").isNullOrBlank())
+        }
 
-        val result = MarkdownExporter.toPdf("# Hello", tmpPdf.absolutePath, PdfExportOptions(browser = null))
-        assertFalse(result.isSuccess, "PDF export without browser should fail")
-        assertTrue(result.exceptionOrNull()?.message?.contains("KBrowser") == true)
+        val testStorageDir = File(System.getProperty("java.io.tmpdir"), "inkcompose_test_kbrowser").absolutePath
+        File(testStorageDir).mkdirs()
+        KBrowser.initializeConfig(testStorageDir, useOsr = true)
+        initializeKBrowser()
+
+        val md = "# 标题\n\n正文段落。\n\n```mermaid\ngraph TD; A-->B;\n```\n"
+        val tmpPdf = File.createTempFile("inkcompose_export_kbpdf_", ".pdf")
+        tmpPdf.deleteOnExit()
+        val result = MarkdownExporter.toPdf(md, tmpPdf.absolutePath, PdfExportOptions(title = "Mermaid PDF"))
+        assertTrue(result.isSuccess, "PDF export should succeed: ${result.exceptionOrNull()?.message}")
+        assertTrue(tmpPdf.length() > 0, "PDF should not be empty")
+        // PDF 魔数：%PDF
+        val head = tmpPdf.inputStream().use { it.readNBytes(4) }.toString(Charsets.US_ASCII)
+        assertTrue(head.startsWith("%PDF"), "output must be a PDF file, head=$head")
     }
 
     @Test

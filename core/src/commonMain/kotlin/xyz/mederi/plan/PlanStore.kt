@@ -127,7 +127,9 @@ class PlanStore(
      * - `plan.json`：机器可读真理源（load 全走它，解析零歧义）
      * - `plan.md`：纯人读 Markdown（无 JSON 注释块），批准 UI / 用户点开阅读的就是它
      */
-    fun save(plan: Plan) {
+    fun save(plan: Plan) = save(plan, captureProposal = false)
+
+    private fun save(plan: Plan, captureProposal: Boolean) {
         val payload = json.encodeToString(Plan.serializer(), plan)
         val authority = if (plan.subtasks.any { it.acceptanceCases.isNotEmpty() }) authoritativePlan(plan.id) else null
         if (authority != null) {
@@ -137,6 +139,7 @@ class PlanStore(
             require(expectedDir.canonicalFile == expectedDir) { "Plan projection directory must not traverse symlinks." }
         }
         val dir = checkNotNull(writePlanDir(plan.id)) { "Could not create the plan directory for ${plan.id}." }
+        if (captureProposal) captureProposal(plan, dir)
         writePlanFile(File(dir, "plan.md"), buildMarkdown(plan))
         writePlanFile(File(dir, "plan.json"), payload)
         if (authority != null) writePlanFile(authority, payload)
@@ -147,6 +150,17 @@ class PlanStore(
         authoritativePlan(planId)?.takeIf { it.exists() }?.let { return decodePlan(it) }
         val file = planDir(planId)?.let { File(it, "plan.json") } ?: return null
         return if (file.exists()) readProjection(file) else null
+    }
+
+    /** 精确读取用户选中的计划，包含已归档或被替换的版本。 */
+    fun loadPlanForDocument(sessionId: String, planId: String): Plan? = synchronized(planWriteLock) {
+        if (!planId.matches(Regex("[A-Za-z0-9_-]+"))) return null
+        val plan = load(planId) ?: getMederiDir()?.let { root ->
+            listOf("plans-done", "plans-voided").firstNotNullOfOrNull { folder ->
+                File(root, "$folder/$planId/plan.json").takeIf { it.isFile }?.let(::readProjection)
+            }
+        }
+        plan?.takeIf { it.sessionId == sessionId && it.id == planId }
     }
 
     /**
@@ -163,13 +177,22 @@ class PlanStore(
     /** 持久化新版后再变更旧版。人工审批期间只清理被替代的待批草案。 */
     internal fun submitDraft(draft: Plan): PlanLifecycleChange? = synchronized(planWriteLock) {
         val priorPlans = listBySession(draft.sessionId)
+        val previous = executablePlan(priorPlans)
         val autoApprove = draft.agentMode == AgentMode.AUTONOMOUS
+        if (previous != null) require(!draft.revisionReason.isNullOrBlank()) {
+            "Supply revisionReason when revising the current plan."
+        }
         val plan = draft.copy(
-            replacesPlanId = executablePlan(priorPlans)?.id,
+            replacesPlanId = previous?.id,
+            revisionReason = draft.revisionReason?.trim()?.takeIf { previous != null },
             status = if (autoApprove) PlanStatus.APPROVED else PlanStatus.PENDING_APPROVAL,
         )
         if (autoApprove && plan.subtasks.any { !acceptanceFilesMatch(it) }) return null
-        save(plan)
+        if (previous != null) {
+            val directory = checkNotNull(planDir(previous.id))
+            captureProposal(previous, directory)
+        }
+        save(plan, captureProposal = true)
         val path = getPlanAbsolutePath(plan.id) ?: return null
         val superseded = if (autoApprove) priorPlans.filterNot { it.isTerminal }
             else priorPlans.filter { it.status == PlanStatus.PENDING_APPROVAL }
@@ -181,7 +204,9 @@ class PlanStore(
         if (draft.status != PlanStatus.PENDING_APPROVAL || load(draft.id) != draft ||
             draft.subtasks.any { !acceptanceFilesMatch(it) }) return null
         val path = getPlanAbsolutePath(draft.id) ?: return null
-        val superseded = listBySession(draft.sessionId).filter { it.id != draft.id && !it.isTerminal }
+        val plans = listBySession(draft.sessionId)
+        if (draft.revisionReason != null && executablePlan(plans)?.id != draft.replacesPlanId) return null
+        val superseded = plans.filter { it.id != draft.id && !it.isTerminal }
         val plan = draft.copy(status = PlanStatus.APPROVED)
         save(plan)
         PlanLifecycleChange(plan, path, voidPlans(superseded))
@@ -401,7 +426,7 @@ class PlanStore(
     fun getPlanDirAbsolutePath(planId: String): String? =
         writePlanDir(planId)?.absolutePath
 
-    fun archive(planId: String) {
+    fun archive(planId: String): Unit = synchronized(planWriteLock) {
         val dst = getEnsureMederiDir()?.let { File(it, "plans-done") } ?: return
         dst.mkdirs()
         val src = planDir(planId, write = true) ?: return
@@ -554,13 +579,53 @@ class PlanStore(
 
     fun planMarkdown(plan: Plan): String = buildMarkdown(plan)
 
-    private fun buildMarkdown(plan: Plan): String {
+    /** 页尾仅供用户阅读。上下文组装和执行继续读取 plan.md。 */
+    fun planDocumentMarkdown(plan: Plan): String {
+        val body = planMarkdown(plan)
+        val reason = plan.revisionReason ?: return body
+        val (before, after) = synchronized(planWriteLock) {
+            val previous = plan.replacesPlanId?.let { loadPlanForDocument(plan.sessionId, it) }
+            previous?.let(::readProposal) to readProposal(plan)
+        }
+        val revision = if (before != null && after != null) {
+            renderPlanRevisionMarkdown(before, after, reason)
+        } else {
+            "## 修订记录\n\n修订快照缺失，无法比较。"
+        }
+        return "$body\n\n---\n\n$revision"
+    }
+
+    private fun proposalFile(plan: Plan, directory: File): File {
+        val authority = authoritativePlan(plan.id)?.takeIf { plan.subtasks.any { task -> task.acceptanceCases.isNotEmpty() } }
+        if (authority != null) return File(authority.parentFile, "proposals/${plan.id}.md")
+        val root = checkNotNull(getMederiDir()).let { File(it.absoluteFile.parentFile.canonicalFile, it.name) }
+        val expectedDir = File(root, "${directory.parentFile.name}/${plan.id}")
+        require(directory.canonicalFile == expectedDir) { "Plan snapshot directory must not traverse symlinks." }
+        return File(directory, "proposal.md")
+    }
+
+    private fun captureProposal(plan: Plan, directory: File) {
+        val file = proposalFile(plan, directory)
+        if (!java.nio.file.Files.exists(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            writePlanFile(file, buildMarkdown(plan, proposalOnly = true))
+        }
+    }
+
+    private fun readProposal(plan: Plan): String? {
+        val directory = getPlanAbsolutePath(plan.id)?.let { File(it).parentFile } ?: return null
+        val file = proposalFile(plan, directory)
+        return file.takeIf {
+            java.nio.file.Files.isRegularFile(it.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        }?.readText()
+    }
+
+    private fun buildMarkdown(plan: Plan, proposalOnly: Boolean = false): String {
         val sb = StringBuilder()
         val structured = plan.subtasks.any { it.acceptanceCases.isNotEmpty() }
         // ===== Part 1: Implementation Plan（给人读，纯 Markdown）=====
         // 段名规范化：用户语言（中文）+ 英文括注；正文内容由 AI 按提示词规则用用户语言撰写
         sb.appendLine("# 计划（Plan）：${plan.title}")
-        plan.replacesPlanId?.let { sb.appendLine("替代计划版本：`$it`") }
+        if (!proposalOnly) plan.replacesPlanId?.let { sb.appendLine("替代计划版本：`$it`") }
         sb.appendLine()
         // 内部状态（Status/Created/AgentMode）由 UI 卡片与侧边栏呈现，不写进文档
         sb.appendLine("## 项目背景（Project Context）")
@@ -649,7 +714,7 @@ class PlanStore(
         }
         plan.subtasks.forEach { st ->
             sb.appendLine("### 子任务 ${st.index + 1}：${st.name}")
-            sb.appendLine("**状态**：${st.status}")
+            if (!proposalOnly) sb.appendLine("**状态**：${st.status}")
             if (st.targetFiles.isNotEmpty()) sb.appendLine("**文件**：${st.targetFiles.joinToString(", ")}")
             if (st.dependsOn.isNotEmpty()) sb.appendLine("**依赖**：${st.dependsOn.joinToString(", ") { "T-${it + 1}" }}")
             if (st.acceptanceCases.isNotEmpty())
@@ -665,12 +730,12 @@ class PlanStore(
                 sb.appendLine(st.appendix)
                 sb.appendLine()
             }
-            if (!st.spec.isNullOrBlank()) {
+            if (!proposalOnly && !st.spec.isNullOrBlank()) {
                 sb.appendLine("#### 执行清单（Spec）")
                 sb.appendLine(st.spec)
                 sb.appendLine()
             }
-            if (st.specChanges.isNotEmpty()) {
+            if (!proposalOnly && st.specChanges.isNotEmpty()) {
                 // 严格 append-only：修正留痕（完整旧 spec 文本保存在 plan.json 的审计记录里）
                 sb.appendLine("#### Spec 修正记录（append-only）")
                 st.specChanges.forEachIndexed { i, c ->
@@ -694,14 +759,14 @@ class PlanStore(
                 sb.appendLine("机器校验·输出必须包含：${st.verification.expectStdoutContains.joinToString(" | ")}")
             if (st.verification.expectStdoutNotContains.isNotEmpty())
                 sb.appendLine("机器校验·输出不得包含：${st.verification.expectStdoutNotContains.joinToString(" | ")}")
-            if (st.verificationChanges.isNotEmpty()) {
+            if (!proposalOnly && st.verificationChanges.isNotEmpty()) {
                 sb.appendLine()
                 sb.appendLine("##### 验证契约修正记录（append-only）")
                 st.verificationChanges.forEachIndexed { i, c ->
                     sb.appendLine("- #${i + 1} `${c.oldSpec.command}` → `${c.newSpec.command}`：${c.reason}（${c.timestamp}）")
                 }
             }
-            st.verificationResult?.let { r ->
+            st.verificationResult?.takeUnless { proposalOnly }?.let { r ->
                 sb.appendLine()
                 sb.appendLine("#### 验证结果（Verification Result）")
                 sb.appendLine("- 状态：${r.status}")

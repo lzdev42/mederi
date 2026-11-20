@@ -1682,8 +1682,7 @@ class WorkspaceViewModel(
     }
 
     /**
-     * 派生当前会话制定过的全部计划列表（概览面板真理源）。
-     * 涵盖待批准、执行中、已完成、已作废四个生命周期阶段。
+     * 从当前会话的计划摘要派生概览。生效修订折叠旧版本，待批草案独立展示。
      */
     val planOverviewList: List<PlanOverviewItem>
         get() {
@@ -1694,7 +1693,16 @@ class WorkspaceViewModel(
             } else {
                 approvals
             }
-            return merged.map { req ->
+            val byId = merged.associateBy { it.id }
+            val superseded = mutableSetOf<String>()
+            val effectiveStatuses = setOf("APPROVED", "IN_PROGRESS", "AUTO_APPROVED", "COMPLETED")
+            merged.filter { it.status.uppercase() in effectiveStatuses }.forEach { plan ->
+                var previousId = plan.replacesPlanId
+                while (previousId != null && superseded.add(previousId)) {
+                    previousId = byId[previousId]?.replacesPlanId
+                }
+            }
+            return merged.filterNot { it.id in superseded }.map { req ->
                 val status = when (req.status.uppercase()) {
                     "PENDING" -> PlanOverviewStatus.PendingApproval
                     "APPROVED", "IN_PROGRESS", "AUTO_APPROVED" -> PlanOverviewStatus.InProgress

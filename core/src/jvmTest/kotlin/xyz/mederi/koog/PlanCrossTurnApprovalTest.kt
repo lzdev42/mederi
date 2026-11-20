@@ -121,7 +121,7 @@ class PlanCrossTurnApprovalTest {
         val sessionId = insertSession(store, "sess_cross", projectId, model("A"))
         val active = plan(sessionId, PlanStatus.IN_PROGRESS)
         planStore.save(active)
-        val p = requireNotNull(planStore.submitDraft(plan(sessionId))).plan
+        val p = requireNotNull(planStore.submitDraft(plan(sessionId).copy(revisionReason = "Revise the approach"))).plan
         assertEquals(active.id, p.replacesPlanId)
         assertEquals(PlanStatus.IN_PROGRESS, planStore.load(active.id)?.status)
 

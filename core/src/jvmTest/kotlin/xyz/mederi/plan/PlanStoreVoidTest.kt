@@ -11,6 +11,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 /**
  * 计划作废机制（P2）行为锁定，三条硬规则之二"同一会话只有最新计划可执行"：
@@ -90,8 +91,12 @@ class PlanStoreVoidTest {
     fun `superseded draft cannot activate and original plan is preserved until approval`() {
         val original = makePlan(status = PlanStatus.IN_PROGRESS)
         planStore.save(original)
-        val first = assertNotNull(planStore.submitDraft(makePlan(createdAt = "2026-09-09T00:00:00Z")))
-        val latest = assertNotNull(planStore.submitDraft(makePlan(createdAt = "2026-09-10T00:00:00Z")))
+        val first = assertNotNull(planStore.submitDraft(
+            makePlan(createdAt = "2026-09-09T00:00:00Z").copy(revisionReason = "First proposal")
+        ))
+        val latest = assertNotNull(planStore.submitDraft(
+            makePlan(createdAt = "2026-09-10T00:00:00Z").copy(revisionReason = "Second proposal")
+        ))
 
         assertEquals(listOf(first.plan.id), latest.voidedPlanIds)
         assertEquals(original.id, latest.plan.replacesPlanId)
@@ -102,6 +107,56 @@ class PlanStoreVoidTest {
         assertEquals(listOf(original.id), approval.voidedPlanIds)
         assertEquals(PlanStatus.APPROVED, planStore.loadBySession(original.sessionId)?.status)
         assertEquals(latest.plan.id, planStore.loadBySession(original.sessionId)?.id)
+    }
+
+    @Test
+    fun `revisions preserve snapshots and only the document preview reads the previous one`() {
+        val task = Subtask(0, "Retry", planDetail = "Implement the retry policy.", verification = VerificationSpec("true"))
+        val original = makePlan(status = PlanStatus.IN_PROGRESS).copy(
+            approach = "Retry three times.",
+            subtasks = listOf(task.copy(spec = "Legacy execution details")),
+        )
+        val other = makePlan(sessionId = "other", status = PlanStatus.APPROVED)
+        planStore.save(original)
+        planStore.save(other)
+        val replacement = makePlan(createdAt = "2026-09-10T00:00:00Z").copy(
+            approach = "Retry twice.",
+            subtasks = listOf(task),
+        )
+        assertFailsWith<IllegalArgumentException> { planStore.submitDraft(replacement) }
+        val draft = assertNotNull(planStore.submitDraft(replacement.copy(revisionReason = "Limit the wait."))).plan
+        assertEquals(original.id, planStore.loadBySession(original.sessionId)?.id)
+        assertEquals(other.id, planStore.loadBySession(other.sessionId)?.id)
+        val pendingPreview = planStore.planDocumentMarkdown(draft)
+        assertTrue(pendingPreview.contains("## 修订记录"))
+        assertTrue(pendingPreview.substringAfter("## 修订记录").contains("~~Retry three times"))
+        assertTrue(pendingPreview.substringAfter("## 修订记录").contains("**Retry twice"))
+        assertTrue(pendingPreview.contains("Limit the wait"))
+        assertFalse(pendingPreview.contains("Legacy execution details"))
+
+        val approved = assertNotNull(planStore.approveDraft(draft)).plan
+        assertEquals(approved.id, planStore.loadBySession(original.sessionId)?.id)
+        assertEquals(original.id, planStore.loadPlanForDocument(original.sessionId, original.id)?.id)
+        assertNull(planStore.loadPlanForDocument(other.sessionId, original.id))
+        assertEquals(pendingPreview, planStore.planDocumentMarkdown(approved))
+        val bodyPath = assertNotNull(planStore.getPlanAbsolutePath(approved.id))
+        assertFalse(File(bodyPath).readText().contains("## 修订记录"))
+
+        val snapshot = File(File(bodyPath).parentFile, "proposal.md")
+        val captured = snapshot.readText()
+        val updated = assertNotNull(planStore.updatePlan(approved.id) {
+            it.copy(
+                status = PlanStatus.COMPLETED,
+                subtasks = listOf(task.copy(spec = "Current execution details", status = SubtaskStatus.COMPLETED)),
+            )
+        })
+        assertEquals(captured, snapshot.readText())
+        planStore.archive(updated.id)
+        val archivedPreview = planStore.planDocumentMarkdown(
+            assertNotNull(planStore.loadPlanForDocument(updated.sessionId, updated.id))
+        )
+        assertTrue(archivedPreview.substringBefore("## 修订记录").contains("Current execution details"))
+        assertEquals(pendingPreview.substringAfter("## 修订记录"), archivedPreview.substringAfter("## 修订记录"))
     }
 
     @Test

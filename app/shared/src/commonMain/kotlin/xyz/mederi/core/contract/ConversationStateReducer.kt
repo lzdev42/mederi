@@ -369,7 +369,8 @@ object ConversationStateReducer {
                 summary = event.payload["summary"].orEmpty(),
                 subtaskCount = event.payload["subtaskCount"]?.toIntOrNull() ?: subtasks.size,
                 status = "PENDING",
-                subtasks = subtasks
+                subtasks = subtasks,
+                replacesPlanId = event.payload["replacesPlanId"]
             )
             val updatedList = (snapshot.planApprovals.filter { it.id != req.id } + req)
             snapshot.copy(
@@ -410,7 +411,8 @@ object ConversationStateReducer {
                     snapshot.planApprovals.map { plan ->
                         if (plan.id == planId) plan.copy(
                             status = newStatus ?: plan.status,
-                            subtasks = newSubtasks ?: plan.subtasks
+                            subtasks = newSubtasks ?: plan.subtasks,
+                            replacesPlanId = event.payload["replacesPlanId"] ?: plan.replacesPlanId
                         ) else plan
                     }
                 } else if (action == "created") {
@@ -422,7 +424,8 @@ object ConversationStateReducer {
                         summary = event.payload["summary"].orEmpty(),
                         subtaskCount = newSubtasks?.size ?: 0,
                         status = "APPROVED",
-                        subtasks = newSubtasks.orEmpty()
+                        subtasks = newSubtasks.orEmpty(),
+                        replacesPlanId = event.payload["replacesPlanId"]
                     )
                 } else snapshot.planApprovals
             } else snapshot.planApprovals

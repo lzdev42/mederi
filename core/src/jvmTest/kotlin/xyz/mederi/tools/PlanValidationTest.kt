@@ -88,7 +88,9 @@ class PlanValidationTest {
         tool.execute(validPlanArgs())
         val original = assertNotNull(planStore.loadBySession("sess_validation"))
 
-        val response = withTimeout(2_000) { tool.execute(validPlanArgs().copy(title = "Replacement")) }
+        val response = withTimeout(2_000) {
+            tool.execute(validPlanArgs().copy(title = "Replacement", revisionReason = "Clarify the goal"))
+        }
 
         assertTrue(response.contains("auto-approved"), response)
         val replacement = assertNotNull(planStore.loadBySession("sess_validation"))
@@ -104,7 +106,11 @@ class PlanValidationTest {
         val original = assertNotNull(planStore.loadBySession("sess_validation"))
         val collector = File(tmpDir, "collector.sh").apply { writeText("original") }
         val args = validPlanArgs().let { plan ->
-            plan.copy(title = "Replacement", subtasks = plan.subtasks.map { it.copy(acceptanceFiles = listOf(collector.name)) })
+            plan.copy(
+                title = "Replacement",
+                revisionReason = "Verify with a collector",
+                subtasks = plan.subtasks.map { it.copy(acceptanceFiles = listOf(collector.name)) },
+            )
         }
         val waiting = async(start = CoroutineStart.UNDISPATCHED) {
             planTools(AgentMode.APPROVAL).WritePlanTool().execute(args)

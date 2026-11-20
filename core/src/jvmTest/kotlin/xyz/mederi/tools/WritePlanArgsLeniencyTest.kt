@@ -138,4 +138,24 @@ class WritePlanArgsLeniencyTest {
         assertEquals("", case.detects)
         assertEquals("acceptance case 'c1': field 'detects' is blank", case.validationError())
     }
+
+    @Test
+    fun `execute reports banned literal in acceptance case and names it`() = runBlocking {
+        val subtaskBannedCase = """{"name":"s0","planDetail":"d","targetFiles":["f.kt"],"verification":"./gradlew test","verificationExpected":"pass","overallAcceptance":true,"acceptanceCases":[{"id":"case1","objective":"o","setup":"s","input":"i","steps":"st","observationSource":"obs","expected":"PASS","detects":"det"}]}"""
+        val result = planTools().WritePlanTool().execute(
+            json.decodeFromString<PlanTools.WritePlanArgs>(planJson(subtasksJson = "[$subtaskBannedCase]"))
+        )
+        assertTrue(result.contains("banned: PASS"), result)
+        assertTrue(result.contains("Task 0 (s0)"), result)
+    }
+
+    @Test
+    fun `execute reports missing dependencies in overall acceptance task`() = runBlocking {
+        val st0 = """{"name":"s0","planDetail":"d","targetFiles":["f.kt"],"verification":"./gradlew test","verificationExpected":"pass","acceptanceCases":[{"id":"c1","objective":"o","setup":"s","input":"i","steps":"st","observationSource":"obs","expected":"val1","detects":"det"}]}"""
+        val st1 = """{"name":"s1","planDetail":"d","targetFiles":["f.kt"],"verification":"./gradlew test","verificationExpected":"pass","overallAcceptance":true,"dependsOn":[1],"acceptanceCases":[{"id":"c2","objective":"o","setup":"s","input":"i","steps":"st","observationSource":"obs","expected":"val2","detects":"det"}]}"""
+        val result = planTools().WritePlanTool().execute(
+            json.decodeFromString<PlanTools.WritePlanArgs>(planJson(subtasksJson = "[$st0, $st1]"))
+        )
+        assertTrue(result.contains("Missing dependencies: [0]"), result)
+    }
 }

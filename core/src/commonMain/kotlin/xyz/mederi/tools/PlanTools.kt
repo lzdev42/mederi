@@ -38,6 +38,7 @@ import xyz.mederi.debug.DebugLog
 internal val WRITE_PLAN_ARGS_STRUCTURE: String = """
 {
   "planId": "",
+  "revisionReason": "",
   "title": "",
   "summary": "",
   "projectContext": "",
@@ -164,17 +165,17 @@ class PlanTools(
                 "(e.g. [\"FAILED\", \"Traceback\"])."
         )
         val verificationExpectStdoutNotContains: List<String> = emptyList(),
-        @LLMDescription("Indices of subtasks this depends on (0-based).")
+        @LLMDescription("Indices of subtasks this depends on (0-based). For overallAcceptance=true, this MUST contain every preceding index from 0 to lastIndex-1 (e.g. [0, 1, ..., n-1]; never omit index 0).")
         val dependsOn: List<Int> = emptyList(),
         @LLMDescription("Whether this can run in parallel with other subtasks.")
         val parallelizable: Boolean = false,
         @LLMDescription("Optional. Subtask-level technical appendix for reviewers/controllers: current logic, code evidence, root cause, fix preview (pseudo-code or real code), business logic. High information density — no full source dumps, only key code lines + core contradiction + key pseudocode. Leave empty for simple subtasks (new files, mechanical changes). This is the argument version (why), distinct from spec (how).")
         val appendix: String? = null,
-        @LLMDescription("Structured acceptance cases. Collector outputs one JSON object with scalar actual values keyed by case ID. Include setup, concrete input, actual entry point, expected value, evidence source and defect detected.")
+        @LLMDescription("Structured acceptance cases. Collector outputs one JSON object with scalar actual values keyed by case ID. Include setup, concrete input, actual entry point, expected value, evidence source and defect detected. Expected must be an exact scalar string (strict equality observed == expected; no prose comments like 'PASS(...)'; banned literals: PASS, ALL PASS, BUILD SUCCESSFUL).")
         val acceptanceCases: List<AcceptanceCase> = emptyList(),
         @LLMDescription("Existing project-relative collector, assertion and fixture files read by the verification command. Inline-only collectors can leave this empty.")
         val acceptanceFiles: List<String> = emptyList(),
-        @LLMDescription("True for the final task validating the overall outcome through its actual entry point. It depends on every implementation task.")
+        @LLMDescription("True for the final task validating the overall outcome through its actual entry point. It depends on every implementation task (dependsOn must strictly contain all indices from 0 to lastIndex-1; never omit 0).")
         val overallAcceptance: Boolean = false,
     )
 
@@ -245,7 +246,9 @@ class PlanTools(
         @LLMDescription("Optional. Plan-level technical context: cross-subtask shared background, plan-level key decisions/changes/data. Omit when there is no cross-subtask content.")
         val appendix: String? = null,
         @LLMDescription("Subtask list (the skeleton). Required for new plans; in update mode keep empty — subtasks cannot be edited in place, submit a new draft instead. Each subtask must include name, brief intent, targetFiles, and verification. Detailed implementation specs are generated after approval via generate_spec.")
-        val subtasks: List<SubtaskArg> = emptyList()
+        val subtasks: List<SubtaskArg> = emptyList(),
+        @LLMDescription("Required when revising the current approved plan. State why the plan changes. Submit the complete revised plan with planId empty.")
+        val revisionReason: String = "",
     )
 
     @Serializable
@@ -282,7 +285,7 @@ class PlanTools(
         description = "Software-development workflow only; not for browser, research, office, or document tasks, " +
             "even when temporary scripts are used. Resolve substantive decisions via ask_user first; " +
             "leave openQuestions empty. Submit a plan for the current session. Without planId: " +
-            "submits a new plan that replaces the prior executable version after approval. With planId: updates the existing " +
+            "submits the complete plan. To revise the current executable plan, include revisionReason. The new version takes effect after approval. With planId: updates the existing " +
             "plan in place — only provide fields you want to change, blank/empty fields keep their existing " +
             "values. Only a legacy PENDING_APPROVAL draft can be edited in place. Structured drafts use a " +
             "fresh ID for each revision. Approval mode waits for the user. Autonomous mode auto-approves each submitted version. " +
@@ -306,7 +309,7 @@ class PlanTools(
                 if (existing.sessionId != sessionId || existing.status != PlanStatus.PENDING_APPROVAL)
                     return "Error: Cannot update plan — status is ${existing.status}. " +
                         "Only PENDING_APPROVAL plans can be updated. " +
-                        "APPROVED plans: use converge_plan to append subtasks. " +
+                        "To revise an approved plan, submit the complete plan with planId empty and include revisionReason. " +
                         "Spec corrections: use generate_spec with reason= (append-only)."
 
                 if (existing.subtasks.any { it.acceptanceCases.isNotEmpty() } || args.subtasks.isNotEmpty())
@@ -414,9 +417,14 @@ class PlanTools(
                 },
                 createdAt = timestamp,
                 agentMode = agentMode,
+                revisionReason = args.revisionReason.takeIf { it.isNotBlank() },
             )
 
-            val submitted = planStore.submitDraft(draft)
+            val submitted = try {
+                planStore.submitDraft(draft)
+            } catch (failure: IllegalArgumentException) {
+                return "Error: ${failure.message}"
+            }
                 ?: return "Error: could not persist the plan or its declared verification files changed. Check the plan directory and verification files before retrying."
             val plan = submitted.plan
             emitVoidedPlans(eventBus, sessionId, submitted.voidedPlanIds)
@@ -441,6 +449,7 @@ class PlanTools(
                 summary = plan.summary,
                 subtaskCount = plan.subtasks.size,
                 subtasksJson = encodeSubtasksWire(plan.subtasks),
+                replacesPlanId = plan.replacesPlanId,
             ) {
                 val approved = planStore.approveDraft(plan)
                 activation = approved
@@ -458,8 +467,14 @@ class PlanTools(
             return executionGuidance(approved.plan, if (updated) "Plan updated and approved." else "Plan approved.")
         }
 
-        private fun executionGuidance(plan: Plan, status: String) =
-            "$status Plan ID: ${plan.id}. Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks."
+        private fun executionGuidance(plan: Plan, status: String) = buildString {
+            append("$status Plan ID: ${plan.id}. ")
+            if (plan.revisionReason != null) {
+                append("This is the current approved revision. Read its plan.md before execution: ")
+                append("${planStore.getPlanRelativePath(plan.id)}. ")
+            }
+            append("Use subagent(SPAWN, planId=..., subtaskIndex=...) to execute subtasks.")
+        }
 
         /**
          * PLAN_PROGRESS 事件：驱动 UI planApprovals 投影表。
@@ -474,11 +489,12 @@ class PlanTools(
                     "planId" to plan.id,
                     "action" to action,
                     "subtasks" to subtasksJson
-                ) + if (action == "created") mapOf(
-                    "title" to plan.title,
-                    "summary" to plan.summary,
-                    "planPath" to planStore.getPlanAbsolutePath(plan.id).orEmpty()
-                ) else emptyMap(),
+                ) + if (action == "created") buildMap {
+                    put("title", plan.title)
+                    put("summary", plan.summary)
+                    put("planPath", planStore.getPlanAbsolutePath(plan.id).orEmpty())
+                    plan.replacesPlanId?.let { put("replacesPlanId", it) }
+                } else emptyMap(),
                 timestamp = Instant.now().toString()
             ))
         }
@@ -671,17 +687,40 @@ class PlanTools(
      */
     private fun validateAcceptance(subtasks: List<SubtaskArg>): String? {
         if (subtasks.isEmpty()) return null // Partial updates may keep the existing task list.
-        if (subtasks.any { it.acceptanceCases.isEmpty() || it.acceptanceCases.any { case -> !case.isValid() } })
-            return "Every task needs concrete acceptance cases with valid IDs, setup, input, steps, observation source, expected value and defect detected."
+        val caseErrors = mutableListOf<String>()
+        subtasks.forEachIndexed { i, task ->
+            val label = "Task $i (${task.name.ifBlank { "<unnamed>" }})"
+            if (task.acceptanceCases.isEmpty()) {
+                caseErrors.add("$label: acceptanceCases is empty — needs at least one concrete acceptance case.")
+            } else {
+                task.acceptanceCases.forEach { case ->
+                    case.validationError()?.let { err ->
+                        caseErrors.add("$label - $err")
+                    }
+                }
+            }
+        }
+        if (caseErrors.isNotEmpty()) {
+            return "Acceptance cases validation failed:\n" + caseErrors.joinToString("\n")
+        }
         if (subtasks.any { task -> task.acceptanceCases.any { it.manual } &&
                 (task.acceptanceCases.any { !it.manual } || task.verification.isNotBlank() || task.acceptanceFiles.isNotEmpty()) })
             return "Put manual cases in a dedicated task with no collector command or collector files."
         val cases = subtasks.flatMap { it.acceptanceCases }
         if (cases.map { it.id }.distinct().size != cases.size) return "Acceptance case IDs must be unique in the plan."
         val overall = subtasks.withIndex().filter { it.value.overallAcceptance }
-        if (overall.size != 1 || overall.single().index != subtasks.lastIndex ||
-            overall.single().value.dependsOn.toSet() != (0 until subtasks.lastIndex).toSet())
-            return "The final task must be the only overall acceptance task and depend on every preceding task."
+        if (overall.isEmpty()) {
+            return "Missing overall acceptance task: the final task (index ${subtasks.lastIndex}) must set overallAcceptance=true."
+        }
+        if (overall.size != 1 || overall.single().index != subtasks.lastIndex) {
+            return "The final task (index ${subtasks.lastIndex}) must be the only overall acceptance task (got overallAcceptance on indices ${overall.map { it.index }})."
+        }
+        val expectedDeps = (0 until subtasks.lastIndex).toSet()
+        val actualDeps = overall.single().value.dependsOn.toSet()
+        val missingDeps = expectedDeps - actualDeps
+        if (missingDeps.isNotEmpty()) {
+            return "The final task must depend on every preceding task. Missing dependencies: ${missingDeps.sorted()}."
+        }
         return null
     }
 

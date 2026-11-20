@@ -590,6 +590,7 @@ class TurnExecutor(
             // 活跃子任务的 spec 仍挂（spawn 前主 agent 确认要用）；其余子任务的 spec 留磁盘。
             buildString {
                 appendLine("Title: ${p.title}")
+                appendLine("Plan ID: ${p.id}")
                 appendLine("Status: ${p.status}")
                 if (p.businessLogic.isNotBlank()) {
                     appendLine("Business Logic: ${p.businessLogic}")

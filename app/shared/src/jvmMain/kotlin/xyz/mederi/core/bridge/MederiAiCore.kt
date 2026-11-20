@@ -810,6 +810,7 @@ class MederiAiCore(
             summary = summary,
             subtaskCount = subtasks.size,
             status = if (status == xyz.mederi.plan.PlanStatus.PENDING_APPROVAL) "PENDING" else status.name,
+            replacesPlanId = replacesPlanId,
             subtasks = subtasks.map { task ->
                 xyz.mederi.core.contract.models.PlanSubtaskItem(
                     index = task.index,
@@ -1220,7 +1221,7 @@ class MederiAiCore(
     }
 
     /**
-     * 按需读盘计划文档：subtaskIndex=null → planMarkdown 全文；非 null → 该子任务 Spec 原文。
+     * 按需读取计划正文及预览用修订记录，或指定子任务的 Spec 原文。
      * 空/越界子任务与计划不存在同样按 Not Found 语义失败。
      */
     override suspend fun getPlanDocument(
@@ -1228,10 +1229,10 @@ class MederiAiCore(
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val store = planStoreForSession(conversationId)
-            val plan = store.load(planId)
+            val plan = store.loadPlanForDocument(conversationId, planId)
                 ?: throw xyz.mederi.api.exception.MederiNotFoundException("Plan not found: $planId")
             if (subtaskIndex == null) {
-                store.planMarkdown(plan)
+                store.planDocumentMarkdown(plan)
             } else {
                 plan.subtasks.getOrNull(subtaskIndex)?.spec?.takeIf { it.isNotBlank() }
                     ?: throw xyz.mederi.api.exception.MederiNotFoundException(

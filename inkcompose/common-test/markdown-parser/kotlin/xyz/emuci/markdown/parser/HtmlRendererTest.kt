@@ -80,7 +80,7 @@ class HtmlRendererTest {
     fun should_render_indented_code_block() {
         val md = "    code line 1\n    code line 2"
         val html = render(md)
-        assertContains(html, "<pre><code>")
+        assertContains(html, "<pre class=\"code-block-pre\"><code>")
         assertContains(html, "code line 1")
     }
 

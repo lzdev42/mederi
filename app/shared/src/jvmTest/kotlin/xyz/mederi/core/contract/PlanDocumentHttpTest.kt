@@ -43,6 +43,7 @@ class PlanDocumentHttpTest {
             core.initialize().getOrThrow()
             val project = core.createProject(CreateProjectInput("Document", projectDir.path)).getOrThrow()
             val conversation = core.createConversation(project.id).getOrThrow()
+            val otherConversation = core.createConversation(project.id).getOrThrow()
             val store = PlanStore(listOf(projectDir.path), authorityRoot = config.path)
             store.save(Plan(
                 id = "plan_doc",
@@ -82,6 +83,12 @@ class PlanDocumentHttpTest {
             assertEquals(
                 HttpStatusCode.NotFound,
                 client.get("/v1/sessions/${conversation.id}/plans/plan_nope/document").status
+            )
+            store.archive("plan_doc")
+            assertEquals(markdown, client.get("$base/document").bodyAsText())
+            assertEquals(
+                HttpStatusCode.NotFound,
+                client.get("/v1/sessions/${otherConversation.id}/plans/plan_doc/document").status
             )
         } finally {
             root.deleteRecursively()

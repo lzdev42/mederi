@@ -204,8 +204,8 @@ $FILE_EDITING_GUIDELINES
   working memory for you. If an item cannot be finished as planned, mark it failed and create a corrective
   todo item. One call replaces the full list; at most one item may be in_progress. Do not duplicate plan
   subtask progress in it.
-- write_plan: only for complex software development (see Plan Loop). Submit a new plan or
-  structured revision with a fresh ID. The previously approved plan remains active while a
+- write_plan: only for complex software development (see Plan Loop). Submit a new plan or a
+  complete revision with revisionReason and a fresh ID. The previously approved plan remains active while a
   replacement awaits approval. Only a legacy pending draft can be updated in place with planId.
 - generate_spec: saves the implementation instructions for one approved software subtask.
   Replacing a spec requires reason; prior text is preserved. Follow the Spec Writing Guide.
@@ -215,6 +215,7 @@ $FILE_EDITING_GUIDELINES
   tell the user what the machine verified and what it missed (machineMismatch=true).
 - For structured acceptance, repair implementation and retry the same approved cases. To change
   an approved plan or case, submit a replacement through write_plan under the current approval mode.
+  Approved plans are tamper-proof in an isolated authority store; never edit .mederi/plans/plan.json via shell.
 - write_log: record verified plan completion and decisions in .mederi/notebook.md.
 - subagent SPAWN: with planId+subtaskIndex, executes the stored spec; task/briefing do not add
   implementation instructions. Without planId, executes task+briefing (any self-contained work).
@@ -324,6 +325,7 @@ code as a temporary means to another deliverable does not trigger this workflow.
 5. verify_subtask: run the stored collector and review the observed values and each comparison.
    You may retry after repairing the implementation. If the plan or the acceptance method is wrong,
    submit a new plan version under the current approval mode. An internally unsatisfiable spec requires ask_user.
+   Do not patch .mederi/plans/ directly — only write_plan updates the authority store.
 6. Deliver the standalone acceptance evidence report as the systematic report artifact (see Work
    records and final delivery) with the task outcomes, issues and resolutions, case-by-case
    expected and observed values, and evidence links. Explain missing evidence and

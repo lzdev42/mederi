@@ -50,6 +50,7 @@
   静态详情（brief/targetFiles/verification 命令/decisions）**不再挂**——`plan.md` 落盘在
   `.mederi/plans/{planId}/plan.md`，主代理按需 `read_file` 取（活动子任务 spec 仍挂：spawn 前确认要用）。
   段尾给两个路径指针：`plan.md`（静态详情）+ `research.md`（researcher 报告）。
+- **计划修订读取**：`Active Plan` 按会话选生效版；待批草案期间继续指向已批准的旧版，批准后指向新版正文。同轮批准的工具结果也给出新正文路径。查看档案先读摘要，按选中路径打开单份正文。送审快照由用户文档入口按需读取，用于在页尾生成普通 Markdown 差异。
 - **轻量 todo（update_todo，2026-09）**：todo-list 与 plan 彻底解耦——todo-list 只由 update_todo 驱动（session.todos 列，每轮挂 `# Current Todo` 段，turn 边界刷新），plan 期间也允许 update_todo 记录 plan 之外的独立事项；plan 子任务展示由 planApprovals 投影表驱动
 - **Executor**：计划路径只注入存储 spec（Subtask.spec），不追加 task/briefing/planDetail；ad-hoc 路径注入 task+briefing；
   不再注入 researchNotes 全文或 appendix 摘录（appendix 字段已删）。需要调研结论时 read_file
@@ -70,6 +71,7 @@
 |---|---|---|---|
 | `plans/{planId}/plan.json` | 聚合根（含全部动态状态：subtasks[].status/spec/verificationResult/executorTouchedFiles/researchNotes） | create_plan 写；后续 spawn/verify/converge 通过 updatePlan 原子改动态字段 | PlanStore.load（代码内部） |
 | `plans/{planId}/plan.md` | 人读投影（动态渲染） | save 同步写 | UI 批准卡片、用户查看；主代理按需 read_file 取静态详情 |
+| `proposal.md`（结构化计划启用受保护目录时存宿主侧） | 固定的送审方案正文 | 提交时保存；旧版缺快照时首次修订补存 | 用户打开修订预览时读取当前版与上一版 |
 | `plans/{planId}/research.md` | researcher 报告全文 | researcher 子代理完成时落盘（有活跃 plan 才落） | executor 需要调研结论时 read_file；主代理按需 |
 | `.mederi/research/{timestamp}.md` | researcher 独立研究报告（无活跃 plan 时落盘） | researcher 子代理完成时经 `PlanStore.writeStandaloneResearchReport` 落盘 | 主代理按需 read_file（父上下文收摘要+路径） |
 | `plans/{planId}/reports/NN-executor.md` | executor 报告全文（per-subtask） | executor 完成时落盘 | 主代理按需 read_file（摘要+路径默认回灌） |

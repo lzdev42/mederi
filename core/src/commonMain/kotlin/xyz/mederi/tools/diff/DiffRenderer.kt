@@ -35,6 +35,40 @@ internal fun countChanges(before: String?, after: String?): Pair<Int, Int> {
     return additions to deletions
 }
 
+internal data class ChangedLineRange(val before: IntRange, val after: IntRange)
+
+/** Neighbouring insertions and deletions form one change, with no surrounding context. */
+internal fun changedLineRanges(before: List<String>, after: List<String>): List<ChangedLineRange> {
+    if (before == after) return emptyList()
+    val changes = mutableListOf<ChangedLineRange>()
+    var oldStart = 0
+    var newStart = 0
+    var oldEnd = 0
+    var newEnd = 0
+
+    fun flush() {
+        if (oldStart != oldEnd || newStart != newEnd) {
+            changes.add(ChangedLineRange(oldStart until oldEnd, newStart until newEnd))
+        }
+    }
+
+    for (op in computeDiffOps("changedLineRanges", before, after)) {
+        when (op) {
+            is DiffOp.Equal -> {
+                flush()
+                oldEnd += op.length
+                newEnd += op.length
+                oldStart = oldEnd
+                newStart = newEnd
+            }
+            is DiffOp.Delete -> oldEnd += op.length
+            is DiffOp.Insert -> newEnd += op.length
+        }
+    }
+    flush()
+    return changes
+}
+
 private sealed class DiffOp {
     data class Equal(val length: Int) : DiffOp()
     data class Delete(val length: Int) : DiffOp()

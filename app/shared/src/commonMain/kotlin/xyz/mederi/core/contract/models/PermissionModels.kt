@@ -53,4 +53,5 @@ data class PlanApprovalRequest(
     val subtaskCount: Int = 0,
     val status: String = "PENDING",
     val subtasks: List<PlanSubtaskItem> = emptyList(),
+    val replacesPlanId: String? = null,
 )

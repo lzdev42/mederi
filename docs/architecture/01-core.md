@@ -1267,7 +1267,9 @@ ToolFactory 将 BATCH 加入 FS_TOOL_NAMES，按本角色和本次 toolNames 构
 ### 结构化验收与证据
 
 - `plan/AcceptanceEvidence.kt` 定义 `AcceptanceCase`、`AcceptanceRun`、`AcceptanceObservation` 与 `AcceptanceVerdict`。任务用例有稳定 ID、目的、前置状态、具体输入、真实入口步骤、取证位置、期望值和可发现问题。最终整体验收任务依赖所有前序任务。
-- `write_plan` 将用例和取证命令纳入批准版本，对声明的脚本、断言文件和 fixture 记录 SHA-256。新版计划使用新 ID，初版和替换版都遵循当前 AgentMode。APPROVAL 下，替换草案与原执行版可以并存，直到新版通过校验并批准落盘才作废原版。AUTONOMOUS 直接批准新版。结构化计划的既有验收契约不能通过 `update_verify` 改写，修实现后可直接重试。
+- `write_plan` 将用例和取证命令纳入批准版本，对声明的脚本、断言文件和 fixture 记录 SHA-256。修订提交完整方案和 `revisionReason`，使用新 ID，`Plan.replacesPlanId` 指向提交时的生效版。APPROVAL 下，替换草案与原执行版可以并存，批准时校验基线仍生效并作废原版。AUTONOMOUS 直接批准新版。结构化计划的既有验收契约不能通过 `update_verify` 改写，修实现后可直接重试。
+- `PlanStore` 提交时固定保存方案 Markdown 快照。项目计划目录使用 `proposal.md`，启用宿主权威存储的结构化计划使用受保护的独立快照文件。会话按结构化记录枚举和选版。用户预览经 `loadPlanForDocument(sessionId, planId)` 精确查找活跃、归档或作废版本，再由 `planDocumentMarkdown(plan)` 对比本版与上一版快照并拼接 Markdown 页尾。执行用的 `plan.md` 保持正文投影。
+- 修订关系经 `PLAN_APPROVAL_REQUESTED` 与自动批准的 `PLAN_PROGRESS(created)` 提供可选的 `replacesPlanId`，重启时从计划记录恢复。
 - `verify_subtask` 运行批准的取证命令，前后校验声明文件的摘要。命令提供以用例 ID 为键的单个 JSON 对象，由 Core 逐条比较实际标量和预期值，追加 `AcceptanceRun`。无观察、环境失败和观察不符均不能完成子任务。整体用例在前序任务通过后运行。旧计划保留原工具兼容，验收报告把缺少结构化观测的任务列为证据不足。
 - `PlanStore` 为结构化计划优先读取宿主受保护目录的计划快照（持久配置启用时），工作区 Markdown/JSON 供查看。独立 `acceptance-report.md` 由 Core 从状态和运行记录生成，`SessionApi.getPlanAcceptanceReport(sessionId, planId)` 可按会话读取活跃或归档计划的当前报告。运行输出有长度上限，保留历次运行。
 - 人工用例以 `AcceptanceCase.manual` 标识，单独成任务。仅通过会话 API 提交实测值、证据与签认人；模型验收工具拒绝代签。Core 比较观测值并保留签认历史。自动记录保存计划声明的实现文件指纹；验证期间这些文件发生变化时应重验。
